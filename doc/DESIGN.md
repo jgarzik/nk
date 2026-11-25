@@ -241,6 +241,15 @@ stack. The switch saves what a call preserves on the outgoing stack
 in the thread's `KernelStack`. An exited thread is freed by the thread
 that runs next. The SMP rules are in `doc/LOCKING.md`.
 
+## The System process
+
+There is one process, System, with Windows' id for it (4). Its block has
+`EPROCESS`'s size and Windows' layout for the fields NK keeps; the rest
+is zero. Every thread belongs to it, the idle threads included (Windows
+gives those a process of their own), and carries a client id: the
+process id and a thread id from the same sequence of multiples of four.
+The kernel handle table is its handle table.
+
 ## Waits
 
 A thread waits on an event, semaphore, timer, mutex or thread by linking
@@ -330,8 +339,8 @@ signalled object.
 
 Kernel handles are entries in one table, with Windows' kernel-handle
 bits; a handle holds a reference until closed. No per-process tables, no
-access checks. `NtCurrentThread()` (-2) names the caller;
-`NtCurrentProcess()` names nothing.
+access checks. `NtCurrentThread()` (-2) names the caller and
+`NtCurrentProcess()` (-1) its process.
 
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index
@@ -511,8 +520,8 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 
 ## What is absent
 
-No SEH, APCs, device interrupts, PnP, power management, processes or user
-mode. Where a fixture imports something in that territory but never
+No SEH, APCs, device interrupts, PnP, power management, user processes
+or user mode. Where a fixture imports something in that territory but never
 reaches it on the tested path, the export is `Traps`.
 
 SEH is the sharpest edge (`kernel/ke/seh.rs`). `ProbeForRead` performs

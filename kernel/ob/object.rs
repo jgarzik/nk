@@ -116,6 +116,7 @@ static EVENT_NAME: [u16; 5] = wide(b"Event");
 static THREAD_NAME: [u16; 6] = wide(b"Thread");
 static DEVICE_NAME: [u16; 6] = wide(b"Device");
 static KEY_NAME: [u16; 3] = wide(b"Key");
+static PROCESS_NAME: [u16; 7] = wide(b"Process");
 
 /// Events (`KEVENT`).
 pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
@@ -131,8 +132,17 @@ pub static DEVICE_TYPE: ObjectType = ObjectType::new(
 pub static KEY_TYPE: ObjectType =
     ObjectType::new(FIRST_TYPE_INDEX + 3, &KEY_NAME, Some(crate::cm::closed));
 
+/// Processes (`EPROCESS`).
+pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 4] = [&EVENT_TYPE, &THREAD_TYPE, &DEVICE_TYPE, &KEY_TYPE];
+static TYPES: [&ObjectType; 5] = [
+    &EVENT_TYPE,
+    &THREAD_TYPE,
+    &DEVICE_TYPE,
+    &KEY_TYPE,
+    &PROCESS_TYPE,
+];
 
 /// What hides type indices in object headers. Chosen once, before the
 /// first object is made.

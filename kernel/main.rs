@@ -81,6 +81,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     }
     // Threads are objects: the object manager comes first.
     ob::object::init(arch::counter());
+    if let Err(why) = ps::process::init(info.boot_time) {
+        test::abort("ps.process", format_args!("{why}"));
+    }
     // What this processor is running becomes its idle thread.
     if let Err(why) = ke::thread::init_cpu(ke::smp::stack_of(0)) {
         test::abort("ke.thread", format_args!("{why}"));

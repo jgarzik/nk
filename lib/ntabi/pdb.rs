@@ -222,6 +222,31 @@ fn thread_matches_the_kernel() {
     let affinity = types.layout("_GROUP_AFFINITY").expect("_GROUP_AFFINITY");
     assert_eq!(offset(&affinity, "_GROUP_AFFINITY", "Mask"), 0);
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
+    assert_eq!(PROCESS, field("Process"));
+    let apc_state = types.layout("_KAPC_STATE").expect("_KAPC_STATE");
+    assert_eq!(
+        APC_STATE_PROCESS,
+        field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")
+    );
+    assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
+    let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
+    assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
+    assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueThread"), 8);
+}
+
+#[test]
+fn process_matches_the_kernel() {
+    use crate::process::*;
+    let Some(types) = kernel_types() else { return };
+    let eprocess = types.layout("_EPROCESS").expect("_EPROCESS");
+    let kprocess = types.layout("_KPROCESS").expect("_KPROCESS");
+    let field = |name| offset(&eprocess, "_EPROCESS", name);
+    assert_eq!(EPROCESS_SIZE, eprocess.size as usize);
+    assert_eq!(field("Pcb"), 0);
+    assert_eq!(offset(&kprocess, "_KPROCESS", "Header"), 0);
+    assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
+    assert_eq!(CREATE_TIME, field("CreateTime"));
+    assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
 }
 
 #[test]

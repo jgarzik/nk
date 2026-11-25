@@ -5,7 +5,13 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["ob.types", "ob.references", "ob.handles", "ob.thread"],
+    names: &[
+        "ob.types",
+        "ob.references",
+        "ob.handles",
+        "ob.thread",
+        "ps.system",
+    ],
     run,
     manual: false,
 };
@@ -27,4 +33,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "ob.handles", "look-ups:", handle::handle_test());
     counted(r, "ob.thread", "waits:", handle::thread_test());
+    r.check("ps.system", crate::ps::process::self_test);
 }

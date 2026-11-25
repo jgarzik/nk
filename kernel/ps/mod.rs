@@ -1,9 +1,11 @@
 //! System threads, as drivers create them.
 //!
-//! NK has no processes yet, so every thread is a system thread and the
+//! Every thread belongs to the System process (`process`), so the
 //! process a driver names is not looked at.
 
 #![allow(non_snake_case)]
+
+pub mod process;
 
 use crate::ke::thread;
 use crate::ob::{handle, object};

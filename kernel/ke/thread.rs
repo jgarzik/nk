@@ -191,6 +191,13 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         field::<u8>(thread, layout::PRIORITY).write(thread_priority);
         field::<u8>(thread, layout::BASE_PRIORITY).write(thread_priority);
         field::<u32>(thread, layout::NEXT_PROCESSOR).write(pcr::current_processor());
+        let process = crate::ps::process::system();
+        field::<*mut u8>(thread, layout::PROCESS).write(process);
+        field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
+        field::<[u64; 2]>(thread, layout::CID).write([
+            nk_ntabi::process::SYSTEM_PROCESS_ID,
+            crate::ps::process::new_thread_id(),
+        ]);
         set_state(thread, state);
     }
     Some(thread)
