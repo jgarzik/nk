@@ -12,6 +12,11 @@ pub fn wide(text: &str) -> Vec<u8> {
     text.encode_utf16().flat_map(u16::to_le_bytes).collect()
 }
 
+/// `text` as UTF-16 units.
+pub fn w(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
 /// Store the checksum of a base block that a test has changed.
 pub fn seal(file: &mut [u8]) {
     let sum = checksum(file);

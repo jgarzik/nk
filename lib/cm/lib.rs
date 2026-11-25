@@ -1,9 +1,12 @@
 //! The registry: a tree of named keys, each holding named values.
 //!
-//! Pure and in memory: nothing is read from or written to a hive file.
-//! Names of keys and values are compared without regard to case, as
-//! Windows compares them. A key is known by a [`KeyId`]; the root is
-//! what Windows calls `\Registry`.
+//! Pure and in memory. Names of keys and values are compared without
+//! regard to case, as Windows compares them. A key is known by a
+//! [`KeyId`]; the root is what Windows calls `\Registry`. A key's
+//! subkeys are kept, and enumerated, in the order of their upper-cased
+//! names; its values in the order they were first set.
+//!
+//! [`regf`] reads a hive file in place.
 //!
 //! Every allocation asks for exactly what it needs, so that
 //! [`Hive::storage`] can say how much pool the tree holds.
@@ -13,12 +16,20 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 
+mod info;
 pub mod regf;
 #[cfg(test)]
 mod regf_tests;
 #[cfg(test)]
 mod writer;
+
+pub use info::{
+    KEY_BASIC_HEADER, KEY_FULL_HEADER, KEY_NAME_HEADER, KEY_NODE_HEADER, KeyInfo, NO_CLASS,
+    VALUE_BASIC_HEADER, key_basic_information, key_full_information, key_name_information,
+    key_node_information, value_basic_information,
+};
 
 /// A key in a hive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +70,17 @@ struct Value {
 struct Key {
     name: Vec<u16>,
     parent: usize,
+    /// Its subkeys, in the order of their upper-cased names.
     children: Vec<usize>,
     values: Vec<Value>,
+    /// The class it was given: bytes, UTF-16 by convention.
+    class: Vec<u8>,
+    /// Its security descriptor, self-relative; empty if it has none.
+    security: Vec<u8>,
+    /// When it was last written, as a `FILETIME`.
+    last_write: u64,
+    /// It is a symbolic link to another key.
+    link: bool,
     /// How many handles are open to it.
     open: u32,
     /// Deleted: gone from its parent, empty, and refusing every
@@ -83,6 +103,13 @@ fn same(a: &[u16], b: &[u16]) -> bool {
         && a.iter()
             .zip(b)
             .all(|(&x, &y)| nk_rtl::upcase(x) == nk_rtl::upcase(y))
+}
+
+/// The order Windows keeps and enumerates subkeys in: by upper-cased
+/// name, a name before any longer one it starts.
+fn order(a: &[u16], b: &[u16]) -> Ordering {
+    let upper = |&c: &u16| nk_rtl::upcase(c);
+    a.iter().map(upper).cmp(b.iter().map(upper))
 }
 
 /// The parts of a path between backslashes.
@@ -137,6 +164,10 @@ impl Hive {
             parent,
             children: Vec::new(),
             values: Vec::new(),
+            class: Vec::new(),
+            security: Vec::new(),
+            last_write: 0,
+            link: false,
             open: 0,
             deleted: false,
         };
@@ -194,6 +225,8 @@ impl Hive {
         gone.deleted = true;
         gone.name = Vec::new();
         gone.values = Vec::new();
+        gone.class = Vec::new();
+        gone.security = Vec::new();
         Ok(())
     }
 
@@ -232,7 +265,10 @@ impl Hive {
                         .try_reserve_exact(1)
                         .map_err(|_| Error::NoMemory)?;
                     let new = self.add(name, key)?;
-                    self.keys[key].children.push(new);
+                    let at = self.keys[key]
+                        .children
+                        .partition_point(|&child| order(&self.keys[child].name, name).is_lt());
+                    self.keys[key].children.insert(at, new);
                     return Ok((KeyId(new), true));
                 }
             };
@@ -285,6 +321,8 @@ impl Hive {
             count(key.name.capacity(), 2);
             count(key.children.capacity(), size_of::<usize>());
             count(key.values.capacity(), size_of::<Value>());
+            count(key.class.capacity(), 1);
+            count(key.security.capacity(), 1);
             for value in &key.values {
                 count(value.name.capacity(), 2);
                 count(value.data.capacity(), 1);
