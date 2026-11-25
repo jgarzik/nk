@@ -6,7 +6,7 @@ members = ["lib/pe", "lib/pdb", "lib/oracle", "lib/ke", "lib/selftest", "lib/boo
 default-members = ["lib/pe", "lib/pdb", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "tools/peinfo", "tools/pdbinfo", "boot", "kernel"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jgarzik/nk"

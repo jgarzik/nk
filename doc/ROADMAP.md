@@ -135,8 +135,8 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
 | 0 | Ground truth | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; ledger shows 14 of 1740 |
-| 1 | **Kernel core** (in progress) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, APCs, timers, work queues | WDK samples that block, queue work and use timers; asynchronous IRPs; the existing tests under all CPUs |
-| 2 | Exceptions, objects, registry | SEH on both architectures; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
+| 1 | Kernel core (done: release 0.0.2) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, timers, work queues, cancellable requests; a registry in memory and security descriptors, as far as Microsoft's samples ask | Microsoft's `event` and `cancel` samples and eleven conformance drivers answer as on Windows; the tests pass on 1 to 8 CPUs, repeated under load |
+| 2 | **Exceptions, objects, registry** (next) | SEH on both architectures; APCs; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
 | 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
 | 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond phase 3 | KMDF echo sample; `usbxhci` + hub + HID keyboard on the OptiPlex; `serial.sys` |
@@ -153,31 +153,19 @@ more names); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
 logon.
 
-## Next step: phases 0 and 1
+## Next step: phase 2
 
-Phase 1, the kernel core, is next because every other phase lists it as a
-prerequisite. It is also NK's sharpest limit: a driver that returns
-"pending" cannot be waited for, and no hardware driver can run without
-interrupts and DPCs. Inside the phase:
+Phase 2 completes the trunk. Structured exception handling comes first
+in it: it needs no hardware, file systems use it on every path, and
+`METHOD_NEITHER` requests cannot be tested without it. APCs come with
+it, since the object manager, the registry read from a real hive and
+Microsoft's support libraries all assume them.
 
-1. Interrupt controllers and the clock on the boot CPU, both
-   architectures.
-2. The other CPUs, before the scheduler exists, so that per-CPU state,
-   IRQL and cross-CPU interrupts are right before code depends on them.
-3. Threads, the scheduler and waits, written for many CPUs from the first
-   commit.
-4. DPCs, timers, work queues, APCs, and the drivers that prove them.
-
-The pin and the symbol-derived layout tables of phase 0 come first, by a
-few days: phase 1 fixes the thread and processor structures, and those
-must have Windows' shape. The rest of phase 0 runs alongside.
-
-SEH is deliberately second, not first: nothing in phase 1's proofs needs
-it, and it needs no hardware. It must not slip later than phase 2, since
-file systems use it on every path.
-
-Recorded gaps of phase 1: the clock always ticks (no tickless idle), and
-its rate is fixed at 64 Hz; thread priorities are not boosted.
+Gaps phase 1 leaves, each recorded where the code is described
+(`doc/DESIGN.md`): no APCs are delivered; the clock always ticks, at
+64 Hz; thread priorities are not boosted; a thread can change only its
+own priority; DPCs run on the interrupted thread's stack; the registry
+is in memory only and nothing enforces a security descriptor.
 
 ## Risks
 

@@ -4,30 +4,30 @@ version = 4
 
 [[package]]
 name = "nk-acpi"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-bootinfo"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-cm"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-rtl",
 ]
 
 [[package]]
 name = "nk-ke"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-mm"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-ntabi"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-pdb",
  "nk-se",
@@ -35,34 +35,34 @@ dependencies = [
 
 [[package]]
 name = "nk-oracle"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-pdb"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-pe"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-rtl"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-se"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-selftest"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-rtl",
 ]
 
 [[package]]
 name = "nkkrnl"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "nkload"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
@@ -89,14 +89,14 @@ dependencies = [
 
 [[package]]
 name = "pdbinfo"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-pdb",
 ]
 
 [[package]]
 name = "peinfo"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-pe",
 ]

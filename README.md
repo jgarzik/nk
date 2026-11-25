@@ -15,17 +15,21 @@ Windows rescue disk at a `cmd.exe` prompt. `doc/ROADMAP.md` lays out the
 phases. NK contains and ships no Windows code, and boots on its own
 through UEFI.
 
-## Status: driver bootstrap
+## Status: kernel core
 
 NK is a proof that the approach works end to end, on a deliberately
 small surface. Under QEMU, on both architectures, NK:
 
 1. boots from UEFI firmware through its own loader,
-2. takes over the CPU and memory,
+2. takes over the CPUs and memory: every processor running, interrupts
+   on, a clock, preemptive threads that wait, timers, deferred calls and
+   work items,
 3. loads a real Windows driver binary: maps it, relocates it, binds its
    imports,
 4. calls the driver's own entry point, which creates its device,
-5. opens the device and sends it real I/O request packets (IRPs),
+5. opens the device and sends it real I/O request packets (IRPs), which
+   the driver may hold, complete later from a timer or a thread of its
+   own, or have cancelled,
 6. checks status, byte counts and payloads, unloads the driver, and
    verifies nothing leaked.
 
@@ -69,16 +73,16 @@ verifies their SHA-256. A passing boot ends like this on the serial
 console:
 
 ```
-NK 0.0.1 (x86_64)
+NK 0.0.2 (x86_64)
 ...
-NK-TEST null.load:OK
-NK-TEST null.read:OK
-NK-TEST null.write:OK
 NK-TEST sioctl.buffered:OK
-NK-TEST sioctl.out-direct:OK
-sioctl: 100 load/exercise/unload cycles, resources unchanged
 NK-TEST sioctl.cycles:OK
-NK-TEST-COMPLETE pass=28 fail=0 skip=1
+NK-TEST cancel.cancelled:OK reads cancelled while queued: 7
+NK-TEST cancel.cycles:OK load/exercise/unload cycles, resources unchanged: 100
+...
+NK-TEST oracle.sioctl:OK 31 lines as on Windows
+NK-TEST oracle.cancel:OK 12 lines as on Windows
+NK-TEST-COMPLETE pass=132 fail=0 skip=1
 ```
 
 `make gate` runs everything a change must pass: formatting, lints, host
