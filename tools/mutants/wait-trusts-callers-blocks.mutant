@@ -1,0 +1,8 @@
+# After a wait, every wait block of the caller's array is looked at, not
+# only those the wait linked: the kernel acts on whatever the driver
+# left in its memory.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/wait.rs
+replace:             for (index, &object) in objects.iter().enumerate().take(linked) {
+with:             for (index, &object) in objects.iter().enumerate() {

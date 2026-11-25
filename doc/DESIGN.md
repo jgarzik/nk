@@ -295,8 +295,11 @@ four wait blocks built into every thread on the object's wait list, and
 sleeping until a waker claims it. A wait with a time limit also sets the
 thread's own timer and links a second block there, whose key is
 `STATUS_TIMEOUT`: the time limit is one more object, and the first to be
-signalled ends the wait. `doc/LOCKING.md` gives the rules that make this
-safe on several processors.
+signalled ends the wait. A wait may name up to 64 objects, with the
+caller's wait blocks beyond three, and be for any one of them (it
+reports which) or for all at once (it takes all or none).
+`doc/LOCKING.md` gives the rules that make this safe on several
+processors.
 
 Events, semaphores, wait blocks and the dispatcher header are laid out
 as on Windows (`lib/ntabi/ke.rs`, checked against the kernel's symbols).

@@ -38,6 +38,9 @@ pub unsafe fn signal<'a>(object: *mut DISPATCHER_HEADER) -> &'a AtomicI32 {
     unsafe { AtomicI32::from_ptr(&raw mut (*object).SignalState) }
 }
 
+/// `KWAIT_BLOCK.WaitType`: the block is part of a wait for all.
+const WAIT_ALL: u8 = 0;
+
 /// An object's lock, held at `DISPATCH_LEVEL` until dropped.
 pub struct ObjectLock {
     object: *mut DISPATCHER_HEADER,
@@ -85,7 +88,7 @@ unsafe fn kind(object: *mut DISPATCHER_HEADER) -> u8 {
 ///
 /// # Safety
 /// `object` is live and its lock is held.
-unsafe fn available(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread) -> bool {
+pub unsafe fn available(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread) -> bool {
     // SAFETY: per the contract.
     unsafe {
         signal(object).load(Ordering::Relaxed) > 0
@@ -100,7 +103,7 @@ unsafe fn available(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread)
 /// # Safety
 /// `object` is live, its lock is held, and it is `available` to
 /// `thread`, which is the running thread or one the caller has claimed.
-unsafe fn take(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread) {
+pub unsafe fn take(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread) {
     // SAFETY: per the contract.
     unsafe {
         match kind(object) {
@@ -126,22 +129,6 @@ pub unsafe fn init_wait_list(object: *mut DISPATCHER_HEADER) {
             Flink: head,
             Blink: head,
         });
-    }
-}
-
-/// Take the object for the calling thread if it is signalled.
-///
-/// # Safety
-/// `object` is live and its lock is held.
-pub unsafe fn try_take(object: *mut DISPATCHER_HEADER) -> bool {
-    let me = thread::current();
-    // SAFETY: per the contract.
-    unsafe {
-        let can = available(object, me);
-        if can {
-            take(object, me);
-        }
-        can
     }
 }
 
@@ -236,7 +223,11 @@ pub unsafe fn satisfy(object: *mut DISPATCHER_HEADER) -> Woken {
                 continue;
             };
             unlink(block);
-            take(object, waiter);
+            // A thread waiting for all of several objects takes them
+            // itself, all or none, when it has looked: it is only woken.
+            if (&raw const (*block).WaitType).read() != WAIT_ALL {
+                take(object, waiter);
+            }
             if found == Claimed::Asleep {
                 thread::set_wake_link(waiter, woken.0);
                 woken.0 = waiter;

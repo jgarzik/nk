@@ -162,8 +162,10 @@ Every object a thread can wait on (event, semaphore, timer) has a lock of
 its own, bit 7 of its header's type byte, as on Windows. It covers the
 object's signal state, its list of wait blocks, and the blocks linked
 there. It is taken at `DISPATCH_LEVEL`, before any ranked lock. These
-locks are in the driver's memory and are not ranked or recorded; nothing
-holds two.
+locks are in the driver's memory and are not ranked or recorded. Nothing
+holds two, with one exception: a wait for all of several objects holds
+all their locks at once while it looks and takes, locking in order of
+address and unlocking in reverse.
 
 For a timer the lock also serialises setting and cancelling. Expiry
 takes the timer out under the table's lock, lets go, and only then takes
@@ -204,6 +206,13 @@ interleaving with up to three wakers is checked on the host.
   the object's, when time ran out) is unlinked by the thread itself,
   under that object's lock, before its wait returns. A waker that meets
   such a leftover block cannot claim its thread and passes over it.
+- **All or nothing.** A waker does not take its object for a thread
+  that waits for all of several; it only wakes it. The thread then looks
+  again, holding every object's lock, and takes all of them or none and
+  waits again. Its time limit is fixed once, however often it looks.
+- **Only what was linked.** After a wait the kernel looks only at the
+  wait blocks that wait linked. The rest of a caller's wait block array
+  is the caller's memory, in whatever state it was left.
 - **A thread takes no timer to its grave.** A wait cancels its timer
   and, if an expiry had already taken the timer out of its table, waits
   until that expiry has finished with it, before it returns. Reaping a

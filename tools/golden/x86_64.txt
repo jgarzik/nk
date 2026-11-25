@@ -46,6 +46,10 @@ wait.delay ok
 wait.semaphore ok
 wait.ping-pong ok
 wait.race ok
+wait.any ok
+wait.all ok
+wait.many-blocking ok
+wait.all-race ok
 ob.references ok
 ob.handles ok
 ob.thread ok

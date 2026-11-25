@@ -14,6 +14,10 @@ pub static GROUP: Group = Group {
         "wait.semaphore",
         "wait.ping-pong",
         "wait.race",
+        "wait.any",
+        "wait.all",
+        "wait.many-blocking",
+        "wait.all-race",
     ],
     run,
     manual: false,
@@ -49,6 +53,20 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "wait.ping-pong", "round trips:", wait::ping_pong_test());
     counted(r, "wait.race", "settings accounted for:", wait::race_test());
+    r.check("wait.any", wait::any_test);
+    r.check("wait.all", wait::all_test);
+    counted(
+        r,
+        "wait.many-blocking",
+        "waits:",
+        wait::blocking_many_test(),
+    );
+    counted(
+        r,
+        "wait.all-race",
+        "waits for both satisfied:",
+        wait::all_race_test(),
+    );
 }
 
 /// A wait that has to block at DISPATCH_LEVEL must stop the system.

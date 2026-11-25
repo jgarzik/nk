@@ -26,7 +26,7 @@
 #![allow(non_snake_case)]
 
 use super::object::{self, ObjectLock};
-use super::{dpc, irql, thread, timer};
+use super::{dpc, irql, thread, time, timer};
 use crate::arch;
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
@@ -40,8 +40,12 @@ pub const STATUS_SUCCESS: u32 = 0;
 /// The wait's time limit passed first.
 pub const STATUS_TIMEOUT: u32 = 0x102;
 
-/// `WAIT_TYPE`: `WaitAny`.
+/// `WAIT_TYPE`: `WaitAll` and `WaitAny`.
+const WAIT_ALL: u8 = 0;
 const WAIT_ANY: u8 = 1;
+/// What a waker claims a wait-for-all thread with: not a status the
+/// wait returns, but "something changed; look again".
+const WAKE_AND_LOOK: u32 = 0x2000;
 
 /// Stop the system if the caller may not block: a wait that has to
 /// sleep needs an IRQL below `DISPATCH_LEVEL`.
@@ -63,11 +67,11 @@ fn must_be_able_to_block(irql_at_call: u8) {
 ///
 /// # Safety
 /// `block` is one of the running thread's wait blocks, linked nowhere.
-unsafe fn prepare(block: *mut KWAIT_BLOCK, object: *mut DISPATCHER_HEADER, key: u32) {
+unsafe fn prepare(block: *mut KWAIT_BLOCK, object: *mut DISPATCHER_HEADER, key: u32, kind: u8) {
     // SAFETY: per the contract. Field by field: the spare fields of a
     // thread's built-in blocks hold other things.
     unsafe {
-        (&raw mut (*block).WaitType).write(WAIT_ANY);
+        (&raw mut (*block).WaitType).write(kind);
         (&raw mut (*block).WaitKey).write(key as u16);
         (&raw mut (*block).Thread).write(thread::current().cast());
         (&raw mut (*block).Object).write(object.cast());
@@ -96,6 +100,35 @@ unsafe fn withdraw(object: *mut DISPATCHER_HEADER, block: *mut KWAIT_BLOCK) {
 /// `object` is a live dispatcher object that stays valid until this
 /// returns.
 pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>) -> u32 {
+    let blocks = thread::wait_block(thread::current(), 0);
+    // SAFETY: per the contract; the blocks are the running thread's own.
+    unsafe { wait_objects(object.as_slice(), false, timeout, blocks) }
+}
+
+/// The most objects one wait may name, as on Windows.
+pub const MAXIMUM_WAIT_OBJECTS: usize = 64;
+/// How many of a thread's built-in wait blocks are for objects.
+const THREAD_WAIT_OBJECTS: usize = 3;
+
+/// Wait on several objects: until any one is signalled (returning its
+/// index) or, with `all`, until all are at once (returning
+/// `STATUS_SUCCESS`); or until `timeout` passes (`STATUS_TIMEOUT`).
+///
+/// A wait for all takes all the objects or none. Wakers do not take
+/// objects for such a waiter: they only wake it, and it looks again for
+/// itself, holding every object's lock at once, in address order. That
+/// is the one place more than one object lock is held.
+///
+/// # Safety
+/// Every object is a live dispatcher object that stays valid until this
+/// returns; no object appears twice when `all`; `blocks` has room for
+/// one wait block per object and is used by nothing else meanwhile.
+pub unsafe fn wait_objects(
+    objects: &[*mut DISPATCHER_HEADER],
+    all: bool,
+    timeout: Option<i64>,
+    blocks: *mut KWAIT_BLOCK,
+) -> u32 {
     let old = irql::current();
     if old > irql::DISPATCH_LEVEL {
         must_be_able_to_block(old);
@@ -103,72 +136,121 @@ pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>)
     arch::set_irql(irql::DISPATCH_LEVEL);
     let me = thread::current();
     let register = thread::wait_register(me);
-    let object_block = thread::wait_block(me, 0);
     let timer_block = thread::wait_block(me, TIMER_WAIT_BLOCK);
     let my_timer = thread::timer(me);
-    // SAFETY: per the contract for `object`; the blocks and the timer
-    // are the running thread's own.
-    unsafe {
-        match object {
-            Some(object) => {
-                let _lock = ObjectLock::take(object);
-                let taken = object::try_take(object);
-                if taken || timeout == Some(0) {
-                    drop(_lock);
-                    arch::set_irql(old);
-                    return if taken {
-                        STATUS_SUCCESS
-                    } else {
-                        STATUS_TIMEOUT
-                    };
-                }
-                must_be_able_to_block(old);
-                // From here wakers can find the thread.
-                register.begin();
-                prepare(object_block, object, STATUS_SUCCESS);
-                object::link(object, object_block);
-            }
-            None => {
-                must_be_able_to_block(old);
-                register.begin();
-            }
-        }
-        if let Some(due) = timeout {
-            // Set first, then look: setting clears what an earlier
-            // expiry may have left, and a timer that has already gone
-            // off by the time its block would be linked ends the wait
-            // here instead.
-            timer::KeSetTimer(my_timer, due, core::ptr::null_mut());
-            let header = &raw mut (*my_timer).Header;
-            let _lock = ObjectLock::take(header);
-            if object::signal(header).load(Ordering::Relaxed) > 0 {
-                let _ = register.claim(STATUS_TIMEOUT);
-            } else {
-                prepare(timer_block, header, STATUS_TIMEOUT);
-                object::link(header, timer_block);
-            }
-        }
-
-        thread::sleep();
-
-        let status = register
-            .status()
-            .expect("a thread woke from a wait that nothing ended");
-        if timeout.is_some() {
-            // Not just cancelled: an expiry of this timer may be under
-            // way on another processor, and once this wait returns the
-            // thread, timer and all, may be freed.
-            timer::cancel_and_settle(my_timer);
-            withdraw(&raw mut (*my_timer).Header, timer_block);
-        }
-        if let Some(object) = object {
-            withdraw(object, object_block);
-        }
-        register.finish();
-        thread::set_wait_status(me, status);
-        arch::set_irql(old);
-        status
+    // A time limit is fixed once, as a system time, however often a
+    // wait for all has to look again.
+    let deadline = timeout.map(|due| match due {
+        0 => 0,
+        due if due < 0 => (time::system_time() + due.unsigned_abs()) as i64,
+        due => due,
+    });
+    // The order in which a wait for all locks its objects.
+    let mut by_address = [0usize; MAXIMUM_WAIT_OBJECTS];
+    for (slot, index) in by_address.iter_mut().zip(0..objects.len()) {
+        *slot = index;
     }
+    let by_address = &mut by_address[..objects.len()];
+    by_address.sort_unstable_by_key(|&index| objects[index].addr());
+
+    // SAFETY: per the contract throughout.
+    let status = unsafe {
+        loop {
+            // Nothing is linked yet, so nothing can claim the thread
+            // until a block goes on a list below. Only blocks linked
+            // here are looked at again afterwards: the rest of the
+            // caller's array is whatever the caller left in it.
+            register.begin();
+            let mut linked = 0;
+            if all {
+                let mut locks: [Option<ObjectLock>; MAXIMUM_WAIT_OBJECTS] =
+                    [const { None }; MAXIMUM_WAIT_OBJECTS];
+                for (lock, &index) in locks.iter_mut().zip(by_address.iter()) {
+                    *lock = Some(ObjectLock::take(objects[index]));
+                }
+                if objects.iter().all(|&object| object::available(object, me)) {
+                    for &object in objects {
+                        object::take(object, me);
+                    }
+                    let _ = register.claim(STATUS_SUCCESS);
+                } else if deadline != Some(0) {
+                    for (index, &object) in objects.iter().enumerate() {
+                        let block = blocks.add(index);
+                        prepare(block, object, WAKE_AND_LOOK, WAIT_ALL);
+                        object::link(object, block);
+                    }
+                    linked = objects.len();
+                }
+                // Released in the reverse of the order taken.
+                for lock in locks.iter_mut().rev() {
+                    drop(lock.take());
+                }
+            } else {
+                for (index, &object) in objects.iter().enumerate() {
+                    let _lock = ObjectLock::take(object);
+                    if object::available(object, me) {
+                        // Unless an object earlier in the list was
+                        // signalled meanwhile and got in first.
+                        if register.claim(index as u32).is_some() {
+                            object::take(object, me);
+                        }
+                        break;
+                    }
+                    let block = blocks.add(index);
+                    prepare(block, object, index as u32, WAIT_ANY);
+                    object::link(object, block);
+                    linked = index + 1;
+                }
+            }
+            if register.status().is_none() {
+                if deadline == Some(0) {
+                    let _ = register.claim(STATUS_TIMEOUT);
+                } else {
+                    must_be_able_to_block(old);
+                }
+            }
+            let timed = register.status().is_none() && deadline.is_some();
+            if let Some(due) = deadline.filter(|_| timed) {
+                // Set first, then look: setting clears what an earlier
+                // expiry may have left, and a timer that has already
+                // gone off by the time its block would be linked ends
+                // the wait here instead.
+                timer::KeSetTimer(my_timer, due, core::ptr::null_mut());
+                let header = &raw mut (*my_timer).Header;
+                let _lock = ObjectLock::take(header);
+                if object::signal(header).load(Ordering::Relaxed) > 0 {
+                    let _ = register.claim(STATUS_TIMEOUT);
+                } else {
+                    prepare(timer_block, header, STATUS_TIMEOUT, WAIT_ANY);
+                    object::link(header, timer_block);
+                }
+            }
+
+            thread::sleep();
+
+            let status = register
+                .status()
+                .expect("a thread woke from a wait that nothing ended");
+            if timed {
+                // Not just cancelled: an expiry of this timer may be
+                // under way on another processor, and once this wait
+                // returns the thread, timer and all, may be freed.
+                timer::cancel_and_settle(my_timer);
+                withdraw(&raw mut (*my_timer).Header, timer_block);
+            }
+            for (index, &object) in objects.iter().enumerate().take(linked) {
+                withdraw(object, blocks.add(index));
+            }
+            register.finish();
+            if status != WAKE_AND_LOOK {
+                break status;
+            }
+        }
+    };
+    // SAFETY: `me` is the running thread.
+    unsafe { thread::set_wait_status(me, status) };
+    arch::set_irql(old);
+    status
 }
 
 /// Start the running thread's wait blocks off as unlinked. Once per
@@ -179,7 +261,7 @@ pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>)
 pub unsafe fn init_thread(thread: *mut thread::Thread) {
     // SAFETY: per the contract.
     unsafe {
-        for index in [0, TIMER_WAIT_BLOCK] {
+        for index in 0..=TIMER_WAIT_BLOCK {
             (&raw mut (*thread::wait_block(thread, index)).BlockState).write(WAIT_BLOCK_INACTIVE);
         }
         timer::KeInitializeTimer(thread::timer(thread));
@@ -335,6 +417,53 @@ pub unsafe extern "C" fn KeWaitForSingleObject(
     }
 }
 
+/// [`KeWaitForMultipleObjects`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kewaitformultipleobjects).
+/// `wait_type` is 0 to wait for all, 1 for any. More than three objects
+/// need the caller's wait blocks; more than 64, or more than three
+/// without, stops the system as on Windows.
+///
+/// # Safety
+/// `object` points to `count` pointers to live dispatcher objects that
+/// stay valid until this returns; `timeout` is null or points to a due
+/// time; `wait_block_array` is null or has room for `count` wait blocks.
+pub unsafe extern "C" fn KeWaitForMultipleObjects(
+    count: u32,
+    object: *const *mut c_void,
+    wait_type: u32,
+    _wait_reason: u32,
+    _wait_mode: i8,
+    _alertable: u8,
+    timeout: *const i64,
+    wait_block_array: *mut KWAIT_BLOCK,
+) -> i32 {
+    let count = count as usize;
+    if count > MAXIMUM_WAIT_OBJECTS || (count > THREAD_WAIT_OBJECTS && wait_block_array.is_null()) {
+        crate::kd::bugcheck(format_args!(
+            "0x0000000C MAXIMUM_WAIT_OBJECTS_EXCEEDED: a wait on {count} objects"
+        ));
+    }
+    let mut objects = [core::ptr::null_mut::<DISPATCHER_HEADER>(); MAXIMUM_WAIT_OBJECTS];
+    // SAFETY: per the contract.
+    unsafe {
+        for (index, slot) in objects.iter_mut().enumerate().take(count) {
+            *slot = object.add(index).read_unaligned().cast();
+        }
+        let objects = &objects[..count];
+        let all = wait_type == u32::from(WAIT_ALL);
+        if all && (1..count).any(|i| objects[..i].contains(&objects[i])) {
+            // One object twice can never be taken twice at once.
+            return nk_ntabi::status::STATUS_INVALID_PARAMETER;
+        }
+        let blocks = if wait_block_array.is_null() {
+            thread::wait_block(thread::current(), 0)
+        } else {
+            wait_block_array
+        };
+        let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
+        wait_objects(objects, all, timeout, blocks) as i32
+    }
+}
+
 /// [`KeDelayExecutionThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kedelayexecutionthread).
 ///
 /// # Safety
@@ -353,8 +482,9 @@ pub unsafe extern "C" fn KeDelayExecutionThread(
 
 // ---- tests --------------------------------------------------------------
 
-use super::{pcr, smp, time};
+use super::{pcr, smp};
 use crate::test::Slot;
+use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use nk_ke::TIME_INCREMENT;
 
@@ -788,4 +918,234 @@ pub fn blocked_in_dpc_test() {
         dpc::KeInitializeDpc(DPC.ptr(), Some(routine), core::ptr::null_mut());
         dpc::KeInsertQueueDpc(DPC.ptr(), core::ptr::null_mut(), core::ptr::null_mut());
     }
+}
+
+static EVENTS: [Slot<KEVENT>; 4] = [const { Slot::new() }; 4];
+
+/// The test events' states as bits, event 0 lowest.
+fn states() -> u32 {
+    let mut bits = 0;
+    for (index, event) in EVENTS.iter().enumerate() {
+        // SAFETY: static, initialised events.
+        if unsafe { KeReadStateEvent(event.ptr()) } != 0 {
+            bits |= 1 << index;
+        }
+    }
+    bits
+}
+
+fn set_event(index: usize) -> i32 {
+    set(&EVENTS[index])
+}
+
+/// Wait on the first `count` test events, as a driver would call for
+/// it, with wait blocks of the caller's own; `ms` is a time limit.
+fn wait_events(count: usize, all: bool, ms: Option<i64>) -> u32 {
+    let objects: [*mut c_void; 4] = core::array::from_fn(|i| EVENTS[i].ptr().cast());
+    // A driver's wait blocks are whatever was on its stack. Fill them
+    // with the worst case: every byte says "linked", every pointer is
+    // wild. The kernel must look only at blocks it linked itself.
+    let mut blocks = MaybeUninit::<[KWAIT_BLOCK; 4]>::uninit();
+    // SAFETY: plain bytes into local storage.
+    unsafe {
+        blocks.as_mut_ptr().cast::<u8>().write_bytes(
+            nk_ntabi::ke::WAIT_BLOCK_ACTIVE,
+            size_of::<[KWAIT_BLOCK; 4]>(),
+        );
+    }
+    let due = ms.map(|ms| -ms * 10_000);
+    let timeout = due.as_ref().map_or(core::ptr::null(), core::ptr::from_ref);
+    // SAFETY: static, initialised events; the due time and the blocks
+    // are locals that outlive the call.
+    unsafe {
+        KeWaitForMultipleObjects(
+            count as u32,
+            objects.as_ptr(),
+            u32::from(!all),
+            0,
+            0,
+            0,
+            timeout,
+            blocks.as_mut_ptr().cast(),
+        ) as u32
+    }
+}
+
+fn init_events() {
+    for event in &EVENTS {
+        init_event(event, true, false);
+    }
+}
+
+/// A wait for any of several objects reports the first that is
+/// signalled, in the order given, and takes only that one.
+pub fn any_test() -> Result<(), &'static str> {
+    init_events();
+    if wait_events(3, false, Some(0)) != STATUS_TIMEOUT {
+        return Err("a wait for any of three unsignalled events did not time out");
+    }
+    set_event(1);
+    if (wait_events(3, false, Some(0)), states()) != (1, 0) {
+        return Err("a wait for any did not report and take the one signalled event");
+    }
+    set_event(2);
+    set_event(0);
+    if (wait_events(3, false, Some(0)), states()) != (0, 0b100) {
+        return Err("a wait for any did not take the first signalled event and leave the other");
+    }
+    // The built-in blocks serve up to three objects.
+    let objects: [*mut c_void; 3] = core::array::from_fn(|i| EVENTS[i].ptr().cast());
+    let none = 0i64;
+    // SAFETY: static, initialised events; the due time is a local.
+    let status = unsafe {
+        KeWaitForMultipleObjects(
+            3,
+            objects.as_ptr(),
+            1,
+            0,
+            0,
+            0,
+            &raw const none,
+            core::ptr::null_mut(),
+        )
+    };
+    if (status, states()) != (2, 0) {
+        return Err("a wait for any with the thread's own wait blocks went wrong");
+    }
+    Ok(())
+}
+
+/// A wait for all of several objects takes all of them or none.
+pub fn all_test() -> Result<(), &'static str> {
+    init_events();
+    set_event(2);
+    if (wait_events(3, true, Some(0)), states()) != (STATUS_TIMEOUT, 0b100) {
+        return Err("a wait for all took an object though not all were signalled");
+    }
+    if (wait_events(3, true, Some(20)), states()) != (STATUS_TIMEOUT, 0b100) {
+        return Err("a wait for all that timed out took an object");
+    }
+    set_event(0);
+    set_event(1);
+    if (wait_events(3, true, Some(0)), states()) != (STATUS_SUCCESS, 0) {
+        return Err("a wait for all did not take all three signalled events");
+    }
+    // The same object twice can never be had twice at once.
+    let twice: [*mut c_void; 2] = [EVENTS[0].ptr().cast(); 2];
+    let none = 0i64;
+    // SAFETY: a static, initialised event; the due time is a local.
+    let status = unsafe {
+        KeWaitForMultipleObjects(
+            2,
+            twice.as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            &raw const none,
+            core::ptr::null_mut(),
+        )
+    };
+    if status != nk_ntabi::status::STATUS_INVALID_PARAMETER {
+        return Err("a wait for all of the same object twice was not refused");
+    }
+    Ok(())
+}
+
+/// Blocking waits on four objects: a wait for any returns when another
+/// thread sets one; a wait for all only when all four have been set,
+/// one after another; and a wait for all that runs out of time leaves
+/// what was set. Returns the waits made.
+pub fn blocking_many_test() -> Result<u32, &'static str> {
+    /// Set `count` events from `first` up, 15 ms apart.
+    fn setter(packed: usize) {
+        let (first, count) = (packed >> 8, packed & 0xFF);
+        for index in first..first + count {
+            delay_ms(15);
+            set_event(index);
+        }
+    }
+    let before = thread::count();
+    init_events();
+    thread::create(
+        setter,
+        3 << 8 | 1,
+        thread::NORMAL_PRIORITY,
+        thread::ANYWHERE,
+    )?;
+    if (wait_events(4, false, None), states()) != (3, 0) {
+        return Err("a blocking wait for any did not report the event another thread set");
+    }
+    if !settle(before) {
+        return Err("the setter did not finish");
+    }
+    let started = time::interrupt_time();
+    thread::create(setter, 4, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    if (wait_events(4, true, None), states()) != (STATUS_SUCCESS, 0) {
+        return Err("a blocking wait for all did not take all four events");
+    }
+    if time::interrupt_time() - started < 600_000 {
+        return Err("a wait for all returned before the last object was set");
+    }
+    if !settle(before) {
+        return Err("the setter did not finish");
+    }
+    // Three of four set, and time runs out.
+    thread::create(setter, 3, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    if wait_events(4, true, Some(120)) != STATUS_TIMEOUT {
+        return Err("a wait for all succeeded with one object never set");
+    }
+    if !settle(before) || states() != 0b0111 {
+        return Err("a wait for all that timed out took objects");
+    }
+    Ok(3)
+}
+
+/// Two threads each wait for both of two events, over and over, while a
+/// third sets the events. A wait for all takes one setting of each or
+/// neither: at the end every setting that found its event unsignalled
+/// is accounted for, per event. Returns the waits that succeeded.
+pub fn all_race_test() -> Result<u64, &'static str> {
+    fn taker(_: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            if wait_events(2, true, Some(1)) == STATUS_SUCCESS {
+                TAKEN.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+    }
+    let before = thread::count();
+    init_events();
+    TAKEN.store(0, Ordering::Relaxed);
+    STOP.store(false, Ordering::Release);
+    spawn(taker, 0, 2)?;
+    let mut effective = [0u64; 2];
+    let until = time::interrupt_time() + 5_000_000;
+    let mut round = 0usize;
+    while time::interrupt_time() < until {
+        let which = round % 2;
+        if set_event(which) == 0 {
+            effective[which] += 1;
+        }
+        round += 1;
+        match round % 512 {
+            0 => delay_ms(20),
+            n if n % 5 == 0 => time::stall((n % 30) as u64),
+            _ => {}
+        }
+        if round % 64 == 0 {
+            thread::yield_now();
+        }
+    }
+    STOP.store(true, Ordering::Release);
+    if !settle(before) {
+        return Err("the takers did not finish");
+    }
+    let taken = TAKEN.load(Ordering::Acquire);
+    let left = states();
+    for (which, &set) in effective.iter().enumerate() {
+        if taken + u64::from(left >> which & 1) != set {
+            return Err("a wait for all took one event without the other");
+        }
+    }
+    Ok(taken)
 }
