@@ -503,15 +503,16 @@ def sha256(data):
 
 
 def drivers_of(script):
-    """{file name in the script: bytes} for its `load` steps, taken from
-    the x86-64 fixture of the same name."""
+    """{file name in the script: bytes} for its `load` and `install`
+    steps, taken from the x86-64 fixture of the same name."""
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     drivers = {}
     for line in script.splitlines():
         words = line.split()
-        if words[:1] != ["load"]:
+        if words[:1] not in (["load"], ["install"]):
             continue
-        stem = Path(words[2]).stem
+        file = words[-1]
+        stem = Path(file).stem
         matches = [fx for fx in manifest
                    if fx["name"] == stem and fx["arch"] == "x86_64" and "kind" not in fx]
         if len(matches) != 1:
@@ -519,7 +520,7 @@ def drivers_of(script):
         path = FIXTURES / matches[0]["file"]
         if not path.exists():
             sys.exit(f"oracle: {path} is not downloaded (run: make fixtures)")
-        drivers[words[2]] = path.read_bytes()
+        drivers[file] = path.read_bytes()
     return drivers
 
 
