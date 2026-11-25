@@ -9,11 +9,11 @@
 
 use super::object::{self, ObjectType};
 use crate::ke::{Rank, SpinLock};
-use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
 use nk_ntabi::ob::{kernel_handle, kernel_handle_index};
 use nk_ntabi::status::*;
+use nk_ob::Slots;
 
 /// `NtCurrentThread()`: not an entry of any table, it names whichever
 /// thread uses it. (`NtCurrentProcess()`, -1, names nothing here: NK
@@ -28,22 +28,19 @@ struct Entry(*mut u8);
 // there.
 unsafe impl Send for Entry {}
 
-static TABLE: SpinLock<Vec<Option<Entry>>> = SpinLock::new(Rank::Handles, Vec::new());
+static TABLE: SpinLock<Slots<Entry>> = SpinLock::new(Rank::Handles, Slots::new());
 
 /// The pool memory the table itself occupies, as `(blocks, bytes)`. It
 /// grows with the most handles ever open at once and is kept, so a leak
 /// check must not count it as lost.
 pub fn storage() -> (usize, usize) {
-    let capacity = TABLE.lock().capacity();
-    (
-        usize::from(capacity != 0),
-        capacity * size_of::<Option<Entry>>(),
-    )
+    let bytes = TABLE.lock().storage();
+    (usize::from(bytes != 0), bytes)
 }
 
 /// Handles that are open.
 pub fn count() -> usize {
-    TABLE.lock().iter().flatten().count()
+    TABLE.lock().count()
 }
 
 /// Open a handle to an object. The handle takes its own reference.
@@ -57,16 +54,7 @@ pub unsafe fn open(body: *mut u8) -> u64 {
         object::reference(body);
         object::handle_count(body).fetch_add(1, Ordering::AcqRel);
     }
-    let mut table = TABLE.lock();
-    let index = match table.iter().position(Option::is_none) {
-        Some(free) => free,
-        None => {
-            table.push(None);
-            table.len() - 1
-        }
-    };
-    table[index] = Some(Entry(body));
-    kernel_handle(index)
+    kernel_handle(TABLE.lock().insert(Entry(body)))
 }
 
 /// The object a handle names, with a new reference for the caller, if
@@ -83,7 +71,7 @@ pub fn reference(handle: u64, ty: Option<*const ObjectType>) -> Result<*mut u8, 
     }
     let index = kernel_handle_index(handle).ok_or(STATUS_INVALID_HANDLE)?;
     let table = TABLE.lock();
-    let Some(Some(Entry(body))) = table.get(index) else {
+    let Some(Entry(body)) = table.get(index) else {
         return Err(STATUS_INVALID_HANDLE);
     };
     // SAFETY: the table holds a reference, and its lock is held, so the
@@ -103,7 +91,7 @@ pub fn close(handle: u64) -> NTSTATUS {
     let Some(index) = kernel_handle_index(handle) else {
         return STATUS_INVALID_HANDLE;
     };
-    let Some(Entry(body)) = TABLE.lock().get_mut(index).and_then(Option::take) else {
+    let Some(Entry(body)) = TABLE.lock().take(index) else {
         return STATUS_INVALID_HANDLE;
     };
     // SAFETY: the entry held a reference, which this gives up, outside

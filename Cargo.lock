@@ -41,6 +41,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-ob"
+version = "0.0.2"
+dependencies = [
+ "nk-rtl",
+]
+
+[[package]]
 name = "nk-oracle"
 version = "0.0.2"
 
@@ -78,6 +85,7 @@ dependencies = [
  "nk-ke",
  "nk-mm",
  "nk-ntabi",
+ "nk-ob",
  "nk-oracle",
  "nk-pe",
  "nk-rtl",
