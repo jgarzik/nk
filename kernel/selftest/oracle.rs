@@ -213,6 +213,7 @@ pub static GROUP: Group = Group {
         "oracle.nkc-mutex",
         "oracle.nkc-waitn",
         "oracle.nkc-work",
+        "oracle.cancel",
     ],
     run,
     manual: false,
@@ -306,6 +307,14 @@ fn run(r: &mut Report, info: &BootInfo) {
         "nkc-work.sys",
         include_str!("../../oracle/nkc-work.script"),
         include_str!("../../oracle/nkc-work.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.cancel",
+        "cancel.sys",
+        include_str!("../../oracle/cancel.script"),
+        include_str!("../../oracle/cancel.txt"),
     );
 }
 

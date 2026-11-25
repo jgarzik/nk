@@ -214,7 +214,27 @@ fn values() -> Result<(), &'static str> {
         }
         // The other forms of query are not there; a handle to something
         // else is not a key.
-        if query(handle, "Number", 1, 28).0 != 0xC000_0002 {
+        // The full form: the name as it was set, and where the data is.
+        // Two bytes short of the whole, it holds what fitted and says
+        // so.
+        let (status, length, out) = query(handle, "TEXT", 1, 32);
+        if (status, length) != (0x8000_0005, 34)
+            || out[4..20] != [1, 0, 0, 0, 28, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0]
+            || out[20..28] != [b'T', 0, b'e', 0, b'x', 0, b't', 0]
+            || out[28..32] != text[..4]
+        {
+            return Err("the full form of a value is not its name, type and data");
+        }
+        // Asked with no room, it says how much is needed.
+        let sizing = (
+            query(handle, "Text", 1, 0).0,
+            query(handle, "Text", 1, 0).1,
+            query(handle, "Text", 1, 20).0,
+        );
+        if sizing != (0xC000_0023, 34, 0x8000_0005) {
+            return Err("the full form did not say how much room it needs");
+        }
+        if query(handle, "Number", 0, 28).0 != 0xC000_0002 {
             return Err("an unimplemented form of query did not say so");
         }
         let mut thread = core::ptr::null_mut();

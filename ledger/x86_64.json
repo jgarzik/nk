@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 78,
-  "implemented": 72,
+  "total": 107,
+  "implemented": 101,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -1113,7 +1113,7 @@
    "file": "cancel.x64.sys",
    "sha256": "63aec27a5b75c6f6a9f1146846edbe8f0dccdeb31e204274209105c5995c7334",
    "status": "wdk-built",
-   "loaded_at_boot": false,
+   "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",

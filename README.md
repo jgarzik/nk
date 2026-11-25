@@ -37,17 +37,18 @@ The drivers are Microsoft's, not written for NK:
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, built with Microsoft's WDK | runs | runs |
 | `nkc-*.sys` (nine) | NK's conformance drivers, built with Microsoft's WDK, each recorded on Windows first | match Windows value for value | the same |
 | `event.sys` | Microsoft's WDM event sample, built with Microsoft's WDK | runs as on Windows with a debugger attached; without one, stops where Windows stops | the same |
+| `cancel.sys` | Microsoft's WDM cancel sample, built with Microsoft's WDK | answers as on Windows; reads cancelled while queued; 100 load/unload cycles without a leak | the same |
 
-**What this is not.** Two software drivers are not general driver
+**What this is not.** A few software drivers are not general driver
 compatibility. NK has preemptive threads that wait on events,
-semaphores, timers and mutexes, and requests that pend and can be
-cancelled, but no APCs, no
-device interrupts, no structured exception handling, no Plug and Play
-and no user mode. It
-has not been run on physical hardware. The two
-drivers' request-by-request results match a run on real Windows 10
-(`oracle/`); the rest of what the tests expect comes from Microsoft's
-documentation, sample source and binaries. `doc/ROADMAP.md` says what is
+semaphores, timers and mutexes, requests that pend and can be
+cancelled, a registry in memory and security descriptors nothing yet
+enforces, but no APCs, no device interrupts, no structured exception
+handling, no Plug and Play and no user mode. It has not been run on
+physical hardware. What the drivers above answer, request by request,
+matches a run on real Windows 10 (`oracle/`); the rest of what the
+tests expect comes from Microsoft's documentation, sample source and
+binaries. `doc/ROADMAP.md` says what is
 open and the path from here to Windows user mode.
 
 ## Try it

@@ -1,0 +1,31 @@
+# Microsoft's cancel sample (general/cancel/sys), unmodified.
+#
+# The driver creates its device with IoCreateDeviceSecure, from the
+# device-security library linked into it: a security descriptor from an
+# SDDL string, and a look in the registry for overrides. A read is
+# queued on a cancel-safe queue and marked pending; a system thread of
+# the driver's takes it off, "polls the device" at most once more after
+# half a second, and completes it with four bytes.
+
+load cancel cancel.sys
+open dev \Device\CANCELSAMP
+open dos \DosDevices\CancelSamp
+
+# A buffer shorter than the driver's four bytes is refused.
+read dev 2
+
+# A read pends, and the driver's thread completes it: four bytes, the
+# counter the thread ran down.
+read dev 4
+read dos 8
+
+# The same again: the queue is empty between requests.
+read dev 4
+
+# The driver handles nothing else.
+write dev 00
+ioctl dev 00222000 - 0
+
+close dos
+close dev
+unload cancel

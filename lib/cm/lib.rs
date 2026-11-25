@@ -190,13 +190,13 @@ impl Hive {
         Ok(())
     }
 
-    /// A value of `key`: its type and data.
-    pub fn value(&self, key: KeyId, name: &[u16]) -> Option<(u32, &[u8])> {
+    /// A value of `key`: its name as it was set, its type and data.
+    pub fn value(&self, key: KeyId, name: &[u16]) -> Option<(&[u16], u32, &[u8])> {
         self.keys[key.0]
             .values
             .iter()
             .find(|value| same(&value.name, name))
-            .map(|value| (value.kind, &value.data[..]))
+            .map(|value| (&value.name[..], value.kind, &value.data[..]))
     }
 
     /// The memory the tree holds, as `(allocations, bytes)`.
@@ -251,6 +251,48 @@ pub fn partial_information(kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usiz
     out[PARTIAL_HEADER..PARTIAL_HEADER + room].copy_from_slice(&data[..room]);
     (
         if room == data.len() {
+            Fit::All
+        } else {
+            Fit::Part
+        },
+        needed,
+    )
+}
+
+/// Size of a `KEY_VALUE_FULL_INFORMATION` before the name: title
+/// index, type, data offset, data length, name length.
+pub const FULL_HEADER: usize = 20;
+
+/// Write a value as a `KEY_VALUE_FULL_INFORMATION` into `out`: the
+/// header, the name, then the data at the next multiple of four bytes.
+/// Returns how much fitted, and the length that holds all of it.
+pub fn full_information(name: &[u16], kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usize) {
+    let name_bytes = name.len() * 2;
+    let data_offset = (FULL_HEADER + name_bytes + 3) & !3;
+    let needed = data_offset + data.len();
+    if out.len() < FULL_HEADER {
+        return (Fit::Nothing, needed);
+    }
+    let header = [
+        0,
+        kind,
+        data_offset as u32,
+        data.len() as u32,
+        name_bytes as u32,
+    ];
+    for (i, field) in header.iter().enumerate() {
+        out[4 * i..4 * i + 4].copy_from_slice(&field.to_le_bytes());
+    }
+    let name = name.iter().flat_map(|unit| unit.to_le_bytes());
+    out[FULL_HEADER..]
+        .iter_mut()
+        .zip(name)
+        .for_each(|(to, from)| *to = from);
+    if let Some(room) = out.get_mut(data_offset..) {
+        room.iter_mut().zip(data).for_each(|(to, &from)| *to = from);
+    }
+    (
+        if out.len() >= needed {
             Fit::All
         } else {
             Fit::Part
@@ -343,19 +385,27 @@ mod tests {
             .unwrap();
         hive.set_value(system, &w("Text"), 1, &[b'n', 0, 0, 0])
             .unwrap();
+        let number = w("Number");
         assert_eq!(
             hive.value(system, &w("NUMBER")),
-            Some((4, &[0x78, 0x56, 0x34, 0x12][..]))
+            Some((&number[..], 4, &[0x78, 0x56, 0x34, 0x12][..]))
         );
         assert_eq!(
-            hive.value(system, &w("text")),
+            hive.value(system, &w("text")).map(|v| (v.1, v.2)),
             Some((1, &[b'n', 0, 0, 0][..]))
         );
-        // Set again under another spelling: replaced, type and all.
+        // Set again under another spelling: replaced, type and all; the
+        // name stays as it was first set.
         hive.set_value(system, &w("number"), 3, &[9]).unwrap();
-        assert_eq!(hive.value(system, &w("Number")), Some((3, &[9][..])));
+        assert_eq!(
+            hive.value(system, &w("NUMBER")),
+            Some((&number[..], 3, &[9][..]))
+        );
         hive.set_value(system, &w("Empty"), 3, &[]).unwrap();
-        assert_eq!(hive.value(system, &w("Empty")), Some((3, &[][..])));
+        assert_eq!(
+            hive.value(system, &w("Empty")).map(|v| (v.1, v.2.len())),
+            Some((3, 0))
+        );
         // Values belong to their key.
         let root = hive.root().unwrap();
         assert_eq!(hive.value(root, &w("Number")), None);
@@ -381,6 +431,67 @@ mod tests {
         // Replacing a value with one of the same size changes nothing.
         hive.set_value(key, &w("v"), 4, &[5, 6, 7, 8]).unwrap();
         assert_eq!(hive.storage(), with_value);
+    }
+
+    #[test]
+    fn the_full_form_carries_the_name_and_says_where_the_data_is() {
+        let data = [1, 2, 3, 4, 5, 6];
+        // "Abc": 6 bytes of name, so the data starts at 28, not 26.
+        let mut out = [0xEEu8; 40];
+        assert_eq!(
+            full_information(&w("Abc"), 3, &data, &mut out),
+            (Fit::All, 34)
+        );
+        assert_eq!(
+            out[..20],
+            [0, 0, 0, 0, 3, 0, 0, 0, 28, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]
+        );
+        assert_eq!(out[20..26], [b'A', 0, b'b', 0, b'c', 0]);
+        assert_eq!(out[26..28], [0xEE, 0xEE], "the gap is left alone");
+        assert_eq!(out[28..34], data);
+        assert_eq!(out[34], 0xEE);
+        // Exactly enough; one short; the header and part of the name;
+        // the header alone.
+        let mut exact = [0xEEu8; 34];
+        assert_eq!(
+            full_information(&w("Abc"), 3, &data, &mut exact).0,
+            Fit::All
+        );
+        let mut short = [0xEEu8; 33];
+        assert_eq!(
+            full_information(&w("Abc"), 3, &data, &mut short),
+            (Fit::Part, 34)
+        );
+        assert_eq!(short[28..33], data[..5]);
+        let mut name_cut = [0xEEu8; 23];
+        assert_eq!(
+            full_information(&w("Abc"), 3, &data, &mut name_cut),
+            (Fit::Part, 34)
+        );
+        assert_eq!(name_cut[16..], [6, 0, 0, 0, b'A', 0, b'b']);
+        let mut header = [0xEEu8; 20];
+        assert_eq!(
+            full_information(&w("Abc"), 3, &data, &mut header),
+            (Fit::Part, 34)
+        );
+        assert_eq!(header[8], 28);
+        // Not even the header: untouched.
+        let mut nothing = [0xEEu8; 19];
+        assert_eq!(
+            full_information(&w("Abc"), 3, &data, &mut nothing),
+            (Fit::Nothing, 34)
+        );
+        assert_eq!(nothing, [0xEE; 19]);
+        // A name of even length needs no gap; no data, no bytes for it.
+        assert_eq!(
+            full_information(&w("Text"), 1, &data, &mut out),
+            (Fit::All, 34)
+        );
+        assert_eq!(out[8], 28);
+        assert_eq!(
+            full_information(&w("Abc"), 3, &[], &mut out),
+            (Fit::All, 28)
+        );
     }
 
     #[test]

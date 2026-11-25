@@ -416,8 +416,8 @@ case. A key handle is a handle to a small object naming the key; a name
 is absolute from `\Registry` or relative to an open key.
 
 Creating makes only the last key of a path, as on Windows. Values are
-read as `KeyValuePartialInformation`; the other forms answer
-`STATUS_NOT_IMPLEMENTED`. There are no access checks, no symbolic links
+read as `KeyValuePartialInformation` or `KeyValueFullInformation`; the
+other forms answer `STATUS_NOT_IMPLEMENTED`. There are no access checks, no symbolic links
 between keys, no notification and no deletion yet. The registry's memory
 is its own: leak checks leave it out, as they do the handle table.
 

@@ -272,7 +272,7 @@ unsafe fn transfer(
     major: u8,
     buffer: *mut u8,
     len: usize,
-) -> Result<IoResult, IoError> {
+) -> Result<Pending, IoError> {
     // SAFETY: per the contract.
     unsafe {
         let irp = request(
@@ -304,7 +304,7 @@ unsafe fn transfer(
             // Neither: the driver gets the caller's buffer as it is.
             (*irp).UserBuffer = buffer.cast();
         }
-        submit(file, irp)
+        Ok(start(file, irp))
     }
 }
 
@@ -314,6 +314,17 @@ unsafe fn transfer(
 /// `file` must be an open file.
 pub unsafe fn read(file: *mut FILE_OBJECT, buffer: &mut [u8]) -> Result<IoResult, IoError> {
     // SAFETY: `buffer` is a valid writable slice; `file` per the contract.
+    unsafe { read_start(file, buffer) }?.wait()
+}
+
+/// Send a read without waiting for it.
+///
+/// # Safety
+/// `file` must be an open file, and `buffer` must stay valid and unused
+/// until the returned request has been waited for.
+pub unsafe fn read_start(file: *mut FILE_OBJECT, buffer: &mut [u8]) -> Result<Pending, IoError> {
+    // SAFETY: `buffer` is a valid writable slice; the rest per the
+    // contract.
     unsafe { transfer(file, IRP_MJ_READ, buffer.as_mut_ptr(), buffer.len()) }
 }
 
@@ -323,7 +334,7 @@ pub unsafe fn read(file: *mut FILE_OBJECT, buffer: &mut [u8]) -> Result<IoResult
 /// `file` must be an open file.
 pub unsafe fn write(file: *mut FILE_OBJECT, buffer: &[u8]) -> Result<IoResult, IoError> {
     // SAFETY: a write only reads the buffer; `file` per the contract.
-    unsafe { transfer(file, IRP_MJ_WRITE, buffer.as_ptr().cast_mut(), buffer.len()) }
+    unsafe { transfer(file, IRP_MJ_WRITE, buffer.as_ptr().cast_mut(), buffer.len()) }?.wait()
 }
 
 /// Send a device control request and wait for it. The control code's low

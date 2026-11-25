@@ -108,6 +108,8 @@ sioctl.close ok
 sioctl.unload ok
 sioctl.no-leak ok
 sioctl.cycles ok
+cancel.cancelled ok
+cancel.cycles ok
 oracle.null skip
 oracle.sioctl ok
 oracle.nkc-irql ok
@@ -119,3 +121,4 @@ oracle.nkc-wait ok
 oracle.nkc-mutex ok
 oracle.nkc-waitn ok
 oracle.nkc-work ok
+oracle.cancel ok

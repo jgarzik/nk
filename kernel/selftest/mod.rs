@@ -6,6 +6,7 @@
 //! architecture) makes its tests SKIP.
 
 mod base;
+mod cancel;
 mod clock;
 mod cm;
 mod csq;
@@ -50,6 +51,7 @@ pub static GROUPS: &[&Group] = &[
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
+    &cancel::GROUP,
     &oracle::GROUP,
     &neg::PANIC,
     &neg::FAULT,

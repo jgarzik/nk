@@ -173,6 +173,7 @@ None is committed. The boot tests put them on the EFI system partition:
 | `null.sys` | Microsoft's inbox Null driver | loads; read gives end-of-file, write accepts all bytes; unloads without leaks |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, WDK-built | loads; opens by device name and by its symbolic link; buffered, in-direct and out-direct control requests return the sample's data; bad requests fail with the sample's status codes; 100 load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample, WDK-built | with a debugger attached, runs: its timer's DPC completes pended requests; without one, its opening breakpoint stops the system as on Windows |
+| `cancel.sys` | Microsoft's WDM cancel sample, WDK-built | creates its device through Microsoft's device-security library (SDDL, registry, security descriptor); queues reads on a cancel-safe queue that its own thread serves; reads are cancelled while queued; 100 load/exercise/unload cycles leave nothing behind |
 | `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), WDK-built: irql, time, dpc, timer, thread, wait, mutex, waitn, work | each returns the list of values it observed, the same list it returns on Windows |
 | `wrongarch.sys` | the same sample built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |

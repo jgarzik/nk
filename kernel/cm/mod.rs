@@ -22,7 +22,8 @@ static HIVE: SpinLock<Hive> = SpinLock::new(Rank::Registry, Hive::new());
 /// `REG_CREATED_NEW_KEY`, `REG_OPENED_EXISTING_KEY`.
 const CREATED: u32 = 1;
 const OPENED: u32 = 2;
-/// `KeyValuePartialInformation`.
+/// `KeyValueFullInformation`, `KeyValuePartialInformation`.
+const FULL: u32 = 1;
 const PARTIAL: u32 = 2;
 
 /// The keys every Windows system has and drivers build on, which no
@@ -224,8 +225,9 @@ pub unsafe extern "C" fn ZwSetValueKey(
 }
 
 /// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey),
-/// for `KeyValuePartialInformation`: the value's type and data. The
-/// other forms are not implemented.
+/// for `KeyValueFullInformation` (name, type and data) and
+/// `KeyValuePartialInformation` (type and data). The other forms are
+/// not implemented.
 ///
 /// # Safety
 /// `value_name` is null or a counted string; `information` is writable
@@ -238,7 +240,7 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     length: u32,
     result_length: *mut u32,
 ) -> NTSTATUS {
-    if class != PARTIAL {
+    if class != PARTIAL && class != FULL {
         return STATUS_NOT_IMPLEMENTED;
     }
     let key = match key_of(key_handle) {
@@ -251,16 +253,22 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     // lock, and copied to the driver's afterwards.
     let answer = {
         let hive = HIVE.lock();
-        let Some((kind, data)) = hive.value(key, &name) else {
+        let Some((stored_name, kind, data)) = hive.value(key, &name) else {
             return STATUS_OBJECT_NAME_NOT_FOUND;
         };
+        // Sized first, with no room at all, so that the copy made is
+        // no larger than the answer.
+        let write = |out: &mut [u8]| match class {
+            FULL => nk_cm::full_information(stored_name, kind, data, out),
+            _ => nk_cm::partial_information(kind, data, out),
+        };
+        let room = (length as usize).min(write(&mut []).1);
         let mut out = Vec::new();
-        let room = (length as usize).min(nk_cm::PARTIAL_HEADER + data.len());
         if out.try_reserve_exact(room).is_err() {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         out.resize(room, 0);
-        let (fit, needed) = nk_cm::partial_information(kind, data, &mut out);
+        let (fit, needed) = write(&mut out);
         (fit, needed, out)
     };
     let (fit, needed, out) = answer;

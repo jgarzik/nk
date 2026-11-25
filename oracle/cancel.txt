@@ -1,0 +1,16 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 26cf6306a4d68b0b4f4b42bf5e655d44441bc2ed12aad43e4314e32879dd1f2a
+# driver cancel.sys sha256 63aec27a5b75c6f6a9f1146846edbe8f0dccdeb31e204274209105c5995c7334
+load cancel: ok
+open dev \Device\CANCELSAMP: 00000000
+open dos \DosDevices\CancelSamp: 00000000
+read dev 2: c0000023 - eeee
+read dev 4: 00000000 4 ffffffff
+read dos 8: 00000000 4 ffffffffeeeeeeee
+read dev 4: 00000000 4 ffffffff
+write dev 00: c0000010 -
+ioctl dev 00222000 - 0: c0000010 - -
+close dos: 00000000
+close dev: 00000000
+unload cancel: ok
+end

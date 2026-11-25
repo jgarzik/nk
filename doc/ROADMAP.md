@@ -16,17 +16,18 @@ objects, synchronous IRPs with completion routines and MDLs; interrupt
 controllers, the IRQL as their priority mask, a clock, every processor
 running, DPCs, timers, preemptive threads, waits on events, semaphores,
 timers and mutexes, kernel handles, system threads, work items, requests
-that pend and can be cancelled. Microsoft's
-`null.sys` (x86-64) and the WDK-built `sioctl.sys` (both) load, do I/O and
-unload without leaks.
+that pend and can be cancelled, cancel-safe queues, security
+descriptors, a registry in memory. Microsoft's `null.sys` (x86-64) and
+the WDK-built samples `sioctl.sys`, `event.sys` and `cancel.sys` (both)
+load, do I/O and unload without leaks, answering as they do on Windows.
 
 Not there: device interrupts, APCs,
 structured exception
 handling, Plug and Play, any hardware device, user mode. Open
 gaps carried into the phases below: no arm64 `null.sys` (no usable
 source; stays SKIP), `METHOD_NEITHER` untested (phase 2), never run on a
-physical machine (phase 3). The two drivers' results match a run on real
-Windows, request by request (`oracle/`).
+physical machine (phase 3). What the test drivers answer matches a run
+on real Windows, request by request (`oracle/`).
 
 ## Destination
 
