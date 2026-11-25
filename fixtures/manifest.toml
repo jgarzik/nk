@@ -176,23 +176,23 @@ note = "Windows-driver-samples d49bb7d7 general/event/wdm"
 name = "abi-probe"
 arch = "x86_64"
 file = "abi-probe.x64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.x64.txt"
-sha256 = "f5b3bd9b583d3544ce1ea5fb7412a2ebc5aef5b38453c9c50fbdb1038587e3e5"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/abi-probe.x64.txt"
+sha256 = "144e5aeb2af3149663fed74251f246d2b3554b99ec8e65ad221b95cf54ec8960"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v6 abi-probe/probe.c and probe-unwind.c, WDK 10.0.28000.2526, NT target 19041"
 
 [[fixture]]
 name = "abi-probe"
 arch = "aarch64"
 file = "abi-probe.arm64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.arm64.txt"
-sha256 = "22518e8a44c84fe370f12b3a370db999170a222ce1a604c99118ddf9fedb47da"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/abi-probe.arm64.txt"
+sha256 = "f71be96cdfae3416055aa0ad39bf2b327c313fbd5a9f15c2a988a5c455bcf3e2"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v6 abi-probe/probe.c and probe-unwind.c, WDK 10.0.28000.2526, NT target 19041"
 
 # Microsoft's public symbols for the kernel of the pinned build
 # (ntoskrnl.exe 10.0.19041.2006, the kernel of Windows 10 22H2 19045.2006).

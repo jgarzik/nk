@@ -5,8 +5,9 @@
 //! `CONTEXT` and a `DISPATCHER_CONTEXT` and reads and writes them, so
 //! all three are ABI. `CONTEXT` and `DISPATCHER_CONTEXT` differ by
 //! architecture; both forms are declared on every host so the layouts
-//! can be checked there. The x86-64 forms are compared with the kernel's
-//! public symbols (`pdb.rs`); the arm64 forms follow the WDK's headers.
+//! can be checked there. Both are compared with the table the WDK's
+//! compiler produced (`probe.rs`), the x86-64 forms also with the
+//! kernel's public symbols (`pdb.rs`).
 
 use core::ffi::c_void;
 
