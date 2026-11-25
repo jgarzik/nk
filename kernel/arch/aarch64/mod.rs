@@ -7,6 +7,7 @@ pub mod platform;
 mod smp;
 mod switch;
 mod trap;
+pub mod unwind;
 mod variadic;
 
 pub use gic::{

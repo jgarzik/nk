@@ -27,6 +27,7 @@ nk-pe = { path = "../lib/pe" }
 nk-rtl = { path = "../lib/rtl" }
 nk-cm = { path = "../lib/cm" }
 nk-se = { path = "../lib/se" }
+nk-unwind = { path = "../lib/unwind" }
 nk-selftest = { path = "../lib/selftest" }
 
 [lints]

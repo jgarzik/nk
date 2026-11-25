@@ -207,6 +207,47 @@ pub fn image_headers(image: &[u8]) -> Result<Headers, PeError> {
     read_headers(image).map(|(headers, ..)| headers)
 }
 
+/// As [`Pe::page_flags`], for an image laid out in memory, of which
+/// `image` is at least the headers.
+pub fn image_page_flags(image: &[u8], rva: u32) -> Option<u32> {
+    let (headers, off, count) = read_headers(image).ok()?;
+    let table = image.get(off..off.checked_add(count.checked_mul(SECTION_HEADER_SIZE)?)?)?;
+    let sections = table
+        .as_chunks::<SECTION_HEADER_SIZE>()
+        .0
+        .iter()
+        .map(|h| section_at(h));
+    page_flags(&headers, sections, rva)
+}
+
+/// Decode one entry of the section table.
+fn section_at(h: &[u8]) -> Section {
+    let w = |o: usize| u32::from_le_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]]);
+    let mut name = [0; 8];
+    name.copy_from_slice(&h[..8]);
+    Section {
+        name,
+        virt_size: w(8),
+        rva: w(12),
+        raw_size: w(16),
+        raw_off: w(20),
+        characteristics: w(36),
+    }
+}
+
+fn page_flags(
+    headers: &Headers,
+    mut sections: impl Iterator<Item = Section>,
+    rva: u32,
+) -> Option<u32> {
+    if rva < headers.size_of_headers {
+        return Some(SCN_MEM_READ);
+    }
+    sections
+        .find(|s| rva >= s.rva && u64::from(rva) < u64::from(s.rva) + u64::from(s.mem_size()))
+        .map(|s| s.characteristics)
+}
+
 /// A PE32+ file, as read from disk.
 #[derive(Debug, Clone, Copy)]
 pub struct Pe<'a> {
@@ -257,33 +298,16 @@ impl<'a> Pe<'a> {
 
     pub fn sections(&self) -> impl Iterator<Item = Section> + 'a {
         let (file, off) = (self.file, self.sections_off);
-        (0..self.nsections).map(move |i| {
-            // Bounds were checked in `parse`.
-            let h = &file[off + i * SECTION_HEADER_SIZE..][..SECTION_HEADER_SIZE];
-            let w = |o: usize| u32::from_le_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]]);
-            let mut name = [0; 8];
-            name.copy_from_slice(&h[..8]);
-            Section {
-                name,
-                virt_size: w(8),
-                rva: w(12),
-                raw_size: w(16),
-                raw_off: w(20),
-                characteristics: w(36),
-            }
-        })
+        // Bounds were checked in `parse`.
+        (0..self.nsections)
+            .map(move |i| section_at(&file[off + i * SECTION_HEADER_SIZE..][..SECTION_HEADER_SIZE]))
     }
 
     /// Section characteristics (`SCN_MEM_*`) governing the image page at
     /// `rva`: the section that covers it, or read-only for the headers.
     /// `None` for a page no section covers, which should stay unmapped.
     pub fn page_flags(&self, rva: u32) -> Option<u32> {
-        if rva < self.headers.size_of_headers {
-            return Some(SCN_MEM_READ);
-        }
-        self.sections()
-            .find(|s| rva >= s.rva && u64::from(rva) < u64::from(s.rva) + u64::from(s.mem_size()))
-            .map(|s| s.characteristics)
+        page_flags(&self.headers, self.sections(), rva)
     }
 
     /// Lay the file out as it sits in memory: headers, then each section at

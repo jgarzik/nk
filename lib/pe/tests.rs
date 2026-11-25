@@ -227,6 +227,19 @@ fn page_flags_follow_sections() {
 }
 
 #[test]
+fn page_flags_are_read_from_a_mapped_image_s_headers() {
+    let file = Builder::new().build();
+    let pe = Pe::parse(&file).unwrap();
+    let (_, image) = mapped(&file);
+    for rva in (0..=IMAGE_SIZE).step_by(0x1000) {
+        assert_eq!(image_page_flags(&image[..0x1000], rva), pe.page_flags(rva));
+    }
+    // Headers that end before the section table describe no page.
+    assert_eq!(image_page_flags(&image[..0x100], TEXT), None);
+    assert_eq!(image_page_flags(b"MZ", 0), None);
+}
+
+#[test]
 fn machine_check() {
     let pe_file = Builder {
         machine: MACHINE_ARM64,

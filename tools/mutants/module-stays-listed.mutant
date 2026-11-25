@@ -2,4 +2,5 @@
 scenario: x86_64
 fails: ldr.module.driver
 file: kernel/ldr/mod.rs
-remove:     MODULES.lock().remove(image.base);
+replace:     let module = MODULES.lock().remove(image.base);
+with:     let module = MODULES.lock().containing(image.base);

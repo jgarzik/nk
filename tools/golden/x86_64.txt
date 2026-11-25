@@ -42,6 +42,9 @@ thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
 thread.identity ok
+seh.walk.thread ok
+seh.walk.dpc ok
+seh.walk.interrupt ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok
