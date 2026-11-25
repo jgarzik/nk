@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 107,
-  "implemented": 101,
+  "total": 108,
+  "implemented": 102,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -1075,6 +1075,154 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInsertQueueDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-se",
+   "file": "nkc-se.arm64.sys",
+   "sha256": "8970edb14de5ff8712ac2eecc9cee5e16dbfccf52882a94d6e8019919f1e4484",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetOwnerSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddAccessAllowedAce",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetDaclSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCaptureSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeExports",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetDaclSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAbsoluteToSelfRelativeSD",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-reg",
+   "file": "nkc-reg.arm64.sys",
+   "sha256": "914fa4358c1caab2bdc9aa8dda2608a55b557b4b1f6e7fd483e425f00a3654fc",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwDeleteKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwCreateKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
      "state": "implemented"
     },
     {

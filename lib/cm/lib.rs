@@ -37,6 +37,11 @@ pub enum Error {
     NotFound,
     /// No memory for the change; nothing was changed.
     NoMemory,
+    /// The key has been deleted (`STATUS_KEY_DELETED`).
+    Deleted,
+    /// The key has subkeys and so cannot be deleted
+    /// (`STATUS_CANNOT_DELETE`).
+    HasSubkeys,
 }
 
 struct Value {
@@ -47,8 +52,15 @@ struct Value {
 
 struct Key {
     name: Vec<u16>,
+    parent: usize,
     children: Vec<usize>,
     values: Vec<Value>,
+    /// How many handles are open to it.
+    open: u32,
+    /// Deleted: gone from its parent, empty, and refusing every
+    /// request. Its place in the table is reused once no handle is
+    /// open to it.
+    deleted: bool,
 }
 
 /// A registry.
@@ -108,22 +120,75 @@ impl Hive {
     /// The root key, made on first use.
     pub fn root(&mut self) -> Result<KeyId, Error> {
         if self.keys.is_empty() {
-            self.add(ROOT)?;
+            self.add(ROOT, 0)?;
         }
         Ok(KeyId(0))
     }
 
-    fn add(&mut self, name: &[u16]) -> Result<usize, Error> {
-        let name = exact(name)?;
-        self.keys
-            .try_reserve_exact(1)
-            .map_err(|_| Error::NoMemory)?;
-        self.keys.push(Key {
-            name,
+    fn add(&mut self, name: &[u16], parent: usize) -> Result<usize, Error> {
+        let key = Key {
+            name: exact(name)?,
+            parent,
             children: Vec::new(),
             values: Vec::new(),
-        });
-        Ok(self.keys.len() - 1)
+            open: 0,
+            deleted: false,
+        };
+        // The place of a deleted key nobody has open any more, or a
+        // new one.
+        match self
+            .keys
+            .iter()
+            .position(|old| old.deleted && old.open == 0)
+        {
+            Some(vacant) => {
+                self.keys[vacant] = key;
+                Ok(vacant)
+            }
+            None => {
+                self.keys
+                    .try_reserve_exact(1)
+                    .map_err(|_| Error::NoMemory)?;
+                self.keys.push(key);
+                Ok(self.keys.len() - 1)
+            }
+        }
+    }
+
+    fn live(&self, key: KeyId) -> Result<usize, Error> {
+        if self.keys[key.0].deleted {
+            Err(Error::Deleted)
+        } else {
+            Ok(key.0)
+        }
+    }
+
+    /// A handle has been opened to `key`.
+    pub fn opened(&mut self, key: KeyId) {
+        self.keys[key.0].open += 1;
+    }
+
+    /// A handle to `key` has been closed.
+    pub fn closed(&mut self, key: KeyId) {
+        self.keys[key.0].open -= 1;
+    }
+
+    /// Delete `key`: it leaves its parent and loses its values at once,
+    /// and every later request through a handle still open to it is
+    /// refused. A key with subkeys is not deleted; nor is the root.
+    pub fn delete(&mut self, key: KeyId) -> Result<(), Error> {
+        let index = self.live(key)?;
+        if !self.keys[index].children.is_empty() || index == 0 {
+            return Err(Error::HasSubkeys);
+        }
+        let parent = self.keys[index].parent;
+        self.keys[parent].children.retain(|&child| child != index);
+        self.keys[parent].children.shrink_to_fit();
+        let gone = &mut self.keys[index];
+        gone.deleted = true;
+        gone.name = Vec::new();
+        gone.values = Vec::new();
+        Ok(())
     }
 
     fn child(&self, key: usize, name: &[u16]) -> Option<usize> {
@@ -138,7 +203,7 @@ impl Hive {
     /// `start` itself.
     pub fn open(&self, start: KeyId, path: &[u16]) -> Result<KeyId, Error> {
         components(path)
-            .try_fold(start.0, |key, name| self.child(key, name))
+            .try_fold(self.live(start)?, |key, name| self.child(key, name))
             .map(KeyId)
             .ok_or(Error::NotFound)
     }
@@ -147,7 +212,7 @@ impl Hive {
     /// the last part of the path is created: the keys above it must
     /// exist. Says whether the key is new.
     pub fn create(&mut self, start: KeyId, path: &[u16]) -> Result<(KeyId, bool), Error> {
-        let mut key = start.0;
+        let mut key = self.live(start)?;
         let mut parts = components(path).peekable();
         while let Some(name) = parts.next() {
             key = match self.child(key, name) {
@@ -160,7 +225,7 @@ impl Hive {
                         .children
                         .try_reserve_exact(1)
                         .map_err(|_| Error::NoMemory)?;
-                    let new = self.add(name)?;
+                    let new = self.add(name, key)?;
                     self.keys[key].children.push(new);
                     return Ok((KeyId(new), true));
                 }
@@ -177,8 +242,9 @@ impl Hive {
         kind: u32,
         data: &[u8],
     ) -> Result<(), Error> {
+        let index = self.live(key)?;
         let data = exact(data)?;
-        let values = &mut self.keys[key.0].values;
+        let values = &mut self.keys[index].values;
         if let Some(value) = values.iter_mut().find(|value| same(&value.name, name)) {
             value.kind = kind;
             value.data = data;
@@ -191,12 +257,14 @@ impl Hive {
     }
 
     /// A value of `key`: its name as it was set, its type and data.
-    pub fn value(&self, key: KeyId, name: &[u16]) -> Option<(&[u16], u32, &[u8])> {
-        self.keys[key.0]
+    /// `NotFound` if it has no such value.
+    pub fn value(&self, key: KeyId, name: &[u16]) -> Result<(&[u16], u32, &[u8]), Error> {
+        self.keys[self.live(key)?]
             .values
             .iter()
             .find(|value| same(&value.name, name))
             .map(|value| (&value.name[..], value.kind, &value.data[..]))
+            .ok_or(Error::NotFound)
     }
 
     /// The memory the tree holds, as `(allocations, bytes)`.
@@ -263,23 +331,26 @@ pub fn partial_information(kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usiz
 /// index, type, data offset, data length, name length.
 pub const FULL_HEADER: usize = 20;
 
+/// The `DataOffset` of a value that has no data.
+pub const NO_DATA: u32 = u32::MAX;
+
 /// Write a value as a `KEY_VALUE_FULL_INFORMATION` into `out`: the
-/// header, the name, then the data at the next multiple of four bytes.
+/// header, the name, then the data at the next multiple of eight bytes
+/// (so Windows 10 x64 places it; `oracle/nkc-reg.txt`). A value with no
+/// data ends with its name and gives [`NO_DATA`] as the offset.
 /// Returns how much fitted, and the length that holds all of it.
 pub fn full_information(name: &[u16], kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usize) {
     let name_bytes = name.len() * 2;
-    let data_offset = (FULL_HEADER + name_bytes + 3) & !3;
-    let needed = data_offset + data.len();
+    let (data_offset, needed) = if data.is_empty() {
+        (NO_DATA, FULL_HEADER + name_bytes)
+    } else {
+        let offset = (FULL_HEADER + name_bytes + 7) & !7;
+        (offset as u32, offset + data.len())
+    };
     if out.len() < FULL_HEADER {
         return (Fit::Nothing, needed);
     }
-    let header = [
-        0,
-        kind,
-        data_offset as u32,
-        data.len() as u32,
-        name_bytes as u32,
-    ];
+    let header = [0, kind, data_offset, data.len() as u32, name_bytes as u32];
     for (i, field) in header.iter().enumerate() {
         out[4 * i..4 * i + 4].copy_from_slice(&field.to_le_bytes());
     }
@@ -288,7 +359,7 @@ pub fn full_information(name: &[u16], kind: u32, data: &[u8], out: &mut [u8]) ->
         .iter_mut()
         .zip(name)
         .for_each(|(to, from)| *to = from);
-    if let Some(room) = out.get_mut(data_offset..) {
+    if let Some(room) = out.get_mut(data_offset as usize..) {
         room.iter_mut().zip(data).for_each(|(to, &from)| *to = from);
     }
     (
@@ -380,7 +451,7 @@ mod tests {
     #[test]
     fn values_are_set_replaced_and_read() {
         let (mut hive, system) = hive();
-        assert_eq!(hive.value(system, &w("Number")), None);
+        assert_eq!(hive.value(system, &w("Number")), Err(Error::NotFound));
         hive.set_value(system, &w("Number"), 4, &[0x78, 0x56, 0x34, 0x12])
             .unwrap();
         hive.set_value(system, &w("Text"), 1, &[b'n', 0, 0, 0])
@@ -388,27 +459,63 @@ mod tests {
         let number = w("Number");
         assert_eq!(
             hive.value(system, &w("NUMBER")),
-            Some((&number[..], 4, &[0x78, 0x56, 0x34, 0x12][..]))
+            Ok((&number[..], 4, &[0x78, 0x56, 0x34, 0x12][..]))
         );
         assert_eq!(
             hive.value(system, &w("text")).map(|v| (v.1, v.2)),
-            Some((1, &[b'n', 0, 0, 0][..]))
+            Ok((1, &[b'n', 0, 0, 0][..]))
         );
         // Set again under another spelling: replaced, type and all; the
         // name stays as it was first set.
         hive.set_value(system, &w("number"), 3, &[9]).unwrap();
         assert_eq!(
             hive.value(system, &w("NUMBER")),
-            Some((&number[..], 3, &[9][..]))
+            Ok((&number[..], 3, &[9][..]))
         );
         hive.set_value(system, &w("Empty"), 3, &[]).unwrap();
         assert_eq!(
             hive.value(system, &w("Empty")).map(|v| (v.1, v.2.len())),
-            Some((3, 0))
+            Ok((3, 0))
         );
         // Values belong to their key.
         let root = hive.root().unwrap();
-        assert_eq!(hive.value(root, &w("Number")), None);
+        assert_eq!(hive.value(root, &w("Number")), Err(Error::NotFound));
+    }
+
+    #[test]
+    fn a_deleted_key_is_gone_at_once_and_its_place_reused_when_closed() {
+        let (mut hive, system) = hive();
+        let (key, _) = hive.create(system, &w("Gone")).unwrap();
+        let (sub, _) = hive.create(key, &w("Sub")).unwrap();
+        hive.set_value(key, &w("V"), 4, &[1, 2, 3, 4]).unwrap();
+        hive.opened(key);
+        // Not while it has a subkey; nor the root, ever.
+        assert_eq!(hive.delete(key), Err(Error::HasSubkeys));
+        assert_eq!(hive.delete(sub), Ok(()));
+        let before = hive.storage();
+        assert_eq!(hive.delete(key), Ok(()));
+        let root = hive.root().unwrap();
+        assert_eq!(hive.delete(root), Err(Error::HasSubkeys));
+        // Gone by name, and its memory with it...
+        assert_eq!(hive.open(system, &w("Gone")), Err(Error::NotFound));
+        assert!(hive.storage().1 < before.1);
+        // ...and through the handle still open, everything is refused.
+        assert_eq!(hive.delete(key), Err(Error::Deleted));
+        assert_eq!(hive.open(key, &[]), Err(Error::Deleted));
+        assert_eq!(hive.create(key, &w("New")), Err(Error::Deleted));
+        assert_eq!(hive.set_value(key, &w("V"), 4, &[]), Err(Error::Deleted));
+        assert_eq!(hive.value(key, &w("V")), Err(Error::Deleted));
+        // A new key takes the place of the subkey, which nobody had
+        // open, not of the key that is still open.
+        let (again, new) = hive.create(system, &w("Gone")).unwrap();
+        assert!(new);
+        assert_eq!(again, sub);
+        assert_eq!(hive.value(again, &w("V")), Err(Error::NotFound));
+        // Closed, the deleted key's place is free too.
+        hive.closed(key);
+        let (next, _) = hive.create(system, &w("Next")).unwrap();
+        assert_eq!(next, key);
+        assert_eq!(hive.open(system, &w("next")), Ok(next));
     }
 
     #[test]
@@ -436,62 +543,65 @@ mod tests {
     #[test]
     fn the_full_form_carries_the_name_and_says_where_the_data_is() {
         let data = [1, 2, 3, 4, 5, 6];
-        // "Abc": 6 bytes of name, so the data starts at 28, not 26.
-        let mut out = [0xEEu8; 40];
+        // "Text": 8 bytes of name end at 28; the data starts at 32, as
+        // Windows places it.
+        let mut out = [0xEEu8; 48];
         assert_eq!(
-            full_information(&w("Abc"), 3, &data, &mut out),
-            (Fit::All, 34)
+            full_information(&w("Text"), 1, &data, &mut out),
+            (Fit::All, 38)
         );
         assert_eq!(
             out[..20],
-            [0, 0, 0, 0, 3, 0, 0, 0, 28, 0, 0, 0, 6, 0, 0, 0, 6, 0, 0, 0]
+            [0, 0, 0, 0, 1, 0, 0, 0, 32, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0]
         );
-        assert_eq!(out[20..26], [b'A', 0, b'b', 0, b'c', 0]);
-        assert_eq!(out[26..28], [0xEE, 0xEE], "the gap is left alone");
-        assert_eq!(out[28..34], data);
-        assert_eq!(out[34], 0xEE);
+        assert_eq!(out[20..28], [b'T', 0, b'e', 0, b'x', 0, b't', 0]);
+        assert_eq!(out[28..32], [0xEE; 4], "the gap is left alone");
+        assert_eq!(out[32..38], data);
+        assert_eq!(out[38], 0xEE);
+        // A name of three letters ends at 26: the data is at 32 again.
+        assert_eq!(
+            full_information(&w("Odd"), 3, &data[..3], &mut out),
+            (Fit::All, 35)
+        );
+        assert_eq!(out[8], 32);
         // Exactly enough; one short; the header and part of the name;
         // the header alone.
-        let mut exact = [0xEEu8; 34];
+        let mut exact = [0xEEu8; 38];
         assert_eq!(
-            full_information(&w("Abc"), 3, &data, &mut exact).0,
+            full_information(&w("Text"), 1, &data, &mut exact).0,
             Fit::All
         );
-        let mut short = [0xEEu8; 33];
+        let mut short = [0xEEu8; 37];
         assert_eq!(
-            full_information(&w("Abc"), 3, &data, &mut short),
-            (Fit::Part, 34)
+            full_information(&w("Text"), 1, &data, &mut short),
+            (Fit::Part, 38)
         );
-        assert_eq!(short[28..33], data[..5]);
+        assert_eq!(short[32..37], data[..5]);
         let mut name_cut = [0xEEu8; 23];
         assert_eq!(
-            full_information(&w("Abc"), 3, &data, &mut name_cut),
-            (Fit::Part, 34)
+            full_information(&w("Text"), 1, &data, &mut name_cut),
+            (Fit::Part, 38)
         );
-        assert_eq!(name_cut[16..], [6, 0, 0, 0, b'A', 0, b'b']);
+        assert_eq!(name_cut[16..], [8, 0, 0, 0, b'T', 0, b'e']);
         let mut header = [0xEEu8; 20];
         assert_eq!(
-            full_information(&w("Abc"), 3, &data, &mut header),
-            (Fit::Part, 34)
+            full_information(&w("Text"), 1, &data, &mut header),
+            (Fit::Part, 38)
         );
-        assert_eq!(header[8], 28);
+        assert_eq!(header[8], 32);
         // Not even the header: untouched.
         let mut nothing = [0xEEu8; 19];
         assert_eq!(
-            full_information(&w("Abc"), 3, &data, &mut nothing),
-            (Fit::Nothing, 34)
+            full_information(&w("Text"), 1, &data, &mut nothing),
+            (Fit::Nothing, 38)
         );
         assert_eq!(nothing, [0xEE; 19]);
-        // A name of even length needs no gap; no data, no bytes for it.
+        // No data: the value ends with its name, and says so.
         assert_eq!(
-            full_information(&w("Text"), 1, &data, &mut out),
-            (Fit::All, 34)
+            full_information(&w("Empty"), 3, &[], &mut out),
+            (Fit::All, 30)
         );
-        assert_eq!(out[8], 28);
-        assert_eq!(
-            full_information(&w("Abc"), 3, &[], &mut out),
-            (Fit::All, 28)
-        );
+        assert_eq!(out[8..16], [0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
     }
 
     #[test]

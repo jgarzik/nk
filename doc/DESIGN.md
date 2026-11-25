@@ -424,8 +424,12 @@ is absolute from `\Registry` or relative to an open key.
 
 Creating makes only the last key of a path, as on Windows. Values are
 read as `KeyValuePartialInformation` or `KeyValueFullInformation`; the
-other forms answer `STATUS_NOT_IMPLEMENTED`. There are no access checks, no symbolic links
-between keys, no notification and no deletion yet. The registry's memory
+other forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can
+be deleted: it is gone by name at once, and handles still open to it
+are good only for closing. Loading a driver makes its service key
+(`...\Services\<name>`) if it is not there, as the service control
+manager would have; it stays. There are no access checks, no symbolic
+links between keys and no notification. The registry's memory
 is its own: leak checks leave it out, as they do the handle table.
 
 ### Pure logic lives in `lib/`

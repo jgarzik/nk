@@ -1,6 +1,6 @@
 //! Tests of the registry, through the routines drivers call.
 
-use crate::cm::{ZwCreateKey, ZwOpenKey, ZwQueryValueKey, ZwSetValueKey};
+use crate::cm::{ZwCreateKey, ZwDeleteKey, ZwOpenKey, ZwQueryValueKey, ZwSetValueKey};
 use crate::ps::ZwClose;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
@@ -10,7 +10,7 @@ use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 
 pub static GROUP: Group = Group {
-    names: &["cm.keys", "cm.values"],
+    names: &["cm.keys", "cm.values", "cm.delete"],
     run,
     manual: false,
 };
@@ -214,14 +214,14 @@ fn values() -> Result<(), &'static str> {
         }
         // The other forms of query are not there; a handle to something
         // else is not a key.
-        // The full form: the name as it was set, and where the data is.
-        // Two bytes short of the whole, it holds what fitted and says
-        // so.
+        // The full form: the name as it was set, and where the data is
+        // (at the next multiple of eight bytes, as on Windows). Six
+        // bytes short of the whole, it holds what fitted and says so.
         let (status, length, out) = query(handle, "TEXT", 1, 32);
-        if (status, length) != (0x8000_0005, 34)
-            || out[4..20] != [1, 0, 0, 0, 28, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0]
+        if (status, length) != (0x8000_0005, 38)
+            || out[4..20] != [1, 0, 0, 0, 32, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0]
             || out[20..28] != [b'T', 0, b'e', 0, b'x', 0, b't', 0]
-            || out[28..32] != text[..4]
+            || out[28..32] != [0; 4]
         {
             return Err("the full form of a value is not its name, type and data");
         }
@@ -231,7 +231,7 @@ fn values() -> Result<(), &'static str> {
             query(handle, "Text", 1, 0).1,
             query(handle, "Text", 1, 20).0,
         );
-        if sizing != (0xC000_0023, 34, 0x8000_0005) {
+        if sizing != (0xC000_0023, 38, 0x8000_0005) {
             return Err("the full form did not say how much room it needs");
         }
         if query(handle, "Number", 0, 28).0 != 0xC000_0002 {
@@ -265,7 +265,59 @@ fn values() -> Result<(), &'static str> {
     result
 }
 
+/// A deleted key is gone by name at once; handles still open to it are
+/// good only for closing; a key with subkeys is not deleted.
+fn delete() -> Result<(), &'static str> {
+    let null = core::ptr::null_mut();
+    let path = alloc::format!("{SERVICES}\\NkDelete");
+    let (_, parent, _) = key(&path, null, true);
+    let (_, child, _) = key("Child", parent, true);
+    let (_, second, _) = key(&path, null, false);
+    let result = (|| {
+        if set(parent, "V", 4, &[1, 2, 3, 4]) != 0 {
+            return Err("a value could not be set");
+        }
+        if ZwDeleteKey(parent) as u32 != 0xC000_0121 {
+            return Err("a key with a subkey was deleted");
+        }
+        if ZwDeleteKey(child) != 0 || ZwDeleteKey(parent) != 0 {
+            return Err("an empty key could not be deleted");
+        }
+        if key(&path, null, false).0 != NOT_FOUND {
+            return Err("a deleted key can still be opened by name");
+        }
+        // Through either handle still open to it: refused.
+        let refused = [
+            ZwDeleteKey(second) as u32,
+            set(second, "V", 4, &[0; 4]),
+            query(parent, "V", 2, 28).0,
+            key("Child", second, true).0,
+        ];
+        if refused != [0xC000_017C; 4] {
+            return Err("a deleted key still answers through an open handle");
+        }
+        if ZwDeleteKey(0x1234 as *mut c_void) as u32 != 0xC000_0008 {
+            return Err("deleting through no handle did not say so");
+        }
+        Ok(())
+    })();
+    for handle in [parent, child, second] {
+        ZwClose(handle);
+    }
+    result?;
+    // The name is free again, and the new key is empty.
+    let (status, again, disposition) = key(&path, null, true);
+    let empty = query(again, "V", 2, 28).0 == NOT_FOUND;
+    let deleted = ZwDeleteKey(again);
+    ZwClose(again);
+    if (status, disposition, deleted) != (0, 1, 0) || !empty {
+        return Err("a deleted key's name could not be used again for a new, empty key");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
+    r.check("cm.delete", delete);
 }

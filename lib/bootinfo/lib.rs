@@ -11,14 +11,14 @@
 #![cfg_attr(not(test), no_std)]
 
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
 pub const HHDM_BASE: u64 = 0xFFFF_8000_0000_0000;
 pub const KERNEL_BASE: u64 = 0xFFFF_F800_0000_0000;
 
-pub const MAX_MODULES: usize = 16;
+pub const MAX_MODULES: usize = 32;
 pub const MODULE_NAME_LEN: usize = 32;
 /// Room for the kernel command line, including its NUL padding.
 pub const CMDLINE_LEN: usize = 256;

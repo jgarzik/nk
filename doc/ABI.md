@@ -168,10 +168,12 @@ available binary can observe.
 ## Not yet verified
 
 - `SE_EXPORTS` past `SeUserModeDriversSid` (0x210). Up to there, the
-  offsets are the ones Microsoft's device-security library, linked into
-  the `cancel` fixture, reads SIDs from. The two SIDs and one privilege
-  after it, and the structure's size (0x230), are the header's as NK
-  reads it; no fixture reads them yet.
+  offsets are the ones the WDK probe records and Microsoft's
+  device-security library, linked into the `cancel` fixture, reads SIDs
+  from. The two SIDs and one privilege after it, and the structure's
+  size (0x230), are what NK takes the Windows 10 kernel to publish; the
+  current WDK's header has grown further (0x260), so the probe cannot
+  say, and no fixture reads them yet.
 
 - The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
   documented convention; no symbol file, probe fact or fixture driver

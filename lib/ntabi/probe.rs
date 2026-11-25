@@ -10,7 +10,9 @@
 //! passes; it never counts an absent table as agreement.
 
 use crate::io::*;
+use crate::ob::OBJECT_ATTRIBUTES;
 use crate::pcr;
+use crate::se::{SE_EXPORTS, SECURITY_DESCRIPTOR};
 use core::mem::{offset_of, size_of};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -181,6 +183,37 @@ fn nk_facts() -> Vec<(&'static str, usize)> {
         ("const IO_TYPE_DRIVER", IO_TYPE_DRIVER as usize),
         ("const IO_TYPE_FILE", IO_TYPE_FILE as usize),
         ("const IO_TYPE_IRP", IO_TYPE_IRP as usize),
+        // Security, named objects, cancel-safe queues.
+        sz!(SECURITY_DESCRIPTOR),
+        off!(SECURITY_DESCRIPTOR, Control),
+        off!(SECURITY_DESCRIPTOR, Owner),
+        off!(SECURITY_DESCRIPTOR, Group),
+        off!(SECURITY_DESCRIPTOR, Sacl),
+        off!(SECURITY_DESCRIPTOR, Dacl),
+        // Not the size: the WDK's header has grown past what the
+        // Windows 10 kernel publishes.
+        off!(SE_EXPORTS, SeNullSid),
+        off!(SE_EXPORTS, SeWorldSid),
+        off!(SE_EXPORTS, SeLocalSystemSid),
+        off!(SE_EXPORTS, SeAliasAdminsSid),
+        off!(SE_EXPORTS, SeAnonymousLogonSid),
+        off!(SE_EXPORTS, SeUndockPrivilege),
+        off!(SE_EXPORTS, SeIUserSid),
+        sz!(OBJECT_ATTRIBUTES),
+        off!(OBJECT_ATTRIBUTES, ObjectName),
+        off!(OBJECT_ATTRIBUTES, Attributes),
+        off!(OBJECT_ATTRIBUTES, SecurityDescriptor),
+        sz!(IO_CSQ),
+        off!(IO_CSQ, CsqInsertIrp),
+        off!(IO_CSQ, CsqRemoveIrp),
+        off!(IO_CSQ, CsqPeekNextIrp),
+        off!(IO_CSQ, CsqAcquireLock),
+        off!(IO_CSQ, CsqReleaseLock),
+        off!(IO_CSQ, CsqCompleteCanceledIrp),
+        off!(IO_CSQ, ReservePointer),
+        sz!(IO_CSQ_IRP_CONTEXT),
+        off!(IO_CSQ_IRP_CONTEXT, Irp),
+        off!(IO_CSQ_IRP_CONTEXT, Csq),
     ]
 }
 

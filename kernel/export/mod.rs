@@ -202,6 +202,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
     export!(Implemented, se::ZwSetSecurityObject),
     export!(Implemented, cm::ZwCreateKey),
+    export!(Implemented, cm::ZwDeleteKey),
     export!(Implemented, cm::ZwOpenKey),
     export!(Implemented, cm::ZwQueryValueKey),
     export!(Implemented, cm::ZwSetValueKey),

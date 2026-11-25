@@ -59,6 +59,13 @@ pub fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> 
         ldr::unload(&image);
         return Err(DriverError::NoMemory);
     }
+    // Its service key, which on Windows exists before a driver is
+    // started; the path to it is what the driver's entry is given.
+    if crate::cm::service_key(name).is_err() {
+        ldr::unload(&image);
+        let _ = pool::free(object.cast());
+        return Err(DriverError::NoMemory);
+    }
     let mut driver_name = wide("\\Driver\\", name);
     let mut registry_path = wide(
         "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\",

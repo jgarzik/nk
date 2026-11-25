@@ -176,23 +176,23 @@ note = "Windows-driver-samples d49bb7d7 general/event/wdm"
 name = "abi-probe"
 arch = "x86_64"
 file = "abi-probe.x64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v2/abi-probe.x64.txt"
-sha256 = "185e5aba5c6f022a5bd453bbede5829d7565063461ef246583279292001aae10"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.x64.txt"
+sha256 = "f5b3bd9b583d3544ce1ea5fb7412a2ebc5aef5b38453c9c50fbdb1038587e3e5"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
 
 [[fixture]]
 name = "abi-probe"
 arch = "aarch64"
 file = "abi-probe.arm64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v2/abi-probe.arm64.txt"
-sha256 = "7712456e885922d846b1659b6906fd9717db80e77378a3cfe08c21d4a7809385"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.arm64.txt"
+sha256 = "22518e8a44c84fe370f12b3a370db999170a222ce1a604c99118ddf9fedb47da"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
 
 # Microsoft's public symbols for the kernel of the pinned build
 # (ntoskrnl.exe 10.0.19041.2006, the kernel of Windows 10 22H2 19045.2006).
@@ -301,6 +301,42 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-work.arm6
 sha256 = "71d92802c6f73fc4dd9b5bf0358773a4443a5516cbeded38f8eab274fae98060"
 status = "nk-authored"
 note = "nk-fixtures v4 nkc/nkc-work.c: work items"
+
+[[fixture]]
+name = "nkc-se"
+arch = "x86_64"
+file = "nkc-se.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-se.x64.nkc-se.sys"
+sha256 = "611de4cc0c244700999ff7ee3b893dc5628d7d7ab73ed6800cb14ca6115305e2"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
+
+[[fixture]]
+name = "nkc-se"
+arch = "aarch64"
+file = "nkc-se.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-se.arm64.nkc-se.sys"
+sha256 = "8970edb14de5ff8712ac2eecc9cee5e16dbfccf52882a94d6e8019919f1e4484"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
+
+[[fixture]]
+name = "nkc-reg"
+arch = "x86_64"
+file = "nkc-reg.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.x64.nkc-reg.sys"
+sha256 = "2e787bfe049656183b992ccf837df14d1e1c6ca7047eef1031036e613123ddb9"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+
+[[fixture]]
+name = "nkc-reg"
+arch = "aarch64"
+file = "nkc-reg.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.arm64.nkc-reg.sys"
+sha256 = "914fa4358c1caab2bdc9aa8dda2608a55b557b4b1f6e7fd483e425f00a3654fc"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
 
 [[fixture]]
 name = "cancel"

@@ -60,6 +60,8 @@ fn status(error: Error) -> NTSTATUS {
     match error {
         Error::NotFound => STATUS_OBJECT_NAME_NOT_FOUND,
         Error::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+        Error::Deleted => STATUS_KEY_DELETED,
+        Error::HasSubkeys => STATUS_CANNOT_DELETE,
     }
 }
 
@@ -123,10 +125,14 @@ fn start_of(hive: &mut Hive, start: Option<KeyId>) -> Result<KeyId, NTSTATUS> {
     }
 }
 
-/// A handle to `key`.
+/// A handle to `key`, which the caller has counted as opened
+/// (`Hive::opened`) under the lock it found the key under; the count is
+/// given back if no handle can be made.
 fn open(key: KeyId) -> Result<*mut c_void, NTSTATUS> {
-    let body = object::create(&object::KEY_TYPE, size_of::<usize>())
-        .ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    let Some(body) = object::create(&object::KEY_TYPE, size_of::<usize>()) else {
+        HIVE.lock().closed(key);
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
+    };
     // SAFETY: a fresh object of that size; the handle takes its own
     // reference and the creating one is given up.
     unsafe {
@@ -134,6 +140,46 @@ fn open(key: KeyId) -> Result<*mut c_void, NTSTATUS> {
         let handle = handle::open(body);
         object::dereference(body);
         Ok(handle as *mut c_void)
+    }
+}
+
+/// The object manager's call when the last reference to a key object
+/// has gone: the key has one handle fewer.
+///
+/// # Safety
+/// `body` is a key object nothing refers to any more.
+pub unsafe fn closed(body: *mut u8) {
+    // SAFETY: per the contract: the body is the key's number.
+    let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
+    HIVE.lock().closed(key);
+}
+
+/// Make sure the service key of a driver being loaded exists
+/// (`...\Services\<name>`), as the service control manager would have
+/// made it on Windows: a driver may keep its settings under it.
+pub fn service_key(name: &str) -> Result<(), &'static str> {
+    let path: Vec<u16> = alloc::format!("Machine\\System\\CurrentControlSet\\Services\\{name}")
+        .encode_utf16()
+        .collect();
+    let mut hive = HIVE.lock();
+    let root = hive.root().map_err(|_| "no memory for the registry")?;
+    hive.create(root, &path)
+        .map(|_| ())
+        .map_err(|_| "no service key")
+}
+
+/// [`ZwDeleteKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletekey):
+/// delete an open key that has no subkeys. It is gone by name at once;
+/// handles still open to it, this one included, are good only for
+/// closing.
+pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
+    let key = match key_of(key_handle) {
+        Ok(key) => key,
+        Err(status) => return status,
+    };
+    match HIVE.lock().delete(key) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
     }
 }
 
@@ -152,7 +198,9 @@ pub unsafe extern "C" fn ZwOpenKey(
     let found = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
         let start = start_of(&mut hive, start)?;
-        hive.open(start, &path).map_err(status)
+        let key = hive.open(start, &path).map_err(status)?;
+        hive.opened(key);
+        Ok(key)
     });
     match found.and_then(open) {
         Ok(handle) => {
@@ -185,7 +233,9 @@ pub unsafe extern "C" fn ZwCreateKey(
     let made = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
         let start = start_of(&mut hive, start)?;
-        hive.create(start, &path).map_err(status)
+        let (key, new) = hive.create(start, &path).map_err(status)?;
+        hive.opened(key);
+        Ok((key, new))
     });
     match made.and_then(|(key, new)| Ok((open(key)?, new))) {
         Ok((handle, new)) => {
@@ -262,8 +312,9 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     // lock, and copied to the driver's afterwards.
     let answer = {
         let hive = HIVE.lock();
-        let Some((stored_name, kind, data)) = hive.value(key, &name) else {
-            return STATUS_OBJECT_NAME_NOT_FOUND;
+        let (stored_name, kind, data) = match hive.value(key, &name) {
+            Ok(value) => value,
+            Err(error) => return status(error),
         };
         // Sized first, with no room at all, so that the copy made is
         // no larger than the answer.

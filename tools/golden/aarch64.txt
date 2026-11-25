@@ -61,6 +61,7 @@ se.capture ok
 se.device ok
 cm.keys ok
 cm.values ok
+cm.delete ok
 io.csq ok
 io.csq-cancel ok
 io.csq-race ok
@@ -127,4 +128,6 @@ oracle.nkc-wait ok
 oracle.nkc-mutex ok
 oracle.nkc-waitn ok
 oracle.nkc-work ok
+oracle.nkc-se ok
+oracle.nkc-reg ok
 oracle.cancel ok

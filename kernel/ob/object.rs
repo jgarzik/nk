@@ -48,7 +48,7 @@ pub static DEVICE_TYPE: ObjectType = ObjectType {
 /// Registry keys: an open key's object names the key (`cm`).
 pub static KEY_TYPE: ObjectType = ObjectType {
     index: 3,
-    delete: None,
+    delete: Some(crate::cm::closed),
 };
 
 static TYPES: [&ObjectType; 4] = [&EVENT_TYPE, &THREAD_TYPE, &DEVICE_TYPE, &KEY_TYPE];
