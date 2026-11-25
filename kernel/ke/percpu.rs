@@ -3,6 +3,7 @@
 //! is reached through `arch::percpu()`.
 
 use super::dpc::Queue;
+use super::thread::Dispatcher;
 use super::timer::Table;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +18,8 @@ pub struct PerCpu {
     dpcs: Queue,
     /// Timers set here and not yet due.
     timers: Table,
+    /// The threads ready to run here, and the idle thread.
+    dispatcher: Dispatcher,
 }
 
 // SAFETY: a processor only touches the non-atomic part of its own
@@ -31,6 +34,7 @@ impl PerCpu {
             ticks: AtomicU64::new(0),
             dpcs: Queue::new(),
             timers: Table::new(),
+            dispatcher: Dispatcher::new(),
         }
     }
 
@@ -42,6 +46,11 @@ impl PerCpu {
     /// This processor's queue of deferred procedure calls.
     pub fn dpcs(&self) -> &Queue {
         &self.dpcs
+    }
+
+    /// This processor's dispatcher state.
+    pub fn dispatcher(&self) -> &Dispatcher {
+        &self.dispatcher
     }
 
     /// This processor's table of pending timers.

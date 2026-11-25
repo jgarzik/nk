@@ -115,7 +115,7 @@ and arm64 alike:
 5. Results go to the serial port as `NK-TEST` lines; the machine powers
    off.
 
-There is no user mode and no scheduler. The proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
+There is no user mode. The proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
 sample built with the WDK (see `doc/TESTING.md`).
 
 ### The machine description
@@ -140,8 +140,8 @@ boot processor's translation settings.
 Each processor has its own area, the PCR at its start, allocated before
 it is started (the boot processor's is static: it is needed before memory
 is). Each brings up its own interrupt controller and clock interrupt.
-Processor 0 alone keeps the time. Until there is a scheduler a started
-processor idles, taking interrupts.
+Processor 0 alone keeps the time. The context a processor starts in
+becomes its idle thread.
 
 `ke::ipi` has other processors run a routine, at the interprocessor
 IRQL (14), and waits for all of them; one call is in progress at a time.
@@ -182,6 +182,27 @@ tick keeps that page current, and its layout is checked against the
 kernel's public symbols. The wall clock starts from the firmware's time,
 read by the loader.
 
+### Threads
+
+A thread is an `ETHREAD`-sized block, laid out as Windows lays it out
+for the fields NK keeps, followed by NK's own state, with a 32 KiB
+kernel stack that has nothing mapped below it. Each processor has a
+ready queue per priority (0 to 31) with a summary word, and an idle
+thread. A thread belongs to the queues of one processor, chosen when it
+is created.
+
+A processor leaves a thread only when the thread calls the dispatcher:
+to yield, which gives way to ready threads of its own priority or
+higher, or to exit. There is no preemption and no blocking yet. The
+switch keeps what a call preserves on the outgoing thread's stack
+(vector registers included: xmm6-15 and MXCSR, or d8-d15 and FPCR) and
+the stack pointer in the thread's `KernelStack`. An exited thread is
+freed by the thread that runs next.
+
+After boot the kernel's own work, the tests today, runs in a thread at
+priority 8 and `PASSIVE_LEVEL`, which is what a driver expects of its
+caller.
+
 ### Deferred procedure calls
 
 Each processor has a queue of DPCs. Queueing one puts it on the queue of
@@ -211,8 +232,8 @@ ones back, and queues their DPCs with the system time as arguments.
 A timer never fires before its due time, and fires at the first tick
 after it. A due time already past fires inside `KeSetTimer`. The driver
 owns the `KTIMER`; its layout, and the header bits NK uses (`Inserted`,
-the lock bit), are Windows'. Nothing waits on a timer yet: there are no
-threads.
+the lock bit), are Windows'. Nothing waits on a timer yet: threads
+cannot block.
 
 ### The kernel is a PE image
 
@@ -338,7 +359,7 @@ directory. There are no handles, no directories and no security checks.
 
 ### What NK leaves out, and how it stays honest
 
-No threads, waits, SEH, PnP or power management. Where a proof
+No waits, SEH, PnP or power management. Where a proof
 driver imports something in that territory but never reaches it on the
 tested path, the export exists and stops the machine with a named
 bugcheck if called. The ledger lists those separately; they never count

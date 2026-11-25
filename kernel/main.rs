@@ -60,6 +60,7 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
         test::abort("mm.stack", format_args!("cannot allocate the boot stack"));
     };
     arch::set_kernel_stack(stack.base);
+    ke::smp::set_stack(0, stack);
     arch::switch_stack(stack.top, on_kernel_stack, info)
 }
 
@@ -70,6 +71,10 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     }
     if let Err(why) = arch::interrupts_init() {
         test::abort("hal.interrupts", format_args!("{why}"));
+    }
+    // What this processor is running becomes its idle thread.
+    if let Err(why) = ke::thread::init_cpu(ke::smp::stack_of(0)) {
+        test::abort("ke.thread", format_args!("{why}"));
     }
     // From here on interrupts are held back by the IRQL alone.
     arch::enable_interrupts();
@@ -83,6 +88,20 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
         Err(why) => test::abort("ke.smp", format_args!("{why}")),
     }
 
+    // The rest runs in a thread, at PASSIVE_LEVEL, as drivers expect of
+    // whatever calls them; this context idles.
+    let info = core::ptr::from_ref(info) as usize;
+    if let Err(why) = ke::thread::create(system_thread, info, ke::thread::NORMAL_PRIORITY, 0) {
+        test::abort("ke.thread", format_args!("{why}"));
+    }
+    ke::thread::idle_loop()
+}
+
+/// The first thread: run the tests, then power off.
+fn system_thread(info: usize) {
+    // SAFETY: the address of the loader's hand-off block, which lives
+    // for ever and is never written.
+    let info = unsafe { &*(info as *const BootInfo) };
     export::print_all();
     test::run_all(selftest::GROUPS, info)
 }

@@ -5,6 +5,7 @@ mod cpu;
 mod gic;
 pub mod platform;
 mod smp;
+mod switch;
 mod trap;
 
 pub use gic::{
@@ -31,6 +32,7 @@ pub fn interrupt_processor(number: usize, vector: u32) {
 
 pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
 pub use smp::{prepare as smp_prepare, start as cpu_start};
+pub use switch::{callee_saved_survive, context_switch, new_context, wait_for_interrupt};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -101,12 +103,6 @@ pub fn switch_stack(
 
 /// Nothing to undo once every processor is running.
 pub fn smp_finish() {}
-
-/// Wait for an interrupt. Interrupts must be enabled.
-pub fn idle() {
-    // SAFETY: `wfi` stops the processor until the next interrupt.
-    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
-}
 
 /// Record the kernel stack this processor now runs on. Nothing to do
 /// here: exception entry recognises an overflow from the stack pointer.

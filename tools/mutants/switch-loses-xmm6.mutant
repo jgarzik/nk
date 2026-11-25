@@ -1,0 +1,6 @@
+# The thread switch does not restore xmm6, a register a call preserves:
+# a thread comes back with another thread's value in it.
+scenario: x86_64
+fails: thread.registers
+file: kernel/arch/x86_64/switch.rs
+remove:     movaps xmm6, [rsp + 0x00]

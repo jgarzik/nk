@@ -29,6 +29,11 @@ timer.cancel ok
 timer.periodic ok
 timer.chain ok
 timer.other-cpu ok
+thread.lifecycle ok
+thread.turns ok
+thread.priority ok
+thread.other-cpu ok
+thread.registers ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load skip

@@ -49,9 +49,6 @@ struct CpuArea {
     pcr: [u8; PCR_SIZE],
     /// NK's own per-processor state. No driver can see it.
     private: Private,
-    /// Stand-in for the current thread object. There are no threads yet,
-    /// but `KeGetCurrentThread()` must return a stable non-null pointer.
-    thread: [u8; 4096],
     fault_stack: [u8; FAULT_STACK_SIZE],
     gdt: [u64; 10],
     tss: Tss,
@@ -79,7 +76,6 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
         stack_base: AtomicU64::new(0),
         generic: PerCpu::new(),
     },
-    thread: [0; 4096],
     fault_stack: [0; FAULT_STACK_SIZE],
     gdt: [0; 10],
     tss: Tss {
@@ -162,9 +158,6 @@ pub fn init(number: u32) {
         pcr.add(PCR.current_prcb)
             .cast::<u64>()
             .write(pcr.add(PCR.prcb) as u64);
-        pcr.add(PCR.current_thread)
-            .cast::<u64>()
-            .write((&raw mut (*area).thread) as u64);
         pcr.add(PCR.number).cast::<u32>().write(number);
         if let Some(legacy) = PCR.legacy_number {
             // One byte: enough for the 64 processors of a group.

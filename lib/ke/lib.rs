@@ -272,6 +272,115 @@ pub struct ListEntry {
     pub prev: *mut ListEntry,
 }
 
+/// Thread priorities run from 0 to 31, as on Windows.
+pub const PRIORITIES: usize = 32;
+
+/// One processor's threads that are ready to run: a queue per priority,
+/// and a summary word with a bit for each queue that is not empty. The
+/// links are inside the threads; the queues own no memory and are only
+/// touched under their owner's lock.
+#[derive(Debug)]
+pub struct ReadyQueues {
+    /// `(first, last)` of each priority's queue; null when empty.
+    queues: [(*mut ListEntry, *mut ListEntry); PRIORITIES],
+    summary: u32,
+}
+
+// SAFETY: the queues are pointers; whoever holds the lock around them
+// may use them from any processor.
+unsafe impl Send for ReadyQueues {}
+
+impl ReadyQueues {
+    pub const fn new() -> Self {
+        Self {
+            queues: [(core::ptr::null_mut(), core::ptr::null_mut()); PRIORITIES],
+            summary: 0,
+        }
+    }
+
+    /// The highest priority with a thread ready, if any is.
+    pub fn highest(&self) -> Option<u8> {
+        (self.summary != 0).then(|| 31 - self.summary.leading_zeros() as u8)
+    }
+
+    /// Queue `entry` at `priority`: at the back, behind threads already
+    /// waiting their turn, or at the front when `front` (a thread that
+    /// was preempted before its turn was over).
+    ///
+    /// # Safety
+    /// `entry` is a writable link in no queue, valid until removed or
+    /// taken; every queued link is valid. `priority` is below 32.
+    pub unsafe fn insert(&mut self, entry: *mut ListEntry, priority: u8, front: bool) {
+        let (head, tail) = self.queues[usize::from(priority)];
+        // SAFETY: per the contract.
+        unsafe {
+            if front {
+                entry.write(ListEntry {
+                    next: head,
+                    prev: core::ptr::null_mut(),
+                });
+                if head.is_null() {
+                    self.queues[usize::from(priority)] = (entry, entry);
+                } else {
+                    (&raw mut (*head).prev).write(entry);
+                    self.queues[usize::from(priority)].0 = entry;
+                }
+            } else {
+                entry.write(ListEntry {
+                    next: core::ptr::null_mut(),
+                    prev: tail,
+                });
+                if tail.is_null() {
+                    self.queues[usize::from(priority)] = (entry, entry);
+                } else {
+                    (&raw mut (*tail).next).write(entry);
+                    self.queues[usize::from(priority)].1 = entry;
+                }
+            }
+        }
+        self.summary |= 1 << priority;
+    }
+
+    /// Take `entry`, queued at `priority`, out of its queue.
+    ///
+    /// # Safety
+    /// As `insert`, except that `entry` is in the queue of `priority`.
+    pub unsafe fn remove(&mut self, entry: *mut ListEntry, priority: u8) {
+        let queue = &mut self.queues[usize::from(priority)];
+        // SAFETY: per the contract.
+        unsafe {
+            let ListEntry { next, prev } = entry.read();
+            if prev.is_null() {
+                queue.0 = next;
+            } else {
+                (&raw mut (*prev).next).write(next);
+            }
+            if next.is_null() {
+                queue.1 = prev;
+            } else {
+                (&raw mut (*next).prev).write(prev);
+            }
+        }
+        if queue.0.is_null() {
+            self.summary &= !(1 << priority);
+        }
+    }
+
+    /// Take the first thread of the highest non-empty queue, if its
+    /// priority is at least `floor`. Returns it with its priority.
+    ///
+    /// # Safety
+    /// Every queued link is valid.
+    pub unsafe fn take(&mut self, floor: u8) -> Option<(*mut ListEntry, u8)> {
+        let priority = self.highest().filter(|&p| p >= floor)?;
+        let entry = self.queues[usize::from(priority)].0;
+        // SAFETY: per the contract; the summary bit says the queue is
+        // not empty.
+        unsafe { self.remove(entry, priority) };
+        Some((entry, priority))
+    }
+}
+
 /// How many buckets a timer table has, as on Windows.
 pub const TIMER_BUCKETS: usize = 256;
 
@@ -470,6 +579,78 @@ mod tests {
                 due,
             })
             .collect()
+    }
+
+    fn entries(n: usize) -> Vec<ListEntry> {
+        (0..n)
+            .map(|_| ListEntry {
+                next: core::ptr::dangling_mut(),
+                prev: core::ptr::dangling_mut(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ready_queues_serve_the_highest_priority_in_turn() {
+        let mut nodes = entries(6);
+        let p: Vec<*mut ListEntry> = nodes.iter_mut().map(core::ptr::from_mut).collect();
+        let mut ready = ReadyQueues::new();
+        // SAFETY: the nodes outlive the queues' use of them.
+        unsafe {
+            assert_eq!((ready.highest(), ready.take(0)), (None, None));
+            ready.insert(p[0], 8, false);
+            ready.insert(p[1], 8, false);
+            ready.insert(p[2], 31, false);
+            ready.insert(p[3], 0, false);
+            ready.insert(p[4], 8, true);
+            assert_eq!(ready.highest(), Some(31));
+            assert_eq!(ready.take(0), Some((p[2], 31)));
+            // At the front goes first; the rest in order of arrival.
+            assert_eq!(ready.take(0), Some((p[4], 8)));
+            assert_eq!(ready.take(0), Some((p[0], 8)));
+            // Nothing at or above the floor: left alone.
+            assert_eq!(ready.take(9), None);
+            assert_eq!(ready.take(8), Some((p[1], 8)));
+            assert_eq!(ready.highest(), Some(0));
+            assert_eq!(ready.take(1), None);
+            assert_eq!(ready.take(0), Some((p[3], 0)));
+            assert_eq!((ready.highest(), ready.take(0)), (None, None));
+            // To the front of an empty queue, then behind it.
+            ready.insert(p[5], 4, true);
+            ready.insert(p[0], 4, false);
+            assert_eq!(ready.take(0), Some((p[5], 4)));
+            assert_eq!(ready.take(0), Some((p[0], 4)));
+        }
+    }
+
+    #[test]
+    fn ready_queues_give_up_a_thread_from_any_place() {
+        for victim in 0..3 {
+            let mut nodes = entries(4);
+            let p: Vec<*mut ListEntry> = nodes.iter_mut().map(core::ptr::from_mut).collect();
+            let mut ready = ReadyQueues::new();
+            // SAFETY: as above.
+            unsafe {
+                for &entry in &p[..3] {
+                    ready.insert(entry, 12, false);
+                }
+                ready.insert(p[3], 3, false);
+                ready.remove(p[victim], 12);
+                assert_eq!(ready.highest(), Some(12));
+                for i in (0..3).filter(|&i| i != victim) {
+                    assert_eq!(ready.take(0), Some((p[i], 12)));
+                }
+                // The queue emptied by taking: its summary bit is gone.
+                assert_eq!(ready.highest(), Some(3));
+                ready.remove(p[3], 3);
+                assert_eq!(ready.highest(), None);
+                // Emptied by removal, a queue is whole again.
+                ready.insert(p[victim], 12, true);
+                ready.insert(p[3], 12, false);
+                assert_eq!(ready.take(0), Some((p[victim], 12)));
+                assert_eq!(ready.take(0), Some((p[3], 12)));
+            }
+        }
     }
 
     const T: u64 = TIME_INCREMENT;

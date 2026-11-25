@@ -3,7 +3,7 @@
 //!
 //! Objects handed to drivers are allocated from the pool at exactly their
 //! Windows size and reached through raw pointers only. Requests are
-//! synchronous: there are no threads to block, so a driver that pends a
+//! synchronous: a thread cannot block yet, so a driver that pends a
 //! request and never completes it is reported, not waited for.
 
 pub mod device;

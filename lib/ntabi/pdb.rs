@@ -178,3 +178,27 @@ fn timer_matches_the_kernel() {
     assert_eq!(offset_of!(KTIMER, TimerType), field("TimerType"));
     assert_eq!(offset_of!(KTIMER, Period), field("Period"));
 }
+
+#[test]
+fn thread_matches_the_kernel() {
+    use crate::thread::*;
+    let Some(types) = kernel_types() else { return };
+    let kthread = types.layout("_KTHREAD").expect("_KTHREAD");
+    let ethread = types.layout("_ETHREAD").expect("_ETHREAD");
+    let field = |name| offset(&kthread, "_KTHREAD", name);
+    assert_eq!(KTHREAD_SIZE, kthread.size as usize);
+    assert_eq!(ETHREAD_SIZE, ethread.size as usize);
+    assert_eq!(offset(&ethread, "_ETHREAD", "Tcb"), 0);
+    assert_eq!(field("Header"), 0);
+    assert_eq!(INITIAL_STACK, field("InitialStack"));
+    assert_eq!(STACK_LIMIT, field("StackLimit"));
+    assert_eq!(STACK_BASE, field("StackBase"));
+    assert_eq!(KERNEL_STACK, field("KernelStack"));
+    assert_eq!(RUNNING, field("Running"));
+    assert_eq!(PRIORITY, field("Priority"));
+    assert_eq!(WAIT_LIST_ENTRY, field("WaitListEntry"));
+    assert_eq!(STATE, field("State"));
+    assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
+    assert_eq!(BASE_PRIORITY, field("BasePriority"));
+    assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
+}

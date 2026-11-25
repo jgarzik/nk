@@ -53,9 +53,10 @@ loads, so these are ABI even though no import shows them. Offsets are in
 | Processor number | `gs:[0x1A4]` (32 bits); `gs:[0x184]` (one byte, older headers) | NK's own: `[x18, #0x9A4]` |
 | Current IRQL | register CR8 | kernel-private; drivers call an export |
 
-There are no threads yet. The current-thread slot points at a zeroed
-placeholder so the inlined load returns a stable non-null pointer; a
-driver that looks inside the thread object will not find Windows' fields.
+The current-thread slot holds the address of the running thread's
+`ETHREAD`-sized block. The fields NK maintains in it are at Windows'
+x86-64 offsets (`lib/ntabi/thread.rs`, checked against the kernel's
+symbols); the rest of the block is zero.
 
 Segment selectors on x86-64 match Windows (kernel code 0x10, data 0x18,
 TSS 0x40). That is a debugging convenience, not a driver dependency.

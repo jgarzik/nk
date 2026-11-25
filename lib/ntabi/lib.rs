@@ -20,6 +20,7 @@ pub mod io;
 pub mod ke;
 pub mod pcr;
 pub mod status;
+pub mod thread;
 
 #[cfg(test)]
 mod pdb;

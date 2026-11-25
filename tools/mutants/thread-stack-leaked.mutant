@@ -1,0 +1,5 @@
+# A thread that exits keeps its stack for ever.
+scenario: aarch64
+fails: thread.lifecycle
+file: kernel/ke/thread.rs
+remove:             mm::stack::free((*previous).stack);

@@ -14,6 +14,7 @@ mod null;
 mod oracle;
 mod sioctl;
 mod smp;
+mod thread;
 mod timer;
 
 use crate::mm;
@@ -27,6 +28,7 @@ pub static GROUPS: &[&Group] = &[
     &smp::GROUP,
     &dpc::GROUP,
     &timer::GROUP,
+    &thread::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
@@ -68,6 +70,8 @@ pub struct Resources {
     /// is not a leak, and anything else that takes frames is.
     spare_frames: u64,
     names: usize,
+    /// Threads that exist: a test waits for the ones it made to end.
+    threads: u32,
 }
 
 pub fn resources() -> Resources {
@@ -78,5 +82,6 @@ pub fn resources() -> Resources {
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
         names: crate::ob::count(),
+        threads: crate::ke::thread::count(),
     }
 }

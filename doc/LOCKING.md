@@ -72,6 +72,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
+| 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
@@ -115,11 +116,31 @@ Each of these stops the system when broken:
   expects `PASSIVE_LEVEL`; a held lock means `DISPATCH_LEVEL`.
 
 The locks at ranks 10 to 30 protect data that Windows guards with locks a
-thread can sleep on. Spin locks stand in until threads exist; they are
-stricter, never looser.
+thread can sleep on. Spin locks stand in until threads can block; they
+are stricter, never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 bugcheck path uses it, on the console, and never returns.
+
+### Switching threads
+
+The dispatcher runs at `DISPATCH_LEVEL` and holds no lock across a
+switch: the ready-queue lock is dropped first, and the record of held
+locks is the processor's, so nothing held could follow the thread. Two
+rules stand in for the lock:
+
+- **`swap_busy`.** A thread that gives up its processor is put on a
+  queue while still running on its stack. The flag is set before it
+  becomes visible there and cleared by the next thread on that
+  processor, once the old stack is no longer in use. A processor never
+  switches to a thread with the flag set; it waits.
+- **The next thread cleans up.** The thread switched to clears the flag
+  of the one before it, or frees it if it exited. A thread never frees
+  its own stack.
+
+The IRQL belongs to the processor, not the thread. Every switch happens
+at `DISPATCH_LEVEL`, and each thread lowers it again on its own way out
+of the dispatcher.
 
 ### Object locks
 

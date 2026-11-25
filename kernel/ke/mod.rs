@@ -11,6 +11,7 @@ pub mod percpu;
 pub mod seh;
 pub mod smp;
 pub mod spinlock;
+pub mod thread;
 pub mod time;
 pub mod timer;
 

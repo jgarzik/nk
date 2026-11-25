@@ -2,11 +2,11 @@
 //!
 //! The boot processor starts the others one at a time. Each sets up its
 //! own state (the architecture's part), starts its clock, reports that it
-//! is running, and then idles with interrupts on: there is no scheduler
-//! yet, so interrupts are all an idle processor does.
+//! is running, and becomes its own idle thread (`thread.rs`).
 
-use super::{irql, time};
+use super::{irql, thread, time};
 use crate::hal::platform;
+use crate::mm::stack::Stack;
 use crate::{arch, mm};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
@@ -17,6 +17,24 @@ static ONLINE: AtomicU64 = AtomicU64::new(1);
 /// How long a processor gets to report in: 100 ns units. Generous; an
 /// emulated machine with many processors starts them slowly.
 const START_TIMEOUT: u64 = 5 * 10_000_000;
+
+/// The lowest address of the stack each processor started on, which
+/// becomes its idle thread's.
+static STACKS: [AtomicU64; platform::MAX_CPUS] = [const { AtomicU64::new(0) }; platform::MAX_CPUS];
+
+/// Record the stack processor `number` starts on.
+pub fn set_stack(number: usize, stack: Stack) {
+    STACKS[number].store(stack.base, Ordering::Release);
+}
+
+/// The stack processor `number` started on.
+pub fn stack_of(number: usize) -> Stack {
+    let base = STACKS[number].load(Ordering::Acquire);
+    Stack {
+        base,
+        top: base + nk_bootinfo::KERNEL_STACK_SIZE,
+    }
+}
 
 /// The mask of running processors.
 pub fn online() -> u64 {
@@ -43,6 +61,7 @@ pub fn start_all(info: &BootInfo) -> Result<usize, &'static str> {
             return Err("no memory for a processor's state");
         }
         let stack = mm::stack::alloc().ok_or("no memory for a processor's stack")?;
+        set_stack(number, stack);
         arch::cpu_start(number, stack.top)?;
         let deadline = time::interrupt_time() + START_TIMEOUT;
         while !is_online(number) {
@@ -65,11 +84,13 @@ pub fn ap_main(number: usize) -> ! {
     debug_assert_eq!(super::pcr::current_processor() as usize, number);
     arch::set_irql(irql::PASSIVE_LEVEL);
     time::start_cpu();
+    // The stack this processor was started on becomes its idle thread's.
+    if let Err(why) = thread::init_cpu(stack_of(number)) {
+        panic!("processor {number}: {why}");
+    }
     ONLINE.fetch_or(1 << number, Ordering::Release);
     arch::enable_interrupts();
-    loop {
-        arch::idle();
-    }
+    thread::idle_loop()
 }
 
 /// Every processor firmware listed is running, and each takes its own

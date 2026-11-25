@@ -30,9 +30,6 @@ struct CpuArea {
     irql: AtomicU8,
     /// State the generic kernel keeps per processor.
     generic: PerCpu,
-    /// Stand-in for the current thread object. There are no threads yet,
-    /// but `KeGetCurrentThread()` must return a stable non-null pointer.
-    thread: [u8; 4096],
     /// Room for one stack at the alignment every kernel stack has.
     overflow_stack: [u8; OVERFLOW_ROOM],
 }
@@ -54,7 +51,6 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     overflow_top: 0,
     irql: AtomicU8::new(0),
     generic: PerCpu::new(),
-    thread: [0; 4096],
     overflow_stack: [0; OVERFLOW_ROOM],
 }));
 
@@ -109,9 +105,6 @@ pub fn init(number: u32) {
         pcr.add(PCR.current_prcb)
             .cast::<u64>()
             .write(pcr.add(PCR.prcb) as u64);
-        pcr.add(PCR.current_thread)
-            .cast::<u64>()
-            .write((&raw mut (*area).thread) as u64);
         pcr.add(PCR.number).cast::<u32>().write(number);
         // Three stack sizes always hold one aligned stack.
         (*area).overflow_top = stack_top_in(

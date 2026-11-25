@@ -5,6 +5,7 @@ mod clock;
 mod cpu;
 pub mod platform;
 mod smp;
+mod switch;
 mod trap;
 
 pub use apic::{
@@ -14,6 +15,7 @@ pub use apic::{
 
 pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql, set_kernel_stack};
 pub use smp::{finish as smp_finish, prepare as smp_prepare};
+pub use switch::{callee_saved_survive, context_switch, new_context, wait_for_interrupt};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use nk_bootinfo::{BootInfo, Serial};
@@ -119,12 +121,6 @@ pub fn interrupt_processor(number: usize, vector: u32) {
 /// each takes a non-maskable interrupt and halts in its handler.
 pub fn stop_others() {
     apic::send_nmi_to_others();
-}
-
-/// Wait for an interrupt. Interrupts must be enabled.
-pub fn idle() {
-    // SAFETY: `hlt` stops the processor until the next interrupt.
-    unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
 }
 
 /// Take over the boot CPU, processor 0: descriptor tables, exception
