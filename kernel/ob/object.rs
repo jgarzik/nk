@@ -24,14 +24,28 @@ const TAG: u32 = u32::from_le_bytes(*b"ObNK");
 pub struct ObjectType {
     /// Its place in `TYPES`; kept in each object's header.
     index: u8,
+    /// Called with the body when the last reference has gone, before
+    /// the object's memory is freed: gives up what the object owns.
+    delete: Option<unsafe fn(*mut u8)>,
 }
 
 /// Events (`KEVENT`).
-pub static EVENT_TYPE: ObjectType = ObjectType { index: 0 };
+pub static EVENT_TYPE: ObjectType = ObjectType {
+    index: 0,
+    delete: None,
+};
 /// Threads (`ETHREAD`).
-pub static THREAD_TYPE: ObjectType = ObjectType { index: 1 };
+pub static THREAD_TYPE: ObjectType = ObjectType {
+    index: 1,
+    delete: None,
+};
+/// Devices (`DEVICE_OBJECT`).
+pub static DEVICE_TYPE: ObjectType = ObjectType {
+    index: 2,
+    delete: Some(crate::io::device::deleted),
+};
 
-static TYPES: [&ObjectType; 2] = [&EVENT_TYPE, &THREAD_TYPE];
+static TYPES: [&ObjectType; 3] = [&EVENT_TYPE, &THREAD_TYPE, &DEVICE_TYPE];
 
 /// A variable a driver imports to name a type: it holds the type's
 /// address.
@@ -49,6 +63,10 @@ pub static ExEventObjectType: TypeVariable = TypeVariable(&raw const EVENT_TYPE)
 /// [`PsThreadType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle):
 /// what a driver passes to insist on a thread.
 pub static PsThreadType: TypeVariable = TypeVariable(&raw const THREAD_TYPE);
+
+/// `IoDeviceObjectType` (`wdm.h`): what a driver passes to insist on a
+/// device.
+pub static IoDeviceObjectType: TypeVariable = TypeVariable(&raw const DEVICE_TYPE);
 
 impl TypeVariable {
     /// The address drivers import.
@@ -127,6 +145,13 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
     // SAFETY: per the contract.
     let left = unsafe { pointer_count(body) }.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
+        // SAFETY: nothing refers to the object any more; its type's
+        // procedure is given the body it was created with.
+        unsafe {
+            if let Some(delete) = type_of(body).delete {
+                delete(body);
+            }
+        }
         let freed = pool::free(header(body).cast());
         debug_assert!(freed.is_ok());
     } else if left < 0 {

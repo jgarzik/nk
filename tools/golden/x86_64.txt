@@ -57,6 +57,7 @@ ob.thread ok
 se.well-known ok
 se.descriptor ok
 se.capture ok
+se.device ok
 mutex.ownership ok
 mutex.exclusion ok
 mutex.fast ok

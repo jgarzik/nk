@@ -1,0 +1,8 @@
+# ZwSetSecurityObject builds the device's new descriptor from the new
+# one alone instead of replacing only the named parts of the old:
+# setting the owner loses the access list.
+scenario: x86_64
+fails: se.device
+file: kernel/se/mod.rs
+replace:                 Copies::block(&old.parts().replaced(&new.parts(), information))
+with:                 Copies::block(&new.parts().replaced(&old.parts(), 0))

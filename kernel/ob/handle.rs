@@ -136,6 +136,34 @@ pub unsafe extern "C" fn ObReferenceObjectByHandle(
     }
 }
 
+/// [`ObOpenObjectByPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-obopenobjectbypointer):
+/// a handle to an object the caller has a pointer to. Every handle is
+/// a kernel handle, and there are no access checks: the attributes,
+/// access state, desired access and access mode are not looked at.
+///
+/// # Safety
+/// `object` is an object-manager object the caller holds a reference
+/// to; `handle` points to room for a handle.
+pub unsafe extern "C" fn ObOpenObjectByPointer(
+    object: *mut c_void,
+    _handle_attributes: u32,
+    _access_state: *mut c_void,
+    _desired_access: u32,
+    object_type: *const ObjectType,
+    _access_mode: i8,
+    handle: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        if !object_type.is_null() && !core::ptr::eq(object_type, object::type_of(object.cast())) {
+            handle.write_unaligned(core::ptr::null_mut());
+            return STATUS_OBJECT_TYPE_MISMATCH;
+        }
+        handle.write_unaligned(open(object.cast()) as *mut c_void);
+    }
+    STATUS_SUCCESS
+}
+
 // ---- tests --------------------------------------------------------------
 
 use crate::ke::{thread, time, wait};

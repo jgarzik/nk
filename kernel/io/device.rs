@@ -1,8 +1,15 @@
 //! Device objects: `IoCreateDevice`, `IoDeleteDevice`.
+//!
+//! A device is an object-manager object, so a handle can be opened to
+//! it. It has two counts, as on Windows: `ReferenceCount` in the device
+//! itself (open files, work items on their way), which decides when a
+//! deleted device stops being one, and the object's pointer count,
+//! which decides when its memory goes. `IoCreateDevice` holds one
+//! pointer reference; the device gives it up when it is deleted and
+//! unreferenced.
 
 #![allow(non_snake_case)]
 
-use super::TAG_DEVICE;
 use crate::ke::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::{kd, ke, ob, rtl};
@@ -58,10 +65,10 @@ pub unsafe extern "C" fn IoCreateDevice(
     // Device object, then the driver's extension, then NK's private block.
     let ext = (extension_size as usize).next_multiple_of(16);
     let total = size_of::<DEVICE_OBJECT>() + ext + size_of::<DeviceExtra>();
-    let device = pool::alloc_zeroed(total, TAG_DEVICE).cast::<DEVICE_OBJECT>();
-    if device.is_null() {
+    let Some(body) = ob::object::create(&ob::object::DEVICE_TYPE, total) else {
         return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    };
+    let device = body.cast::<DEVICE_OBJECT>();
     // SAFETY: `name` is valid per the contract.
     let name = unsafe { rtl::copy_unicode(name) };
     // SAFETY: `device` is a fresh, zeroed, exclusively owned block of
@@ -101,7 +108,7 @@ pub unsafe extern "C" fn IoCreateDevice(
         if !name.is_empty() {
             let status = ob::insert(&name, ob::Target::Device(device));
             if !nt_success(status) {
-                let _ = pool::free(device.cast());
+                ob::object::dereference(body);
                 return status;
             }
             (*device).Flags |= DO_DEVICE_HAS_NAME;
@@ -126,14 +133,58 @@ unsafe fn extra(device: *mut DEVICE_OBJECT) -> *mut DeviceExtra {
 unsafe fn destroy(device: *mut DEVICE_OBJECT) {
     // SAFETY: per the contract; clearing Type makes a stale pointer fail
     // `check` instead of looking valid.
-    unsafe { (*device).Type = 0 };
-    if let Err(e) = pool::free(device.cast()) {
-        kd::bugcheck(format_args!("freeing device object {device:p}: {e:?}"));
+    unsafe {
+        (*device).Type = 0;
+        ob::object::dereference(device.cast());
     }
 }
 
-/// One lock over every device's reference count and its delete-pending
-/// mark, as on Windows (the I/O database lock). "The count has reached
+/// The object manager's call when the last pointer to a device has
+/// gone: free the security descriptor it was given.
+///
+/// # Safety
+/// `body` is a device object nothing refers to any more.
+pub unsafe fn deleted(body: *mut u8) {
+    // SAFETY: per the contract; the descriptor is a pool block of the
+    // kernel's, put there by `replace_security`.
+    unsafe {
+        let descriptor = (*body.cast::<DEVICE_OBJECT>()).SecurityDescriptor;
+        if !descriptor.is_null() {
+            let _ = pool::free(descriptor.cast());
+        }
+    }
+}
+
+/// Give `device` the security descriptor `make` builds from the one it
+/// has (null if none): a pool block, which the device then owns. `None`
+/// from `make` changes nothing and is passed on.
+///
+/// # Safety
+/// `device` is a device object the caller holds a pointer reference to.
+pub unsafe fn replace_security(
+    device: *mut DEVICE_OBJECT,
+    make: impl FnOnce(*const u8) -> Option<*mut u8>,
+) -> Option<()> {
+    // SAFETY: per the contract. The pointer belongs to the database
+    // lock, so two changes at once cannot both build on the same old
+    // descriptor; the old block is freed once nothing can find it.
+    unsafe {
+        let old = {
+            let _database = DATABASE.lock();
+            let old = (*device).SecurityDescriptor;
+            let new = make(old.cast())?;
+            (*device).SecurityDescriptor = new.cast();
+            old
+        };
+        if !old.is_null() {
+            let _ = pool::free(old.cast());
+        }
+    }
+    Some(())
+}
+
+/// One lock over every device's reference count, its delete-pending
+/// mark and its security descriptor pointer, as on Windows (the I/O database lock). "The count has reached
 /// zero" and "deletion is pending" are decided together or not at all:
 /// whichever of `IoDeleteDevice` and the last dereference comes second
 /// sees both, under the lock, and it alone frees the device, after

@@ -10,7 +10,7 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::se::SECURITY_DESCRIPTOR;
 
 pub static GROUP: Group = Group {
-    names: &["se.well-known", "se.descriptor", "se.capture"],
+    names: &["se.well-known", "se.descriptor", "se.capture", "se.device"],
     run,
     manual: false,
 };
@@ -285,8 +285,175 @@ fn capture() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A device is an object a handle can be opened to, and setting its
+/// security through the handle gives it a descriptor of its own, which
+/// lives as long as the device's memory does.
+fn device() -> Result<(), &'static str> {
+    use crate::io::device::{IoCreateDevice, IoDeleteDevice};
+    use crate::ob::handle::{ObOpenObjectByPointer, ObReferenceObjectByHandle};
+    use crate::ob::object::{ExEventObjectType, IoDeviceObjectType, ObfDereferenceObject};
+    use crate::ps::ZwClose;
+    use nk_ntabi::io::{DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT};
+
+    // Pool blocks in use, the handle table's own storage aside.
+    let blocks = || pool::usage().blocks - crate::ob::handle::storage().0;
+    const DACL: u32 = nk_se::DACL_SECURITY_INFORMATION;
+    const OWNER: u32 = nk_se::OWNER_SECURITY_INFORMATION;
+    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+    let driver = pool::alloc_zeroed(size, u32::from_le_bytes(*b"Test")).cast::<DRIVER_OBJECT>();
+    if driver.is_null() {
+        return Err("no memory for a driver object");
+    }
+    // SAFETY: the test's own driver object and locals; the device is
+    // used only while this test holds it or a handle to it.
+    let result = unsafe {
+        (|| {
+            let table = SeExports.table();
+            let mut acl = empty_acl(ACL_ROOM);
+            // A list that claims more entries than it holds.
+            let mut damaged = empty_acl(ACL_ROOM);
+            damaged[4] = 9;
+            let before = blocks();
+            let mut dev: *mut DEVICE_OBJECT = core::ptr::null_mut();
+            if IoCreateDevice(driver, 0, core::ptr::null(), 0x22, 0, 0, &raw mut dev) != 0 {
+                return Err("no device");
+            }
+            let mut wrong = core::ptr::dangling_mut::<c_void>();
+            let status = ObOpenObjectByPointer(
+                dev.cast(),
+                0x200,
+                core::ptr::null_mut(),
+                0,
+                ExEventObjectType.value(),
+                0,
+                &raw mut wrong,
+            );
+            if status as u32 != 0xC000_0024 || !wrong.is_null() {
+                return Err("a device was opened as an event");
+            }
+            let mut handle = core::ptr::null_mut();
+            if ObOpenObjectByPointer(
+                dev.cast(),
+                0x200,
+                core::ptr::null_mut(),
+                0,
+                IoDeviceObjectType.value(),
+                0,
+                &raw mut handle,
+            ) != 0
+            {
+                return Err("a handle to a device could not be opened");
+            }
+            let mut back = core::ptr::null_mut();
+            if ObReferenceObjectByHandle(
+                handle,
+                0,
+                IoDeviceObjectType.value(),
+                0,
+                &raw mut back,
+                core::ptr::null_mut(),
+            ) != 0
+                || back != dev.cast()
+            {
+                return Err("the handle does not name the device");
+            }
+            ObfDereferenceObject(back);
+
+            // A descriptor with an access list, set as the list alone.
+            let mut sd = core::mem::zeroed::<SECURITY_DESCRIPTOR>();
+            let sd_ptr = &raw mut sd;
+            RtlCreateSecurityDescriptor(sd_ptr, 1);
+            RtlAddAccessAllowedAce(acl.as_mut_ptr(), 2, GENERIC_ALL, (*table).SeLocalSystemSid);
+            RtlSetDaclSecurityDescriptor(sd_ptr, 1, acl.as_mut_ptr().cast(), 0);
+            (&raw mut (*sd_ptr).Owner).write((*table).SeAliasAdminsSid.cast_mut().cast());
+            if !(&raw const (*dev).SecurityDescriptor).read().is_null() {
+                return Err("a new device already has a descriptor");
+            }
+            if ZwSetSecurityObject(handle, DACL, sd_ptr.cast()) != 0 {
+                return Err("setting a device's access list failed");
+            }
+            let first = (&raw const (*dev).SecurityDescriptor).read();
+            if first.is_null() || RtlLengthSecurityDescriptor(first) != 20 + 64 {
+                return Err("the device's descriptor is not the list alone");
+            }
+            let held = blocks();
+            // Then the owner: the list stays, the old block goes.
+            if ZwSetSecurityObject(handle, OWNER, sd_ptr.cast()) != 0 {
+                return Err("setting a device's owner failed");
+            }
+            let second = (&raw const (*dev).SecurityDescriptor).read();
+            let copy = core::slice::from_raw_parts(
+                second.cast::<u8>(),
+                RtlLengthSecurityDescriptor(second) as usize,
+            );
+            let parts = nk_se::parse_relative(copy).ok_or("the device's descriptor is damaged")?;
+            if parts.dacl != Some(&acl[..])
+                || parts.owner.map(<[u8]>::len) != Some(16)
+                || copy.len() != 100
+            {
+                return Err("the device's descriptor lost a part");
+            }
+            if blocks() != held {
+                return Err("replacing a descriptor did not free the old one");
+            }
+
+            // What is refused: a damaged list, a bad revision, no
+            // descriptor, a handle that is none, an object without one.
+            RtlSetDaclSecurityDescriptor(sd_ptr, 1, damaged.as_mut_ptr().cast(), 0);
+            let bad_list = ZwSetSecurityObject(handle, DACL, sd_ptr.cast()) as u32;
+            RtlSetDaclSecurityDescriptor(sd_ptr, 1, acl.as_mut_ptr().cast(), 0);
+            let no_handle = ZwSetSecurityObject(0x1234 as *mut c_void, DACL, sd_ptr.cast()) as u32;
+            let nothing = ZwSetSecurityObject(handle, DACL, core::ptr::null()) as u32;
+            sd_ptr.cast::<u8>().write(7);
+            let revision = ZwSetSecurityObject(handle, DACL, sd_ptr.cast()) as u32;
+            sd_ptr.cast::<u8>().write(1);
+            if (bad_list, no_handle, nothing, revision)
+                != (0xC000_0077, 0xC000_0008, 0xC000_000D, 0xC000_0058)
+            {
+                return Err("a request that should be refused was not, or with the wrong status");
+            }
+            if (&raw const (*dev).SecurityDescriptor).read() != second {
+                return Err("a refused request changed the descriptor");
+            }
+            let thread = crate::ke::thread::current();
+            let mut own = core::ptr::null_mut();
+            if ObOpenObjectByPointer(
+                thread.cast(),
+                0x200,
+                core::ptr::null_mut(),
+                0,
+                core::ptr::null(),
+                0,
+                &raw mut own,
+            ) != 0
+            {
+                return Err("a handle to a thread could not be opened");
+            }
+            let unsupported = ZwSetSecurityObject(own, DACL, sd_ptr.cast()) as u32;
+            ZwClose(own);
+            if unsupported != 0xC000_00BB {
+                return Err("a thread took a security descriptor NK does not keep");
+            }
+
+            // Deleted while the handle is open, the device's memory and
+            // its descriptor stay until the handle is closed.
+            IoDeleteDevice(dev);
+            if blocks() != held {
+                return Err("a device with an open handle was freed when deleted");
+            }
+            if ZwClose(handle) != 0 || blocks() != before {
+                return Err("closing the last handle did not free the device and its descriptor");
+            }
+            Ok(())
+        })()
+    };
+    let _ = pool::free(driver.cast());
+    result
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.well-known", well_known);
     r.check("se.descriptor", descriptor);
     r.check("se.capture", capture);
+    r.check("se.device", device);
 }

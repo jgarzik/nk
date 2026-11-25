@@ -599,26 +599,90 @@ pub unsafe extern "C" fn RtlAbsoluteToSelfRelativeSD(
     STATUS_SUCCESS
 }
 
+impl Copies {
+    /// A self-relative descriptor of `parts` in a fresh pool block.
+    fn block(parts: &Parts<'_>) -> Option<*mut u8> {
+        let needed = parts.relative_length();
+        let block = pool::alloc(needed, TAG);
+        if block.is_null() {
+            return None;
+        }
+        // SAFETY: the block is fresh, `needed` bytes long, and the
+        // kernel's own until it is returned.
+        let written =
+            parts.write_relative(unsafe { core::slice::from_raw_parts_mut(block, needed) });
+        debug_assert_eq!(written, Ok(needed));
+        Some(block)
+    }
+}
+
+/// `ZwSetSecurityObject` (`ntifs.h`): replace the parts of an object's
+/// security descriptor that `information` names with those of
+/// `descriptor`. Devices have a descriptor (`DEVICE_OBJECT.
+/// SecurityDescriptor`); for other objects NK keeps none and says so.
+///
+/// # Safety
+/// `descriptor` points to a security descriptor whose parts are where
+/// it says.
+pub unsafe extern "C" fn ZwSetSecurityObject(
+    handle: *mut c_void,
+    information: u32,
+    descriptor: *const c_void,
+) -> NTSTATUS {
+    use crate::ob::{handle, object};
+    if descriptor.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; the object is referenced from the look-up
+    // to the last line.
+    unsafe {
+        if !known_revision(descriptor.cast()) {
+            return STATUS_UNKNOWN_REVISION;
+        }
+        let Some(new) = Copies::of(descriptor.cast()) else {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        };
+        match new.parts().validate() {
+            Ok(()) => {}
+            Err(nk_se::Invalid::Sid) => return STATUS_INVALID_SID,
+            Err(nk_se::Invalid::Acl) => return STATUS_INVALID_ACL,
+        }
+        let body = match handle::reference(handle as u64, None) {
+            Ok(body) => body,
+            Err(status) => return status,
+        };
+        let status = if core::ptr::eq(object::type_of(body), &raw const object::DEVICE_TYPE) {
+            let replaced = crate::io::device::replace_security(body.cast(), |old| {
+                let old = if old.is_null() {
+                    Copies {
+                        control: 0,
+                        parts: [const { None }; 4],
+                    }
+                } else {
+                    Copies::of(old)?
+                };
+                Copies::block(&old.parts().replaced(&new.parts(), information))
+            });
+            match replaced {
+                Some(()) => STATUS_SUCCESS,
+                None => STATUS_INSUFFICIENT_RESOURCES,
+            }
+        } else {
+            STATUS_NOT_SUPPORTED
+        };
+        object::dereference(body);
+        status
+    }
+}
+
 /// A self-relative copy of a descriptor, in a pool block the caller
 /// frees. `None` without memory.
 ///
 /// # Safety
 /// `sd` points to a security descriptor whose parts are where it says.
 pub unsafe fn capture(sd: *const u8) -> Option<*mut u8> {
-    // SAFETY: per the contract; the block is fresh and the kernel's own
-    // until it is returned.
-    unsafe {
-        let copies = Copies::of(sd)?;
-        let parts = copies.parts();
-        let needed = parts.relative_length();
-        let block = pool::alloc(needed, TAG);
-        if block.is_null() {
-            return None;
-        }
-        let written = parts.write_relative(core::slice::from_raw_parts_mut(block, needed));
-        debug_assert_eq!(written, Ok(needed));
-        Some(block)
-    }
+    // SAFETY: per the contract.
+    unsafe { Copies::block(&Copies::of(sd)?.parts()) }
 }
 
 /// `SeCaptureSecurityDescriptor`: give the caller a descriptor it can

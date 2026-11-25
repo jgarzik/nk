@@ -1264,12 +1264,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwSetSecurityObject",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoDeviceObjectType",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1279,7 +1279,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ObOpenObjectByPointer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

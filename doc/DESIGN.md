@@ -276,8 +276,10 @@ plays the debugger over its serial port and says go. The kernel's own tests anno
 ### Objects, references and handles
 
 What the object manager allocates has Windows' `OBJECT_HEADER` in front
-of it: a pointer count, a handle count, a type. Events and threads are
-such objects so far. An object is freed when its last reference goes. A
+of it: a pointer count, a handle count, a type. Events, threads and
+devices are such objects so far. An object is freed when its last
+reference goes; its type may name a procedure that first gives up what
+the object owns. A
 thread holds a reference on itself until it has ended and been buried,
 so a thread nobody else refers to frees itself, and one that is referred
 to stays a valid object, signalled, after it ends.
@@ -391,7 +393,11 @@ privilege numbers, laid out as in `ntifs.h`.
 
 NK checks no access: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully, so that they are right
-when something reads them. A forced capture
+when something reads them. Setting an object's security
+(`ZwSetSecurityObject`) replaces the named parts of the descriptor a
+device carries (`DEVICE_OBJECT.SecurityDescriptor`); NK keeps none for
+other objects and refuses with `STATUS_NOT_SUPPORTED`. A new device has
+no descriptor until one is set, where Windows gives it a default. A forced capture
 (`SeCaptureSecurityDescriptor`) is a self-relative copy in the pool, the
 caller's to free.
 
@@ -452,7 +458,10 @@ A refused image leaves nothing allocated; the boot tests check that.
 ### I/O
 
 Driver, device and file objects and IRPs are pool allocations of exactly
-their Windows size, reached by raw pointer. A device object is followed
+their Windows size, reached by raw pointer. A device is an object-manager
+object, so a handle can be opened to it (`ObOpenObjectByPointer`); its
+own `ReferenceCount` decides when a deleted device stops being one, the
+object's pointer count when its memory goes. A device object is followed
 by the driver's extension and then a private NK block (where Windows has
 its own private extension).
 

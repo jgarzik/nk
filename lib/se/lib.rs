@@ -213,6 +213,75 @@ impl Parts<'_> {
     }
 }
 
+/// `SECURITY_INFORMATION` bits: which parts of a descriptor a request
+/// is about.
+pub const OWNER_SECURITY_INFORMATION: u32 = 1;
+pub const GROUP_SECURITY_INFORMATION: u32 = 2;
+pub const DACL_SECURITY_INFORMATION: u32 = 4;
+pub const SACL_SECURITY_INFORMATION: u32 = 8;
+
+/// What is wrong with a descriptor's parts, as the status Windows gives
+/// for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Invalid {
+    /// `STATUS_INVALID_SID`
+    Sid,
+    /// `STATUS_INVALID_ACL`
+    Acl,
+}
+
+impl<'a> Parts<'a> {
+    /// Whether every part is what it should be: owner and group sound
+    /// SIDs, the lists sound ACLs.
+    pub fn validate(&self) -> Result<(), Invalid> {
+        for sid in [self.owner, self.group].into_iter().flatten() {
+            if valid_sid(sid) != Some(sid.len()) {
+                return Err(Invalid::Sid);
+            }
+        }
+        for acl in [self.sacl, self.dacl].into_iter().flatten() {
+            if acl_used(acl).is_none() {
+                return Err(Invalid::Acl);
+            }
+        }
+        Ok(())
+    }
+
+    /// This descriptor with the parts `information` names replaced by
+    /// those of `new`, control bits included: what setting an object's
+    /// security does to the descriptor it has.
+    #[must_use]
+    pub fn replaced(&self, new: &Parts<'a>, information: u32) -> Parts<'a> {
+        let mut merged = *self;
+        let mut take = |bit: u32, control: u16| {
+            let chosen = information & bit != 0;
+            if chosen {
+                merged.control = merged.control & !control | new.control & control;
+            }
+            chosen
+        };
+        if take(OWNER_SECURITY_INFORMATION, SE_OWNER_DEFAULTED) {
+            merged.owner = new.owner;
+        }
+        if take(GROUP_SECURITY_INFORMATION, SE_GROUP_DEFAULTED) {
+            merged.group = new.group;
+        }
+        if take(
+            DACL_SECURITY_INFORMATION,
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED,
+        ) {
+            merged.dacl = new.dacl;
+        }
+        if take(
+            SACL_SECURITY_INFORMATION,
+            SE_SACL_PRESENT | SE_SACL_DEFAULTED,
+        ) {
+            merged.sacl = new.sacl;
+        }
+        merged
+    }
+}
+
 /// Read a self-relative descriptor. `None` if a part lies outside the
 /// block or is not what it should be.
 pub fn parse_relative(block: &[u8]) -> Option<Parts<'_>> {
@@ -408,6 +477,106 @@ mod tests {
             (Some(&owner[..]), Some(&group[..]), None)
         );
         assert_eq!(back.dacl, Some(&acl[..]));
+    }
+
+    #[test]
+    fn setting_security_replaces_only_the_parts_named() {
+        let (mut old_acl, mut new_acl) = (empty_acl(32), empty_acl(40));
+        add_access_allowed(&mut old_acl, 2, 1, &system()).unwrap();
+        add_access_allowed(&mut new_acl, 2, 2, &admins()).unwrap();
+        let (sys, adm) = (system(), admins());
+        let old = Parts {
+            control: SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_OWNER_DEFAULTED,
+            owner: Some(&sys),
+            group: Some(&sys),
+            sacl: None,
+            dacl: Some(&old_acl),
+        };
+        let new = Parts {
+            control: SE_DACL_PRESENT | SE_GROUP_DEFAULTED | SE_SACL_PRESENT,
+            owner: Some(&adm),
+            group: None,
+            sacl: Some(&new_acl),
+            dacl: Some(&new_acl),
+        };
+        // Nothing named: nothing changes.
+        let same = old.replaced(&new, 0);
+        assert_eq!(
+            (same.control, same.owner, same.dacl),
+            (old.control, old.owner, old.dacl)
+        );
+        // The DACL alone: it and its two control bits.
+        let dacl = old.replaced(&new, DACL_SECURITY_INFORMATION);
+        assert_eq!(dacl.dacl, Some(&new_acl[..]));
+        assert_eq!(dacl.control, SE_DACL_PRESENT | SE_OWNER_DEFAULTED);
+        assert_eq!(
+            (dacl.owner, dacl.group, dacl.sacl),
+            (old.owner, old.group, None)
+        );
+        // Everything.
+        let all = old.replaced(&new, 0xF);
+        assert_eq!((all.owner, all.group), (Some(&adm[..]), None));
+        assert_eq!(
+            (all.sacl, all.dacl),
+            (Some(&new_acl[..]), Some(&new_acl[..]))
+        );
+        assert_eq!(all.control, new.control);
+        // Owner and group, one at a time.
+        assert_eq!(
+            old.replaced(&new, OWNER_SECURITY_INFORMATION).control,
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED
+        );
+        let group = old.replaced(&new, GROUP_SECURITY_INFORMATION);
+        assert_eq!((group.group, group.owner), (None, old.owner));
+        assert_eq!(group.control, old.control | SE_GROUP_DEFAULTED);
+        assert_eq!(
+            old.replaced(&new, SACL_SECURITY_INFORMATION).sacl,
+            Some(&new_acl[..])
+        );
+    }
+
+    #[test]
+    fn parts_are_validated() {
+        let (acl, sys) = (empty_acl(32), system());
+        let good = Parts {
+            control: SE_DACL_PRESENT,
+            owner: Some(&sys),
+            group: None,
+            sacl: None,
+            dacl: Some(&acl),
+        };
+        assert_eq!(good.validate(), Ok(()));
+        assert_eq!(Parts::default().validate(), Ok(()));
+        let mut bad_sid = system();
+        bad_sid[0] = 3;
+        assert_eq!(
+            Parts {
+                group: Some(&bad_sid),
+                ..good
+            }
+            .validate(),
+            Err(Invalid::Sid)
+        );
+        // A slice longer than the SID in it is not that SID.
+        let long = [&system()[..], &[0, 0]].concat();
+        assert_eq!(
+            Parts {
+                owner: Some(&long),
+                ..good
+            }
+            .validate(),
+            Err(Invalid::Sid)
+        );
+        let mut bad_acl = empty_acl(32);
+        bad_acl[4] = 2;
+        assert_eq!(
+            Parts {
+                sacl: Some(&bad_acl),
+                ..good
+            }
+            .validate(),
+            Err(Invalid::Acl)
+        );
     }
 
     #[test]

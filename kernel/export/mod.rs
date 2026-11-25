@@ -194,6 +194,13 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, se::RtlSetDaclSecurityDescriptor),
     export!(Implemented, se::SeCaptureSecurityDescriptor),
     export_variable!(Implemented, "SeExports", se::SeExports),
+    export_variable!(
+        Implemented,
+        "IoDeviceObjectType",
+        ob::object::IoDeviceObjectType
+    ),
+    export!(Implemented, ob::handle::ObOpenObjectByPointer),
+    export!(Implemented, se::ZwSetSecurityObject),
 ];
 
 /// The address a driver's import of `module!name` binds to.
