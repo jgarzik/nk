@@ -7,13 +7,16 @@ the kernel's own PE loader. Export states come from the kernel itself: the
 boot test saves the `NK-EXPORT <module> <name> <state>` lines the kernel
 prints. With no boot log yet, every import is "missing".
 
-Usage: ledger.py [--check]
-  default  rewrite ledger/<arch>.json
-  --check  fail if a committed ledger differs from what would be generated
-           (fixtures that are not downloaded make the check a visible SKIP)
+Usage: ledger.py [--check | --missing <binary>...]
+  default    rewrite ledger/<arch>.json
+  --check    fail if a committed ledger differs from what would be generated
+             (fixtures that are not downloaded make the check a visible SKIP)
+  --missing  print, by area, the kernel names the named corpus binaries
+             import that the last x86-64 boot did not export as implemented
 """
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -45,6 +48,58 @@ def imports_of(path):
 
 KERNEL_MODULES = ("ntoskrnl.exe", "hal.dll")
 CORPUS = ROOT / "ledger" / "corpus.x86_64.txt"
+KERNEL = ROOT / "ledger" / "ntoskrnl.x86_64.txt"
+
+
+def microsoft_kernel(exports, listing):
+    """What Microsoft's kernel of the pinned build exports, and how much
+    of it NK does. `listing` is the text of ledger/ntoskrnl.x86_64.txt
+    (written by tools/corpus.py from the binary)."""
+    names, forwarded, unnamed = set(), 0, 0
+    for line in listing.splitlines():
+        if line.startswith("#"):
+            continue
+        _, name, where = line.split()
+        forwarded += where.startswith("forward:")
+        if name == "-":
+            unnamed += 1
+        else:
+            names.add(name)
+    ours = {name for (module, name) in exports if module == KERNEL_MODULES[0]}
+    return {
+        "note": "the export directory of Microsoft's ntoskrnl.exe (fixtures/corpus.toml), "
+                "which NK never loads, against the names NK exports",
+        "names": len(names),
+        "by_ordinal_only": unnamed,
+        "forwarded": forwarded,
+        "exported_by_nk": len(names & ours),
+        "nk_names_it_lacks": sorted(ours - names),
+    }
+
+
+def missing(exports, lists, wanted):
+    """{area: [names]} that the binaries in `wanted` import from the
+    kernel and NK does not export as implemented. An area is a name's
+    leading capitalised word (`Io`, `Rtl`); `other` holds the rest."""
+    areas, seen = {}, set()
+    for line in lists.splitlines():
+        if line.startswith("#"):
+            continue
+        head, _, symbols = line.partition(":")
+        file, _, module = head.split()
+        if file not in wanted or module not in KERNEL_MODULES:
+            continue
+        seen.add(file)
+        for name in symbols.split():
+            state = next((exports[(m, name)] for m in KERNEL_MODULES if (m, name) in exports),
+                         "missing")
+            if state == "implemented":
+                continue
+            # `IoCreateDevice` is Io's; `ObfReferenceObject` is Ob's fast form.
+            prefix = re.match(r"[A-Z][a-z]+", name)
+            area = prefix.group().removesuffix("f") if prefix else "other"
+            areas.setdefault(area, set()).add(name if state == "missing" else f"{name}({state})")
+    return {area: sorted(names) for area, names in sorted(areas.items())}, sorted(seen)
 
 
 def corpus(exports, lists):
@@ -83,6 +138,8 @@ def corpus(exports, lists):
         "kernel_names": {"total": len(union),
                          **{s: sum(1 for v in union.values() if v == s) for s in STATES}},
         "by_binary": [binaries[f] for f in sorted(binaries)],
+        **({"microsoft_kernel": microsoft_kernel(exports, KERNEL.read_text())}
+           if KERNEL.exists() else {}),
     }
 
 
@@ -119,7 +176,24 @@ def build(arch, fixtures):
     }
 
 
+def print_missing(wanted):
+    exports, booted = kernel_exports("x86_64")
+    if not booted:
+        print("ledger: no boot log (run: make check)")
+        return 1
+    areas, seen = missing(exports, CORPUS.read_text(), {w.lower() for w in wanted})
+    for name in sorted({w.lower() for w in wanted} - set(seen)):
+        print(f"ledger: {name} is not in the corpus")
+    total = sum(len(names) for names in areas.values())
+    print(f"{', '.join(seen)}: {total} kernel names not implemented")
+    for area, names in areas.items():
+        print(f"  {area} ({len(names)}): {' '.join(names)}")
+    return 0
+
+
 def main():
+    if sys.argv[1:2] == ["--missing"] and len(sys.argv) > 2:
+        return print_missing(sys.argv[2:])
     check = "--check" in sys.argv
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     # Only driver images have import tables.

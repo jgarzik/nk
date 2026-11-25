@@ -4,6 +4,14 @@
 # their import tables for the ledger. Maintained by `tools/corpus.py
 # resolve`; the SHA-256 is of the bytes Microsoft's symbol server serves.
 
+# Microsoft's kernel of the pinned build. Never loaded: its export
+# directory is what the ledger measures NK's exports against.
+[kernel]
+file = "ntoskrnl.exe"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/ntoskrnl.exe/2FF0D7221046000/ntoskrnl.exe"
+sha256 = "cc9b3a6c057ca31d0886c8efb7965a4c47e2d80fd0185d9b9fa55c5dc1d0dc55"
+
 [[binary]]
 file = "acpi.sys"
 version = "10.0.19041.1741"

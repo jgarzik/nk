@@ -2457,6 +2457,16 @@
     "by_ordinal": 0,
     "other_modules": {}
    }
-  ]
+  ],
+  "microsoft_kernel": {
+   "note": "the export directory of Microsoft's ntoskrnl.exe (fixtures/corpus.toml), which NK never loads, against the names NK exports",
+   "names": 3064,
+   "by_ordinal_only": 23,
+   "forwarded": 0,
+   "exported_by_nk": 109,
+   "nk_names_it_lacks": [
+    "KfLowerIrql"
+   ]
+  }
  }
 }

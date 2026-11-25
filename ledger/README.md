@@ -27,6 +27,15 @@ unmodified, and for each how many of the names it imports from the kernel
 NK provides. Nothing in the corpus is loaded yet; the section is the
 denominator of the whole project.
 
+`microsoft_kernel` measures the other way: what Microsoft's own
+`ntoskrnl.exe` of that build exports (names, exports by ordinal only,
+forwarders), how many of those names NK exports, and any name NK exports
+that Microsoft's kernel does not. NK never loads that kernel; only its
+export directory is read, into `ntoskrnl.x86_64.txt`.
+
+`tools/ledger.py --missing <binary>...` lists, by area, the kernel names
+those corpus binaries import that NK does not yet implement.
+
 The binaries are pinned in `fixtures/corpus.toml` and never committed.
 `corpus.x86_64.txt` holds what each one imports, written by
 `tools/corpus.py` from the binaries; the ledger is computed from that

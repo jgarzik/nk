@@ -50,5 +50,45 @@ class Corpus(unittest.TestCase):
         self.assertEqual(self.by_file["d.sys"]["other_modules"], {})
 
 
+KERNEL = """\
+# comment
+1 - code
+2 IoCreateDevice code
+3 KeSetEvent code
+4 KeStallExecutionProcessor forward:HAL.KeStallExecutionProcessor
+5 ZwClose code
+"""
+
+
+class MicrosoftKernel(unittest.TestCase):
+    def test_counts(self):
+        exports = dict(EXPORTS)
+        exports[("ntoskrnl.exe", "NkOnly")] = "implemented"
+        exports[("other.sys", "KeSetEvent")] = "implemented"
+        kernel = ledger.microsoft_kernel(exports, KERNEL)
+        self.assertEqual((kernel["names"], kernel["by_ordinal_only"], kernel["forwarded"]),
+                         (4, 1, 1))
+        # ProbeForRead and NkOnly are not names of this (made-up) kernel.
+        self.assertEqual(kernel["exported_by_nk"], 3)
+        self.assertEqual(kernel["nk_names_it_lacks"], ["NkOnly", "ProbeForRead"])
+
+
+class Missing(unittest.TestCase):
+    def test_names_by_area_for_the_binaries_asked(self):
+        areas, seen = ledger.missing(EXPORTS, LISTS, {"a.sys", "nosuch.sys"})
+        self.assertEqual(seen, ["a.sys"])
+        # Implemented names are left out; a partial or trapping one says so.
+        self.assertEqual(areas, {"Ke": ["KeSetEvent"], "Zw": ["ZwClose(traps)"],
+                                 "other": ["#4"]})
+
+    def test_the_union_of_several_binaries(self):
+        areas, seen = ledger.missing(EXPORTS, LISTS, {"a.sys", "b.sys", "c.sys"})
+        self.assertEqual(seen, ["a.sys", "b.sys"])
+        self.assertEqual(areas["Probe"], ["ProbeForRead(partial)"])
+        # A fast-call form belongs to its area.
+        areas, _ = ledger.missing({}, "x.sys 1 ntoskrnl.exe: ObfReferenceObject\n", {"x.sys"})
+        self.assertEqual(areas, {"Ob": ["ObfReferenceObject"]})
+
+
 if __name__ == "__main__":
     unittest.main()
