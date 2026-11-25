@@ -1,0 +1,91 @@
+# NK design
+
+Decisions and their reasons. Where NK departs from `doc/handoff.md`, it
+says so. Windows concepts are not explained here; see Microsoft's
+[driver documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/_kernel/)
+and the [PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
+
+## The MVP: 0.0.1, driver bootstrap
+
+On QEMU, x86-64 and arm64 alike:
+
+1. UEFI firmware starts `nkload`, NK's own loader.
+2. `nkload` reads the kernel and the driver files from the EFI system
+   partition, maps the kernel, leaves boot services and jumps to it.
+3. The kernel takes over the CPU and memory, then loads each driver:
+   map, relocate, bind imports, call the real `DriverEntry`.
+4. A built-in test opens the driver's device, sends real IRPs and checks
+   status, byte count and payload.
+5. Results go to the serial port as `NK-TEST` lines; the machine powers
+   off.
+
+There is no user mode, no scheduler and only the boot CPU runs. The
+proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
+sample built with the WDK (see `doc/TESTING.md`).
+
+## Boot, mirroring Windows
+
+Windows on QEMU boots as: UEFI firmware, `bootmgfw.efi` from the EFI
+system partition, `winload.efi`, which loads `ntoskrnl.exe`, `hal.dll`
+and the boot-start drivers as PE images, builds a loader block, leaves
+boot services and jumps to the kernel. On arm64 the `virt` machine is
+described by ACPI, as on x86.
+
+NK keeps that shape with one loader, `nkload`, standing in for both
+Microsoft stages. It hands the kernel a private `BootInfo` block. NK does
+not imitate the Windows loader block: no driver sees it, so it is not part
+of the contract.
+
+## The kernel is a PE image
+
+The handoff suggests a freestanding ELF kernel. NK builds the kernel for
+Rust's stock `x86_64-unknown-uefi` and `aarch64-unknown-uefi` targets
+instead, which produce PE images. Reasons:
+
+- They are prebuilt targets on stable Rust. No nightly, no `build-std`,
+  no custom target file.
+- The Windows calling convention is the target's native `extern "C"`,
+  so every export has the ABI drivers expect without per-function
+  annotation. Measured results are in `doc/ABI.md`.
+- One PE loader, `lib/pe`, is used twice: the loader maps the kernel with
+  it and the kernel maps drivers with it. The code that must be right for
+  drivers is exercised on every boot.
+- PE images carry unwind tables, which SEH will need later.
+
+## Exports are a table, not a PE export directory
+
+Drivers import from `ntoskrnl.exe` and `HAL.dll` by name. NK resolves
+those names against a static registry built by a macro. Each entry
+records the module, the name, the function and an honest status. The same
+registry feeds the import binder and the compatibility ledger, so the
+ledger cannot drift from what the kernel really exports.
+
+An import with no entry rejects the driver and names the symbol.
+
+## ABI structures
+
+Everything a driver can see is declared once in `lib/ntabi` as
+`#[repr(C)]` with compile-time size and offset checks for each
+architecture. The kernel keeps its private state beside these objects,
+never inside a larger struct in their place.
+
+## Pure logic lives in `lib/`
+
+Anything that can be written without touching hardware goes in a
+`no_std` library crate and is unit-tested on the build host: PE loading,
+structure layouts, string and list routines, allocator arithmetic, page
+table construction. The kernel binary is the glue and the `unsafe`.
+
+## What the MVP leaves out, and how it stays honest
+
+No threads, waits, timers, SEH, PnP or power management. Where a proof
+driver imports something in that territory but never reaches it on the
+tested path, the export exists and stops the machine with a named
+bugcheck if called. The ledger lists those separately; they never count
+as implemented.
+
+## Dependencies
+
+The loader speaks UEFI through its own small bindings and the kernel has
+no external crates. Reuse from the sibling `hk` kernel is by idea and by
+small MIT-licensed pieces with attribution, not by wholesale import.

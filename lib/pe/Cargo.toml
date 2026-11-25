@@ -1,0 +1,12 @@
+[package]
+name = "nk-pe"
+description = "PE32+ image parsing, mapping, relocation and import binding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true

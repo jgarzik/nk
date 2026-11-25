@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = ["lib/pe"]
+# Bare `cargo test` / `cargo clippy` cover the host-testable crates. The
+# loader and kernel only build for the UEFI targets: use the Makefile.
+default-members = ["lib/pe"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+static_mut_refs = "deny"
+unused_unsafe = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+new_without_default = "allow"
+if_then_some_else_none = "warn"
+manual_let_else = "warn"
+missing_safety_doc = "deny"
+undocumented_unsafe_blocks = "deny"
+unnecessary_safety_comment = "deny"
+unnecessary_safety_doc = "deny"
+mut_mut = "warn"
+cast_lossless = "warn"
+as_underscore = "warn"
+ptr_as_ptr = "warn"
+ptr_cast_constness = "warn"
+as_ptr_cast_mut = "warn"
+ref_as_ptr = "warn"
+borrow_as_ptr = "warn"
+ignored_unit_patterns = "warn"
+needless_bitwise_bool = "warn"
+no_mangle_with_rust_abi = "warn"
+float_arithmetic = "warn"
+
+# The kernel favours correctness and observability over speed: release
+# builds keep overflow checks and debug assertions.
+[profile.release]
+panic = "abort"
+overflow-checks = true
+debug-assertions = true
+opt-level = 2
+
+[profile.dev]
+panic = "abort"
