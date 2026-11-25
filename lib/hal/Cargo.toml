@@ -1,6 +1,6 @@
 [package]
 name = "nk-hal"
-description = "Interrupt-controller and timer arithmetic of both architectures"
+description = "Interrupt controllers and timers of both architectures: what firmware says and how registers are encoded"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,3 +12,6 @@ path = "lib.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+nk-acpi = { path = "../acpi" }

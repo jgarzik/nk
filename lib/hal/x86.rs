@@ -1,4 +1,7 @@
-//! x86-64: the local APIC.
+//! x86-64: the local APIC and the I/O APICs.
+
+use core::fmt;
+use nk_acpi::{Cpu, Madt, MadtEntry};
 
 /// The IRQL an interrupt vector runs at: its upper four bits, which is
 /// also how the APIC itself ranks vectors.
@@ -30,9 +33,229 @@ pub const fn timer_counts(period: u64, rate: u64, frequency: u64) -> u32 {
     }
 }
 
+/// How many I/O APICs are kept.
+pub const MAX_IO_APICS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoApic {
+    pub id: u8,
+    pub address: u64,
+    /// First global system interrupt this I/O APIC serves.
+    pub gsi_base: u32,
+}
+
+/// Where the interrupt controllers are.
+#[derive(Debug)]
+pub struct Controllers {
+    /// Physical address of the local APIC registers (xAPIC mode).
+    pub local_apic: u64,
+    io_apics: [IoApic; MAX_IO_APICS],
+    n_io_apics: usize,
+}
+
+impl Controllers {
+    pub fn from_madt(madt: &Madt<'_>) -> Self {
+        let mut c = Controllers {
+            local_apic: u64::from(madt.local_apic),
+            io_apics: [IoApic {
+                id: 0,
+                address: 0,
+                gsi_base: 0,
+            }; MAX_IO_APICS],
+            n_io_apics: 0,
+        };
+        for e in madt.entries() {
+            match e {
+                MadtEntry::LocalApicAddress(address) => c.local_apic = address,
+                MadtEntry::IoApic {
+                    id,
+                    address,
+                    gsi_base,
+                } if c.n_io_apics < MAX_IO_APICS => {
+                    c.io_apics[c.n_io_apics] = IoApic {
+                        id,
+                        address: u64::from(address),
+                        gsi_base,
+                    };
+                    c.n_io_apics += 1;
+                }
+                _ => {}
+            }
+        }
+        c
+    }
+
+    pub fn io_apics(&self) -> &[IoApic] {
+        &self.io_apics[..self.n_io_apics]
+    }
+}
+
+impl fmt::Display for Controllers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "local APIC at {:#x}", self.local_apic)?;
+        for io in self.io_apics() {
+            write!(
+                f,
+                ", I/O APIC {} at {:#x} from GSI {}",
+                io.id, io.address, io.gsi_base
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// The processor a MADT entry describes, if it is one NK may start.
+pub fn usable_cpu(entry: &MadtEntry) -> Option<Cpu> {
+    match *entry {
+        MadtEntry::LocalApic {
+            uid,
+            id,
+            enabled: true,
+            ..
+        } => Some(Cpu {
+            hw_id: u64::from(id),
+            uid,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::table;
+    use nk_acpi::madt;
+
+    fn controllers(local_apic: u32, entries: &[Vec<u8>]) -> Controllers {
+        let bytes = table::madt(local_apic, entries);
+        Controllers::from_madt(&madt(&bytes).expect("a well-formed MADT"))
+    }
+
+    #[test]
+    fn the_local_apic_and_the_io_apics_come_from_the_table() {
+        let c = controllers(
+            0xFEE0_0000,
+            &[
+                table::local_apic(0, 0, 1),
+                table::io_apic(7, 0xFEC0_0000, 0),
+                table::local_apic(1, 1, 1),
+                table::io_apic(8, 0xFEC0_1000, 24),
+            ],
+        );
+        assert_eq!(c.local_apic, 0xFEE0_0000);
+        assert_eq!(
+            c.io_apics(),
+            [
+                IoApic {
+                    id: 7,
+                    address: 0xFEC0_0000,
+                    gsi_base: 0
+                },
+                IoApic {
+                    id: 8,
+                    address: 0xFEC0_1000,
+                    gsi_base: 24
+                },
+            ]
+        );
+        assert_eq!(
+            c.to_string(),
+            "local APIC at 0xfee00000, I/O APIC 7 at 0xfec00000 from GSI 0, \
+             I/O APIC 8 at 0xfec01000 from GSI 24"
+        );
+    }
+
+    #[test]
+    fn a_64_bit_local_apic_address_replaces_the_header_s() {
+        let c = controllers(
+            0xFEE0_0000,
+            &[
+                table::local_apic(0, 0, 1),
+                table::local_apic_address(0x1_FEE0_0000),
+            ],
+        );
+        assert_eq!(c.local_apic, 0x1_FEE0_0000);
+        assert!(c.io_apics().is_empty());
+        assert_eq!(c.to_string(), "local APIC at 0x1fee00000");
+    }
+
+    #[test]
+    fn io_apics_beyond_the_eighth_are_left_out() {
+        let entries: Vec<_> = (0..10u8)
+            .map(|n| table::io_apic(n, 0xFEC0_0000 + u32::from(n) * 0x1000, u32::from(n) * 24))
+            .collect();
+        let c = controllers(0xFEE0_0000, &entries);
+        assert_eq!(c.io_apics().len(), MAX_IO_APICS);
+        assert_eq!(c.io_apics()[7].id, 7);
+        // An entry after the ones left out is still read.
+        let mut entries = entries;
+        entries.push(table::local_apic_address(0x2_0000_0000));
+        assert_eq!(controllers(0, &entries).local_apic, 0x2_0000_0000);
+    }
+
+    #[test]
+    fn a_usable_processor_is_an_enabled_local_apic() {
+        let cpu = |uid, id, enabled, online_capable| MadtEntry::LocalApic {
+            uid,
+            id,
+            enabled,
+            online_capable,
+        };
+        assert_eq!(
+            usable_cpu(&cpu(3, 5, true, false)),
+            Some(Cpu { hw_id: 5, uid: 3 })
+        );
+        // An x2APIC id does not fit eight bits.
+        assert_eq!(
+            usable_cpu(&cpu(9, 0x1_0000, true, false)),
+            Some(Cpu {
+                hw_id: 0x1_0000,
+                uid: 9
+            })
+        );
+        // Not enabled: not started, even if it could be brought online.
+        assert_eq!(usable_cpu(&cpu(3, 5, false, false)), None);
+        assert_eq!(usable_cpu(&cpu(3, 5, false, true)), None);
+        assert_eq!(
+            usable_cpu(&MadtEntry::IoApic {
+                id: 0,
+                address: 0xFEC0_0000,
+                gsi_base: 0
+            }),
+            None
+        );
+        assert_eq!(
+            usable_cpu(&MadtEntry::Gicc {
+                uid: 0,
+                mpidr: 0,
+                enabled: true,
+                gicr_base: 0
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn the_processors_of_a_table_are_its_enabled_ones_in_order() {
+        let bytes = table::madt(
+            0xFEE0_0000,
+            &[
+                table::local_apic(0, 0, 1),
+                table::local_apic(1, 2, 0),
+                table::io_apic(7, 0xFEC0_0000, 0),
+                table::x2apic(0x1_0000, 1, 9),
+                table::local_apic(3, 6, 2),
+            ],
+        );
+        let ids: Vec<_> = madt(&bytes)
+            .unwrap()
+            .entries()
+            .filter_map(|e| usable_cpu(&e))
+            .map(|c| (c.uid, c.hw_id))
+            .collect();
+        assert_eq!(ids, [(0, 0), (9, 0x1_0000)]);
+    }
 
     #[test]
     fn a_vector_runs_at_the_irql_in_its_upper_four_bits() {

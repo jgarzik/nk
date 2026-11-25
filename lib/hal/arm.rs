@@ -4,6 +4,9 @@
 //! level 0 in bits 0-7, level 1 in 8-15, level 2 in 16-23 and level 3 in
 //! bits 32-39.
 
+use core::fmt;
+use nk_acpi::{Cpu, Madt, MadtEntry};
+
 /// The priority of interrupts that run at IRQL `level` (0 to 15), which
 /// is also the mask value that holds them back. A higher IRQL is a
 /// numerically lower priority, sixteen apart, so the sixteen levels fit
@@ -70,9 +73,277 @@ pub const fn next_tick(last: u64, period: u64, now: u64) -> u64 {
     if due <= now { now + period } else { due }
 }
 
+/// A stretch of redistributor frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Redistributors {
+    pub address: u64,
+    pub length: u64,
+}
+
+/// One GICv3 redistributor: two 64 KiB frames.
+pub const REDISTRIBUTOR_SIZE: u64 = 0x2_0000;
+/// The affinity fields of `MPIDR_EL1`: Aff3 and Aff2..Aff0.
+pub const MPIDR_AFFINITY: u64 = 0xFF_00FF_FFFF;
+
+/// Where the interrupt controllers are, with room for `N` stretches of
+/// redistributors.
+#[derive(Debug)]
+pub struct Controllers<const N: usize> {
+    /// Physical address of the GIC distributor; 0 if the table names
+    /// none.
+    pub distributor: u64,
+    /// GIC architecture version from the table; 0 means "ask the hardware".
+    pub version: u8,
+    /// Where redistributors may be: the table's regions, or one frame pair
+    /// per processor when it lists them that way.
+    redistributors: [Redistributors; N],
+    n_redistributors: usize,
+}
+
+impl<const N: usize> Controllers<N> {
+    pub fn from_madt(madt: &Madt<'_>) -> Self {
+        let mut c = Controllers {
+            distributor: 0,
+            version: 0,
+            redistributors: [Redistributors {
+                address: 0,
+                length: 0,
+            }; N],
+            n_redistributors: 0,
+        };
+        let add = |c: &mut Self, address, length| {
+            if c.n_redistributors < N {
+                c.redistributors[c.n_redistributors] = Redistributors { address, length };
+                c.n_redistributors += 1;
+            }
+        };
+        // Regions take precedence: per-processor addresses are only used
+        // by tables that have no region entries.
+        for e in madt.entries() {
+            match e {
+                MadtEntry::Gicd { address, version } => {
+                    (c.distributor, c.version) = (address, version);
+                }
+                MadtEntry::Gicr { address, length } => add(&mut c, address, u64::from(length)),
+                _ => {}
+            }
+        }
+        if c.n_redistributors == 0 {
+            for e in madt.entries() {
+                if let MadtEntry::Gicc {
+                    enabled: true,
+                    gicr_base,
+                    ..
+                } = e
+                    && gicr_base != 0
+                {
+                    add(&mut c, gicr_base, REDISTRIBUTOR_SIZE);
+                }
+            }
+        }
+        c
+    }
+
+    pub fn redistributors(&self) -> &[Redistributors] {
+        &self.redistributors[..self.n_redistributors]
+    }
+}
+
+impl<const N: usize> fmt::Display for Controllers<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "GICv{} distributor at {:#x}",
+            self.version, self.distributor
+        )?;
+        for r in self.redistributors() {
+            write!(f, ", redistributors at {:#x}+{:#x}", r.address, r.length)?;
+        }
+        Ok(())
+    }
+}
+
+/// The processor a MADT entry describes, if it is one NK may start.
+pub fn usable_cpu(entry: &MadtEntry) -> Option<Cpu> {
+    match *entry {
+        MadtEntry::Gicc {
+            uid,
+            mpidr,
+            enabled: true,
+            ..
+        } => Some(Cpu {
+            hw_id: mpidr & MPIDR_AFFINITY,
+            uid,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::table;
+    use nk_acpi::madt;
+
+    fn controllers<const N: usize>(entries: &[Vec<u8>]) -> Controllers<N> {
+        let bytes = table::madt(0, entries);
+        Controllers::from_madt(&madt(&bytes).expect("a well-formed MADT"))
+    }
+
+    #[test]
+    fn the_distributor_and_redistributor_regions_come_from_the_table() {
+        let c: Controllers<4> = controllers(&[
+            table::gicc(0, 1, 0, 0),
+            table::gicc(1, 1, 0, 1),
+            table::gicd(0x0800_0000, 3),
+            table::gicr(0x080A_0000, 0x00F6_0000),
+            table::gicr(0x4000_0000, 0x0004_0000),
+        ]);
+        assert_eq!((c.distributor, c.version), (0x0800_0000, 3));
+        assert_eq!(
+            c.redistributors(),
+            [
+                Redistributors {
+                    address: 0x080A_0000,
+                    length: 0x00F6_0000
+                },
+                Redistributors {
+                    address: 0x4000_0000,
+                    length: 0x0004_0000
+                },
+            ]
+        );
+        assert_eq!(
+            c.to_string(),
+            "GICv3 distributor at 0x8000000, redistributors at 0x80a0000+0xf60000, \
+             redistributors at 0x40000000+0x40000"
+        );
+    }
+
+    #[test]
+    fn without_regions_each_enabled_processor_gives_its_own_frames() {
+        let c: Controllers<4> = controllers(&[
+            table::gicc(0, 1, 0x1000_0000, 0),
+            // Disabled: its redistributor is not one to look in.
+            table::gicc(1, 0, 0x1002_0000, 1),
+            // Enabled, but the table gives no address for it.
+            table::gicc(2, 1, 0, 2),
+            table::gicc(3, 1, 0x1006_0000, 3),
+            table::gicd(0x0800_0000, 0),
+        ]);
+        assert_eq!(
+            c.redistributors(),
+            [
+                Redistributors {
+                    address: 0x1000_0000,
+                    length: REDISTRIBUTOR_SIZE
+                },
+                Redistributors {
+                    address: 0x1006_0000,
+                    length: REDISTRIBUTOR_SIZE
+                },
+            ]
+        );
+        assert_eq!(c.version, 0);
+    }
+
+    #[test]
+    fn regions_take_precedence_over_per_processor_addresses() {
+        // The region entry comes last and still wins.
+        let c: Controllers<4> = controllers(&[
+            table::gicc(0, 1, 0x1000_0000, 0),
+            table::gicc(1, 1, 0x1002_0000, 1),
+            table::gicr(0x080A_0000, 0x0004_0000),
+        ]);
+        assert_eq!(
+            c.redistributors(),
+            [Redistributors {
+                address: 0x080A_0000,
+                length: 0x0004_0000
+            }]
+        );
+    }
+
+    #[test]
+    fn a_table_with_no_gic_names_no_distributor() {
+        let c: Controllers<4> = controllers(&[table::local_apic(0, 0, 1)]);
+        assert_eq!(c.distributor, 0);
+        assert!(c.redistributors().is_empty());
+        assert_eq!(c.to_string(), "GICv0 distributor at 0x0");
+        let c: Controllers<4> = controllers(&[]);
+        assert_eq!(c.distributor, 0);
+    }
+
+    #[test]
+    fn stretches_beyond_the_room_there_is_are_left_out() {
+        let regions: Vec<_> = (0..5u64)
+            .map(|n| table::gicr(0x1000_0000 + n * 0x10_0000, 0x2_0000))
+            .collect();
+        let c: Controllers<3> = controllers(&regions);
+        assert_eq!(c.redistributors().len(), 3);
+        assert_eq!(c.redistributors()[2].address, 0x1020_0000);
+        let cpus: Vec<_> = (0..5u64)
+            .map(|n| table::gicc(n as u32, 1, 0x2000_0000 + n * 0x2_0000, n))
+            .collect();
+        let c: Controllers<2> = controllers(&cpus);
+        assert_eq!(c.redistributors().len(), 2);
+        assert_eq!(c.redistributors()[1].address, 0x2002_0000);
+        // No room at all is still an answer.
+        let c: Controllers<0> = controllers(&regions);
+        assert!(c.redistributors().is_empty());
+    }
+
+    #[test]
+    fn a_usable_processor_is_an_enabled_gicc_named_by_its_affinity() {
+        let cpu = |uid, mpidr, enabled| MadtEntry::Gicc {
+            uid,
+            mpidr,
+            enabled,
+            gicr_base: 0,
+        };
+        assert_eq!(
+            usable_cpu(&cpu(7, 0x0102, true)),
+            Some(Cpu {
+                hw_id: 0x0102,
+                uid: 7
+            })
+        );
+        // Only the affinity fields name the processor: not the bits
+        // between level 2 and level 3, nor those above.
+        assert_eq!(
+            usable_cpu(&cpu(1, 0xFFFF_FF04_8000_0001, true)).map(|c| c.hw_id),
+            Some(0x04_0000_0001)
+        );
+        assert_eq!(usable_cpu(&cpu(7, 0x0102, false)), None);
+        assert_eq!(
+            usable_cpu(&MadtEntry::Gicd {
+                address: 0x0800_0000,
+                version: 3
+            }),
+            None
+        );
+        assert_eq!(
+            usable_cpu(&MadtEntry::LocalApic {
+                uid: 0,
+                id: 0,
+                enabled: true,
+                online_capable: false
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn a_processor_is_named_the_same_by_the_table_and_by_its_redistributor() {
+        // What `usable_cpu` keeps of an MPIDR is exactly what the
+        // redistributor's affinity and the SGI encoding read.
+        let mpidr = 0xFFFF_FF04_8003_0201;
+        let id = mpidr & MPIDR_AFFINITY;
+        assert_eq!(redistributor_affinity(id), 0x0403_0201);
+        assert_eq!(redistributor_affinity(id), redistributor_affinity(mpidr));
+        assert_eq!(sgi(id, 1), sgi(mpidr, 1));
+    }
 
     #[test]
     fn each_irql_has_its_own_priority_and_higher_is_more_urgent() {

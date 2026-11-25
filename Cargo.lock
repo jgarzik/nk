@@ -20,6 +20,9 @@ dependencies = [
 [[package]]
 name = "nk-hal"
 version = "0.0.2"
+dependencies = [
+ "nk-acpi",
+]
 
 [[package]]
 name = "nk-ke"
