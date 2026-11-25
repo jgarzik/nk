@@ -49,6 +49,10 @@ wait.race ok
 ob.references ok
 ob.handles ok
 ob.thread ok
+mutex.ownership ok
+mutex.exclusion ok
+mutex.fast ok
+mutex.region ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load skip

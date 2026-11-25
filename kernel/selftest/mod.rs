@@ -9,6 +9,7 @@ mod base;
 mod clock;
 mod dpc;
 mod loader;
+mod mutex;
 mod neg;
 mod null;
 mod ob;
@@ -33,6 +34,7 @@ pub static GROUPS: &[&Group] = &[
     &thread::GROUP,
     &wait::GROUP,
     &ob::GROUP,
+    &mutex::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
@@ -48,6 +50,7 @@ pub static GROUPS: &[&Group] = &[
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,
     &wait::IN_DPC,
+    &mutex::EXIT_HOLDING,
 ];
 
 /// The bytes of the boot module called `name`, if the loader supplied it.

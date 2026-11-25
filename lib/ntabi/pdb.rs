@@ -201,6 +201,10 @@ fn thread_matches_the_kernel() {
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
     assert_eq!(AFFINITY, field("Affinity"));
+    assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
+    assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
+    assert_eq!(KERNEL_APC_DISABLE + 2, field("SpecialApcDisable"));
+    assert_eq!(MUTANT_LIST_HEAD, field("MutantListHead"));
     assert_eq!(TIMER, field("Timer"));
     assert_eq!(WAIT_BLOCK, field("WaitBlock"));
     assert_eq!(WAIT_STATUS, field("WaitStatus"));
@@ -281,4 +285,29 @@ fn object_header_matches_the_kernel() {
         offset_of!(OBJECT_HEADER, SecurityDescriptor),
         field("SecurityDescriptor")
     );
+}
+
+#[test]
+fn mutexes_match_the_kernel() {
+    use crate::ke::{FAST_MUTEX, KMUTANT};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let mutant = types.layout("_KMUTANT").expect("_KMUTANT");
+    let field = |name| offset(&mutant, "_KMUTANT", name);
+    assert_eq!(size_of::<KMUTANT>(), mutant.size as usize);
+    assert_eq!(
+        offset_of!(KMUTANT, MutantListEntry),
+        field("MutantListEntry")
+    );
+    assert_eq!(offset_of!(KMUTANT, OwnerThread), field("OwnerThread"));
+    assert_eq!(offset_of!(KMUTANT, MutantFlags), field("MutantFlags"));
+    assert_eq!(offset_of!(KMUTANT, ApcDisable), field("ApcDisable"));
+    let fast = types.layout("_FAST_MUTEX").expect("_FAST_MUTEX");
+    let field = |name| offset(&fast, "_FAST_MUTEX", name);
+    assert_eq!(size_of::<FAST_MUTEX>(), fast.size as usize);
+    assert_eq!(offset_of!(FAST_MUTEX, Count), field("Count"));
+    assert_eq!(offset_of!(FAST_MUTEX, Owner), field("Owner"));
+    assert_eq!(offset_of!(FAST_MUTEX, Contention), field("Contention"));
+    assert_eq!(offset_of!(FAST_MUTEX, Event), field("Event"));
+    assert_eq!(offset_of!(FAST_MUTEX, OldIrql), field("OldIrql"));
 }

@@ -182,6 +182,7 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).wait).write(WaitRegister::new());
         (&raw mut (*thread).wake_link).write(core::ptr::null_mut());
         super::wait::init_thread(thread);
+        super::mutex::init_thread(thread);
         field::<u8>(thread, 0).write(layout::THREAD_OBJECT);
         field::<u64>(thread, layout::INITIAL_STACK).write(stack.top);
         field::<u64>(thread, layout::STACK_BASE).write(stack.top);
@@ -350,6 +351,12 @@ pub fn wait_register<'a>(thread: *mut Thread) -> &'a WaitRegister {
     // callers hold a thread they found through a linked wait block or
     // the current-thread slot.
     unsafe { &(*thread).wait }
+}
+
+/// A field of the thread's Windows-shaped block, for the modules that
+/// keep their own facts there.
+pub fn object_field<T>(thread: *mut Thread, offset: usize) -> *mut T {
+    field(thread, offset)
 }
 
 /// One of the thread's four built-in wait blocks.
@@ -638,6 +645,7 @@ fn after_switch() {
                 !super::timer::pending(timer(previous)),
                 "a thread exited with its wait timer pending"
             );
+            super::mutex::check_none_held(previous);
             mm::stack::free((*previous).stack);
             // It has ended: whoever waits for it may go on.
             let woken = {
@@ -646,9 +654,11 @@ fn after_switch() {
                 super::object::satisfy(header)
             };
             woken.ready();
-            THREADS.fetch_sub(1, Ordering::AcqRel);
-            // The reference it held on itself while it could run.
+            // The reference it held on itself while it could run. Only
+            // then is it counted gone: whoever waits for the count to
+            // fall finds the memory already returned.
             ob::object::dereference(previous.cast());
+            THREADS.fetch_sub(1, Ordering::AcqRel);
         } else {
             (*previous).swap_busy.store(false, Ordering::Release);
         }

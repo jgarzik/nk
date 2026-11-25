@@ -6,6 +6,7 @@ pub mod interrupt;
 pub mod ipi;
 pub mod irql;
 pub mod kspin;
+pub mod mutex;
 pub mod object;
 pub mod pcr;
 pub mod percpu;

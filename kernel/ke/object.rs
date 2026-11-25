@@ -12,13 +12,14 @@
 //! collects the threads it has claimed and readies them after letting
 //! go (`doc/LOCKING.md`).
 
-use super::{irql, thread};
+use super::{irql, mutex, thread};
 use crate::arch;
 use core::sync::atomic::{AtomicI32, AtomicU8, Ordering};
 use nk_ke::Claimed;
 use nk_ntabi::ke::{
-    DISPATCHER_HEADER, EVENT_SYNCHRONIZATION_OBJECT, KWAIT_BLOCK, LIST_ENTRY, OBJECT_LOCK,
-    SEMAPHORE_OBJECT, TIMER_SYNCHRONIZATION_OBJECT, WAIT_BLOCK_ACTIVE, WAIT_BLOCK_INACTIVE,
+    DISPATCHER_HEADER, EVENT_SYNCHRONIZATION_OBJECT, KWAIT_BLOCK, LIST_ENTRY, MUTANT_OBJECT,
+    OBJECT_LOCK, SEMAPHORE_OBJECT, TIMER_SYNCHRONIZATION_OBJECT, WAIT_BLOCK_ACTIVE,
+    WAIT_BLOCK_INACTIVE,
 };
 
 /// # Safety
@@ -70,18 +71,46 @@ impl Drop for ObjectLock {
     }
 }
 
-/// Whether taking an object of this type uses up its signal: an event or
-/// timer that lets one waiter through, a semaphore's count.
+/// What kind of object this is.
 ///
 /// # Safety
 /// `object` points to a live dispatcher object.
-unsafe fn consumes(object: *mut DISPATCHER_HEADER) -> bool {
+unsafe fn kind(object: *mut DISPATCHER_HEADER) -> u8 {
     // SAFETY: per the contract.
-    let kind = unsafe { type_byte(object) }.load(Ordering::Relaxed) & !OBJECT_LOCK;
-    matches!(
-        kind,
-        EVENT_SYNCHRONIZATION_OBJECT | SEMAPHORE_OBJECT | TIMER_SYNCHRONIZATION_OBJECT
-    )
+    unsafe { type_byte(object) }.load(Ordering::Relaxed) & !OBJECT_LOCK
+}
+
+/// Whether `thread` may take the object as it stands: it is signalled,
+/// or it is a mutex the thread already owns.
+///
+/// # Safety
+/// `object` is live and its lock is held.
+unsafe fn available(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread) -> bool {
+    // SAFETY: per the contract.
+    unsafe {
+        signal(object).load(Ordering::Relaxed) > 0
+            || (kind(object) == MUTANT_OBJECT && mutex::owner(object.cast()) == thread)
+    }
+}
+
+/// `thread` takes the object: use up what taking this kind of object
+/// uses up. An event or timer that lets one waiter through and a
+/// semaphore's count go down by one; a mutex gets its owner.
+///
+/// # Safety
+/// `object` is live, its lock is held, and it is `available` to
+/// `thread`, which is the running thread or one the caller has claimed.
+unsafe fn take(object: *mut DISPATCHER_HEADER, thread: *mut thread::Thread) {
+    // SAFETY: per the contract.
+    unsafe {
+        match kind(object) {
+            EVENT_SYNCHRONIZATION_OBJECT | SEMAPHORE_OBJECT | TIMER_SYNCHRONIZATION_OBJECT => {
+                signal(object).fetch_sub(1, Ordering::Relaxed);
+            }
+            MUTANT_OBJECT => mutex::taken(object.cast(), thread),
+            _ => {}
+        }
+    }
 }
 
 /// Make an object's wait list empty.
@@ -105,16 +134,14 @@ pub unsafe fn init_wait_list(object: *mut DISPATCHER_HEADER) {
 /// # Safety
 /// `object` is live and its lock is held.
 pub unsafe fn try_take(object: *mut DISPATCHER_HEADER) -> bool {
+    let me = thread::current();
     // SAFETY: per the contract.
     unsafe {
-        let state = signal(object);
-        if state.load(Ordering::Relaxed) <= 0 {
-            return false;
+        let can = available(object, me);
+        if can {
+            take(object, me);
         }
-        if consumes(object) {
-            state.fetch_sub(1, Ordering::Relaxed);
-        }
-        true
+        can
     }
 }
 
@@ -184,7 +211,8 @@ impl Woken {
 
 /// Let waiting threads take what the object's signal state allows, in
 /// the order they began waiting. Each is claimed with its wait block's
-/// key as the status its wait returns.
+/// key as the status its wait returns, and takes the object as it is
+/// claimed: a mutex has its new owner before that owner has run.
 ///
 /// # Safety
 /// `object` is live and its lock is held.
@@ -196,7 +224,6 @@ pub unsafe fn satisfy(object: *mut DISPATCHER_HEADER) -> Woken {
     unsafe {
         let state = signal(object);
         let head = &raw mut (*object).WaitListHead;
-        let uses_up = consumes(object);
         let mut entry = (*head).Flink;
         while entry != head && state.load(Ordering::Relaxed) > 0 {
             let block = entry.cast::<KWAIT_BLOCK>();
@@ -209,9 +236,7 @@ pub unsafe fn satisfy(object: *mut DISPATCHER_HEADER) -> Woken {
                 continue;
             };
             unlink(block);
-            if uses_up {
-                state.fetch_sub(1, Ordering::Relaxed);
-            }
+            take(object, waiter);
             if found == Claimed::Asleep {
                 thread::set_wake_link(waiter, woken.0);
                 woken.0 = waiter;

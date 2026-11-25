@@ -170,6 +170,12 @@ takes the timer out under the table's lock, lets go, and only then takes
 the timer's own lock to signal it; a timer that was set again in
 between is left alone.
 
+A mutex's lock also covers its owner and its place in the owner's list
+of mutexes held. A thread being let in to a mutex while it sleeps has
+its list and its APC-disable count changed on its behalf by the
+releasing thread, under that mutex's lock; otherwise only a thread
+itself changes them.
+
 ### Waiting and waking
 
 The race between a thread going to sleep and whatever would wake it is

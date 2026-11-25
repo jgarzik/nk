@@ -271,7 +271,7 @@ pub fn thread_test() -> Result<u32, &'static str> {
         // SAFETY: the test holds a reference to the thread.
         unsafe { wait::wait(Some(thread.cast()), ms.map(|ms| -ms * 10_000)) }
     };
-    let pool_before = blocks();
+    let (pool_before, threads_before) = (blocks(), thread::count());
     let started = time::interrupt_time();
     let short = thread::create_referenced(body, 30, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
     let long = thread::create_referenced(body, 300, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
@@ -304,6 +304,12 @@ pub fn thread_test() -> Result<u32, &'static str> {
         if close(handle) != STATUS_SUCCESS {
             return Err("the thread's handle could not be closed");
         }
+    }
+    // A thread is signalled as it is buried, a moment before its own
+    // reference goes: wait for the burial to be over.
+    let deadline = time::interrupt_time() + 50_000_000;
+    while thread::count() != threads_before && time::interrupt_time() < deadline {
+        thread::yield_now();
     }
     if blocks() != pool_before {
         return Err("threads that ended and were let go of were not freed");

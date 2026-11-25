@@ -225,3 +225,17 @@ tier = "gate"
 cmdline = "test=neg.wait-in-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+
+[x86_64-neg-mutex-held-at-exit]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.mutex-held-at-exit"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"
+
+[aarch64-neg-mutex-held-at-exit]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.mutex-held-at-exit"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"

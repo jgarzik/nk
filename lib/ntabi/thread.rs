@@ -48,6 +48,12 @@ pub const WAIT_BLOCK: usize = 0x140;
 pub const TIMER_WAIT_BLOCK: usize = 3;
 /// `WaitStatus`: what the thread's last wait returned.
 pub const WAIT_STATUS: usize = 0xC8;
+/// `KernelApcDisable`: 16 bits, negative while the thread is in a
+/// critical region or holds a mutex; with `SpecialApcDisable`, the 16
+/// bits after it, it forms the 32-bit `CombinedApcDisable`.
+pub const KERNEL_APC_DISABLE: usize = 0x1E4;
+/// `MutantListHead`: the mutexes the thread holds.
+pub const MUTANT_LIST_HEAD: usize = 0x308;
 /// `Affinity.Mask`: the processors the thread may run on, 64 bits.
 pub const AFFINITY: usize = 0x240;
 /// `IdealProcessor`: the processor it is placed on by preference.

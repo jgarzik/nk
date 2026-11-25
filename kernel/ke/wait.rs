@@ -354,27 +354,9 @@ pub unsafe extern "C" fn KeDelayExecutionThread(
 // ---- tests --------------------------------------------------------------
 
 use super::{pcr, smp, time};
-use core::cell::UnsafeCell;
-use core::mem::MaybeUninit;
+use crate::test::Slot;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 use nk_ke::TIME_INCREMENT;
-
-/// Static storage for an object the tests hand to the kernel by pointer,
-/// as a driver would.
-struct Slot<T>(UnsafeCell<MaybeUninit<T>>);
-
-// SAFETY: reached only through the kernel routines, which take pointers
-// and do their own locking.
-unsafe impl<T> Sync for Slot<T> {}
-
-impl<T> Slot<T> {
-    const fn new() -> Self {
-        Self(UnsafeCell::new(MaybeUninit::uninit()))
-    }
-    fn ptr(&self) -> *mut T {
-        self.0.get().cast()
-    }
-}
 
 static EVENT: Slot<KEVENT> = Slot::new();
 static REPLY: Slot<KEVENT> = Slot::new();

@@ -14,12 +14,12 @@ On QEMU, x86-64 and arm64: UEFI boot through NK's own loader, own page
 tables, a pool, a PE loader with import binding, driver/device/file
 objects, synchronous IRPs with completion routines and MDLs; interrupt
 controllers, the IRQL as their priority mask, a clock, every processor
-running, DPCs, timers, preemptive threads, and waits on events,
-semaphores and timers. Microsoft's
+running, DPCs, timers, preemptive threads, waits on events, semaphores,
+timers and mutexes, kernel handles. Microsoft's
 `null.sys` (x86-64) and the WDK-built `sioctl.sys` (both) load, do I/O and
 unload without leaks.
 
-Not there: device interrupts, APCs, mutexes, asynchronous I/O,
+Not there: device interrupts, APCs, asynchronous I/O,
 structured exception
 handling, Plug and Play, any hardware device, user mode. Open
 gaps carried into the phases below: no arm64 `null.sys` (no usable

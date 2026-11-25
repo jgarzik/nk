@@ -184,6 +184,45 @@ const _: () = {
     assert!(offset_of!(KWAIT_BLOCK, Object) == 0x20);
 };
 
+/// `DISPATCHER_HEADER.Type` of a mutex: `MutantObject`.
+pub const MUTANT_OBJECT: u8 = 2;
+
+/// `KMUTANT` (`KMUTEX`). Its signal state is 1 when free, 0 when held
+/// once, and one lower for each further time its owner has taken it.
+#[repr(C)]
+pub struct KMUTANT {
+    pub Header: DISPATCHER_HEADER,
+    /// Links the mutex into its owner's list of mutexes held.
+    pub MutantListEntry: LIST_ENTRY,
+    pub OwnerThread: *mut c_void,
+    pub MutantFlags: u8,
+    /// 1 for a mutex from `KeInitializeMutex`: kernel APCs stay off
+    /// while it is held.
+    pub ApcDisable: u8,
+}
+
+/// `FAST_MUTEX`. A driver initialises it in line: `Count` 1, no owner,
+/// and a synchronization event. `Count` is 1 when free, 0 when held, and
+/// one lower for each thread waiting.
+#[repr(C)]
+pub struct FAST_MUTEX {
+    pub Count: i32,
+    pub Owner: *mut c_void,
+    pub Contention: u32,
+    pub Event: KEVENT,
+    pub OldIrql: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KMUTANT>() == 0x38);
+    assert!(offset_of!(KMUTANT, OwnerThread) == 0x28);
+    assert!(offset_of!(KMUTANT, ApcDisable) == 0x31);
+    assert!(size_of::<FAST_MUTEX>() == 0x38);
+    assert!(offset_of!(FAST_MUTEX, Event) == 0x18);
+    assert!(offset_of!(FAST_MUTEX, OldIrql) == 0x30);
+};
+
 /// `KUSER_SHARED_DATA`: a page at a fixed kernel address that code built
 /// with the WDK reads the time from directly. Only the fields NK
 /// maintains are named.

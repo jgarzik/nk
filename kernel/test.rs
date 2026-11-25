@@ -168,3 +168,21 @@ fn complete() -> ! {
     );
     crate::hal::power_off_or_halt()
 }
+
+/// Static storage for an object a test hands to the kernel by pointer,
+/// as a driver would.
+pub struct Slot<T>(core::cell::UnsafeCell<core::mem::MaybeUninit<T>>);
+
+// SAFETY: reached only through the kernel routines, which take pointers
+// and do their own locking.
+unsafe impl<T> Sync for Slot<T> {}
+
+impl<T> Slot<T> {
+    pub const fn new() -> Self {
+        Self(core::cell::UnsafeCell::new(core::mem::MaybeUninit::uninit()))
+    }
+
+    pub fn ptr(&self) -> *mut T {
+        self.0.get().cast()
+    }
+}

@@ -104,6 +104,7 @@ tier in parallel:
 | `*-neg-cpu-stuck` | a processor that stops answering interprocessor interrupts stops the system |
 | `*-neg-dpc-watchdog` | a DPC that never returns stops the system, with the limit shortened by `dpc-limit=<ticks>` |
 | `*-neg-wait-at-dispatch`, `*-neg-wait-in-dpc` | a wait that would have to block at `DISPATCH_LEVEL` stops the system |
+| `*-neg-mutex-held-at-exit` | a thread that ends holding a mutex stops the system |
 | `*-known-bad` | a failing test fails the run |
 | `*-wrong-cpus` | a processor the kernel does not find fails a test |
 

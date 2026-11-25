@@ -220,6 +220,27 @@ After boot the kernel's own work, the tests today, runs in a thread at
 priority 8 and `PASSIVE_LEVEL`, which is what a driver expects of its
 caller.
 
+### Mutexes and critical regions
+
+A mutex (`KMUTANT`) is waited for like any other object, but has an
+owner: the owner may take it again, only the owner may release it, and
+it is free when released as often as taken. A waiter that is let in owns
+the mutex from the moment the releasing thread claims it, before it has
+run. While a thread holds a mutex or is inside a critical region its
+`KernelApcDisable` count is negative, as on Windows, which is what
+`KeAreApcsDisabled` reports. A thread that ends holding a mutex stops
+the system (`THREAD_TERMINATE_HELD_MUTEX`); releasing one that is not
+owned, an exception on Windows, stops it too.
+
+A fast mutex is a count and an event, set up in line by the driver: 1
+when free, 0 when held, one lower per waiter. Taking a free one is a
+single atomic step; a release that finds waiters passes the mutex to one
+through the event. Taking it raises the IRQL to `APC_LEVEL`.
+
+NK does not queue APCs: nothing loaded delivers work that way yet. The
+counts and the IRQL are kept as Windows keeps them, so that code which
+asks whether APCs are disabled gets Windows' answer.
+
 ### Objects, references and handles
 
 What the object manager allocates has Windows' `OBJECT_HEADER` in front
