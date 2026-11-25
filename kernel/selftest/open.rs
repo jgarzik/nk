@@ -412,8 +412,8 @@ fn relative(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     // given up; a thread is an object too.
     let (directory, thread) = unsafe {
         let handles = (
-            handle::open(directory),
-            handle::open(crate::ke::thread::current().cast()),
+            handle::open(directory, 0).unwrap_or(0),
+            handle::open(crate::ke::thread::current().cast(), 0).unwrap_or(0),
         );
         object::dereference(directory);
         handles
@@ -664,7 +664,7 @@ fn fs_control(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     let code = ctl_code(0x11, 0x803, METHOD_BUFFERED, 0);
     let opened = open(DEVICE).map_err(|_| "the device did not open")?;
     // SAFETY: a thread is an object; the handle is closed below.
-    let thread = unsafe { handle::open(crate::ke::thread::current().cast()) };
+    let thread = unsafe { handle::open(crate::ke::thread::current().cast(), 0) }.unwrap_or(0);
     let verdict = (|| {
         let kinds: [(u8, Control); 2] = [
             (IRP_MJ_FILE_SYSTEM_CONTROL, file::fs_control),

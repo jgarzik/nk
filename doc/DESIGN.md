@@ -342,10 +342,18 @@ and how many there were. A thread references itself until it has ended
 and been reaped, so an unreferenced thread frees itself and a referenced
 one stays a valid, signalled object.
 
-Kernel handles are entries in one table, with Windows' kernel-handle
-bits; a handle holds a reference until closed. No per-process tables, no
-access checks. `NtCurrentThread()` (-2) names the caller and
-`NtCurrentProcess()` (-1) its process.
+Kernel handles are entries in one table, the System process's, with
+Windows' kernel-handle bits; a handle holds a reference until closed. No
+per-process tables. Each handle has the access it was granted and its
+attributes (inherit, protect from close). Nothing decides what a subject
+may have: a handle is granted what its opener asked for, generic rights
+turned into what they mean for the object's type. A use of a handle on
+behalf of user mode is refused (`STATUS_ACCESS_DENIED`) access the handle
+lacks; kernel mode is not held to it, as `ObReferenceObjectByHandle`
+documents. A type's generic rights are Windows' for files and registry
+keys; the other types have none recorded, and a generic right asked of
+them grants nothing. `NtCurrentThread()` (-2) names the caller and
+`NtCurrentProcess()` (-1) its process, with every access.
 
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index
@@ -564,7 +572,7 @@ Creating makes only the last key of a path, as on Windows. Values are
 read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
 forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
-access checks, symbolic links or notification. Leak checks leave out the
+access checks, registry symbolic links or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
 ## Security descriptors

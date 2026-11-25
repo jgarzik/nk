@@ -109,10 +109,16 @@ impl ObjectType {
     }
 
     /// The same type, whose `close` is called whenever a handle to one
-    /// of its objects is closed, and for which the generic rights mean
-    /// what `mapping` says.
-    const fn with_handles(mut self, close: OB_CLOSE_METHOD, mapping: GENERIC_MAPPING) -> Self {
+    /// of its objects is closed.
+    const fn closing(mut self, close: OB_CLOSE_METHOD) -> Self {
         self.0.TypeInfo.CloseProcedure = Some(close);
+        self
+    }
+
+    /// The same type, for which the generic rights mean what `mapping`
+    /// says. A type without one has no meaning for them: a handle asked
+    /// for generic rights alone is granted nothing.
+    const fn rights(mut self, mapping: GENERIC_MAPPING) -> Self {
         self.0.TypeInfo.ValidAccessMask = mapping.GenericAll;
         self.0.TypeInfo.GenericMapping = mapping;
         self
@@ -170,7 +176,15 @@ pub static DEVICE_TYPE: ObjectType = ObjectType::new(
 );
 /// Registry keys: an open key's object names the key (`cm`).
 pub static KEY_TYPE: ObjectType =
-    ObjectType::new(FIRST_TYPE_INDEX + 3, &KEY_NAME, Some(crate::cm::closed));
+    ObjectType::new(FIRST_TYPE_INDEX + 3, &KEY_NAME, Some(crate::cm::closed)).rights(
+        // `KEY_READ`, `KEY_WRITE`, `KEY_EXECUTE`, `KEY_ALL_ACCESS`.
+        GENERIC_MAPPING {
+            GenericRead: 0x0002_0019,
+            GenericWrite: 0x0002_0006,
+            GenericExecute: 0x0002_0019,
+            GenericAll: 0x000F_003F,
+        },
+    );
 
 /// Processes (`EPROCESS`).
 pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None);
@@ -200,10 +214,8 @@ pub static FILE_TYPE: ObjectType = ObjectType::new(
     &FILE_NAME,
     Some(crate::io::file::deleted),
 )
-.with_handles(
-    crate::io::file::handle_closed,
-    nk_ntabi::io::FILE_GENERIC_MAPPING,
-);
+.closing(crate::io::file::handle_closed)
+.rights(nk_ntabi::io::FILE_GENERIC_MAPPING);
 
 /// Every type, by index from `FIRST_TYPE_INDEX`.
 static TYPES: [&ObjectType; 10] = [

@@ -161,21 +161,22 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(KeyId, Vec<u16>
     }
 }
 
-/// A handle to `key`, which the caller has counted as opened
-/// (`Hive::opened`) under the lock it found the key under; the count is
-/// given back if no handle can be made.
-fn open(key: KeyId) -> Result<*mut c_void, NTSTATUS> {
+/// A handle to `key`, granted `access`. The caller has counted the key
+/// as opened (`Hive::opened`) under the lock it found the key under;
+/// the count is given back if no handle can be made.
+fn open(key: KeyId, access: u32) -> Result<*mut c_void, NTSTATUS> {
     let Some(body) = object::create(&object::KEY_TYPE, size_of::<usize>()) else {
         HIVE.lock().closed(key);
         return Err(STATUS_INSUFFICIENT_RESOURCES);
     };
     // SAFETY: a fresh object of that size; the handle takes its own
-    // reference and the creating one is given up.
+    // reference and the creating one is given up, which without a
+    // handle ends the object and gives the key's count back.
     unsafe {
         body.cast::<usize>().write(key.index());
-        let handle = handle::open(body);
+        let handle = handle::open(body, access);
         object::dereference(body);
-        Ok(handle as *mut c_void)
+        handle.map(|handle| handle as *mut c_void)
     }
 }
 
@@ -237,14 +238,15 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
 }
 
 /// [`ZwOpenKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey).
-/// There are no access checks: the desired access is not looked at.
+/// There are no access checks: the handle is granted the access asked
+/// for.
 ///
 /// # Safety
 /// `key_handle` is writable; `attributes` points to an
 /// `OBJECT_ATTRIBUTES`.
 pub unsafe extern "C" fn ZwOpenKey(
     key_handle: *mut *mut c_void,
-    _desired_access: u32,
+    desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
@@ -254,7 +256,7 @@ pub unsafe extern "C" fn ZwOpenKey(
         hive.opened(key);
         Ok(key)
     });
-    match found.and_then(open) {
+    match found.and_then(|key| open(key, desired_access)) {
         Ok(handle) => {
             // SAFETY: per the contract.
             unsafe { key_handle.write_unaligned(handle) };
@@ -274,7 +276,7 @@ pub unsafe extern "C" fn ZwOpenKey(
 /// `OBJECT_ATTRIBUTES`; `disposition` is null or writable.
 pub unsafe extern "C" fn ZwCreateKey(
     key_handle: *mut *mut c_void,
-    _desired_access: u32,
+    desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
     _title_index: u32,
     _class: *const UNICODE_STRING,
@@ -288,7 +290,7 @@ pub unsafe extern "C" fn ZwCreateKey(
         hive.opened(key);
         Ok((key, new))
     });
-    match made.and_then(|(key, new)| Ok((open(key)?, new))) {
+    match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
         Ok((handle, new)) => {
             // SAFETY: per the contract.
             unsafe {

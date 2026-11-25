@@ -1,9 +1,9 @@
 //! The slots of a handle table that remembers what each handle may do:
 //! the access granted when it was opened, and its attributes.
 //!
-//! As with [`Slots`](crate::Slots), a handle is its slot's index, the
-//! lowest free slot is used first, and the table never looks inside
-//! what it holds. The kernel turns generic rights and `MAXIMUM_ALLOWED`
+//! A handle is its slot's index, the lowest free slot is used first
+//! (so indices stay small and a closed handle's number is given out
+//! again), and the table never looks inside what it holds. The kernel turns generic rights and `MAXIMUM_ALLOWED`
 //! into the type's specific rights before a mask gets here.
 
 use alloc::vec::Vec;

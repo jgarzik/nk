@@ -341,7 +341,7 @@ fn namespace() -> Result<(), &'static str> {
     let (directory, _) = ob::lookup(None, &wide("\\")).map_err(|_| "no root directory")?;
     // SAFETY: the look-up's reference, handed to the handle.
     let directory = unsafe {
-        let opened = handle::open(directory);
+        let opened = handle::open(directory, 0).unwrap_or(0);
         object::dereference(directory);
         opened as *mut c_void
     };

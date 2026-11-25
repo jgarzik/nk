@@ -457,26 +457,35 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         } else {
             Err(IoError::NoMemory)
         };
+        // What the open has been granted: for kernel mode, with no
+        // check made, all that was asked for and whatever the driver
+        // granted on its own.
+        let granted = (&raw const (*state).PreviouslyGrantedAccess).read()
+            | (&raw const (*state).RemainingDesiredAccess).read();
         se::token::delete_access_state(state);
         // The related file object is the driver's to read only while
         // the create is processed. `target` holds it until this
         // function returns, which is after the request has completed,
         // pended or not; the pointer does not outlive that reference.
         (*file).RelatedFileObject = core::ptr::null_mut();
-        result
+        result.map(|r| (r, granted))
     };
     let status = match result {
-        Ok(r) if nt_success(r.status) => {
+        Ok((r, granted)) if nt_success(r.status) => {
             // SAFETY: `file` is the open file; the handle takes its own
-            // reference and the creating one is given up.
+            // reference and the creating one is given up. Without a
+            // handle that ends the file: its type sends the driver the
+            // cleanup and the close.
             unsafe {
-                let handle = handle::open(body);
-                (*file).Flags |= FO_HANDLE_CREATED;
+                let handle = handle::open(body, granted);
+                if handle.is_ok() {
+                    (*file).Flags |= FO_HANDLE_CREATED;
+                }
                 object::dereference(body);
-                return Ok((handle, r.information));
+                return handle.map(|handle| (handle, r.information));
             }
         }
-        Ok(r) => r.status,
+        Ok((r, _)) => r.status,
         Err(IoError::NoMemory) => STATUS_INSUFFICIENT_RESOURCES,
         Err(_) => STATUS_UNSUCCESSFUL,
     };
