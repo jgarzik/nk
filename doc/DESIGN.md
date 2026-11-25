@@ -447,6 +447,9 @@ routine. Completion follows the Windows sequence: unwind the stack
 locations running completion routines, then copy results to the
 requestor and signal its event.
 
+A dispatch routine is called inside a critical region, as on Windows for
+a synchronous request: a driver that asks finds kernel APCs disabled.
+
 A driver may pend a request (`STATUS_PENDING`) and complete it later,
 from a DPC, a timer or a worker thread; the requestor waits on an event
 that completion sets. The requestor owns the IRP and frees it once it

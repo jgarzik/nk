@@ -148,7 +148,12 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP) -> Pending {
         (*irp).Thread = ke::pcr::current_thread().cast();
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
-        let dispatch_status = irp::call_driver((*file).DeviceObject, irp);
+        // Windows calls the driver for a synchronous request with kernel
+        // APCs off, in a critical region; a driver can ask, and
+        // nkc-mutex does (oracle/nkc-mutex.txt).
+        let device_object = (*file).DeviceObject;
+        let dispatch_status =
+            ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp));
         Pending {
             irp,
             waiting,

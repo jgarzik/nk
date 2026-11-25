@@ -101,3 +101,8 @@ oracle.nkc-irql ok
 oracle.nkc-time ok
 oracle.nkc-dpc ok
 oracle.nkc-timer ok
+oracle.nkc-thread ok
+oracle.nkc-wait ok
+oracle.nkc-mutex ok
+oracle.nkc-waitn ok
+oracle.nkc-work ok

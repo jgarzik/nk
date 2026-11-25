@@ -46,6 +46,10 @@ unsafe impl Sync for TypeVariable {}
 /// event.
 pub static ExEventObjectType: TypeVariable = TypeVariable(&raw const EVENT_TYPE);
 
+/// [`PsThreadType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle):
+/// what a driver passes to insist on a thread.
+pub static PsThreadType: TypeVariable = TypeVariable(&raw const THREAD_TYPE);
+
 impl TypeVariable {
     /// The address drivers import.
     pub const fn address(&'static self) -> *const () {

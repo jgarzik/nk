@@ -1,0 +1,10 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 1d863a61d8cd3295847c35a0d2edabc93a16a085bee4361e625d5b36d327278e
+# driver nkc-mutex.sys sha256 6c63ba917492bcd8218d700530ec6468648fa3cd366fd7c1496a9e46c8e401b3
+load nkc-mutex: ok
+open d \Device\NkcMutex: 00000000
+ioctl d 00222000 - 256: 00000000 92 010000000100000000000000000000000100000000000000ffffffff01000000020100000000000000000000ffffffff0000000001000000010000000000000001000000010000000000000000000000010000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222000 - 8: c0000023 - eeeeeeeeeeeeeeee
+close d: 00000000
+unload nkc-mutex: ok
+end

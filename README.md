@@ -35,6 +35,7 @@ The drivers are Microsoft's, not written for NK:
 | --- | --- | --- | --- |
 | `null.sys` | The Null device driver shipped in Windows 10 | runs | no test binary yet |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, built with Microsoft's WDK | runs | runs |
+| `nkc-*.sys` (nine) | NK's conformance drivers, built with Microsoft's WDK, each recorded on Windows first | match Windows value for value | the same |
 | `event.sys` | Microsoft's WDM event sample, built with Microsoft's WDK | runs as on Windows with a debugger attached; without one, stops where Windows stops | the same |
 
 **What this is not.** Two software drivers are not general driver

@@ -20,6 +20,7 @@ mod ke;
 mod ldr;
 mod mm;
 mod ob;
+mod ps;
 mod rt;
 mod rtl;
 mod selftest;

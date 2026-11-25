@@ -172,6 +172,8 @@ None is committed. The boot tests put them on the EFI system partition:
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver | loads; read gives end-of-file, write accepts all bytes; unloads without leaks |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, WDK-built | loads; opens by device name and by its symbolic link; buffered, in-direct and out-direct control requests return the sample's data; bad requests fail with the sample's status codes; 100 load/exercise/unload cycles leak nothing |
+| `event.sys` | Microsoft's WDM event sample, WDK-built | with a debugger attached, runs: its timer's DPC completes pended requests; without one, its opening breakpoint stops the system as on Windows |
+| `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), WDK-built: irql, time, dpc, timer, thread, wait, mutex, waitn, work | each returns the list of values it observed, the same list it returns on Windows |
 | `wrongarch.sys` | the same sample built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
@@ -200,6 +202,13 @@ is replayed in two places:
   binary. Each line NK produces must be the line Windows produced: same
   status, same byte count, same bytes in the output buffer, including the
   bytes nobody wrote.
+
+A conformance driver is the same idea turned inside out: a small driver
+that exercises a few kernel routines itself and reports what it saw as a
+list of numbers. It is loaded on Windows first; what Windows returns is
+the specification, even where it surprises (a dispatch routine finds
+kernel APCs already disabled: the I/O manager calls it inside a critical
+region).
 
 `oracle/README.md` defines the script and the transcript. The transcripts
 do not depend on the architecture, so arm64 NK is held to the lines

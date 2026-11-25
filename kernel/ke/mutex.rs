@@ -187,6 +187,14 @@ pub extern "C" fn KeLeaveCriticalRegion() {
     apc_disable(thread::current()).fetch_add(1, Ordering::Relaxed);
 }
 
+/// Run `f` inside a critical region.
+pub fn in_critical_region<R>(f: impl FnOnce() -> R) -> R {
+    KeEnterCriticalRegion();
+    let result = f();
+    KeLeaveCriticalRegion();
+    result
+}
+
 /// [`KeAreApcsDisabled`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keareapcsdisabled):
 /// whether the thread is in a critical or guarded region.
 pub extern "C" fn KeAreApcsDisabled() -> u8 {

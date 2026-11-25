@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 50,
-  "implemented": 44,
+  "total": 78,
+  "implemented": 72,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -597,6 +597,516 @@
      "state": "implemented"
     }
    ]
+  },
+  {
+   "name": "nkc-thread",
+   "file": "nkc-thread.x64.sys",
+   "sha256": "b3148a507958be49e7014ade5d3befe92907e591ede918bf6b082b00ef9f48bd",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExEventObjectType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-wait",
+   "file": "nkc-wait.x64.sys",
+   "sha256": "fb577b5d3ca9f3ae03843aadf19cc8e6b8d1508a11e48b6ea1cfd270d3bd903b",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReadStateEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeResetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReadStateSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeTimer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReadStateTimer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetTimer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-mutex",
+   "file": "nkc-mutex.x64.sys",
+   "sha256": "6c63ba917492bcd8218d700530ec6468648fa3cd366fd7c1496a9e46c8e401b3",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReadStateMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeEnterCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeLeaveCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAreApcsDisabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquireFastMutexUnsafe",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleaseFastMutexUnsafe",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquireFastMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleaseFastMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExTryToAcquireFastMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-waitn",
+   "file": "nkc-waitn.x64.sys",
+   "sha256": "0d130998c2fba064e66bc1fbb79732c3223190d83ebd78feaa041953a4189f16",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReadStateEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForMultipleObjects",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-work",
+   "file": "nkc-work.x64.sys",
+   "sha256": "a2cb3466c8a967e102f53c1c9ee303ee11c454b348ebcec46a194b99b6f56004",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInsertQueueDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItem",
+     "state": "implemented"
+    }
+   ]
   }
  ],
  "corpus": {
@@ -604,10 +1114,10 @@
   "binaries": 58,
   "kernel_names": {
    "total": 1740,
-   "implemented": 42,
+   "implemented": 68,
    "partial": 5,
    "traps": 1,
-   "missing": 1692
+   "missing": 1666
   },
   "by_binary": [
    {
@@ -615,10 +1125,10 @@
     "version": "10.0.19041.1741",
     "kernel": {
      "total": 260,
-     "implemented": 28,
+     "implemented": 43,
      "partial": 0,
      "traps": 0,
-     "missing": 232
+     "missing": 217
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -632,10 +1142,10 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 28,
+     "implemented": 41,
      "partial": 4,
      "traps": 1,
-     "missing": 218
+     "missing": 205
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -649,10 +1159,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 40,
-     "implemented": 4,
+     "implemented": 7,
      "partial": 0,
      "traps": 1,
-     "missing": 35
+     "missing": 32
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -678,10 +1188,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 240,
-     "implemented": 12,
+     "implemented": 21,
      "partial": 1,
      "traps": 1,
-     "missing": 226
+     "missing": 217
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -694,10 +1204,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 171,
-     "implemented": 27,
+     "implemented": 38,
      "partial": 4,
      "traps": 1,
-     "missing": 139
+     "missing": 128
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -707,10 +1217,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 186,
-     "implemented": 17,
+     "implemented": 31,
      "partial": 4,
      "traps": 1,
-     "missing": 164
+     "missing": 150
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -720,10 +1230,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 121,
-     "implemented": 16,
+     "implemented": 29,
      "partial": 1,
      "traps": 1,
-     "missing": 103
+     "missing": 90
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -733,10 +1243,10 @@
     "version": "10.0.19041.1110",
     "kernel": {
      "total": 85,
-     "implemented": 13,
+     "implemented": 16,
      "partial": 3,
      "traps": 1,
-     "missing": 68
+     "missing": 65
     },
     "by_ordinal": 2,
     "other_modules": {}
@@ -746,10 +1256,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 68,
-     "implemented": 13,
+     "implemented": 21,
      "partial": 1,
      "traps": 0,
-     "missing": 54
+     "missing": 46
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -761,10 +1271,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 486,
-     "implemented": 36,
+     "implemented": 58,
      "partial": 4,
      "traps": 1,
-     "missing": 445
+     "missing": 423
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -778,10 +1288,10 @@
     "version": "10.0.19041.1826",
     "kernel": {
      "total": 326,
-     "implemented": 22,
+     "implemented": 37,
      "partial": 4,
      "traps": 1,
-     "missing": 299
+     "missing": 284
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -796,10 +1306,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 24,
+     "implemented": 38,
      "partial": 5,
      "traps": 1,
-     "missing": 295
+     "missing": 281
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -809,10 +1319,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 78,
-     "implemented": 10,
+     "implemented": 16,
      "partial": 2,
      "traps": 1,
-     "missing": 65
+     "missing": 59
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -826,10 +1336,10 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 107,
-     "implemented": 22,
+     "implemented": 31,
      "partial": 1,
      "traps": 1,
-     "missing": 83
+     "missing": 74
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -857,10 +1367,10 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 33,
-     "implemented": 13,
+     "implemented": 19,
      "partial": 1,
      "traps": 0,
-     "missing": 19
+     "missing": 13
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -874,10 +1384,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 30,
+     "implemented": 39,
      "partial": 0,
      "traps": 1,
-     "missing": 60
+     "missing": 51
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -890,10 +1400,10 @@
     "version": "10.0.19041.1266",
     "kernel": {
      "total": 78,
-     "implemented": 12,
+     "implemented": 16,
      "partial": 0,
      "traps": 0,
-     "missing": 66
+     "missing": 62
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -905,10 +1415,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 19,
+     "implemented": 27,
      "partial": 0,
      "traps": 0,
-     "missing": 47
+     "missing": 39
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -921,10 +1431,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 24,
+     "implemented": 34,
      "partial": 1,
      "traps": 1,
-     "missing": 40
+     "missing": 30
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -951,10 +1461,10 @@
     "version": "10.0.19041.1586",
     "kernel": {
      "total": 120,
-     "implemented": 13,
+     "implemented": 22,
      "partial": 1,
      "traps": 1,
-     "missing": 105
+     "missing": 96
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -966,10 +1476,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 16,
+     "implemented": 27,
      "partial": 0,
      "traps": 0,
-     "missing": 75
+     "missing": 64
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -979,10 +1489,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 76,
-     "implemented": 16,
+     "implemented": 22,
      "partial": 0,
      "traps": 1,
-     "missing": 59
+     "missing": 53
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -992,10 +1502,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 14,
-     "implemented": 3,
+     "implemented": 7,
      "partial": 0,
      "traps": 0,
-     "missing": 11
+     "missing": 7
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1007,10 +1517,10 @@
     "version": "10.0.19041.1706",
     "kernel": {
      "total": 82,
-     "implemented": 7,
+     "implemented": 15,
      "partial": 0,
      "traps": 1,
-     "missing": 74
+     "missing": 66
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1020,10 +1530,10 @@
     "version": "10.0.19041.844",
     "kernel": {
      "total": 147,
-     "implemented": 15,
+     "implemented": 26,
      "partial": 0,
      "traps": 1,
-     "missing": 131
+     "missing": 120
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1033,10 +1543,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 35,
+     "implemented": 53,
      "partial": 2,
      "traps": 1,
-     "missing": 321
+     "missing": 303
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1049,10 +1559,10 @@
     "version": "10.0.19041.1682",
     "kernel": {
      "total": 235,
-     "implemented": 22,
+     "implemented": 35,
      "partial": 3,
      "traps": 1,
-     "missing": 209
+     "missing": 196
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1066,10 +1576,10 @@
     "version": "10.0.19041.1526",
     "kernel": {
      "total": 111,
-     "implemented": 20,
+     "implemented": 24,
      "partial": 3,
      "traps": 1,
-     "missing": 87
+     "missing": 83
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1079,10 +1589,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 25,
+     "implemented": 44,
      "partial": 5,
      "traps": 1,
-     "missing": 594
+     "missing": 575
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1112,10 +1622,10 @@
     "version": "10.0.19041.1889",
     "kernel": {
      "total": 137,
-     "implemented": 22,
+     "implemented": 30,
      "partial": 2,
      "traps": 0,
-     "missing": 113
+     "missing": 105
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1127,10 +1637,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 239,
-     "implemented": 32,
+     "implemented": 45,
      "partial": 2,
      "traps": 1,
-     "missing": 204
+     "missing": 191
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1144,10 +1654,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 41,
-     "implemented": 7,
+     "implemented": 12,
      "partial": 0,
      "traps": 0,
-     "missing": 34
+     "missing": 29
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1157,10 +1667,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 71,
-     "implemented": 15,
+     "implemented": 27,
      "partial": 1,
      "traps": 0,
-     "missing": 55
+     "missing": 43
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1170,10 +1680,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 68,
-     "implemented": 23,
+     "implemented": 29,
      "partial": 0,
      "traps": 1,
-     "missing": 44
+     "missing": 38
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1230,10 +1740,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 269,
-     "implemented": 29,
+     "implemented": 36,
      "partial": 4,
      "traps": 1,
-     "missing": 235
+     "missing": 228
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1243,10 +1753,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 32,
+     "implemented": 50,
      "partial": 4,
      "traps": 1,
-     "missing": 292
+     "missing": 274
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1264,10 +1774,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 42,
-     "implemented": 13,
+     "implemented": 17,
      "partial": 1,
      "traps": 1,
-     "missing": 27
+     "missing": 23
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1279,10 +1789,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 54,
-     "implemented": 17,
+     "implemented": 27,
      "partial": 2,
      "traps": 1,
-     "missing": 34
+     "missing": 24
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1296,10 +1806,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 29,
-     "implemented": 12,
+     "implemented": 15,
      "partial": 0,
      "traps": 0,
-     "missing": 17
+     "missing": 14
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1309,10 +1819,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 20,
+     "implemented": 24,
      "partial": 2,
      "traps": 1,
-     "missing": 92
+     "missing": 88
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1328,10 +1838,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 121,
-     "implemented": 17,
+     "implemented": 26,
      "partial": 2,
      "traps": 0,
-     "missing": 102
+     "missing": 93
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1345,10 +1855,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 109,
-     "implemented": 17,
+     "implemented": 27,
      "partial": 1,
      "traps": 1,
-     "missing": 90
+     "missing": 80
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1360,10 +1870,10 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 89,
-     "implemented": 20,
+     "implemented": 29,
      "partial": 0,
      "traps": 0,
-     "missing": 69
+     "missing": 60
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1375,10 +1885,10 @@
     "version": "1.31.19041.1566",
     "kernel": {
      "total": 217,
-     "implemented": 33,
+     "implemented": 50,
      "partial": 3,
      "traps": 1,
-     "missing": 180
+     "missing": 163
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1391,10 +1901,10 @@
     "version": "1.31.19041.1151",
     "kernel": {
      "total": 38,
-     "implemented": 7,
+     "implemented": 12,
      "partial": 0,
      "traps": 1,
-     "missing": 30
+     "missing": 25
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -1404,10 +1914,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 38,
-     "implemented": 9,
+     "implemented": 13,
      "partial": 1,
      "traps": 1,
-     "missing": 27
+     "missing": 23
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1419,10 +1929,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 37,
-     "implemented": 4,
+     "implemented": 7,
      "partial": 0,
      "traps": 0,
-     "missing": 33
+     "missing": 30
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1438,10 +1948,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 451,
-     "implemented": 14,
+     "implemented": 31,
      "partial": 0,
      "traps": 1,
-     "missing": 436
+     "missing": 419
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1458,10 +1968,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 439,
-     "implemented": 13,
+     "implemented": 32,
      "partial": 1,
      "traps": 1,
-     "missing": 424
+     "missing": 405
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -1492,10 +2002,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 36,
-     "implemented": 11,
+     "implemented": 14,
      "partial": 0,
      "traps": 1,
-     "missing": 24
+     "missing": 21
     },
     "by_ordinal": 0,
     "other_modules": {}

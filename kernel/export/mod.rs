@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{io, ke, ldr, mm, ob, rtl};
+use crate::{ex, io, ke, ldr, mm, ob, ps, rtl};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -131,6 +131,35 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Traps, ke::seh::__C_specific_handler),
+    export!(Implemented, ke::mutex::ExAcquireFastMutex),
+    export!(Implemented, ke::mutex::ExAcquireFastMutexUnsafe),
+    export!(Implemented, ex::work::ExQueueWorkItem),
+    export!(Implemented, ke::mutex::ExReleaseFastMutex),
+    export!(Implemented, ke::mutex::ExReleaseFastMutexUnsafe),
+    export!(Implemented, ke::mutex::ExTryToAcquireFastMutex),
+    export!(Implemented, ex::work::IoAllocateWorkItem),
+    export!(Implemented, ex::work::IoFreeWorkItem),
+    export!(Implemented, ex::work::IoQueueWorkItem),
+    export!(Implemented, ke::mutex::KeAreApcsDisabled),
+    export!(Implemented, ke::wait::KeDelayExecutionThread),
+    export!(Implemented, ke::mutex::KeEnterCriticalRegion),
+    export!(Implemented, ps::KeGetCurrentThread),
+    export!(Implemented, ke::wait::KeInitializeEvent),
+    export!(Implemented, ke::mutex::KeInitializeMutex),
+    export!(Implemented, ke::wait::KeInitializeSemaphore),
+    export!(Implemented, ke::mutex::KeLeaveCriticalRegion),
+    export!(Implemented, ke::wait::KeReadStateEvent),
+    export!(Implemented, ke::mutex::KeReadStateMutex),
+    export!(Implemented, ke::wait::KeReadStateSemaphore),
+    export!(Implemented, ke::mutex::KeReleaseMutex),
+    export!(Implemented, ke::wait::KeReleaseSemaphore),
+    export!(Implemented, ke::wait::KeResetEvent),
+    export!(Implemented, ke::wait::KeWaitForMultipleObjects),
+    export!(Implemented, ke::wait::KeWaitForSingleObject),
+    export!(Implemented, ps::PsCreateSystemThread),
+    export!(Implemented, ps::PsTerminateSystemThread),
+    export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
+    export!(Implemented, ps::ZwClose),
 ];
 
 /// The address a driver's import of `module!name` binds to.

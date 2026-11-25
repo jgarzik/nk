@@ -208,6 +208,11 @@ pub static GROUP: Group = Group {
         "oracle.nkc-time",
         "oracle.nkc-dpc",
         "oracle.nkc-timer",
+        "oracle.nkc-thread",
+        "oracle.nkc-wait",
+        "oracle.nkc-mutex",
+        "oracle.nkc-waitn",
+        "oracle.nkc-work",
     ],
     run,
     manual: false,
@@ -261,6 +266,46 @@ fn run(r: &mut Report, info: &BootInfo) {
         "nkc-timer.sys",
         include_str!("../../oracle/nkc-timer.script"),
         include_str!("../../oracle/nkc-timer.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-thread",
+        "nkc-thread.sys",
+        include_str!("../../oracle/nkc-thread.script"),
+        include_str!("../../oracle/nkc-thread.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-wait",
+        "nkc-wait.sys",
+        include_str!("../../oracle/nkc-wait.script"),
+        include_str!("../../oracle/nkc-wait.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-mutex",
+        "nkc-mutex.sys",
+        include_str!("../../oracle/nkc-mutex.script"),
+        include_str!("../../oracle/nkc-mutex.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-waitn",
+        "nkc-waitn.sys",
+        include_str!("../../oracle/nkc-waitn.script"),
+        include_str!("../../oracle/nkc-waitn.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-work",
+        "nkc-work.sys",
+        include_str!("../../oracle/nkc-work.script"),
+        include_str!("../../oracle/nkc-work.txt"),
     );
 }
 

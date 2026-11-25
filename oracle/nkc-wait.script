@@ -1,0 +1,13 @@
+# NK conformance driver nkc-wait (waiting on one object).
+#
+# One request runs the driver's checks and returns the values it logged,
+# 32 bits each, ending with 0x4E4B4321. What each value means is written
+# beside it in nk-fixtures nkc/nkc-wait.c. The second request has a buffer
+# too small for the list and must be refused whole.
+
+load nkc-wait nkc-wait.sys
+open d \Device\NkcWait
+ioctl d 00222000 - 256
+ioctl d 00222000 - 8
+close d
+unload nkc-wait
