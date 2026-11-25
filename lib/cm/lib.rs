@@ -7,7 +7,8 @@
 //! names; its values in the order they were first set.
 //!
 //! [`regf`] reads a hive file in place; [`import`] copies one into the
-//! tree.
+//! tree. [`query`] works through the query tables of
+//! `RtlQueryRegistryValues`.
 //!
 //! Every allocation asks for exactly what it needs, so that
 //! [`Hive::storage`] can say how much pool the tree holds.
@@ -21,6 +22,7 @@ use core::cmp::Ordering;
 
 mod import;
 mod info;
+pub mod query;
 pub mod regf;
 #[cfg(test)]
 mod regf_tests;
