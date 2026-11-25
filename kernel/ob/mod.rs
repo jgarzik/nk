@@ -1,11 +1,8 @@
 //! The object namespace, reduced to what device I/O needs: named device
 //! objects and symbolic links to them.
 //!
-//! Names are compared case-insensitively and `\DosDevices`, `\??` and
-//! `\GLOBAL??` are one directory (`nk_rtl::same_object_name`). A name must
-//! match an entry exactly: there is no directory tree and no parsing of a
-//! path remainder after a device name yet, so `\Device\Foo\bar` does not
-//! open `\Device\Foo`.
+//! The table and its rules for names are `nk_ob::Namespace`, tested on
+//! the host; here are the lock around it and the references.
 
 pub mod handle;
 pub mod object;
@@ -14,84 +11,60 @@ use crate::ke::{Rank, SpinLock};
 use alloc::vec::Vec;
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::status::*;
-
-/// How many symbolic links a lookup follows before giving up.
-const MAX_LINK_DEPTH: usize = 8;
+use nk_ob::{NameError, Namespace};
 
 pub enum Target {
     Device(*mut DEVICE_OBJECT),
     SymbolicLink(Vec<u16>),
 }
 
-struct Entry {
-    name: Vec<u16>,
-    target: Target,
-}
+/// A device as the namespace holds it.
+#[derive(Clone, Copy, PartialEq)]
+struct Device(*mut DEVICE_OBJECT);
 
 // SAFETY: the device pointer is only an identity here; the namespace never
 // dereferences it.
-unsafe impl Send for Entry {}
+unsafe impl Send for Device {}
 
-static NAMESPACE: SpinLock<Vec<Entry>> = SpinLock::new(Rank::Namespace, Vec::new());
+static NAMESPACE: SpinLock<Namespace<Device>> = SpinLock::new(Rank::Namespace, Namespace::new());
+
+fn status(error: NameError) -> NTSTATUS {
+    match error {
+        NameError::Invalid => STATUS_OBJECT_NAME_INVALID,
+        NameError::Collision => STATUS_OBJECT_NAME_COLLISION,
+        NameError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+        NameError::NotFound => STATUS_OBJECT_NAME_NOT_FOUND,
+    }
+}
 
 /// Add a name. Fails if the name is malformed or already taken.
 pub fn insert(name: &[u16], target: Target) -> NTSTATUS {
-    if !nk_rtl::is_valid_object_name(name) {
-        return STATUS_OBJECT_NAME_INVALID;
-    }
-    let mut ns = NAMESPACE.lock();
-    if ns.iter().any(|e| nk_rtl::same_object_name(&e.name, name)) {
-        return STATUS_OBJECT_NAME_COLLISION;
-    }
-    if ns.try_reserve(1).is_err() {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    ns.push(Entry {
-        name: name.to_vec(),
-        target,
-    });
-    STATUS_SUCCESS
+    let target = match target {
+        Target::Device(device) => nk_ob::Target::Object(Device(device)),
+        Target::SymbolicLink(to) => nk_ob::Target::SymbolicLink(to),
+    };
+    NAMESPACE
+        .lock()
+        .insert(name, target)
+        .map_or_else(status, |()| STATUS_SUCCESS)
 }
 
 /// Remove the symbolic link called `name`.
 pub fn remove_link(name: &[u16]) -> NTSTATUS {
-    let mut ns = NAMESPACE.lock();
-    let found = ns.iter().position(|e| {
-        matches!(e.target, Target::SymbolicLink(_)) && nk_rtl::same_object_name(&e.name, name)
-    });
-    match found {
-        Some(i) => {
-            ns.swap_remove(i);
-            ns.shrink_to_fit();
-            STATUS_SUCCESS
-        }
-        None => STATUS_OBJECT_NAME_NOT_FOUND,
-    }
+    NAMESPACE
+        .lock()
+        .remove_link(name)
+        .map_or_else(status, |()| STATUS_SUCCESS)
 }
 
 /// Remove every name of `device`.
 pub fn remove_device(device: *mut DEVICE_OBJECT) {
-    let mut ns = NAMESPACE.lock();
-    ns.retain(|e| !matches!(e.target, Target::Device(d) if d == device));
-    // An empty table holds no memory, so leak checks see none.
-    ns.shrink_to_fit();
+    NAMESPACE.lock().remove_object(Device(device));
 }
 
 /// The device `name` refers to, following symbolic links.
 pub fn lookup_device(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
-    let ns = NAMESPACE.lock();
-    let mut name = name;
-    for _ in 0..MAX_LINK_DEPTH {
-        match &ns
-            .iter()
-            .find(|e| nk_rtl::same_object_name(&e.name, name))?
-            .target
-        {
-            Target::Device(d) => return Some(*d),
-            Target::SymbolicLink(to) => name = to,
-        }
-    }
-    None
+    NAMESPACE.lock().lookup(name).map(|Device(d)| d)
 }
 
 /// The device `name` refers to, with a pointer reference taken while
@@ -100,24 +73,12 @@ pub fn lookup_device(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
 /// device meanwhile.
 pub fn lookup_device_referenced(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
     let ns = NAMESPACE.lock();
-    let mut name = name;
-    for _ in 0..MAX_LINK_DEPTH {
-        match &ns
-            .iter()
-            .find(|e| nk_rtl::same_object_name(&e.name, name))?
-            .target
-        {
-            Target::Device(d) => {
-                // SAFETY: a device loses its names, under this lock,
-                // before it gives up the reference it was created with;
-                // so one that still has a name is alive.
-                unsafe { object::reference(d.cast()) };
-                return Some(*d);
-            }
-            Target::SymbolicLink(to) => name = to,
-        }
-    }
-    None
+    let Device(device) = ns.lookup(name)?;
+    // SAFETY: a device loses its names, under this lock, before it gives
+    // up the reference it was created with; so one that still has a name
+    // is alive.
+    unsafe { object::reference(device.cast()) };
+    Some(device)
 }
 
 /// Number of names in the namespace (for leak checks).

@@ -9,7 +9,7 @@ use crate::mm;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use nk_acpi::{CensusError, PhysMem};
-use nk_bootinfo::{BootInfo, regions};
+use nk_bootinfo::{BootInfo, described};
 
 /// One processor group, as on Windows: at most 64 logical processors.
 pub const MAX_CPUS: usize = 64;
@@ -48,7 +48,6 @@ struct DirectMap<'a>(&'a BootInfo);
 
 impl PhysMem for DirectMap<'_> {
     fn bytes(&self, addr: u64, len: usize) -> Option<&[u8]> {
-        let end = addr.checked_add(len as u64)?;
         // SAFETY: the loader left the memory map in reserved memory that
         // the direct map covers.
         let map = unsafe {
@@ -57,13 +56,11 @@ impl PhysMem for DirectMap<'_> {
                 self.0.mmap_len as usize,
             )
         };
-        regions(map, self.0.mmap_desc_size as usize)
-            .any(|r| r.phys <= addr && end <= r.end())
-            .then(|| {
-                // SAFETY: the range lies in one mapped firmware region, and
-                // firmware does not change its tables after boot services.
-                unsafe { core::slice::from_raw_parts(mm::phys_to_virt(addr), len) }
-            })
+        described(map, self.0.mmap_desc_size as usize, addr, len as u64).then(|| {
+            // SAFETY: the range lies in one mapped firmware region, and
+            // firmware does not change its tables after boot services.
+            unsafe { core::slice::from_raw_parts(mm::phys_to_virt(addr), len) }
+        })
     }
 }
 

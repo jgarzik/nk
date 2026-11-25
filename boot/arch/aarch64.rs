@@ -7,7 +7,7 @@
 //! register and looks up which indices mean "normal" and "device" memory.
 
 use nk_bootinfo::{BootInfo, Serial};
-use nk_mm::pt;
+use nk_mm::pt::{self, MairError};
 
 pub const NAME: &str = "aarch64";
 pub const MACHINE: u16 = nk_pe::MACHINE_ARM64;
@@ -24,11 +24,6 @@ pub fn map_top(ram_top: u64) -> u64 {
 }
 pub const NEEDS_IDENTITY_MAP: bool = false;
 
-/// `MAIR` attribute encodings.
-const ATTR_NORMAL_WB: u8 = 0xFF;
-const ATTR_DEVICE_NGNRNE: u8 = 0x00;
-const ATTR_DEVICE_NGNRE: u8 = 0x04;
-
 pub fn pt_arch(info: &mut BootInfo) -> Result<PtArch, &'static str> {
     let (el, mair): (u64, u64);
     // SAFETY: reading two system registers has no side effects.
@@ -38,18 +33,13 @@ pub fn pt_arch(info: &mut BootInfo) -> Result<PtArch, &'static str> {
     if el >> 2 != 1 {
         return Err("firmware is not running at EL1");
     }
-    let find = |attr: u8| mair.to_le_bytes().iter().position(|&a| a == attr);
-    let normal =
-        find(ATTR_NORMAL_WB).ok_or("MAIR_EL1 has no write-back normal memory attribute")?;
-    let device = find(ATTR_DEVICE_NGNRNE)
-        .or_else(|| find(ATTR_DEVICE_NGNRE))
-        .ok_or("MAIR_EL1 has no device memory attribute")?;
-    info.mair_normal = normal as u8;
-    info.mair_device = device as u8;
-    Ok(pt::Aarch64 {
-        mair_normal: normal as u8,
-        mair_device: device as u8,
-    })
+    let arch = pt::Aarch64::from_mair(mair).map_err(|e| match e {
+        MairError::NoNormal => "MAIR_EL1 has no write-back normal memory attribute",
+        MairError::NoDevice => "MAIR_EL1 has no device memory attribute",
+    })?;
+    info.mair_normal = arch.mair_normal;
+    info.mair_device = arch.mair_device;
+    Ok(arch)
 }
 
 /// TCR_EL1 fields for the TTBR1 half: 48-bit addresses (T1SZ=16), 4 KiB

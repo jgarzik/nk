@@ -22,27 +22,17 @@ use crate::mm::pool;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
-use nk_ntabi::ex::{IO_WORKITEM, WORK_QUEUE_ITEM};
+use nk_ntabi::ex::{IO_WORKITEM, WORK_QUEUE_ITEM, WORK_QUEUES, work_queue};
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::ke::{KSEMAPHORE, LIST_ENTRY};
 
 /// The queues NK keeps.
-const QUEUES: usize = 3;
+const QUEUES: usize = WORK_QUEUES;
 
-/// The queue that serves a `WORK_QUEUE_TYPE`: `CriticalWorkQueue`,
-/// `DelayedWorkQueue` and `HyperCriticalWorkQueue` their own;
-/// `NormalWorkQueue` and `BackgroundWorkQueue` the delayed one;
-/// `RealTimeWorkQueue` the hypercritical; `SuperCriticalWorkQueue` the
-/// critical. `None` for a value Windows does not define.
+/// The queue that serves a `WORK_QUEUE_TYPE` (`nk_ntabi::ex::work_queue`).
+/// `None` for a value Windows does not define.
 fn queue_of(queue_type: u32) -> Option<&'static Queue> {
-    let index = match queue_type {
-        0..=2 => queue_type as usize,
-        3 | 4 => 1,
-        5 => 2,
-        6 => 0,
-        _ => return None,
-    };
-    Some(&QUEUE[index])
+    work_queue(queue_type).map(|index| &QUEUE[index])
 }
 /// Each queue's worker threads: how many, and at what priority. Indexed
 /// by `WORK_QUEUE_TYPE`: critical, delayed, hypercritical.

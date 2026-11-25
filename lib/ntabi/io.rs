@@ -8,7 +8,7 @@
 //! Fields NK never reads are still present and named, so a driver that
 //! does read them finds the right bytes (zero) at the right place.
 
-use crate::status::NTSTATUS;
+use crate::status::{NTSTATUS, nt_success};
 use core::ffi::c_void;
 
 pub type PVOID = *mut c_void;
@@ -333,6 +333,32 @@ pub struct IO_STACK_LOCATION {
     pub Context: PVOID,
 }
 
+/// How many stack locations an IRP for a device stack `stack_size` deep
+/// has, and the size of the IRP with them, as `IoSizeOfIrp` gives it. A
+/// request always has at least one location.
+pub const fn irp_size(stack_size: i8) -> (usize, usize) {
+    let locations = if stack_size < 1 {
+        1
+    } else {
+        stack_size as usize
+    };
+    (
+        locations,
+        size_of::<IRP>() + locations * size_of::<IO_STACK_LOCATION>(),
+    )
+}
+
+/// Whether a stack location's completion routine is to be called, given
+/// the location's `Control` byte, the status the request completed with
+/// and whether it was cancelled: on success, on failure or on
+/// cancellation, as the driver that set the routine asked
+/// (`IoSetCompletionRoutine`).
+pub const fn completion_routine_wanted(control: u8, status: NTSTATUS, cancelled: bool) -> bool {
+    (nt_success(status) && control & SL_INVOKE_ON_SUCCESS != 0)
+        || (!nt_success(status) && control & SL_INVOKE_ON_ERROR != 0)
+        || (cancelled && control & SL_INVOKE_ON_CANCEL != 0)
+}
+
 /// `Parameters.Read` / `Parameters.Write`: Length, Key, ByteOffset.
 pub const fn rw_parameters(length: u32, byte_offset: i64) -> [u64; 4] {
     [length as u64, 0, byte_offset as u64, 0]
@@ -508,6 +534,65 @@ mod layout {
         assert_eq!(ctl_code(40000, 0x901, METHOD_OUT_DIRECT, 0), 0x9C40_2406);
         assert_eq!(ctl_code(40000, 0x902, METHOD_BUFFERED, 0), 0x9C40_2408);
         assert_eq!(ctl_code(40000, 0x903, METHOD_NEITHER, 0), 0x9C40_240F);
+    }
+
+    #[test]
+    fn an_irp_has_at_least_one_stack_location() {
+        // 0xD0 for the IRP and 0x48 for each location, on 64-bit Windows.
+        assert_eq!(irp_size(1), (1, 0xD0 + 0x48));
+        assert_eq!(irp_size(2), (2, 0xD0 + 2 * 0x48));
+        assert_eq!(irp_size(0), (1, 0xD0 + 0x48));
+        assert_eq!(irp_size(-1), (1, 0xD0 + 0x48));
+        assert_eq!(irp_size(i8::MIN), (1, 0xD0 + 0x48));
+        // The deepest stack still fits the IRP's 16-bit `Size`.
+        let (locations, size) = irp_size(i8::MAX);
+        assert_eq!(locations, 127);
+        assert!(size <= usize::from(u16::MAX));
+    }
+
+    #[test]
+    fn a_completion_routine_is_called_for_the_outcomes_it_asked_for() {
+        use crate::status::*;
+        let wanted = completion_routine_wanted;
+        // Asked for nothing: never called.
+        for status in [STATUS_SUCCESS, STATUS_END_OF_FILE] {
+            assert!(!wanted(0, status, false));
+            assert!(!wanted(0, status, true));
+            assert!(!wanted(SL_PENDING_RETURNED, status, true));
+        }
+        // On success only.
+        assert!(wanted(SL_INVOKE_ON_SUCCESS, STATUS_SUCCESS, false));
+        assert!(!wanted(SL_INVOKE_ON_SUCCESS, STATUS_END_OF_FILE, false));
+        // On error only.
+        assert!(wanted(SL_INVOKE_ON_ERROR, STATUS_END_OF_FILE, false));
+        assert!(!wanted(SL_INVOKE_ON_ERROR, STATUS_SUCCESS, false));
+        // On cancellation only: whatever the status, if cancelled.
+        assert!(wanted(SL_INVOKE_ON_CANCEL, STATUS_SUCCESS, true));
+        assert!(wanted(SL_INVOKE_ON_CANCEL, STATUS_END_OF_FILE, true));
+        assert!(!wanted(SL_INVOKE_ON_CANCEL, STATUS_SUCCESS, false));
+        assert!(!wanted(SL_INVOKE_ON_CANCEL, STATUS_END_OF_FILE, false));
+        // All three, as `IoSetCompletionRoutine(.., TRUE, TRUE, TRUE)`.
+        let all = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
+        for status in [STATUS_SUCCESS, STATUS_END_OF_FILE, STATUS_BUFFER_OVERFLOW] {
+            assert!(wanted(all, status, false));
+            assert!(wanted(all, status, true));
+        }
+    }
+
+    #[test]
+    fn a_warning_counts_as_a_failure_and_information_as_a_success() {
+        use crate::status::*;
+        let wanted = completion_routine_wanted;
+        // `NT_SUCCESS` draws the line: a warning is not a success.
+        assert!(wanted(SL_INVOKE_ON_ERROR, STATUS_BUFFER_OVERFLOW, false));
+        assert!(!wanted(SL_INVOKE_ON_SUCCESS, STATUS_BUFFER_OVERFLOW, false));
+        let informational = STATUS_IMAGE_MACHINE_TYPE_MISMATCH;
+        assert!(wanted(SL_INVOKE_ON_SUCCESS, informational, false));
+        assert!(!wanted(SL_INVOKE_ON_ERROR, informational, false));
+        // The pending-returned bit shares the byte and changes nothing.
+        let noisy = SL_INVOKE_ON_ERROR | SL_PENDING_RETURNED;
+        assert!(wanted(noisy, STATUS_END_OF_FILE, false));
+        assert!(!wanted(noisy, STATUS_SUCCESS, false));
     }
 
     #[test]

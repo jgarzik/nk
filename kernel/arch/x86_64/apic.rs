@@ -15,6 +15,7 @@ use crate::hal::platform;
 use crate::ke::interrupt;
 use crate::mm;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use nk_hal::x86::{irql_of_vector, timer_counts, x2apic_msr};
 
 /// `(vector, IRQL)` pairs the interrupt self-test uses. The IRQL of a
 /// vector is its upper four bits.
@@ -56,7 +57,6 @@ const ICR_STARTUP: u32 = 0x4600;
 const MSR_APIC_BASE: u32 = 0x1B;
 const APIC_BASE_ENABLE: u64 = 1 << 11;
 const APIC_BASE_X2APIC: u64 = 1 << 10;
-const MSR_X2APIC: u32 = 0x800;
 const MSR_X2APIC_SELF_IPI: u32 = 0x83F;
 
 /// Whether this machine's processors run in x2APIC mode.
@@ -90,7 +90,7 @@ fn wrmsr(msr: u32, value: u64) {
 
 fn read(reg: u32) -> u32 {
     if X2APIC.load(Ordering::Relaxed) {
-        rdmsr(MSR_X2APIC + (reg >> 4)) as u32
+        rdmsr(x2apic_msr(reg)) as u32
     } else {
         // SAFETY: `MMIO` is the APIC register page in the direct map;
         // device registers are read with volatile accesses.
@@ -100,7 +100,7 @@ fn read(reg: u32) -> u32 {
 
 fn write(reg: u32, value: u32) {
     if X2APIC.load(Ordering::Relaxed) {
-        wrmsr(MSR_X2APIC + (reg >> 4), u64::from(value));
+        wrmsr(x2apic_msr(reg), u64::from(value));
     } else {
         // SAFETY: as `read`.
         unsafe {
@@ -179,7 +179,7 @@ pub fn init_cpu() {
 fn command(target: u32, command: u32) {
     if X2APIC.load(Ordering::Relaxed) {
         wrmsr(
-            MSR_X2APIC + (REG_ICR_LOW >> 4),
+            x2apic_msr(REG_ICR_LOW),
             u64::from(target) << 32 | u64::from(command),
         );
     } else {
@@ -216,7 +216,7 @@ pub fn send_nmi_to_others() {
 /// vector needs no enabling.
 pub fn interrupt_enable(vector: u32, level: u8) {
     assert!(
-        vector >> 4 == u32::from(level),
+        irql_of_vector(vector) == level,
         "vector {vector:#x} is not at IRQL {level}"
     );
 }
@@ -246,7 +246,7 @@ pub fn interrupt(vector: u32) {
         write(REG_EOI, 0);
         return;
     }
-    interrupt::dispatch(vector, (vector >> 4) as u8, || write(REG_EOI, 0));
+    interrupt::dispatch(vector, irql_of_vector(vector), || write(REG_EOI, 0));
 }
 
 pub fn enable_interrupts() {
@@ -281,9 +281,8 @@ pub fn set_timer_rate(hz: u64) {
 /// Interrupt on `vector` every `period` ticks of a counter that runs at
 /// `frequency` ticks per second.
 pub fn timer_periodic(vector: u32, period: u64, frequency: u64) {
-    let rate = u128::from(TIMER_HZ.load(Ordering::Relaxed));
-    let counts = (u128::from(period) * rate / u128::from(frequency)).clamp(1, u128::from(u32::MAX));
+    let counts = timer_counts(period, TIMER_HZ.load(Ordering::Relaxed), frequency);
     write(REG_TIMER_DIVIDE, DIVIDE_BY_16);
     write(REG_LVT_TIMER, LVT_PERIODIC | vector);
-    write(REG_TIMER_INITIAL, counts as u32);
+    write(REG_TIMER_INITIAL, counts);
 }
