@@ -18,7 +18,7 @@ unload without leaks.
 
 Not there: interrupts, timers, threads, more than one CPU, structured
 exception handling, Plug and Play, any hardware device, user mode. Open
-gaps carried into the phases below: no arm64 `null.sys` (phase 0), nothing
+gaps carried into the phases below: no arm64 `null.sys` (no usable source; stays SKIP), nothing
 compared with real Windows (phase 0), `METHOD_NEITHER` untested (phase 2),
 never run on a physical machine (phase 3).
 
@@ -41,7 +41,8 @@ no WIM filter, no NTFS. Booting an untouched `boot.wim` comes after.
 | Whose user mode? | Microsoft's real binaries, from Microsoft's media. NK ships none of them. |
 | Whose PCI, ACPI, storage, file-system, network and framework drivers? | Microsoft's. NK is the kernel and HAL only; the golden rule applies to Microsoft's own drivers too. |
 | Which Windows? | The Windows 10 2004-22H2 family (one code base, 19041). Drivers built for any of it must run. |
-| Which exact build for user mode? | The WinPE image in Microsoft's deployment kit, 10.0.19041.1, if phase 0 finds arm64 in it; otherwise a fully serviced 22H2. One revision supplies user mode, the system-call table and the private layouts. |
+| Which exact build? | Windows 10 Enterprise 22H2, 10.0.19045.2006: the build of Microsoft's evaluation ISO. The reference VM is installed from that ISO and fixture versions follow it. One revision supplies user mode, the system-call numbers and the private layouts. |
+| Where do Windows files come from? | x86-64 files one by one from Microsoft's symbol server, pinned by SHA-256; the reference VM from the evaluation ISO. Microsoft's deployment kit (WinPE) is not used for testing: its licence allows WinPE only for installing and recovering Windows. |
 | First prompt | In the real console window (phase 9). No effort goes into a console without the window system. |
 | Code from hk | None. hk is read as a reference; NK's code is written fresh. |
 | arm64 | First class for all NK code: every commit builds and boots both. Proofs that need a Microsoft arm64 binary nobody can fetch print SKIP until the supply is solved. |
@@ -123,7 +124,7 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 0 | Ground truth | exact Windows revision pinned; the surveyed corpus fetched by hash and listed in the ledger; structure layouts and the system-call table generated from public symbols and `ntdll.dll`; reference Windows VM; arm64 supply settled or marked blocked | every later proof has a Windows result to match; ledger shows 14 of ~1700 |
+| 0 | Ground truth | exact Windows build pinned; reference Windows VM that runs the same test drivers; the surveyed corpus fetched by hash and listed in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; ledger shows 14 of ~1700 |
 | 1 | **Kernel core** (next) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, APCs, timers, work queues | WDK samples that block, queue work and use timers; asynchronous IRPs; 0.0.1's tests under all CPUs |
 | 2 | Exceptions, objects, registry | SEH on both architectures; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
@@ -175,9 +176,15 @@ file systems use it on every path.
   routines. FAT comes first for that reason.
 - **The exact build.** System-call numbers changed inside the 19041
   family (471 calls at release, 473 later), so user mode and the kernel's
-  tables must come from one revision. Whether Microsoft's deployment kit
-  contains an arm64 WinPE at 10.0.19041.1 is not yet verified; the pin
-  depends on it (see Decisions).
+  tables must come from one revision: the pinned 19045.2006.
+- **arm64 has no Microsoft binaries.** No public source serves Windows 10
+  arm64 files that NK may use. arm64 is proven with WDK-built drivers and
+  with x86-64 Windows results that do not depend on the architecture.
+- **WinPE's licence.** The destination is a WinPE-style rescue disk, but
+  the deployment kit licenses WinPE only for installing and recovering
+  Windows. Whether the destination image is WinPE itself or a minimal
+  image built from a licensed Windows installation is open, and is the
+  user's decision, not NK's.
 - **Fixture identity.** The symbol server keys files by timestamp and
   size and may serve a re-signed variant; fixtures are pinned by the hash
   of what was served.

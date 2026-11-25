@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "target" / "fixtures"
 PEINFO = ROOT / "target" / "debug" / "peinfo"
-REFERENCE = "Windows 10 22H2, NT 10.0.19045"
+REFERENCE = "Windows 10 22H2, NT 10.0.19045.2006"
 # States the kernel may report, best first. "missing" is ours: no export.
 STATES = ["implemented", "partial", "traps", "missing"]
 

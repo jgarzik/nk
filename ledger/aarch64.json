@@ -1,5 +1,5 @@
 {
- "reference": "Windows 10 22H2, NT 10.0.19045",
+ "reference": "Windows 10 22H2, NT 10.0.19045.2006",
  "arch": "aarch64",
  "export_states_from_boot_log": true,
  "summary": {

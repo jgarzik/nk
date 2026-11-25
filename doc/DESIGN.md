@@ -22,7 +22,9 @@ manager and `winload`. Nothing else is NK's.
   `csrss.exe`, `cmd.exe`. NK serves them the system calls of one exact
   Windows build.
 - **NK ships none of it.** The Windows files come from Microsoft's own
-  servers or the user's media, at test or install time.
+  servers or the user's media, at test or install time. Tests fetch
+  x86-64 files from Microsoft's symbol server; nothing is taken from the
+  deployment kit (WinPE), whose licence does not cover testing.
 
 The reason is the golden rule turned on Microsoft's own code: if an
 unmodified driver cannot tell NK from Windows, then Microsoft's inbox
@@ -61,7 +63,9 @@ a `cmd.exe` prompt on QEMU x86-64, QEMU arm64 and a Dell OptiPlex.
    the pinned corpus imports it. The ledger carries the denominators.
 6. **One exact build.** Drivers of the whole Windows 10 2004-22H2 family
    must run. User mode, the system-call numbers and the private layouts
-   come from a single revision of it, chosen in roadmap phase 0.
+   come from a single revision of it: 10.0.19045.2006, the build of
+   Microsoft's Windows 10 Enterprise evaluation ISO, which is also what the
+   reference VM runs.
 7. **Hardware is found through ACPI on both architectures,** because
    Microsoft's `acpi.sys` and `pci.sys` do the enumerating.
 8. **Sources.** Microsoft's documentation, headers and samples; the
