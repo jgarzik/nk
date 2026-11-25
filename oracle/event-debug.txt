@@ -1,0 +1,16 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 dba3b3ef2977208aea3202231abc7f79babb7de498edeef485a69171f9392f32
+# driver event.sys sha256 90e510f121b2307610341f9e6c2963e94584bc2c3763a998c8bba7ad1e3f5b79
+debugger: attached
+load event: ok
+open dev \Device\Event_Sample: 00000000
+open dos \DosDevices\Event_Sample: 00000000
+ioctl dev 00222000 00000000 0: c000000d - -
+ioctl dev 00222000 00000000000000000000000000000000c0bdf0ffffffffff 0: 00000000 0 -
+ioctl dos 00222000 0000000000000000000000000000000040420f0000000000 0: 00000000 0 -
+ioctl dev 00222000 02000000000000000000000000000000c0bdf0ffffffffff 0: c000000d - -
+ioctl dev 00222004 - 0: c0000002 - -
+close dos: 00000000
+close dev: 00000000
+unload event: ok
+end

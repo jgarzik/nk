@@ -1,0 +1,8 @@
+# The kernel believes the time counter runs at half its real rate, so
+# every interval it measures is half as long as it should be: NK's clock
+# runs fast. Only an outside clock can tell.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/time.rs
+replace:     FREQUENCY.store(frequency, Ordering::Relaxed);
+with:     FREQUENCY.store(frequency / 2, Ordering::Relaxed);

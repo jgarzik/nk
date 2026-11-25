@@ -1,0 +1,46 @@
+# Microsoft's WDM IOCTL sample (general/ioctl/wdm), unmodified.
+#
+# The driver answers every request with a fixed string and reports its
+# length, 38 bytes with the terminator. Output lengths for the direct
+# methods stay within the string: the sample copies the whole output
+# length from its own data, so a longer buffer would receive whatever
+# follows the string in the driver image.
+
+load sioctl sioctl.sys
+open dev \Device\SIOCTL
+open dos \DosDevices\IoctlTest
+open alias \??\ioctltest
+open missing \Device\NoSuchDevice
+
+# METHOD_BUFFERED: the reply is copied back up to the reported length.
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 100
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 38
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 10
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 1
+
+# METHOD_OUT_DIRECT: the driver writes the caller's pages through an MDL.
+ioctl dos 9c402406 68656c6c6f2066726f6d204e4b00 38
+ioctl dos 9c402406 68656c6c6f2066726f6d204e4b00 10
+ioctl dos 9c402406 68656c6c6f2066726f6d204e4b00 1
+
+# METHOD_IN_DIRECT: the second buffer is input too, and is not modified.
+ioctl dos 9c402401 68656c6c6f2066726f6d204e4b00 64
+ioctl dos 9c402401 68656c6c6f2066726f6d204e4b00 1
+
+# Requests the driver refuses: an empty buffer, an unknown code.
+ioctl dos 9c402408 - 16
+ioctl dos 9c402408 78 0
+ioctl dos 9c402401 - 16
+ioctl dos 9c402401 78 0
+ioctl dos 9c402406 - 16
+ioctl dos 9c402406 78 0
+ioctl dos 9c402410 78 16
+
+# The driver has no read or write routine.
+read dos 16
+write dos 616263
+
+close alias
+close dos
+close dev
+unload sioctl

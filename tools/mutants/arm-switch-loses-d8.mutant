@@ -1,0 +1,7 @@
+# The arm64 thread switch does not restore d8 and d9, registers a call
+# preserves.
+scenario: aarch64
+fails: thread.registers
+file: kernel/arch/aarch64/switch.rs
+occurrence: 1
+remove:     ldp d8, d9, [sp, #96]

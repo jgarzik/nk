@@ -9,7 +9,7 @@
 //! check compares, and a bad or overrunning free is reported, not obeyed.
 
 use super::{PAGE_SIZE, alloc_frames, direct_to_phys, free_frames, phys_to_virt};
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use nk_mm::heap::{Arena, HeapError, Usage};
 
 const ARENA_PAGES: usize = 256;
@@ -32,10 +32,13 @@ struct Pool {
     large: [Option<Large>; MAX_LARGE],
 }
 
-static POOL: SpinLock<Pool> = SpinLock::new(Pool {
-    arenas: [const { None }; MAX_ARENAS],
-    large: [None; MAX_LARGE],
-});
+static POOL: SpinLock<Pool> = SpinLock::new(
+    Rank::Pool,
+    Pool {
+        arenas: [const { None }; MAX_ARENAS],
+        large: [None; MAX_LARGE],
+    },
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolError {
@@ -160,6 +163,12 @@ pub fn usage() -> Usage {
     total
 }
 
+/// Frames held as arenas. An arena is kept once made, so a leak check
+/// must not count its frames as lost.
+pub fn arena_frames() -> u64 {
+    (POOL.lock().arenas.iter().flatten().count() * ARENA_PAGES) as u64
+}
+
 /// Walk every arena checking headers and guard bytes.
 pub fn check() -> Result<(), HeapError> {
     POOL.lock()
@@ -211,4 +220,59 @@ pub fn self_test() -> Result<(), &'static str> {
         return Err("pool leaked");
     }
     Ok(())
+}
+
+/// [`ExAllocatePoolWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithtag).
+/// Every pool type gets non-paged memory, which is always a legal answer.
+/// Null if memory is exhausted; the contents are unspecified.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePoolWithTag(
+    _pool_type: u32,
+    number_of_bytes: usize,
+    tag: u32,
+) -> *mut core::ffi::c_void {
+    // Windows gives a zero-byte request a minimal block, not null.
+    alloc(number_of_bytes.max(1), tag).cast()
+}
+
+/// `POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`, or'ed into the pool type.
+const QUOTA_FAIL_INSTEAD_OF_RAISE: u32 = 8;
+
+/// [`ExAllocatePoolWithQuotaTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithquotatag).
+/// NK charges no quotas: there is one process. On failure Windows raises
+/// an exception unless the caller asked for null instead; NK has no
+/// exceptions to raise yet, and an unhandled one stops Windows too.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePoolWithQuotaTag(
+    pool_type: u32,
+    number_of_bytes: usize,
+    tag: u32,
+) -> *mut core::ffi::c_void {
+    let block = alloc(number_of_bytes.max(1), tag);
+    if block.is_null() && pool_type & QUOTA_FAIL_INSTEAD_OF_RAISE == 0 {
+        crate::kd::bugcheck(format_args!(
+            "0x0000001E KMODE_EXCEPTION_NOT_HANDLED: STATUS_INSUFFICIENT_RESOURCES \
+             (a pool allocation with quota of {number_of_bytes} bytes failed)"
+        ));
+    }
+    block.cast()
+}
+
+/// [`ExFreePoolWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepoolwithtag).
+/// Freeing what was not allocated, or a block written past its end, stops
+/// the system, as on Windows.
+///
+/// # Safety
+/// `p` came from a pool allocation routine and is not used afterwards.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ExFreePoolWithTag(p: *mut core::ffi::c_void, _tag: u32) {
+    match free(p.cast()) {
+        Ok(_) => {}
+        Err(PoolError::NotAllocated) => crate::kd::bugcheck(format_args!(
+            "0x000000C2 BAD_POOL_CALLER: free of {p:p}, which is not a live pool block"
+        )),
+        Err(PoolError::Overrun { tag, size }) => crate::kd::bugcheck(format_args!(
+            "0x00000019 BAD_POOL_HEADER: block {p:p} (tag {tag:#x}, {size} bytes) was overrun"
+        )),
+    }
 }

@@ -1,0 +1,5 @@
+# The handler keeps the interrupted code's floating-point control word.
+scenario: aarch64
+fails: cpu.fp-preserved
+file: kernel/arch/aarch64/trap.rs
+remove:     msr fpcr, xzr

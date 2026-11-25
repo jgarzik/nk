@@ -1,0 +1,7 @@
+# A waker takes its object for a thread that waits for all of several:
+# the thread ends up holding one object without the others.
+scenario: aarch64
+fails: scenario
+file: kernel/ke/object.rs
+replace:             if (&raw const (*block).WaitType).read() != WAIT_ALL {
+with:             if true {

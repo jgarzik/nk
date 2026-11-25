@@ -1,0 +1,7 @@
+# The handler runs with a rounding mode other than the kernel's own, as it
+# would if it simply kept the interrupted code's MXCSR.
+scenario: x86_64
+fails: cpu.fp-preserved
+file: kernel/arch/x86_64/trap.rs
+replace:     mov dword ptr [rsp + 104], 0x1F80
+with:     mov dword ptr [rsp + 104], 0x7F80

@@ -1,14 +1,92 @@
-//! A spinning mutual-exclusion lock for kernel-private data.
+//! NK's lock for its own data: a spin lock with a rank.
 //!
-//! This is NK's own lock, not the driver-visible `KSPIN_LOCK`. Only the
-//! boot CPU runs today, but data is locked as if every CPU did.
+//! This is not the driver-visible `KSPIN_LOCK`. Taking one:
+//!
+//! - raises the IRQL to the level of the lock's rank, so that nothing
+//!   which could want the same lock (another thread on this processor, a
+//!   DPC, for the console even an interrupt) can run here while it is
+//!   held;
+//! - waits its turn: waiters are served in order of arrival;
+//! - is checked against the locks this processor already holds: ranks
+//!   rise strictly inward, and a lock is never taken twice.
+//!
+//! Releasing must happen in the reverse order of taking, which is what
+//! dropping guards in scope order does. A broken rule stops the system;
+//! `doc/LOCKING.md` lists the ranks and the reasons.
 
+use super::irql;
+use crate::arch;
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, Ordering};
+use nk_ke::TicketLock;
+
+/// The order in which locks may nest: a lock may be taken only while every
+/// lock held has a lower rank. See `doc/LOCKING.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Rank {
+    /// The loaded-driver records (`io::driver`).
+    Drivers = 10,
+    /// The loaded-image table (`ldr`).
+    Images = 20,
+    /// Devices' reference counts and delete-pending marks (`io::device`).
+    IoDatabase = 25,
+    /// The object namespace (`ob`).
+    Namespace = 30,
+    /// The registry (`cm`).
+    Registry = 33,
+    /// The kernel handle table (`ob::handle`).
+    Handles = 35,
+    /// The executive pool (`mm::pool`).
+    Pool = 40,
+    /// Kernel address space and page tables (`mm::map`).
+    AddressSpace = 50,
+    /// The frame allocator (`mm`).
+    Frames = 60,
+    /// The interprocessor call in progress (`ke::ipi`).
+    Ipi = 200,
+    /// A queue of work items (`ex::work`).
+    WorkQueue = 210,
+    /// A processor's ready queues (`ke::thread`).
+    Ready = 220,
+    /// A processor's table of pending timers (`ke::timer`).
+    TimerTable = 230,
+    /// A processor's queue of deferred procedure calls (`ke::dpc`).
+    DpcQueue = 240,
+    /// The diagnostic console (`kd`): innermost, so anything can print.
+    Console = 250,
+}
+
+impl Rank {
+    /// The IRQL at which locks of this rank are held.
+    const fn level(self) -> u8 {
+        match self {
+            // Usable from any context, an interrupt included.
+            Rank::Console | Rank::DpcQueue => irql::HIGH_LEVEL,
+            _ => irql::DISPATCH_LEVEL,
+        }
+    }
+}
+
+/// Update this processor's record of the locks it holds. The caller is
+/// at `level`, the level of the lock being taken or released.
+///
+/// The update runs at `HIGH_LEVEL`. An interrupt handler may take a lock
+/// too (the console, a DPC queue), and one arriving half-way through an
+/// update would read, and then overwrite, a record that is not yet
+/// whole.
+fn held<R>(level: u8, update: impl FnOnce(&mut nk_ke::Held) -> R) -> R {
+    arch::set_irql(irql::HIGH_LEVEL);
+    // SAFETY: at HIGH_LEVEL nothing else runs on this processor, and the
+    // reference ends with the closure.
+    let result = update(unsafe { arch::percpu().held() });
+    arch::set_irql(level);
+    result
+}
 
 pub struct SpinLock<T> {
-    locked: AtomicBool,
+    lock: TicketLock,
+    rank: Rank,
     value: UnsafeCell<T>,
 }
 
@@ -17,32 +95,46 @@ unsafe impl<T: Send> Sync for SpinLock<T> {}
 
 pub struct Guard<'a, T> {
     lock: &'a SpinLock<T>,
+    /// The IRQL to return to.
+    old_irql: u8,
 }
 
+/// The lock taken by force on the way to stopping the system. It is never
+/// released: nothing runs afterwards.
+pub struct Forced<'a, T>(&'a SpinLock<T>);
+
 impl<T> SpinLock<T> {
-    pub const fn new(value: T) -> Self {
+    pub const fn new(rank: Rank, value: T) -> Self {
         Self {
-            locked: AtomicBool::new(false),
+            lock: TicketLock::new(),
+            rank,
             value: UnsafeCell::new(value),
         }
     }
 
-    pub fn lock(&self) -> Guard<'_, T> {
-        while self
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            core::hint::spin_loop();
-        }
-        Guard { lock: self }
+    fn id(&self) -> usize {
+        core::ptr::from_ref(self).addr()
     }
 
-    /// Take the lock even if it is held. For the panic path only, where
-    /// the holder will never run again.
-    pub fn force_lock(&self) -> Guard<'_, T> {
-        self.locked.store(true, Ordering::Relaxed);
-        Guard { lock: self }
+    pub fn lock(&self) -> Guard<'_, T> {
+        let level = self.rank.level();
+        let old_irql = irql::raise(level);
+        if let Err(v) = held(level, |held| held.acquire(self.id(), self.rank as u8)) {
+            irql::violation(v);
+        }
+        self.lock.lock();
+        Guard {
+            lock: self,
+            old_irql,
+        }
+    }
+
+    /// Take the lock even if it is held, checking nothing. For the path
+    /// that stops the system only: the holder will never run again.
+    pub fn force_lock(&self) -> Forced<'_, T> {
+        arch::set_irql(irql::HIGH_LEVEL);
+        self.lock.force();
+        Forced(self)
     }
 }
 
@@ -63,6 +155,115 @@ impl<T> DerefMut for Guard<'_, T> {
 
 impl<T> Drop for Guard<'_, T> {
     fn drop(&mut self) {
-        self.lock.locked.store(false, Ordering::Release);
+        self.lock.lock.unlock();
+        if let Err(v) = held(self.lock.rank.level(), |held| held.release(self.lock.id())) {
+            irql::violation(v);
+        }
+        irql::lower(self.old_irql);
     }
+}
+
+impl<T> Deref for Forced<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        // SAFETY: the system is stopping; this processor is the only one
+        // that will touch the value again.
+        unsafe { &*self.0.value.get() }
+    }
+}
+
+// ---- tests --------------------------------------------------------------
+
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use nk_ntabi::ke::KDPC;
+
+/// A lock ordinary code takes, and one an interrupt handler takes.
+static OUTER: SpinLock<u64> = SpinLock::new(Rank::Drivers, 0);
+static INNER: SpinLock<u64> = SpinLock::new(Rank::DpcQueue, 0);
+static FLOODING: AtomicBool = AtomicBool::new(false);
+/// Interrupts the handler has taken.
+static HANDLED: AtomicU64 = AtomicU64::new(0);
+
+/// The most interrupts the test sends.
+const FLOOD: u64 = 200_000;
+
+struct FloodDpc(UnsafeCell<core::mem::MaybeUninit<KDPC>>);
+// SAFETY: accessed only through the DPC routines, by pointer.
+unsafe impl Sync for FloodDpc {}
+static FLOOD_DPC: FloodDpc = FloodDpc(UnsafeCell::new(core::mem::MaybeUninit::uninit()));
+
+fn take_inner(_: u32) {
+    *INNER.lock() += 1;
+    HANDLED.fetch_add(1, Ordering::Release);
+}
+
+/// Interrupt processor 0 over and over, from another processor.
+///
+/// # Safety
+/// Called as a DPC routine; it dereferences none of its arguments.
+unsafe extern "C" fn flood(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
+    // As many as fit in a third of a second: an emulated machine is
+    // slow, and a DPC must not run long.
+    let deadline = super::time::interrupt_time() + 3_000_000;
+    for sent in 0..FLOOD {
+        if super::time::interrupt_time() > deadline {
+            break;
+        }
+        arch::interrupt_processor(0, arch::TEST_LOW.0);
+        // Wait for it to be taken, so that none merges with the next.
+        let mut patience = 100_000;
+        while HANDLED.load(Ordering::Acquire) <= sent && patience > 0 {
+            core::hint::spin_loop();
+            patience -= 1;
+        }
+    }
+    FLOODING.store(false, Ordering::Release);
+}
+
+fn start_flood(_: usize) {
+    // SAFETY: static storage for a `KDPC` that is not queued.
+    unsafe {
+        let dpc = FLOOD_DPC.0.get().cast::<KDPC>();
+        super::dpc::KeInitializeDpc(dpc, Some(flood), core::ptr::null_mut());
+        super::dpc::KeInsertQueueDpc(dpc, core::ptr::null_mut(), core::ptr::null_mut());
+    }
+}
+
+/// Interrupts whose handler takes a lock arrive, from another processor
+/// and so at any instant, while this one takes and releases a lock as
+/// fast as it can. The record of locks held must survive. Returns how
+/// many times the handler took its lock.
+pub fn interrupted_test() -> Result<u64, &'static str> {
+    let (vector, level) = arch::TEST_LOW;
+    *INNER.lock() = 0;
+    HANDLED.store(0, Ordering::Relaxed);
+    super::interrupt::register(vector, level, take_inner);
+    let other = super::smp::online_count() - 1;
+    let mut taken = 0u64;
+    if other == 0 {
+        // Alone: the interrupts can only come between the locks.
+        for _ in 0..FLOOD / 100 {
+            arch::self_interrupt(vector);
+            *OUTER.lock() += 1;
+            taken += 1;
+        }
+    } else {
+        FLOODING.store(true, Ordering::Release);
+        super::ipi::call_on(other, start_flood, 0);
+        while FLOODING.load(Ordering::Acquire) {
+            *OUTER.lock() += 1;
+            taken += 1;
+        }
+    }
+    super::time::stall(1000);
+    super::interrupt::unregister(vector);
+    let handled = *INNER.lock();
+    if taken == 0 || handled == 0 {
+        return Err("no lock was taken under interrupts");
+    }
+    if irql::current() != irql::PASSIVE_LEVEL {
+        return Err("the IRQL did not come back down");
+    }
+    Ok(handled)
 }

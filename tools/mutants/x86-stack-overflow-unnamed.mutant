@@ -1,0 +1,8 @@
+# The fault handler no longer recognises a fault below the stack as an
+# overflow: the machine still stops, but with a bare "double fault" that
+# says nothing about the cause.
+scenario: x86_64-neg-stack-overflow
+fails: scenario
+file: kernel/mm/stack.rs
+replace:     nk_bootinfo::below_stack(base, address)
+with:     nk_bootinfo::below_stack(base, address) && false

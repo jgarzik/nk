@@ -1,0 +1,7 @@
+# Making a thread ready on this processor does not ask for the interrupt
+# at whose end the processor reconsiders: a higher-priority thread waits
+# for the next clock tick.
+scenario: x86_64
+fails: thread.preempt
+file: kernel/ke/thread.rs
+remove:         arch::self_interrupt(arch::DPC.0);

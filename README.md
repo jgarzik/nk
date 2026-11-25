@@ -2,27 +2,34 @@
 
 A Windows NT-compatible kernel written in Rust, for x86-64 and arm64.
 
-NK's goal is to run existing, unmodified Windows kernel-mode drivers: the
-same `.sys` file that loads on Windows loads on NK. The compatibility
-target is fixed at Windows 10 22H2 (NT 10.0, build 19045). Windows defines
-the driver ABI and the behaviour drivers observe; the implementation
-behind it is NK's own.
+NK's rule is that an unmodified Windows kernel-mode driver cannot tell NK
+from Windows: the same `.sys` file that loads on Windows loads on NK. The
+compatibility target is the Windows 10 2004-22H2 family (NT 10.0, builds
+19041 to 19045). Windows defines the driver ABI and the behaviour drivers
+observe; the implementation behind it is NK's own.
 
-NK is not a Windows desktop clone and not a Linux compatibility layer. It
-boots on its own through UEFI, with no Windows or Linux code in the boot
-path.
+NK replaces only the Windows kernel and HAL. The long-term goal is to
+boot the rest of Windows on top of it, unmodified: Microsoft's own bus,
+storage and file-system drivers, then Microsoft's user mode, up to a
+Windows rescue disk at a `cmd.exe` prompt. `doc/ROADMAP.md` lays out the
+phases. NK contains and ships no Windows code, and boots on its own
+through UEFI.
 
-## Status: 0.0.1, driver bootstrap
+## Status: kernel core
 
-This first release is a proof that the approach works end to end, on a
-deliberately small surface. Under QEMU, on both architectures, NK:
+NK is a proof that the approach works end to end, on a deliberately
+small surface. Under QEMU, on both architectures, NK:
 
 1. boots from UEFI firmware through its own loader,
-2. takes over the CPU and memory,
+2. takes over the CPUs and memory: every processor running, interrupts
+   on, a clock, preemptive threads that wait, timers, deferred calls and
+   work items,
 3. loads a real Windows driver binary: maps it, relocates it, binds its
    imports,
 4. calls the driver's own entry point, which creates its device,
-5. opens the device and sends it real I/O request packets (IRPs),
+5. opens the device and sends it real I/O request packets (IRPs), which
+   the driver may hold, complete later from a timer or a thread of its
+   own, or have cancelled,
 6. checks status, byte counts and payloads, unloads the driver, and
    verifies nothing leaked.
 
@@ -32,14 +39,21 @@ The drivers are Microsoft's, not written for NK:
 | --- | --- | --- | --- |
 | `null.sys` | The Null device driver shipped in Windows 10 | runs | no test binary yet |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, built with Microsoft's WDK | runs | runs |
+| `nkc-*.sys` (eleven) | NK's conformance drivers, built with Microsoft's WDK, each recorded on Windows first | match Windows value for value | the same |
+| `event.sys` | Microsoft's WDM event sample, built with Microsoft's WDK | runs as on Windows with a debugger attached; without one, stops where Windows stops | the same |
+| `cancel.sys` | Microsoft's WDM cancel sample, built with Microsoft's WDK | answers as on Windows; reads cancelled while queued; 100 load/unload cycles without a leak | the same |
 
-**What this is not.** Two software drivers are not general driver
-compatibility. 0.0.1 has no threads or scheduler, no interrupts, no
-structured exception handling, no Plug and Play, no user mode, and runs
-only the boot CPU. It has not been run on physical hardware, and its
-results have been checked against Microsoft's documentation, sample source
-and binaries, not yet against a run on real Windows. `doc/ROADMAP.md` says
-what is open and what comes next.
+**What this is not.** A few software drivers are not general driver
+compatibility. NK has preemptive threads that wait on events,
+semaphores, timers and mutexes, requests that pend and can be
+cancelled, a registry in memory and security descriptors nothing yet
+enforces, but no APCs, no device interrupts, no structured exception
+handling, no Plug and Play and no user mode. It has not been run on
+physical hardware. What the drivers above answer, request by request,
+matches a run on real Windows 10 (`oracle/`); the rest of what the
+tests expect comes from Microsoft's documentation, sample source and
+binaries. `doc/ROADMAP.md` says what is
+open and the path from here to Windows user mode.
 
 ## Try it
 
@@ -59,16 +73,16 @@ verifies their SHA-256. A passing boot ends like this on the serial
 console:
 
 ```
-NK 0.0.1 (x86_64)
+NK 0.0.2 (x86_64)
 ...
-NK-TEST null.load:OK
-NK-TEST null.read:OK
-NK-TEST null.write:OK
 NK-TEST sioctl.buffered:OK
-NK-TEST sioctl.out-direct:OK
-sioctl: 100 load/exercise/unload cycles, resources unchanged
 NK-TEST sioctl.cycles:OK
-NK-TEST-COMPLETE pass=28 fail=0 skip=1
+NK-TEST cancel.cancelled:OK reads cancelled while queued: 7
+NK-TEST cancel.cycles:OK load/exercise/unload cycles, resources unchanged: 100
+...
+NK-TEST oracle.sioctl:OK 31 lines as on Windows
+NK-TEST oracle.cancel:OK 12 lines as on Windows
+NK-TEST-COMPLETE pass=132 fail=0 skip=1
 ```
 
 `make gate` runs everything a change must pass: formatting, lints, host
@@ -111,24 +125,24 @@ SHA-256; the tests download them and reject a mismatch.
 | Path | Contents |
 | --- | --- |
 | `boot/` | `nkload`, the UEFI loader |
-| `kernel/` | the kernel: `arch/` (CPU-specific), `mm/`, `io/`, `ldr/`, `ob/`, `ke/`, `export/`, `selftest/` |
-| `lib/` | hardware-independent logic, unit-tested on the build host: PE loading, page tables, allocators, structure layouts, ACPI lookup |
+| `kernel/` | the kernel: `arch/` (CPU-specific), `mm/`, `io/`, `ldr/`, `ob/`, `ke/`, `ex/`, `ps/`, `se/`, `cm/`, `rtl/`, `kd/`, `export/`, `selftest/` |
+| `lib/` | hardware-independent logic, unit-tested on the build host: PE loading, page tables, allocators, structure layouts, security descriptors, the registry, formatted output, ACPI tables, PDB symbol files |
 | `fixtures/` | the manifest of test drivers |
 | `ledger/` | generated compatibility ledger |
-| `tools/` | fixture fetcher, boot-test harness, image builder, the gate |
+| `tools/` | fixture fetcher, boot-test harness and judge, image builder, PE and PDB dumpers, the gate |
 | `doc/` | design and reference notes |
 
 ## Documentation
 
-- `doc/DESIGN.md`: the decisions behind NK and their reasons
+- `doc/DESIGN.md`: what NK is, its principles, and the decisions behind
+  the code
 - `doc/BOOT.md`: from firmware to the kernel's first instruction
-- `doc/ABI.md`: what was measured about compilers and layouts, and what is
-  still unverified
+- `doc/ABI.md`: what the kernel relies on about compilers and layouts,
+  and what is still unverified
 - `doc/TESTING.md`: unit tests, boot tests, fixtures
-- `doc/ROADMAP.md`: what 0.0.1 covers and what follows
+- `doc/ROADMAP.md`: the phases from here to a Windows rescue disk
+- `doc/LOCKING.md`: IRQL, the kernel's locks, their order
 - `doc/UNSAFE.md`: rules for `unsafe` code
-- `doc/handoff.md`: the original project brief, kept for reference; where
-  NK departs from it, `doc/DESIGN.md` says why
 
 ## Releases
 

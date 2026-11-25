@@ -1,0 +1,9 @@
+# Taking a lock no longer raises the IRQL to the lock's level: code that
+# could want the same lock would be free to run on this processor.
+scenario: x86_64
+# Whichever comes first stops the boot: the test, or an interrupt that
+# arrives while such a lock is held and takes a lock ranked below it.
+fails: scenario
+file: kernel/ke/spinlock.rs
+replace:         let level = self.rank.level();
+with:         let level = irql::current();

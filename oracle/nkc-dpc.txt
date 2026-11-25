@@ -1,0 +1,10 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 1fd769248ef1aabfb37cdb319e3eb8f88b6aa70db87f98d2604286a741223fd1
+# driver nkc-dpc.sys sha256 261373cb691d48ad82aa5df4afbf543588b5f0ea38c29030d756956f7ef6f3e2
+load nkc-dpc: ok
+open d \Device\NkcDpc: 00000000
+ioctl d 00222000 - 256: 00000000 52 01000000010000000200000001000000010000000000000001000000020000000100000000000000020000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222000 - 8: c0000023 - eeeeeeeeeeeeeeee
+close d: 00000000
+unload nkc-dpc: ok
+end

@@ -1,0 +1,9 @@
+# IoCsqInsertIrp installs the cancel routine with a plain store before
+# it reads the cancel flag: a canceller on another processor and the
+# insert can each miss the other's write, and a cancelled request stays
+# queued for good. Needs real processors to show (KVM).
+scenario: x86_64
+fails: io.csq-race
+file: kernel/io/csq.rs
+replace:         cancel_routine(irp).swap(cancelled as *mut c_void, Ordering::SeqCst);
+with:         cancel_routine(irp).store(cancelled as *mut c_void, Ordering::Release);

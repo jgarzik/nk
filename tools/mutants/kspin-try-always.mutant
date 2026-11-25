@@ -1,0 +1,7 @@
+# Trying a held spin lock reports success, so two holders would both
+# believe they own it.
+scenario: aarch64
+fails: oracle.nkc-irql
+file: kernel/ke/kspin.rs
+replace:     u8::from(taken)
+with:     u8::from(taken || true)

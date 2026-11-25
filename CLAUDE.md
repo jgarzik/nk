@@ -4,12 +4,18 @@ device goes in `kernel/arch/` or `kernel/hal/`; pure logic goes in `lib/`
 where the host can unit-test it.
 
 ## Mission
-- Run unmodified Windows 10 22H2 (NT 10.0.19045) kernel drivers. The
-  driver ABI is binding: exports, calling conventions, structure layouts,
-  IRQL and lifetime rules. Internals are ours to design.
+- Golden rule: an unmodified Windows 10 (2004-22H2, NT 10.0.19041-19045)
+  kernel driver cannot tell NK from Windows. The driver ABI is binding:
+  exports, calling conventions, structure layouts, IRQL and lifetime
+  rules. What no binary can observe is ours to design.
+- NK is `ntoskrnl.exe` + `hal.dll` + a loader, nothing else. Bus, ACPI,
+  storage, file-system, framework and window-system drivers are
+  Microsoft's binaries; so is all of user mode. Destination: Microsoft's
+  WinPE at a `cmd.exe` prompt (`doc/ROADMAP.md`).
 - Both arches are first class: every commit builds both.
-- Scope follows the import tables of real drivers (`ledger/`), not the
-  size of the Windows export list. Brief: `doc/handoff.md` (advisory).
+- Scope follows the import tables of real binaries (`ledger/`), not the
+  size of the Windows export list.
+- NK code is written fresh: read hk, ReactOS and Wine; copy none of them.
 
 ## Build / verify
 - Makefile targets only. Done = `make gate` prints GATE-OK.
@@ -24,8 +30,8 @@ where the host can unit-test it.
 - No fake success. A missing import rejects the driver load and names
   the symbol. An export that cannot do its job fails per its contract or
   bugchecks; it never returns success without doing the work.
-- Driver-visible structs live in `lib/ntabi` as `#[repr(C)]` with const
-  size/offset asserts. Never hand a driver a larger private struct, and
+- Structs a binary can see, documented or private, live in `lib/ntabi`
+  as `#[repr(C)]` with const size/offset asserts. Never hand a driver a larger private struct, and
   never hold a Rust reference into memory a driver can write.
 - Windows binaries are never committed. Fixtures are fetched by URL and
   pinned by SHA-256 (`fixtures/manifest.toml`); a missing fixture is a
@@ -41,5 +47,8 @@ where the host can unit-test it.
 - No CHANGELOG/NEWS files. No dead or speculative code.
 - Releases: version in the workspace `Cargo.toml`, tag `vX.Y.Z`, images
   from `make dist` (no Windows binaries in them).
+
+- Locks: `doc/LOCKING.md` states the ranks and rules; a new or changed
+  lock updates it in the same commit.
 
 Design: `doc/DESIGN.md`. Phases: `doc/ROADMAP.md`. Tests: `doc/TESTING.md`.

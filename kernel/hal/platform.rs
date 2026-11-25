@@ -1,0 +1,118 @@
+//! What the machine is made of, read from ACPI once at boot: the
+//! processors and where the interrupt controllers are.
+//!
+//! The MADT lists every processor firmware knows. NK numbers the boot
+//! processor 0, as Windows does, and the rest in table order.
+
+use crate::arch::platform::{self as arch_platform, Controllers};
+use crate::mm;
+use alloc::boxed::Box;
+use core::sync::atomic::{AtomicPtr, Ordering};
+use nk_acpi::{CensusError, PhysMem};
+use nk_bootinfo::{BootInfo, regions};
+
+/// One processor group, as on Windows: at most 64 logical processors.
+pub const MAX_CPUS: usize = 64;
+
+pub use nk_acpi::Cpu;
+
+pub struct Platform {
+    cpus: [Cpu; MAX_CPUS],
+    ncpus: usize,
+    pub controllers: Controllers,
+    /// What else firmware says that this architecture needs.
+    pub firmware: arch_platform::Firmware,
+}
+
+impl Platform {
+    /// Usable processors; index 0 is the boot processor.
+    pub fn cpus(&self) -> &[Cpu] {
+        &self.cpus[..self.ncpus]
+    }
+}
+
+static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The platform description. Panics before [`init`].
+pub fn get() -> &'static Platform {
+    let p = PLATFORM.load(Ordering::Acquire);
+    assert!(!p.is_null(), "platform description used before hal init");
+    // SAFETY: `init` stored a leaked, fully initialised `Platform` that is
+    // never written again.
+    unsafe { &*p }
+}
+
+/// Firmware tables through the direct map. Only addresses inside a region
+/// of the firmware memory map are mapped, so only those are readable.
+struct DirectMap<'a>(&'a BootInfo);
+
+impl PhysMem for DirectMap<'_> {
+    fn bytes(&self, addr: u64, len: usize) -> Option<&[u8]> {
+        let end = addr.checked_add(len as u64)?;
+        // SAFETY: the loader left the memory map in reserved memory that
+        // the direct map covers.
+        let map = unsafe {
+            core::slice::from_raw_parts(
+                mm::phys_to_virt(self.0.mmap_phys),
+                self.0.mmap_len as usize,
+            )
+        };
+        regions(map, self.0.mmap_desc_size as usize)
+            .any(|r| r.phys <= addr && end <= r.end())
+            .then(|| {
+                // SAFETY: the range lies in one mapped firmware region, and
+                // firmware does not change its tables after boot services.
+                unsafe { core::slice::from_raw_parts(mm::phys_to_virt(addr), len) }
+            })
+    }
+}
+
+/// Read the MADT and record the processors and interrupt controllers.
+pub fn init(info: &BootInfo) -> Result<(), &'static str> {
+    let mem = DirectMap(info);
+    let table = nk_acpi::find_table(&mem, info.rsdp, b"APIC").ok_or("no ACPI MADT")?;
+    let madt = nk_acpi::madt(table).ok_or("the ACPI MADT is malformed")?;
+
+    let mut cpus = [Cpu { hw_id: 0, uid: 0 }; MAX_CPUS];
+    let listed = madt.entries().filter_map(|e| arch_platform::usable_cpu(&e));
+    let (n, more) = nk_acpi::census(arch_platform::current_cpu_id(), listed, &mut cpus).map_err(
+        |e| match e {
+            CensusError::NoBootProcessor => "the MADT does not list the boot processor",
+            CensusError::BootProcessorTwice => "the MADT lists the boot processor twice",
+            CensusError::ProcessorTwice => "the MADT lists a processor twice",
+        },
+    )?;
+    if more {
+        kprintln!("hal: more than {MAX_CPUS} processors; the rest stay off");
+    }
+    let platform = Box::leak(Box::new(Platform {
+        cpus,
+        ncpus: n,
+        controllers: Controllers::from_madt(&madt),
+        firmware: arch_platform::firmware(|signature| {
+            nk_acpi::find_table(&mem, info.rsdp, signature)
+        }),
+    }));
+    kprintln!("hal: {n} processors; {}", platform.controllers);
+    PLATFORM.store(platform, Ordering::Release);
+    Ok(())
+}
+
+/// The census agrees with the processor running this code and, when the
+/// command line states how many processors the machine has (`cpus=<n>`,
+/// set by the test harness to what it asked QEMU for), with that.
+pub fn self_test(info: &BootInfo) -> Result<usize, &'static str> {
+    let cpus = get().cpus();
+    if cpus.first().map(|c| c.hw_id) != Some(arch_platform::current_cpu_id()) {
+        return Err("processor 0 is not the boot processor");
+    }
+    if (1..cpus.len()).any(|i| cpus[..i].iter().any(|c| c.hw_id == cpus[i].hw_id)) {
+        return Err("two processors share a hardware id");
+    }
+    match info.option("cpus").map(str::parse::<usize>) {
+        Some(Ok(expected)) if expected == cpus.len() => Ok(cpus.len()),
+        Some(Ok(_)) => Err("processor count differs from cpus= on the command line"),
+        Some(Err(_)) => Err("cpus= on the command line is not a number"),
+        None => Ok(cpus.len()),
+    }
+}

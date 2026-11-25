@@ -7,7 +7,10 @@
 //! path remainder after a device name yet, so `\Device\Foo\bar` does not
 //! open `\Device\Foo`.
 
-use crate::ke::SpinLock;
+pub mod handle;
+pub mod object;
+
+use crate::ke::{Rank, SpinLock};
 use alloc::vec::Vec;
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::status::*;
@@ -29,7 +32,7 @@ struct Entry {
 // dereferences it.
 unsafe impl Send for Entry {}
 
-static NAMESPACE: SpinLock<Vec<Entry>> = SpinLock::new(Vec::new());
+static NAMESPACE: SpinLock<Vec<Entry>> = SpinLock::new(Rank::Namespace, Vec::new());
 
 /// Add a name. Fails if the name is malformed or already taken.
 pub fn insert(name: &[u16], target: Target) -> NTSTATUS {
@@ -85,6 +88,32 @@ pub fn lookup_device(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
             .target
         {
             Target::Device(d) => return Some(*d),
+            Target::SymbolicLink(to) => name = to,
+        }
+    }
+    None
+}
+
+/// The device `name` refers to, with a pointer reference taken while
+/// the name still led to it: its memory stays until the caller drops
+/// the reference (`object::dereference`), whatever becomes of the
+/// device meanwhile.
+pub fn lookup_device_referenced(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
+    let ns = NAMESPACE.lock();
+    let mut name = name;
+    for _ in 0..MAX_LINK_DEPTH {
+        match &ns
+            .iter()
+            .find(|e| nk_rtl::same_object_name(&e.name, name))?
+            .target
+        {
+            Target::Device(d) => {
+                // SAFETY: a device loses its names, under this lock,
+                // before it gives up the reference it was created with;
+                // so one that still has a name is alive.
+                unsafe { object::reference(d.cast()) };
+                return Some(*d);
+            }
             Target::SymbolicLink(to) => name = to,
         }
     }

@@ -1,0 +1,12 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 4f0587d59fa084ad12ca8038c60e9ba6767170eea680efcc79a4916437c7cbce
+use null: ok
+open n \Device\Null: 00000000
+read n 64: c0000011 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+read n 0: c0000011 - -
+write n -: 00000000 0
+write n 78: 00000000 1
+write n 73697874792d666f7572206279746573206f66206461746120666f7220746865206e756c6c2064657669636520746f207377616c6c6f772077686f6c652e2e2e2e: 00000000 65
+ioctl n 00150800 70696e67 8: c0000010 - eeeeeeeeeeeeeeee
+close n: 00000000
+end

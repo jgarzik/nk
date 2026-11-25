@@ -7,11 +7,23 @@
 
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Registers saved by the entry stub, lowest address first.
+///
+/// The floating-point part is what Windows saves in a trap frame: the
+/// volatile registers XMM0-XMM5 and MXCSR. Kernel code that an interrupt
+/// goes on to run (a driver's DPC, say) may use those freely, so the
+/// interrupted code would otherwise find them changed. XMM6-XMM15 are
+/// preserved by every function that uses them, under the calling
+/// convention, and are not saved here.
 #[repr(C)]
 pub struct Frame {
+    pub xmm: [[u64; 2]; 6],
+    /// MXCSR of the interrupted code, in the low 32 bits.
+    pub mxcsr: u64,
+    /// Scratch: the stub loads the kernel's MXCSR from here.
+    scratch: u64,
     pub r15: u64,
     pub r14: u64,
     pub r13: u64,
@@ -37,6 +49,8 @@ pub struct Frame {
 }
 
 const BREAKPOINT: u64 = 3;
+const NMI: u64 = 2;
+const DOUBLE_FAULT: u64 = 8;
 const PAGE_FAULT: u64 = 14;
 /// `int 0x29`: `__fastfail`, how MSVC-built code reports fatal corruption
 /// (a failed stack-cookie check, for one). The reason code is in rcx.
@@ -51,8 +65,10 @@ pub fn breakpoints() -> u32 {
 
 // Every vector gets a stub that pushes a zero error code where the CPU
 // pushes none, then the vector number. The common path saves the
-// general-purpose registers and calls the handler with the Windows x64
-// convention: argument in rcx, 32 bytes of shadow space, 16-byte aligned.
+// general-purpose registers, then XMM0-XMM5 and MXCSR, gives the handler
+// the kernel's own MXCSR (all exceptions masked, round to nearest), and
+// calls it with the Windows x64 convention: argument in rcx, 32 bytes of
+// shadow space, 16-byte aligned.
 global_asm!(
     r#"
     .text
@@ -1086,6 +1102,16 @@ nk_trap_common:
     push r13
     push r14
     push r15
+    sub rsp, 112
+    movups xmmword ptr [rsp], xmm0
+    movups xmmword ptr [rsp + 16], xmm1
+    movups xmmword ptr [rsp + 32], xmm2
+    movups xmmword ptr [rsp + 48], xmm3
+    movups xmmword ptr [rsp + 64], xmm4
+    movups xmmword ptr [rsp + 80], xmm5
+    stmxcsr dword ptr [rsp + 96]
+    mov dword ptr [rsp + 104], 0x1F80
+    ldmxcsr dword ptr [rsp + 104]
     mov rcx, rsp
     mov rbp, rsp
     and rsp, -16
@@ -1093,6 +1119,14 @@ nk_trap_common:
     cld
     call {handler}
     mov rsp, rbp
+    ldmxcsr dword ptr [rsp + 96]
+    movups xmm0, xmmword ptr [rsp]
+    movups xmm1, xmmword ptr [rsp + 16]
+    movups xmm2, xmmword ptr [rsp + 32]
+    movups xmm3, xmmword ptr [rsp + 48]
+    movups xmm4, xmmword ptr [rsp + 64]
+    movups xmm5, xmmword ptr [rsp + 80]
+    add rsp, 112
     pop r15
     pop r14
     pop r13
@@ -1110,6 +1144,45 @@ nk_trap_common:
     pop rax
     add rsp, 16
     iretq
+
+// For `fp_trap_test`. Load XMM0-XMM5 and MXCSR from the block at rcx, take
+// a breakpoint, store what they hold afterwards in the block at rdx.
+// A block is six 16-byte registers, then MXCSR.
+    .globl nk_fp_trap_probe
+nk_fp_trap_probe:
+    sub rsp, 8
+    stmxcsr dword ptr [rsp]
+    movups xmm0, xmmword ptr [rcx]
+    movups xmm1, xmmword ptr [rcx + 16]
+    movups xmm2, xmmword ptr [rcx + 32]
+    movups xmm3, xmmword ptr [rcx + 48]
+    movups xmm4, xmmword ptr [rcx + 64]
+    movups xmm5, xmmword ptr [rcx + 80]
+    ldmxcsr dword ptr [rcx + 96]
+    int3
+    movups xmmword ptr [rdx], xmm0
+    movups xmmword ptr [rdx + 16], xmm1
+    movups xmmword ptr [rdx + 32], xmm2
+    movups xmmword ptr [rdx + 48], xmm3
+    movups xmmword ptr [rdx + 64], xmm4
+    movups xmmword ptr [rdx + 80], xmm5
+    stmxcsr dword ptr [rdx + 96]
+    ldmxcsr dword ptr [rsp]
+    add rsp, 8
+    ret
+
+// What code run from an interrupt is entitled to do: overwrite every
+// volatile vector register. Stores the MXCSR it runs with at rcx.
+    .globl nk_fp_clobber
+nk_fp_clobber:
+    stmxcsr dword ptr [rcx]
+    pcmpeqd xmm0, xmm0
+    movdqa xmm1, xmm0
+    movdqa xmm2, xmm0
+    movdqa xmm3, xmm0
+    movdqa xmm4, xmm0
+    movdqa xmm5, xmm0
+    ret
 
     .section .rdata
     .balign 8
@@ -1378,25 +1451,100 @@ nk_trap_table:
 unsafe extern "C" {
     /// Addresses of the 256 entry stubs, by vector.
     static nk_trap_table: [u64; 256];
+    fn nk_fp_trap_probe(load: *const FpBlock, store: *mut FpBlock);
+    fn nk_fp_clobber(mxcsr: *mut u32);
+}
+
+/// XMM0-XMM5 and MXCSR, as `nk_fp_trap_probe` loads and stores them.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FpBlock {
+    xmm: [[u64; 2]; 6],
+    mxcsr: u32,
+}
+
+/// MXCSR as the kernel runs: every exception masked, round to nearest.
+const KERNEL_MXCSR: u32 = 0x1F80;
+/// Set while `fp_trap_test` wants the breakpoint handler to overwrite the
+/// volatile vector registers.
+static FP_CLOBBER: AtomicBool = AtomicBool::new(false);
+/// The MXCSR the handler ran with during that breakpoint.
+static HANDLER_MXCSR: AtomicU32 = AtomicU32::new(0);
+
+/// An exception must not disturb the vector registers or MXCSR of the
+/// code it interrupts, even when the handler (as a driver's code may)
+/// uses every volatile one; and the handler must run with the kernel's
+/// own MXCSR, not the interrupted code's.
+pub fn fp_trap_test() -> Result<(), &'static str> {
+    let mut load = FpBlock {
+        xmm: [[0; 2]; 6],
+        // Round toward zero: a value no kernel code sets, so finding it
+        // again afterwards means it was restored, not merely left alone.
+        mxcsr: KERNEL_MXCSR | 0x6000,
+    };
+    for (i, reg) in load.xmm.iter_mut().enumerate() {
+        *reg = [0x1111_1111_1111_1111 * (i as u64 + 1), !(i as u64)];
+    }
+    let mut store = FpBlock {
+        xmm: [[0; 2]; 6],
+        mxcsr: 0,
+    };
+    FP_CLOBBER.store(true, Ordering::Relaxed);
+    crate::kd::expect_breakpoint(true);
+    // SAFETY: both blocks are live and of the size the probe reads and
+    // writes; it restores the caller's MXCSR, and XMM0-XMM5 are volatile.
+    unsafe { nk_fp_trap_probe(&raw const load, &raw mut store) };
+    crate::kd::expect_breakpoint(false);
+    FP_CLOBBER.store(false, Ordering::Relaxed);
+    if HANDLER_MXCSR.load(Ordering::Relaxed) != KERNEL_MXCSR {
+        return Err("the handler ran with the interrupted code's MXCSR");
+    }
+    if store.mxcsr != load.mxcsr {
+        return Err("MXCSR was not restored after the exception");
+    }
+    if store.xmm != load.xmm {
+        return Err("a volatile vector register was not restored after the exception");
+    }
+    Ok(())
 }
 
 extern "C" fn trap_handler(frame: &mut Frame) {
     if frame.vector == BREAKPOINT {
-        // `int3` is a trap: rip already points past it.
+        // `int3` is a trap: rip already points past it. Whether to go
+        // on is not this layer's to say.
+        crate::kd::breakpoint(frame.rip - 1);
         BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
+        if FP_CLOBBER.load(Ordering::Relaxed) {
+            let mut mxcsr = 0;
+            // SAFETY: the routine writes one `u32` and volatile registers.
+            unsafe { nk_fp_clobber(&raw mut mxcsr) };
+            HANDLER_MXCSR.store(mxcsr, Ordering::Relaxed);
+        }
         return;
+    }
+    if frame.vector == NMI && crate::kd::stopping() {
+        // Another processor is stopping the system and said so.
+        super::halt();
+    }
+    if frame.vector >= 32 && frame.vector != FAST_FAIL {
+        return super::apic::interrupt(frame.vector as u32);
     }
     let cr2: u64;
     // SAFETY: reading CR2 has no side effects.
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
+    // A stack that overflows faults on the unmapped memory below it. The
+    // page fault cannot push its own frame there, so it arrives as a
+    // double fault, on the stack kept for that.
+    let overflow = matches!(frame.vector, DOUBLE_FAULT | PAGE_FAULT)
+        && crate::mm::stack::is_overflow(super::cpu::kernel_stack(), cr2);
     let what = match frame.vector {
+        _ if overflow => "kernel stack overflow",
         0 => "divide error",
         6 => "invalid opcode",
-        8 => "double fault",
+        DOUBLE_FAULT => "double fault",
         13 => "general protection fault",
         PAGE_FAULT => "page fault",
         FAST_FAIL => "driver fast-fail (reason code in rcx)",
-        32.. => "unexpected interrupt",
         _ => "exception",
     };
     crate::kd::bugcheck(format_args!(
@@ -1498,8 +1646,30 @@ pub fn init(code_selector: u16, fault_ist: u8) {
     };
 }
 
-/// Execute a breakpoint instruction.
+/// Load the IDT `init` built on a processor that is starting up. Every
+/// processor shares the one table.
+pub fn load() {
+    let pointer = super::cpu::TablePointer {
+        limit: (size_of::<[Gate; 256]>() - 1) as u16,
+        base: IDT.0.get() as u64,
+    };
+    // SAFETY: as at the end of `init`.
+    unsafe {
+        core::arch::asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack))
+    };
+}
+
+/// Execute a breakpoint instruction: the kernel's own, for its tests.
 pub fn breakpoint() {
+    crate::kd::expect_breakpoint(true);
     // SAFETY: `int3` traps to the handler above, which resumes after it.
+    unsafe { core::arch::asm!("int3", options(nomem, nostack)) };
+    crate::kd::expect_breakpoint(false);
+}
+
+/// Execute a breakpoint instruction the way a driver's `DbgBreakPoint`
+/// does: unannounced.
+pub fn driver_breakpoint() {
+    // SAFETY: `int3` traps to the handler above.
     unsafe { core::arch::asm!("int3", options(nomem, nostack)) };
 }

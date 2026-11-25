@@ -1,0 +1,14 @@
+# Microsoft's Null device driver, the one shipped in Windows.
+#
+# A read reports end of file and leaves the buffer alone; a write accepts
+# every byte; anything else is refused.
+
+use null
+open n \Device\Null
+read n 64
+read n 0
+write n -
+write n 78
+write n 73697874792d666f7572206279746573206f66206461746120666f7220746865206e756c6c2064657669636520746f207377616c6c6f772077686f6c652e2e2e2e
+ioctl n 00150800 70696e67 8
+close n

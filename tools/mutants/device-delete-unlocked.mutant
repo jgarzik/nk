@@ -1,0 +1,8 @@
+# Deleting a device decides "is it still referenced?" before it marks
+# the deletion as pending: a last reference dropped in between sees no
+# deletion pending, and the device is never freed.
+scenario: x86_64
+fails: work.delete-race
+file: kernel/io/device.rs
+replace:             (*device).ReferenceCount == 0
+with:             (*device).ReferenceCount == 0 && false

@@ -1,0 +1,353 @@
+# Microsoft's kernel-mode binaries of the pinned build, Windows 10 22H2
+# 19045.2006 (x86-64): the drivers and libraries NK means to run unmodified.
+# Not fixtures of any test: nothing loads them yet. tools/corpus.py reads
+# their import tables for the ledger. Maintained by `tools/corpus.py
+# resolve`; the SHA-256 is of the bytes Microsoft's symbol server serves.
+
+[[binary]]
+file = "acpi.sys"
+version = "10.0.19041.1741"
+url = "https://msdl.microsoft.com/download/symbols/acpi.sys/CAFA7F8Bcc000/acpi.sys"
+sha256 = "546616469ee88d22c9b23cbcbedc5a5206a321a90cb246ac461b6eb595fb3478"
+
+[[binary]]
+file = "afd.sys"
+version = "10.0.19041.1766"
+url = "https://msdl.microsoft.com/download/symbols/afd.sys/57314DA5a5000/afd.sys"
+sha256 = "7702901e50c0ac69f71f98aed1ef732a7c50c5915efd4dc4b9bf43301fc1798b"
+
+[[binary]]
+file = "basicdisplay.sys"
+version = "10.0.19041.1949"
+url = "https://msdl.microsoft.com/download/symbols/basicdisplay.sys/9AD4156516000/basicdisplay.sys"
+sha256 = "96247a99368036d1da897758c4368a55c2f5b8f5756563f66cb83ec813c7eedf"
+
+[[binary]]
+file = "bootvid.dll"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/bootvid.dll/D13EE5B6b000/bootvid.dll"
+sha256 = "be118cd579b1a9e0eb96359072d4c471961178f8ed018bc4f286d576c2237f3b"
+
+[[binary]]
+file = "ci.dll"
+version = "10.0.19041.1865"
+url = "https://msdl.microsoft.com/download/symbols/ci.dll/AEFC59C2e7000/ci.dll"
+sha256 = "d0408a9f64eafb72e8aa1cf127d07d919f0cab38a6bdf2b406255909c85e3a8d"
+
+[[binary]]
+file = "classpnp.sys"
+version = "10.0.19041.1865"
+url = "https://msdl.microsoft.com/download/symbols/classpnp.sys/9F3B3C5A6f000/classpnp.sys"
+sha256 = "bee09603b73f9293dd4f2fd921f8b45e41fb1a43b965fa4f63eaa00e4c6f30bc"
+
+[[binary]]
+file = "clfs.sys"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/clfs.sys/7440E8906b000/clfs.sys"
+sha256 = "f05382f562b9d1257f54c16a476254fde7d59c0b3fa6a1fa90980a0fe35595b1"
+
+[[binary]]
+file = "cng.sys"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/cng.sys/24A2F192bb000/cng.sys"
+sha256 = "087a998aa02b2bb2f57d57d8d48f285f939cc87346d5c3c34450671205a70408"
+
+[[binary]]
+file = "condrv.sys"
+version = "10.0.19041.1110"
+url = "https://msdl.microsoft.com/download/symbols/condrv.sys/2E6C186F12000/condrv.sys"
+sha256 = "e4ae23eb73bb9f525822dfab09d3ded0e921255467fa1341267b6ae9bcaa01f7"
+
+[[binary]]
+file = "disk.sys"
+version = "10.0.19041.1865"
+url = "https://msdl.microsoft.com/download/symbols/disk.sys/0CCB67861f000/disk.sys"
+sha256 = "00c1a4bfc8cef76d961de8c9b71fd8538b5852b2fb1d1b43bba50d8ac5ffda9c"
+
+[[binary]]
+file = "dxgkrnl.sys"
+version = "10.0.19041.1865"
+url = "https://msdl.microsoft.com/download/symbols/dxgkrnl.sys/0448A9FF3aa000/dxgkrnl.sys"
+sha256 = "cd0c9a90caa674f6a260b4d5c9c942fdba95c13ad1fae730da0a60c79c86a1e7"
+
+[[binary]]
+file = "fastfat.sys"
+version = "10.0.19041.1826"
+url = "https://msdl.microsoft.com/download/symbols/fastfat.sys/473D1B046c000/fastfat.sys"
+sha256 = "f2666e697f43c525cd572fda5ef83ad1f427be1a60b4a4aeb75defde38096b89"
+
+[[binary]]
+file = "fltmgr.sys"
+version = "10.0.19041.1806"
+url = "https://msdl.microsoft.com/download/symbols/fltmgr.sys/B57CD7EF6d000/fltmgr.sys"
+sha256 = "a6817db35019ea51db275227b5bd6ac683c04bf730ccc6cb7d98558e46beba0c"
+
+[[binary]]
+file = "fwpkclnt.sys"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/fwpkclnt.sys/CCE2A0B17f000/fwpkclnt.sys"
+sha256 = "33eaae020ec4cdaf95b45004aa01ff9b2fbdab58487ae280969f838c05cc7211"
+
+[[binary]]
+file = "hidclass.sys"
+version = "10.0.19041.868"
+url = "https://msdl.microsoft.com/download/symbols/hidclass.sys/021FDD4D3f000/hidclass.sys"
+sha256 = "469bac4950767e0cfbaf6452dff522fa4d6144772ad5e0b61d17039397529c9f"
+
+[[binary]]
+file = "hidparse.sys"
+version = "10.0.19041.868"
+url = "https://msdl.microsoft.com/download/symbols/hidparse.sys/3404D24613000/hidparse.sys"
+sha256 = "f67cb92f6e58ae66ec29425c74d136d06abb96c2eb7db3b087fc67b16ac8aedc"
+
+[[binary]]
+file = "hidusb.sys"
+version = "10.0.19041.868"
+url = "https://msdl.microsoft.com/download/symbols/hidusb.sys/1B0E634F12000/hidusb.sys"
+sha256 = "3d7e7bce4a5654aeec62482c850869e20a1ab505b16bd690ba63886c20f25d1d"
+
+[[binary]]
+file = "i8042prt.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/i8042prt.sys/515D28B121000/i8042prt.sys"
+sha256 = "13e5e0adf3074d2bfea9beb9ee8298d7fa7d932f7dc4ab3fec7d4724ac9cd737"
+
+[[binary]]
+file = "intelpep.sys"
+version = "10.0.19041.1266"
+url = "https://msdl.microsoft.com/download/symbols/intelpep.sys/356F68F66b000/intelpep.sys"
+sha256 = "5d6958f2c527d465aed88b6604f9527b4612b4b5bc4f9f234e5200def7438bad"
+
+[[binary]]
+file = "kbdclass.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/kbdclass.sys/3156654A14000/kbdclass.sys"
+sha256 = "36b400ac58ad7be8f5a9f30fb6c9cc258998ccf70e499968a0f2437b5546081d"
+
+[[binary]]
+file = "kbdhid.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/kbdhid.sys/DF2550C211000/kbdhid.sys"
+sha256 = "53823067641bf00effb1fbb6572592ff99e6a3d2acd02d09a938176fd8681467"
+
+[[binary]]
+file = "kdcom.dll"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/kdcom.dll/4A2C3F8Ce000/kdcom.dll"
+sha256 = "65a2794d12aceeb14cbc6bafab6328d5f174b34d2e29ab20bdb194c3594a901c"
+
+[[binary]]
+file = "ksecdd.sys"
+version = "10.0.19041.1586"
+url = "https://msdl.microsoft.com/download/symbols/ksecdd.sys/A3C78A6829000/ksecdd.sys"
+sha256 = "99c567eb9316b0cfc2dbffecc4818b576f2286c0819dba7f5d2f3c0388e688fb"
+
+[[binary]]
+file = "mountmgr.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/mountmgr.sys/6FA7424A1e000/mountmgr.sys"
+sha256 = "1e1259530988e7c6147527b70bc9f641e7231a709cdc46d4eb26a27fd6640423"
+
+[[binary]]
+file = "msfs.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/msfs.sys/95155DF111000/msfs.sys"
+sha256 = "57e77f84241e43388a239775d069497403d9d3ec298a35d81b86db2b0f3b78bb"
+
+[[binary]]
+file = "msisadrv.sys"
+version = "10.0.19041.1202"
+url = "https://msdl.microsoft.com/download/symbols/msisadrv.sys/1AAAEF93b000/msisadrv.sys"
+sha256 = "46b2c56f21291d6375fbe33d8d48d0662bdd4770b8962d1d1aaa540893897a9a"
+
+[[binary]]
+file = "msrpc.sys"
+version = "10.0.19041.1706"
+url = "https://msdl.microsoft.com/download/symbols/msrpc.sys/A79D353E61000/msrpc.sys"
+sha256 = "25ec79b44ff2f02a814d7c320fb27e2fa515403814069ecd0b6cb745f7d9389f"
+
+[[binary]]
+file = "mup.sys"
+version = "10.0.19041.844"
+url = "https://msdl.microsoft.com/download/symbols/mup.sys/71933DBD26000/mup.sys"
+sha256 = "757e91d214b38d75819b8fe0e0d9d10e648660244cbea79c588c9e62cb71ac74"
+
+[[binary]]
+file = "ndis.sys"
+version = "10.0.19041.1387"
+url = "https://msdl.microsoft.com/download/symbols/ndis.sys/2AE4B05116f000/ndis.sys"
+sha256 = "9268405feacc07b4c64e7d913f41884bb925f15f6b6f56a2d5ee1fa4e9ace947"
+
+[[binary]]
+file = "netio.sys"
+version = "10.0.19041.1682"
+url = "https://msdl.microsoft.com/download/symbols/netio.sys/9495D5BD98000/netio.sys"
+sha256 = "087e1dc103c4e5c4965bc5d565bd2530db9febde72640e81cb1ed75464f44d92"
+
+[[binary]]
+file = "npfs.sys"
+version = "10.0.19041.1526"
+url = "https://msdl.microsoft.com/download/symbols/npfs.sys/733C49801c000/npfs.sys"
+sha256 = "9e3c3e5e7c33dacc77d347dad2cd37043f47e0dd93dbb6ee7710bd68aee0b30b"
+
+[[binary]]
+file = "ntfs.sys"
+version = "10.0.19041.1949"
+url = "https://msdl.microsoft.com/download/symbols/ntfs.sys/0635DCD22d7000/ntfs.sys"
+sha256 = "988d805c1e03f2d868d9bb9defae7bfee2b23d3df4602ec54707fe84b9afe3a6"
+
+[[binary]]
+file = "null.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/null.sys/01FE6381a000/null.sys"
+sha256 = "876185b0fc0e802ff7954d84d6255fd61eeff217ace56e61510e1fa1f56cdef1"
+
+[[binary]]
+file = "partmgr.sys"
+version = "10.0.19041.1889"
+url = "https://msdl.microsoft.com/download/symbols/partmgr.sys/2D3C45FE31000/partmgr.sys"
+sha256 = "34f5e9db0cd91ed74b54f39fc4745ba165cb0af24c3ff28bef027a2f1ee5938f"
+
+[[binary]]
+file = "pci.sys"
+version = "10.0.19041.1949"
+url = "https://msdl.microsoft.com/download/symbols/pci.sys/F80BD6C577000/pci.sys"
+sha256 = "20363e0035d5788b89b416d6a41757715af4338aa91effb059fde73bc2b8eb2d"
+
+[[binary]]
+file = "pshed.dll"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/pshed.dll/4C55DC991a000/pshed.dll"
+sha256 = "3b479d66b3db14103bf0589809929fb3d07e7a427c9005501e630d7e1d4df662"
+
+[[binary]]
+file = "ramdisk.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/ramdisk.sys/17C23E96f000/ramdisk.sys"
+sha256 = "9f977e8e317fdfc86de78d952db9cf51029a1e4b1962d7d327e4616320b8e0f8"
+
+[[binary]]
+file = "serial.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/serial.sys/58F73A851c000/serial.sys"
+sha256 = "7e877f3a3001e3020fc80f73b60ef3f77b16443670a228616b5c69d3619b54ba"
+
+[[binary]]
+file = "sleepstudyhelper.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/sleepstudyhelper.sys/664F6ECBf000/sleepstudyhelper.sys"
+sha256 = "27780013f1a67ba895ff16c0420f32ee44c50ec088c1f43d5c415f79314c495f"
+
+[[binary]]
+file = "storahci.sys"
+version = "10.0.19041.1889"
+url = "https://msdl.microsoft.com/download/symbols/storahci.sys/6A1B92AB32000/storahci.sys"
+sha256 = "366a4b86334f11f53fb41be3040a761df008b53236d3ec7ddecc380c6fdf0c16"
+
+[[binary]]
+file = "stornvme.sys"
+version = "10.0.19041.1566"
+url = "https://msdl.microsoft.com/download/symbols/stornvme.sys/8C8FFBBA2d000/stornvme.sys"
+sha256 = "977ca982a4e672a9f2c4d5da7d7a6e65c038eff6abfb1b9bc2557747fd95569e"
+
+[[binary]]
+file = "storport.sys"
+version = "10.0.19041.1949"
+url = "https://msdl.microsoft.com/download/symbols/storport.sys/678B50D1b5000/storport.sys"
+sha256 = "a127777bfb1c0d42e98f41f302171b16619bc81165ad009629052410c5a24541"
+
+[[binary]]
+file = "tcpip.sys"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/tcpip.sys/A332AFFE2ec000/tcpip.sys"
+sha256 = "9c892873e544ae05d3d47b00e3e82ec79b0bb43b5c23e6678ed50b10544809d1"
+
+[[binary]]
+file = "tdi.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/tdi.sys/D1AD2BD410000/tdi.sys"
+sha256 = "7085329aa038a405583c776ecbab29153e54e91053e144d52c88ff95eb9a7817"
+
+[[binary]]
+file = "ucx01000.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/ucx01000.sys/11447CC944000/ucx01000.sys"
+sha256 = "38b88e5075c4b04ae1db1834daddd61614b8641568ad103659b2a8a7697465f9"
+
+[[binary]]
+file = "usbd.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/usbd.sys/76AC3507e000/usbd.sys"
+sha256 = "9df625c8cec59f747a5adf5ebcc1169e102733534d7232b2a4461968e7ca7d41"
+
+[[binary]]
+file = "usbhub3.sys"
+version = "10.0.19041.1202"
+url = "https://msdl.microsoft.com/download/symbols/usbhub3.sys/8D1085E2a3000/usbhub3.sys"
+sha256 = "54c736c9a40a769ceb7bc094d5458f2ec4fa2a5128ecb86dbce2f2a83eaeb203"
+
+[[binary]]
+file = "usbxhci.sys"
+version = "10.0.19041.1806"
+url = "https://msdl.microsoft.com/download/symbols/usbxhci.sys/53BEE7459e000/usbxhci.sys"
+sha256 = "6a2161813473119912e75bdaf19033c8edaac2c2a946e1a82405fc7afae35d07"
+
+[[binary]]
+file = "volmgr.sys"
+version = "10.0.19041.1806"
+url = "https://msdl.microsoft.com/download/symbols/volmgr.sys/1177989B19000/volmgr.sys"
+sha256 = "e8e08c6a8682920e7e62def3c5681e0d30688106976e1baee71dab70fdc0e66c"
+
+[[binary]]
+file = "watchdog.sys"
+version = "10.0.19041.868"
+url = "https://msdl.microsoft.com/download/symbols/watchdog.sys/F13839AB18000/watchdog.sys"
+sha256 = "98b7a6749634e93534e630eb3dc843b677200d5e1ce7dd9687896add6da534bf"
+
+[[binary]]
+file = "wdf01000.sys"
+version = "1.31.19041.1566"
+url = "https://msdl.microsoft.com/download/symbols/wdf01000.sys/2F5B6E21d1000/wdf01000.sys"
+sha256 = "d19d0aa162146f31117fef463629d77b23f1c21bb863a1249470723c28f4be70"
+
+[[binary]]
+file = "wdfldr.sys"
+version = "1.31.19041.1151"
+url = "https://msdl.microsoft.com/download/symbols/wdfldr.sys/565B60B213000/wdfldr.sys"
+sha256 = "4e370cd1c8d17be2d6063daca9d4f148fc443eb35c44a8913473fc440f29fed1"
+
+[[binary]]
+file = "wimmount.sys"
+version = "10.0.19041.1202"
+url = "https://msdl.microsoft.com/download/symbols/wimmount.sys/B12B9F0Fe000/wimmount.sys"
+sha256 = "74b32619be246d7dd6d520309692c32ee922852405dab432caf6012e72b495ff"
+
+[[binary]]
+file = "win32k.sys"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/win32k.sys/0014322E9a000/win32k.sys"
+sha256 = "0f34019d08a2a777f7b560796c83bd069f0458a4e1343bd81f98ac15d729ac39"
+
+[[binary]]
+file = "win32kbase.sys"
+version = "10.0.19041.1949"
+url = "https://msdl.microsoft.com/download/symbols/win32kbase.sys/86359DD62d3000/win32kbase.sys"
+sha256 = "2a8dd90a019242259e130440741419c2021f028d07d39e9764aa613b3b415484"
+
+[[binary]]
+file = "win32kfull.sys"
+version = "10.0.19041.2006"
+url = "https://msdl.microsoft.com/download/symbols/win32kfull.sys/8639F8523b5000/win32kfull.sys"
+sha256 = "268726d0255571132849cba3d3fe30c56d640c9fa1669a16fd39afc174259b5d"
+
+[[binary]]
+file = "wmilib.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/wmilib.sys/CD518505c000/wmilib.sys"
+sha256 = "0241160ae1e5635d8e12c517c50b327471ec9ae6af08538751892cbe467ba7ff"
+
+[[binary]]
+file = "wpprecorder.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/wpprecorder.sys/15060D0011000/wpprecorder.sys"
+sha256 = "7b4e4c2c0f70836e5117d04f819cd928b73b1aa7f3051b0079e298ba902dca21"

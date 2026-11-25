@@ -1,0 +1,8 @@
+# A driver's spin lock is taken without raising the IRQL to
+# DISPATCH_LEVEL: the driver would see PASSIVE_LEVEL while holding it.
+scenario: x86_64
+fails: oracle.nkc-irql
+file: kernel/ke/kspin.rs
+occurrence: 1
+replace:     let old = set_irql(irql::DISPATCH_LEVEL, true);
+with:     let old = irql::current();

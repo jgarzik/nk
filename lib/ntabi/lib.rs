@@ -16,9 +16,16 @@
 #![cfg_attr(not(test), no_std)]
 #![allow(non_snake_case, non_camel_case_types, clippy::upper_case_acronyms)]
 
+pub mod ex;
 pub mod io;
+pub mod ke;
+pub mod ob;
 pub mod pcr;
+pub mod se;
 pub mod status;
+pub mod thread;
 
+#[cfg(test)]
+mod pdb;
 #[cfg(test)]
 mod probe;

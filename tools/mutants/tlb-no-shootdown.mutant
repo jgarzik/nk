@@ -1,0 +1,7 @@
+# Unmapping a page drops the translation on the processor that unmapped
+# it and nowhere else: the others go on using memory that is gone.
+scenario: x86_64
+fails: smp.tlb
+file: kernel/arch/x86_64/mod.rs
+replace:     crate::ke::ipi::call_all(flush_local, va as usize);
+with:     flush_local(va as usize);

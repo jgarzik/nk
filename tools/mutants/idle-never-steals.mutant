@@ -1,0 +1,7 @@
+# A processor with nothing to do never looks at the others' queues: a
+# thread waits behind another while processors sit idle.
+scenario: aarch64
+fails: thread.migrate
+file: kernel/ke/thread.rs
+replace:     for other in (1..processors).map(|step| (me + step) % processors) {
+with:     for other in (1..1).map(|step| (me + step) % processors) {

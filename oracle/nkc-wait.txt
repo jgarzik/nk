@@ -1,0 +1,10 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 7c19d278a91c9395d5769a0df0c1ed63e1af76c9f98beb0d1c4f34e65bd3e5a2
+# driver nkc-wait.sys sha256 fb577b5d3ca9f3ae03843aadf19cc8e6b8d1508a11e48b6ea1cfd270d3bd903b
+load nkc-wait: ok
+open d \Device\NkcWait: 00000000
+ioctl d 00222000 - 256: 00000000 120 000000000201000000000000010000000000000000000000010000000000000000000000020100000000000002010000000000000300000000000000010000000200000003000000020000000000000000000000020100000000000003000000020100000000000001000000000000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222000 - 8: c0000023 - eeeeeeeeeeeeeeee
+close d: 00000000
+unload nkc-wait: ok
+end

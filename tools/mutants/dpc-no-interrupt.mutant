@@ -1,0 +1,9 @@
+# Queueing a DPC does not ask for the interrupt that runs the queue: the
+# DPC sits there until something else happens to run it.
+scenario: x86_64
+# The boot does not get as far as the DPC tests: with no interrupt to
+# run them, the DPCs that timers expire through never run, and the first
+# test that waits with a time limit waits for ever.
+fails: scenario
+file: kernel/ke/dpc.rs
+remove:         arch::self_interrupt(arch::DPC.0);

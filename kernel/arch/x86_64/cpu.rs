@@ -5,8 +5,15 @@
 //! Drivers do not depend on them, but debuggers and crash dumps read more
 //! naturally when they match.
 
+use crate::hal::platform::MAX_CPUS;
+use crate::ke::percpu::PerCpu;
+use crate::mm;
 use core::cell::UnsafeCell;
-use nk_ntabi::pcr::{NATIVE as PCR, PCR_SIZE};
+use core::mem::offset_of;
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use nk_ntabi::pcr::NATIVE as PCR;
+
+const PCR_SIZE: usize = PCR.size;
 
 pub const KERNEL_CODE: u16 = 0x10;
 const KERNEL_DATA: u16 = 0x18;
@@ -40,12 +47,19 @@ struct Tss {
 struct CpuArea {
     /// KPCR followed by KPRCB; GS points here.
     pcr: [u8; PCR_SIZE],
-    /// Stand-in for the current thread object. There are no threads yet,
-    /// but `KeGetCurrentThread()` must return a stable non-null pointer.
-    thread: [u8; 4096],
+    /// NK's own per-processor state. No driver can see it.
+    private: Private,
     fault_stack: [u8; FAULT_STACK_SIZE],
     gdt: [u64; 10],
     tss: Tss,
+}
+
+struct Private {
+    /// Lowest address of the kernel stack this processor is running on,
+    /// or 0 while it is still on the loader's.
+    stack_base: AtomicU64,
+    /// State the generic kernel keeps per processor.
+    generic: PerCpu,
 }
 
 struct Shared(UnsafeCell<CpuArea>);
@@ -54,9 +68,14 @@ struct Shared(UnsafeCell<CpuArea>);
 // this one before anything else can observe it.
 unsafe impl Sync for Shared {}
 
+/// The boot processor's area. It is needed before memory can be
+/// allocated; every other processor's is allocated.
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
-    thread: [0; 4096],
+    private: Private {
+        stack_base: AtomicU64::new(0),
+        generic: PerCpu::new(),
+    },
     fault_stack: [0; FAULT_STACK_SIZE],
     gdt: [0; 10],
     tss: Tss {
@@ -70,12 +89,55 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     },
 }));
 
-/// Load this CPU's GDT, TSS and PCR. Boot CPU only for now.
-pub fn init() {
-    let area = BOOT_CPU.0.get();
-    // SAFETY: single-threaded early boot: this is the only reference to
-    // the boot CPU's area, and the pointers written stay valid forever
-    // because the area is static.
+/// Each processor's area, by processor number; null until it has one.
+static AREAS: [AtomicPtr<CpuArea>; MAX_CPUS] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; MAX_CPUS];
+
+/// Allocate and record the area of processor `number`, which is about to
+/// be started. `false` if memory ran out.
+pub fn prepare(number: usize) -> bool {
+    let pages = size_of::<CpuArea>().div_ceil(mm::PAGE_SIZE);
+    let Some(frames) = mm::alloc_frames(pages) else {
+        return false;
+    };
+    let area = mm::phys_to_virt(frames).cast::<CpuArea>();
+    // SAFETY: fresh, zeroed, page-aligned memory of the right size that
+    // nothing else references. Zero is a valid value for every field but
+    // the two written here.
+    unsafe {
+        (&raw mut (*area).private).write(Private {
+            stack_base: AtomicU64::new(0),
+            generic: PerCpu::new(),
+        });
+        (&raw mut (*area).tss.io_map_base).write_unaligned(size_of::<Tss>() as u16);
+    }
+    AREAS[number].store(area, Ordering::Release);
+    true
+}
+
+/// The generic kernel's state for processor `number`, if it has been
+/// prepared.
+pub fn percpu_of(number: usize) -> Option<&'static PerCpu> {
+    let area = AREAS.get(number)?.load(Ordering::Acquire);
+    // SAFETY: a recorded area lives forever, and `generic` is only ever
+    // accessed through shared references.
+    (!area.is_null()).then(|| unsafe { &(*area).private.generic })
+}
+
+/// Load this CPU's GDT, TSS and PCR, and record that it is processor
+/// `number`. Processor 0 uses the static area; any other must have been
+/// `prepare`d.
+pub fn init(number: u32) {
+    let area = if number == 0 {
+        AREAS[0].store(BOOT_CPU.0.get(), Ordering::Release);
+        BOOT_CPU.0.get()
+    } else {
+        AREAS[number as usize].load(Ordering::Acquire)
+    };
+    assert!(!area.is_null(), "processor {number} has no area");
+    // SAFETY: only this processor touches its area during its own
+    // set-up, and the pointers written stay valid for ever: the area is
+    // never freed.
     unsafe {
         let pcr = (&raw mut (*area).pcr).cast::<u8>();
         let tss = &raw mut (*area).tss;
@@ -96,9 +158,27 @@ pub fn init() {
         pcr.add(PCR.current_prcb)
             .cast::<u64>()
             .write(pcr.add(PCR.prcb) as u64);
-        pcr.add(PCR.current_thread)
-            .cast::<u64>()
-            .write((&raw mut (*area).thread) as u64);
+        pcr.add(PCR.number).cast::<u32>().write(number);
+        if let Some(legacy) = PCR.legacy_number {
+            // One byte: enough for the 64 processors of a group.
+            pcr.add(legacy).write(number as u8);
+        }
+
+        // Drivers use SSE, and the trap entry saves it: make sure it is
+        // on. CR0: no emulation, monitor the coprocessor, no lazy
+        // switching. CR4: FXSAVE and SSE exceptions enabled.
+        core::arch::asm!(
+            "mov {t}, cr0",
+            "and {t}, {cr0_clear}",
+            "or {t}, 2",
+            "mov cr0, {t}",
+            "mov {t}, cr4",
+            "or {t}, 0x600",
+            "mov cr4, {t}",
+            t = out(reg) _,
+            cr0_clear = const !0xCu64,
+            options(nomem, nostack),
+        );
 
         let pointer = TablePointer {
             limit: (size_of::<[u64; 10]>() - 1) as u16,
@@ -147,4 +227,56 @@ pub fn pcr() -> *mut u8 {
         core::arch::asm!("mov {}, gs:[{}]", out(reg) pcr, const PCR.self_ptr, options(readonly, nostack))
     };
     pcr as *mut u8
+}
+
+/// The thread running on this processor, loaded from the PCR in one
+/// instruction, as a driver's in-line `KeGetCurrentThread()` does: the
+/// thread cannot be moved between finding the PCR and reading it.
+pub fn current_thread() -> *mut u8 {
+    let thread: u64;
+    // SAFETY: GS points at this processor's PCR once `init` has run.
+    unsafe {
+        core::arch::asm!("mov {}, gs:[{}]", out(reg) thread, const PCR.current_thread, options(readonly, nostack));
+    }
+    thread as *mut u8
+}
+
+/// This CPU's private state.
+fn private() -> &'static Private {
+    // SAFETY: the PCR is the first field of this CPU's `CpuArea`, which
+    // lives forever; `Private` is only ever accessed through shared
+    // references and holds atomics.
+    unsafe { &*pcr().add(offset_of!(CpuArea, private)).cast::<Private>() }
+}
+
+/// Record the kernel stack this processor now runs on, by its lowest
+/// address, so that a fault just below it is recognised as an overflow.
+pub fn set_kernel_stack(base: u64) {
+    private().stack_base.store(base, Ordering::Relaxed);
+}
+
+/// Lowest address of the current kernel stack, or 0 if not recorded.
+pub fn kernel_stack() -> u64 {
+    private().stack_base.load(Ordering::Relaxed)
+}
+
+/// The generic kernel's state for this processor.
+pub fn percpu() -> &'static PerCpu {
+    &private().generic
+}
+
+/// The current IRQL. On x86-64 it is register CR8, the task priority,
+/// which is where code built with the WDK reads it.
+pub fn irql() -> u8 {
+    let level: u64;
+    // SAFETY: reading CR8 has no side effects.
+    unsafe { core::arch::asm!("mov {}, cr8", out(reg) level, options(nomem, nostack)) };
+    level as u8
+}
+
+/// Set the IRQL. The caller has checked the change is legal.
+pub fn set_irql(level: u8) {
+    // SAFETY: CR8 only holds the task priority; any value up to 15 is
+    // valid.
+    unsafe { core::arch::asm!("mov cr8, {}", in(reg) u64::from(level), options(nomem, nostack)) };
 }

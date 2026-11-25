@@ -1,0 +1,8 @@
+# Microsoft's event sample (general/event/wdm), unmodified, on Windows
+# booted normally, with no kernel debugger.
+#
+# The sample's DriverEntry begins with DbgBreakPoint(). With no debugger
+# to take it, the breakpoint is an exception nobody handles, in a system
+# thread: loading the driver stops the system.
+
+load event event.sys

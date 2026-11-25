@@ -1,0 +1,17 @@
+[package]
+name = "nk-cm"
+description = "The registry as a tree of keys and values, in memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+nk-rtl = { path = "../rtl" }

@@ -13,7 +13,7 @@ use super::{module, resources};
 use crate::io::driver;
 use crate::io::file::{self, IoError, IoResult};
 use crate::mm::{PAGE_SIZE, pool};
-use crate::test;
+use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -184,16 +184,34 @@ fn cycle(image: &[u8]) -> Check {
     }
 }
 
-pub fn run(info: &BootInfo) {
+pub static GROUP: Group = Group {
+    names: &[
+        "sioctl.load",
+        "sioctl.open",
+        "sioctl.buffered",
+        "sioctl.out-direct",
+        "sioctl.in-direct",
+        "sioctl.bad-requests",
+        "sioctl.neither",
+        "sioctl.close",
+        "sioctl.unload",
+        "sioctl.no-leak",
+        "sioctl.cycles",
+    ],
+    run,
+    manual: false,
+};
+
+fn run(r: &mut Report, info: &BootInfo) {
     let Some(image) = module(info, "sioctl.sys") else {
-        return test::skip("sioctl", format_args!("module sioctl.sys not provided"));
+        return r.skip_rest(format_args!("module sioctl.sys not provided"));
     };
     let before = resources();
     let object = match driver::load("SIoctl", image) {
         Ok(object) => object,
-        Err(e) => return test::fail("sioctl.load", format_args!("{e:?}")),
+        Err(e) => return r.fail("sioctl.load", format_args!("{e:?}")),
     };
-    test::ok("sioctl.load");
+    r.ok("sioctl.load");
 
     // The device is reachable by its own name and through the symbolic
     // link the driver made, under either spelling of the DOS directory.
@@ -205,25 +223,25 @@ pub fn run(info: &BootInfo) {
         }
     }
     if opened.len() == 3 {
-        test::ok("sioctl.open");
+        r.ok("sioctl.open");
         let file = opened[1];
-        test::run("sioctl.buffered", || buffered(file));
-        test::run("sioctl.out-direct", || out_direct(file));
-        test::run("sioctl.in-direct", || in_direct(file));
-        test::run("sioctl.bad-requests", || bad_requests(file));
+        r.check("sioctl.buffered", || buffered(file));
+        r.check("sioctl.out-direct", || out_direct(file));
+        r.check("sioctl.in-direct", || in_direct(file));
+        r.check("sioctl.bad-requests", || bad_requests(file));
         // SAFETY: `file` stays open until the loop below.
         match unsafe { file::device_control(file, NEITHER, b"x", &mut [0u8; 8]) } {
-            Err(IoError::UnsupportedMethod) => test::skip(
+            Err(IoError::UnsupportedMethod) => r.skip(
                 "sioctl.neither",
                 format_args!("METHOD_NEITHER needs user memory and SEH"),
             ),
-            other => test::fail(
+            other => r.fail(
                 "sioctl.neither",
                 format_args!("expected the kernel to decline: {other:?}"),
             ),
         }
     } else {
-        test::fail(
+        r.fail(
             "sioctl.open",
             format_args!("{} of 3 names opened", opened.len()),
         );
@@ -240,7 +258,7 @@ pub fn run(info: &BootInfo) {
         );
     }
     drop(opened);
-    test::run("sioctl.close", || {
+    r.check("sioctl.close", || {
         if closed {
             Ok(())
         } else {
@@ -250,19 +268,19 @@ pub fn run(info: &BootInfo) {
 
     match driver::unload(object) {
         Ok(()) if file::open(DOS_NAME).is_err() && file::open(DEVICE).is_err() => {
-            test::ok("sioctl.unload")
+            r.ok("sioctl.unload")
         }
-        Ok(()) => test::fail(
+        Ok(()) => r.fail(
             "sioctl.unload",
             format_args!("device or symbolic link survived unload"),
         ),
-        Err(why) => test::fail("sioctl.unload", format_args!("{why}")),
+        Err(why) => r.fail("sioctl.unload", format_args!("{why}")),
     }
     let after = resources();
     if after == before {
-        test::ok("sioctl.no-leak");
+        r.ok("sioctl.no-leak");
     } else {
-        test::fail(
+        r.fail(
             "sioctl.no-leak",
             format_args!("before {before:?}, after {after:?}"),
         );
@@ -272,14 +290,14 @@ pub fn run(info: &BootInfo) {
     let failed = (0..CYCLES).find_map(|i| cycle(image).err().map(|why| (i, why)));
     let after = resources();
     match failed {
-        Some((i, why)) => test::fail("sioctl.cycles", format_args!("cycle {i}: {why}")),
-        None if after != before => test::fail(
+        Some((i, why)) => r.fail("sioctl.cycles", format_args!("cycle {i}: {why}")),
+        None if after != before => r.fail(
             "sioctl.cycles",
             format_args!("leak after {CYCLES} cycles: before {before:?}, after {after:?}"),
         ),
         None => {
             kprintln!("sioctl: {CYCLES} load/exercise/unload cycles, resources unchanged");
-            test::ok("sioctl.cycles");
+            r.ok("sioctl.cycles");
         }
     }
 }

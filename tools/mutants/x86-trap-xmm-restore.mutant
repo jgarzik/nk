@@ -1,0 +1,6 @@
+# The trap exit forgets to restore one volatile vector register. Driver
+# code interrupted in the middle of a calculation would compute garbage.
+scenario: x86_64
+fails: cpu.fp-preserved
+file: kernel/arch/x86_64/trap.rs
+remove:     movups xmm3, xmmword ptr [rsp + 48]

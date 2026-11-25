@@ -1,0 +1,7 @@
+# NK reports one byte too many for a buffered request. The oracle test
+# must notice any departure from what Windows did, however small.
+scenario: x86_64
+fails: oracle.sioctl
+file: kernel/selftest/oracle.rs
+replace:         information: r.information,
+with:         information: r.information + (r.information == 10) as usize,

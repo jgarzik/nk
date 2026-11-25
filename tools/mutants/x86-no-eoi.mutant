@@ -1,0 +1,7 @@
+# The local APIC is never told an interrupt has finished, so it holds
+# back every later interrupt of the same or lower priority.
+scenario: x86_64
+fails: ke.interrupts
+file: kernel/arch/x86_64/apic.rs
+replace:     interrupt::dispatch(vector, (vector >> 4) as u8, || write(REG_EOI, 0));
+with:     interrupt::dispatch(vector, (vector >> 4) as u8, || ());

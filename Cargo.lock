@@ -4,42 +4,82 @@ version = 4
 
 [[package]]
 name = "nk-acpi"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "nk-bootinfo"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
-name = "nk-mm"
-version = "0.0.1"
-
-[[package]]
-name = "nk-ntabi"
-version = "0.0.1"
-
-[[package]]
-name = "nk-pe"
-version = "0.0.1"
-
-[[package]]
-name = "nk-rtl"
-version = "0.0.1"
-
-[[package]]
-name = "nkkrnl"
-version = "0.0.1"
+name = "nk-cm"
+version = "0.0.2"
 dependencies = [
- "nk-bootinfo",
- "nk-mm",
- "nk-ntabi",
- "nk-pe",
  "nk-rtl",
 ]
 
 [[package]]
+name = "nk-ke"
+version = "0.0.2"
+
+[[package]]
+name = "nk-mm"
+version = "0.0.2"
+
+[[package]]
+name = "nk-ntabi"
+version = "0.0.2"
+dependencies = [
+ "nk-pdb",
+ "nk-se",
+]
+
+[[package]]
+name = "nk-oracle"
+version = "0.0.2"
+
+[[package]]
+name = "nk-pdb"
+version = "0.0.2"
+
+[[package]]
+name = "nk-pe"
+version = "0.0.2"
+
+[[package]]
+name = "nk-rtl"
+version = "0.0.2"
+
+[[package]]
+name = "nk-se"
+version = "0.0.2"
+
+[[package]]
+name = "nk-selftest"
+version = "0.0.2"
+dependencies = [
+ "nk-rtl",
+]
+
+[[package]]
+name = "nkkrnl"
+version = "0.0.2"
+dependencies = [
+ "nk-acpi",
+ "nk-bootinfo",
+ "nk-cm",
+ "nk-ke",
+ "nk-mm",
+ "nk-ntabi",
+ "nk-oracle",
+ "nk-pe",
+ "nk-rtl",
+ "nk-se",
+ "nk-selftest",
+]
+
+[[package]]
 name = "nkload"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
@@ -48,8 +88,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdbinfo"
+version = "0.0.2"
+dependencies = [
+ "nk-pdb",
+]
+
+[[package]]
 name = "peinfo"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "nk-pe",
 ]

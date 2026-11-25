@@ -1,0 +1,401 @@
+# Boot scenarios: one QEMU run each, judged by tools/judge.py.
+#
+#   arch      x86_64 | aarch64
+#   tier      which runs include it: "gate" (every commit) or "soak"
+#   smp       guest CPUs (default: $QEMU_SMP, else 4). The harness adds
+#             `cpus=<smp>` to the command line unless the scenario sets it,
+#             and the kernel checks it found that many
+#   cmdline   kernel command line (\NK\cmdline.txt); see kernel/test.rs
+#   expect    "ok" (default), "bugcheck" or "fail"
+#   match     expect = "bugcheck": regular expression the BUGCHECK line
+#             must contain
+#   must_fail expect = "fail": exactly these tests fail
+#   accel     "tcg": emulate the processor even where the host could run
+#             it directly (x86-64 only; arm64 is always emulated)
+#   golden    file in tools/golden/ listing every test and its verdict
+#   canonical true: this run's log and export list are kept as
+#             target/qemu/serial-<arch>.log and exports-<arch>.txt (the
+#             ledger is generated from the latter)
+#
+# `make check` / `check-arm` run the scenario named after the architecture.
+
+[x86_64]
+arch = "x86_64"
+tier = "gate"
+golden = "x86_64"
+canonical = true
+
+[aarch64]
+arch = "aarch64"
+tier = "gate"
+golden = "aarch64"
+canonical = true
+
+# One processor: nothing may depend on there being others.
+
+[x86_64-smp1]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+golden = "x86_64"
+
+[aarch64-smp1]
+arch = "aarch64"
+tier = "gate"
+smp = 1
+golden = "aarch64"
+
+# The soak tier (`make soak`): the whole test list again and again, with
+# other numbers of processors and both ways of running x86-64, on a host
+# given more to do than it can do at once.
+
+[x86_64-soak-smp2]
+arch = "x86_64"
+tier = "soak"
+smp = 2
+golden = "x86_64"
+
+[x86_64-soak-smp3]
+arch = "x86_64"
+tier = "soak"
+smp = 3
+golden = "x86_64"
+
+[x86_64-soak-smp8]
+arch = "x86_64"
+tier = "soak"
+smp = 8
+golden = "x86_64"
+
+[x86_64-soak-smp4]
+arch = "x86_64"
+tier = "soak"
+golden = "x86_64"
+
+[x86_64-soak-smp1]
+arch = "x86_64"
+tier = "soak"
+smp = 1
+golden = "x86_64"
+
+[aarch64-soak-smp2]
+arch = "aarch64"
+tier = "soak"
+smp = 2
+golden = "aarch64"
+
+[aarch64-soak-smp3]
+arch = "aarch64"
+tier = "soak"
+smp = 3
+golden = "aarch64"
+
+[aarch64-soak-smp8]
+arch = "aarch64"
+tier = "soak"
+smp = 8
+golden = "aarch64"
+
+[aarch64-soak-smp4]
+arch = "aarch64"
+tier = "soak"
+golden = "aarch64"
+
+[aarch64-soak-smp1]
+arch = "aarch64"
+tier = "soak"
+smp = 1
+golden = "aarch64"
+
+[x86_64-soak-tcg]
+arch = "x86_64"
+tier = "soak"
+accel = "tcg"
+golden = "x86_64"
+
+[x86_64-soak-tcg-smp8]
+arch = "x86_64"
+tier = "soak"
+accel = "tcg"
+smp = 8
+golden = "x86_64"
+
+# The harness must tell a kernel bug from a pass: a Rust panic and a stray
+# memory access each have to end the boot with a bugcheck.
+
+[x86_64-neg-panic]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.panic"
+expect = "bugcheck"
+match = "KERNEL PANIC: panicked at kernel/selftest/neg\\.rs"
+
+[aarch64-neg-panic]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.panic"
+expect = "bugcheck"
+match = "KERNEL PANIC: panicked at kernel/selftest/neg\\.rs"
+
+[x86_64-neg-fault]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.fault"
+expect = "bugcheck"
+match = "BUGCHECK: page fault"
+
+[aarch64-neg-fault]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.fault"
+expect = "bugcheck"
+match = "BUGCHECK: synchronous exception"
+
+# Running off the kernel stack must be named as that.
+
+[x86_64-neg-stack-overflow]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
+[aarch64-neg-stack-overflow]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
+# Broken IRQL and locking rules must stop the system, with Windows'
+# bugcheck code where Windows has one.
+
+[x86_64-neg-lock-order]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.lock-order"
+expect = "bugcheck"
+match = "BUGCHECK: lock order violation"
+
+[x86_64-neg-lock-twice]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.lock-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000F SPIN_LOCK_ALREADY_OWNED"
+
+[x86_64-neg-irql-lower]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.irql-lower"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL"
+
+[aarch64-neg-lock-order]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.lock-order"
+expect = "bugcheck"
+match = "BUGCHECK: lock order violation"
+
+[aarch64-neg-lock-twice]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.lock-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000F SPIN_LOCK_ALREADY_OWNED"
+
+[aarch64-neg-irql-lower]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.irql-lower"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL"
+
+# And a failing test must fail the run.
+
+[x86_64-known-bad]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=meta.fail"
+expect = "fail"
+must_fail = ["meta.fail"]
+
+[aarch64-known-bad]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=meta.fail"
+expect = "fail"
+must_fail = ["meta.fail"]
+
+# A processor that goes missing must fail a test: tell the kernel the
+# machine has three while QEMU gives it four.
+
+[x86_64-wrong-cpus]
+arch = "x86_64"
+tier = "gate"
+smp = 4
+cmdline = "test=hal.cpus cpus=3"
+expect = "fail"
+must_fail = ["hal.cpus"]
+
+[aarch64-wrong-cpus]
+arch = "aarch64"
+tier = "gate"
+smp = 4
+cmdline = "test=hal.cpus cpus=3"
+expect = "fail"
+must_fail = ["hal.cpus"]
+
+[x86_64-neg-cpu-stuck]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.cpu-stuck"
+expect = "bugcheck"
+match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"
+
+[aarch64-neg-cpu-stuck]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.cpu-stuck"
+expect = "bugcheck"
+match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"
+
+[x86_64-neg-dpc-watchdog]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.dpc-watchdog dpc-limit=32"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000133 DPC_WATCHDOG_VIOLATION"
+
+[aarch64-neg-dpc-watchdog]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.dpc-watchdog dpc-limit=32"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000133 DPC_WATCHDOG_VIOLATION"
+
+[x86_64-neg-wait-at-dispatch]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.wait-at-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: a wait that must block at IRQL 2"
+
+[x86_64-neg-wait-in-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.wait-in-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+
+[aarch64-neg-wait-at-dispatch]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.wait-at-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: a wait that must block at IRQL 2"
+
+[aarch64-neg-wait-in-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.wait-in-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+
+[x86_64-neg-mutex-held-at-exit]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.mutex-held-at-exit"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"
+
+[aarch64-neg-mutex-held-at-exit]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.mutex-held-at-exit"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"
+
+[x86_64-neg-work-bad-irql]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.work-bad-irql"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
+
+[aarch64-neg-work-bad-irql]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.work-bad-irql"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
+
+[x86_64-neg-information-overstated]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.information-overstated"
+expect = "bugcheck"
+match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
+
+[aarch64-neg-information-overstated]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.information-overstated"
+expect = "bugcheck"
+match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
+
+[x86_64-neg-breakpoint]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.breakpoint"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+[x86_64-debugger-breakpoint]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.breakpoint debug=on"
+
+[aarch64-neg-breakpoint]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.breakpoint"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+[aarch64-debugger-breakpoint]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.breakpoint debug=on"
+
+# Microsoft's event sample breaks into the debugger as it starts. With
+# no debugger Windows stops with bugcheck 0x7E (oracle/event.txt); so
+# must NK, at the same step.
+
+[x86_64-oracle-event]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.event"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+[aarch64-oracle-event]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.event"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+# The same sample with a debugger attached that says go: it runs, and
+# must do what it does on Windows (oracle/event-debug.txt).
+
+[x86_64-oracle-event-debug]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.event-debug debug=on"
+
+[aarch64-oracle-event-debug]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.event-debug debug=on"

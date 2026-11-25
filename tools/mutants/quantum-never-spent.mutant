@@ -1,0 +1,6 @@
+# The clock tick does not charge the running thread: a thread that never
+# yields keeps the processor from its equals for ever.
+scenario: aarch64
+fails: thread.quantum
+file: kernel/ke/time.rs
+remove:     super::thread::tick();

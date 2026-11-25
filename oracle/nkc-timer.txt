@@ -1,0 +1,10 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 1f3e697439e53c8b3655781bf6ce9c86c5051c4767ad0e166649de1da53efe1e
+# driver nkc-timer.sys sha256 8c0b4f9b9314fd35ebee3ee41175537a39c6c6d2b8b555dea814df0964a09f9b
+load nkc-timer: ok
+open d \Device\NkcTimer: 00000000
+ioctl d 00222000 - 256: 00000000 92 0000000000000000010000000200000001000000000000000000000001000000000000000100000000000000010000000000000001000000010000000000000001000000000000000100000001000000010000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222000 - 8: c0000023 - eeeeeeeeeeeeeeee
+close d: 00000000
+unload nkc-timer: ok
+end

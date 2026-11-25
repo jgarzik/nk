@@ -11,15 +11,79 @@
 #![cfg_attr(not(test), no_std)]
 
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 4;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
 pub const HHDM_BASE: u64 = 0xFFFF_8000_0000_0000;
 pub const KERNEL_BASE: u64 = 0xFFFF_F800_0000_0000;
 
-pub const MAX_MODULES: usize = 16;
+pub const MAX_MODULES: usize = 32;
 pub const MODULE_NAME_LEN: usize = 32;
+/// Room for the kernel command line, including its NUL padding.
+pub const CMDLINE_LEN: usize = 256;
+
+/// Size of every kernel stack, the boot stack included.
+///
+/// A stack's top is a multiple of twice this size, so an address on the
+/// stack has bit `KERNEL_STACK_SHIFT` set and the `KERNEL_STACK_SIZE`
+/// bytes below the stack have it clear. That lets exception entry tell
+/// that the stack has overflowed from the stack pointer alone, before it
+/// stores anything (arm64, which takes exceptions on the current stack).
+pub const KERNEL_STACK_SIZE: u64 = 1 << KERNEL_STACK_SHIFT;
+pub const KERNEL_STACK_SHIFT: u32 = 15;
+
+/// The highest stack top inside `len` bytes at `start`: a multiple of
+/// twice the stack size with a whole stack below it. `None` if the range
+/// has room for none; three stack sizes always do.
+pub const fn stack_top_in(start: u64, len: u64) -> Option<u64> {
+    let top = (start + len) & !(2 * KERNEL_STACK_SIZE - 1);
+    if top >= start + KERNEL_STACK_SIZE && len >= KERNEL_STACK_SIZE {
+        Some(top)
+    } else {
+        None
+    }
+}
+
+/// Whether `address` lies in the unmapped stretch below the kernel stack
+/// whose lowest address is `base`: where an overflowing stack lands.
+/// A `base` of 0 means "no stack recorded" and matches nothing.
+pub const fn below_stack(base: u64, address: u64) -> bool {
+    base >= KERNEL_STACK_SIZE && address < base && address >= base - KERNEL_STACK_SIZE
+}
+
+/// A calendar date and time (UTC, Gregorian) as Windows counts time:
+/// 100 ns units since 1601-01-01. `None` for a date that does not exist
+/// or lies before 1601.
+pub const fn windows_time(
+    year: u32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<u64> {
+    const DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    if year < 1601 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let in_month = DAYS[month as usize - 1] + (leap && month == 2) as u32;
+    if day < 1 || day > in_month {
+        return None;
+    }
+    // Days in the whole years since 1601, then in this year's whole months.
+    let y = (year - 1601) as u64;
+    let mut days = y * 365 + y / 4 - y / 100 + y / 400;
+    let mut m = 0;
+    while m < month as usize - 1 {
+        days += (DAYS[m] + (leap && m == 1) as u32) as u64;
+        m += 1;
+    }
+    days += (day - 1) as u64;
+    let seconds = days * 86_400 + (hour * 3600 + minute * 60 + second) as u64;
+    Some(seconds * 10_000_000)
+}
 
 /// `EFI_MEMORY_TYPE` values the kernel cares about.
 pub const EFI_LOADER_CODE: u32 = 1;
@@ -115,6 +179,12 @@ pub struct BootInfo {
     pub mair_normal: u8,
     pub mair_device: u8,
     _pad: [u8; 6],
+    /// Wall-clock time when the loader ran, as Windows counts it: 100 ns
+    /// units since 1601-01-01 UTC. 0 if firmware could not say.
+    pub boot_time: u64,
+    /// The kernel command line: `key=value` words separated by spaces,
+    /// NUL padded. Empty when the boot volume has no command-line file.
+    pub cmdline: [u8; CMDLINE_LEN],
     pub modules: [Module; MAX_MODULES],
 }
 
@@ -136,8 +206,48 @@ impl BootInfo {
             mair_normal: 0,
             mair_device: 0,
             _pad: [0; 6],
+            boot_time: 0,
+            cmdline: [0; CMDLINE_LEN],
             modules: [Module::EMPTY; MAX_MODULES],
         }
+    }
+
+    /// Store the command line read from the boot volume. Line ends and
+    /// other control characters become spaces. `Err` if it does not fit
+    /// or is not ASCII: a truncated option would silently change a test.
+    pub fn set_cmdline(&mut self, text: &[u8]) -> Result<(), &'static str> {
+        if text.len() >= CMDLINE_LEN {
+            return Err("kernel command line is too long");
+        }
+        if !text.is_ascii() {
+            return Err("kernel command line is not ASCII");
+        }
+        self.cmdline = [0; CMDLINE_LEN];
+        for (dst, &src) in self.cmdline.iter_mut().zip(text) {
+            *dst = if src < b' ' { b' ' } else { src };
+        }
+        Ok(())
+    }
+
+    /// The command line without its padding.
+    pub fn cmdline(&self) -> &str {
+        let len = self
+            .cmdline
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(CMDLINE_LEN);
+        core::str::from_utf8(&self.cmdline[..len]).unwrap_or("")
+    }
+
+    /// The value of the command-line word `key=value`, if present. The
+    /// last occurrence wins.
+    pub fn option(&self, key: &str) -> Option<&str> {
+        self.cmdline()
+            .split(' ')
+            .filter_map(|word| word.split_once('='))
+            .filter(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+            .next_back()
     }
 
     pub fn is_valid(&self) -> bool {
@@ -238,7 +348,119 @@ mod tests {
         // Both loader and kernel are built from this source, but a silent
         // layout change should still be a deliberate VERSION bump.
         assert_eq!(size_of::<Module>(), 48);
-        assert_eq!(size_of::<BootInfo>(), 104 + 48 * MAX_MODULES);
+        assert_eq!(size_of::<BootInfo>(), 112 + CMDLINE_LEN + 48 * MAX_MODULES);
         assert!(BootInfo::new().is_valid());
+    }
+
+    #[test]
+    fn stack_tops() {
+        const S: u64 = KERNEL_STACK_SIZE;
+        // Three stack sizes hold a stack wherever they start.
+        for start in [
+            0x10_0000,
+            0x10_1000,
+            0x10_7000,
+            0x10_8000,
+            0x10_F000,
+            0x7FFF_F000,
+        ] {
+            let top = stack_top_in(start, 3 * S).expect("room for a stack");
+            assert_eq!(top % (2 * S), 0);
+            assert!(top - S >= start && top <= start + 3 * S);
+            // On the stack the bit is set; in the size below it, clear.
+            for sp in [top - 8, top - S] {
+                assert_ne!(sp >> KERNEL_STACK_SHIFT & 1, 0, "{sp:#x}");
+            }
+            for sp in [top - S - 8, top - 2 * S] {
+                assert_eq!(sp >> KERNEL_STACK_SHIFT & 1, 0, "{sp:#x}");
+            }
+        }
+        assert_eq!(
+            stack_top_in(2 * S, S),
+            None,
+            "an aligned top with no stack below"
+        );
+        assert_eq!(stack_top_in(S, S), Some(2 * S));
+        assert_eq!(stack_top_in(S + 0x1000, S), None);
+        assert_eq!(stack_top_in(0x1000, 0x1000), None);
+    }
+
+    #[test]
+    fn the_gap_below_a_stack() {
+        const S: u64 = KERNEL_STACK_SIZE;
+        let base = 0xFFFF_F880_0000_8000;
+        assert!(below_stack(base, base - 8));
+        assert!(below_stack(base, base - S));
+        assert!(!below_stack(base, base), "the stack itself");
+        assert!(!below_stack(base, base + 64));
+        assert!(!below_stack(base, base - S - 8), "below the gap");
+        assert!(!below_stack(0, 0x1000), "no stack recorded");
+        assert!(!below_stack(0, u64::MAX));
+        assert!(!below_stack(S / 2, 0), "a base too low to have a gap");
+    }
+
+    #[test]
+    fn windows_times() {
+        assert_eq!(windows_time(1601, 1, 1, 0, 0, 0), Some(0));
+        assert_eq!(windows_time(1601, 1, 2, 0, 0, 1), Some(864_010_000_000));
+        // The Unix epoch, a constant every Windows programmer knows.
+        assert_eq!(
+            windows_time(1970, 1, 1, 0, 0, 0),
+            Some(116_444_736_000_000_000)
+        );
+        // 2020-01-01, the bound the clock conformance driver checks against.
+        assert_eq!(
+            windows_time(2020, 1, 1, 0, 0, 0),
+            Some(132_223_104_000_000_000)
+        );
+        // Leap days: 2000 had one, 1900 did not, 2024 did.
+        assert_eq!(
+            windows_time(2000, 3, 1, 0, 0, 0).unwrap()
+                - windows_time(2000, 2, 28, 0, 0, 0).unwrap(),
+            2 * 864_000_000_000
+        );
+        assert!(windows_time(1900, 2, 29, 0, 0, 0).is_none());
+        assert!(windows_time(2024, 2, 29, 23, 59, 59).is_some());
+        assert!(windows_time(2023, 2, 29, 0, 0, 0).is_none());
+        for bad in [
+            (1600, 12, 31, 0, 0, 0),
+            (2026, 0, 1, 0, 0, 0),
+            (2026, 13, 1, 0, 0, 0),
+            (2026, 4, 31, 0, 0, 0),
+            (2026, 1, 0, 0, 0, 0),
+            (2026, 1, 1, 24, 0, 0),
+            (2026, 1, 1, 0, 60, 0),
+            (2026, 1, 1, 0, 0, 60),
+        ] {
+            assert!(
+                windows_time(bad.0, bad.1, bad.2, bad.3, bad.4, bad.5).is_none(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cmdline_options() {
+        let mut info = BootInfo::new();
+        assert_eq!(info.cmdline(), "");
+        assert_eq!(info.option("test"), None);
+        info.set_cmdline(b"test=neg.panic  cpus=4\r\n").unwrap();
+        assert_eq!(info.option("test"), Some("neg.panic"));
+        assert_eq!(info.option("cpus"), Some("4"));
+        assert_eq!(info.option("cpu"), None, "a key is matched whole");
+        assert_eq!(info.option("neg.panic"), None, "values are not keys");
+        info.set_cmdline(b"test=a test=b").unwrap();
+        assert_eq!(info.option("test"), Some("b"), "the last word wins");
+        info.set_cmdline(b"test=").unwrap();
+        assert_eq!(info.option("test"), Some(""));
+    }
+
+    #[test]
+    fn cmdline_rejects_what_it_cannot_hold() {
+        let mut info = BootInfo::new();
+        assert!(info.set_cmdline(&[b'a'; CMDLINE_LEN]).is_err());
+        assert!(info.set_cmdline(&[b'a'; CMDLINE_LEN - 1]).is_ok());
+        assert_eq!(info.cmdline().len(), CMDLINE_LEN - 1);
+        assert!(info.set_cmdline("test=\u{e9}".as_bytes()).is_err());
     }
 }

@@ -1,0 +1,6 @@
+# The GIC is never told an interrupt has finished, so it holds back every
+# later interrupt of the same or lower priority.
+scenario: aarch64
+fails: ke.interrupts
+file: kernel/arch/aarch64/gic.rs
+remove:         unsafe { asm!("msr icc_eoir1_el1, {}", "isb", in(reg) id, options(nomem, nostack)) };

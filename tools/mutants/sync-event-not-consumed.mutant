@@ -1,0 +1,7 @@
+# A synchronization event stays signalled after letting a waiter
+# through: one setting wakes every waiter.
+scenario: aarch64
+fails: wait.synchronization
+file: kernel/ke/object.rs
+replace:             EVENT_SYNCHRONIZATION_OBJECT | SEMAPHORE_OBJECT | TIMER_SYNCHRONIZATION_OBJECT => {
+with:             SEMAPHORE_OBJECT | TIMER_SYNCHRONIZATION_OBJECT => {

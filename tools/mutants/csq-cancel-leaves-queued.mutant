@@ -1,0 +1,7 @@
+# The cancel routine of a cancel-safe queue completes the request as
+# cancelled without taking it off the driver's queue: the driver later
+# hands out a request that is already gone.
+scenario: x86_64
+fails: io.csq-cancel
+file: kernel/io/csq.rs
+remove:         (queue.remove)(csq, irp);

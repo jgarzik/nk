@@ -21,6 +21,10 @@ sudo apt-get install make qemu-system-x86 qemu-system-arm \
 No C compiler or cross toolchain is needed: the loader and kernel are
 linked by the linker that ships with Rust.
 
+`make oracle`, which replays the oracle scripts on real Windows, also
+needs KVM, `qemu-utils` (for `qemu-img`) and `xorriso`. Nothing else
+uses them; see `doc/TESTING.md`.
+
 ## Rust
 
 Install [rustup](https://rustup.rs). `rust-toolchain.toml` names the
@@ -48,7 +52,13 @@ emulation otherwise; `NO_KVM=1` forces emulation.
 
 ## When a boot test fails
 
-- `target/qemu/serial-<arch>.log` is the full serial console.
+- The failing scenario's directory, `target/qemu/<scenario>/`, is kept
+  and its path printed: `serial.log` is the full serial console, and after
+  a hang `hang-registers.txt` has every CPU's registers.
+  `target/qemu/serial-<arch>.log` is the last main boot of each
+  architecture.
+- `tools/boot_test.py <scenario>` reruns one scenario; `KEEP=1` keeps its
+  directory even when it passes.
 - A line starting `BUGCHECK:` is a fatal kernel error with a register
   dump. Addresses from `0xFFFFF80000000000` are in the kernel image; the
   driver images are mapped from `0xFFFFF88000000000`.

@@ -1,8 +1,8 @@
 name: CI
 
-# Runs the same gate a commit must pass locally: format, lint, host unit
-# tests, and a QEMU boot test of each architecture with real driver
-# fixtures. See doc/TESTING.md.
+# Runs the commit gate (`make gate`): format, lint, host unit tests, and
+# every boot scenario of the gate tier on both architectures, with real
+# driver fixtures. See doc/TESTING.md.
 on:
   push:
   pull_request:
@@ -44,4 +44,5 @@ jobs:
           name: logs
           path: |
             target/qemu/*.log
+            target/qemu/*/
             target/gate/*.out

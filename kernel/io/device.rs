@@ -1,8 +1,16 @@
 //! Device objects: `IoCreateDevice`, `IoDeleteDevice`.
+//!
+//! A device is an object-manager object, so a handle can be opened to
+//! it. It has two counts, as on Windows: `ReferenceCount` in the device
+//! itself (open files, work items on their way), which decides when a
+//! deleted device stops being one, and the object's pointer count,
+//! which decides when its memory goes. `IoCreateDevice` holds one
+//! pointer reference; the device gives it up when it is deleted and
+//! unreferenced.
 
 #![allow(non_snake_case)]
 
-use super::TAG_DEVICE;
+use crate::ke::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::{kd, ke, ob, rtl};
 use nk_ntabi::io::*;
@@ -57,10 +65,10 @@ pub unsafe extern "C" fn IoCreateDevice(
     // Device object, then the driver's extension, then NK's private block.
     let ext = (extension_size as usize).next_multiple_of(16);
     let total = size_of::<DEVICE_OBJECT>() + ext + size_of::<DeviceExtra>();
-    let device = pool::alloc_zeroed(total, TAG_DEVICE).cast::<DEVICE_OBJECT>();
-    if device.is_null() {
+    let Some(body) = ob::object::create(&ob::object::DEVICE_TYPE, total) else {
         return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    };
+    let device = body.cast::<DEVICE_OBJECT>();
     // SAFETY: `name` is valid per the contract.
     let name = unsafe { rtl::copy_unicode(name) };
     // SAFETY: `device` is a fresh, zeroed, exclusively owned block of
@@ -90,7 +98,7 @@ pub unsafe extern "C" fn IoCreateDevice(
         if exclusive != 0 {
             (*device).Flags |= DO_EXCLUSIVE;
         }
-        ke::event::init(&raw mut (*device).DeviceLock, EVENT_SYNCHRONIZATION, true);
+        ke::wait::KeInitializeEvent(&raw mut (*device).DeviceLock, 1, 1);
         let queue = &raw mut (*device).DeviceQueue;
         (*queue).Type = DEVICE_QUEUE_OBJECT;
         (*queue).Size = size_of::<KDEVICE_QUEUE>() as i16;
@@ -100,14 +108,19 @@ pub unsafe extern "C" fn IoCreateDevice(
         if !name.is_empty() {
             let status = ob::insert(&name, ob::Target::Device(device));
             if !nt_success(status) {
-                let _ = pool::free(device.cast());
+                ob::object::dereference(body);
                 return status;
             }
             (*device).Flags |= DO_DEVICE_HAS_NAME;
         }
-        // Newest device first, as on Windows.
-        (*device).NextDevice = (*driver).DeviceObject;
-        (*driver).DeviceObject = device;
+        // Newest device first, as on Windows. The list belongs to the
+        // database lock: devices are deleted, and others created, at the
+        // same time.
+        {
+            let _database = DATABASE.lock();
+            (*device).NextDevice = (*driver).DeviceObject;
+            (*driver).DeviceObject = device;
+        }
         device_out.write_unaligned(device);
     }
     STATUS_SUCCESS
@@ -125,15 +138,68 @@ unsafe fn extra(device: *mut DEVICE_OBJECT) -> *mut DeviceExtra {
 unsafe fn destroy(device: *mut DEVICE_OBJECT) {
     // SAFETY: per the contract; clearing Type makes a stale pointer fail
     // `check` instead of looking valid.
-    unsafe { (*device).Type = 0 };
-    if let Err(e) = pool::free(device.cast()) {
-        kd::bugcheck(format_args!("freeing device object {device:p}: {e:?}"));
+    unsafe {
+        (*device).Type = 0;
+        ob::object::dereference(device.cast());
     }
 }
 
-/// `IoDeleteDevice`: remove a device object. If files are still open on
-/// it, it disappears from the namespace and the driver's list now and is
-/// freed when the last one closes.
+/// The object manager's call when the last pointer to a device has
+/// gone: free the security descriptor it was given.
+///
+/// # Safety
+/// `body` is a device object nothing refers to any more.
+pub unsafe fn deleted(body: *mut u8) {
+    // SAFETY: per the contract; the descriptor is a pool block of the
+    // kernel's, put there by `replace_security`.
+    unsafe {
+        let descriptor = (*body.cast::<DEVICE_OBJECT>()).SecurityDescriptor;
+        if !descriptor.is_null() {
+            let _ = pool::free(descriptor.cast());
+        }
+    }
+}
+
+/// Give `device` the security descriptor `make` builds from the one it
+/// has (null if none): a pool block, which the device then owns. `None`
+/// from `make` changes nothing and is passed on.
+///
+/// # Safety
+/// `device` is a device object the caller holds a pointer reference to.
+pub unsafe fn replace_security(
+    device: *mut DEVICE_OBJECT,
+    make: impl FnOnce(*const u8) -> Option<*mut u8>,
+) -> Option<()> {
+    // SAFETY: per the contract. The pointer belongs to the database
+    // lock, so two changes at once cannot both build on the same old
+    // descriptor; the old block is freed once nothing can find it.
+    unsafe {
+        let old = {
+            let _database = DATABASE.lock();
+            let old = (*device).SecurityDescriptor;
+            let new = make(old.cast())?;
+            (*device).SecurityDescriptor = new.cast();
+            old
+        };
+        if !old.is_null() {
+            let _ = pool::free(old.cast());
+        }
+    }
+    Some(())
+}
+
+/// One lock over every device's reference count, its delete-pending
+/// mark and its security descriptor pointer, as on Windows (the I/O database lock). "The count has reached
+/// zero" and "deletion is pending" are decided together or not at all:
+/// whichever of `IoDeleteDevice` and the last dereference comes second
+/// sees both, under the lock, and it alone frees the device, after
+/// letting go.
+static DATABASE: SpinLock<()> = SpinLock::new(Rank::IoDatabase, ());
+
+/// `IoDeleteDevice`: remove a device object. If it is still referenced
+/// (files open on it, work items on their way), it disappears from the
+/// namespace and the driver's list now and is freed when the last
+/// reference goes.
 ///
 /// # Safety
 /// `device` must be a device object created by `IoCreateDevice`.
@@ -141,45 +207,75 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
     // SAFETY: `device` is readable per the contract; `check` validates it.
     unsafe {
         check(device, "IoDeleteDevice");
-        if (*extra(device)).delete_pending {
-            kd::bugcheck(format_args!("IoDeleteDevice: {device:p} deleted twice"));
-        }
         ob::remove_device(device);
-        // Unlink from the driver's singly linked device list.
-        let mut link = &raw mut (*(*device).DriverObject).DeviceObject;
-        while !(*link).is_null() && *link != device {
-            link = &raw mut (**link).NextDevice;
-        }
-        if *link == device {
-            *link = (*device).NextDevice;
-        }
-        (*device).NextDevice = core::ptr::null_mut();
-        if (*device).ReferenceCount > 0 {
+        let unreferenced = {
+            let _database = DATABASE.lock();
+            if (*extra(device)).delete_pending {
+                kd::bugcheck(format_args!("IoDeleteDevice: {device:p} deleted twice"));
+            }
+            // Unlink from the driver's singly linked device list.
+            let mut link = &raw mut (*(*device).DriverObject).DeviceObject;
+            while !(*link).is_null() && *link != device {
+                link = &raw mut (**link).NextDevice;
+            }
+            if *link == device {
+                *link = (*device).NextDevice;
+            }
+            (*device).NextDevice = core::ptr::null_mut();
             (*extra(device)).delete_pending = true;
-        } else {
+            (*device).ReferenceCount == 0
+        };
+        if unreferenced {
             destroy(device);
         }
     }
 }
 
-/// Count an open file against the device.
+/// Take a reference on a device found by name, for a file about to be
+/// opened on it, unless it has been deleted since it was found.
+///
+/// # Safety
+/// `device` is a device object whose memory the caller keeps alive (a
+/// pointer reference).
+pub unsafe fn reference_unless_deleted(device: *mut DEVICE_OBJECT) -> bool {
+    let _database = DATABASE.lock();
+    // SAFETY: per the contract; the mark and the count belong to the
+    // lock. The private block is part of the device's own allocation.
+    unsafe {
+        if (*extra(device)).delete_pending {
+            return false;
+        }
+        (*device).ReferenceCount += 1;
+    }
+    true
+}
+
+/// Take a reference on the device: an open file, a work item on its way.
 ///
 /// # Safety
 /// `device` must be a live device object.
 pub unsafe fn reference(device: *mut DEVICE_OBJECT) {
-    // SAFETY: per the contract.
+    let _database = DATABASE.lock();
+    // SAFETY: per the contract; the count belongs to the lock.
     unsafe { (*device).ReferenceCount += 1 };
 }
 
-/// Drop an open file's count; free the device if it was deleted meanwhile.
+/// Drop a reference; free the device if it was deleted meanwhile and
+/// this was the last.
 ///
 /// # Safety
-/// `device` must be a live device object with a positive count.
+/// `device` must be a live device object the caller holds a reference
+/// on, which it gives up.
 pub unsafe fn dereference(device: *mut DEVICE_OBJECT) {
-    // SAFETY: per the contract.
+    // SAFETY: per the contract. Nothing of the device is read after the
+    // lock is dropped unless this call is the one to free it.
     unsafe {
-        (*device).ReferenceCount -= 1;
-        if (*device).ReferenceCount == 0 && (*extra(device)).delete_pending {
+        let last = {
+            let _database = DATABASE.lock();
+            (*device).ReferenceCount -= 1;
+            (*device).ReferenceCount == 0 && (*extra(device)).delete_pending
+        };
+        if last {
             destroy(device);
         }
     }

@@ -1,0 +1,7 @@
+# A DPC already on a queue is accepted again: its link is written while
+# it is in the list.
+scenario: aarch64
+fails: scenario
+file: kernel/ke/dpc.rs
+replace:             .is_ok();
+with:             .is_ok() || true;

@@ -1,0 +1,8 @@
+# Releasing a contended fast mutex does not wake a waiter: the mutex is
+# counted as passed on, and nobody has it.
+scenario: x86_64
+# The waiter is never woken, so the test that contends for the mutex
+# never finishes: the boot is killed for taking too long.
+fails: scenario
+file: kernel/ke/mutex.rs
+remove:             wait::KeSetEvent(&raw mut (*mutex).Event, 0, 0);

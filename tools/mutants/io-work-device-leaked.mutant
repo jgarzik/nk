@@ -1,0 +1,6 @@
+# The reference an I/O work item holds on its device is never dropped:
+# the device, and so its driver, can never go.
+scenario: aarch64
+fails: work.io
+file: kernel/ex/work.rs
+remove:                 device::dereference(object.cast());

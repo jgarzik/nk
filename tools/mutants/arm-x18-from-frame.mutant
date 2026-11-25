@@ -1,0 +1,8 @@
+# The arm64 interrupt exit takes x18, which names the processor, from
+# the saved frame: a thread preempted on one processor and resumed on
+# another goes on with the first one's.
+scenario: aarch64
+fails: scenario
+file: kernel/arch/aarch64/trap.rs
+replace:     mrs x18, tpidr_el1
+with:     ldr x18, [sp, #144]

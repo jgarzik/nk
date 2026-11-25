@@ -1,0 +1,7 @@
+# A wait that was satisfied in time leaves its time limit's timer set.
+# A thread that then exits leaves a timer table pointing into memory
+# that is freed.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/wait.rs
+remove:                 timer::cancel_and_settle(my_timer);

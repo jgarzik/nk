@@ -15,14 +15,18 @@ mod efi;
 
 use nk_bootinfo::{
     BootInfo, EFI_ATTR_RUNTIME, EFI_LOADER_CODE, EFI_RUNTIME_CODE, HHDM_BASE, KERNEL_BASE,
-    MAX_MODULES, MODULE_NAME_LEN, Module, Serial, regions,
+    KERNEL_STACK_SIZE, MAX_MODULES, MODULE_NAME_LEN, Module, Serial, regions, stack_top_in,
+    windows_time,
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
 
 const KERNEL_PATH: &str = "\\NK\\nkkrnl.exe";
 const DRIVER_DIR: &str = "\\NK\\drivers";
-const STACK_PAGES: usize = 16;
+/// Optional: one line of `key=value` words for the kernel.
+const CMDLINE_PATH: &str = "\\NK\\cmdline.txt";
+/// Room for one kernel stack at the alignment the kernel requires.
+const STACK_PAGES: usize = 3 * (KERNEL_STACK_SIZE as usize) / 4096;
 /// Room for the final memory map; firmware maps are a few KiB.
 const MMAP_PAGES: usize = 16;
 const BLOCK_2M: u64 = 2 << 20;
@@ -199,9 +203,17 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
     info.kernel_phys = image_phys;
     info.kernel_size = size as u64;
     info.rsdp = efi::rsdp();
+    info.boot_time = efi::time()
+        .and_then(|[y, mo, d, h, mi, s]| windows_time(y, mo, d, h, mi, s))
+        .unwrap_or(0);
     info.efi_runtime = efi::runtime() as u64;
     info.serial = serial();
     load_modules(&root_dir, &mut info)?;
+    if let Some(file) = root_dir.open(CMDLINE_PATH) {
+        let text = file.read_all().ok_or("cannot read \\NK\\cmdline.txt")?;
+        info.set_cmdline(text.trim_ascii())?;
+        println!("nkload: command line: {}", info.cmdline());
+    }
     drop(root_dir);
 
     let pt_arch = arch::pt_arch(&mut info)?;
@@ -228,7 +240,8 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
     unsafe { (info_phys as *mut BootInfo).write(info) };
 
     let entry = KERNEL_BASE + u64::from(h.entry_rva);
-    let stack_top = HHDM_BASE + stack + (STACK_PAGES * 4096) as u64;
+    let stack_top = HHDM_BASE
+        + stack_top_in(stack, (STACK_PAGES * 4096) as u64).ok_or("no room for the boot stack")?;
     // SAFETY: boot services are gone; `root` maps the kernel image, the
     // direct map holding the stack and BootInfo, and (where the
     // architecture needs it) the identity range this code runs from.

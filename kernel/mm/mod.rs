@@ -9,8 +9,9 @@
 
 pub mod map;
 pub mod pool;
+pub mod stack;
 
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, regions};
 use nk_mm::frames::FrameBitmap;
@@ -21,7 +22,7 @@ pub const PAGE_SIZE: usize = 4096;
 const LOW_RESERVED_FRAMES: u64 = 256;
 
 static HHDM: AtomicU64 = AtomicU64::new(0);
-static FRAMES: SpinLock<Option<FrameBitmap<'static>>> = SpinLock::new(None);
+static FRAMES: SpinLock<Option<FrameBitmap<'static>>> = SpinLock::new(Rank::Frames, None);
 
 /// The direct-map address of physical address `pa`.
 pub fn phys_to_virt(pa: u64) -> *mut u8 {

@@ -1,0 +1,6 @@
+# A started processor never starts its clock interrupt. It would run,
+# but nothing time-driven would ever happen on it.
+scenario: x86_64
+fails: smp.running
+file: kernel/ke/smp.rs
+remove:     time::start_cpu();

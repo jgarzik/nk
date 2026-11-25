@@ -1,0 +1,6 @@
+# One release frees a mutex its owner took twice.
+scenario: aarch64
+fails: mutex.ownership
+file: kernel/ke/mutex.rs
+replace:             if previous != 0 {
+with:             if false {

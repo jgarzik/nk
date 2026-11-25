@@ -1,10 +1,48 @@
 //! arm64.
 
+mod clock;
 mod cpu;
+mod gic;
+pub mod platform;
+mod smp;
+mod switch;
 mod trap;
+mod variadic;
 
-pub use cpu::pcr;
-pub use trap::{breakpoint, breakpoints};
+pub use gic::{
+    TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
+    init as interrupts_init, interrupt_enable, self_interrupt, stop_others,
+};
+
+/// `(interrupt id, IRQL)` of the interrupt a processor sends itself to
+/// run its deferred procedure calls: DISPATCH_LEVEL.
+pub const DPC: (u32, u8) = (3, 2);
+
+/// `(interrupt id, IRQL)` of the interprocessor interrupt.
+pub const IPI: (u32, u8) = (1, 14);
+
+/// Interrupt processor `number` on the interprocessor interrupt.
+pub fn ipi_send(number: usize) {
+    interrupt_processor(number, IPI.0);
+}
+
+/// Send processor `number` the software-generated interrupt `vector`.
+pub fn interrupt_processor(number: usize, vector: u32) {
+    gic::send_interrupt(number, vector);
+}
+
+pub use cpu::{current_thread, irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
+pub use smp::{prepare as smp_prepare, start as cpu_start};
+/// The hardware's own name for the processor running this code: its
+/// MPIDR affinity, asked of the processor itself.
+pub fn hardware_processor() -> u64 {
+    platform::current_cpu_id()
+}
+
+pub use switch::{
+    all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
+};
+pub use trap::{breakpoint, breakpoints, driver_breakpoint, fp_trap_test};
 
 use core::sync::atomic::{AtomicU8, Ordering};
 use nk_bootinfo::{BootInfo, Serial};
@@ -48,10 +86,42 @@ pub fn halt() -> ! {
     }
 }
 
-/// Take over the boot CPU: exception vectors, PCR.
+/// Continue on a new stack: call `entry(info)` with the stack pointer at
+/// `top`. Whatever was on the old stack is abandoned.
+pub fn switch_stack(
+    top: u64,
+    entry: extern "C" fn(&'static BootInfo) -> !,
+    info: &'static BootInfo,
+) -> ! {
+    // SAFETY: `top` is the top of a mapped stack nothing else uses, 16-byte
+    // aligned; with no frame or return address the entry starts a fresh
+    // call chain.
+    unsafe {
+        core::arch::asm!(
+            "mov sp, {top}",
+            "mov x29, xzr",
+            "mov x30, xzr",
+            "br {entry}",
+            top = in(reg) top,
+            entry = in(reg) entry,
+            in("x0") info,
+            options(noreturn),
+        )
+    }
+}
+
+/// Nothing to undo once every processor is running.
+pub fn smp_finish() {}
+
+/// Record the kernel stack this processor now runs on. Nothing to do
+/// here: exception entry recognises an overflow from the stack pointer.
+pub fn set_kernel_stack(_base: u64) {}
+
+/// Take over the boot CPU, processor 0: exception vectors, PCR. Prints
+/// nothing and takes no lock: it runs before either works.
 pub fn cpu_init() {
     trap::init();
-    cpu::init();
+    cpu::init(0);
 }
 
 /// Indices into firmware's `MAIR_EL1`, which the loader looked up.
@@ -79,7 +149,8 @@ pub fn pt_root() -> u64 {
     ttbr & 0x0000_FFFF_FFFF_F000
 }
 
-/// Drop any cached translation for the page at `va`.
+/// Drop any cached translation for the page at `va`, on every processor:
+/// the instruction broadcasts.
 pub fn flush_tlb_page(va: u64) {
     // SAFETY: TLB invalidation only discards cached translations.
     unsafe {
@@ -94,8 +165,15 @@ pub fn mapping_sync() {
     unsafe { core::arch::asm!("dsb ishst", "isb", options(nostack)) };
 }
 
-/// A fast-changing counter, used only to vary stack-protector cookies.
-pub fn cycle_counter() -> u64 {
+pub use clock::{CLOCK, calibrate as clock_calibrate, next as clock_next};
+
+/// Start the clock interrupt, every `period` counter ticks.
+pub fn clock_start(period: u64) {
+    clock::start(period, crate::ke::time::frequency());
+}
+
+/// The time counter: the generic timer's virtual count.
+pub fn counter() -> u64 {
     let count: u64;
     // SAFETY: reading the virtual counter touches no memory.
     unsafe { core::arch::asm!("mrs {}, cntvct_el0", out(reg) count, options(nomem, nostack)) };

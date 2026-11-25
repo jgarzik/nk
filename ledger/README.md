@@ -18,3 +18,18 @@ will need.
 
 Export states come from what the booted kernel prints, so the ledger
 describes the kernel that ran, not a hand-kept list.
+
+## The corpus
+
+`x86_64.json` also has a `corpus` section: Microsoft's own kernel-mode
+binaries of the pinned Windows build, the drivers NK means to run
+unmodified, and for each how many of the names it imports from the kernel
+NK provides. Nothing in the corpus is loaded yet; the section is the
+denominator of the whole project.
+
+The binaries are pinned in `fixtures/corpus.toml` and never committed.
+`corpus.x86_64.txt` holds what each one imports, written by
+`tools/corpus.py` from the binaries; the ledger is computed from that
+file, so neither the gate nor CI downloads the corpus. `make corpus`
+downloads it and checks the file is still what the binaries say. There is
+no arm64 corpus: no source offers Windows 10 arm64 binaries.

@@ -10,8 +10,10 @@
 #                    public symbol server
 #   wdk-built        Microsoft sample source, unmodified, built with the WDK
 #                    by github.com/jgarzik/nk-fixtures
-# Nothing here has been run on a reference Windows installation yet, so no
-# entry is "windows-verified".
+#   nk-authored      NK's own test driver source, built with the WDK by
+#                    github.com/jgarzik/nk-fixtures
+# The drivers that oracle/ has a script for are also run on real Windows,
+# and NK must reproduce what they did there; see oracle/README.md.
 
 [[fixture]]
 name = "null"
@@ -67,6 +69,104 @@ status = "wdk-built"
 boot = false
 note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
 
+# NK's conformance drivers (nk-fixtures nkc/): each exercises a few kernel
+# routines and returns what it observed; oracle/ holds what real Windows
+# returned. Listed here before the kernel can load them, so the ledger
+# shows what each still needs; a driver is turned on (boot = true) by the
+# commit that completes its imports.
+
+[[fixture]]
+name = "nkc-irql"
+arch = "x86_64"
+file = "nkc-irql.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-irql.x64.nkc-irql.sys"
+sha256 = "3c9ae3500e7a7265de8d7bf326c3bd7afa1d043a1495fa631ac66e73a94d3303"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-irql.c: IRQL and spin locks"
+
+[[fixture]]
+name = "nkc-irql"
+arch = "aarch64"
+file = "nkc-irql.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-irql.arm64.nkc-irql.sys"
+sha256 = "6de03b71204e1d5c2afda9d08f321d2f28bd1f99654fe1415f995b6582fc1a22"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-irql.c: IRQL and spin locks"
+
+[[fixture]]
+name = "nkc-dpc"
+arch = "x86_64"
+file = "nkc-dpc.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-dpc.x64.nkc-dpc.sys"
+sha256 = "261373cb691d48ad82aa5df4afbf543588b5f0ea38c29030d756956f7ef6f3e2"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-dpc.c: deferred procedure calls"
+
+[[fixture]]
+name = "nkc-dpc"
+arch = "aarch64"
+file = "nkc-dpc.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-dpc.arm64.nkc-dpc.sys"
+sha256 = "ed931fd7432e9754c471a700cbe20854ccbd45932f33a9ca543c4850b9b6f05d"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-dpc.c: deferred procedure calls"
+
+[[fixture]]
+name = "nkc-timer"
+arch = "x86_64"
+file = "nkc-timer.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-timer.x64.nkc-timer.sys"
+sha256 = "8c0b4f9b9314fd35ebee3ee41175537a39c6c6d2b8b555dea814df0964a09f9b"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-timer.c: kernel timers"
+
+[[fixture]]
+name = "nkc-timer"
+arch = "aarch64"
+file = "nkc-timer.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-timer.arm64.nkc-timer.sys"
+sha256 = "fea08e3df02ddd79140393e8d959e1aaf82e0f4387bbee09d2e9aa42796c6614"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-timer.c: kernel timers"
+
+[[fixture]]
+name = "nkc-time"
+arch = "x86_64"
+file = "nkc-time.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-time.x64.nkc-time.sys"
+sha256 = "908d17b4e5b7418940f63e703ac525e62fbe3ad867bcdaed1e8d419efc1202c2"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-time.c: clocks"
+
+[[fixture]]
+name = "nkc-time"
+arch = "aarch64"
+file = "nkc-time.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-time.arm64.nkc-time.sys"
+sha256 = "ff56a5f0cb65a18feb1cddabc718cb54d3cf6b1ce4c705d09c7d3a3f5610243a"
+status = "nk-authored"
+note = "nk-fixtures v3 nkc/nkc-time.c: clocks"
+
+# Microsoft's WDM event sample: a timer and a DPC completing requests.
+
+[[fixture]]
+name = "event"
+arch = "x86_64"
+file = "event.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/wdm-event.x64.event.sys"
+sha256 = "90e510f121b2307610341f9e6c2963e94584bc2c3763a998c8bba7ad1e3f5b79"
+status = "wdk-built"
+note = "Windows-driver-samples d49bb7d7 general/event/wdm"
+
+[[fixture]]
+name = "event"
+arch = "aarch64"
+file = "event.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/wdm-event.arm64.event.sys"
+sha256 = "6ff61898c7f247210b38a39e04cf2a3049d5a48eba79be552b6bc83c8959b803"
+status = "wdk-built"
+note = "Windows-driver-samples d49bb7d7 general/event/wdm"
+
 # Structure sizes and offsets as Microsoft's compiler and WDK headers
 # produce them: the table the nk-fixtures ABI probe was built with.
 # lib/ntabi/probe.rs compares NK's definitions against these. Not PE
@@ -76,20 +176,182 @@ note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
 name = "abi-probe"
 arch = "x86_64"
 file = "abi-probe.x64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v2/abi-probe.x64.txt"
-sha256 = "185e5aba5c6f022a5bd453bbede5829d7565063461ef246583279292001aae10"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.x64.txt"
+sha256 = "f5b3bd9b583d3544ce1ea5fb7412a2ebc5aef5b38453c9c50fbdb1038587e3e5"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
 
 [[fixture]]
 name = "abi-probe"
 arch = "aarch64"
 file = "abi-probe.arm64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v2/abi-probe.arm64.txt"
-sha256 = "7712456e885922d846b1659b6906fd9717db80e77378a3cfe08c21d4a7809385"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.arm64.txt"
+sha256 = "22518e8a44c84fe370f12b3a370db999170a222ce1a604c99118ddf9fedb47da"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+
+# Microsoft's public symbols for the kernel of the pinned build
+# (ntoskrnl.exe 10.0.19041.2006, the kernel of Windows 10 22H2 19045.2006).
+# They hold the layouts of the kernel's private structures, which
+# Microsoft's own drivers were compiled against; lib/ntabi/pdb.rs compares
+# NK's definitions with them. The name on the symbol server is the GUID
+# and age recorded in that kernel's debug directory.
+
+[[fixture]]
+name = "ntkrnlmp"
+arch = "x86_64"
+file = "ntkrnlmp.x64.pdb"
+url = "https://msdl.microsoft.com/download/symbols/ntkrnlmp.pdb/68A17FAF3012B7846079AEECDBE0A5831/ntkrnlmp.pdb"
+sha256 = "380dbab8f5958b602f977fe5a96b84548675146809ef5ec05ec259da9b41abbb"
+status = "microsoft-inbox"
+kind = "pdb"
+boot = false
+note = "public symbols of ntoskrnl.exe 10.0.19041.2006 (sha256 cc9b3a6c057ca31d0886c8efb7965a4c47e2d80fd0185d9b9fa55c5dc1d0dc55)"
+
+[[fixture]]
+name = "nkc-thread"
+arch = "x86_64"
+file = "nkc-thread.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-thread.x64.nkc-thread.sys"
+sha256 = "b3148a507958be49e7014ade5d3befe92907e591ede918bf6b082b00ef9f48bd"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-thread.c: system threads"
+
+[[fixture]]
+name = "nkc-thread"
+arch = "aarch64"
+file = "nkc-thread.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-thread.arm64.nkc-thread.sys"
+sha256 = "be19bffb3a548543e78d60a8fbd1e8f7f1917bd9c261614c81a14407ca46bde8"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-thread.c: system threads"
+
+[[fixture]]
+name = "nkc-wait"
+arch = "x86_64"
+file = "nkc-wait.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-wait.x64.nkc-wait.sys"
+sha256 = "fb577b5d3ca9f3ae03843aadf19cc8e6b8d1508a11e48b6ea1cfd270d3bd903b"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-wait.c: waiting on one object"
+
+[[fixture]]
+name = "nkc-wait"
+arch = "aarch64"
+file = "nkc-wait.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-wait.arm64.nkc-wait.sys"
+sha256 = "c344793e2d4cfea9543dca3fa87232c67d8e3034424c67f1250e5a73afa82bf9"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-wait.c: waiting on one object"
+
+[[fixture]]
+name = "nkc-mutex"
+arch = "x86_64"
+file = "nkc-mutex.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-mutex.x64.nkc-mutex.sys"
+sha256 = "6c63ba917492bcd8218d700530ec6468648fa3cd366fd7c1496a9e46c8e401b3"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-mutex.c: mutexes, fast mutexes, critical regions"
+
+[[fixture]]
+name = "nkc-mutex"
+arch = "aarch64"
+file = "nkc-mutex.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-mutex.arm64.nkc-mutex.sys"
+sha256 = "2e3041a17dd88f4daa2a93fc969a4d647706f89bdd756d651f0910ce9e3378c3"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-mutex.c: mutexes, fast mutexes, critical regions"
+
+[[fixture]]
+name = "nkc-waitn"
+arch = "x86_64"
+file = "nkc-waitn.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-waitn.x64.nkc-waitn.sys"
+sha256 = "0d130998c2fba064e66bc1fbb79732c3223190d83ebd78feaa041953a4189f16"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-waitn.c: waiting on several objects"
+
+[[fixture]]
+name = "nkc-waitn"
+arch = "aarch64"
+file = "nkc-waitn.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-waitn.arm64.nkc-waitn.sys"
+sha256 = "b8c56fec8ca23e4ea1ad8ddcc9f9bd00e7057a2f3a5d0122ae7b00c2bd810c7e"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-waitn.c: waiting on several objects"
+
+[[fixture]]
+name = "nkc-work"
+arch = "x86_64"
+file = "nkc-work.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-work.x64.nkc-work.sys"
+sha256 = "a2cb3466c8a967e102f53c1c9ee303ee11c454b348ebcec46a194b99b6f56004"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-work.c: work items"
+
+[[fixture]]
+name = "nkc-work"
+arch = "aarch64"
+file = "nkc-work.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-work.arm64.nkc-work.sys"
+sha256 = "71d92802c6f73fc4dd9b5bf0358773a4443a5516cbeded38f8eab274fae98060"
+status = "nk-authored"
+note = "nk-fixtures v4 nkc/nkc-work.c: work items"
+
+[[fixture]]
+name = "nkc-se"
+arch = "x86_64"
+file = "nkc-se.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-se.x64.nkc-se.sys"
+sha256 = "611de4cc0c244700999ff7ee3b893dc5628d7d7ab73ed6800cb14ca6115305e2"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
+
+[[fixture]]
+name = "nkc-se"
+arch = "aarch64"
+file = "nkc-se.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-se.arm64.nkc-se.sys"
+sha256 = "8970edb14de5ff8712ac2eecc9cee5e16dbfccf52882a94d6e8019919f1e4484"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
+
+[[fixture]]
+name = "nkc-reg"
+arch = "x86_64"
+file = "nkc-reg.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.x64.nkc-reg.sys"
+sha256 = "2e787bfe049656183b992ccf837df14d1e1c6ca7047eef1031036e613123ddb9"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+
+[[fixture]]
+name = "nkc-reg"
+arch = "aarch64"
+file = "nkc-reg.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.arm64.nkc-reg.sys"
+sha256 = "914fa4358c1caab2bdc9aa8dda2608a55b557b4b1f6e7fd483e425f00a3654fc"
+status = "nk-authored"
+note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+
+[[fixture]]
+name = "cancel"
+arch = "x86_64"
+file = "cancel.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/wdm-cancel.x64.cancel.sys"
+sha256 = "63aec27a5b75c6f6a9f1146846edbe8f0dccdeb31e204274209105c5995c7334"
+status = "wdk-built"
+note = "Windows-driver-samples d49bb7d7 general/cancel/sys"
+
+[[fixture]]
+name = "cancel"
+arch = "aarch64"
+file = "cancel.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/wdm-cancel.arm64.cancel.sys"
+sha256 = "a624875c461bfb1e0ca341bfad466c9631f9132eb537556b20315ce447842b4f"
+status = "wdk-built"
+note = "Windows-driver-samples d49bb7d7 general/cancel/sys"

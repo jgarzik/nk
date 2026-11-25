@@ -178,6 +178,49 @@ pub fn runtime() -> *mut RuntimeServices {
     st().runtime
 }
 
+/// `EFI_TIME`, as `GetTime` fills it.
+#[repr(C)]
+#[derive(Default)]
+struct Time {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    pad1: u8,
+    nanosecond: u32,
+    time_zone: i16,
+    daylight: u8,
+    pad2: u8,
+}
+
+/// The firmware clock as `(year, month, day, hour, minute, second)`, if
+/// it has one. Taken as UTC, which is what firmware clocks under QEMU
+/// keep and what Windows expects of a UEFI machine's clock.
+pub fn time() -> Option<[u32; 6]> {
+    type GetTime = unsafe extern "efiapi" fn(*mut Time, *mut c_void) -> Status;
+    let mut t = Time::default();
+    // SAFETY: GetTime is the first runtime service after the table
+    // header; it fills the structure passed and takes an optional second
+    // pointer.
+    let status = unsafe {
+        let get: GetTime = core::mem::transmute((*runtime()).time_and_variables[0]);
+        get(&raw mut t, core::ptr::null_mut())
+    };
+    (status == SUCCESS).then(|| {
+        [
+            t.year,
+            t.month.into(),
+            t.day.into(),
+            t.hour.into(),
+            t.minute.into(),
+            t.second.into(),
+        ]
+        .map(u32::from)
+    })
+}
+
 /// Power the machine off. Works before and after `ExitBootServices`.
 pub fn shutdown() -> ! {
     // SAFETY: the runtime table is valid for the life of the system, and
@@ -319,7 +362,9 @@ impl File {
         let mut out: *mut FileProto = core::ptr::null_mut();
         // SAFETY: `self.0` is an open file protocol; `name` is NUL terminated.
         let s = unsafe { ((*self.0).open)(self.0, &raw mut out, name.as_ptr(), FILE_MODE_READ, 0) };
-        (s == SUCCESS).then_some(File(out))
+        // Lazily: a `File` built around the null pointer of a failed open
+        // would be closed when dropped.
+        (s == SUCCESS).then(|| File(out))
     }
 
     /// Size in bytes.

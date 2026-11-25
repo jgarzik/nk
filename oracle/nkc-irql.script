@@ -1,0 +1,13 @@
+# NK conformance driver nkc-irql (IRQL and spin locks).
+#
+# One request runs the driver's checks and returns the values it logged,
+# 32 bits each, ending with 0x4E4B4321. What each value means is written
+# beside it in nk-fixtures nkc/nkc-irql.c. The second request has a buffer
+# too small for the list and must be refused whole.
+
+load nkc-irql nkc-irql.sys
+open d \Device\NkcIrql
+ioctl d 00222000 - 256
+ioctl d 00222000 - 8
+close d
+unload nkc-irql

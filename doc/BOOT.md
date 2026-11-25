@@ -10,6 +10,7 @@ in `lib/bootinfo/lib.rs`.
 \EFI\BOOT\BOOTX64.EFI     nkload on x86-64 (BOOTAA64.EFI on arm64)
 \NK\nkkrnl.exe            the kernel
 \NK\drivers\*.sys         boot drivers
+\NK\cmdline.txt           optional: the kernel command line
 ```
 
 `tools/mkesp.py` builds it. Firmware starts the `\EFI\BOOT` file because
@@ -17,7 +18,9 @@ it is the default path for a volume with no boot entry.
 
 ## What nkload does
 
-1. Reads the kernel and every file in `\NK\drivers` into memory.
+1. Reads the kernel and every file in `\NK\drivers` into memory, and
+   the command line if there is one: a single line of `key=value` words
+   (`doc/TESTING.md` lists them), at most 255 ASCII characters.
 2. Maps the kernel image with `lib/pe` and relocates it to its fixed
    virtual base. The kernel links at a low default base on purpose, so the
    relocation path runs on every boot.
@@ -52,7 +55,9 @@ The low half differs by architecture:
 
 ## State at kernel entry
 
-- Boot CPU only, interrupts masked, on a 64 KiB stack in the direct map.
+- Boot CPU only, interrupts masked, on a 32 KiB stack in the direct map
+  whose top is a multiple of 64 KiB: the size and alignment of every
+  kernel stack (`nk_bootinfo::KERNEL_STACK_SIZE`).
 - One argument: a pointer to `BootInfo`.
 - x86-64: `EFER.NXE` and `CR0.WP` set. arm64: EL1.
 - Memory the loader allocated (kernel image, page tables, stack,
@@ -72,4 +77,7 @@ real hardware. NK never calls `SetVirtualAddressMap`.
 - The direct map is a writable alias of all RAM, kernel text included, so
   the image's read-only mappings stop accidents, not a determined write.
 - On arm64 firmware's full identity map is still live in `TTBR0`.
-- The boot stack has no guard page.
+- The loader's boot stack has ordinary memory below it. The kernel
+  leaves it for a guarded stack of its own as soon as it can allocate
+  one; until then an overflow is caught on arm64 (by the alignment rule)
+  but not on x86-64.

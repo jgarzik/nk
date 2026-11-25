@@ -1,0 +1,7 @@
+# An idle processor takes a waiting thread without asking whether the
+# thread may run there.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/thread.rs
+replace:             if field::<u64>(thread, layout::AFFINITY).read() & 1 << me == 0 {
+with:             if false {

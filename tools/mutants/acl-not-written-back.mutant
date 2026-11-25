@@ -1,0 +1,7 @@
+# RtlAddAccessAllowedAce works out the new access list on a copy and
+# never writes it back: it reports success and the driver's list is
+# unchanged.
+scenario: x86_64
+fails: se.descriptor
+file: kernel/se/mod.rs
+remove:                     acl.add(i).write(byte);

@@ -1,0 +1,7 @@
+# A driver's dispatch routine is called outside a critical region: it
+# finds kernel APCs enabled, where on Windows they are off.
+scenario: x86_64
+fails: oracle.nkc-mutex
+file: kernel/io/file.rs
+replace:             ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp));
+with:             irp::call_driver(device_object, irp);

@@ -9,8 +9,18 @@
 
 use super::{PAGE_SIZE, alloc_frames, phys_to_virt};
 use crate::arch;
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
+use core::sync::atomic::{AtomicU64, Ordering};
 use nk_mm::pt::{self, MapError, Prot, TableMem};
+
+/// Frames taken for page tables. They are kept for good, so a leak check
+/// must not count them as lost.
+static TABLE_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// Frames this module holds as page tables.
+pub fn table_frames() -> u64 {
+    TABLE_FRAMES.load(Ordering::Relaxed)
+}
 
 /// Start of the region for dynamic kernel mappings.
 const REGION_BASE: u64 = 0xFFFF_F880_0000_0000;
@@ -25,18 +35,45 @@ struct Space {
     free: [Option<(u64, usize)>; FREE_SLOTS],
 }
 
-/// Serialises page-table edits; holds the address-space allocator.
-static NEXT_VA: SpinLock<Space> = SpinLock::new(Space {
-    next: REGION_BASE,
-    free: [None; FREE_SLOTS],
-});
+impl Space {
+    /// A range of `pages` pages at a multiple of `align` bytes: a freed
+    /// one of that size and alignment if there is one, else fresh space.
+    fn take(&mut self, pages: usize, align: u64) -> Option<u64> {
+        if let Some(slot) = self
+            .free
+            .iter_mut()
+            .find(|s| s.is_some_and(|(va, n)| n == pages && va % align == 0))
+        {
+            return slot.take().map(|(va, _)| va);
+        }
+        let va = self.next.checked_next_multiple_of(align)?;
+        // The page after the range stays unmapped.
+        let end = va.checked_add(((pages + 1) * PAGE_SIZE) as u64)?;
+        if end > REGION_END {
+            return None;
+        }
+        self.next = end;
+        Some(va)
+    }
+}
 
-/// The live kernel page tables, edited through the direct map.
-struct Tables;
+/// Serialises page-table edits; holds the address-space allocator.
+static NEXT_VA: SpinLock<Space> = SpinLock::new(
+    Rank::AddressSpace,
+    Space {
+        next: REGION_BASE,
+        free: [None; FREE_SLOTS],
+    },
+);
+
+/// Page tables, edited through the direct map.
+pub struct Tables;
 
 impl TableMem for Tables {
     fn alloc_table(&mut self) -> Option<u64> {
-        alloc_frames(1)
+        let frame = alloc_frames(1)?;
+        TABLE_FRAMES.fetch_add(1, Ordering::Relaxed);
+        Some(frame)
     }
 
     fn read(&self, table: u64, index: usize) -> u64 {
@@ -59,21 +96,13 @@ impl TableMem for Tables {
 /// Reserve `pages` pages of kernel address space. A gap page follows each
 /// reservation, so running off the end of one mapping faults.
 pub fn alloc_va(pages: usize) -> Option<u64> {
-    let mut space = NEXT_VA.lock();
-    if let Some(slot) = space
-        .free
-        .iter_mut()
-        .find(|s| s.is_some_and(|(_, n)| n == pages))
-    {
-        return slot.take().map(|(va, _)| va);
-    }
-    let va = space.next;
-    let end = va.checked_add(((pages + 1) * PAGE_SIZE) as u64)?;
-    if end > REGION_END {
-        return None;
-    }
-    space.next = end;
-    Some(va)
+    NEXT_VA.lock().take(pages, PAGE_SIZE as u64)
+}
+
+/// As `alloc_va`, at an address that is a multiple of `align` bytes (a
+/// power of two, at least a page).
+pub fn alloc_va_aligned(pages: usize, align: u64) -> Option<u64> {
+    NEXT_VA.lock().take(pages, align)
 }
 
 /// Give back address space from `alloc_va`, once nothing is mapped there.

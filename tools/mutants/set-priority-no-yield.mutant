@@ -1,0 +1,7 @@
+# A thread that lowers its own priority below a ready thread keeps the
+# processor until its next interrupt.
+scenario: x86_64
+fails: thread.set-priority
+file: kernel/ke/thread.rs
+replace:     if (new as u8) < before {
+with:     if false {
