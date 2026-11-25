@@ -5,10 +5,15 @@
 //! Both hold whatever the kernel puts in them (a pointer, in practice)
 //! and never look inside it; the kernel wraps them in a lock and does
 //! the reference counting.
+//!
+//! [`tree`] is the namespace with directories: a path walk that follows
+//! symbolic links and stops at the object whose type parses the rest.
 
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
+
+pub mod tree;
 
 use alloc::vec::Vec;
 
