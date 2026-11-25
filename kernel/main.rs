@@ -51,6 +51,9 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
         test::abort("mm.init", format_args!("{why}"));
     }
     kprintln!("memory: {} MiB free", mm::free_frame_count() * 4 / 1024);
+    if let Err(why) = hal::platform::init(info) {
+        test::abort("hal.platform", format_args!("{why}"));
+    }
 
     export::print_all();
     test::run_all(selftest::GROUPS, info)

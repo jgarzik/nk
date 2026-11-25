@@ -77,6 +77,137 @@ pub fn spcr(table: &[u8]) -> Option<Spcr> {
     })
 }
 
+/// One entry of the MADT that NK acts on. Processor entries of both
+/// encodings (8-bit APIC id and x2APIC) read as [`MadtEntry::LocalApic`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MadtEntry {
+    /// An x86 processor, by its local APIC id.
+    LocalApic {
+        uid: u32,
+        id: u32,
+        /// Usable now.
+        enabled: bool,
+        /// Not enabled, but the system may bring it online later.
+        online_capable: bool,
+    },
+    IoApic {
+        id: u8,
+        address: u32,
+        gsi_base: u32,
+    },
+    /// 64-bit replacement for the header's local APIC address.
+    LocalApicAddress(u64),
+    /// An ARM processor: its GIC CPU interface.
+    Gicc {
+        uid: u32,
+        mpidr: u64,
+        enabled: bool,
+        /// This processor's redistributor, when the table lists
+        /// redistributors per processor rather than as regions; else 0.
+        gicr_base: u64,
+    },
+    /// The GIC distributor. `version` 0 means "ask the hardware".
+    Gicd {
+        address: u64,
+        version: u8,
+    },
+    /// A region holding the redistributors of several processors.
+    Gicr {
+        address: u64,
+        length: u32,
+    },
+    /// An entry type NK does not use yet.
+    Other(u8),
+}
+
+/// The Multiple APIC Description Table: processors and interrupt
+/// controllers.
+#[derive(Debug, Clone, Copy)]
+pub struct Madt<'a> {
+    /// Local APIC address from the header (x86; 32-bit).
+    pub local_apic: u32,
+    entries: &'a [u8],
+}
+
+const MADT_ENTRIES: usize = 44;
+
+/// Parse a MADT. `None` if any entry is malformed: a table that cannot be
+/// read to its end is not trusted for its beginning either.
+pub fn madt(table: &[u8]) -> Option<Madt<'_>> {
+    let madt = Madt {
+        local_apic: u32_at(table, 36)?,
+        entries: table.get(MADT_ENTRIES..)?,
+    };
+    let mut rest = madt.entries;
+    while !rest.is_empty() {
+        let len = usize::from(*rest.get(1)?);
+        if len < 2 || len > rest.len() || entry(&rest[..len]).is_none() {
+            return None;
+        }
+        rest = &rest[len..];
+    }
+    Some(madt)
+}
+
+/// Decode one entry; `None` if it is too short for its type.
+fn entry(e: &[u8]) -> Option<MadtEntry> {
+    Some(match e[0] {
+        0 => {
+            let flags = u32_at(e, 4)?;
+            MadtEntry::LocalApic {
+                uid: u32::from(e[2]),
+                id: u32::from(e[3]),
+                enabled: flags & 1 != 0,
+                online_capable: flags & 2 != 0,
+            }
+        }
+        1 => MadtEntry::IoApic {
+            id: e[2],
+            address: u32_at(e, 4)?,
+            gsi_base: u32_at(e, 8)?,
+        },
+        5 => MadtEntry::LocalApicAddress(u64_at(e, 4)?),
+        9 => {
+            let flags = u32_at(e, 8)?;
+            MadtEntry::LocalApic {
+                uid: u32_at(e, 12)?,
+                id: u32_at(e, 4)?,
+                enabled: flags & 1 != 0,
+                online_capable: flags & 2 != 0,
+            }
+        }
+        0xB => MadtEntry::Gicc {
+            uid: u32_at(e, 8)?,
+            mpidr: u64_at(e, 68)?,
+            enabled: u32_at(e, 12)? & 1 != 0,
+            gicr_base: u64_at(e, 60)?,
+        },
+        0xC => MadtEntry::Gicd {
+            address: u64_at(e, 8)?,
+            version: *e.get(20)?,
+        },
+        0xE => MadtEntry::Gicr {
+            address: u64_at(e, 4)?,
+            length: u32_at(e, 12)?,
+        },
+        other => MadtEntry::Other(other),
+    })
+}
+
+impl<'a> Madt<'a> {
+    pub fn entries(&self) -> impl Iterator<Item = MadtEntry> + 'a {
+        let mut rest = self.entries;
+        core::iter::from_fn(move || {
+            // `madt` checked every length, so this neither panics nor
+            // stops early.
+            let len = usize::from(*rest.get(1)?);
+            let (this, next) = rest.split_at_checked(len)?;
+            rest = next;
+            entry(this)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +301,150 @@ mod tests {
         fw.0[0x204..0x208].copy_from_slice(&0x000F_0000u32.to_le_bytes());
         assert!(find_table(&fw, 0x1000, b"SPCR").is_none());
         assert!(spcr(&[0; 40]).is_none(), "truncated SPCR");
+    }
+
+    fn madt_table(local_apic: u32, entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut body = local_apic.to_le_bytes().to_vec();
+        body.extend_from_slice(&1u32.to_le_bytes());
+        for e in entries {
+            body.extend_from_slice(e);
+        }
+        sdt(b"APIC", &body)
+    }
+
+    fn lapic(uid: u8, id: u8, flags: u32) -> Vec<u8> {
+        let mut e = vec![0, 8, uid, id];
+        e.extend_from_slice(&flags.to_le_bytes());
+        e
+    }
+
+    fn x2apic(id: u32, flags: u32, uid: u32) -> Vec<u8> {
+        let mut e = vec![9, 16, 0, 0];
+        for v in [id, flags, uid] {
+            e.extend_from_slice(&v.to_le_bytes());
+        }
+        e
+    }
+
+    fn gicc(uid: u32, flags: u32, gicr: u64, mpidr: u64) -> Vec<u8> {
+        let mut e = vec![0u8; 80];
+        (e[0], e[1]) = (0xB, 80);
+        e[8..12].copy_from_slice(&uid.to_le_bytes());
+        e[12..16].copy_from_slice(&flags.to_le_bytes());
+        e[60..68].copy_from_slice(&gicr.to_le_bytes());
+        e[68..76].copy_from_slice(&mpidr.to_le_bytes());
+        e
+    }
+
+    #[test]
+    fn madt_x86() {
+        let mut ioapic = vec![1, 12, 7, 0];
+        ioapic.extend_from_slice(&0xFEC0_0000u32.to_le_bytes());
+        ioapic.extend_from_slice(&24u32.to_le_bytes());
+        let mut addr = vec![5, 12, 0, 0];
+        addr.extend_from_slice(&0x1_FEE0_0000u64.to_le_bytes());
+        let t = madt_table(
+            0xFEE0_0000,
+            &[
+                lapic(0, 0, 1),
+                lapic(1, 1, 1),
+                lapic(2, 2, 0),
+                lapic(3, 3, 2),
+                ioapic,
+                vec![2, 10, 0, 0, 2, 0, 0, 0, 0, 0], // interrupt source override
+                x2apic(0x1_0000, 1, 9),
+                addr,
+            ],
+        );
+        let m = madt(&t).expect("MADT");
+        assert_eq!(m.local_apic, 0xFEE0_0000);
+        let e: Vec<MadtEntry> = m.entries().collect();
+        let cpu = |uid, id, enabled, online_capable| MadtEntry::LocalApic {
+            uid,
+            id,
+            enabled,
+            online_capable,
+        };
+        assert_eq!(
+            e,
+            [
+                cpu(0, 0, true, false),
+                cpu(1, 1, true, false),
+                cpu(2, 2, false, false),
+                cpu(3, 3, false, true),
+                MadtEntry::IoApic {
+                    id: 7,
+                    address: 0xFEC0_0000,
+                    gsi_base: 24
+                },
+                MadtEntry::Other(2),
+                cpu(9, 0x1_0000, true, false),
+                MadtEntry::LocalApicAddress(0x1_FEE0_0000),
+            ]
+        );
+    }
+
+    #[test]
+    fn madt_arm() {
+        let mut gicd = vec![0u8; 24];
+        (gicd[0], gicd[1], gicd[20]) = (0xC, 24, 3);
+        gicd[8..16].copy_from_slice(&0x0800_0000u64.to_le_bytes());
+        let mut gicr = vec![0xE, 16, 0, 0];
+        gicr.extend_from_slice(&0x080A_0000u64.to_le_bytes());
+        gicr.extend_from_slice(&0x00F6_0000u32.to_le_bytes());
+        let t = madt_table(0, &[gicc(0, 1, 0, 0), gicc(1, 1, 0, 0x101), gicd, gicr]);
+        let e: Vec<MadtEntry> = madt(&t).expect("MADT").entries().collect();
+        assert_eq!(
+            e,
+            [
+                MadtEntry::Gicc {
+                    uid: 0,
+                    mpidr: 0,
+                    enabled: true,
+                    gicr_base: 0
+                },
+                MadtEntry::Gicc {
+                    uid: 1,
+                    mpidr: 0x101,
+                    enabled: true,
+                    gicr_base: 0
+                },
+                MadtEntry::Gicd {
+                    address: 0x0800_0000,
+                    version: 3
+                },
+                MadtEntry::Gicr {
+                    address: 0x080A_0000,
+                    length: 0x00F6_0000
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_madt_reads_as_absent() {
+        let good = madt_table(0xFEE0_0000, &[lapic(0, 0, 1), lapic(1, 1, 1)]);
+        assert!(madt(&good).is_some());
+        assert!(madt(&good[..40]).is_none(), "no room for the header");
+        // An entry whose length runs past the table.
+        let mut t = good.clone();
+        t[MADT_ENTRIES + 8 + 1] = 9;
+        assert!(madt(&t).is_none());
+        // A zero-length entry would never advance.
+        let mut t = good.clone();
+        t[MADT_ENTRIES + 1] = 0;
+        assert!(madt(&t).is_none());
+        // An entry shorter than its type needs.
+        let t = madt_table(
+            0,
+            &[vec![
+                0xB, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ]],
+        );
+        assert!(madt(&t).is_none());
+        // A table that ends in the middle of an entry header.
+        let mut t = good;
+        t.push(0);
+        assert!(madt(&t).is_none());
     }
 }

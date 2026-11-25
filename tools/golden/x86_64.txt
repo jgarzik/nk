@@ -4,6 +4,7 @@ cpu.breakpoint ok
 mm.frames ok
 mm.map ok
 mm.pool ok
+hal.cpus ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok

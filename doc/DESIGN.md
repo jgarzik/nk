@@ -119,6 +119,15 @@ There is no user mode, no scheduler and only the boot CPU runs. The
 proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
 sample built with the WDK (see `doc/TESTING.md`).
 
+### The machine description
+
+`kernel/hal/platform.rs` reads the ACPI MADT once, on both architectures:
+the processors firmware lists as usable, and where the interrupt
+controllers are (local and I/O APICs; the GIC distributor and
+redistributors). The boot processor is number 0, as on Windows, and at
+most 64 processors are kept, one Windows processor group. Nothing starts
+the other processors or touches the controllers yet.
+
 ### The kernel is a PE image
 
 NK builds the kernel for Rust's stock `x86_64-unknown-uefi` and

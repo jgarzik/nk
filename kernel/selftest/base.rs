@@ -1,7 +1,8 @@
-//! Tests of the kernel's own foundations: processor state and memory.
+//! Tests of the kernel's own foundations: processor state, memory and
+//! the description of the machine.
 
 use crate::test::{Group, Report};
-use crate::{ke, mm};
+use crate::{hal, ke, mm};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
@@ -12,6 +13,7 @@ pub static GROUP: Group = Group {
         "mm.frames",
         "mm.map",
         "mm.pool",
+        "hal.cpus",
     ],
     run,
     manual: false,
@@ -30,4 +32,8 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("mm.frames", mm::frames_self_test);
     r.check("mm.map", mm::map::self_test);
     r.check("mm.pool", mm::pool::self_test);
+    match hal::platform::self_test(info) {
+        Ok(n) => r.ok_with("hal.cpus", format_args!("{n} processors")),
+        Err(why) => r.fail("hal.cpus", format_args!("{why}")),
+    }
 }

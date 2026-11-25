@@ -41,9 +41,12 @@ A declared verdict that is never reported is a FAIL, as is one reported
 twice, one that was not declared, and a group that does not give back
 what it took (`NK-TEST leak:FAIL`).
 
-The kernel command line is the file `\NK\cmdline.txt` on the boot volume.
-`test=<pattern>` runs only the groups with a matching test name (`*`
-matches any run of characters).
+The kernel command line is the file `\NK\cmdline.txt` on the boot volume:
+
+| Word | Meaning |
+| --- | --- |
+| `test=<pattern>` | run only the groups with a matching test name (`*` matches any run of characters) |
+| `cpus=<n>` | the machine has `n` processors; `hal.cpus` fails if the kernel finds another number. The harness sets it to what it asked QEMU for |
 
 ### What passing means
 
@@ -77,8 +80,9 @@ tier in parallel:
 | `x86_64`, `aarch64` | the tests pass |
 | `*-neg-panic`, `*-neg-fault` | a kernel panic or a stray memory access ends the boot in a bugcheck, and the harness sees it |
 | `*-known-bad` | a failing test fails the run |
+| `*-wrong-cpus` | a processor the kernel does not find fails a test |
 
-The last two kinds are the tests of the tests. An expected bugcheck counts
+All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
 way to the test is not taken for the one it meant to cause.
 
@@ -97,7 +101,8 @@ A boot that reaches the timeout is a hang: before killing it the harness
 saves every CPU's registers to `hang-registers.txt` in the scenario
 directory, and on x86-64 sends an NMI so the kernel prints its own state.
 
-Knobs: `BOOT_TEST_TIMEOUT` (seconds, default 120), `QEMU_SMP`, `QEMU_MEM`,
+Knobs: `BOOT_TEST_TIMEOUT` (seconds, default 120), `QEMU_SMP` (guest
+CPUs where the scenario does not say; default 4), `QEMU_MEM`,
 `NO_KVM=1`, `JOBS` (boots at once), `KEEP=1` (keep every scenario
 directory). `make run` / `make run-arm` boot with the console attached.
 

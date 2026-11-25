@@ -1,4 +1,7 @@
-//! Platform services below the kernel proper: firmware runtime calls.
+//! Platform services below the kernel proper: firmware runtime calls and
+//! the description of the machine.
+
+pub mod platform;
 
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU64, Ordering};

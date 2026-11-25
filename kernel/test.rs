@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! NK-TEST-PLAN <n>                 verdicts to expect, printed first
-//! NK-TEST <name>:OK
+//! NK-TEST <name>:OK [<what was observed>]
 //! NK-TEST <name>:FAIL <why>
 //! NK-TEST <name>:SKIP <why>
 //! NK-TEST-COMPLETE pass=<n> fail=<n> skip=<n>
@@ -70,6 +70,15 @@ impl Report {
         if self.claim(name) {
             PASS.fetch_add(1, Ordering::Relaxed);
             kprintln!("NK-TEST {name}:OK");
+        }
+    }
+
+    /// Pass, stating what was observed (a count, a measurement), so that
+    /// a test which checked nothing is visible in the log.
+    pub fn ok_with(&mut self, name: &str, observed: fmt::Arguments<'_>) {
+        if self.claim(name) {
+            PASS.fetch_add(1, Ordering::Relaxed);
+            kprintln!("NK-TEST {name}:OK {observed}");
         }
     }
 

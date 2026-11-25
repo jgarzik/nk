@@ -30,6 +30,7 @@ version = "0.0.1"
 name = "nkkrnl"
 version = "0.0.1"
 dependencies = [
+ "nk-acpi",
  "nk-bootinfo",
  "nk-mm",
  "nk-ntabi",

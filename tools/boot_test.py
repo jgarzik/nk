@@ -89,7 +89,21 @@ def kvm_usable():
     return os.access("/dev/kvm", os.R_OK | os.W_OK) and not os.environ.get("NO_KVM")
 
 
-def qemu_command(arch, interactive):
+def smp_of(sc):
+    """Guest CPUs: the scenario's `smp`, else QEMU_SMP, else 4."""
+    return int(sc.get("smp", SMP))
+
+
+def kernel_cmdline(sc):
+    """The scenario's command line, plus the CPU count the kernel should
+    find, so that a processor that fails to show up fails a test."""
+    words = sc.get("cmdline", "").split()
+    if not any(w.startswith("cpus=") for w in words):
+        words.append(f"cpus={smp_of(sc)}")
+    return " ".join(words)
+
+
+def qemu_command(arch, smp, interactive):
     """The command line. Paths are relative to the scenario directory, where
     QEMU is started, so the QMP socket path stays short."""
     code, _ = FIRMWARE[arch]
@@ -101,7 +115,7 @@ def qemu_command(arch, interactive):
         # arm64 expects of the `virt` machine.
         cmd = ["qemu-system-aarch64", "-machine", "virt,gic-version=3", "-cpu", "neoverse-n1"]
     cmd += [
-        "-m", MEM, "-smp", SMP,
+        "-m", MEM, "-smp", str(smp),
         "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
         "-drive", "if=pflash,format=raw,file=vars.fd",
         "-drive", "if=none,id=esp,format=raw,snapshot=on,file=esp.img",
@@ -177,20 +191,20 @@ def kill_stale(directory):
             pass
 
 
-def boot(arch, directory, interactive):
+def boot(arch, smp, directory, interactive):
     """Run QEMU in `directory` (which holds esp.img and vars.fd). Returns
     the timeout in seconds if it had to be killed, else 0. The serial
     output goes to serial.log there."""
     proc, timed_out = None, 0
     try:
         if interactive:
-            proc = subprocess.Popen(qemu_command(arch, True), cwd=directory)
+            proc = subprocess.Popen(qemu_command(arch, smp, True), cwd=directory)
             proc.wait()
             return 0
         with open(directory / "serial.log", "wb") as log, \
                 open(directory / "qemu.err", "wb") as err:
             proc = subprocess.Popen(
-                qemu_command(arch, False), cwd=directory,
+                qemu_command(arch, smp, False), cwd=directory,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
                 start_new_session=True, preexec_fn=die_with_parent,
             )
@@ -247,9 +261,9 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False):
             esp.symlink_to(image.resolve())
             missing = ["(prebuilt image)"]
         else:
-            missing = mkesp.build(arch, esp, cmdline=sc.get("cmdline", ""))
+            missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc))
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
-        timed_out = boot(arch, directory, interactive)
+        timed_out = boot(arch, smp_of(sc), directory, interactive)
         if interactive:
             passed = True
             return 0
@@ -305,8 +319,9 @@ def run_tier(tier, scenarios):
     names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
     if not names:
         sys.exit(f"boot_test: no scenario in tier {tier!r}")
-    # Each boot runs up to SMP guest CPUs flat out.
-    jobs = int(os.environ.get("JOBS", max(1, (os.cpu_count() or 1) // max(1, int(SMP)))))
+    # Each boot runs up to its `smp` guest CPUs flat out.
+    widest = max(smp_of(scenarios[n]) for n in names)
+    jobs = int(os.environ.get("JOBS", max(1, (os.cpu_count() or 1) // widest)))
     children, lock = [], threading.Lock()
 
     def one(name):

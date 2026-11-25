@@ -15,6 +15,7 @@ test = false
 bench = false
 
 [dependencies]
+nk-acpi = { path = "../lib/acpi" }
 nk-bootinfo = { path = "../lib/bootinfo" }
 nk-mm = { path = "../lib/mm" }
 nk-ntabi = { path = "../lib/ntabi" }

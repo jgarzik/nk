@@ -2,6 +2,9 @@
 #
 #   arch      x86_64 | aarch64
 #   tier      which runs include it: "gate" (every commit) or "soak"
+#   smp       guest CPUs (default: $QEMU_SMP, else 4). The harness adds
+#             `cpus=<smp>` to the command line unless the scenario sets it,
+#             and the kernel checks it found that many
 #   cmdline   kernel command line (\NK\cmdline.txt); see kernel/test.rs
 #   expect    "ok" (default), "bugcheck" or "fail"
 #   match     expect = "bugcheck": regular expression the BUGCHECK line
@@ -72,3 +75,22 @@ tier = "gate"
 cmdline = "test=meta.fail"
 expect = "fail"
 must_fail = ["meta.fail"]
+
+# A processor that goes missing must fail a test: tell the kernel the
+# machine has three while QEMU gives it four.
+
+[x86_64-wrong-cpus]
+arch = "x86_64"
+tier = "gate"
+smp = 4
+cmdline = "test=hal.cpus cpus=3"
+expect = "fail"
+must_fail = ["hal.cpus"]
+
+[aarch64-wrong-cpus]
+arch = "aarch64"
+tier = "gate"
+smp = 4
+cmdline = "test=hal.cpus cpus=3"
+expect = "fail"
+must_fail = ["hal.cpus"]

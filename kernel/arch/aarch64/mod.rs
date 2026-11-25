@@ -1,6 +1,7 @@
 //! arm64.
 
 mod cpu;
+pub mod platform;
 mod trap;
 
 pub use cpu::pcr;
