@@ -48,6 +48,12 @@ pub const fn nt_success(status: NTSTATUS) -> bool {
     status >= 0
 }
 
+/// `NT_ERROR`: the request failed outright. A warning (`0x8...`) is not
+/// an error: the request did something, and its results stand.
+pub const fn nt_error(status: NTSTATUS) -> bool {
+    status as u32 >> 30 == 3
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +68,27 @@ mod tests {
         assert!(!nt_success(STATUS_BUFFER_OVERFLOW), "0x8... is a warning");
         assert!(!nt_success(STATUS_END_OF_FILE));
         assert_eq!(STATUS_END_OF_FILE as u32, 0xC000_0011);
+    }
+
+    #[test]
+    fn only_the_top_class_is_an_error() {
+        assert!(nt_error(STATUS_END_OF_FILE));
+        assert!(nt_error(STATUS_INSUFFICIENT_RESOURCES));
+        assert!(nt_error(-1));
+        // A warning returns data; an informational code is a success.
+        assert!(!nt_error(STATUS_BUFFER_OVERFLOW));
+        assert!(!nt_error(STATUS_IMAGE_MACHINE_TYPE_MISMATCH));
+        assert!(!nt_error(STATUS_SUCCESS));
+        assert!(!nt_error(STATUS_PENDING));
+        // The boundaries of the four classes.
+        assert!(!nt_error(0x3FFF_FFFF));
+        assert!(!nt_error(0x7FFF_FFFF));
+        assert!(!nt_error(err(0xBFFF_FFFF)));
+        assert!(nt_error(err(0xC000_0000)));
+        // Every status is a success, an error, or a warning between.
+        for status in [0, 0x103, err(0x8000_0005), err(0xC000_0001)] {
+            assert!(!(nt_success(status) && nt_error(status)));
+        }
         // The constants are built at compile time; build one at run time
         // too, so the conversion is seen to keep every bit.
         let bits = std::hint::black_box(0xC000_009Au32);
