@@ -151,6 +151,42 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: synchronous exception"
 
+# The low half of the address space is NK's own on both architectures:
+# a null pointer faults, and so does ordinary memory at its physical
+# address, which firmware's map of the low half made readable. One
+# processor for the latter, so that it is the boot processor's low half
+# that is tried: the one that was firmware's.
+
+[x86_64-neg-low-memory]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+cmdline = "test=neg.low-memory"
+expect = "bugcheck"
+match = "BUGCHECK: page fault"
+
+[aarch64-neg-low-memory]
+arch = "aarch64"
+tier = "gate"
+smp = 1
+cmdline = "test=neg.low-memory"
+expect = "bugcheck"
+match = "BUGCHECK: synchronous exception"
+
+[x86_64-neg-null]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.null"
+expect = "bugcheck"
+match = "BUGCHECK: page fault"
+
+[aarch64-neg-null]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.null"
+expect = "bugcheck"
+match = "BUGCHECK: synchronous exception"
+
 # Running off the kernel stack must be named as that.
 
 [x86_64-neg-stack-overflow]

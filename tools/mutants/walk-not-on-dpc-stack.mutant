@@ -1,0 +1,8 @@
+# A stack walk reads only the running thread's stack, not the stack DPC
+# routines run on: a walk begun in a DPC routine cannot read its own
+# frames.
+scenario: x86_64
+fails: seh.walk.dpc
+file: kernel/ke/unwind.rs
+replace:     [Some(super::thread::current_stack()), dpc]
+with:     [Some(super::thread::current_stack()), None]

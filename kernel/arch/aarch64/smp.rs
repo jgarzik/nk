@@ -4,7 +4,8 @@
 //! address with the MMU off. The stub below runs there. It installs the
 //! boot processor's translation settings, with a one-page table that
 //! maps the stub to itself for the moment the MMU comes on, and jumps to
-//! the kernel proper on the stack it was given.
+//! the kernel proper on the stack it was given. There the processor
+//! exchanges that table for NK's low half.
 
 use super::{cpu, gic, trap};
 use crate::hal::platform;
@@ -33,12 +34,6 @@ struct Parameters {
     entry: u64,
     number: u64,
 }
-
-/// The low 16 bits of `TCR_EL1` describe the lower half of the address
-/// space. For the stub's table: 48-bit addresses, 4 KiB pages, cacheable
-/// inner-shareable table walks.
-const TCR_T0_MASK: u64 = 0xFFFF;
-const TCR_T0: u64 = 16 | 1 << 8 | 1 << 10 | 3 << 12;
 
 global_asm!(
     r#"
@@ -83,10 +78,6 @@ unsafe extern "C" {
 static STUB: AtomicU64 = AtomicU64::new(0);
 /// Physical address of the parameter frame.
 static PARAMETERS: AtomicU64 = AtomicU64::new(0);
-/// The boot processor's lower-half table and translation control, which
-/// a started processor adopts once it runs in the upper half.
-static BOOT_TTBR0: AtomicU64 = AtomicU64::new(0);
-static BOOT_TCR: AtomicU64 = AtomicU64::new(0);
 
 /// The physical address behind kernel address `va`, as the processor
 /// translates it.
@@ -124,18 +115,18 @@ pub fn prepare(_: &BootInfo) -> Result<(), &'static str> {
     .map_err(|_| "cannot build the start-up tables")?;
     let parameters = mm::alloc_frames(1).ok_or("no memory for the start-up parameters")?;
 
-    let (ttbr0, tcr, mair, sctlr, cpacr): (u64, u64, u64, u64, u64);
+    // The boot processor's low half is in NK's table format already,
+    // which is the stub table's too: its control register serves as is.
+    let (tcr, mair, sctlr, cpacr): (u64, u64, u64, u64);
     // SAFETY: reading this processor's translation and control registers.
     unsafe {
         asm!(
-            "mrs {0}, ttbr0_el1", "mrs {1}, tcr_el1", "mrs {2}, mair_el1",
-            "mrs {3}, sctlr_el1", "mrs {4}, cpacr_el1",
-            out(reg) ttbr0, out(reg) tcr, out(reg) mair, out(reg) sctlr, out(reg) cpacr,
+            "mrs {0}, tcr_el1", "mrs {1}, mair_el1",
+            "mrs {2}, sctlr_el1", "mrs {3}, cpacr_el1",
+            out(reg) tcr, out(reg) mair, out(reg) sctlr, out(reg) cpacr,
             options(nomem, nostack),
         );
     }
-    BOOT_TTBR0.store(ttbr0, Ordering::Relaxed);
-    BOOT_TCR.store(tcr, Ordering::Relaxed);
     // SAFETY: a fresh frame in the direct map, written before any
     // processor is started on it.
     unsafe {
@@ -144,7 +135,7 @@ pub fn prepare(_: &BootInfo) -> Result<(), &'static str> {
             .write(Parameters {
                 ttbr0: root,
                 ttbr1: super::pt_root(),
-                tcr: tcr & !TCR_T0_MASK | TCR_T0,
+                tcr,
                 mair,
                 sctlr,
                 cpacr,
@@ -218,22 +209,9 @@ pub fn start(number: usize, stack_top: u64) -> Result<(), &'static str> {
 /// Where a started processor enters the kernel, in the upper half on its
 /// own stack with interrupts off.
 extern "C" fn entry(number: u64) -> ! {
-    // SAFETY: this code runs from the upper half, so the lower half can
-    // be exchanged for the boot processor's: every processor then has
-    // the same view. Stale translations are dropped.
-    unsafe {
-        asm!(
-            "msr ttbr0_el1, {ttbr0}",
-            "msr tcr_el1, {tcr}",
-            "isb",
-            "tlbi vmalle1",
-            "dsb nsh",
-            "isb",
-            ttbr0 = in(reg) BOOT_TTBR0.load(Ordering::Relaxed),
-            tcr = in(reg) BOOT_TCR.load(Ordering::Relaxed),
-            options(nostack),
-        );
-    }
+    // This code runs from the upper half, so the stub's table can be
+    // exchanged for NK's low half: every processor has the same view.
+    super::adopt_low_half();
     trap::init();
     cpu::init(number as u32);
     if let Err(why) = gic::init_cpu(number as usize) {

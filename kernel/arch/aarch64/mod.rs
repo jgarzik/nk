@@ -7,6 +7,7 @@ pub mod platform;
 mod smp;
 mod switch;
 mod trap;
+pub mod unwind;
 mod variadic;
 
 pub use gic::{
@@ -45,7 +46,7 @@ pub use switch::{
 };
 pub use trap::{breakpoint, breakpoints, driver_breakpoint, fp_trap_test};
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use nk_bootinfo::{BootInfo, Serial};
 
 pub const NAME: &str = "aarch64";
@@ -133,6 +134,84 @@ pub fn mm_init(info: &BootInfo) {
     MAIR_NORMAL.store(info.mair_normal, Ordering::Relaxed);
     MAIR_DEVICE.store(info.mair_device, Ordering::Relaxed);
 }
+
+/// The low 16 bits of `TCR_EL1` describe the lower half of the address
+/// space. NK's are what `nk_mm::pt` builds: 48-bit addresses, 4 KiB
+/// pages, cacheable inner-shareable table walks. Firmware's own may
+/// differ, so they are replaced along with its table.
+const TCR_T0_MASK: u64 = 0xFFFF;
+const TCR_T0: u64 = 16 | 1 << 8 | 1 << 10 | 3 << 12;
+
+/// Physical address of the root of the low half's tables, once built.
+static LOW_ROOT: AtomicU64 = AtomicU64::new(0);
+
+/// Build NK's own low half and leave firmware's: a table holding only
+/// the regions firmware's runtime services use, each at its physical
+/// address. Code regions are writable too, because runtime driver
+/// images mix code and data; device registers get device attributes.
+/// Run once, on the boot processor, when memory can be allocated.
+pub fn low_half_init() -> Result<(), &'static str> {
+    use crate::mm::map::Tables;
+    use nk_bootinfo::FirmwareUse;
+    use nk_mm::pt::{Prot, TableMem};
+
+    let root = Tables.alloc_table().ok_or("no memory for the low half")?;
+    LOW_ROOT.store(root, Ordering::Relaxed);
+    for (region, used_as) in crate::mm::firmware_regions() {
+        let prot = match used_as {
+            FirmwareUse::RuntimeCode => Prot::RWX,
+            _ if region.is_ram() => Prot::RW,
+            _ => Prot::DEVICE,
+        };
+        crate::mm::map::map(region.phys, region.phys, region.pages as usize, prot)
+            .map_err(|_| "cannot map firmware's runtime regions")?;
+    }
+    adopt_low_half();
+    Ok(())
+}
+
+/// Make NK's low half this processor's. The caller runs in the upper
+/// half with interrupts masked, so nothing uses the lower one while the
+/// table and its format change; stale translations are dropped.
+pub fn adopt_low_half() {
+    // SAFETY: per the above, and `LOW_ROOT` is a table in NK's format.
+    unsafe {
+        core::arch::asm!(
+            "msr ttbr0_el1, {root}",
+            "mrs {tcr}, tcr_el1",
+            "bic {tcr}, {tcr}, {mask}",
+            "orr {tcr}, {tcr}, {low}",
+            "msr tcr_el1, {tcr}",
+            "isb",
+            "tlbi vmalle1",
+            "dsb nsh",
+            "isb",
+            root = in(reg) LOW_ROOT.load(Ordering::Relaxed),
+            tcr = out(reg) _,
+            mask = in(reg) TCR_T0_MASK,
+            low = in(reg) TCR_T0,
+            options(nostack),
+        );
+    }
+}
+
+/// Physical address of the root of the table tree that translates `va`:
+/// each half of the address space has its own.
+pub fn pt_root_of(va: u64) -> u64 {
+    if va >> 63 == 0 {
+        LOW_ROOT.load(Ordering::Relaxed)
+    } else {
+        pt_root()
+    }
+}
+
+/// Before a call into firmware's runtime code: nothing to do. The low
+/// half of every processor holds the runtime regions at their physical
+/// addresses.
+pub fn firmware_enter() {}
+
+/// After a firmware call that returned: nothing to undo.
+pub fn firmware_leave() {}
 
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::Aarch64 {

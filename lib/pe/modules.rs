@@ -15,12 +15,15 @@ pub struct Module {
     pub size: u64,
     /// The image's exception directory (`.pdata`), empty if it has none.
     pub pdata: DataDir,
+    /// Where the kernel reads the image's bytes: an address at which all
+    /// `size` bytes are mapped and none can be written.
+    pub view: u64,
 }
 
 impl Module {
     /// `None` if the name is longer than [`NAME_MAX`] or the image is
     /// empty or wraps the address space.
-    pub fn new(name: &[u8], base: u64, size: u64, pdata: DataDir) -> Option<Self> {
+    pub fn new(name: &[u8], base: u64, size: u64, pdata: DataDir, view: u64) -> Option<Self> {
         if name.len() > NAME_MAX || size == 0 || base.checked_add(size).is_none() {
             return None;
         }
@@ -32,6 +35,7 @@ impl Module {
             base,
             size,
             pdata,
+            view,
         })
     }
 
@@ -107,7 +111,7 @@ mod tests {
     use super::*;
 
     fn module(name: &str, base: u64, size: u64) -> Module {
-        Module::new(name.as_bytes(), base, size, DataDir::default()).unwrap()
+        Module::new(name.as_bytes(), base, size, DataDir::default(), 0).unwrap()
     }
 
     #[test]
@@ -116,9 +120,10 @@ mod tests {
             rva: 0x3000,
             size: 0x24,
         };
-        let m = Module::new(b"sioctl.sys", 0x1000, 0x2000, pdata).unwrap();
+        let m = Module::new(b"sioctl.sys", 0x1000, 0x2000, pdata, 0x9000).unwrap();
         assert_eq!(m.name(), b"sioctl.sys");
         assert_eq!(m.pdata, pdata);
+        assert_eq!(m.view, 0x9000);
         assert!(!m.contains(0xFFF));
         assert!(m.contains(0x1000));
         assert!(m.contains(0x2FFF));
@@ -128,11 +133,11 @@ mod tests {
     #[test]
     fn a_module_that_cannot_be_described_is_refused() {
         let dir = DataDir::default();
-        assert!(Module::new(&[b'a'; NAME_MAX], 0x1000, 1, dir).is_some());
-        assert!(Module::new(&[b'a'; NAME_MAX + 1], 0x1000, 1, dir).is_none());
-        assert!(Module::new(b"empty", 0x1000, 0, dir).is_none());
-        assert!(Module::new(b"wraps", u64::MAX, 2, dir).is_none());
-        assert!(Module::new(b"last", u64::MAX, 1, dir).is_none());
+        assert!(Module::new(&[b'a'; NAME_MAX], 0x1000, 1, dir, 0).is_some());
+        assert!(Module::new(&[b'a'; NAME_MAX + 1], 0x1000, 1, dir, 0).is_none());
+        assert!(Module::new(b"empty", 0x1000, 0, dir, 0).is_none());
+        assert!(Module::new(b"wraps", u64::MAX, 2, dir, 0).is_none());
+        assert!(Module::new(b"last", u64::MAX, 1, dir, 0).is_none());
     }
 
     #[test]

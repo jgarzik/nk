@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle soak mutants coverage gate clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check unwind-check corpus oracle soak mutants coverage gate clean
 
 help:
 	@echo "NK make targets:"
@@ -22,6 +22,7 @@ help:
 	@echo "  fmt-check  fail if the tree is not formatted"
 	@echo "  fixtures   download and verify the driver fixtures (target/fixtures/)"
 	@echo "  ledger     regenerate the compatibility ledger (ledger/)"
+	@echo "  unwind-check  kernel code without unwind entries is on the allow-list"
 	@echo "  corpus     re-read the import tables of Microsoft's inbox binaries (network)"
 	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
 	@echo "  soak       the whole test list, many times, on an overloaded host"
@@ -108,6 +109,11 @@ ledger: fixtures
 
 ledger-check: fixtures
 	@tools/ledger.py --check
+
+# The code of each kernel image that has no unwind entry is prebuilt
+# library code, a leaf, or a symbol listed in tools/unwind/.
+unwind-check: build build-arm
+	@tools/unwind_coverage.py
 
 # Downloads the binaries of fixtures/corpus.toml and checks that the
 # committed import lists, which the ledger counts, are what they import.

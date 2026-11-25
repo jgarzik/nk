@@ -1,0 +1,6 @@
+# Unmapping user pages frees their frames but leaves the translations:
+# the addresses go on reaching memory that is no longer theirs.
+scenario: x86_64
+fails: mm.user.map
+file: kernel/mm/user.rs
+remove:             map::unmap(at, 1);

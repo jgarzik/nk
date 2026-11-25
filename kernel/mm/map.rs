@@ -79,7 +79,7 @@ pub fn free_va(va: u64, pages: usize) {
 /// Map `pages` pages at `va` to the physical range starting at `pa`.
 pub fn map(va: u64, pa: u64, pages: usize, prot: Prot) -> Result<(), MapError> {
     let _guard = NEXT_VA.lock();
-    let (root, arch_pt) = (arch::pt_root(), arch::pt_arch());
+    let (root, arch_pt) = (arch::pt_root_of(va), arch::pt_arch());
     pt::map_range(
         &mut Tables,
         &arch_pt,
@@ -97,7 +97,7 @@ pub fn map(va: u64, pa: u64, pages: usize, prot: Prot) -> Result<(), MapError> {
 /// Remove `pages` mappings starting at `va`. Unmapped pages are skipped.
 pub fn unmap(va: u64, pages: usize) {
     let _guard = NEXT_VA.lock();
-    let (root, arch_pt) = (arch::pt_root(), arch::pt_arch());
+    let (root, arch_pt) = (arch::pt_root_of(va), arch::pt_arch());
     for i in 0..pages {
         let page = va + (i * PAGE_SIZE) as u64;
         if pt::unmap(&mut Tables, &arch_pt, root, page).is_some() {
@@ -109,7 +109,34 @@ pub fn unmap(va: u64, pages: usize) {
 /// The physical address `va` maps to in the kernel address space.
 pub fn translate(va: u64) -> Option<u64> {
     let _guard = NEXT_VA.lock();
-    pt::translate(&Tables, &arch::pt_arch(), arch::pt_root(), va)
+    pt::translate(&Tables, &arch::pt_arch(), arch::pt_root_of(va), va)
+}
+
+/// The low half holds firmware's runtime regions, each at its physical
+/// address, and neither address zero nor ordinary memory. Returns the
+/// number of regions.
+pub fn low_half_test() -> Result<usize, &'static str> {
+    if translate(0).is_some() {
+        return Err("address zero is mapped");
+    }
+    let frame = alloc_frames(1).ok_or("no frames")?;
+    let stray = translate(frame);
+    super::free_frames(frame, 1);
+    if stray.is_some() {
+        return Err("ordinary memory is mapped at its physical address");
+    }
+    let mut regions = 0;
+    for (region, _) in super::firmware_regions() {
+        let last = region.end() - PAGE_SIZE as u64;
+        if translate(region.phys) != Some(region.phys) || translate(last) != Some(last) {
+            return Err("a firmware runtime region is not mapped at its physical address");
+        }
+        regions += 1;
+    }
+    if regions == 0 {
+        return Err("firmware names no runtime regions");
+    }
+    Ok(regions)
 }
 
 /// Map a frame at a fresh address, see the same bytes through both views,

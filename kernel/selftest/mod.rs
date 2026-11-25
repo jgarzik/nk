@@ -21,6 +21,7 @@ mod oracle;
 mod pend;
 mod review;
 mod se;
+mod seh;
 mod sioctl;
 mod smp;
 mod thread;
@@ -39,6 +40,7 @@ pub static GROUPS: &[&Group] = &[
     &dpc::GROUP,
     &timer::GROUP,
     &thread::GROUP,
+    &seh::GROUP,
     &wait::GROUP,
     &ob::GROUP,
     &se::GROUP,
@@ -56,6 +58,8 @@ pub static GROUPS: &[&Group] = &[
     &oracle::GROUP,
     &neg::PANIC,
     &neg::FAULT,
+    &neg::NULL,
+    &neg::LOW_MEMORY,
     &neg::STACK_OVERFLOW,
     &neg::DPC_STACK_OVERFLOW,
     &neg::LOCK_ORDER,

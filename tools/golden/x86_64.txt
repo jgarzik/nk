@@ -6,6 +6,10 @@ ke.irql-and-locks ok
 ke.interrupts ok
 mm.frames ok
 mm.map ok
+mm.low-half ok
+mm.user.map ok
+mm.user.refused ok
+mm.user.other-cpu ok
 mm.pool ok
 mm.stack ok
 hal.cpus ok
@@ -42,6 +46,9 @@ thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
 thread.identity ok
+seh.walk.thread ok
+seh.walk.dpc ok
+seh.walk.interrupt ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok

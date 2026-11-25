@@ -102,6 +102,7 @@ dependencies = [
  "nk-rtl",
  "nk-se",
  "nk-selftest",
+ "nk-unwind",
 ]
 
 [[package]]

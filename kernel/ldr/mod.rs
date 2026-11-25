@@ -11,7 +11,7 @@ use crate::mm::{self, PAGE_SIZE, map};
 use crate::{arch, export};
 use alloc::string::String;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_mm::pt::Prot;
 use nk_pe::modules::{Module, Modules};
@@ -24,24 +24,80 @@ static BOOT: AtomicPtr<BootInfo> = AtomicPtr::new(core::ptr::null_mut());
 /// The name Windows' own module list gives the kernel image.
 const KERNEL_NAME: &[u8] = b"ntoskrnl.exe";
 
+/// A frame of zeros, mapped wherever an image's view has nothing to
+/// show. Never written.
+static ZERO_FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// Map the view of an image of `pages` pages laid out in the frames at
+/// `phys`: a second mapping of the whole image, read-only, through which
+/// the kernel reads its function table and code.
+///
+/// A page of a section the image cannot write shows that page. Every
+/// other page (writable data, a gap between sections) shows zeros. So
+/// no byte of the view changes or faults, and a slice over all of it is
+/// sound whatever the image's own code is doing. `flags` gives the
+/// section characteristics of the page at an RVA.
+fn map_view(phys: u64, pages: usize, flags: impl Fn(u32) -> Option<u32>) -> Option<u64> {
+    let view = map::alloc_va(pages)?;
+    for page in 0..pages {
+        let rva = (page * PAGE_SIZE) as u32;
+        let constant = flags(rva).is_some_and(|f| f & nk_pe::SCN_MEM_WRITE == 0);
+        let frame = if constant {
+            phys + u64::from(rva)
+        } else {
+            ZERO_FRAME.load(Ordering::Relaxed)
+        };
+        if map::map(view + u64::from(rva), frame, 1, Prot::RO).is_err() {
+            unmap_view(view, pages);
+            return None;
+        }
+    }
+    Some(view)
+}
+
+fn unmap_view(view: u64, pages: usize) {
+    map::unmap(view, pages);
+    map::free_va(view, pages);
+}
+
+/// The bytes of a loaded image, through its view.
+///
+/// # Safety
+/// The image stays loaded for as long as the slice is used. That holds
+/// while code of the image is on a live stack, which is when its
+/// function table is wanted.
+pub unsafe fn view<'a>(module: &Module) -> &'a [u8] {
+    // SAFETY: `map_view` mapped `size` bytes there, which nothing can
+    // write; per the contract they are still mapped.
+    unsafe { core::slice::from_raw_parts(module.view as *const u8, module.size as usize) }
+}
+
 /// Remember where the boot files are, and enter the kernel's own image
 /// in the table of loaded images.
 pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
     BOOT.store(core::ptr::from_ref(info).cast_mut(), Ordering::Release);
+    let zero = mm::alloc_frames(1).ok_or("no memory for the frame of zeros")?;
+    ZERO_FRAME.store(zero, Ordering::Relaxed);
     // SAFETY: the loader laid the kernel image out in `kernel_size`
     // bytes at `kernel_phys`, whose first page holds its headers.
-    let headers = unsafe {
+    let first = unsafe {
         core::slice::from_raw_parts(
             mm::phys_to_virt(info.kernel_phys),
             (info.kernel_size as usize).min(PAGE_SIZE),
         )
     };
-    let headers = nk_pe::image_headers(headers).map_err(|_| "the kernel image has no headers")?;
+    let headers = nk_pe::image_headers(first).map_err(|_| "the kernel image has no headers")?;
+    let pages = (info.kernel_size as usize).div_ceil(PAGE_SIZE);
+    let view = map_view(info.kernel_phys, pages, |rva| {
+        nk_pe::image_page_flags(first, rva)
+    })
+    .ok_or("no memory for the view of the kernel image")?;
     let kernel = Module::new(
         KERNEL_NAME,
         nk_bootinfo::KERNEL_BASE,
         info.kernel_size,
         headers.dir(nk_pe::DIR_EXCEPTION),
+        view,
     )
     .ok_or("the kernel image cannot be described")?;
     MODULES
@@ -190,14 +246,20 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
         return Err(e);
     }
     arch::sync_icache(mem.as_ptr(), mem.len());
+    let Some(view) = map_view(phys, pages, |rva| pe.page_flags(rva)) else {
+        release(&image);
+        return Err(LoadError::NoMemory);
+    };
     let entered = Module::new(
         name.as_bytes(),
         base,
         size as u64,
         h.dir(nk_pe::DIR_EXCEPTION),
+        view,
     )
     .is_some_and(|module| MODULES.lock().insert(module).is_ok());
     if !entered {
+        unmap_view(view, pages);
         release(&image);
         return Err(LoadError::TooMany);
     }
@@ -212,8 +274,13 @@ fn release(image: &Image) {
 
 /// Unmap an image and free its memory. No code in it may run again.
 pub fn unload(image: &Image) {
-    MODULES.lock().remove(image.base);
+    let module = MODULES.lock().remove(image.base);
+    // The image's addresses go back first, so that the next image of
+    // this size is given them again and its view the view's.
     release(image);
+    if let Some(module) = module {
+        unmap_view(module.view, image.pages);
+    }
 }
 
 /// The image `address` is in: the kernel's own or a loaded driver's.

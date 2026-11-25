@@ -57,6 +57,9 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
         test::abort("mm.init", format_args!("{why}"));
     }
     kprintln!("memory: {} MiB free", mm::free_frame_count() * 4 / 1024);
+    if let Err(why) = arch::low_half_init() {
+        test::abort("mm.low-half", format_args!("{why}"));
+    }
     if let Err(why) = ldr::init(info) {
         test::abort("ldr.init", format_args!("{why}"));
     }

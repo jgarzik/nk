@@ -101,7 +101,8 @@ Firmware starts `nkload`, which loads the kernel and drivers and jumps to
 1. `arch::cpu_init`: the boot processor's PCR (static: needed before
    memory is), which locks and the IRQL depend on. Console. Firmware
    runtime table.
-2. `BootInfo` checked; `arch::mm_init`, `mm::init`: frames, pool, mappings.
+2. `BootInfo` checked; `arch::mm_init`, `mm::init`: frames, pool, mappings;
+   `arch::low_half_init`: on arm64, NK's own low half replaces firmware's.
 3. Move from the loader's stack to a guarded kernel stack.
 4. `hal::platform` (MADT), interrupt controller, the idle thread (the
    context being run), interrupts on: from here only the IRQL holds them
@@ -118,17 +119,31 @@ Any step that fails prints a `FAIL` line and stops. There is no user mode.
 
 | Range | Contents |
 | --- | --- |
-| low half | firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`). No user space |
+| low half | NK's own table on both architectures: firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`), and the user range. Nothing at address zero |
 | `0xFFFF_8000_0000_0000` + phys | direct map of physical memory: 2 MiB blocks, not executable; ranges without RAM as device memory |
 | `0xFFFF_F780_0000_0000` | `KUSER_SHARED_DATA`, one page, Windows' address |
 | `0xFFFF_F800_0000_0000` | the kernel image: 4 KiB pages, each section's own protection |
-| `0xFFFF_F880_0000_0000` to `0xFFFF_F900_0000_0000` | dynamic mappings: driver images, kernel stacks, MDL views |
+| `0xFFFF_F880_0000_0000` to `0xFFFF_F900_0000_0000` | dynamic mappings: driver images and the views of images, kernel stacks, MDL views |
+
+**The user range** (`kernel/mm/user.rs`) is `0x1_0000` up to Windows'
+`MmUserProbeAddress`, `0x7FFF_FFFF_0000`, on both architectures (the
+low half is 47 bits wide on x86-64 and 48 on arm64). There is one
+address space, the System process's, so the range is every thread's.
+`mm::user` maps fresh zeroed frames there and unmaps them, with page
+tables made on demand and every processor's translation dropped on
+unmap; it has no exports. A range that touches a firmware runtime
+region is refused, since those share the low half.
+
+The pages are kernel-only: writable, not executable, not marked
+user-accessible. Nothing runs in user mode, and a kernel-only page is
+one the kernel can always touch: x86-64 SMAP and arm64 PAN, neither of
+which NK enables, restrict only pages marked for user mode.
 
 ## Memory
 
 - **Frames.** A bitmap allocator over `EfiConventionalMemory` only,
   never below 1 MiB. Loader allocations and firmware boot-services memory
-  stay reserved (on arm64 the latter holds firmware's live page tables).
+  stay reserved.
 - **Pool.** Small requests come from 1 MiB arenas at 16-byte alignment;
   requests of about a page or more get their own page-aligned frames, as
   on Windows. All pool is in the direct map: non-paged and physically
@@ -164,7 +179,7 @@ INIT and start-up interrupts into a real-mode trampoline copied below
 1 MiB, which climbs to long mode on the kernel's page tables. arm64: PSCI
 `CPU_ON` (by the call the FADT names) into a stub that runs with the MMU
 off on a table mapping only its own page, then adopts the boot
-processor's translation settings.
+processor's translation settings and NK's low half.
 
 Each processor has its own area, the PCR at its start and NK's `PerCpu`
 (held locks, DPC queue, timer table, ready queues) beside it, allocated
@@ -411,15 +426,53 @@ Not covered:
 - The prebuilt `core`, `alloc` and `compiler_builtins`: Rust ships them
   without tables. What NK instantiates from them (generic code) is
   compiled with NK and has entries; their own non-generic functions
-  (formatting, `memcpy`, 128-bit division) do not. A function with no
-  entry is taken for a leaf, which these need not be, so a walk cannot
-  be trusted beneath one.
+  (formatting, `memcpy`, 128-bit division) do not.
 - x86-64 MXCSR and arm64 FPCR of interrupted code: they are in the trap
   frame, but unwind codes have no way to name them.
 
 A compiled function that uses no stack has no entry either, on both
 architectures. That is the convention for a leaf: its return address is
 where the call left it, at `[rsp]` or in `x30`.
+
+The gate holds the uncovered code to this list (`make unwind-check`,
+`doc/TESTING.md`): a new assembly routine without unwind directives
+fails it.
+
+**Walking a stack** (`kernel/ke/unwind.rs`). A walk starts from the
+registers a function captures of itself (`arch::unwind::capture`) and
+undoes one frame at a time: the image the program counter is in, the
+function's entry in that image's table, the registers of the frame
+beneath (`nk_unwind`). It ends at the zero return address. It stops
+with an error, never a guess or a fault, when:
+
+- a program counter is in no image;
+- a frame needs a stack slot outside the stacks the processor can be
+  on: the running thread's and, at `DISPATCH_LEVEL` or above, the
+  processor's DPC stack;
+- a function has no entry and is not where a leaf can be. A leaf calls
+  nothing, so only the code an interrupt stopped, the frame right
+  beneath an interrupt frame, can be one. Any other frame is waiting
+  for a call to return and must have an entry; the error names the
+  image and offset. So a walk never passes through a prebuilt function
+  that called NK code. Where an interrupt stopped inside a prebuilt
+  function the walk cannot tell: it takes it for a leaf, which it need
+  not be.
+
+A return address is looked up as Windows does: as it is on x86-64, as
+the instruction before it on arm64.
+
+The tests `seh.walk.*` walk from a thread, from a DPC routine across
+the change of stack, and from an interrupt handler through the
+interrupt frame, each down to the thread's start stub; mutants take an
+unwind directive away from a stub on each architecture.
+
+**Image views.** Unwind data is read through a second mapping of each
+image, the kernel's included, made when the image is entered in the
+table of images (`ldr::view`): all of the image, read-only, where a page
+of a section the image cannot write shows that page and every other
+page shows zeros. Nothing can change a byte of it and no offset into it
+faults, so the unwinder can be handed the whole image as one slice
+while the image's own data keeps changing.
 
 ## Exports
 
@@ -460,9 +513,9 @@ and only then maps it with each section's protection. Also:
 A refused image leaves nothing allocated.
 
 Every image in memory, the kernel's own first (as `ntoskrnl.exe`), is in
-one fixed-size table by file name, address range and function table
-(`nk_pe::modules`): a fatal trap names the image and offset it happened
-at.
+one fixed-size table by file name, address range, function table and
+view (`nk_pe::modules`): a fatal trap names the image and offset it
+happened at, and a stack walk finds each frame's function there.
 
 ## Starting a driver
 

@@ -10,7 +10,8 @@ Microsoft's documentation, sample source and the fixture binaries.
 | `make check`, `check-arm` | one boot of the main scenario | (as part of `boot-gate`) |
 | `make boot-gate` | every gate-tier boot scenario, in parallel | yes |
 | `make ledger-check` | the committed ledger is what the boot printed | yes |
-| `make gate` | fmt, clippy (both arches), the three above; prints `GATE-OK` | |
+| `make unwind-check` | kernel code with no unwind entry is on the allow-list | yes |
+| `make gate` | fmt, clippy (both arches), the four above; prints `GATE-OK` | |
 | `make soak` | the whole list, repeated, on an overloaded host | no: long |
 | `make mutants` | each deliberate break must fail its test | no: a build and boot each |
 | `make coverage` | `lib/` line coverage, 95% per file | no: needs `cargo-llvm-cov` |
@@ -209,6 +210,25 @@ checks every mutant still applies.
 A change that adds a mechanism whose failure would be silent (state
 saved and restored, an interrupt acknowledged, a wake-up delivered) adds
 the mutant that removes it.
+
+## Unwind coverage
+
+`tools/unwind_coverage.py` reads each built kernel image and its link
+map (`nkkrnl.map`, written beside the image) and finds every code
+symbol that no `.pdata` entry covers. Such a symbol must be one of:
+
+- code of a library listed in `tools/unwind/<arch>.txt`: the
+  prebuilt `core`, `alloc` and `compiler_builtins`. They are allowed
+  whole: which of their functions a build links in changes with
+  unrelated code and with the compiler's version;
+- a Rust function compiled with NK: the compiler gives an entry to
+  every function that uses the stack, so one without is a leaf;
+- a symbol listed there by name with its reason: assembly, which
+  nothing else checks.
+
+A new assembly routine without unwind directives therefore fails the
+gate until it gets them or is listed; so does a listed name that no
+longer applies. The check prints the count and bytes of each kind.
 
 ## Release images
 
