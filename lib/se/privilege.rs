@@ -10,7 +10,7 @@
 //! refused.
 //!
 //! [SePrivilegeCheck]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-seprivilegecheck
-//! [SeSinglePrivilegeCheck]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sesingleprivilegecheck
+//! [SeSinglePrivilegeCheck]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-sesingleprivilegecheck
 
 use crate::token::{Luid, Privilege, SE_PRIVILEGE_USED_FOR_ACCESS, Token};
 
