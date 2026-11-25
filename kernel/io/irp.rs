@@ -249,6 +249,16 @@ pub extern "C" fn IoReleaseCancelSpinLock(irql: u8) {
     crate::arch::set_irql(irql);
 }
 
+/// A request's cancel flag (`Irp->Cancel`), for reading and writing
+/// in step with its cancel routine.
+///
+/// # Safety
+/// `irp` is a live IRP.
+pub unsafe fn cancel_flag<'a>(irp: *mut IRP) -> &'a core::sync::atomic::AtomicU8 {
+    // SAFETY: per the contract.
+    unsafe { core::sync::atomic::AtomicU8::from_ptr(&raw mut (*irp).Cancel) }
+}
+
 /// [`IoCancelIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocancelirp):
 /// mark the IRP cancelled and, if its driver left a cancel routine,
 /// call it, with the cancel lock held, for the routine to release.
@@ -261,11 +271,15 @@ pub unsafe extern "C" fn IoCancelIrp(irp: *mut IRP) -> u8 {
     unsafe {
         let mut old = 0;
         IoAcquireCancelSpinLock(&raw mut old);
-        (*irp).Cancel = 1;
+        // The flag, then the routine; whoever makes a request
+        // cancellable installs the routine, then reads the flag. Both
+        // orders must be seen by both sides: sequentially consistent
+        // operations (`doc/DESIGN.md`).
+        cancel_flag(irp).store(1, Ordering::SeqCst);
         // Taken out in one step: the driver takes it out the same way
         // when it means to complete the request itself.
         let routine = AtomicPtr::from_ptr(&raw mut (*irp).CancelRoutine)
-            .swap(core::ptr::null_mut(), Ordering::AcqRel);
+            .swap(core::ptr::null_mut(), Ordering::SeqCst);
         if routine.is_null() {
             IoReleaseCancelSpinLock(old);
             return 0;

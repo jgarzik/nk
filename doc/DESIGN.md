@@ -507,7 +507,12 @@ copy to.
 Cancelling (`IoCancelIrp`) marks the IRP, takes out its cancel routine
 in one atomic step, and calls it holding the system-wide cancel spin
 lock, which the routine releases. A driver completing a request takes
-the routine out the same way, so exactly one of the two completes it. An
+the routine out the same way, so exactly one of the two completes it.
+Making a request cancellable is "install the routine, then read the
+cancel flag" against the canceller's "set the flag, then take the
+routine"; both sides use sequentially consistent operations, since with
+less each can miss the other's write and a cancelled request is never
+completed. An
 IRP completed with its cancel routine still set stops the system when it
 is cancelled (`CANCEL_STATE_IN_COMPLETED_IRP`).
 

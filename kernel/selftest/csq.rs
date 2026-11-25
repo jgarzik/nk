@@ -12,7 +12,7 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::io::{IO_CSQ, IO_CSQ_IRP_CONTEXT, IRP, SL_PENDING_RETURNED};
 
 pub static GROUP: Group = Group {
-    names: &["io.csq", "io.csq-cancel", "io.wdm-version"],
+    names: &["io.csq", "io.csq-cancel", "io.csq-race", "io.wdm-version"],
     run,
     manual: false,
 };
@@ -281,6 +281,95 @@ fn cancel() -> Result<(), &'static str> {
     result
 }
 
+/// The request the race is over, the round it is for, and the round
+/// the canceller has finished.
+static RACED: AtomicPtr<IRP> = AtomicPtr::new(core::ptr::null_mut());
+static ROUND: AtomicU32 = AtomicU32::new(0);
+static CANCELLER_DONE: AtomicU32 = AtomicU32::new(0);
+const RACE_ROUNDS: u32 = 20_000;
+
+/// Cancel each round's request as soon as the round begins, give or
+/// take a few instructions.
+fn canceller(_: usize) {
+    for round in 1..=RACE_ROUNDS {
+        while ROUND.load(Ordering::Acquire) != round {
+            crate::ke::thread::yield_now();
+        }
+        for _ in 0..(round / 8) % 8 {
+            core::hint::spin_loop();
+        }
+        // SAFETY: the round's request, alive until this round is
+        // reported done.
+        unsafe { irp::IoCancelIrp(RACED.load(Ordering::Acquire)) };
+        CANCELLER_DONE.store(round, Ordering::Release);
+    }
+}
+
+/// A request is queued on one processor while it is cancelled on
+/// another, the two as close together as can be arranged. Whichever
+/// comes first, a cancelled request must not stay queued: it is
+/// completed as cancelled, exactly once.
+fn race() -> Result<u32, &'static str> {
+    use crate::ke::{smp, thread};
+    let mut csq = queue();
+    let csq = &raw mut csq;
+    let irp = request(0)?;
+    let threads = thread::count();
+    // Another processor if there is one.
+    let me = crate::ke::pcr::current_processor() as usize;
+    let other = (0..64)
+        .find(|&cpu| cpu != me && smp::is_online(cpu))
+        .unwrap_or(me);
+    ROUND.store(0, Ordering::Release);
+    CANCELLER_DONE.store(0, Ordering::Release);
+    CANCELLED.store(0, Ordering::Release);
+    RACED.store(irp, Ordering::Release);
+    thread::create(canceller, 0, thread::NORMAL_PRIORITY, 1 << other)
+        .map_err(|_| "no thread to cancel with")?;
+    let mut result = Ok(RACE_ROUNDS);
+    for round in 1..=RACE_ROUNDS {
+        // SAFETY: the test's own request, on no queue between rounds,
+        // which the canceller touches only during a round.
+        unsafe {
+            (*irp).Cancel = 0;
+            (*(*irp).CurrentStackLocation).Control = 0;
+            ROUND.store(round, Ordering::Release);
+            for _ in 0..round % 8 {
+                core::hint::spin_loop();
+            }
+            IoCsqInsertIrp(csq, irp, core::ptr::null_mut());
+        }
+        while CANCELLER_DONE.load(Ordering::Acquire) != round {
+            thread::yield_now();
+        }
+        if result.is_ok() && CANCELLED.load(Ordering::Acquire) != round {
+            result = Err(
+                "a request cancelled while it was being queued was not completed as cancelled, once",
+            );
+        }
+        // Whatever happened, the next round starts with an empty queue.
+        // SAFETY: the test's own queue and request.
+        unsafe {
+            IoCsqRemoveNextIrp(csq, core::ptr::null_mut());
+            for slot in &QUEUE {
+                slot.store(core::ptr::null_mut(), Ordering::Release);
+            }
+            (*irp).CancelRoutine = core::ptr::null_mut();
+        }
+    }
+    while thread::count() != threads {
+        thread::yield_now();
+    }
+    // SAFETY: the test's own request, on no queue.
+    unsafe { irp::free(irp) };
+    if UNLOCKED_USE.load(Ordering::Acquire) {
+        return Err(
+            "the queue's callbacks were called without its lock, or the completion with it",
+        );
+    }
+    result
+}
+
 /// Windows 10 implements WDM 6.0 and everything before it.
 fn wdm_version() -> Result<(), &'static str> {
     let answers = [
@@ -302,5 +391,12 @@ fn wdm_version() -> Result<(), &'static str> {
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("io.csq", in_and_out);
     r.check("io.csq-cancel", cancel);
+    match race() {
+        Ok(rounds) => r.ok_with(
+            "io.csq-race",
+            format_args!("requests queued while being cancelled: {rounds}"),
+        ),
+        Err(why) => r.fail("io.csq-race", format_args!("{why}")),
+    }
     r.check("io.wdm-version", wdm_version);
 }

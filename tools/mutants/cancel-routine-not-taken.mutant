@@ -4,5 +4,5 @@
 scenario: aarch64
 fails: scenario
 file: kernel/io/irp.rs
-replace:             .swap(core::ptr::null_mut(), Ordering::AcqRel);
+replace:             .swap(core::ptr::null_mut(), Ordering::SeqCst);
 with:             .load(Ordering::Acquire);

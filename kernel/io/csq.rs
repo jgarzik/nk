@@ -172,14 +172,20 @@ pub unsafe extern "C" fn IoCsqInsertIrp(
         (queue.insert)(csq, irp);
         // `IoMarkIrpPending`.
         (*(*irp).CurrentStackLocation).Control |= SL_PENDING_RETURNED;
-        cancel_routine(irp).store(cancelled as *mut c_void, Ordering::Release);
+        // Install the routine, then look at the cancel flag; the
+        // canceller sets the flag, then looks for the routine. Each
+        // must see the other's write if it came first, so both sides
+        // use sequentially consistent operations: with anything weaker
+        // each can miss the other, and a cancelled request stays
+        // queued for good.
+        cancel_routine(irp).swap(cancelled as *mut c_void, Ordering::SeqCst);
         // Cancelled before the routine was in place? Then nobody will
         // call it: if it can still be taken back out, the request is
         // this call's to complete. If it cannot, the canceller has it
         // and waits for the queue's lock.
-        if (*irp).Cancel != 0
+        if super::irp::cancel_flag(irp).load(Ordering::SeqCst) != 0
             && !cancel_routine(irp)
-                .swap(core::ptr::null_mut(), Ordering::AcqRel)
+                .swap(core::ptr::null_mut(), Ordering::SeqCst)
                 .is_null()
         {
             (queue.remove)(csq, irp);

@@ -63,6 +63,7 @@ cm.keys ok
 cm.values ok
 io.csq ok
 io.csq-cancel ok
+io.csq-race ok
 io.wdm-version ok
 mutex.ownership ok
 mutex.exclusion ok
