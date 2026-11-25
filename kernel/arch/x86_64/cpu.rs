@@ -6,6 +6,8 @@
 //! naturally when they match.
 
 use core::cell::UnsafeCell;
+use core::mem::offset_of;
+use core::sync::atomic::{AtomicU64, Ordering};
 use nk_ntabi::pcr::NATIVE as PCR;
 
 const PCR_SIZE: usize = PCR.size;
@@ -42,12 +44,20 @@ struct Tss {
 struct CpuArea {
     /// KPCR followed by KPRCB; GS points here.
     pcr: [u8; PCR_SIZE],
+    /// NK's own per-processor state. No driver can see it.
+    private: Private,
     /// Stand-in for the current thread object. There are no threads yet,
     /// but `KeGetCurrentThread()` must return a stable non-null pointer.
     thread: [u8; 4096],
     fault_stack: [u8; FAULT_STACK_SIZE],
     gdt: [u64; 10],
     tss: Tss,
+}
+
+struct Private {
+    /// Lowest address of the kernel stack this processor is running on,
+    /// or 0 while it is still on the loader's.
+    stack_base: AtomicU64,
 }
 
 struct Shared(UnsafeCell<CpuArea>);
@@ -58,6 +68,9 @@ unsafe impl Sync for Shared {}
 
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
+    private: Private {
+        stack_base: AtomicU64::new(0),
+    },
     thread: [0; 4096],
     fault_stack: [0; FAULT_STACK_SIZE],
     gdt: [0; 10],
@@ -171,4 +184,23 @@ pub fn pcr() -> *mut u8 {
         core::arch::asm!("mov {}, gs:[{}]", out(reg) pcr, const PCR.self_ptr, options(readonly, nostack))
     };
     pcr as *mut u8
+}
+
+/// This CPU's private state.
+fn private() -> &'static Private {
+    // SAFETY: the PCR is the first field of this CPU's `CpuArea`, which
+    // lives forever; `Private` is only ever accessed through shared
+    // references and holds atomics.
+    unsafe { &*pcr().add(offset_of!(CpuArea, private)).cast::<Private>() }
+}
+
+/// Record the kernel stack this processor now runs on, by its lowest
+/// address, so that a fault just below it is recognised as an overflow.
+pub fn set_kernel_stack(base: u64) {
+    private().stack_base.store(base, Ordering::Relaxed);
+}
+
+/// Lowest address of the current kernel stack, or 0 if not recorded.
+pub fn kernel_stack() -> u64 {
+    private().stack_base.load(Ordering::Relaxed)
 }

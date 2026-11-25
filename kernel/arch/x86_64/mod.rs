@@ -4,7 +4,7 @@ mod cpu;
 pub mod platform;
 mod trap;
 
-pub use cpu::pcr;
+pub use cpu::{pcr, set_kernel_stack};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use nk_bootinfo::{BootInfo, Serial};
@@ -55,6 +55,31 @@ pub fn halt() -> ! {
     loop {
         // SAFETY: disabling interrupts and halting touches no memory.
         unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) }
+    }
+}
+
+/// Continue on a new stack: call `entry(info)` with the stack pointer at
+/// `top`. Whatever was on the old stack is abandoned.
+pub fn switch_stack(
+    top: u64,
+    entry: extern "C" fn(&'static BootInfo) -> !,
+    info: &'static BootInfo,
+) -> ! {
+    // SAFETY: `top` is the top of a mapped stack nothing else uses, 16-byte
+    // aligned; the 32 bytes are the callee's shadow space, and the call
+    // leaves the stack as the convention requires at function entry.
+    unsafe {
+        core::arch::asm!(
+            "mov rsp, {top}",
+            "xor ebp, ebp",
+            "sub rsp, 32",
+            "call {entry}",
+            "ud2",
+            top = in(reg) top,
+            entry = in(reg) entry,
+            in("rcx") info,
+            options(noreturn),
+        )
     }
 }
 

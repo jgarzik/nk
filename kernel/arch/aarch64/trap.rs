@@ -46,6 +46,14 @@ pub fn breakpoints() -> u32 {
 // Sixteen vectors of 0x80 bytes each: {current EL with SP0, current EL
 // with SPx, lower EL 64-bit, lower EL 32-bit} x {sync, IRQ, FIQ, SError}.
 // Each makes room for a Frame, saves x0/x1, and passes its index in x0.
+//
+// Exceptions are taken on the stack that was current, so before storing
+// anything an entry checks that the frame it just made room for is still
+// on a stack. Every kernel stack has one address bit set throughout and
+// clear in the stretch below it (`nk_bootinfo::KERNEL_STACK_SIZE`); the
+// stack pointer cannot be tested directly, so it is swapped into x0 and
+// back with three additions. An overflow goes to `nk_stack_overflow`,
+// which reports it from the processor's overflow stack.
 // The common path saves the rest, including the vector registers and the
 // floating-point control and status registers, and gives the handler the
 // kernel's own control word (round to nearest, no traps).
@@ -57,84 +65,225 @@ global_asm!(
 nk_vectors:
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #0
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #1
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #2
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #3
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #4
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #5
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #6
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #7
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #8
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #9
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #10
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #11
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #12
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #13
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #14
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
     .balign 0x80
     sub sp, sp, #816
+    add sp, sp, x0
+    sub x0, sp, x0
+    tbz x0, #{stack_shift}, 1f
+    sub x0, sp, x0
+    sub sp, sp, x0
     stp x0, x1, [sp]
     mov x0, #15
     b nk_trap_common
+1:  sub x0, sp, x0
+    sub sp, sp, x0
+    b nk_stack_overflow
+
+// Entered with sp and every register as at the exception, less the frame
+// already subtracted from sp. Nothing can be saved on that stack.
+nk_stack_overflow:
+    msr tpidrro_el0, x0
+    mrs x0, tpidr_el1
+    ldr x0, [x0, #{overflow_top}]
+    mov x1, sp
+    mov sp, x0
+    add x0, x1, #816
+    mrs x1, elr_el1
+    mrs x2, far_el1
+    bl {overflow}
 
 nk_trap_common:
     mov x1, x0
@@ -326,7 +475,18 @@ nk_fp_clobber:
     ret
 "#,
     handler = sym trap_handler,
+    overflow = sym stack_overflow,
+    overflow_top = const super::cpu::OVERFLOW_TOP,
+    stack_shift = const nk_bootinfo::KERNEL_STACK_SHIFT,
 );
+
+/// The kernel stack overflowed. Runs on the overflow stack; the registers
+/// of the interrupted code, other than these, are gone.
+extern "C" fn stack_overflow(sp: u64, pc: u64, far: u64) -> ! {
+    crate::kd::bugcheck(format_args!(
+        "kernel stack overflow at pc={pc:#018x}\nsp={sp:#018x} far={far:#018x}"
+    ))
+}
 
 unsafe extern "C" {
     static nk_vectors: u8;

@@ -1,0 +1,10 @@
+# Exception entry on the kernel's own stack stops checking for overflow
+# (the fifth vector: a synchronous exception from kernel mode). It then
+# stores a frame below the stack, faults doing so, and repeats without
+# end.
+scenario: aarch64-neg-stack-overflow
+fails: scenario
+file: kernel/arch/aarch64/trap.rs
+occurrence: 5
+replace:     tbz x0, #{stack_shift}, 1f
+with:     tbnz xzr, #{stack_shift}, 1f

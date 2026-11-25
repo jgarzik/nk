@@ -14,6 +14,7 @@ pub static GROUP: Group = Group {
         "mm.frames",
         "mm.map",
         "mm.pool",
+        "mm.stack",
         "hal.cpus",
     ],
     run,
@@ -34,6 +35,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("mm.frames", mm::frames_self_test);
     r.check("mm.map", mm::map::self_test);
     r.check("mm.pool", mm::pool::self_test);
+    r.check("mm.stack", mm::stack::self_test);
     match hal::platform::self_test(info) {
         Ok(n) => r.ok_with("hal.cpus", format_args!("{n} processors")),
         Err(why) => r.fail("hal.cpus", format_args!("{why}")),

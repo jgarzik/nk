@@ -190,7 +190,19 @@ table construction. The kernel binary is the glue and the `unsafe`.
   The driver-unload leak test compares those counts.
 - **Kernel mappings.** Driver images are mapped above the kernel image
   with 4 KiB pages and each section's own protection. Address space is
-  bump-allocated and not reused; frames are freed on unmap.
+  bump-allocated, with a small cache of freed ranges reused by size;
+  frames are freed on unmap.
+- **Kernel stacks.** 32 KiB each, mapped in the same region with the
+  32 KiB below left unmapped, so running off the bottom faults. The top
+  is a multiple of 64 KiB, which puts one address bit at 1 across the
+  stack and at 0 across the gap. On x86-64 the overflow arrives as a
+  double fault on its own stack and is recognised by the faulting
+  address. arm64 takes exceptions on the current stack, so exception
+  entry tests that bit of the stack pointer before it stores anything and
+  reports from a per-processor overflow stack. Either way the bugcheck
+  says "kernel stack overflow". The kernel moves from the loader's stack
+  to one of these as soon as memory is up. Windows' kernel stacks are
+  24 KiB on x86-64; no driver can depend on the exact size.
 
 ### Loading a driver
 

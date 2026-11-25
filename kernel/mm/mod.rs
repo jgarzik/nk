@@ -9,6 +9,7 @@
 
 pub mod map;
 pub mod pool;
+pub mod stack;
 
 use crate::ke::SpinLock;
 use core::sync::atomic::{AtomicU64, Ordering};

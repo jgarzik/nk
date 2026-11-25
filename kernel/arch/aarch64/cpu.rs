@@ -6,6 +6,8 @@
 //! it once per CPU is enough: nothing NK compiles will disturb it.
 
 use core::cell::UnsafeCell;
+use core::mem::offset_of;
+use nk_bootinfo::{KERNEL_STACK_SIZE, stack_top_in};
 use nk_ntabi::pcr::NATIVE as PCR;
 
 const PCR_SIZE: usize = PCR.size;
@@ -15,10 +17,20 @@ const PCR_SIZE: usize = PCR.size;
 struct CpuArea {
     /// KPCR followed by KPRCB; x18 points here.
     pcr: [u8; PCR_SIZE],
+    /// Top of this processor's overflow stack. Exception entry loads it
+    /// from here, relative to `TPIDR_EL1`, when it finds the stack it
+    /// arrived on has overflowed.
+    overflow_top: u64,
     /// Stand-in for the current thread object. There are no threads yet,
     /// but `KeGetCurrentThread()` must return a stable non-null pointer.
     thread: [u8; 4096],
+    /// Room for one stack at the alignment every kernel stack has.
+    overflow_stack: [u8; OVERFLOW_ROOM],
 }
+
+const OVERFLOW_ROOM: usize = 3 * KERNEL_STACK_SIZE as usize;
+/// Where exception entry finds `overflow_top`, from the PCR.
+pub const OVERFLOW_TOP: usize = offset_of!(CpuArea, overflow_top);
 
 struct Shared(UnsafeCell<CpuArea>);
 
@@ -28,7 +40,9 @@ unsafe impl Sync for Shared {}
 
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
+    overflow_top: 0,
     thread: [0; 4096],
+    overflow_stack: [0; OVERFLOW_ROOM],
 }));
 
 /// Point x18 at this CPU's PCR and record that it is processor `number`.
@@ -50,6 +64,12 @@ pub fn init(number: u32) {
             .cast::<u64>()
             .write((&raw mut (*area).thread) as u64);
         pcr.add(PCR.number).cast::<u32>().write(number);
+        // Three stack sizes always hold one aligned stack.
+        (*area).overflow_top = stack_top_in(
+            (&raw mut (*area).overflow_stack) as u64,
+            OVERFLOW_ROOM as u64,
+        )
+        .unwrap_or(0);
         core::arch::asm!("msr tpidr_el1, {0}", "mov x18, {0}", in(reg) pcr as u64, options(nomem, nostack));
     }
 }

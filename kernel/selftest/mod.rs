@@ -25,6 +25,7 @@ pub static GROUPS: &[&Group] = &[
     &oracle::GROUP,
     &neg::PANIC,
     &neg::FAULT,
+    &neg::STACK_OVERFLOW,
     &neg::META_FAIL,
 ];
 

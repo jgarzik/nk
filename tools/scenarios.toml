@@ -60,6 +60,22 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: synchronous exception"
 
+# Running off the kernel stack must be named as that.
+
+[x86_64-neg-stack-overflow]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
+[aarch64-neg-stack-overflow]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
 # And a failing test must fail the run.
 
 [x86_64-known-bad]

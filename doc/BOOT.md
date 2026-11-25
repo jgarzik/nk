@@ -55,7 +55,9 @@ The low half differs by architecture:
 
 ## State at kernel entry
 
-- Boot CPU only, interrupts masked, on a 64 KiB stack in the direct map.
+- Boot CPU only, interrupts masked, on a 32 KiB stack in the direct map
+  whose top is a multiple of 64 KiB: the size and alignment of every
+  kernel stack (`nk_bootinfo::KERNEL_STACK_SIZE`).
 - One argument: a pointer to `BootInfo`.
 - x86-64: `EFER.NXE` and `CR0.WP` set. arm64: EL1.
 - Memory the loader allocated (kernel image, page tables, stack,
@@ -75,4 +77,7 @@ real hardware. NK never calls `SetVirtualAddressMap`.
 - The direct map is a writable alias of all RAM, kernel text included, so
   the image's read-only mappings stop accidents, not a determined write.
 - On arm64 firmware's full identity map is still live in `TTBR0`.
-- The boot stack has no guard page.
+- The loader's boot stack has ordinary memory below it. The kernel
+  leaves it for a guarded stack of its own as soon as it can allocate
+  one; until then an overflow is caught on arm64 (by the alignment rule)
+  but not on x86-64.

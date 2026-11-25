@@ -58,3 +58,30 @@ pub static META_FAIL: Group = Group {
 fn meta_fail(r: &mut Report, _: &BootInfo) {
     r.fail("meta.fail", format_args!("deliberate failure"));
 }
+
+/// Running off the end of the kernel stack must be reported as that, not
+/// as silent corruption or an unexplained fault.
+pub static STACK_OVERFLOW: Group = Group {
+    names: &["neg.stack-overflow"],
+    run: stack_overflow,
+    manual: true,
+};
+
+/// Recurse without end. Each call keeps a buffer alive across the next,
+/// so the compiler cannot turn the recursion into a loop.
+#[inline(never)]
+#[allow(unconditional_recursion, reason = "overflowing the stack is the test")]
+fn descend(depth: u64) -> u64 {
+    let mut pad = [depth as u8; 256];
+    core::hint::black_box(&mut pad);
+    descend(depth + 1) + u64::from(pad[0])
+}
+
+fn stack_overflow(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.stack-overflow");
+    let depth = descend(0);
+    r.fail(
+        "neg.stack-overflow",
+        format_args!("unbounded recursion returned {depth}"),
+    );
+}

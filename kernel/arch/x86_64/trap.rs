@@ -49,6 +49,7 @@ pub struct Frame {
 }
 
 const BREAKPOINT: u64 = 3;
+const DOUBLE_FAULT: u64 = 8;
 const PAGE_FAULT: u64 = 14;
 /// `int 0x29`: `__fastfail`, how MSVC-built code reports fatal corruption
 /// (a failed stack-cookie check, for one). The reason code is in rcx.
@@ -1519,10 +1520,16 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     let cr2: u64;
     // SAFETY: reading CR2 has no side effects.
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
+    // A stack that overflows faults on the unmapped memory below it. The
+    // page fault cannot push its own frame there, so it arrives as a
+    // double fault, on the stack kept for that.
+    let overflow = matches!(frame.vector, DOUBLE_FAULT | PAGE_FAULT)
+        && crate::mm::stack::is_overflow(super::cpu::kernel_stack(), cr2);
     let what = match frame.vector {
+        _ if overflow => "kernel stack overflow",
         0 => "divide error",
         6 => "invalid opcode",
-        8 => "double fault",
+        DOUBLE_FAULT => "double fault",
         13 => "general protection fault",
         PAGE_FAULT => "page fault",
         FAST_FAIL => "driver fast-fail (reason code in rcx)",

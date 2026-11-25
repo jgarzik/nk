@@ -11,9 +11,11 @@ Each file in tools/mutants/ describes one deliberate break:
     remove:     movups xmm3, xmmword ptr [rsp + 48]
 
 `remove:` deletes the first line of the file equal to the text after
-`remove: ` (leading spaces count). `replace:` followed by `with:` swaps it
-instead. `fails:` names the test that must report FAIL, or `bugcheck`,
-`hang` for a boot that must end that way.
+`remove: ` (leading spaces count); `occurrence: 3` picks the third such
+line instead. `replace:` followed by `with:` swaps the line instead of
+deleting it. `fails:` names the test that must report FAIL, or is
+`scenario` when the scenario as a whole must fail (one that expects a
+particular bugcheck, say, and no longer gets it).
 
 Usage: mutants.py [name...]      (default: every mutant)
 
@@ -23,6 +25,7 @@ the gate (it rebuilds the kernel once per mutant); run it when tests or
 the code they cover change, and at the end of a phase.
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -51,9 +54,12 @@ def parse(path):
 def mutate(text, fields, name):
     target = fields.get("remove", fields.get("replace"))
     lines = text.split("\n")
-    if target not in lines:
-        sys.exit(f"mutants: {name}: the line to change is not in {fields['file']}:\n  {target!r}")
-    at = lines.index(target)
+    matches = [i for i, line in enumerate(lines) if line == target]
+    occurrence = int(fields.get("occurrence", "1"))
+    if len(matches) < occurrence:
+        sys.exit(f"mutants: {name}: {fields['file']} has {len(matches)} lines equal to "
+                 f"{target!r}, not {occurrence}")
+    at = matches[occurrence - 1]
     lines[at:at + 1] = [] if "remove" in fields else [fields["with"]]
     return "\n".join(lines)
 
@@ -72,18 +78,16 @@ def run(name):
         if built.returncode != 0:
             print(f"{name}: the mutant does not build:\n{built.stderr[-2000:]}")
             return False
+        # A broken kernel may well hang: do not wait two minutes for it.
+        env = {**os.environ, "BOOT_TEST_TIMEOUT": os.environ.get("MUTANT_TIMEOUT", "30")}
         boot = subprocess.run([ROOT / "tools" / "boot_test.py", fields["scenario"]],
-                              cwd=ROOT, capture_output=True, text=True)
+                              cwd=ROOT, capture_output=True, text=True, env=env)
         out = boot.stdout
     finally:
         source.write_bytes(original)
     wanted = fields["fails"]
-    if wanted == "bugcheck":
-        caught = bool(re.search(r"^\s+BUGCHECK", out, re.M))
-    elif wanted == "hang":
-        caught = "timeout after" in out
-    else:
-        caught = bool(re.search(rf"NK-TEST {re.escape(wanted)}:FAIL", out))
+    caught = wanted == "scenario" or bool(
+        re.search(rf"NK-TEST {re.escape(wanted)}:FAIL", out))
     if boot.returncode == 0:
         print(f"{name}: SURVIVED: the boot passed with the kernel broken")
         return False

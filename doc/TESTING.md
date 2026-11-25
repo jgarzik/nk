@@ -81,6 +81,7 @@ tier in parallel:
 | --- | --- |
 | `x86_64`, `aarch64` | the tests pass |
 | `*-neg-panic`, `*-neg-fault` | a kernel panic or a stray memory access ends the boot in a bugcheck, and the harness sees it |
+| `*-neg-stack-overflow` | running off the kernel stack is reported as a stack overflow |
 | `*-known-bad` | a failing test fails the run |
 | `*-wrong-cpus` | a processor the kernel does not find fails a test |
 

@@ -19,8 +19,10 @@ class Mutants(unittest.TestCase):
             with self.subTest(mutant=path.stem):
                 fields = mutants.parse(path)
                 self.assertIn(fields["scenario"], SCENARIOS)
-                self.assertEqual(SCENARIOS[fields["scenario"]].get("expect", "ok"), "ok",
-                                 "a mutant is judged against a scenario that should pass")
+                # A named test can only be seen to fail in a scenario that
+                # otherwise passes; other scenarios fail as a whole.
+                expects_ok = SCENARIOS[fields["scenario"]].get("expect", "ok") == "ok"
+                self.assertEqual(fields["fails"] == "scenario", not expects_ok)
                 text = (mutants.ROOT / fields["file"]).read_text()
                 changed = mutants.mutate(text, fields, path.stem)
                 self.assertNotEqual(changed, text)

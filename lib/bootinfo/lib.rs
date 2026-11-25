@@ -23,6 +23,28 @@ pub const MODULE_NAME_LEN: usize = 32;
 /// Room for the kernel command line, including its NUL padding.
 pub const CMDLINE_LEN: usize = 256;
 
+/// Size of every kernel stack, the boot stack included.
+///
+/// A stack's top is a multiple of twice this size, so an address on the
+/// stack has bit `KERNEL_STACK_SHIFT` set and the `KERNEL_STACK_SIZE`
+/// bytes below the stack have it clear. That lets exception entry tell
+/// that the stack has overflowed from the stack pointer alone, before it
+/// stores anything (arm64, which takes exceptions on the current stack).
+pub const KERNEL_STACK_SIZE: u64 = 1 << KERNEL_STACK_SHIFT;
+pub const KERNEL_STACK_SHIFT: u32 = 15;
+
+/// The highest stack top inside `len` bytes at `start`: a multiple of
+/// twice the stack size with a whole stack below it. `None` if the range
+/// has room for none; three stack sizes always do.
+pub const fn stack_top_in(start: u64, len: u64) -> Option<u64> {
+    let top = (start + len) & !(2 * KERNEL_STACK_SIZE - 1);
+    if top >= start + KERNEL_STACK_SIZE && len >= KERNEL_STACK_SIZE {
+        Some(top)
+    } else {
+        None
+    }
+}
+
 /// `EFI_MEMORY_TYPE` values the kernel cares about.
 pub const EFI_LOADER_CODE: u32 = 1;
 pub const EFI_RUNTIME_CODE: u32 = 5;
@@ -284,6 +306,39 @@ mod tests {
         assert_eq!(size_of::<Module>(), 48);
         assert_eq!(size_of::<BootInfo>(), 104 + CMDLINE_LEN + 48 * MAX_MODULES);
         assert!(BootInfo::new().is_valid());
+    }
+
+    #[test]
+    fn stack_tops() {
+        const S: u64 = KERNEL_STACK_SIZE;
+        // Three stack sizes hold a stack wherever they start.
+        for start in [
+            0x10_0000,
+            0x10_1000,
+            0x10_7000,
+            0x10_8000,
+            0x10_F000,
+            0x7FFF_F000,
+        ] {
+            let top = stack_top_in(start, 3 * S).expect("room for a stack");
+            assert_eq!(top % (2 * S), 0);
+            assert!(top - S >= start && top <= start + 3 * S);
+            // On the stack the bit is set; in the size below it, clear.
+            for sp in [top - 8, top - S] {
+                assert_ne!(sp >> KERNEL_STACK_SHIFT & 1, 0, "{sp:#x}");
+            }
+            for sp in [top - S - 8, top - 2 * S] {
+                assert_eq!(sp >> KERNEL_STACK_SHIFT & 1, 0, "{sp:#x}");
+            }
+        }
+        assert_eq!(
+            stack_top_in(2 * S, S),
+            None,
+            "an aligned top with no stack below"
+        );
+        assert_eq!(stack_top_in(S, S), Some(2 * S));
+        assert_eq!(stack_top_in(S + 0x1000, S), None);
+        assert_eq!(stack_top_in(0x1000, 0x1000), None);
     }
 
     #[test]

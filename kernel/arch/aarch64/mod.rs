@@ -49,6 +49,34 @@ pub fn halt() -> ! {
     }
 }
 
+/// Continue on a new stack: call `entry(info)` with the stack pointer at
+/// `top`. Whatever was on the old stack is abandoned.
+pub fn switch_stack(
+    top: u64,
+    entry: extern "C" fn(&'static BootInfo) -> !,
+    info: &'static BootInfo,
+) -> ! {
+    // SAFETY: `top` is the top of a mapped stack nothing else uses, 16-byte
+    // aligned; with no frame or return address the entry starts a fresh
+    // call chain.
+    unsafe {
+        core::arch::asm!(
+            "mov sp, {top}",
+            "mov x29, xzr",
+            "mov x30, xzr",
+            "br {entry}",
+            top = in(reg) top,
+            entry = in(reg) entry,
+            in("x0") info,
+            options(noreturn),
+        )
+    }
+}
+
+/// Record the kernel stack this processor now runs on. Nothing to do
+/// here: exception entry recognises an overflow from the stack pointer.
+pub fn set_kernel_stack(_base: u64) {}
+
 /// Take over the boot CPU, processor 0: exception vectors, PCR. Prints
 /// nothing and takes no lock: it runs before either works.
 pub fn cpu_init() {

@@ -53,6 +53,18 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
         test::abort("mm.init", format_args!("{why}"));
     }
     kprintln!("memory: {} MiB free", mm::free_frame_count() * 4 / 1024);
+
+    // Leave the loader's stack, which lies in the direct map with ordinary
+    // memory below it, for one with nothing mapped below.
+    let Some(stack) = mm::stack::alloc() else {
+        test::abort("mm.stack", format_args!("cannot allocate the boot stack"));
+    };
+    arch::set_kernel_stack(stack.base);
+    arch::switch_stack(stack.top, on_kernel_stack, info)
+}
+
+/// The rest of boot, on the kernel's own stack.
+extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = hal::platform::init(info) {
         test::abort("hal.platform", format_args!("{why}"));
     }
