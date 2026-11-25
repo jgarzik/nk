@@ -5,7 +5,7 @@ says so. Windows concepts are not explained here; see Microsoft's
 [driver documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/_kernel/)
 and the [PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
 
-## The MVP: 0.0.1, driver bootstrap
+## The first milestone: 0.0.1, driver bootstrap
 
 On QEMU, x86-64 and arm64 alike:
 
@@ -140,7 +140,7 @@ The object namespace is a flat table of device names and symbolic links,
 case-insensitive, with `\DosDevices`, `\??` and `\GLOBAL??` as one
 directory. There are no handles, no directories and no security checks.
 
-## What the MVP leaves out, and how it stays honest
+## What 0.0.1 leaves out, and how it stays honest
 
 No threads, waits, timers, SEH, PnP or power management. Where a proof
 driver imports something in that territory but never reaches it on the
@@ -157,5 +157,6 @@ and so does `MmProbeAndLockPages` on an inaccessible buffer. A driver's
 ## Dependencies
 
 The loader speaks UEFI through its own small bindings and the kernel has
-no external crates. Reuse from the sibling `hk` kernel is by idea and by
-small MIT-licensed pieces with attribution, not by wholesale import.
+no external crates. NK shares conventions (the gate, boot-test harness, lint set) with
+its sibling Linux-compatible kernel, [hk](https://github.com/jgarzik/hk),
+but no code.
