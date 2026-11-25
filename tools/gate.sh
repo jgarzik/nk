@@ -8,7 +8,8 @@ rm -rf "$out"
 mkdir -p "$out"
 start=$(date +%s)
 
-for step in fmt-check clippy clippy-arm test ledger-check check check-arm; do
+# The ledger is generated from the boot logs, so it is checked after them.
+for step in fmt-check clippy clippy-arm test check check-arm ledger-check; do
     printf '%-12s' "$step"
     if make --no-print-directory "$step" >"$out/$step.out" 2>&1; then
         echo ok

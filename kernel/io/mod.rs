@@ -1,0 +1,20 @@
+//! The I/O manager: driver and device objects, IRPs, and the request path
+//! from "open this name" to a driver's dispatch routine and back.
+//!
+//! Objects handed to drivers are allocated from the pool at exactly their
+//! Windows size and reached through raw pointers only. Requests are
+//! synchronous: there are no threads to block, so a driver that pends a
+//! request and never completes it is reported, not waited for.
+
+pub mod device;
+pub mod driver;
+pub mod file;
+pub mod irp;
+
+/// Pool tags, as Windows spells its own.
+pub const TAG_DRIVER: u32 = u32::from_le_bytes(*b"Driv");
+pub const TAG_DEVICE: u32 = u32::from_le_bytes(*b"Devi");
+pub const TAG_FILE: u32 = u32::from_le_bytes(*b"File");
+pub const TAG_IRP: u32 = u32::from_le_bytes(*b"Irp ");
+/// Buffers the I/O manager allocates for buffered requests.
+pub const TAG_IO_BUFFER: u32 = u32::from_le_bytes(*b"IoSB");

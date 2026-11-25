@@ -200,6 +200,23 @@ fn headers_and_sections() {
 }
 
 #[test]
+fn page_flags_follow_sections() {
+    let file = Builder::new().build();
+    let pe = Pe::parse(&file).unwrap();
+    assert_eq!(
+        pe.page_flags(0),
+        Some(SCN_MEM_READ),
+        "headers are read-only"
+    );
+    assert_eq!(pe.page_flags(TEXT), Some(SCN_MEM_EXECUTE | SCN_MEM_READ));
+    assert_eq!(
+        pe.page_flags(DATA + 0xFFF),
+        Some(SCN_MEM_READ | SCN_MEM_WRITE)
+    );
+    assert_eq!(pe.page_flags(IMAGE_SIZE), None, "past the image");
+}
+
+#[test]
 fn machine_check() {
     let pe_file = Builder {
         machine: MACHINE_ARM64,

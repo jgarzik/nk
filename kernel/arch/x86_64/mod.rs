@@ -86,3 +86,15 @@ pub fn flush_tlb_page(va: u64) {
 
 /// Make new mappings visible. x86 needs nothing after adding an entry.
 pub fn mapping_sync() {}
+
+/// A fast-changing counter, used only to vary stack-protector cookies.
+pub fn cycle_counter() -> u64 {
+    let (lo, hi): (u32, u32);
+    // SAFETY: rdtsc reads a counter and touches no memory.
+    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)) };
+    u64::from(hi) << 32 | u64::from(lo)
+}
+
+/// Make freshly written code executable. x86 keeps instruction and data
+/// caches coherent by itself.
+pub fn sync_icache(_start: *const u8, _len: usize) {}

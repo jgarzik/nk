@@ -257,6 +257,18 @@ impl<'a> Pe<'a> {
         })
     }
 
+    /// Section characteristics (`SCN_MEM_*`) governing the image page at
+    /// `rva`: the section that covers it, or read-only for the headers.
+    /// `None` for a page no section covers, which should stay unmapped.
+    pub fn page_flags(&self, rva: u32) -> Option<u32> {
+        if rva < self.headers.size_of_headers {
+            return Some(SCN_MEM_READ);
+        }
+        self.sections()
+            .find(|s| rva >= s.rva && u64::from(rva) < u64::from(s.rva) + u64::from(s.mem_size()))
+            .map(|s| s.characteristics)
+    }
+
     /// Lay the file out as it sits in memory: headers, then each section at
     /// its RVA, everything else zero. `image` must hold `size_of_image` bytes.
     pub fn map_into(&self, image: &mut [u8]) -> Result<(), PeError> {

@@ -53,6 +53,17 @@ TSS 0x40). That is a debugging convenience, not a driver dependency.
 Any exception other than a breakpoint is a fatal bugcheck with a register
 dump. There is no SEH: a driver's `__try` block cannot catch anything.
 
+## Found by reading the fixture binaries
+
+- Drivers reach the current IRP stack location at `IRP+0xB8` and the
+  status block at `IRP+0x30` directly; `IoGetCurrentIrpStackLocation` and
+  friends are inlined, never imported.
+- A WDK-built driver's real entry point is a compiler wrapper that
+  validates the stack cookie before the author's `DriverEntry` runs. See
+  "Loading a driver" in `doc/DESIGN.md`.
+- `null.sys` writes a `FAST_IO_DISPATCH` table into its device extension.
+  NK never calls fast I/O routines; every request is an IRP.
+
 ## Not yet verified
 
 - The arm64 PCR offsets above.

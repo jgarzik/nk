@@ -38,6 +38,28 @@ copy. What remains is `target/qemu/serial-<arch>.log`.
 Knobs: `BOOT_TEST_TIMEOUT` (seconds, default 120), `QEMU_SMP`, `QEMU_MEM`,
 `NO_KVM=1`. `make run` / `make run-arm` boot with the console attached.
 
+## Driver fixtures
+
+`fixtures/manifest.toml` lists every Windows binary the tests use, with
+its URL and SHA-256; `make fixtures` downloads them to `target/fixtures/`.
+None is committed. The boot tests put them on the EFI system partition:
+
+| File on the ESP | What it is | Expected |
+| --- | --- | --- |
+| `null.sys` | Microsoft's inbox Null driver | loads; read gives end-of-file, write accepts all bytes; unloads without leaks |
+| `sioctl.sys` | Microsoft's WDM IOCTL sample, WDK-built | loaded from the next phase on |
+| `wrongarch.sys` | the same sample built for the other architecture | refused: wrong machine |
+| `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
+
+A fixture that is not present makes its tests print SKIP. There is no
+Windows 10 arm64 `null.sys` fixture yet, so those tests skip on arm64.
+
+Expected results come from Microsoft's documentation and from reading the
+driver binaries. They have not been compared with a run on Windows.
+
+Each driver test compares pool usage, free frames and namespace entries
+before loading the driver and after unloading it.
+
 ## The gate
 
 `make gate` runs every check a commit must pass and prints `GATE-OK`.

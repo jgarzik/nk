@@ -1,5 +1,6 @@
 //! Kernel core: synchronisation and processor state.
 
+pub mod event;
 pub mod pcr;
 pub mod spinlock;
 

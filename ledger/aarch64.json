@@ -1,14 +1,14 @@
 {
  "reference": "Windows 10 22H2, NT 10.0.19045",
  "arch": "aarch64",
- "export_states_from_boot_log": false,
+ "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 13,
-  "implemented": 0,
+  "implemented": 4,
   "partial": 0,
   "traps": 0,
-  "missing": 13
+  "missing": 9
  },
  "fixtures": [
   {
@@ -41,12 +41,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlInitUnicodeString",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoDeleteDevice",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -61,7 +61,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoCreateDevice",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -71,7 +71,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IofCompleteRequest",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

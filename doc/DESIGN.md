@@ -94,6 +94,45 @@ table construction. The kernel binary is the glue and the `unsafe`.
   with 4 KiB pages and each section's own protection. Address space is
   bump-allocated and not reused; frames are freed on unmap.
 
+## Loading a driver
+
+`kernel/ldr` checks the image is a native PE32+ for this machine, lays it
+out in fresh frames, relocates it to a fresh kernel address, binds every
+import against the export table, and only then maps it with each
+section's protection. Two things the import table does not show:
+
+- **The stack cookie.** MSVC-built drivers check at entry that the loader
+  replaced the default `__security_cookie`, and `__fastfail` if not. The
+  loader finds the cookie through the load configuration directory and
+  writes a per-image value (non-zero, not the default, top 16 bits clear
+  as the x86-64 check requires). Its entropy is only the cycle counter.
+- **Instruction cache.** On arm64 the image is written through one address
+  and run from another, so the loader synchronises the caches.
+
+A refused image leaves nothing allocated; the boot tests check that.
+
+## I/O
+
+Driver, device and file objects and IRPs are pool allocations of exactly
+their Windows size, reached by raw pointer. A device object is followed
+by the driver's extension and then a private NK block (where Windows has
+its own private extension).
+
+`kernel/io/file.rs` plays the part of the I/O system services: it
+resolves a name, builds a real IRP and calls the driver's dispatch
+routine. Completion follows the Windows sequence: unwind the stack
+locations running completion routines, then copy results to the
+requestor, signal its event and free the IRP.
+
+Requests are synchronous. A driver that returns without completing its
+IRP cannot be waited for without threads, so that is reported as a
+failure rather than hung on. A dispatch routine that returns a different
+status than it completed the IRP with is reported too.
+
+The object namespace is a flat table of device names and symbolic links,
+case-insensitive, with `\DosDevices`, `\??` and `\GLOBAL??` as one
+directory. There are no handles, no directories and no security checks.
+
 ## What the MVP leaves out, and how it stays honest
 
 No threads, waits, timers, SEH, PnP or power management. Where a proof

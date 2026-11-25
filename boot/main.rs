@@ -62,17 +62,11 @@ impl nk_acpi::PhysMem for Identity {
 }
 
 /// Protection for the image page at `rva`, from the section that holds it.
-/// The headers are read-only; a page no section covers stays unmapped.
 fn page_prot(pe: &Pe<'_>, rva: u32) -> Option<Prot> {
-    if rva < pe.headers().size_of_headers {
-        return Some(Prot::RO);
-    }
-    let s = pe
-        .sections()
-        .find(|s| (s.rva..s.rva + s.mem_size()).contains(&rva))?;
+    let flags = pe.page_flags(rva)?;
     Some(Prot {
-        write: s.characteristics & nk_pe::SCN_MEM_WRITE != 0,
-        exec: s.characteristics & nk_pe::SCN_MEM_EXECUTE != 0,
+        write: flags & nk_pe::SCN_MEM_WRITE != 0,
+        exec: flags & nk_pe::SCN_MEM_EXECUTE != 0,
         device: false,
     })
 }

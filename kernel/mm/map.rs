@@ -1,11 +1,11 @@
 //! Kernel virtual mappings above the image: driver images and mapped
 //! buffers live here, with real per-page protections.
 //!
-//! Address space is handed out by a bump pointer and not reused. Driver
-//! load/unload cycles consume a few pages of address space each from a
-//! region of terabytes, so reuse is not worth its bookkeeping yet. The
-//! frames behind a mapping are freed on unmap; intermediate page tables
-//! are kept.
+//! Address space comes from a bump pointer, with a small cache of freed
+//! ranges reused by exact size. That is enough for a driver loaded and
+//! unloaded repeatedly to land on the same addresses, so the cycle
+//! allocates no new page tables and leak checks can compare frame counts.
+//! Intermediate page tables are never freed.
 
 use super::{PAGE_SIZE, alloc_frames, phys_to_virt};
 use crate::arch;
@@ -16,8 +16,20 @@ use nk_mm::pt::{self, MapError, Prot, TableMem};
 const REGION_BASE: u64 = 0xFFFF_F880_0000_0000;
 const REGION_END: u64 = 0xFFFF_F900_0000_0000;
 
-/// Serialises page-table edits; holds the next free address.
-static NEXT_VA: SpinLock<u64> = SpinLock::new(REGION_BASE);
+/// Freed ranges kept for reuse.
+const FREE_SLOTS: usize = 32;
+
+struct Space {
+    next: u64,
+    /// `(va, pages)` ranges returned by `free_va`.
+    free: [Option<(u64, usize)>; FREE_SLOTS],
+}
+
+/// Serialises page-table edits; holds the address-space allocator.
+static NEXT_VA: SpinLock<Space> = SpinLock::new(Space {
+    next: REGION_BASE,
+    free: [None; FREE_SLOTS],
+});
 
 /// The live kernel page tables, edited through the direct map.
 struct Tables;
@@ -47,14 +59,29 @@ impl TableMem for Tables {
 /// Reserve `pages` pages of kernel address space. A gap page follows each
 /// reservation, so running off the end of one mapping faults.
 pub fn alloc_va(pages: usize) -> Option<u64> {
-    let mut next = NEXT_VA.lock();
-    let va = *next;
+    let mut space = NEXT_VA.lock();
+    if let Some(slot) = space
+        .free
+        .iter_mut()
+        .find(|s| s.is_some_and(|(_, n)| n == pages))
+    {
+        return slot.take().map(|(va, _)| va);
+    }
+    let va = space.next;
     let end = va.checked_add(((pages + 1) * PAGE_SIZE) as u64)?;
     if end > REGION_END {
         return None;
     }
-    *next = end;
+    space.next = end;
     Some(va)
+}
+
+/// Give back address space from `alloc_va`, once nothing is mapped there.
+/// If the reuse cache is full the range is simply not reused.
+pub fn free_va(va: u64, pages: usize) {
+    if let Some(slot) = NEXT_VA.lock().free.iter_mut().find(|s| s.is_none()) {
+        *slot = Some((va, pages));
+    }
 }
 
 /// Map `pages` pages at `va` to the physical range starting at `pa`.
@@ -131,5 +158,10 @@ pub fn self_test() -> Result<(), &'static str> {
         return Err("direct map translation is wrong");
     }
     super::free_frames(pa, 2);
+    free_va(va, 2);
+    if alloc_va(2) != Some(va) {
+        return Err("freed address space was not reused");
+    }
+    free_va(va, 2);
     Ok(())
 }

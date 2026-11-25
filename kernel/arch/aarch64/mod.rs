@@ -93,3 +93,31 @@ pub fn mapping_sync() {
     // SAFETY: barriers have no memory-safety effect.
     unsafe { core::arch::asm!("dsb ishst", "isb", options(nostack)) };
 }
+
+/// A fast-changing counter, used only to vary stack-protector cookies.
+pub fn cycle_counter() -> u64 {
+    let count: u64;
+    // SAFETY: reading the virtual counter touches no memory.
+    unsafe { core::arch::asm!("mrs {}, cntvct_el0", out(reg) count, options(nomem, nostack)) };
+    count
+}
+
+/// Make freshly written code executable: clean the data cache to the
+/// point of unification for the written range, then drop every cached
+/// instruction (the code will run from a different virtual address than
+/// it was written through).
+pub fn sync_icache(start: *const u8, len: usize) {
+    // The smallest cache line the architecture allows; a larger real line
+    // just means some redundant operations.
+    const LINE: usize = 16;
+    let end = start as usize + len;
+    let mut addr = start as usize & !(LINE - 1);
+    while addr < end {
+        // SAFETY: cache maintenance on a mapped address has no
+        // memory-safety effect.
+        unsafe { core::arch::asm!("dc cvau, {}", in(reg) addr, options(nostack)) };
+        addr += LINE;
+    }
+    // SAFETY: as above.
+    unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
+}

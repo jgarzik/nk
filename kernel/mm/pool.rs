@@ -121,6 +121,30 @@ pub fn free(ptr: *mut u8) -> Result<(usize, u32), PoolError> {
     Err(PoolError::NotAllocated)
 }
 
+/// Size and tag of the live allocation at `ptr`, if it is one.
+pub fn info(ptr: *const u8) -> Option<(usize, u32)> {
+    let addr = ptr as usize;
+    let pool = POOL.lock();
+    if let Some(l) = pool.large.iter().flatten().find(|l| l.addr == addr) {
+        return Some((l.size, l.tag));
+    }
+    pool.arenas
+        .iter()
+        .flatten()
+        .find(|(base, arena)| (*base..*base + arena.len()).contains(&addr))
+        .and_then(|(base, arena)| arena.info(addr - *base).ok())
+}
+
+/// Allocate `size` zeroed bytes. Null if memory is exhausted.
+pub fn alloc_zeroed(size: usize, tag: u32) -> *mut u8 {
+    let ptr = alloc(size, tag);
+    if !ptr.is_null() {
+        // SAFETY: `ptr` is a fresh allocation of `size` bytes.
+        unsafe { core::ptr::write_bytes(ptr, 0, size) };
+    }
+    ptr
+}
+
 /// Live allocations: how many, and how many bytes were asked for.
 pub fn usage() -> Usage {
     let pool = POOL.lock();

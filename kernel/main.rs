@@ -7,12 +7,21 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 #[macro_use]
 mod kd;
 mod arch;
+mod export;
 mod hal;
+mod io;
 mod ke;
+mod ldr;
 mod mm;
+mod ob;
+mod rt;
+mod rtl;
+mod selftest;
 mod test;
 
 use nk_bootinfo::BootInfo;
@@ -52,5 +61,8 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     test::run("mm.frames", mm::frames_self_test);
     test::run("mm.map", mm::map::self_test);
     test::run("mm.pool", mm::pool::self_test);
+
+    export::print_all();
+    selftest::run(info);
     test::complete()
 }

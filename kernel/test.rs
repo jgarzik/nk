@@ -27,14 +27,13 @@ pub fn fail(name: &str, why: fmt::Arguments<'_>) {
     kprintln!("NK-TEST {name}:FAIL {why}");
 }
 
-#[expect(dead_code, reason = "first used when a fixture can be absent")]
 pub fn skip(name: &str, why: fmt::Arguments<'_>) {
     SKIP.fetch_add(1, Ordering::Relaxed);
     kprintln!("NK-TEST {name}:SKIP {why}");
 }
 
 /// Run one self-test and report its verdict.
-pub fn run(name: &str, test: fn() -> Result<(), &'static str>) {
+pub fn run(name: &str, test: impl FnOnce() -> Result<(), &'static str>) {
     match test() {
         Ok(()) => ok(name),
         Err(why) => fail(name, format_args!("{why}")),

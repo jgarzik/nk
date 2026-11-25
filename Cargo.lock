@@ -33,6 +33,8 @@ dependencies = [
  "nk-bootinfo",
  "nk-mm",
  "nk-ntabi",
+ "nk-pe",
+ "nk-rtl",
 ]
 
 [[package]]

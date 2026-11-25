@@ -26,14 +26,26 @@ def binaries(arch):
 
 
 def boot_drivers(arch):
-    """[(name on the ESP, path)] for fixtures the kernel loads on this arch.
-    A fixture that is not downloaded is left out; the kernel reports it."""
+    """[(name on the ESP, path)] for the fixtures the kernel uses on this arch.
+    A fixture that is not downloaded is left out; the kernel reports it.
+
+    Besides the drivers it loads, the kernel is given two real binaries it
+    must refuse:
+      wrongarch.sys   the WDM sample built for the other architecture
+      unresolved.sys  the KMDF sample, whose framework imports NK lacks
+    """
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     drivers = []
     for fx in manifest:
         path = FIXTURES / fx["file"]
-        if fx["arch"] == arch and fx.get("boot", True) and path.exists():
+        if not path.exists():
+            continue
+        if fx["arch"] == arch and fx.get("boot", True):
             drivers.append((fx["name"] + ".sys", path))
+        elif fx["arch"] != arch and fx["name"] == "sioctl":
+            drivers.append(("wrongarch.sys", path))
+        elif fx["arch"] == arch and fx["name"] == "kmdf-echo":
+            drivers.append(("unresolved.sys", path))
     return drivers
 
 
