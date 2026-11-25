@@ -6,7 +6,8 @@
 //! subkeys are kept, and enumerated, in the order of their upper-cased
 //! names; its values in the order they were first set.
 //!
-//! [`regf`] reads a hive file in place.
+//! [`regf`] reads a hive file in place; [`import`] copies one into the
+//! tree.
 //!
 //! Every allocation asks for exactly what it needs, so that
 //! [`Hive::storage`] can say how much pool the tree holds.
@@ -18,6 +19,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
+mod import;
 mod info;
 pub mod regf;
 #[cfg(test)]
@@ -25,6 +27,7 @@ mod regf_tests;
 #[cfg(test)]
 mod writer;
 
+pub use import::{ImportError, import};
 pub use info::{
     KEY_BASIC_HEADER, KEY_FULL_HEADER, KEY_NAME_HEADER, KEY_NODE_HEADER, KeyInfo, NO_CLASS,
     VALUE_BASIC_HEADER, key_basic_information, key_full_information, key_name_information,

@@ -75,7 +75,8 @@ pub enum RegfError {
     /// A cell is misaligned, is not the record it should be, or is too
     /// small for what the record says it holds.
     BadCell,
-    /// An index root refers to another index root.
+    /// An index root refers to another index root, or keys lie deeper
+    /// below one another than Windows allows.
     TooDeep,
 }
 
