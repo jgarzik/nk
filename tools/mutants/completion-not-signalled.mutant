@@ -1,0 +1,6 @@
+# Completing a request does not signal the requestor's event: a pended
+# request is waited for for ever.
+scenario: x86_64
+fails: scenario
+file: kernel/io/irp.rs
+remove:             ke::wait::KeSetEvent((*irp).UserEvent, 0, 0);

@@ -75,6 +75,7 @@ const _: () = {
 
 /// `LIST_ENTRY`.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct LIST_ENTRY {
     pub Flink: *mut LIST_ENTRY,
     pub Blink: *mut LIST_ENTRY,

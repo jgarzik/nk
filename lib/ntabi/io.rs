@@ -13,6 +13,8 @@ use core::ffi::c_void;
 
 pub type PVOID = *mut c_void;
 
+pub use crate::ke::{DISPATCHER_HEADER, KEVENT, LIST_ENTRY};
+
 /// `UNICODE_STRING`: a counted UTF-16 string. Lengths are in bytes.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -24,38 +26,11 @@ pub struct UNICODE_STRING {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct LIST_ENTRY {
-    pub Flink: *mut LIST_ENTRY,
-    pub Blink: *mut LIST_ENTRY,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
 pub struct IO_STATUS_BLOCK {
     /// `Status`, overlaid on a pointer-sized slot.
     pub Status: NTSTATUS,
     pub Information: usize,
 }
-
-/// `DISPATCHER_HEADER`: start of every waitable kernel object.
-#[repr(C)]
-pub struct DISPATCHER_HEADER {
-    pub Type: u8,
-    pub Signalling: u8,
-    pub Size: u8,
-    pub Reserved1: u8,
-    pub SignalState: i32,
-    pub WaitListHead: LIST_ENTRY,
-}
-
-#[repr(C)]
-pub struct KEVENT {
-    pub Header: DISPATCHER_HEADER,
-}
-
-/// `DISPATCHER_HEADER.Type` for events.
-pub const EVENT_NOTIFICATION: u8 = 0;
-pub const EVENT_SYNCHRONIZATION: u8 = 1;
 
 #[repr(C)]
 pub struct KDEVICE_QUEUE {
@@ -82,6 +57,9 @@ pub type DRIVER_DISPATCH = unsafe extern "C" fn(*mut DEVICE_OBJECT, *mut IRP) ->
 pub type DRIVER_INITIALIZE =
     unsafe extern "C" fn(*mut DRIVER_OBJECT, *mut UNICODE_STRING) -> NTSTATUS;
 pub type DRIVER_UNLOAD = unsafe extern "C" fn(*mut DRIVER_OBJECT);
+/// `DRIVER_CANCEL`: entered holding the cancel spin lock, which it
+/// releases at `Irp->CancelIrql`.
+pub type DRIVER_CANCEL = unsafe extern "C" fn(*mut DEVICE_OBJECT, *mut IRP);
 pub type IO_COMPLETION_ROUTINE =
     unsafe extern "C" fn(*mut DEVICE_OBJECT, *mut IRP, PVOID) -> NTSTATUS;
 

@@ -14,6 +14,7 @@ mod neg;
 mod null;
 mod ob;
 mod oracle;
+mod pend;
 mod sioctl;
 mod smp;
 mod thread;
@@ -37,6 +38,7 @@ pub static GROUPS: &[&Group] = &[
     &ob::GROUP,
     &mutex::GROUP,
     &work::GROUP,
+    &pend::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,

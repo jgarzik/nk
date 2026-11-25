@@ -38,7 +38,8 @@ The drivers are Microsoft's, not written for NK:
 
 **What this is not.** Two software drivers are not general driver
 compatibility. NK has preemptive threads that wait on events,
-semaphores, timers and mutexes, but no APCs, no asynchronous I/O, no
+semaphores, timers and mutexes, and requests that pend and can be
+cancelled, but no APCs, no
 device interrupts, no structured exception handling, no Plug and Play
 and no user mode. It
 has not been run on physical hardware. The two

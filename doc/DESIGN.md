@@ -429,12 +429,27 @@ its own private extension).
 resolves a name, builds a real IRP and calls the driver's dispatch
 routine. Completion follows the Windows sequence: unwind the stack
 locations running completion routines, then copy results to the
-requestor, signal its event and free the IRP.
+requestor and signal its event.
 
-Requests are synchronous. A driver that returns without completing its
-IRP cannot be waited for without threads, so that is reported as a
-failure rather than hung on. A dispatch routine that returns a different
-status than it completed the IRP with is reported too.
+A driver may pend a request (`STATUS_PENDING`) and complete it later,
+from a DPC, a timer or a worker thread; the requestor waits on an event
+that completion sets. The requestor owns the IRP and frees it once it
+has seen the completion, so a request can be cancelled at any time
+before that. Windows finishes a request in the requesting thread, by an
+APC; NK finishes it wherever it was completed, at `DISPATCH_LEVEL` or
+below, which no driver can tell apart while there is no user memory to
+copy to.
+
+Cancelling (`IoCancelIrp`) marks the IRP, takes out its cancel routine
+in one atomic step, and calls it holding the system-wide cancel spin
+lock, which the routine releases. A driver completing a request takes
+the routine out the same way, so exactly one of the two completes it. An
+IRP completed with its cancel routine still set stops the system when it
+is cancelled (`CANCEL_STATE_IN_COMPLETED_IRP`).
+
+A driver that returns something other than `STATUS_PENDING` without
+completing its IRP, or a different status than it completed the IRP
+with, has broken the contract; both are reported as failures.
 
 Direct I/O uses real MDLs: the requestor's buffer is described by its
 physical pages, and when the driver asks for a system address the pages

@@ -5,11 +5,19 @@
 //!
 //! Each call builds a real IRP and sends it to the driver's dispatch
 //! routine. Buffers are passed the way the device or control code asks
-//! for: buffered, direct, or neither.
+//! for: buffered, direct, or neither. A request the driver pends is
+//! waited for; it may also be started, cancelled, and waited for later
+//! ([`Pending`]).
+//!
+//! The requestor owns the IRP: completion hands back the results and
+//! signals, and the requestor frees the IRP once it has seen that. So a
+//! request can be cancelled at any time before its requestor lets go,
+//! completed or not.
 
 use super::{TAG_FILE, TAG_IO_BUFFER, device, irp, mdl};
 use crate::mm::pool;
 use crate::{ke, ob};
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -24,8 +32,8 @@ pub struct IoResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoError {
     NoMemory,
-    /// The driver returned without completing the request. Waiting for a
-    /// pended request needs threads, which do not exist yet.
+    /// The driver returned something other than `STATUS_PENDING` without
+    /// having completed the request, which the driver contract forbids.
     NotCompleted {
         dispatch_status: NTSTATUS,
     },
@@ -57,43 +65,105 @@ const GENERIC_READ_WRITE: u32 = 0x0012_019F;
 /// FILE_SYNCHRONOUS_IO_NONALERT`, as `Parameters.Create.Options` packs them.
 const CREATE_OPTIONS: u32 = 1 << 24 | 0x40 | 0x20;
 
-/// Fill in the common requestor fields and send the IRP. Consumes it.
+/// What the requestor keeps while its request is on its way: where the
+/// results go, and what is signalled when they are there.
+struct Waiting {
+    iosb: IO_STATUS_BLOCK,
+    done: KEVENT,
+}
+
+/// A request that has been sent. It may be complete already.
+pub struct Pending {
+    irp: *mut IRP,
+    waiting: Box<Waiting>,
+    dispatch_status: NTSTATUS,
+}
+
+impl Pending {
+    /// Ask the driver to give the request up
+    /// ([`irp::IoCancelIrp`]). `false` if the driver had no cancel
+    /// routine set: the request is past cancelling, or was never
+    /// cancellable.
+    pub fn cancel(&self) -> bool {
+        // SAFETY: the requestor owns the IRP until `wait` frees it.
+        unsafe { irp::IoCancelIrp(self.irp) != 0 }
+    }
+
+    /// Wait for the request to complete, and return what it came back
+    /// with.
+    pub fn wait(mut self) -> Result<IoResult, IoError> {
+        let done = &raw mut self.waiting.done;
+        // SAFETY: the event lives in `self.waiting` until this returns;
+        // the IRP is the requestor's to free once it has completed.
+        unsafe {
+            if self.dispatch_status != STATUS_PENDING && ke::wait::KeReadStateEvent(done) == 0 {
+                // The driver neither completed the request nor said it
+                // would later. It may still hold the IRP, which points
+                // at this request's results: leave both be.
+                let dispatch_status = self.dispatch_status;
+                core::mem::forget(self);
+                return Err(IoError::NotCompleted { dispatch_status });
+            }
+            ke::wait::wait(Some(done.cast()), None);
+            irp::free(self.irp);
+        }
+        let completed = self.waiting.iosb.Status;
+        if self.dispatch_status != STATUS_PENDING && self.dispatch_status != completed {
+            return Err(IoError::StatusMismatch {
+                dispatch_status: self.dispatch_status,
+                completed,
+            });
+        }
+        Ok(IoResult {
+            status: completed,
+            information: self.waiting.iosb.Information,
+        })
+    }
+}
+
+/// Fill in the common requestor fields and send the IRP.
 ///
 /// # Safety
 /// `irp` must be a fresh IRP whose next stack location is set up for
-/// `file`'s device.
-unsafe fn submit(file: *mut FILE_OBJECT, irp: *mut IRP) -> Result<IoResult, IoError> {
-    let mut iosb = IO_STATUS_BLOCK {
-        Status: STATUS_PENDING,
-        Information: 0,
-    };
-    let mut event = ke::event::new_notification();
-    // SAFETY: per the contract; `iosb` and `event` outlive the request
-    // because completion is synchronous or reported as an error.
+/// `file`'s device. Whatever buffers it names stay valid until the
+/// returned request has been waited for.
+unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP) -> Pending {
+    // SAFETY: an all-zero event is a valid value (integers and null
+    // pointers); it is initialised properly just below.
+    let done: KEVENT = unsafe { core::mem::zeroed() };
+    let mut waiting = Box::new(Waiting {
+        iosb: IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: 0,
+        },
+        done,
+    });
+    // SAFETY: per the contract; the boxed results and event stay where
+    // they are until `Pending::wait` has seen the request complete.
     unsafe {
-        (*irp).UserIosb = &raw mut iosb;
-        (*irp).UserEvent = &raw mut event;
+        ke::wait::KeInitializeEvent(&raw mut waiting.done, 0, 0);
+        (*irp).UserIosb = &raw mut waiting.iosb;
+        (*irp).UserEvent = &raw mut waiting.done;
         (*irp).RequestorMode = KERNEL_MODE;
         (*irp).Thread = ke::pcr::current_thread().cast();
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
         let dispatch_status = irp::call_driver((*file).DeviceObject, irp);
-        if !ke::event::is_signaled(&raw const event) {
-            // The driver still owns the IRP, which points at our stack.
-            // Nothing can complete it later without threads; say so.
-            return Err(IoError::NotCompleted { dispatch_status });
-        }
-        if dispatch_status != iosb.Status {
-            return Err(IoError::StatusMismatch {
-                dispatch_status,
-                completed: iosb.Status,
-            });
+        Pending {
+            irp,
+            waiting,
+            dispatch_status,
         }
     }
-    Ok(IoResult {
-        status: iosb.Status,
-        information: iosb.Information,
-    })
+}
+
+/// Send the IRP and wait for it to complete.
+///
+/// # Safety
+/// As [`start`].
+unsafe fn submit(file: *mut FILE_OBJECT, irp: *mut IRP) -> Result<IoResult, IoError> {
+    // SAFETY: per the contract.
+    unsafe { start(file, irp) }.wait()
 }
 
 /// A new IRP for `file`'s device with its next location's function set.
@@ -144,8 +214,8 @@ pub fn open(name: &str) -> Result<*mut FILE_OBJECT, NTSTATUS> {
         (*file).Size = size_of::<FILE_OBJECT>() as i16;
         (*file).DeviceObject = device;
         (*file).Flags = FO_SYNCHRONOUS_IO;
-        ke::event::init(&raw mut (*file).Lock, EVENT_SYNCHRONIZATION, false);
-        ke::event::init(&raw mut (*file).Event, EVENT_NOTIFICATION, false);
+        ke::wait::KeInitializeEvent(&raw mut (*file).Lock, 1, 0);
+        ke::wait::KeInitializeEvent(&raw mut (*file).Event, 0, 0);
         (*file).IrpList.Flink = &raw mut (*file).IrpList;
         (*file).IrpList.Blink = &raw mut (*file).IrpList;
         device::reference(device);
@@ -251,8 +321,8 @@ pub unsafe fn write(file: *mut FILE_OBJECT, buffer: &[u8]) -> Result<IoResult, I
     unsafe { transfer(file, IRP_MJ_WRITE, buffer.as_ptr().cast_mut(), buffer.len()) }
 }
 
-/// Send a device control request. The control code's low two bits say how
-/// the buffers travel.
+/// Send a device control request and wait for it. The control code's low
+/// two bits say how the buffers travel.
 ///
 /// # Safety
 /// `file` must be an open file.
@@ -262,6 +332,21 @@ pub unsafe fn device_control(
     input: &[u8],
     output: &mut [u8],
 ) -> Result<IoResult, IoError> {
+    // SAFETY: per the contract; the slices outlive the wait.
+    unsafe { device_control_start(file, code, input, output) }?.wait()
+}
+
+/// Send a device control request without waiting for it.
+///
+/// # Safety
+/// `file` must be an open file, and `output` must stay valid and unused
+/// until the returned request has been waited for.
+pub unsafe fn device_control_start(
+    file: *mut FILE_OBJECT,
+    code: u32,
+    input: &[u8],
+    output: &mut [u8],
+) -> Result<Pending, IoError> {
     // SAFETY: per the contract; the slices are valid for their lengths.
     unsafe {
         let parameters = ioctl_parameters(output.len() as u32, input.len() as u32, code, 0);
@@ -332,6 +417,6 @@ pub unsafe fn device_control(
                 return Err(IoError::UnsupportedMethod);
             }
         }
-        submit(file, irp)
+        Ok(start(file, irp))
     }
 }

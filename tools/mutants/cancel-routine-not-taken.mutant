@@ -1,0 +1,8 @@
+# Cancelling an IRP calls the cancel routine but leaves it set: the
+# driver's own completion path still thinks the request is its to
+# complete, and it is completed twice.
+scenario: aarch64
+fails: scenario
+file: kernel/io/irp.rs
+replace:             .swap(core::ptr::null_mut(), Ordering::AcqRel);
+with:             .load(Ordering::Acquire);

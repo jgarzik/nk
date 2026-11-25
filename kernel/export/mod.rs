@@ -89,6 +89,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::device::IoDeleteDevice),
     export!(Implemented, io::symlink::IoDeleteSymbolicLink),
     export!(Implemented, io::mdl::IoFreeMdl),
+    export!(Implemented, io::irp::IoReleaseCancelSpinLock),
     export!(Implemented, io::irp::IofCompleteRequest),
     export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeAcquireSpinLockAtDpcLevel),

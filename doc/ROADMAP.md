@@ -19,7 +19,7 @@ timers and mutexes, kernel handles, work items. Microsoft's
 `null.sys` (x86-64) and the WDK-built `sioctl.sys` (both) load, do I/O and
 unload without leaks.
 
-Not there: device interrupts, APCs, asynchronous I/O,
+Not there: device interrupts, APCs,
 structured exception
 handling, Plug and Play, any hardware device, user mode. Open
 gaps carried into the phases below: no arm64 `null.sys` (no usable

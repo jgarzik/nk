@@ -62,6 +62,12 @@ work.runs ok
 work.many ok
 work.io ok
 work.delete-race ok
+io.pend-dpc ok
+io.pend-timer ok
+io.pend-work ok
+io.pend-inline ok
+io.cancel ok
+io.cancel-race ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok

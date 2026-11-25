@@ -2,9 +2,8 @@
 //! from "open this name" to a driver's dispatch routine and back.
 //!
 //! Objects handed to drivers are allocated from the pool at exactly their
-//! Windows size and reached through raw pointers only. Requests are
-//! synchronous: the I/O manager does not yet wait, so a driver that pends a
-//! request and never completes it is reported, not waited for.
+//! Windows size and reached through raw pointers only. A request may be
+//! pended and completed later, and cancelled; `doc/DESIGN.md` says how.
 
 pub mod device;
 pub mod driver;

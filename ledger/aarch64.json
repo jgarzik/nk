@@ -560,7 +560,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoReleaseCancelSpinLock",
-     "state": "missing"
+     "state": "implemented"
     }
    ]
   }

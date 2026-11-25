@@ -91,7 +91,7 @@ pub unsafe extern "C" fn IoCreateDevice(
         if exclusive != 0 {
             (*device).Flags |= DO_EXCLUSIVE;
         }
-        ke::event::init(&raw mut (*device).DeviceLock, EVENT_SYNCHRONIZATION, true);
+        ke::wait::KeInitializeEvent(&raw mut (*device).DeviceLock, 1, 1);
         let queue = &raw mut (*device).DeviceQueue;
         (*queue).Type = DEVICE_QUEUE_OBJECT;
         (*queue).Size = size_of::<KDEVICE_QUEUE>() as i16;

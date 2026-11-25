@@ -5,6 +5,7 @@
 use super::TAG_IRP;
 use crate::mm::pool;
 use crate::{kd, ke};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
@@ -148,8 +149,12 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
     }
 }
 
-/// Final completion: hand results to the requestor and free the IRP.
-/// Windows does this in the requesting thread; with one thread it is here.
+/// Final completion: hand the results to the requestor and tell it. A
+/// requestor that left an event to be told by owns the IRP and frees it
+/// when it has seen the completion; an IRP nobody waits for is freed
+/// here. Windows does this part in the requesting thread, by an APC; NK
+/// does it wherever the request was completed, which is at
+/// `DISPATCH_LEVEL` or below.
 ///
 /// # Safety
 /// `irp` must be a live IRP whose stack has fully unwound.
@@ -186,10 +191,12 @@ unsafe fn finish(irp: *mut IRP) {
         if !(*irp).UserIosb.is_null() {
             (*irp).UserIosb.write((*irp).IoStatus);
         }
-        if !(*irp).UserEvent.is_null() {
-            ke::event::set((*irp).UserEvent);
+        if (*irp).UserEvent.is_null() {
+            free(irp);
+        } else {
+            // Last: from here the requestor may free the IRP.
+            ke::wait::KeSetEvent((*irp).UserEvent, 0, 0);
         }
-        free(irp);
     }
 }
 
@@ -203,5 +210,75 @@ pub unsafe fn free(irp: *mut IRP) {
     unsafe { (*irp).Type = 0 };
     if let Err(e) = pool::free(irp.cast()) {
         kd::bugcheck(format_args!("freeing IRP {irp:p}: {e:?}"));
+    }
+}
+
+/// The cancel spin lock: one lock for the whole system, which a driver's
+/// cancel routine is entered holding and must release. It is a driver's
+/// kind of lock (taken here, released there), so it is not one of NK's
+/// ranked locks.
+static CANCEL_LOCK: AtomicBool = AtomicBool::new(false);
+
+/// [`IoAcquireCancelSpinLock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioacquirecancelspinlock):
+/// take the cancel lock, raising the IRQL to `DISPATCH_LEVEL`; the level
+/// before goes to `*irql`.
+///
+/// # Safety
+/// `irql` points to room for a `KIRQL`.
+pub unsafe extern "C" fn IoAcquireCancelSpinLock(irql: *mut u8) {
+    let old = ke::irql::current();
+    if old < ke::irql::DISPATCH_LEVEL {
+        crate::arch::set_irql(ke::irql::DISPATCH_LEVEL);
+    }
+    while CANCEL_LOCK
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    // SAFETY: per the contract.
+    unsafe { irql.write(old) };
+}
+
+/// [`IoReleaseCancelSpinLock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreleasecancelspinlock):
+/// release the cancel lock and set the IRQL to `irql`.
+pub extern "C" fn IoReleaseCancelSpinLock(irql: u8) {
+    if !CANCEL_LOCK.swap(false, Ordering::Release) {
+        kd::verify(format_args!("the cancel spin lock released while not held"));
+    }
+    crate::arch::set_irql(irql);
+}
+
+/// [`IoCancelIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocancelirp):
+/// mark the IRP cancelled and, if its driver left a cancel routine,
+/// call it, with the cancel lock held, for the routine to release.
+/// Returns whether a routine was called.
+///
+/// # Safety
+/// `irp` is a live IRP that will not be freed during the call.
+pub unsafe extern "C" fn IoCancelIrp(irp: *mut IRP) -> u8 {
+    // SAFETY: per the contract.
+    unsafe {
+        let mut old = 0;
+        IoAcquireCancelSpinLock(&raw mut old);
+        (*irp).Cancel = 1;
+        // Taken out in one step: the driver takes it out the same way
+        // when it means to complete the request itself.
+        let routine = AtomicPtr::from_ptr(&raw mut (*irp).CancelRoutine)
+            .swap(core::ptr::null_mut(), Ordering::AcqRel);
+        if routine.is_null() {
+            IoReleaseCancelSpinLock(old);
+            return 0;
+        }
+        if (*irp).CurrentLocation > (*irp).StackCount + 1 {
+            kd::bugcheck(format_args!(
+                "0x00000048 CANCEL_STATE_IN_COMPLETED_IRP: IRP {irp:p} was completed with its \
+                 cancel routine still set"
+            ));
+        }
+        (*irp).CancelIrql = old;
+        let routine: DRIVER_CANCEL = core::mem::transmute(routine);
+        routine((*(*irp).CurrentStackLocation).DeviceObject, irp);
+        1
     }
 }
