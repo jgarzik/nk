@@ -64,14 +64,21 @@ nk_ap_stub:
     mov x29, xzr
     mov x30, xzr
     br x8
-    .globl nk_ap_stub_end
-nk_ap_stub_end:
+2:
+    // The stub's length, as data: a label after it would look like code
+    // with no unwind entry.
+    .section .rdata,"dr"
+    .balign 8
+    .globl nk_ap_stub_len
+nk_ap_stub_len:
+    .quad 2b - nk_ap_stub
+    .text
 "#
 );
 
 unsafe extern "C" {
     static nk_ap_stub: u8;
-    static nk_ap_stub_end: u8;
+    static nk_ap_stub_len: u64;
 }
 
 /// Physical address of the stub.
@@ -93,11 +100,8 @@ fn physical(va: u64) -> Option<u64> {
 
 /// Build what every start needs. Done once.
 pub fn prepare(_: &BootInfo) -> Result<(), &'static str> {
-    // SAFETY: the two symbols bracket the stub above.
-    let (start, len) = unsafe {
-        let start = &raw const nk_ap_stub;
-        (start as u64, (&raw const nk_ap_stub_end).offset_from(start))
-    };
+    // SAFETY: the stub above and the word that states its length.
+    let (start, len) = unsafe { (&raw const nk_ap_stub as u64, nk_ap_stub_len) };
     // Aligned to 256 bytes and no longer: it lies within one page.
     assert!(len <= 256);
     let stub = physical(start).ok_or("the start-up stub has no physical address")?;
