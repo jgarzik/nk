@@ -29,6 +29,8 @@ pub enum Rank {
     Drivers = 10,
     /// The loaded-image table (`ldr`).
     Images = 20,
+    /// Devices' reference counts and delete-pending marks (`io::device`).
+    IoDatabase = 25,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The kernel handle table (`ob::handle`).

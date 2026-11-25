@@ -3,9 +3,9 @@
 #![allow(non_snake_case)]
 
 use super::TAG_DEVICE;
+use crate::ke::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::{kd, ke, ob, rtl};
-use core::sync::atomic::{AtomicI32, Ordering};
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
@@ -132,9 +132,18 @@ unsafe fn destroy(device: *mut DEVICE_OBJECT) {
     }
 }
 
-/// `IoDeleteDevice`: remove a device object. If files are still open on
-/// it, it disappears from the namespace and the driver's list now and is
-/// freed when the last one closes.
+/// One lock over every device's reference count and its delete-pending
+/// mark, as on Windows (the I/O database lock). "The count has reached
+/// zero" and "deletion is pending" are decided together or not at all:
+/// whichever of `IoDeleteDevice` and the last dereference comes second
+/// sees both, under the lock, and it alone frees the device, after
+/// letting go.
+static DATABASE: SpinLock<()> = SpinLock::new(Rank::IoDatabase, ());
+
+/// `IoDeleteDevice`: remove a device object. If it is still referenced
+/// (files open on it, work items on their way), it disappears from the
+/// namespace and the driver's list now and is freed when the last
+/// reference goes.
 ///
 /// # Safety
 /// `device` must be a device object created by `IoCreateDevice`.
@@ -142,49 +151,56 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
     // SAFETY: `device` is readable per the contract; `check` validates it.
     unsafe {
         check(device, "IoDeleteDevice");
-        if (*extra(device)).delete_pending {
-            kd::bugcheck(format_args!("IoDeleteDevice: {device:p} deleted twice"));
-        }
         ob::remove_device(device);
-        // Unlink from the driver's singly linked device list.
-        let mut link = &raw mut (*(*device).DriverObject).DeviceObject;
-        while !(*link).is_null() && *link != device {
-            link = &raw mut (**link).NextDevice;
-        }
-        if *link == device {
-            *link = (*device).NextDevice;
-        }
-        (*device).NextDevice = core::ptr::null_mut();
-        if (*device).ReferenceCount > 0 {
+        let unreferenced = {
+            let _database = DATABASE.lock();
+            if (*extra(device)).delete_pending {
+                kd::bugcheck(format_args!("IoDeleteDevice: {device:p} deleted twice"));
+            }
+            // Unlink from the driver's singly linked device list.
+            let mut link = &raw mut (*(*device).DriverObject).DeviceObject;
+            while !(*link).is_null() && *link != device {
+                link = &raw mut (**link).NextDevice;
+            }
+            if *link == device {
+                *link = (*device).NextDevice;
+            }
+            (*device).NextDevice = core::ptr::null_mut();
             (*extra(device)).delete_pending = true;
-        } else {
+            (*device).ReferenceCount == 0
+        };
+        if unreferenced {
             destroy(device);
         }
     }
 }
 
-/// Count an open file against the device.
+/// Take a reference on the device: an open file, a work item on its way.
 ///
 /// # Safety
 /// `device` must be a live device object.
 pub unsafe fn reference(device: *mut DEVICE_OBJECT) {
-    // SAFETY: per the contract. Atomic: files are opened, and work items
-    // run, on any processor.
-    unsafe { AtomicI32::from_ptr(&raw mut (*device).ReferenceCount) }
-        .fetch_add(1, Ordering::AcqRel);
+    let _database = DATABASE.lock();
+    // SAFETY: per the contract; the count belongs to the lock.
+    unsafe { (*device).ReferenceCount += 1 };
 }
 
-/// Drop an open file's count; free the device if it was deleted meanwhile.
+/// Drop a reference; free the device if it was deleted meanwhile and
+/// this was the last.
 ///
 /// # Safety
-/// `device` must be a live device object with a positive count.
+/// `device` must be a live device object the caller holds a reference
+/// on, which it gives up.
 pub unsafe fn dereference(device: *mut DEVICE_OBJECT) {
-    // SAFETY: per the contract.
+    // SAFETY: per the contract. Nothing of the device is read after the
+    // lock is dropped unless this call is the one to free it.
     unsafe {
-        let left = AtomicI32::from_ptr(&raw mut (*device).ReferenceCount)
-            .fetch_sub(1, Ordering::AcqRel)
-            - 1;
-        if left == 0 && (*extra(device)).delete_pending {
+        let last = {
+            let _database = DATABASE.lock();
+            (*device).ReferenceCount -= 1;
+            (*device).ReferenceCount == 0 && (*extra(device)).delete_pending
+        };
+        if last {
             destroy(device);
         }
     }

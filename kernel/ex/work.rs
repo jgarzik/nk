@@ -467,6 +467,55 @@ pub fn io_test(device_object: *mut DEVICE_OBJECT) -> Result<u64, &'static str> {
     Ok(2)
 }
 
+/// A device is deleted while a work item of its is still on the way,
+/// over and over, so that the deletion and the item's last reference
+/// meet in every order. The device must be freed exactly once, by
+/// whichever comes second. `make_device` creates one. Returns the
+/// devices deleted.
+pub fn delete_race_test(
+    make_device: fn() -> Option<*mut DEVICE_OBJECT>,
+) -> Result<u64, &'static str> {
+    /// # Safety
+    /// Called as an I/O work routine; the context is its own item.
+    unsafe extern "C" fn routine(_: *mut DEVICE_OBJECT, item: *mut c_void) {
+        // SAFETY: the item came from `IoAllocateWorkItem` and is off
+        // the queue.
+        unsafe { IoFreeWorkItem(item.cast()) };
+        DONE.fetch_add(1, Ordering::AcqRel);
+    }
+    const ROUNDS: u64 = 400;
+    reset();
+    let pool_before = pool::usage().blocks;
+    for round in 0..ROUNDS {
+        let device_object = make_device().ok_or("could not create a device object")?;
+        // SAFETY: a live device; the item frees itself in its routine.
+        unsafe {
+            let item = IoAllocateWorkItem(device_object);
+            if item.is_null() {
+                return Err("no memory for an I/O work item");
+            }
+            IoQueueWorkItem(item, Some(routine), (round % 3) as u32, item.cast());
+            // Now and then let the routine get there first.
+            if round % 3 == 0 {
+                thread::yield_now();
+            }
+            device::IoDeleteDevice(device_object);
+        }
+    }
+    if !finished(ROUNDS) {
+        return Err("not every work item ran");
+    }
+    // The last reference goes a moment after the routine returns.
+    let deadline = time::interrupt_time() + 20_000_000;
+    while pool::usage().blocks != pool_before && time::interrupt_time() < deadline {
+        thread::yield_now();
+    }
+    if pool::usage().blocks != pool_before {
+        return Err("a device deleted with a work item on the way was never freed");
+    }
+    Ok(ROUNDS)
+}
+
 /// A work routine that returns with the IRQL raised. The system must
 /// stop.
 pub fn bad_return_test() {

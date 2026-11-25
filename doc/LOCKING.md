@@ -68,6 +68,7 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 20 | `ldr::LOADED` | table of loaded images | DISPATCH |
+| 25 | `io::device::DATABASE` | every device's reference count and delete-pending mark | DISPATCH |
 | 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
@@ -82,6 +83,10 @@ already held has a lower rank; two locks of one rank never nest.
 
 Why this order:
 
+- A device's reference count and its delete-pending mark change only
+  under the I/O database lock, so "the last reference went" and "the
+  device was deleted" are seen together by whichever comes second. That
+  one frees the device, after dropping the lock.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
   dropped under the handle table's lock: freeing takes the pool's.

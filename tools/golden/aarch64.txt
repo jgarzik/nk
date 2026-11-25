@@ -61,6 +61,7 @@ mutex.region ok
 work.runs ok
 work.many ok
 work.io ok
+work.delete-race ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load skip
