@@ -5,6 +5,7 @@
 use super::TAG_DEVICE;
 use crate::mm::pool;
 use crate::{kd, ke, ob, rtl};
+use core::sync::atomic::{AtomicI32, Ordering};
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
@@ -167,8 +168,10 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
 /// # Safety
 /// `device` must be a live device object.
 pub unsafe fn reference(device: *mut DEVICE_OBJECT) {
-    // SAFETY: per the contract.
-    unsafe { (*device).ReferenceCount += 1 };
+    // SAFETY: per the contract. Atomic: files are opened, and work items
+    // run, on any processor.
+    unsafe { AtomicI32::from_ptr(&raw mut (*device).ReferenceCount) }
+        .fetch_add(1, Ordering::AcqRel);
 }
 
 /// Drop an open file's count; free the device if it was deleted meanwhile.
@@ -178,8 +181,10 @@ pub unsafe fn reference(device: *mut DEVICE_OBJECT) {
 pub unsafe fn dereference(device: *mut DEVICE_OBJECT) {
     // SAFETY: per the contract.
     unsafe {
-        (*device).ReferenceCount -= 1;
-        if (*device).ReferenceCount == 0 && (*extra(device)).delete_pending {
+        let left = AtomicI32::from_ptr(&raw mut (*device).ReferenceCount)
+            .fetch_sub(1, Ordering::AcqRel)
+            - 1;
+        if left == 0 && (*extra(device)).delete_pending {
             destroy(device);
         }
     }

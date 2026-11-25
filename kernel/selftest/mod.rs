@@ -19,6 +19,7 @@ mod smp;
 mod thread;
 mod timer;
 mod wait;
+mod work;
 
 use crate::mm;
 use crate::test::Group;
@@ -35,6 +36,7 @@ pub static GROUPS: &[&Group] = &[
     &wait::GROUP,
     &ob::GROUP,
     &mutex::GROUP,
+    &work::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
@@ -51,6 +53,7 @@ pub static GROUPS: &[&Group] = &[
     &wait::AT_DISPATCH,
     &wait::IN_DPC,
     &mutex::EXIT_HOLDING,
+    &work::BAD_RETURN,
 ];
 
 /// The bytes of the boot module called `name`, if the loader supplied it.

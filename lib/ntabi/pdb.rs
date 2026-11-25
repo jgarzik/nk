@@ -311,3 +311,28 @@ fn mutexes_match_the_kernel() {
     assert_eq!(offset_of!(FAST_MUTEX, Event), field("Event"));
     assert_eq!(offset_of!(FAST_MUTEX, OldIrql), field("OldIrql"));
 }
+
+#[test]
+fn work_items_match_the_kernel() {
+    use crate::ex::{IO_WORKITEM, WORK_QUEUE_ITEM};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let item = types.layout("_WORK_QUEUE_ITEM").expect("_WORK_QUEUE_ITEM");
+    let field = |name| offset(&item, "_WORK_QUEUE_ITEM", name);
+    assert_eq!(size_of::<WORK_QUEUE_ITEM>(), item.size as usize);
+    assert_eq!(offset_of!(WORK_QUEUE_ITEM, List), field("List"));
+    assert_eq!(
+        offset_of!(WORK_QUEUE_ITEM, WorkerRoutine),
+        field("WorkerRoutine")
+    );
+    assert_eq!(offset_of!(WORK_QUEUE_ITEM, Parameter), field("Parameter"));
+    let io = types.layout("_IO_WORKITEM").expect("_IO_WORKITEM");
+    let field = |name| offset(&io, "_IO_WORKITEM", name);
+    assert_eq!(size_of::<IO_WORKITEM>(), io.size as usize);
+    assert_eq!(offset_of!(IO_WORKITEM, WorkItem), field("WorkItem"));
+    assert_eq!(offset_of!(IO_WORKITEM, Routine), field("Routine"));
+    assert_eq!(offset_of!(IO_WORKITEM, IoObject), field("IoObject"));
+    assert_eq!(offset_of!(IO_WORKITEM, Context), field("Context"));
+    assert_eq!(offset_of!(IO_WORKITEM, Type), field("Type"));
+    assert_eq!(offset_of!(IO_WORKITEM, ActivityId), field("ActivityId"));
+}

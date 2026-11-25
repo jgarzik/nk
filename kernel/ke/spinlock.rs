@@ -41,6 +41,8 @@ pub enum Rank {
     Frames = 60,
     /// The interprocessor call in progress (`ke::ipi`).
     Ipi = 200,
+    /// A queue of work items (`ex::work`).
+    WorkQueue = 210,
     /// A processor's ready queues (`ke::thread`).
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).

@@ -12,6 +12,7 @@ extern crate alloc;
 #[macro_use]
 mod kd;
 mod arch;
+mod ex;
 mod export;
 mod hal;
 mod io;
@@ -86,6 +87,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     match ke::smp::start_all(info) {
         Ok(running) => kprintln!("ke: {running} processors running"),
         Err(why) => test::abort("ke.smp", format_args!("{why}")),
+    }
+    if let Err(why) = ex::work::init() {
+        test::abort("ex.work", format_args!("{why}"));
     }
 
     // The rest runs in a thread, at PASSIVE_LEVEL, as drivers expect of

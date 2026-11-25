@@ -74,6 +74,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
+| 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
@@ -92,6 +93,9 @@ Why this order:
   the interprocessor interrupt, so a processor waiting for it still
   answers the call in progress. A routine run by a call takes no lock
   below rank 200: its caller may hold any of them.
+- A work queue's lock covers only linking and unlinking items. The
+  semaphore that wakes a worker is released after the lock is dropped,
+  and no work routine runs with it held.
 - A timer table's lock owns a pending timer's links, due time,
   processor and `Inserted` bit. Expiry holds it while it takes a due
   timer out and puts a periodic one back, then drops it before queueing

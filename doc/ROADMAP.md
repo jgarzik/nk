@@ -15,7 +15,7 @@ tables, a pool, a PE loader with import binding, driver/device/file
 objects, synchronous IRPs with completion routines and MDLs; interrupt
 controllers, the IRQL as their priority mask, a clock, every processor
 running, DPCs, timers, preemptive threads, waits on events, semaphores,
-timers and mutexes, kernel handles. Microsoft's
+timers and mutexes, kernel handles, work items. Microsoft's
 `null.sys` (x86-64) and the WDK-built `sioctl.sys` (both) load, do I/O and
 unload without leaks.
 

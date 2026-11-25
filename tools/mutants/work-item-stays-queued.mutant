@@ -1,0 +1,6 @@
+# A worker runs an item without marking it as off the queue: the item
+# can never be queued again.
+scenario: x86_64
+fails: scenario
+file: kernel/ex/work.rs
+remove:                 (&raw mut (*entry).Flink).write(core::ptr::null_mut());

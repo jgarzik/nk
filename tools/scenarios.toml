@@ -239,3 +239,17 @@ tier = "gate"
 cmdline = "test=neg.mutex-held-at-exit"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"
+
+[x86_64-neg-work-bad-irql]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.work-bad-irql"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
+
+[aarch64-neg-work-bad-irql]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.work-bad-irql"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"

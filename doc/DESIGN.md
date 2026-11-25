@@ -241,6 +241,22 @@ NK does not queue APCs: nothing loaded delivers work that way yet. The
 counts and the IRQL are kept as Windows keeps them, so that code which
 asks whether APCs are disabled gets Windows' answer.
 
+### Work items
+
+Three queues, as on Windows (critical, delayed, hypercritical), each
+with a couple of worker threads at that queue's priority, started at
+boot and free to run on any processor. A work item is the driver's
+memory, linked through its list entry, whose forward link is null
+exactly while it is on no queue, as Windows keeps it. A worker takes an
+item off before running it, so a routine may queue its item again or
+free it. Queueing is allowed at `DISPATCH_LEVEL`; the routine runs at
+`PASSIVE_LEVEL` and must return there with APCs enabled, or the system
+stops (`WORKER_THREAD_RETURNED_AT_BAD_IRQL`).
+
+An I/O work item is allocated by the kernel at Windows' size and tied to
+a device, which is referenced from queueing until the routine has
+returned.
+
 ### Objects, references and handles
 
 What the object manager allocates has Windows' `OBJECT_HEADER` in front
