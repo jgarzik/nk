@@ -102,4 +102,6 @@ mod arm64_tests;
 #[cfg(test)]
 mod scope_tests;
 #[cfg(test)]
+mod sweep_tests;
+#[cfg(test)]
 mod x64_tests;

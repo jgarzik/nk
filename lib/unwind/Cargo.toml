@@ -10,5 +10,8 @@ publish.workspace = true
 [lib]
 path = "lib.rs"
 
+[dev-dependencies]
+nk-pe = { path = "../pe" }
+
 [lints]
 workspace = true
