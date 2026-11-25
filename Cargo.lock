@@ -11,6 +11,13 @@ name = "nk-bootinfo"
 version = "0.0.1"
 
 [[package]]
+name = "nk-cm"
+version = "0.0.1"
+dependencies = [
+ "nk-rtl",
+]
+
+[[package]]
 name = "nk-ke"
 version = "0.0.1"
 
@@ -59,6 +66,7 @@ version = "0.0.1"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
+ "nk-cm",
  "nk-ke",
  "nk-mm",
  "nk-ntabi",

@@ -1,0 +1,7 @@
+# ZwQueryValueKey reports success when only part of a value fitted the
+# caller's buffer: the driver takes a cut-off value for the whole.
+scenario: x86_64
+fails: cm.values
+file: kernel/cm/mod.rs
+replace:         _ => STATUS_BUFFER_OVERFLOW,
+with:         _ => STATUS_SUCCESS,

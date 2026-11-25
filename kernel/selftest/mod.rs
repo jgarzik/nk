@@ -7,6 +7,7 @@
 
 mod base;
 mod clock;
+mod cm;
 mod dpc;
 mod driver_api;
 mod loader;
@@ -39,6 +40,7 @@ pub static GROUPS: &[&Group] = &[
     &wait::GROUP,
     &ob::GROUP,
     &se::GROUP,
+    &cm::GROUP,
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,
@@ -101,9 +103,11 @@ pub fn resources() -> Resources {
     let pool = mm::pool::usage();
     // The handle table keeps its own storage once it has grown.
     let (table_blocks, table_bytes) = crate::ob::handle::storage();
+    // The registry keeps what is written to it.
+    let (registry_blocks, registry_bytes) = crate::cm::storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks,
-        pool_bytes: pool.bytes - table_bytes,
+        pool_blocks: pool.blocks - table_blocks - registry_blocks,
+        pool_bytes: pool.bytes - table_bytes - registry_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
         names: crate::ob::count(),

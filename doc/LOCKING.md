@@ -70,6 +70,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 20 | `ldr::LOADED` | table of loaded images | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer | DISPATCH |
 | 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
+| 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
@@ -91,6 +92,9 @@ Why this order:
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
   old block is freed after the lock is dropped.
+- The registry's lock is held only around a look-up or a change of the
+  tree; a key handle is resolved before it is taken and the driver's
+  memory is read and written outside it.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
   dropped under the handle table's lock: freeing takes the pool's.

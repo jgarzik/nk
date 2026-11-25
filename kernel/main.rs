@@ -12,6 +12,7 @@ extern crate alloc;
 #[macro_use]
 mod kd;
 mod arch;
+mod cm;
 mod ex;
 mod export;
 mod hal;
@@ -92,6 +93,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     }
     if let Err(why) = ex::work::init() {
         test::abort("ex.work", format_args!("{why}"));
+    }
+    if let Err(why) = cm::init() {
+        test::abort("cm", format_args!("{why}"));
     }
 
     // The rest runs in a thread, at PASSIVE_LEVEL, as drivers expect of

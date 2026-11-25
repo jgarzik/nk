@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{ex, io, ke, ldr, mm, ob, ps, rtl, se};
+use crate::{cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -201,6 +201,10 @@ static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
     export!(Implemented, se::ZwSetSecurityObject),
+    export!(Implemented, cm::ZwCreateKey),
+    export!(Implemented, cm::ZwOpenKey),
+    export!(Implemented, cm::ZwQueryValueKey),
+    export!(Implemented, cm::ZwSetValueKey),
 ];
 
 /// The address a driver's import of `module!name` binds to.

@@ -33,6 +33,8 @@ pub enum Rank {
     IoDatabase = 25,
     /// The object namespace (`ob`).
     Namespace = 30,
+    /// The registry (`cm`).
+    Registry = 33,
     /// The kernel handle table (`ob::handle`).
     Handles = 35,
     /// The executive pool (`mm::pool`).

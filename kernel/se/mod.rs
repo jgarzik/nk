@@ -214,7 +214,7 @@ unsafe fn acl_length(acl: *const u8) -> usize {
 ///
 /// # Safety
 /// `from` is readable for `len` bytes.
-unsafe fn copied(from: *const u8, len: usize) -> Option<Vec<u8>> {
+pub unsafe fn copied(from: *const u8, len: usize) -> Option<Vec<u8>> {
     let mut copy = Vec::new();
     copy.try_reserve_exact(len).ok()?;
     // SAFETY: per the contract.

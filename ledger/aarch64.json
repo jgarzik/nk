@@ -1259,7 +1259,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwCreateKey",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1369,17 +1369,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwOpenKey",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwSetValueKey",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwQueryValueKey",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

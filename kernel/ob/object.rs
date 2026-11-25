@@ -45,7 +45,13 @@ pub static DEVICE_TYPE: ObjectType = ObjectType {
     delete: Some(crate::io::device::deleted),
 };
 
-static TYPES: [&ObjectType; 3] = [&EVENT_TYPE, &THREAD_TYPE, &DEVICE_TYPE];
+/// Registry keys: an open key's object names the key (`cm`).
+pub static KEY_TYPE: ObjectType = ObjectType {
+    index: 3,
+    delete: None,
+};
+
+static TYPES: [&ObjectType; 4] = [&EVENT_TYPE, &THREAD_TYPE, &DEVICE_TYPE, &KEY_TYPE];
 
 /// A variable a driver imports to name a type: it holds the type's
 /// address.

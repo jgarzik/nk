@@ -276,8 +276,8 @@ plays the debugger over its serial port and says go. The kernel's own tests anno
 ### Objects, references and handles
 
 What the object manager allocates has Windows' `OBJECT_HEADER` in front
-of it: a pointer count, a handle count, a type. Events, threads and
-devices are such objects so far. An object is freed when its last
+of it: a pointer count, a handle count, a type. Events, threads,
+devices and open registry keys are such objects so far. An object is freed when its last
 reference goes; its type may name a procedure that first gives up what
 the object owns. A
 thread holds a reference on itself until it has ended and been buried,
@@ -401,12 +401,30 @@ no descriptor until one is set, where Windows gives it a default. A forced captu
 (`SeCaptureSecurityDescriptor`) is a self-relative copy in the pool, the
 caller's to free.
 
+### The registry
+
+One tree of keys and values in memory (`lib/cm`, host-tested; the
+routines drivers call are `kernel/cm`). Nothing is loaded from or saved
+to a hive file: the registry starts with the keys every Windows system
+has and drivers build on (`\Registry\Machine\System\CurrentControlSet`
+with `Control\Class` and `Services`) and holds what drivers write until
+the machine stops. Key and value names are compared without regard to
+case. A key handle is a handle to a small object naming the key; a name
+is absolute from `\Registry` or relative to an open key.
+
+Creating makes only the last key of a path, as on Windows. Values are
+read as `KeyValuePartialInformation`; the other forms answer
+`STATUS_NOT_IMPLEMENTED`. There are no access checks, no symbolic links
+between keys, no notification and no deletion yet. The registry's memory
+is its own: leak checks leave it out, as they do the handle table.
+
 ### Pure logic lives in `lib/`
 
 Anything that can be written without touching hardware goes in a
 `no_std` library crate and is unit-tested on the build host: PE loading,
 structure layouts, string and list routines, formatted output, security
-descriptors, allocator arithmetic, page table construction. The kernel binary is the glue and the `unsafe`.
+descriptors, the registry, allocator arithmetic, page table
+construction. The kernel binary is the glue and the `unsafe`.
 
 ### Memory
 

@@ -412,3 +412,35 @@ fn security_structures_match_the_kernel() {
     // One sub-authority is declared; the size is that of such a SID.
     assert_eq!(nk_se::sid_length(1), sid.size as usize);
 }
+
+#[test]
+fn object_attributes_match_the_kernel() {
+    use crate::ob::OBJECT_ATTRIBUTES;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let oa = types
+        .layout("_OBJECT_ATTRIBUTES")
+        .expect("_OBJECT_ATTRIBUTES");
+    let field = |name| offset(&oa, "_OBJECT_ATTRIBUTES", name);
+    assert_eq!(size_of::<OBJECT_ATTRIBUTES>(), oa.size as usize);
+    assert_eq!(
+        offset_of!(OBJECT_ATTRIBUTES, RootDirectory),
+        field("RootDirectory")
+    );
+    assert_eq!(
+        offset_of!(OBJECT_ATTRIBUTES, ObjectName),
+        field("ObjectName")
+    );
+    assert_eq!(
+        offset_of!(OBJECT_ATTRIBUTES, Attributes),
+        field("Attributes")
+    );
+    assert_eq!(
+        offset_of!(OBJECT_ATTRIBUTES, SecurityDescriptor),
+        field("SecurityDescriptor")
+    );
+    assert_eq!(
+        offset_of!(OBJECT_ATTRIBUTES, SecurityQualityOfService),
+        field("SecurityQualityOfService")
+    );
+}

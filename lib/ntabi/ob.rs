@@ -21,6 +21,25 @@ pub struct OBJECT_HEADER {
     pub SecurityDescriptor: *mut c_void,
 }
 
+/// [`OBJECT_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes):
+/// how a caller names the object it wants opened or created.
+#[repr(C)]
+pub struct OBJECT_ATTRIBUTES {
+    pub Length: u32,
+    pub RootDirectory: *mut c_void,
+    pub ObjectName: *const crate::io::UNICODE_STRING,
+    pub Attributes: u32,
+    pub SecurityDescriptor: *mut c_void,
+    pub SecurityQualityOfService: *mut c_void,
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<OBJECT_ATTRIBUTES>() == 48);
+    assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, RootDirectory) == 8);
+    assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, ObjectName) == 16);
+    assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, Attributes) == 24);
+};
+
 /// Where the object begins, from the start of its header.
 pub const OBJECT_BODY: usize = 0x30;
 
