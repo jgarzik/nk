@@ -74,6 +74,8 @@ def build(arch, fixtures):
 def main():
     check = "--check" in sys.argv
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
+    # Only driver images have import tables.
+    manifest = [fx for fx in manifest if fx.get("kind") != "abi-table"]
     absent = [fx["file"] for fx in manifest if not (CACHE / fx["file"]).exists()]
     if absent:
         print(f"ledger: SKIP, fixtures not downloaded: {', '.join(absent)} (run: make fixtures)")

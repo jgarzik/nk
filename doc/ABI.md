@@ -78,16 +78,12 @@ Three sources back those numbers, in increasing order of authority:
    the WDK itself in the nk-fixtures repository. `lib/ntabi/probe.rs`
    compares all of NK's facts against it when the table is downloaded.
 
-**Status of 3: agrees, not yet pinned.** The probe was built by the WDK
-in nk-fixtures CI (run 45539084606, branch `updates`), and the comparison
-was run by hand against its tables: all 120 facts NK states match on x64
-and all 118 on arm64, including `sizeof DEVICE_OBJECT` = 0x150. The two
-architectures' tables are identical apart from the x64-only KPCR lines.
-
-That run is a CI artifact, not a release, so the tables are not in
-`fixtures/manifest.toml` and the test reports SKIP in normal runs. Once an
-nk-fixtures release carries `abi-probe.<arch>.txt`, pin them by hash and
-the check becomes part of `make test`.
+**Status of 3: agrees.** The tables from the nk-fixtures v2 release are
+pinned by hash in `fixtures/manifest.toml`, and `make test` compares
+against them: all 120 facts NK states match on x64 and all 118 on arm64,
+including `sizeof DEVICE_OBJECT` = 0x150. The two architectures' tables
+are identical apart from the x64-only KPCR lines. If the tables cannot be
+downloaded the test prints SKIP rather than pass silently on nothing.
 
 One thing the probe cannot tell: where the KPRCB and the current-thread
 slot sit. The public `KPCR` is 0x178 bytes and stops short of the PRCB.

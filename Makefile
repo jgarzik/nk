@@ -44,7 +44,8 @@ run: build fixtures
 run-arm: build-arm fixtures
 	@tools/boot_test.py aarch64 --run
 
-test:
+# The layout test compares against the WDK tables among the fixtures.
+test: fixtures
 	$(CARGO) test
 
 clippy:

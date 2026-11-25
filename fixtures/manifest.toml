@@ -67,7 +67,29 @@ status = "wdk-built"
 boot = false
 note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
 
-# ABI probe tables (abi-probe.<arch>.txt): not listed yet. The probe is in
-# nk-fixtures but in no release; add entries with their hashes once a
-# release carries them. lib/ntabi/probe.rs picks the tables up from
-# target/fixtures/ and reports SKIP until then.
+# Structure sizes and offsets as Microsoft's compiler and WDK headers
+# produce them: the table the nk-fixtures ABI probe was built with.
+# lib/ntabi/probe.rs compares NK's definitions against these. Not PE
+# images, so the ledger and the boot image leave them out.
+
+[[fixture]]
+name = "abi-probe"
+arch = "x86_64"
+file = "abi-probe.x64.txt"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v2/abi-probe.x64.txt"
+sha256 = "185e5aba5c6f022a5bd453bbede5829d7565063461ef246583279292001aae10"
+status = "wdk-built"
+kind = "abi-table"
+boot = false
+note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+
+[[fixture]]
+name = "abi-probe"
+arch = "aarch64"
+file = "abi-probe.arm64.txt"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v2/abi-probe.arm64.txt"
+sha256 = "7712456e885922d846b1659b6906fd9717db80e77378a3cfe08c21d4a7809385"
+status = "wdk-built"
+kind = "abi-table"
+boot = false
+note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
