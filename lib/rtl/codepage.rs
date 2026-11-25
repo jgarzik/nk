@@ -174,6 +174,29 @@ mod tests {
         }
     }
 
+    /// The upper halves a second time, as the characters themselves in
+    /// byte order, written out from the pages' character charts rather
+    /// than from the mapping files.
+    const CHART_1252: &str = "€\u{81}‚ƒ„…†‡ˆ‰Š‹Œ\u{8D}Ž\u{8F}\u{90}‘’“”•–—˜™š›œ\u{9D}žŸ\
+        \u{A0}¡¢£¤¥¦§¨©ª«¬\u{AD}®¯°±²³´µ¶·¸¹º»¼½¾¿\
+        ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß\
+        àáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ";
+    const CHART_437: &str = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒ\
+        áíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐\
+        └┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀\
+        αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u{A0}";
+
+    #[test]
+    fn the_tables_agree_with_the_character_charts() {
+        for (page, chart) in [(&ANSI_1252, CHART_1252), (&OEM_437, CHART_437)] {
+            let chart: Vec<u16> = chart.encode_utf16().collect();
+            assert_eq!(chart.len(), 128);
+            for (byte, &unit) in (0x80..=0xFFu8).zip(&chart) {
+                assert_eq!(page.to_unicode(byte), unit, "{byte:02X}");
+            }
+        }
+    }
+
     #[test]
     fn known_characters() {
         // (byte, unit in 1252, unit in 437)
