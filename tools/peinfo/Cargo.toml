@@ -1,0 +1,16 @@
+[package]
+name = "peinfo"
+description = "Print what the NK loader sees in a PE image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "peinfo"
+path = "main.rs"
+
+[dependencies]
+nk-pe = { path = "../../lib/pe" }
+
+[lints]
+workspace = true

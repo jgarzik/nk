@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["lib/pe"]
+members = ["lib/pe", "tools/peinfo"]
 # Bare `cargo test` / `cargo clippy` cover the host-testable crates. The
 # loader and kernel only build for the UEFI targets: use the Makefile.
-default-members = ["lib/pe"]
+default-members = ["lib/pe", "tools/peinfo"]
 
 [workspace.package]
 version = "0.0.1"

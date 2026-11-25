@@ -1,0 +1,143 @@
+{
+ "reference": "Windows 10 22H2, NT 10.0.19045",
+ "arch": "aarch64",
+ "export_states_from_boot_log": false,
+ "summary": {
+  "note": "distinct imports of the fixtures loaded at boot",
+  "total": 13,
+  "implemented": 0,
+  "partial": 0,
+  "traps": 0,
+  "missing": 13
+ },
+ "fixtures": [
+  {
+   "name": "sioctl",
+   "file": "sioctl.arm64.sys",
+   "sha256": "c1a315d3dbb49eeea2ebd9e2bc9a06e74952123f2df315c17462b19c22b9a6bd",
+   "status": "wdk-built",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmUnlockPages",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmProbeAndLockPages",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateMdl",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteSymbolicLink",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeMdl",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmMapLockedPagesSpecifyCache",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateSymbolicLink",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ProbeForRead",
+     "state": "missing"
+    }
+   ]
+  },
+  {
+   "name": "kmdf-echo",
+   "file": "echo.arm64.sys",
+   "sha256": "f9784299f0b929e65ed720450e95b506a803e658ae5ed69cbde5b029ae6dd081",
+   "status": "wdk-built",
+   "loaded_at_boot": false,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCopyUnicodeString",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePool2",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "DbgPrintEx",
+     "state": "missing"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionUnbindClass",
+     "state": "missing"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionBindClass",
+     "state": "missing"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionUnbind",
+     "state": "missing"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfLdrQueryInterface",
+     "state": "missing"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionBind",
+     "state": "missing"
+    }
+   ]
+  }
+ ]
+}

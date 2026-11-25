@@ -1,0 +1,68 @@
+# Windows driver binaries used as test fixtures.
+#
+# None of these files are in the repository. `tools/fetch_fixtures.py`
+# downloads each one into target/fixtures/ and rejects any file whose
+# SHA-256 differs. A fixture's identity is its hash: never patch one, and
+# give a rebuilt binary a new entry.
+#
+# status:
+#   microsoft-inbox  shipped by Microsoft in Windows; served by Microsoft's
+#                    public symbol server
+#   wdk-built        Microsoft sample source, unmodified, built with the WDK
+#                    by github.com/jgarzik/nk-fixtures
+# Nothing here has been run on a reference Windows installation yet, so no
+# entry is "windows-verified".
+
+[[fixture]]
+name = "null"
+arch = "x86_64"
+file = "null.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/null.sys/01FE6381a000/null.sys"
+sha256 = "876185b0fc0e802ff7954d84d6255fd61eeff217ace56e61510e1fa1f56cdef1"
+status = "microsoft-inbox"
+note = "null.sys 10.0.19041.1; the same binary ships in Windows 10 2004 through 22H2"
+
+# null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
+# image size of the Windows 10 ARM64 build, which no public index lists.
+# Do not substitute a Windows 11 binary.
+
+[[fixture]]
+name = "sioctl"
+arch = "x86_64"
+file = "sioctl.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v1/wdm-ioctl.x64.sioctl.sys"
+sha256 = "068db52604e5373cc34faa343438cdfb56c1dcf3a222096e3546cd7528bd76ac"
+status = "wdk-built"
+note = "Windows-driver-samples d49bb7d7 general/ioctl/wdm, WDK 10.0.28000.2526, NT target 19041"
+
+[[fixture]]
+name = "sioctl"
+arch = "aarch64"
+file = "sioctl.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v1/wdm-ioctl.arm64.sioctl.sys"
+sha256 = "c1a315d3dbb49eeea2ebd9e2bc9a06e74952123f2df315c17462b19c22b9a6bd"
+status = "wdk-built"
+note = "Windows-driver-samples d49bb7d7 general/ioctl/wdm, WDK 10.0.28000.2526, NT target 19041"
+
+# Not loaded by the kernel yet (KMDF is after 0.0.1); fetched so the ledger
+# shows what they will need.
+
+[[fixture]]
+name = "kmdf-echo"
+arch = "x86_64"
+file = "echo.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v1/kmdf-echo-autosync.x64.echo.sys"
+sha256 = "ad65ceda796eeec7932d8f957856be82da24c3534c7628e1bad76e2de5bd80f6"
+status = "wdk-built"
+boot = false
+note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
+
+[[fixture]]
+name = "kmdf-echo"
+arch = "aarch64"
+file = "echo.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v1/kmdf-echo-autosync.arm64.echo.sys"
+sha256 = "f9784299f0b929e65ed720450e95b506a803e658ae5ed69cbde5b029ae6dd081"
+status = "wdk-built"
+boot = false
+note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"

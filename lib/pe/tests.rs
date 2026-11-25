@@ -115,13 +115,14 @@ impl Builder {
             dir(DIR_BASERELOC, RELOC, 12);
         }
         let sect = opt + 240;
-        let mut section = |i: usize, name: &[u8], rva: u32, vsize: u32, raw: u32, rsize: u32, ch: u32| {
-            let s = sect + i * SECTION_HEADER_SIZE;
-            f[s..][..name.len()].copy_from_slice(name);
-            for (o, v) in [(8, vsize), (12, rva), (16, rsize), (20, raw), (36, ch)] {
-                f[s + o..][..4].copy_from_slice(&v.to_le_bytes());
-            }
-        };
+        let mut section =
+            |i: usize, name: &[u8], rva: u32, vsize: u32, raw: u32, rsize: u32, ch: u32| {
+                let s = sect + i * SECTION_HEADER_SIZE;
+                f[s..][..name.len()].copy_from_slice(name);
+                for (o, v) in [(8, vsize), (12, rva), (16, rsize), (20, raw), (36, ch)] {
+                    f[s + o..][..4].copy_from_slice(&v.to_le_bytes());
+                }
+            };
         // .text has less raw data than virtual size: the tail must be zeroed.
         section(
             0,
@@ -235,7 +236,10 @@ fn map_zero_fills_and_places_sections() {
 fn map_rejects_small_buffer() {
     let file = Builder::new().build();
     let pe = Pe::parse(&file).unwrap();
-    assert_eq!(pe.map_into(&mut [0u8; 0x1000]), Err(PeError::BufferTooSmall));
+    assert_eq!(
+        pe.map_into(&mut [0u8; 0x1000]),
+        Err(PeError::BufferTooSmall)
+    );
 }
 
 #[test]
@@ -338,7 +342,10 @@ fn unresolved_import_is_named_and_nothing_is_bound() {
     assert_eq!(cstr_at(&image, dll_rva).unwrap(), b"ntoskrnl.exe");
     assert_eq!(cstr_at(&image, name_rva).unwrap(), b"NoSuchRoutine");
     assert_eq!(ordinal, 0);
-    assert_eq!(image, before, "a failed bind must leave the image untouched");
+    assert_eq!(
+        image, before,
+        "a failed bind must leave the image untouched"
+    );
 }
 
 #[test]
@@ -376,13 +383,19 @@ fn security_cookie_located_after_relocation() {
     )
     .unwrap();
     assert_eq!(security_cookie_rva(&image, &h, new_base), Some(COOKIE));
-    assert_eq!(security_cookie_rva(&image, &h, new_base + 0x1000_0000), None);
+    assert_eq!(
+        security_cookie_rva(&image, &h, new_base + 0x1000_0000),
+        None
+    );
 }
 
 #[test]
 fn garbage_is_rejected_not_panicked_on() {
     assert_eq!(Pe::parse(b"").unwrap_err(), PeError::BadHeader);
-    assert_eq!(Pe::parse(b"\x7fELF\0\0\0\0").unwrap_err(), PeError::BadHeader);
+    assert_eq!(
+        Pe::parse(b"\x7fELF\0\0\0\0").unwrap_err(),
+        PeError::BadHeader
+    );
     let good = Builder::new().build();
     let mut pe32 = good.clone();
     pe32[0x98..0x9A].copy_from_slice(&0x10Bu16.to_le_bytes());

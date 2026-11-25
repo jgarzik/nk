@@ -8,7 +8,7 @@ rm -rf "$out"
 mkdir -p "$out"
 start=$(date +%s)
 
-for step in fmt-check clippy test; do
+for step in fmt-check clippy test ledger-check; do
     printf '%-12s' "$step"
     if make --no-print-directory "$step" >"$out/$step.out" 2>&1; then
         echo ok

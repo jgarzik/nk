@@ -100,7 +100,10 @@ fn hdr<T>(r: Result<T, PeError>) -> Result<T, PeError> {
 /// The NUL-terminated byte string at `rva` in a mapped image, without the NUL.
 pub fn cstr_at(image: &[u8], rva: u32) -> Result<&[u8], PeError> {
     let tail = image.get(rva as usize..).ok_or(PeError::OutOfBounds)?;
-    let len = tail.iter().position(|&b| b == 0).ok_or(PeError::OutOfBounds)?;
+    let len = tail
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or(PeError::OutOfBounds)?;
     Ok(&tail[..len])
 }
 
@@ -285,7 +288,9 @@ pub fn relocate(image: &mut [u8], h: &Headers, new_base: u64) -> Result<(), PeEr
         return Err(PeError::NotRelocatable);
     }
     let mut off = dir.rva as usize;
-    let end = off.checked_add(dir.size as usize).ok_or(PeError::OutOfBounds)?;
+    let end = off
+        .checked_add(dir.size as usize)
+        .ok_or(PeError::OutOfBounds)?;
     while off + 8 <= end {
         let page = u32_at(image, off)? as usize;
         let block = u32_at(image, off + 4)? as usize;
