@@ -51,6 +51,48 @@ fn fault(r: &mut Report, _: &BootInfo) {
     );
 }
 
+/// A null pointer must fault: nothing of firmware's or anyone's is
+/// mapped at the bottom of the address space.
+pub static NULL: Group = Group {
+    names: &["neg.null"],
+    run: null,
+    manual: true,
+};
+
+fn null(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.null");
+    // SAFETY: not safe, by design: the read must fault. The address is
+    // hidden from the compiler, which knows a null read cannot happen.
+    let byte = unsafe { core::hint::black_box(core::ptr::null::<u8>()).read_volatile() };
+    r.fail(
+        "neg.null",
+        format_args!("read of address zero returned {byte:#x}"),
+    );
+}
+
+/// Ordinary memory must not be readable at its physical address: the
+/// low half holds firmware's runtime regions and nothing else, where
+/// firmware's own map had all of memory.
+pub static LOW_MEMORY: Group = Group {
+    names: &["neg.low-memory"],
+    run: low_memory,
+    manual: true,
+};
+
+fn low_memory(r: &mut Report, _: &BootInfo) {
+    let Some(frame) = mm::alloc_frames(1) else {
+        return r.fail("neg.low-memory", format_args!("no frames"));
+    };
+    kprintln!("NK-NEG-ARMED neg.low-memory");
+    // SAFETY: not safe, by design: the read must fault.
+    let byte = unsafe { (frame as *const u8).read_volatile() };
+    mm::free_frames(frame, 1);
+    r.fail(
+        "neg.low-memory",
+        format_args!("read of memory at its physical address {frame:#x} returned {byte:#x}"),
+    );
+}
+
 /// A test that fails. The harness must report the boot as failed.
 pub static META_FAIL: Group = Group {
     names: &["meta.fail"],

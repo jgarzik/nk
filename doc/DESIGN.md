@@ -101,7 +101,8 @@ Firmware starts `nkload`, which loads the kernel and drivers and jumps to
 1. `arch::cpu_init`: the boot processor's PCR (static: needed before
    memory is), which locks and the IRQL depend on. Console. Firmware
    runtime table.
-2. `BootInfo` checked; `arch::mm_init`, `mm::init`: frames, pool, mappings.
+2. `BootInfo` checked; `arch::mm_init`, `mm::init`: frames, pool, mappings;
+   `arch::low_half_init`: on arm64, NK's own low half replaces firmware's.
 3. Move from the loader's stack to a guarded kernel stack.
 4. `hal::platform` (MADT), interrupt controller, the idle thread (the
    context being run), interrupts on: from here only the IRQL holds them
@@ -118,7 +119,7 @@ Any step that fails prints a `FAIL` line and stops. There is no user mode.
 
 | Range | Contents |
 | --- | --- |
-| low half | firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`). No user space |
+| low half | NK's own table on both architectures: firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`). Nothing at address zero. No user space |
 | `0xFFFF_8000_0000_0000` + phys | direct map of physical memory: 2 MiB blocks, not executable; ranges without RAM as device memory |
 | `0xFFFF_F780_0000_0000` | `KUSER_SHARED_DATA`, one page, Windows' address |
 | `0xFFFF_F800_0000_0000` | the kernel image: 4 KiB pages, each section's own protection |
@@ -128,7 +129,7 @@ Any step that fails prints a `FAIL` line and stops. There is no user mode.
 
 - **Frames.** A bitmap allocator over `EfiConventionalMemory` only,
   never below 1 MiB. Loader allocations and firmware boot-services memory
-  stay reserved (on arm64 the latter holds firmware's live page tables).
+  stay reserved.
 - **Pool.** Small requests come from 1 MiB arenas at 16-byte alignment;
   requests of about a page or more get their own page-aligned frames, as
   on Windows. All pool is in the direct map: non-paged and physically
@@ -164,7 +165,7 @@ INIT and start-up interrupts into a real-mode trampoline copied below
 1 MiB, which climbs to long mode on the kernel's page tables. arm64: PSCI
 `CPU_ON` (by the call the FADT names) into a stub that runs with the MMU
 off on a table mapping only its own page, then adopts the boot
-processor's translation settings.
+processor's translation settings and NK's low half.
 
 Each processor has its own area, the PCR at its start and NK's `PerCpu`
 (held locks, DPC queue, timer table, ready queues) beside it, allocated

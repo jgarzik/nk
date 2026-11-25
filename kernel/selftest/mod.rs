@@ -58,6 +58,8 @@ pub static GROUPS: &[&Group] = &[
     &oracle::GROUP,
     &neg::PANIC,
     &neg::FAULT,
+    &neg::NULL,
+    &neg::LOW_MEMORY,
     &neg::STACK_OVERFLOW,
     &neg::DPC_STACK_OVERFLOW,
     &neg::LOCK_ORDER,

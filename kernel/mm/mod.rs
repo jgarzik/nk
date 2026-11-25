@@ -5,7 +5,7 @@
 //!
 //! Only `EfiConventionalMemory` is handed to the frame allocator. Memory
 //! the loader allocated and firmware's boot-services memory stay
-//! reserved: on arm64 the latter still holds firmware's live page tables.
+//! reserved.
 
 pub mod map;
 pub mod pool;
@@ -13,7 +13,7 @@ pub mod stack;
 
 use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
-use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, regions};
+use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, FirmwareUse, MemRegion, regions};
 use nk_mm::frames::{FrameBitmap, Layout, LayoutError};
 
 pub const PAGE_SIZE: usize = 4096;
@@ -30,17 +30,41 @@ pub fn direct_to_phys(ptr: *const u8) -> u64 {
     ptr as u64 - HHDM.load(Ordering::Relaxed)
 }
 
+/// Where the loader left firmware's memory map: physical address, bytes,
+/// and bytes per descriptor.
+static MEMORY_MAP: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+
+/// The regions of firmware's memory map, once `init` has run.
+fn memory_map() -> impl Iterator<Item = MemRegion> {
+    let [phys, len, desc_size] = [0, 1, 2].map(|i| MEMORY_MAP[i].load(Ordering::Relaxed));
+    // SAFETY: the loader left `len` bytes of memory map at `phys` in
+    // loader-reserved memory, reachable through the direct map and never
+    // written again.
+    let map = unsafe { core::slice::from_raw_parts(phys_to_virt(phys), len as usize) };
+    regions(map, desc_size as usize)
+}
+
+/// The memory firmware's runtime services use, code and data: what the
+/// low half of the address space holds, each region at its physical
+/// address.
+pub fn firmware_regions() -> impl Iterator<Item = (MemRegion, FirmwareUse)> {
+    memory_map().filter_map(|r| match r.firmware_use() {
+        Some(FirmwareUse::LoaderCode) | None => None,
+        Some(use_) => Some((r, use_)),
+    })
+}
+
 /// Set up the frame allocator from the firmware memory map.
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     HHDM.store(info.hhdm_base, Ordering::Relaxed);
-    // SAFETY: the loader left `mmap_len` bytes of memory map at
-    // `mmap_phys` in loader-reserved memory, reachable through the direct
-    // map and never written again.
-    let map = unsafe {
-        core::slice::from_raw_parts(phys_to_virt(info.mmap_phys), info.mmap_len as usize)
-    };
+    for (slot, value) in MEMORY_MAP
+        .iter()
+        .zip([info.mmap_phys, info.mmap_len, info.mmap_desc_size])
+    {
+        slot.store(value, Ordering::Relaxed);
+    }
     let usable = || {
-        regions(map, info.mmap_desc_size as usize)
+        memory_map()
             .filter(|r| r.kind == EFI_CONVENTIONAL)
             .map(|r| (r.phys, r.pages))
     };
