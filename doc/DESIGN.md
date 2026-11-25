@@ -487,7 +487,9 @@ a directory a root handle names. The look-up ends at a device, and what
 is left of the path is the device's to parse (Windows' `IopParseDevice`):
 it becomes the new file object's `FileName`, backslash first, in a pool
 block of the I/O manager's. A name relative to an open file goes to that
-file's device as given, with the file as `RelatedFileObject`. Anything
+file's device as given, with the file as `RelatedFileObject`: referenced
+until the create request has completed, which is as long as Microsoft
+documents the field to be valid, and cleared then. Anything
 but a device at the end of the look-up is `STATUS_OBJECT_TYPE_MISMATCH`.
 
 Finding a device and counting the open are two steps, and the device may

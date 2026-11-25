@@ -96,6 +96,7 @@ io.cancel ok
 io.cancel-race ok
 io.open.remainder ok
 io.open.relative ok
+io.open.relative-lifetime ok
 io.open.create-request ok
 io.open.named-pipe ok
 io.fs-control ok

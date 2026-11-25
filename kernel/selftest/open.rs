@@ -25,6 +25,7 @@ pub static GROUP: Group = Group {
     names: &[
         "io.open.remainder",
         "io.open.relative",
+        "io.open.relative-lifetime",
         "io.open.create-request",
         "io.open.named-pipe",
         "io.fs-control",
@@ -41,8 +42,8 @@ const STATUS_ACCESS_DENIED: NTSTATUS = 0xC000_0022u32 as NTSTATUS;
 /// file, `FILE_CREATED` for a pipe.
 const OPENED: usize = 0x5A;
 const CREATED: usize = 2;
-/// A name the driver refuses to open.
-const REFUSED: &str = "\\refuse";
+/// What the name of a file the driver refuses to open ends with.
+const REFUSED: &str = "refuse";
 
 /// A create request as the driver found it.
 #[derive(Clone, Copy)]
@@ -51,6 +52,9 @@ struct Seen {
     minor: u8,
     file: *mut FILE_OBJECT,
     related: *mut FILE_OBJECT,
+    /// What the related file object says it is (`Type`), read while
+    /// the create is being processed; zero without one.
+    related_type: i16,
     device: *mut DEVICE_OBJECT,
     /// `FileObject->FileName`: its characters (as many as fit), its
     /// length and room in bytes, and whether it has a buffer.
@@ -113,13 +117,20 @@ unsafe extern "C" fn create(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTAT
             *slot = name.Buffer.add(i).read();
         }
         let major = (*location).MajorFunction;
+        let related = (*file).RelatedFileObject;
+        let related_type = if related.is_null() {
+            0
+        } else {
+            (*related).Type
+        };
         let pipe = (major == IRP_MJ_CREATE_NAMED_PIPE)
             .then(|| ((*location).Parameters[3] as *const NAMED_PIPE_CREATE_PARAMETERS).read());
         SEEN.ptr().write(Seen {
             major,
             minor: (*location).MinorFunction,
             file,
-            related: (*file).RelatedFileObject,
+            related,
+            related_type,
             device,
             name: text,
             name_bytes: name.Length,
@@ -141,7 +152,7 @@ unsafe extern "C" fn create(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTAT
         });
         CREATES.fetch_add(1, Ordering::AcqRel);
         let refused: Vec<u16> = REFUSED.encode_utf16().collect();
-        let status = if text[..characters] == refused[..] {
+        let status = if text[..characters].ends_with(&refused) {
             STATUS_ACCESS_DENIED
         } else {
             STATUS_SUCCESS
@@ -434,6 +445,70 @@ fn relative(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     handle::close(thread);
     verdict?;
     Ok(10)
+}
+
+/// The related file object is the driver's to read while it processes
+/// the create, and no longer
+/// ([`FILE_OBJECT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_file_object):
+/// "only valid during the processing of the IRP_MJ_CREATE requests"):
+/// the root may be closed for good the moment the open returns, and the
+/// new file object must not go on pointing at it. Returns the opens
+/// made.
+fn relative_lifetime(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
+    let closes = CLOSES.load(Ordering::Acquire);
+    let root = open("\\Device\\NkOpen\\dir").map_err(|_| "the root did not open")?;
+    let root_file = last().file;
+    let Ok(leaf) = open_from("leaf", root) else {
+        file::close(root);
+        return Err("a relative open failed");
+    };
+    let seen = last();
+    // The root goes at once: its last handle and its last reference.
+    let gone = file::close(root) == STATUS_SUCCESS
+        && CLOSES.load(Ordering::Acquire) == closes + 1
+        && CLOSED.load(Ordering::Acquire) == root_file;
+    // SAFETY: the relative file is open: its object is there to read.
+    let kept = unsafe { (*seen.file).RelatedFileObject };
+    let mut output = [0u8; 4];
+    let code = ctl_code(0x22, 0x800, METHOD_BUFFERED, 0);
+    let served = file::device_control(leaf, code, b"ab", &mut output);
+    let closed = file::close(leaf);
+    if seen.related != root_file || seen.related_type != IO_TYPE_FILE {
+        return Err("the driver did not find a live related file object during the create");
+    }
+    if !gone {
+        return Err("the root was not closed for good while a file opened relative to it lived");
+    }
+    if !kept.is_null() {
+        return Err("a file object goes on pointing at a related file object that has gone");
+    }
+    if served.map(|r| (r.status, r.information)) != Ok((STATUS_SUCCESS, 2))
+        || closed != STATUS_SUCCESS
+        || CLOSES.load(Ordering::Acquire) != closes + 2
+    {
+        return Err("a file opened relative to a root that has gone did not work and close");
+    }
+
+    // A create the driver refuses: the root is there for the driver to
+    // read all the same, and is the only file closed afterwards.
+    let root = open("\\Device\\NkOpen\\dir").map_err(|_| "the root did not open")?;
+    let root_file = last().file;
+    let refused = open_from("refuse", root);
+    let seen = last();
+    let closed = file::close(root);
+    if refused != Err(STATUS_ACCESS_DENIED) {
+        return Err("a refused relative create did not fail with the driver's status");
+    }
+    if seen.related != root_file || seen.related_type != IO_TYPE_FILE {
+        return Err("the driver did not find a live related file object in a create it refused");
+    }
+    if closed != STATUS_SUCCESS
+        || CLOSES.load(Ordering::Acquire) != closes + 3
+        || CLOSED.load(Ordering::Acquire) != root_file
+    {
+        return Err("after a refused relative create the root did not close, alone");
+    }
+    Ok(4)
 }
 
 /// What a create request carries: the options, the share access, the
@@ -741,6 +816,12 @@ fn counted(r: &mut Report, name: &str, what: &str, result: Result<u32, &'static 
 fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "io.open.remainder", "opens:", with_driver(remainder));
     counted(r, "io.open.relative", "opens:", with_driver(relative));
+    counted(
+        r,
+        "io.open.relative-lifetime",
+        "opens:",
+        with_driver(relative_lifetime),
+    );
     counted(
         r,
         "io.open.create-request",

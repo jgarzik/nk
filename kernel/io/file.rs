@@ -458,6 +458,11 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
             Err(IoError::NoMemory)
         };
         se::token::delete_access_state(state);
+        // The related file object is the driver's to read only while
+        // the create is processed. `target` holds it until this
+        // function returns, which is after the request has completed,
+        // pended or not; the pointer does not outlive that reference.
+        (*file).RelatedFileObject = core::ptr::null_mut();
         result
     };
     let status = match result {
