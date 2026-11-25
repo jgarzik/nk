@@ -17,10 +17,6 @@ const MAX_LINK_DEPTH: usize = 8;
 
 pub enum Target {
     Device(*mut DEVICE_OBJECT),
-    #[expect(
-        dead_code,
-        reason = "created by IoCreateSymbolicLink, which the next driver brings"
-    )]
     SymbolicLink(Vec<u16>),
 }
 
@@ -55,10 +51,6 @@ pub fn insert(name: &[u16], target: Target) -> NTSTATUS {
 }
 
 /// Remove the symbolic link called `name`.
-#[expect(
-    dead_code,
-    reason = "called by IoDeleteSymbolicLink, which the next driver brings"
-)]
 pub fn remove_link(name: &[u16]) -> NTSTATUS {
     let mut ns = NAMESPACE.lock();
     let found = ns.iter().position(|e| {

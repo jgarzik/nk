@@ -2,6 +2,7 @@
 
 pub mod event;
 pub mod pcr;
+pub mod seh;
 pub mod spinlock;
 
 pub use spinlock::SpinLock;

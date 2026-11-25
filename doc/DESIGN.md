@@ -129,6 +129,13 @@ IRP cannot be waited for without threads, so that is reported as a
 failure rather than hung on. A dispatch routine that returns a different
 status than it completed the IRP with is reported too.
 
+Direct I/O uses real MDLs: the requestor's buffer is described by its
+physical pages, and when the driver asks for a system address the pages
+are mapped at a fresh kernel address, so the driver works through its own
+view of the caller's memory. Limits are listed at the top of
+`kernel/io/mdl.rs`; the main one is that only kernel buffers can be
+described, since there is no user address space.
+
 The object namespace is a flat table of device names and symbolic links,
 case-insensitive, with `\DosDevices`, `\??` and `\GLOBAL??` as one
 directory. There are no handles, no directories and no security checks.
@@ -140,6 +147,12 @@ driver imports something in that territory but never reaches it on the
 tested path, the export exists and stops the machine with a named
 bugcheck if called. The ledger lists those separately; they never count
 as implemented.
+
+SEH is the sharpest edge. `sioctl.sys` imports `__C_specific_handler`
+and `ProbeForRead` for its `METHOD_NEITHER` path. `ProbeForRead` performs
+the Windows checks, but where Windows raises an exception NK bugchecks,
+and so does `MmProbeAndLockPages` on an inaccessible buffer. A driver's
+`__try` block protects nothing on NK yet.
 
 ## Dependencies
 

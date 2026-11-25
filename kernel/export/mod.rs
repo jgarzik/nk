@@ -8,13 +8,9 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{io, ldr, rtl};
+use crate::{io, ke, ldr, rtl};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[expect(
-    dead_code,
-    reason = "the first partial and trapping exports arrive with the next driver"
-)]
 pub enum State {
     /// Does what the Windows routine does, for what the kernel supports.
     Implemented,
@@ -68,11 +64,20 @@ macro_rules! export {
 }
 
 static EXPORTS: &[Export] = &[
+    export!(Partial, io::mdl::IoAllocateMdl),
     export!(Implemented, io::device::IoCreateDevice),
+    export!(Implemented, io::symlink::IoCreateSymbolicLink),
     export!(Implemented, io::device::IoDeleteDevice),
+    export!(Implemented, io::symlink::IoDeleteSymbolicLink),
+    export!(Implemented, io::mdl::IoFreeMdl),
     export!(Implemented, io::irp::IofCompleteRequest),
+    export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
+    export!(Partial, io::mdl::MmProbeAndLockPages),
+    export!(Implemented, io::mdl::MmUnlockPages),
+    export!(Partial, ke::seh::ProbeForRead),
     export!(Implemented, rtl::RtlInitUnicodeString),
+    export!(Traps, ke::seh::__C_specific_handler),
 ];
 
 /// The address a driver's import of `module!name` binds to.

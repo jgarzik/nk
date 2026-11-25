@@ -10,6 +10,8 @@ pub mod device;
 pub mod driver;
 pub mod file;
 pub mod irp;
+pub mod mdl;
+pub mod symlink;
 
 /// Pool tags, as Windows spells its own.
 pub const TAG_DRIVER: u32 = u32::from_le_bytes(*b"Driv");

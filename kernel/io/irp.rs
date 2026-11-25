@@ -182,6 +182,7 @@ unsafe fn finish(irp: *mut IRP) {
                 kd::bugcheck(format_args!("freeing a request's system buffer: {e:?}"));
             }
         }
+        super::mdl::release_chain(irp);
         if !(*irp).UserIosb.is_null() {
             (*irp).UserIosb.write((*irp).IoStatus);
         }

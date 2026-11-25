@@ -18,8 +18,8 @@ binaries, complete real IRPs and report PASS.
 | 8 | Export registry and driver loader | done |
 | 9 | Object and I/O managers: devices, IRPs | done |
 | 10 | `null.sys` proof | done (x86-64; arm64 blocked on the fixture) |
-| 11 | `sioctl.sys` buffered I/O proof, unload, leak check | |
-| 12 | MDLs and direct I/O | |
+| 11 | `sioctl.sys` buffered I/O proof, unload, leak check | done, both architectures |
+| 12 | MDLs and direct I/O | done, both architectures |
 | 13 | WDK-built ABI probe for layout verification | |
 | 14 | Ledger and documentation pass | |
 

@@ -47,15 +47,19 @@ None is committed. The boot tests put them on the EFI system partition:
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver | loads; read gives end-of-file, write accepts all bytes; unloads without leaks |
-| `sioctl.sys` | Microsoft's WDM IOCTL sample, WDK-built | loaded from the next phase on |
+| `sioctl.sys` | Microsoft's WDM IOCTL sample, WDK-built | loads; opens by device name and by its symbolic link; buffered, in-direct and out-direct control requests return the sample's data; bad requests fail with the sample's status codes; 100 load/exercise/unload cycles leak nothing |
 | `wrongarch.sys` | the same sample built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
 A fixture that is not present makes its tests print SKIP. There is no
 Windows 10 arm64 `null.sys` fixture yet, so those tests skip on arm64.
 
-Expected results come from Microsoft's documentation and from reading the
-driver binaries. They have not been compared with a run on Windows.
+`METHOD_NEITHER` control requests are not sent: the sample probes the raw
+buffers as user memory inside `__try`, which needs user address space and
+SEH. That test prints SKIP.
+
+Expected results come from Microsoft's documentation, the sample's
+published source and reading the driver binaries. They have not been compared with a run on Windows.
 
 Each driver test compares pool usage, free frames and namespace entries
 before loading the driver and after unloading it.

@@ -7,7 +7,7 @@
 //! routine. Buffers are passed the way the device or control code asks
 //! for: buffered, direct, or neither.
 
-use super::{TAG_FILE, TAG_IO_BUFFER, device, irp};
+use super::{TAG_FILE, TAG_IO_BUFFER, device, irp, mdl};
 use crate::mm::pool;
 use crate::{ke, ob};
 use alloc::vec::Vec;
@@ -48,6 +48,9 @@ struct SecurityContext {
     full_create_options: u32,
 }
 
+/// `LOCK_OPERATION` values for `MmProbeAndLockPages`.
+const IO_READ_ACCESS: u32 = 0;
+const IO_WRITE_ACCESS: u32 = 1;
 /// `FILE_GENERIC_READ | FILE_GENERIC_WRITE`
 const GENERIC_READ_WRITE: u32 = 0x0012_019F;
 /// `FILE_OPEN` disposition with `FILE_NON_DIRECTORY_FILE |
@@ -284,7 +287,47 @@ pub unsafe fn device_control(
                     }
                 }
             }
+            METHOD_IN_DIRECT | METHOD_OUT_DIRECT => {
+                // The "input" buffer is buffered; the "output" buffer is
+                // described by an MDL and its pages locked. For
+                // METHOD_IN_DIRECT the driver reads from it, for
+                // METHOD_OUT_DIRECT it writes to it.
+                if !input.is_empty() {
+                    let system = pool::alloc(input.len(), TAG_IO_BUFFER);
+                    if system.is_null() {
+                        irp::free(irp);
+                        return Err(IoError::NoMemory);
+                    }
+                    core::ptr::copy_nonoverlapping(input.as_ptr(), system, input.len());
+                    (*irp).SystemBuffer = system.cast();
+                    (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
+                }
+                if !output.is_empty() {
+                    let mdl = mdl::IoAllocateMdl(
+                        output.as_mut_ptr().cast(),
+                        output.len() as u32,
+                        0,
+                        0,
+                        irp,
+                    );
+                    if mdl.is_null() {
+                        if !(*irp).SystemBuffer.is_null() {
+                            let _ = pool::free((*irp).SystemBuffer.cast());
+                        }
+                        irp::free(irp);
+                        return Err(IoError::NoMemory);
+                    }
+                    let operation = if code & 3 == METHOD_IN_DIRECT {
+                        IO_READ_ACCESS
+                    } else {
+                        IO_WRITE_ACCESS
+                    };
+                    mdl::MmProbeAndLockPages(mdl, KERNEL_MODE, operation);
+                }
+            }
             _ => {
+                // METHOD_NEITHER hands the driver raw caller addresses,
+                // which it must probe as user memory. There is none.
                 irp::free(irp);
                 return Err(IoError::UnsupportedMethod);
             }

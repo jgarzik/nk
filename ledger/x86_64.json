@@ -5,10 +5,10 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 14,
-  "implemented": 5,
-  "partial": 0,
-  "traps": 0,
-  "missing": 9
+  "implemented": 9,
+  "partial": 4,
+  "traps": 1,
+  "missing": 0
  },
  "fixtures": [
   {
@@ -60,27 +60,27 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ProbeForRead",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmProbeAndLockPages",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmUnlockPages",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmMapLockedPagesSpecifyCache",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoAllocateMdl",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -95,7 +95,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoCreateSymbolicLink",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -105,17 +105,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoDeleteSymbolicLink",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoFreeMdl",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "__C_specific_handler",
-     "state": "missing"
+     "state": "traps"
     }
    ]
   },

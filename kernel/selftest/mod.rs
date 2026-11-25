@@ -6,6 +6,7 @@
 
 mod loader;
 mod null;
+mod sioctl;
 
 use crate::mm;
 use nk_bootinfo::BootInfo;
@@ -44,4 +45,5 @@ pub fn resources() -> Resources {
 pub fn run(info: &BootInfo) {
     loader::run(info);
     null::run(info);
+    sioctl::run(info);
 }
