@@ -115,8 +115,7 @@ fn trampoline_page_free(info: &BootInfo) -> bool {
     };
     regions(map, info.mmap_desc_size as usize).any(|r| {
         (r.kind == EFI_CONVENTIONAL || EFI_BOOT_SERVICES.contains(&r.kind))
-            && r.phys <= TRAMPOLINE
-            && TRAMPOLINE + 4096 <= r.end()
+            && r.contains(TRAMPOLINE, 4096)
     })
 }
 

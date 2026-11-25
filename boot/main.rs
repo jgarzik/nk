@@ -14,9 +14,8 @@ mod arch;
 mod efi;
 
 use nk_bootinfo::{
-    BootInfo, EFI_ATTR_RUNTIME, EFI_LOADER_CODE, EFI_RUNTIME_CODE, HHDM_BASE, KERNEL_BASE,
-    KERNEL_STACK_SIZE, MAX_MODULES, MODULE_NAME_LEN, Module, Serial, regions, stack_top_in,
-    windows_time,
+    BootInfo, FirmwareUse, HHDM_BASE, KERNEL_BASE, KERNEL_STACK_SIZE, MAX_MODULES, MODULE_NAME_LEN,
+    Module, Serial, has_ram, ram_top, regions, stack_top_in, windows_time,
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
@@ -115,19 +114,13 @@ fn build_tables(
 ) -> Result<u64, &'static str> {
     let mut t = Tables;
     let root = t.alloc_table().ok_or("out of memory for page tables")?;
-    let ram_top = regions(map, desc_size)
-        .filter(|r| r.is_ram())
-        .map(|r| r.end())
-        .max()
-        .unwrap_or(0);
-    let top = arch::map_top(ram_top).next_multiple_of(BLOCK_2M);
+    let top = arch::map_top(ram_top(map, desc_size)).next_multiple_of(BLOCK_2M);
     let fail = |_| "cannot build page tables";
 
     // The direct map, in 2 MiB blocks: RAM where the memory map has RAM,
     // device memory elsewhere (UART, interrupt controller).
     for block in (0..top).step_by(BLOCK_2M as usize) {
-        let ram = regions(map, desc_size)
-            .any(|r| r.is_ram() && r.phys < block + BLOCK_2M && r.end() > block);
+        let ram = has_ram(map, desc_size, block, BLOCK_2M);
         let prot = if ram { Prot::RW } else { Prot::DEVICE };
         pt::map(&mut t, arch, root, HHDM_BASE + block, block, 1, prot).map_err(fail)?;
     }
@@ -139,12 +132,12 @@ fn build_tables(
     // page zero, stays unmapped.
     if arch::NEEDS_IDENTITY_MAP {
         for r in regions(map, desc_size) {
-            let prot = match r.kind {
-                EFI_LOADER_CODE => Prot::RX,
+            let prot = match r.firmware_use() {
+                Some(FirmwareUse::LoaderCode) => Prot::RX,
                 // Runtime driver images mix code and writable data.
-                EFI_RUNTIME_CODE => Prot::RWX,
-                _ if r.attr & EFI_ATTR_RUNTIME != 0 => Prot::RW,
-                _ => continue,
+                Some(FirmwareUse::RuntimeCode) => Prot::RWX,
+                Some(FirmwareUse::RuntimeData) => Prot::RW,
+                None => continue,
             };
             pt::map_range(&mut t, arch, root, r.phys, r.phys, r.pages * 4096, 0, prot)
                 .map_err(fail)?;
@@ -165,11 +158,8 @@ fn build_tables(
 
 fn serial() -> Serial {
     let spcr = nk_acpi::find_table(&Identity, efi::rsdp(), b"SPCR").and_then(nk_acpi::spcr);
-    match spcr {
-        Some(s) if s.mmio && s.interface == 3 => Serial::new(Serial::MMIO_PL011, s.address),
-        Some(s) if !s.mmio && s.interface <= 1 => Serial::new(Serial::PORT_16550, s.address),
-        _ => arch::DEFAULT_SERIAL,
-    }
+    spcr.and_then(|s| Serial::from_spcr(s.mmio, s.interface, s.address))
+        .unwrap_or(arch::DEFAULT_SERIAL)
 }
 
 fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {

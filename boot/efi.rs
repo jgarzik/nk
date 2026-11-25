@@ -18,7 +18,6 @@ pub const SUCCESS: Status = 0;
 const LOADER_DATA: u32 = 2;
 const ALLOCATE_ANY_PAGES: u32 = 0;
 const FILE_MODE_READ: u64 = 1;
-pub const FILE_DIRECTORY: u64 = 0x10;
 /// `EfiResetShutdown`
 pub const RESET_SHUTDOWN: u32 = 2;
 
@@ -147,8 +146,6 @@ struct FileProto {
 
 /// Offsets in `EFI_FILE_INFO`.
 const INFO_FILE_SIZE: usize = 8;
-const INFO_ATTRIBUTE: usize = 72;
-const INFO_NAME: usize = 80;
 
 static SYSTEM_TABLE: AtomicPtr<SystemTable> = AtomicPtr::new(core::ptr::null_mut());
 
@@ -402,21 +399,7 @@ impl File {
         if self.read(bytes)? == 0 {
             return None;
         }
-        let attr = u64::from_le_bytes(bytes[INFO_ATTRIBUTE..INFO_ATTRIBUTE + 8].try_into().ok()?);
-        let mut len = 0;
-        for c in bytes[INFO_NAME..]
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        {
-            if c == 0 || len == name.len() {
-                break;
-            }
-            name[len] = if c < 0x80 { c as u8 } else { b'?' };
-            len += 1;
-        }
-        Some((len, attr & FILE_DIRECTORY != 0))
+        nk_bootinfo::directory_entry(bytes, name)
     }
 }
 
