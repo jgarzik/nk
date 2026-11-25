@@ -68,6 +68,11 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = hal::platform::init(info) {
         test::abort("hal.platform", format_args!("{why}"));
     }
+    if let Err(why) = arch::interrupts_init() {
+        test::abort("hal.interrupts", format_args!("{why}"));
+    }
+    // From here on interrupts are held back by the IRQL alone.
+    arch::enable_interrupts();
 
     export::print_all();
     test::run_all(selftest::GROUPS, info)

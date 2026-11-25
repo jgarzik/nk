@@ -128,6 +128,16 @@ redistributors). The boot processor is number 0, as on Windows, and at
 most 64 processors are kept, one Windows processor group. Nothing starts
 the other processors or touches the controllers yet.
 
+### Interrupts
+
+Each processor's interrupt controller is brought up with everything
+masked that NK did not ask for: the local APIC on x86-64 (x2APIC mode
+when the processor has it), with the legacy 8259s and every I/O APIC
+input masked; GICv3 on arm64, where a processor finds its redistributor
+by its affinity, not by position. The IRQL is the controller's priority
+mask (`doc/LOCKING.md`). So far the only interrupts are ones a processor
+sends itself, in the tests: there is no clock and no device interrupt.
+
 ### The kernel is a PE image
 
 NK builds the kernel for Rust's stock `x86_64-unknown-uefi` and

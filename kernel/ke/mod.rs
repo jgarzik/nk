@@ -1,6 +1,7 @@
 //! Kernel core: synchronisation and processor state.
 
 pub mod event;
+pub mod interrupt;
 pub mod irql;
 pub mod kspin;
 pub mod pcr;

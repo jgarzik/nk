@@ -1,0 +1,7 @@
+# A handler runs at the IRQL of whatever it interrupted instead of its
+# own, so an interrupt of the same priority could preempt it.
+scenario: aarch64
+fails: ke.interrupts
+file: kernel/ke/interrupt.rs
+occurrence: 1
+remove:     arch::set_irql(level);

@@ -1517,6 +1517,9 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         }
         return;
     }
+    if frame.vector >= 32 && frame.vector != FAST_FAIL {
+        return super::apic::interrupt(frame.vector as u32);
+    }
     let cr2: u64;
     // SAFETY: reading CR2 has no side effects.
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
@@ -1533,7 +1536,6 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         13 => "general protection fault",
         PAGE_FAULT => "page fault",
         FAST_FAIL => "driver fast-fail (reason code in rcx)",
-        32.. => "unexpected interrupt",
         _ => "exception",
     };
     crate::kd::bugcheck(format_args!(

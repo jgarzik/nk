@@ -12,6 +12,7 @@ pub static GROUP: Group = Group {
         "cpu.breakpoint",
         "cpu.fp-preserved",
         "ke.irql-and-locks",
+        "ke.interrupts",
         "mm.frames",
         "mm.map",
         "mm.pool",
@@ -34,6 +35,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("cpu.breakpoint", ke::trap_self_test);
     r.check("cpu.fp-preserved", arch::fp_trap_test);
     r.check("ke.irql-and-locks", ke::irql::self_test);
+    r.check("ke.interrupts", ke::interrupt::self_test);
     r.check("mm.frames", mm::frames_self_test);
     r.check("mm.map", mm::map::self_test);
     r.check("mm.pool", mm::pool::self_test);

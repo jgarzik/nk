@@ -17,8 +17,24 @@ the same processor. The levels NK uses so far:
 
 On x86-64 the IRQL is register CR8, because code built with the WDK reads
 it there. On arm64 drivers call the kernel for it, and it is a field of
-NK's per-processor state. Nothing generates interrupts yet, so today the
-level has only the kernel's own checks behind it.
+NK's per-processor state.
+
+The interrupt controller enforces it. An interrupt runs at an IRQL of its
+own, and the controller holds back every interrupt whose IRQL is not
+above the current one:
+
+- x86-64: the local APIC. A vector's IRQL is its upper four bits, as on
+  Windows, and CR8 is the APIC's task priority, so setting the IRQL is
+  setting the mask. A driver that writes CR8 itself gets the same effect.
+- arm64: the GIC. An interrupt at IRQL `n` has priority `0xF0 - 0x10*n`,
+  and setting the IRQL writes that value for the new level to the
+  priority mask.
+
+Interrupts are enabled from early boot on and never disabled to protect
+data; raising the IRQL is how code keeps interrupts out. A handler runs
+at its interrupt's IRQL with interrupts enabled, so only something more
+urgent can preempt it; the controller is told the interrupt has finished
+before the IRQL comes back down (`kernel/ke/interrupt.rs`).
 
 The rules (`kernel/ke/irql.rs`, checked on every change):
 
@@ -113,6 +129,14 @@ so does NK, with the same bugcheck code.
   locks move the IRQL as stated and leave nothing held.
 - `*-neg-lock-order`, `*-neg-lock-twice`, `*-neg-irql-lower`: boots that
   break a rule on purpose and must end in the bugcheck named above.
+- `ke.interrupts`: a processor interrupts itself and checks that the
+  interrupt arrives once and at its IRQL, a second one arrives after it,
+  one sent while the IRQL is raised waits until it is lowered, a more
+  urgent interrupt preempts a handler and a less urgent one waits for it,
+  and an interrupt nothing handles is counted and survived. x86-64 runs
+  it in x2APIC mode under KVM and xAPIC mode under emulation. Mutants: no
+  end-of-interrupt (each architecture), a handler left at the interrupted
+  code's IRQL, and an IRQL that does not move the GIC's mask.
 - Mutants: a lock that does not raise the IRQL, and a rank check that
   accepts any order.
 - `oracle.nkc-irql`: the conformance driver `nkc-irql` raises and lowers

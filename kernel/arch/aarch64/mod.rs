@@ -1,8 +1,14 @@
 //! arm64.
 
 mod cpu;
+mod gic;
 pub mod platform;
 mod trap;
+
+pub use gic::{
+    TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
+    init as interrupts_init, interrupt_enable, self_interrupt,
+};
 
 pub use cpu::{irql, pcr, percpu, set_irql};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};

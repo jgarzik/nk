@@ -79,6 +79,9 @@ pub fn init(number: u32) {
             OVERFLOW_ROOM as u64,
         )
         .unwrap_or(0);
+        // The IRQL is enforced through the GIC's system registers, and
+        // the first lock taken sets it.
+        super::gic::enable_system_registers();
         core::arch::asm!("msr tpidr_el1, {0}", "mov x18, {0}", in(reg) pcr as u64, options(nomem, nostack));
     }
 }
@@ -112,7 +115,9 @@ pub fn irql() -> u8 {
     area().irql.load(Ordering::Relaxed)
 }
 
-/// Set the IRQL. The caller has checked the change is legal.
+/// Set the IRQL: record it, and have the interrupt controller hold back
+/// everything at or below it. The caller has checked the change is legal.
 pub fn set_irql(level: u8) {
     area().irql.store(level, Ordering::Relaxed);
+    super::gic::set_mask(level);
 }

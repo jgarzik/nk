@@ -556,6 +556,10 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
         }
         return;
     }
+    // Vectors come in fours: synchronous, IRQ, FIQ, SError.
+    if vector & 3 == 1 {
+        return super::gic::interrupt();
+    }
     let kind = match brk {
         Some(BRK_FAST_FAIL) => "driver fast-fail (reason code in x0)",
         _ => ["synchronous exception", "IRQ", "FIQ", "SError"][(vector & 3) as usize],

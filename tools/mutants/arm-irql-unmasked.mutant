@@ -1,0 +1,6 @@
+# Raising the IRQL no longer moves the GIC's priority mask: the level is
+# recorded but nothing is held back.
+scenario: aarch64
+fails: ke.interrupts
+file: kernel/arch/aarch64/cpu.rs
+remove:     super::gic::set_mask(level);
