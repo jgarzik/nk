@@ -70,7 +70,7 @@ The parts of an NT kernel, and the phase that first builds each:
 | PnP, Po | device tree, driver binding, resources, power | driver core, PM core | 3 |
 | Mm | address spaces, sections, faults, MDLs | `mm/` | 4, 6 |
 | Cc, FsRtl | file cache and file-system helper library | page cache, `fs/` libs | 4 |
-| Ps, Se | processes, threads' user side, tokens, access checks | task, cred, LSM hooks | 6 |
+| Ps, Se | processes, threads' user side, tokens, access checks | task, cred, LSM hooks | 2, 6 |
 | System calls | the system-call table, user entry and exit, user APCs and exceptions | syscall entry, signals | 6 |
 | ALPC | message ports between system processes | AF_UNIX / binder | 7 |
 | Session space, callbacks | what `win32k` needs from the kernel | (none) | 9 |
@@ -85,11 +85,11 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 | --- | --- | --- | --- |
 | 0 | Ground truth (done) | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; the ledger carries the denominator |
 | 1 | Kernel core (done: release 0.0.2) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, timers, work queues, cancellable requests; a registry in memory and security descriptors, as far as Microsoft's samples ask | Microsoft's `event` and `cancel` samples and the conformance drivers answer as on Windows; the tests pass on 1 to 8 CPUs, repeated under load |
-| 2 | **Exceptions, objects, registry** (next) | SEH on both architectures; APCs; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
-| 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
-| 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
+| 2 | **Exceptions, objects, registry** (next) | SEH on both architectures; the Ex families its binaries import, with resources and timers; object manager with types, directories and handles; a System process, its token and access checks; registry read from a hive, drivers started from its service keys; export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's `wmilib`, `wpprecorder` and `msrpc` libraries load; a named-pipe round trip through `npfs.sys` |
+| 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts; imports by ordinal and from API sets | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
+| 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting; APCs | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
 | 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond phase 3 | KMDF echo sample; `usbxhci` + hub + HID keyboard on the OptiPlex; `serial.sys` |
-| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, tokens | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
+| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens; `ksecdd.sys` and `cng.sys` | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
 | 7 | Session manager | ALPC, writable registry, known DLLs, sessions, process creation as `smss.exe` drives it | `smss.exe` runs from a real hive up to starting the Windows subsystem |
 | 8 | Win32 base | what `csrss.exe`, its server DLLs, `kernelbase.dll` and `kernel32.dll` ask: the first Win32 processes | `cmd.exe /c ver` with its output redirected to a file |
 | 9 | Window system and console | session space, user-mode callbacks, the second system-call table, display through `dxgkrnl.sys` and `BasicDisplay.sys`, `condrv.sys` and `conhost.exe` | `win32k` loads; an interactive `cmd.exe` in its console window |
@@ -105,9 +105,19 @@ logon.
 
 Phase 2 completes the trunk. Structured exception handling comes first:
 it needs no hardware, file systems use it on every path, and
-`METHOD_NEITHER` requests cannot be tested without it. APCs come with
-it, since the object manager, a registry read from a real hive and
-Microsoft's support libraries all assume them.
+`METHOD_NEITHER` requests cannot be tested without it.
+
+Its scope follows what its proof binaries import:
+
+- `npfs.sys` needs no cache manager but does need a process, a token and
+  a real access check, so that slice of Ps and Se is built here; user
+  processes stay in phase 6.
+- No phase-2 binary queues an APC, imports by ordinal or imports from an
+  API set; each waits for the phase whose binaries do.
+- `ksecdd.sys` and `cng.sys` are full drivers that need virtual memory
+  and secure-kernel answers; they load in phase 6.
+- Drivers are started the way Windows starts them, from their service
+  keys, and boot-start drivers from the hive.
 
 Gaps phase 1 leaves, each described in `doc/DESIGN.md`: no APCs; the
 clock always ticks, at 64 Hz; no priority boosts; a thread can change
