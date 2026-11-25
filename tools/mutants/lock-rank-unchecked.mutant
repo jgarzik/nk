@@ -1,0 +1,7 @@
+# The nesting check accepts locks in any order, so two processors could
+# take the same pair in opposite orders and wait for each other for ever.
+scenario: aarch64-neg-lock-order
+fails: scenario
+file: lib/ke/lib.rs
+replace:             && rank <= top
+with:             && rank == top

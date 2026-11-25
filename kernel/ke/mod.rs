@@ -1,11 +1,13 @@
 //! Kernel core: synchronisation and processor state.
 
 pub mod event;
+pub mod irql;
 pub mod pcr;
+pub mod percpu;
 pub mod seh;
 pub mod spinlock;
 
-pub use spinlock::SpinLock;
+pub use spinlock::{Rank, SpinLock};
 
 use crate::arch;
 

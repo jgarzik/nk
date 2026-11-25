@@ -76,6 +76,51 @@ cmdline = "test=neg.stack-overflow"
 expect = "bugcheck"
 match = "BUGCHECK: kernel stack overflow"
 
+# Broken IRQL and locking rules must stop the system, with Windows'
+# bugcheck code where Windows has one.
+
+[x86_64-neg-lock-order]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.lock-order"
+expect = "bugcheck"
+match = "BUGCHECK: lock order violation"
+
+[x86_64-neg-lock-twice]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.lock-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000F SPIN_LOCK_ALREADY_OWNED"
+
+[x86_64-neg-irql-lower]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.irql-lower"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL"
+
+[aarch64-neg-lock-order]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.lock-order"
+expect = "bugcheck"
+match = "BUGCHECK: lock order violation"
+
+[aarch64-neg-lock-twice]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.lock-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000F SPIN_LOCK_ALREADY_OWNED"
+
+[aarch64-neg-irql-lower]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.irql-lower"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL"
+
 # And a failing test must fail the run.
 
 [x86_64-known-bad]

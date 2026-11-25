@@ -1,7 +1,7 @@
 //! Driver objects: load an image, call its entry point, unload it.
 
 use super::{TAG_DRIVER, irp};
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock, irql};
 use crate::ldr::{self, Image, LoadError};
 use crate::mm::pool;
 use alloc::vec::Vec;
@@ -20,7 +20,7 @@ struct Record {
 // SAFETY: the pointer is an identity for a pool object the record owns.
 unsafe impl Send for Record {}
 
-static DRIVERS: SpinLock<Vec<Record>> = SpinLock::new(Vec::new());
+static DRIVERS: SpinLock<Vec<Record>> = SpinLock::new(Rank::Drivers, Vec::new());
 
 #[derive(Debug)]
 #[expect(dead_code, reason = "fields are read through Debug in test reports")]
@@ -51,6 +51,7 @@ fn counted(s: &mut [u16]) -> UNICODE_STRING {
 /// Load the driver in `file` and run its entry point. `name` is the
 /// service name: the file name without its extension.
 pub fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> {
+    irql::expect_passive("loading a driver");
     let image = ldr::load(file).map_err(DriverError::Load)?;
     let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
     let object = pool::alloc_zeroed(size, TAG_DRIVER).cast::<DRIVER_OBJECT>();
@@ -120,6 +121,7 @@ fn free(object: *mut DRIVER_OBJECT, image: &Image) {
 /// Unload a driver: call its unload routine, then free its object and
 /// image. Fails, leaving the driver loaded, if it has no unload routine.
 pub fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
+    irql::expect_passive("unloading a driver");
     let index = DRIVERS
         .lock()
         .iter()

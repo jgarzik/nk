@@ -4,7 +4,7 @@ mod cpu;
 pub mod platform;
 mod trap;
 
-pub use cpu::{pcr, set_kernel_stack};
+pub use cpu::{irql, pcr, percpu, set_irql, set_kernel_stack};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use nk_bootinfo::{BootInfo, Serial};

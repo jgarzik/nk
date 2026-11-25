@@ -4,7 +4,7 @@ mod cpu;
 pub mod platform;
 mod trap;
 
-pub use cpu::pcr;
+pub use cpu::{irql, pcr, percpu, set_irql};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use core::sync::atomic::{AtomicU8, Ordering};

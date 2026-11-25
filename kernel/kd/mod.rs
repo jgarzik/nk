@@ -1,11 +1,11 @@
 //! Diagnostics: the serial console and the panic path.
 
 use crate::arch::{self, Uart};
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use core::fmt;
 use nk_bootinfo::BootInfo;
 
-static CONSOLE: SpinLock<Option<Uart>> = SpinLock::new(None);
+static CONSOLE: SpinLock<Option<Uart>> = SpinLock::new(Rank::Console, None);
 
 pub fn console_init(info: &BootInfo) {
     *CONSOLE.lock() = Uart::new(info);

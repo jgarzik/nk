@@ -2,6 +2,7 @@ boot ok
 cpu.pcr ok
 cpu.breakpoint ok
 cpu.fp-preserved ok
+ke.irql-and-locks ok
 mm.frames ok
 mm.map ok
 mm.pool ok

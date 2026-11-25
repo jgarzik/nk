@@ -9,7 +9,7 @@
 //! check compares, and a bad or overrunning free is reported, not obeyed.
 
 use super::{PAGE_SIZE, alloc_frames, direct_to_phys, free_frames, phys_to_virt};
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use nk_mm::heap::{Arena, HeapError, Usage};
 
 const ARENA_PAGES: usize = 256;
@@ -32,10 +32,13 @@ struct Pool {
     large: [Option<Large>; MAX_LARGE],
 }
 
-static POOL: SpinLock<Pool> = SpinLock::new(Pool {
-    arenas: [const { None }; MAX_ARENAS],
-    large: [None; MAX_LARGE],
-});
+static POOL: SpinLock<Pool> = SpinLock::new(
+    Rank::Pool,
+    Pool {
+        arenas: [const { None }; MAX_ARENAS],
+        large: [None; MAX_LARGE],
+    },
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolError {

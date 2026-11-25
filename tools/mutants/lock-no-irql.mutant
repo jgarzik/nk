@@ -1,0 +1,7 @@
+# Taking a lock no longer raises the IRQL to the lock's level: code that
+# could want the same lock would be free to run on this processor.
+scenario: x86_64
+fails: ke.irql-and-locks
+file: kernel/ke/spinlock.rs
+replace:         let old_irql = irql::raise(self.rank.level());
+with:         let old_irql = irql::raise(irql::current());

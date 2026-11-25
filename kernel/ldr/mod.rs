@@ -6,7 +6,7 @@
 
 #![allow(non_snake_case)]
 
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use crate::mm::{self, PAGE_SIZE, map};
 use crate::{arch, export};
 use alloc::string::String;
@@ -48,7 +48,7 @@ pub enum LoadError {
 }
 
 /// Images currently loaded, for address-to-image lookups.
-static LOADED: SpinLock<Vec<Image>> = SpinLock::new(Vec::new());
+static LOADED: SpinLock<Vec<Image>> = SpinLock::new(Rank::Images, Vec::new());
 
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()

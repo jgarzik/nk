@@ -9,7 +9,7 @@
 
 use super::{PAGE_SIZE, alloc_frames, phys_to_virt};
 use crate::arch;
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_mm::pt::{self, MapError, Prot, TableMem};
 
@@ -58,10 +58,13 @@ impl Space {
 }
 
 /// Serialises page-table edits; holds the address-space allocator.
-static NEXT_VA: SpinLock<Space> = SpinLock::new(Space {
-    next: REGION_BASE,
-    free: [None; FREE_SLOTS],
-});
+static NEXT_VA: SpinLock<Space> = SpinLock::new(
+    Rank::AddressSpace,
+    Space {
+        next: REGION_BASE,
+        free: [None; FREE_SLOTS],
+    },
+);
 
 /// The live kernel page tables, edited through the direct map.
 struct Tables;

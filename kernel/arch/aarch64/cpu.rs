@@ -5,8 +5,10 @@
 //! from it directly. Rust's UEFI targets never use x18 either, so setting
 //! it once per CPU is enough: nothing NK compiles will disturb it.
 
+use crate::ke::percpu::PerCpu;
 use core::cell::UnsafeCell;
 use core::mem::offset_of;
+use core::sync::atomic::{AtomicU8, Ordering};
 use nk_bootinfo::{KERNEL_STACK_SIZE, stack_top_in};
 use nk_ntabi::pcr::NATIVE as PCR;
 
@@ -21,6 +23,11 @@ struct CpuArea {
     /// from here, relative to `TPIDR_EL1`, when it finds the stack it
     /// arrived on has overflowed.
     overflow_top: u64,
+    /// The current IRQL. Drivers on arm64 ask the kernel for it, so where
+    /// it is kept is NK's choice.
+    irql: AtomicU8,
+    /// State the generic kernel keeps per processor.
+    generic: PerCpu,
     /// Stand-in for the current thread object. There are no threads yet,
     /// but `KeGetCurrentThread()` must return a stable non-null pointer.
     thread: [u8; 4096],
@@ -41,6 +48,8 @@ unsafe impl Sync for Shared {}
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
     overflow_top: 0,
+    irql: AtomicU8::new(0),
+    generic: PerCpu::new(),
     thread: [0; 4096],
     overflow_stack: [0; OVERFLOW_ROOM],
 }));
@@ -83,4 +92,27 @@ pub fn pcr() -> *mut u8 {
         core::arch::asm!("ldr {}, [x18, #{}]", out(reg) pcr, const PCR.self_ptr, options(readonly, nostack))
     };
     pcr as *mut u8
+}
+
+/// This processor's area. The PCR is its first field.
+fn area() -> &'static CpuArea {
+    // SAFETY: x18 holds the address of this processor's `CpuArea`, which
+    // lives forever; the fields reached through this reference are only
+    // ever accessed through shared references.
+    unsafe { &*pcr().cast::<CpuArea>() }
+}
+
+/// The generic kernel's state for this processor.
+pub fn percpu() -> &'static PerCpu {
+    &area().generic
+}
+
+/// The current IRQL.
+pub fn irql() -> u8 {
+    area().irql.load(Ordering::Relaxed)
+}
+
+/// Set the IRQL. The caller has checked the change is legal.
+pub fn set_irql(level: u8) {
+    area().irql.store(level, Ordering::Relaxed);
 }

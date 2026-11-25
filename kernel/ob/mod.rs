@@ -7,7 +7,7 @@
 //! path remainder after a device name yet, so `\Device\Foo\bar` does not
 //! open `\Device\Foo`.
 
-use crate::ke::SpinLock;
+use crate::ke::{Rank, SpinLock};
 use alloc::vec::Vec;
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::status::*;
@@ -29,7 +29,7 @@ struct Entry {
 // dereferences it.
 unsafe impl Send for Entry {}
 
-static NAMESPACE: SpinLock<Vec<Entry>> = SpinLock::new(Vec::new());
+static NAMESPACE: SpinLock<Vec<Entry>> = SpinLock::new(Rank::Namespace, Vec::new());
 
 /// Add a name. Fails if the name is malformed or already taken.
 pub fn insert(name: &[u16], target: Target) -> NTSTATUS {

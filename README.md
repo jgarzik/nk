@@ -131,6 +131,7 @@ SHA-256; the tests download them and reject a mismatch.
   still unverified
 - `doc/TESTING.md`: unit tests, boot tests, fixtures
 - `doc/ROADMAP.md`: the phases from 0.0.1 to a Windows rescue disk
+- `doc/LOCKING.md`: IRQL, the kernel's locks, their order
 - `doc/UNSAFE.md`: rules for `unsafe` code
 
 ## Releases

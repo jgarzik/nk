@@ -48,4 +48,7 @@ where the host can unit-test it.
 - Releases: version in the workspace `Cargo.toml`, tag `vX.Y.Z`, images
   from `make dist` (no Windows binaries in them).
 
+- Locks: `doc/LOCKING.md` states the ranks and rules; a new or changed
+  lock updates it in the same commit.
+
 Design: `doc/DESIGN.md`. Phases: `doc/ROADMAP.md`. Tests: `doc/TESTING.md`.

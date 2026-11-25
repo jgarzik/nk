@@ -10,6 +10,7 @@
 //! judge accepts a bugcheck only after that line, so a crash on the way
 //! to the test is not mistaken for the one the test meant to cause.
 
+use crate::ke::{Rank, SpinLock, irql};
 use crate::mm;
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
@@ -83,5 +84,60 @@ fn stack_overflow(r: &mut Report, _: &BootInfo) {
     r.fail(
         "neg.stack-overflow",
         format_args!("unbounded recursion returned {depth}"),
+    );
+}
+
+static LOW: SpinLock<()> = SpinLock::new(Rank::Pool, ());
+static HIGH: SpinLock<()> = SpinLock::new(Rank::Frames, ());
+
+/// Taking locks against their rank order must stop the system: two
+/// processors doing it in opposite orders would each wait for the other.
+pub static LOCK_ORDER: Group = Group {
+    names: &["neg.lock-order"],
+    run: lock_order,
+    manual: true,
+};
+
+fn lock_order(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.lock-order");
+    let _high = HIGH.lock();
+    let _low = LOW.lock();
+    r.fail(
+        "neg.lock-order",
+        format_args!("locks were taken out of rank order"),
+    );
+}
+
+/// Taking a lock already held must stop the system rather than wait for
+/// itself forever.
+pub static LOCK_TWICE: Group = Group {
+    names: &["neg.lock-twice"],
+    run: lock_twice,
+    manual: true,
+};
+
+fn lock_twice(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.lock-twice");
+    let _first = LOW.lock();
+    let _second = LOW.lock();
+    r.fail(
+        "neg.lock-twice",
+        format_args!("a held lock was taken again"),
+    );
+}
+
+/// "Lowering" the IRQL to a higher level must stop the system.
+pub static IRQL_LOWER: Group = Group {
+    names: &["neg.irql-lower"],
+    run: irql_lower,
+    manual: true,
+};
+
+fn irql_lower(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.irql-lower");
+    irql::lower(irql::DISPATCH_LEVEL);
+    r.fail(
+        "neg.irql-lower",
+        format_args!("the IRQL was lowered upward"),
     );
 }

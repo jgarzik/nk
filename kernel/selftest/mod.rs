@@ -26,6 +26,9 @@ pub static GROUPS: &[&Group] = &[
     &neg::PANIC,
     &neg::FAULT,
     &neg::STACK_OVERFLOW,
+    &neg::LOCK_ORDER,
+    &neg::LOCK_TWICE,
+    &neg::IRQL_LOWER,
     &neg::META_FAIL,
 ];
 
@@ -47,6 +50,9 @@ fn module<'a>(info: &'a BootInfo, name: &str) -> Option<&'a [u8]> {
 pub struct Resources {
     pool_blocks: usize,
     pool_bytes: usize,
+    /// The IRQL: a test that returns with it raised left a lock held or
+    /// forgot to lower it.
+    irql: u8,
     /// Frames that are free or held in a store the kernel keeps for good
     /// (pool arenas, page tables). Those stores grow on first use; that
     /// is not a leak, and anything else that takes frames is.
@@ -59,6 +65,7 @@ pub fn resources() -> Resources {
     Resources {
         pool_blocks: pool.blocks,
         pool_bytes: pool.bytes,
+        irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
         names: crate::ob::count(),
     }

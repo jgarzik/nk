@@ -5,6 +5,7 @@
 //! Drivers do not depend on them, but debuggers and crash dumps read more
 //! naturally when they match.
 
+use crate::ke::percpu::PerCpu;
 use core::cell::UnsafeCell;
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -58,6 +59,8 @@ struct Private {
     /// Lowest address of the kernel stack this processor is running on,
     /// or 0 while it is still on the loader's.
     stack_base: AtomicU64,
+    /// State the generic kernel keeps per processor.
+    generic: PerCpu,
 }
 
 struct Shared(UnsafeCell<CpuArea>);
@@ -70,6 +73,7 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
     private: Private {
         stack_base: AtomicU64::new(0),
+        generic: PerCpu::new(),
     },
     thread: [0; 4096],
     fault_stack: [0; FAULT_STACK_SIZE],
@@ -203,4 +207,25 @@ pub fn set_kernel_stack(base: u64) {
 /// Lowest address of the current kernel stack, or 0 if not recorded.
 pub fn kernel_stack() -> u64 {
     private().stack_base.load(Ordering::Relaxed)
+}
+
+/// The generic kernel's state for this processor.
+pub fn percpu() -> &'static PerCpu {
+    &private().generic
+}
+
+/// The current IRQL. On x86-64 it is register CR8, the task priority,
+/// which is where code built with the WDK reads it.
+pub fn irql() -> u8 {
+    let level: u64;
+    // SAFETY: reading CR8 has no side effects.
+    unsafe { core::arch::asm!("mov {}, cr8", out(reg) level, options(nomem, nostack)) };
+    level as u8
+}
+
+/// Set the IRQL. The caller has checked the change is legal.
+pub fn set_irql(level: u8) {
+    // SAFETY: CR8 only holds the task priority; any value up to 15 is
+    // valid.
+    unsafe { core::arch::asm!("mov cr8, {}", in(reg) u64::from(level), options(nomem, nostack)) };
 }
