@@ -22,6 +22,8 @@ pub const MAX_MODULES: usize = 16;
 pub const MODULE_NAME_LEN: usize = 32;
 
 /// `EFI_MEMORY_TYPE` values the kernel cares about.
+pub const EFI_LOADER_CODE: u32 = 1;
+pub const EFI_RUNTIME_CODE: u32 = 5;
 pub const EFI_CONVENTIONAL: u32 = 7;
 pub const EFI_MMIO: u32 = 11;
 pub const EFI_MMIO_PORT: u32 = 12;

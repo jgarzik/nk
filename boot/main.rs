@@ -106,7 +106,7 @@ fn load_modules(root: &efi::File, info: &mut BootInfo) -> Result<(), &'static st
 }
 
 /// Build the kernel's page tables: direct map, kernel image, and on
-/// architectures that need it an identity map.
+/// architectures that need it a minimal identity map.
 fn build_tables(
     arch: &arch::PtArch,
     pe: &Pe<'_>,
@@ -131,9 +131,24 @@ fn build_tables(
             .any(|r| r.is_ram() && r.phys < block + BLOCK_2M && r.end() > block);
         let prot = if ram { Prot::RW } else { Prot::DEVICE };
         pt::map(&mut t, arch, root, HHDM_BASE + block, block, 1, prot).map_err(fail)?;
-        if arch::NEEDS_IDENTITY_MAP {
-            // Executable: UEFI runtime code runs from here.
-            pt::map(&mut t, arch, root, block, block, 1, Prot::RWX).map_err(fail)?;
+    }
+
+    // The identity map holds only what must run or be reached at its
+    // physical address: firmware runtime regions (for ResetSystem and
+    // friends) and this loader's own code, which is still executing when
+    // the tables are switched. Everything else in the low half, including
+    // page zero, stays unmapped.
+    if arch::NEEDS_IDENTITY_MAP {
+        for r in regions(map, desc_size) {
+            let prot = match r.kind {
+                EFI_LOADER_CODE => Prot::RX,
+                // Runtime driver images mix code and writable data.
+                EFI_RUNTIME_CODE => Prot::RWX,
+                _ if r.attr & EFI_ATTR_RUNTIME != 0 => Prot::RW,
+                _ => continue,
+            };
+            pt::map_range(&mut t, arch, root, r.phys, r.phys, r.pages * 4096, 0, prot)
+                .map_err(fail)?;
         }
     }
 

@@ -35,12 +35,15 @@ off, so a broken boot is a fast, visible test failure rather than a hang.
 | --- | --- |
 | `0xFFFF_8000_0000_0000` + phys | Direct map of physical memory, 2 MiB blocks, not executable. Ranges with no RAM are mapped as device memory. |
 | `0xFFFF_F800_0000_0000` | The kernel image, 4 KiB pages, each with its section's protection (text read+execute, data read+write, the rest read-only). |
-| Low half | Identity map of physical memory, kept for UEFI runtime services. |
+| Low half | Identity map of firmware runtime regions only, kept so UEFI runtime services stay callable. |
 
 The low half differs by architecture:
 
-- **x86-64:** nkload builds the identity map itself, in the same tables,
-  covering at least the first 4 GiB.
+- **x86-64:** nkload builds the identity map itself, in the same tables.
+  It covers the regions firmware marks as needed at runtime (code
+  executable, data not) and the loader's own code, which is still running
+  when the tables are switched. Page zero and ordinary RAM are not mapped
+  there, so a null dereference faults.
 - **arm64:** firmware's own identity map stays in `TTBR0`; nkload only
   installs the kernel half in `TTBR1`. Firmware is running with the MMU
   on, and nkload keeps firmware's `MAIR_EL1` rather than change memory
@@ -64,6 +67,9 @@ real hardware. NK never calls `SetVirtualAddressMap`.
 
 ## Known limits
 
-- The identity map is writable and executable; it should shrink to the
-  firmware runtime regions.
+- Firmware runtime code regions are mapped writable and executable,
+  because runtime driver images mix code and data.
+- The direct map is a writable alias of all RAM, kernel text included, so
+  the image's read-only mappings stop accidents, not a determined write.
+- On arm64 firmware's full identity map is still live in `TTBR0`.
 - The boot stack has no guard page.
