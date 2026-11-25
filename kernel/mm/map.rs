@@ -1,8 +1,8 @@
 //! Kernel virtual mappings above the image: driver images and mapped
 //! buffers live here, with real per-page protections.
 //!
-//! Address space comes from a bump pointer, with a small cache of freed
-//! ranges reused by exact size. That is enough for a driver loaded and
+//! Address space is handed out by `nk_mm::space`, which reuses freed
+//! ranges by exact size. That is enough for a driver loaded and
 //! unloaded repeatedly to land on the same addresses, so the cycle
 //! allocates no new page tables and leak checks can compare frame counts.
 //! Intermediate page tables are never freed.
@@ -12,6 +12,7 @@ use crate::arch;
 use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_mm::pt::{self, MapError, Prot, TableMem};
+use nk_mm::space::Space;
 
 /// Frames taken for page tables. They are kept for good, so a leak check
 /// must not count them as lost.
@@ -22,49 +23,13 @@ pub fn table_frames() -> u64 {
     TABLE_FRAMES.load(Ordering::Relaxed)
 }
 
-/// Start of the region for dynamic kernel mappings.
+/// The region for dynamic kernel mappings.
 const REGION_BASE: u64 = 0xFFFF_F880_0000_0000;
 const REGION_END: u64 = 0xFFFF_F900_0000_0000;
 
-/// Freed ranges kept for reuse.
-const FREE_SLOTS: usize = 32;
-
-struct Space {
-    next: u64,
-    /// `(va, pages)` ranges returned by `free_va`.
-    free: [Option<(u64, usize)>; FREE_SLOTS],
-}
-
-impl Space {
-    /// A range of `pages` pages at a multiple of `align` bytes: a freed
-    /// one of that size and alignment if there is one, else fresh space.
-    fn take(&mut self, pages: usize, align: u64) -> Option<u64> {
-        if let Some(slot) = self
-            .free
-            .iter_mut()
-            .find(|s| s.is_some_and(|(va, n)| n == pages && va % align == 0))
-        {
-            return slot.take().map(|(va, _)| va);
-        }
-        let va = self.next.checked_next_multiple_of(align)?;
-        // The page after the range stays unmapped.
-        let end = va.checked_add(((pages + 1) * PAGE_SIZE) as u64)?;
-        if end > REGION_END {
-            return None;
-        }
-        self.next = end;
-        Some(va)
-    }
-}
-
 /// Serialises page-table edits; holds the address-space allocator.
-static NEXT_VA: SpinLock<Space> = SpinLock::new(
-    Rank::AddressSpace,
-    Space {
-        next: REGION_BASE,
-        free: [None; FREE_SLOTS],
-    },
-);
+static NEXT_VA: SpinLock<Space> =
+    SpinLock::new(Rank::AddressSpace, Space::new(REGION_BASE, REGION_END));
 
 /// Page tables, edited through the direct map.
 pub struct Tables;
@@ -108,9 +73,7 @@ pub fn alloc_va_aligned(pages: usize, align: u64) -> Option<u64> {
 /// Give back address space from `alloc_va`, once nothing is mapped there.
 /// If the reuse cache is full the range is simply not reused.
 pub fn free_va(va: u64, pages: usize) {
-    if let Some(slot) = NEXT_VA.lock().free.iter_mut().find(|s| s.is_none()) {
-        *slot = Some((va, pages));
-    }
+    NEXT_VA.lock().give_back(va, pages);
 }
 
 /// Map `pages` pages at `va` to the physical range starting at `pa`.
