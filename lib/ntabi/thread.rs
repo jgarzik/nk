@@ -40,6 +40,10 @@ pub const STATE: usize = 0x184;
 pub const NEXT_PROCESSOR: usize = 0x218;
 /// `BasePriority`: one signed byte.
 pub const BASE_PRIORITY: usize = 0x233;
+/// `Affinity.Mask`: the processors the thread may run on, 64 bits.
+pub const AFFINITY: usize = 0x240;
+/// `IdealProcessor`: the processor it is placed on by preference.
+pub const IDEAL_PROCESSOR: usize = 0x24C;
 /// `ETHREAD.StartAddress`.
 pub const START_ADDRESS: usize = 0x450;
 

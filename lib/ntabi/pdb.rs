@@ -200,5 +200,9 @@ fn thread_matches_the_kernel() {
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
+    assert_eq!(AFFINITY, field("Affinity"));
+    assert_eq!(IDEAL_PROCESSOR, field("IdealProcessor"));
+    let affinity = types.layout("_GROUP_AFFINITY").expect("_GROUP_AFFINITY");
+    assert_eq!(offset(&affinity, "_GROUP_AFFINITY", "Mask"), 0);
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
 }

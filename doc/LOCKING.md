@@ -134,6 +134,13 @@ rules stand in for the lock:
   becomes visible there and cleared by the next thread on that
   processor, once the old stack is no longer in use. A processor never
   switches to a thread with the flag set; it waits.
+- **Only idle threads wait, and only idle threads take.** A thread that
+  finds its successor's flag still set does not wait for it: it switches
+  to its processor's idle thread, which waits instead. And only an idle
+  thread takes a thread from another processor's queues. An idle thread
+  is never wanted by another processor, so there can be no ring of
+  processors each waiting for the thread the next is leaving. No two
+  processors' ready queues are ever locked together.
 - **The next thread cleans up.** The thread switched to clears the flag
   of the one before it, or frees it if it exited. A thread never frees
   its own stack.

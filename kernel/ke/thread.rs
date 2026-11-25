@@ -8,7 +8,10 @@
 //!
 //! Each processor has ready queues, one per priority, and an idle thread
 //! (the context the processor booted in) that runs when they are empty.
-//! A thread belongs to one processor's queues. A processor gives up a
+//! A ready thread is on one processor's queues. It is put on its ideal
+//! processor's if that one is idle, else on those of any idle processor
+//! its affinity allows, else on its ideal processor's; and an idle
+//! processor with nothing of its own takes a thread from another's. A processor gives up a
 //! thread when the thread yields or exits, when a thread of higher
 //! priority becomes ready there, or when the thread has run for its
 //! quantum and another of its priority is waiting.
@@ -29,6 +32,12 @@
 //!   thread becomes visible, and cleared by whatever runs next on that
 //!   processor, once it is off the old stack. A processor never switches
 //!   to a thread whose `swap_busy` is set; it waits.
+//! - Only an idle thread waits for a `swap_busy` thread, and only an
+//!   idle thread takes from another processor's queues. A thread that
+//!   finds its successor still busy switches to its processor's idle
+//!   thread instead, which is never busy for long and never wanted
+//!   elsewhere; so no ring of processors can form, each waiting for the
+//!   thread the next is leaving.
 //! - A thread that exits is freed by the thread that runs after it.
 
 use super::{Rank, SpinLock, irql, pcr};
@@ -76,6 +85,8 @@ pub struct Dispatcher {
     switches: AtomicU64,
     /// Something happened that may call for a different thread here.
     switch_wanted: AtomicBool,
+    /// The idle thread is what is running here.
+    idling: AtomicBool,
 }
 
 impl Dispatcher {
@@ -86,6 +97,7 @@ impl Dispatcher {
             previous: AtomicPtr::new(core::ptr::null_mut()),
             switches: AtomicU64::new(0),
             switch_wanted: AtomicBool::new(false),
+            idling: AtomicBool::new(true),
         }
     }
 }
@@ -180,14 +192,30 @@ pub fn init_cpu(stack: Stack) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The next ideal processor to hand out: threads are spread in turn.
+static NEXT_IDEAL: AtomicU32 = AtomicU32::new(0);
+
+/// Every processor: the affinity of a thread that may run anywhere.
+pub const ANYWHERE: u64 = u64::MAX;
+
 /// Create a thread that runs `entry(argument)` at `thread_priority` on
-/// processor `processor`, and make it ready.
+/// the processors in the mask `affinity`, and make it ready.
 pub fn create(
     entry: Entry,
     argument: usize,
     thread_priority: u8,
-    processor: usize,
+    affinity: u64,
 ) -> Result<*mut Thread, &'static str> {
+    let allowed = affinity & super::smp::online();
+    if allowed == 0 {
+        return Err("a thread's affinity names no running processor");
+    }
+    // The ideal processor: the next in turn among those allowed.
+    let turn = NEXT_IDEAL.fetch_add(1, Ordering::Relaxed) % allowed.count_ones();
+    let ideal = (0..64)
+        .filter(|n| allowed & 1 << n != 0)
+        .nth(turn as usize)
+        .unwrap_or(0);
     let stack = mm::stack::alloc().ok_or("no memory for a thread's stack")?;
     let Some(thread) = allocate(stack, thread_priority, layout::state::INITIALIZED) else {
         mm::stack::free(stack);
@@ -198,7 +226,8 @@ pub fn create(
         (&raw mut (*thread).entry).write(Some(entry));
         (&raw mut (*thread).argument).write(argument);
         field::<u64>(thread, layout::START_ADDRESS).write(entry as usize as u64);
-        field::<u32>(thread, layout::NEXT_PROCESSOR).write(processor as u32);
+        field::<u64>(thread, layout::AFFINITY).write(allowed);
+        field::<u32>(thread, layout::IDEAL_PROCESSOR).write(ideal);
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
     }
     THREADS.fetch_add(1, Ordering::AcqRel);
@@ -207,8 +236,70 @@ pub fn create(
     Ok(thread)
 }
 
-/// Put `thread` at the back of its processor's queue for its priority,
-/// and wake that processor if it is another.
+/// Whether processor `number` is running its idle thread.
+fn idling(number: usize) -> bool {
+    arch::percpu_of(number).is_some_and(|p| p.dispatcher().idling.load(Ordering::Acquire))
+}
+
+/// The processor a thread with this affinity and ideal processor should
+/// be made ready on.
+fn place(allowed: u64, ideal: usize) -> usize {
+    if idling(ideal) {
+        return ideal;
+    }
+    (0..64)
+        .filter(|n| allowed & 1 << n != 0)
+        .find(|&n| idling(n))
+        .unwrap_or(ideal)
+}
+
+/// Wake one idle processor among `allowed`, other than this one, so
+/// that it looks for work to take.
+fn wake_an_idle(allowed: u64) {
+    let me = pcr::current_processor() as usize;
+    if let Some(number) = (0..64).find(|&n| n != me && allowed & 1 << n != 0 && idling(n))
+        && let Some(there) = arch::percpu_of(number)
+    {
+        // The request outlives the interrupt: if that processor is
+        // between looking for work and halting, it looks again.
+        there
+            .dispatcher()
+            .switch_wanted
+            .store(true, Ordering::Release);
+        arch::ipi_send(number);
+    }
+}
+
+/// Take a thread this processor may run from another processor's queues:
+/// the best that one has, if its affinity allows.
+fn steal() -> Option<*mut Thread> {
+    let me = pcr::current_processor() as usize;
+    let processors = super::smp::online_count();
+    for other in (1..processors).map(|step| (me + step) % processors) {
+        let Some(dispatcher) = arch::percpu_of(other).map(|p| p.dispatcher()) else {
+            continue;
+        };
+        let mut ready = dispatcher.ready.lock();
+        // SAFETY: queued threads are live, and while queued their
+        // affinity and processor belong to the queue's lock.
+        unsafe {
+            let Some((link, found)) = ready.take(0) else {
+                continue;
+            };
+            let thread = thread_of(link);
+            if field::<u64>(thread, layout::AFFINITY).read() & 1 << me == 0 {
+                ready.insert(link, found, true);
+                continue;
+            }
+            field::<u32>(thread, layout::NEXT_PROCESSOR).write(me as u32);
+            return Some(thread);
+        }
+    }
+    None
+}
+
+/// Put `thread` at the back of a processor's queue for its priority, and
+/// have that processor reconsider what it runs.
 ///
 /// # Safety
 /// `thread` is live, on no queue, and not running (or about to stop:
@@ -218,8 +309,15 @@ unsafe fn make_ready(thread: *mut Thread) {
     if old < irql::DISPATCH_LEVEL {
         arch::set_irql(irql::DISPATCH_LEVEL);
     }
-    // SAFETY: per the contract.
-    let processor = unsafe { field::<u32>(thread, layout::NEXT_PROCESSOR).read() } as usize;
+    // SAFETY: per the contract; on no queue, the thread is the caller's.
+    let processor = unsafe {
+        let processor = place(
+            field::<u64>(thread, layout::AFFINITY).read(),
+            field::<u32>(thread, layout::IDEAL_PROCESSOR).read() as usize,
+        );
+        field::<u32>(thread, layout::NEXT_PROCESSOR).write(processor as u32);
+        processor
+    };
     let dispatcher = arch::percpu_of(processor)
         .expect("a thread for a processor that is not running")
         .dispatcher();
@@ -318,9 +416,36 @@ fn dispatch(leaving: Leaving) {
             quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
         }
         // SAFETY: queued threads are live.
-        let next = match unsafe { ready.take(floor) } {
+        let taken = unsafe { ready.take(floor) };
+        let busy = taken.is_some_and(|(link, _)| {
+            // SAFETY: as above.
+            unsafe { (*thread_of(link)).swap_busy.load(Ordering::Acquire) }
+        });
+        let next = match taken {
+            // Still leaving its last stack on another processor: only
+            // the idle thread may wait for it.
+            Some((link, found)) if !idle_thread && busy => {
+                // SAFETY: as above; back where it was.
+                unsafe { ready.insert(link, found, true) };
+                dispatcher.idle.load(Ordering::Acquire)
+            }
             Some((link, _)) => thread_of(link),
             None if leaving == Leaving::Exit => dispatcher.idle.load(Ordering::Acquire),
+            None if idle_thread => {
+                drop(ready);
+                match steal() {
+                    Some(thread) => {
+                        // SAFETY: `me` is this processor's idle thread,
+                        // which is on no queue and wanted by no one.
+                        unsafe {
+                            (*me).swap_busy.store(true, Ordering::Release);
+                            set_state(me, layout::state::READY);
+                        }
+                        return switch_to(me, thread);
+                    }
+                    None => return,
+                }
+            }
             None => return,
         };
         // SAFETY: `me` is the running thread. From the moment it is on
@@ -341,10 +466,24 @@ fn dispatch(leaving: Leaving) {
         }
         next
     };
-    // SAFETY: `next` came off this processor's queue (or is its idle
-    // thread), so no other processor will run it; it may still be
-    // leaving its last stack.
+    if leaving != Leaving::Exit && !idle_thread {
+        // This thread is waiting now; a processor with nothing to do
+        // may take it.
+        // SAFETY: `me` is still on this processor; its affinity changes
+        // only at creation.
+        wake_an_idle(unsafe { field::<u64>(me, layout::AFFINITY).read() });
+    }
+    switch_to(me, next);
+}
+
+/// Leave `me`, already marked and queued as its leaving requires, for
+/// `next`, which this processor took off a queue or is its idle thread.
+fn switch_to(me: *mut Thread, next: *mut Thread) {
+    let dispatcher = arch::percpu().dispatcher();
+    // SAFETY: `next` is this processor's to run; it may still be leaving
+    // its last stack, and then `me` is the idle thread (see `dispatch`).
     unsafe {
+        dispatcher.idling.store((*next).idle, Ordering::Release);
         while (*next).swap_busy.load(Ordering::Acquire) {
             core::hint::spin_loop();
         }
@@ -418,11 +557,16 @@ pub fn exit() -> ! {
 pub fn idle_loop() -> ! {
     let dispatcher = arch::percpu().dispatcher();
     loop {
+        // Cleared before looking: a request that arrives while this
+        // processor looks, or after, is still there when it has looked.
+        dispatcher.switch_wanted.store(false, Ordering::Release);
         yield_now();
-        // An interrupt between looking and halting would be slept
-        // through, so look with interrupts off.
+        // An interrupt between deciding to halt and halting would be
+        // slept through, so decide with interrupts off.
         arch::disable_interrupts();
-        if dispatcher.ready.lock().highest().is_none() {
+        if dispatcher.ready.lock().highest().is_none()
+            && !dispatcher.switch_wanted.load(Ordering::Acquire)
+        {
             arch::wait_for_interrupt();
         } else {
             arch::enable_interrupts();
@@ -478,7 +622,7 @@ pub fn lifecycle_test() -> Result<u32, &'static str> {
     WRONG.store(0, Ordering::Relaxed);
     let me = pcr::current_processor() as usize;
     for _ in 0..ROUNDS {
-        create(body, 0x1234, NORMAL_PRIORITY, me)?;
+        create(body, 0x1234, NORMAL_PRIORITY, 1 << me)?;
         yield_now();
     }
     if !settle(before) {
@@ -508,7 +652,7 @@ pub fn turns_test() -> Result<(), &'static str> {
     TRACE.store(0, Ordering::Relaxed);
     let me = pcr::current_processor() as usize;
     for tag in 1..=3 {
-        create(body, tag, NORMAL_PRIORITY, me)?;
+        create(body, tag, NORMAL_PRIORITY, 1 << me)?;
     }
     if !settle(before) {
         return Err("the threads did not finish");
@@ -529,9 +673,9 @@ pub fn priority_test() -> Result<(), &'static str> {
     let before = count();
     TRACE.store(0, Ordering::Relaxed);
     let me = pcr::current_processor() as usize;
-    create(body, 1, NORMAL_PRIORITY - 1, me)?;
-    create(body, 2, NORMAL_PRIORITY, me)?;
-    create(body, 3, NORMAL_PRIORITY + 4, me)?;
+    create(body, 1, NORMAL_PRIORITY - 1, 1 << me)?;
+    create(body, 2, NORMAL_PRIORITY, 1 << me)?;
+    create(body, 3, NORMAL_PRIORITY + 4, 1 << me)?;
     yield_now();
     // The higher and the equal one have run, in that order; the lower
     // one has not, for all that it was ready first.
@@ -585,7 +729,7 @@ pub fn other_cpu_test() -> Result<u32, &'static str> {
     let before = count();
     let target = super::smp::online_count() - 1;
     TRACE.store(0, Ordering::Relaxed);
-    create(body, 0, NORMAL_PRIORITY, target)?;
+    create(body, 0, NORMAL_PRIORITY, 1 << target)?;
     if !settle(before) {
         return Err("a thread created for another processor did not run and exit");
     }
@@ -614,7 +758,7 @@ pub fn registers_test() -> Result<u32, &'static str> {
     WRONG.store(0, Ordering::Relaxed);
     let me = pcr::current_processor() as usize;
     for seed in 1..=3 {
-        create(body, seed, NORMAL_PRIORITY, me)?;
+        create(body, seed, NORMAL_PRIORITY, 1 << me)?;
     }
     if !settle(before) || RAN.load(Ordering::Acquire) != 3 {
         return Err("the threads did not finish");
@@ -634,9 +778,9 @@ pub fn preempt_test() -> Result<(), &'static str> {
     let before = count();
     TRACE.store(0, Ordering::Relaxed);
     let me = pcr::current_processor() as usize;
-    create(body, 1, NORMAL_PRIORITY - 1, me)?;
+    create(body, 1, NORMAL_PRIORITY - 1, 1 << me)?;
     let after_lower = TRACE.load(Ordering::Acquire);
-    create(body, 2, NORMAL_PRIORITY + 1, me)?;
+    create(body, 2, NORMAL_PRIORITY + 1, 1 << me)?;
     let after_higher = TRACE.load(Ordering::Acquire);
     // SAFETY: the lower thread is still on this processor's queue.
     let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
@@ -672,7 +816,7 @@ pub fn quantum_test() -> Result<u64, &'static str> {
     }
     let me = pcr::current_processor() as usize;
     for which in 0..3 {
-        create(body, which, NORMAL_PRIORITY, me)?;
+        create(body, which, NORMAL_PRIORITY, 1 << me)?;
     }
     let switches = dispatcher.switches.load(Ordering::Relaxed);
     // This thread spins too, as the fourth: about half a second each.
@@ -721,7 +865,7 @@ pub fn preempt_registers_test() -> Result<u64, &'static str> {
     }
     let me = pcr::current_processor() as usize;
     for seed in 1..=3 {
-        create(body, seed, NORMAL_PRIORITY, me)?;
+        create(body, seed, NORMAL_PRIORITY, 1 << me)?;
     }
     if !settle(before) {
         return Err("the threads did not finish");
@@ -734,4 +878,116 @@ pub fn preempt_registers_test() -> Result<u64, &'static str> {
         return Err("a thread made no checks");
     }
     Ok(checks)
+}
+
+/// Where the runner of `migrate_test` is.
+static RUNNER_ON: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// A thread that may run anywhere moves when it has to wait and another
+/// processor is idle, and what a call preserves survives the move. A
+/// runner is chased from processor to processor by threads pinned to
+/// whichever one it is on. Returns the moves it made.
+pub fn migrate_test() -> Result<u64, &'static str> {
+    extern "C" fn switch_away() {
+        yield_now();
+    }
+    fn runner(seed: usize) {
+        let mut last = pcr::current_processor();
+        while !STOP.load(Ordering::Acquire) {
+            if !arch::callee_saved_survive(seed as u64, switch_away) {
+                WRONG.fetch_add(1, Ordering::Relaxed);
+            }
+            let now = pcr::current_processor();
+            if now != last {
+                SPINS[0].fetch_add(1, Ordering::Relaxed);
+                last = now;
+            }
+            RUNNER_ON.store(now, Ordering::Release);
+        }
+    }
+    fn blocker(_: usize) {
+        // Long enough for the runner to be taken elsewhere.
+        super::time::stall(30_000);
+    }
+    const CHASES: u64 = 8;
+    let before = count();
+    let processors = super::smp::online_count();
+    WRONG.store(0, Ordering::Relaxed);
+    SPINS[0].store(0, Ordering::Relaxed);
+    STOP.store(false, Ordering::Release);
+    RUNNER_ON.store(u32::MAX, Ordering::Release);
+    create(runner, 0x5EED, NORMAL_PRIORITY, ANYWHERE)?;
+    // Keep at it until the runner has moved often enough. A chase can
+    // miss: where the runner says it is may be a moment out of date.
+    let deadline = super::time::interrupt_time() + 30_000_000;
+    while processors >= 3
+        && SPINS[0].load(Ordering::Relaxed) < CHASES
+        && super::time::interrupt_time() < deadline
+    {
+        let on = RUNNER_ON.load(Ordering::Acquire);
+        if on == u32::MAX {
+            yield_now();
+            continue;
+        }
+        // Something else to run where the runner is: when the runner
+        // next yields it waits there, and an idle processor takes it.
+        let moves = SPINS[0].load(Ordering::Relaxed);
+        create(blocker, 0, NORMAL_PRIORITY, 1 << on)?;
+        let patience = super::time::interrupt_time() + 1_000_000;
+        while SPINS[0].load(Ordering::Relaxed) == moves && super::time::interrupt_time() < patience
+        {
+            yield_now();
+        }
+    }
+    STOP.store(true, Ordering::Release);
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a register a call preserves changed when a thread moved");
+    }
+    let moves = SPINS[0].load(Ordering::Relaxed);
+    // With this thread busy on its own processor, the runner needs a
+    // third to escape to.
+    if processors >= 3 && moves < CHASES {
+        return Err("a waiting thread was not taken by an idle processor");
+    }
+    Ok(moves)
+}
+
+/// A thread runs only where its affinity allows, however often it gives
+/// up the processor and whoever is idle. Returns the checks made.
+pub fn affinity_test() -> Result<u64, &'static str> {
+    fn body(allowed: usize) {
+        for _ in 0..2000 {
+            if allowed & 1 << pcr::current_processor() == 0 {
+                WRONG.fetch_add(1, Ordering::Relaxed);
+            }
+            SPINS[0].fetch_add(1, Ordering::Relaxed);
+            yield_now();
+        }
+    }
+    let before = count();
+    let processors = super::smp::online_count();
+    WRONG.store(0, Ordering::Relaxed);
+    SPINS[0].store(0, Ordering::Relaxed);
+    // Two threads per processor, each allowed only there, and two
+    // allowed on the last pair only.
+    let pair = 0b11u64 << processors.saturating_sub(2) & super::smp::online();
+    for n in 0..processors {
+        create(body, 1 << n, NORMAL_PRIORITY, 1 << n)?;
+        create(body, 1 << n, NORMAL_PRIORITY, 1 << n)?;
+    }
+    create(body, pair as usize, NORMAL_PRIORITY, pair)?;
+    create(body, pair as usize, NORMAL_PRIORITY, pair)?;
+    if create(body, 0, NORMAL_PRIORITY, 1 << 63).is_ok() {
+        return Err("a thread was created for a processor that does not exist");
+    }
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a thread ran on a processor outside its affinity");
+    }
+    Ok(SPINS[0].load(Ordering::Relaxed))
 }

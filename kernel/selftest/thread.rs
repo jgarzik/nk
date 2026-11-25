@@ -14,6 +14,8 @@ pub static GROUP: Group = Group {
         "thread.preempt",
         "thread.quantum",
         "thread.preempt-registers",
+        "thread.migrate",
+        "thread.affinity",
     ],
     run,
     manual: false,
@@ -65,4 +67,11 @@ fn run(r: &mut Report, _: &BootInfo) {
         "register checks under preemption:",
         thread::preempt_registers_test(),
     );
+    counted(
+        r,
+        "thread.migrate",
+        "moves between processors:",
+        thread::migrate_test(),
+    );
+    counted(r, "thread.affinity", "checks:", thread::affinity_test());
 }

@@ -188,8 +188,13 @@ A thread is an `ETHREAD`-sized block, laid out as Windows lays it out
 for the fields NK keeps, followed by NK's own state, with a 32 KiB
 kernel stack that has nothing mapped below it. Each processor has a
 ready queue per priority (0 to 31) with a summary word, and an idle
-thread. A thread belongs to the queues of one processor, chosen when it
-is created.
+thread. A thread has an affinity (the processors it may run on) and an
+ideal processor, handed out in turn. Made ready, it goes on the queues
+of its ideal processor if that one is idle, else of any idle processor
+its affinity allows, else of its ideal processor. A processor with
+nothing to run takes the best waiting thread it is allowed from another
+processor's queues, and a processor that leaves a thread waiting wakes
+an idle one to do so.
 
 A processor leaves a thread when the thread yields (giving way to ready
 threads of its own priority or higher) or exits; when a thread of higher

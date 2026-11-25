@@ -37,6 +37,8 @@ thread.registers ok
 thread.preempt ok
 thread.quantum ok
 thread.preempt-registers ok
+thread.migrate ok
+thread.affinity ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load skip

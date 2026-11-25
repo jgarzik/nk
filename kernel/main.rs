@@ -91,7 +91,7 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     // The rest runs in a thread, at PASSIVE_LEVEL, as drivers expect of
     // whatever calls them; this context idles.
     let info = core::ptr::from_ref(info) as usize;
-    if let Err(why) = ke::thread::create(system_thread, info, ke::thread::NORMAL_PRIORITY, 0) {
+    if let Err(why) = ke::thread::create(system_thread, info, ke::thread::NORMAL_PRIORITY, 1) {
         test::abort("ke.thread", format_args!("{why}"));
     }
     ke::thread::idle_loop()
