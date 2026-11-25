@@ -1,50 +1,42 @@
 # Locking
 
-How NK protects its own data. Changing a lock, or adding one, changes
-this file in the same commit.
+How NK protects its own data on several processors. A new or changed
+lock changes this file in the same commit.
 
 ## IRQL
 
-Every processor runs at an interrupt request level (IRQL). Code at one
-level is not interrupted by anything that runs at that level or below on
-the same processor. The levels NK uses so far:
+| Level | Value | x86-64 vector | arm64 interrupt | What runs there |
+| --- | --- | --- | --- | --- |
+| `PASSIVE_LEVEL` | 0 | | | threads: driver entry, dispatch routines, work items, the tests |
+| `APC_LEVEL` | 1 | | | a thread holding a fast mutex |
+| `DISPATCH_LEVEL` | 2 | `0x2F` | SGI 3 | DPCs, the dispatcher, code holding a spin lock |
+| clock | 13 | `0xD1` | virtual timer PPI | the clock tick |
+| interprocessor | 14 | `0xE1` | SGI 1 | `ke::ipi` routines |
+| `HIGH_LEVEL` | 15 | | | the DPC-queue and console locks; the bugcheck path |
 
-| Level | Value | What runs there |
-| --- | --- | --- |
-| `PASSIVE_LEVEL` | 0 | ordinary code: driver entry, dispatch routines, the tests |
-| `DISPATCH_LEVEL` | 2 | code holding a spin lock |
-| `HIGH_LEVEL` | 15 | code holding the console lock; the path that stops the system |
+The IRQL is the interrupt controller's priority mask and nothing else;
+on neither architecture is it a copy in memory (see "Per-processor
+state"):
 
-On x86-64 the IRQL is register CR8, because code built with the WDK reads
-it there. On arm64 drivers call the kernel for it, and it is the GIC's
-priority mask register and nothing else. On neither is it a copy in
-memory, for the reason in "Per-processor state" below.
+- x86-64: CR8, the local APIC's task priority, because WDK-built code
+  reads and writes it there. A vector's IRQL is its upper four bits, as
+  on Windows.
+- arm64: the GIC's priority mask, through an export. An interrupt at
+  IRQL `n` has priority `0xF0 - 0x10*n`.
 
-The interrupt controller enforces it. An interrupt runs at an IRQL of its
-own, and the controller holds back every interrupt whose IRQL is not
-above the current one:
+Interrupts are enabled from early boot and never disabled to protect
+data; raising the IRQL keeps them out. A handler runs at its interrupt's
+IRQL with interrupts enabled, so only something more urgent preempts it;
+end-of-interrupt is sent before the IRQL comes back down
+(`kernel/ke/interrupt.rs`).
 
-- x86-64: the local APIC. A vector's IRQL is its upper four bits, as on
-  Windows, and CR8 is the APIC's task priority, so setting the IRQL is
-  setting the mask. A driver that writes CR8 itself gets the same effect.
-- arm64: the GIC. An interrupt at IRQL `n` has priority `0xF0 - 0x10*n`,
-  and setting the IRQL writes that value for the new level to the
-  priority mask.
-
-Interrupts are enabled from early boot on and never disabled to protect
-data; raising the IRQL is how code keeps interrupts out. A handler runs
-at its interrupt's IRQL with interrupts enabled, so only something more
-urgent can preempt it; the controller is told the interrupt has finished
-before the IRQL comes back down (`kernel/ke/interrupt.rs`).
-
-The rules (`kernel/ke/irql.rs`, checked on every change):
+Rules (`kernel/ke/irql.rs`, checked on every change):
 
 - `raise` goes up or stays; `lower` goes down or stays. The reverse is a
   bugcheck: `IRQL_NOT_GREATER_OR_EQUAL` (0x9), `IRQL_NOT_LESS_OR_EQUAL`
   (0xA).
-- A driver is loaded and unloaded at `PASSIVE_LEVEL`; doing it with the
-  level raised is a bugcheck (0xA).
-- Every test group must end at the level it started.
+- A driver is loaded and unloaded at `PASSIVE_LEVEL`, else bugcheck 0xA.
+- Every test group ends at the level it started.
 
 ## Spin locks
 
@@ -203,7 +195,8 @@ of the dispatcher.
 
 ### Object locks
 
-Every object a thread can wait on (event, semaphore, timer) has a lock of
+Every object a thread can wait on (event, semaphore, timer, mutex,
+thread) has a lock of
 its own, bit 7 of its header's type byte, as on Windows. It covers the
 object's signal state, its list of wait blocks, and the blocks linked
 there. It is taken at `DISPATCH_LEVEL`, before any ranked lock. These
@@ -228,7 +221,7 @@ itself changes them.
 The race between a thread going to sleep and whatever would wake it is
 settled by one word per thread, the wait register
 (`nk_ke::WaitRegister`), changed only by compare-and-swap. Its every
-interleaving with up to three wakers is checked on the host.
+interleaving with several wakers is checked on the host.
 
 - **Begin before linking.** A thread marks its wait begun, under the
   object's lock, before its wait block is linked there. From then on a
@@ -292,24 +285,17 @@ so does NK, with the same bugcheck code.
 ## How it is tested
 
 - `lib/ke`: the rules as pure functions (`Held`, `check_raise`,
-  `check_lower`) with unit tests of every violation, and the lock itself
-  (`TicketLock`) with eight threads contending on the build host.
-- `ke.irql-and-locks`: on the booted kernel, raising, lowering and nested
-  locks move the IRQL as stated and leave nothing held.
+  `check_lower`), the lock (`TicketLock`, host threads contending) and
+  the wait register (every interleaving with several wakers).
+- `ke.irql-and-locks`, `ke.interrupts`: on the booted kernel, the IRQL
+  moves as stated, interrupts arrive once, at their level and in order of
+  urgency, and nothing is left held. x86-64 runs x2APIC under KVM and
+  xAPIC under emulation.
 - `*-neg-lock-order`, `*-neg-lock-twice`, `*-neg-irql-lower`: boots that
   break a rule on purpose and must end in the bugcheck named above.
-- `ke.interrupts`: a processor interrupts itself and checks that the
-  interrupt arrives once and at its IRQL, a second one arrives after it,
-  one sent while the IRQL is raised waits until it is lowered, a more
-  urgent interrupt preempts a handler and a less urgent one waits for it,
-  and an interrupt nothing handles is counted and survived. x86-64 runs
-  it in x2APIC mode under KVM and xAPIC mode under emulation. Mutants: no
-  end-of-interrupt (each architecture), a handler left at the interrupted
-  code's IRQL, and an IRQL that does not move the GIC's mask.
-- Mutants: a lock that does not raise the IRQL, and a rank check that
-  accepts any order.
-- `oracle.nkc-irql`: the conformance driver `nkc-irql` raises and lowers
-  the IRQL, takes each kind of spin lock and allocates pool at
-  `DISPATCH_LEVEL`; the 29 values it reports must be the ones it reported
-  on Windows. Mutants: a driver lock that does not raise the IRQL, and a
-  try that always succeeds.
+- `oracle.nkc-irql`: a conformance driver raises and lowers the IRQL,
+  takes each kind of spin lock and allocates pool at `DISPATCH_LEVEL`;
+  the values it reports are the ones it reported on Windows.
+- Mutants (`tools/mutants/`): a lock that does not raise the IRQL, a
+  rank check that accepts any order, no end-of-interrupt, an IRQL that
+  does not move the GIC's mask, a driver lock that does not raise.

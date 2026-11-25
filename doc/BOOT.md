@@ -30,17 +30,14 @@ it is the default path for a volume with no boot entry.
 5. Calls `ExitBootServices`, then switches tables and jumps.
 
 If anything fails, nkload prints an `NK-TEST boot:FAIL` line and powers
-off, so a broken boot is a fast, visible test failure rather than a hang.
+off: a broken boot is a fast test failure, not a hang.
 
 ## Address space at kernel entry
 
-| Range | Contents |
-| --- | --- |
-| `0xFFFF_8000_0000_0000` + phys | Direct map of physical memory, 2 MiB blocks, not executable. Ranges with no RAM are mapped as device memory. |
-| `0xFFFF_F800_0000_0000` | The kernel image, 4 KiB pages, each with its section's protection (text read+execute, data read+write, the rest read-only). |
-| Low half | Identity map of firmware runtime regions only, kept so UEFI runtime services stay callable. |
+nkload builds the direct map and the kernel image's mapping; the table
+of ranges is in `doc/DESIGN.md` (Address space). The low half holds only
+an identity map of firmware runtime regions, and differs by architecture:
 
-The low half differs by architecture:
 
 - **x86-64:** nkload builds the identity map itself, in the same tables.
   It covers the regions firmware marks as needed at runtime (code

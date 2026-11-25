@@ -1,7 +1,6 @@
 # Security
 
-NK is a research milestone, not a system to deploy. Read this before
-running it anywhere that matters.
+NK is a research kernel, not a system to deploy.
 
 ## What NK does not protect against
 
@@ -26,5 +25,4 @@ routine, open a public issue.
 
 If you believe you have found something that should not be discussed in
 public first, use GitHub's private vulnerability reporting on this
-repository ("Report a vulnerability" under the Security tab). Expect a
-reply, but not a service-level commitment: this is an early-stage project.
+repository ("Report a vulnerability" under the Security tab).

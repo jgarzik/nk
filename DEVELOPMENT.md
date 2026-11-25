@@ -30,7 +30,7 @@ uses them; see `doc/TESTING.md`.
 Install [rustup](https://rustup.rs). `rust-toolchain.toml` names the
 stable channel, the `rustfmt` and `clippy` components, and the two UEFI
 targets; rustup fetches whatever is missing the first time you build in
-this directory. NK uses no nightly features.
+this directory.
 
 ## Everyday commands
 
@@ -39,7 +39,8 @@ make test       # host unit tests
 make check      # boot x86-64 under QEMU and run the kernel self-tests
 make check-arm  # the same for arm64 (emulated, a little slower)
 make run        # boot with the serial console attached (Ctrl-A X quits)
-make gate       # everything a commit must pass
+make gate       # everything a commit must pass; prints GATE-OK
+make help       # the other targets (soak, mutants, coverage, oracle, ledger)
 make dist       # release boot images in target/dist/
 make clean      # remove target/
 ```
@@ -60,14 +61,17 @@ emulation otherwise; `NO_KVM=1` forces emulation.
 - `tools/boot_test.py <scenario>` reruns one scenario; `KEEP=1` keeps its
   directory even when it passes.
 - A line starting `BUGCHECK:` is a fatal kernel error with a register
-  dump. Addresses from `0xFFFFF80000000000` are in the kernel image; the
-  driver images are mapped from `0xFFFFF88000000000`.
+  dump. Addresses from `0xFFFFF80000000000` are in the kernel image;
+  driver images and kernel stacks are mapped from `0xFFFFF88000000000`
+  (`doc/DESIGN.md`, Address space).
 - `make run` boots the same image interactively.
 - QEMU's own tracing (`-d int,cpu_reset`) can be added in
   `tools/boot_test.py` when the kernel dies before it can print.
 
-## Layout of a change
+## Releases
 
-Hardware-independent logic goes in a `lib/` crate with unit tests; the
-kernel binary holds the glue and the `unsafe`. See `CONTRIBUTING.md` for
-what a change must include.
+Tagged `vX.Y.Z`; the version is in the workspace `Cargo.toml` and the
+kernel prints it at boot. A release is the tagged source plus one boot
+image per architecture from `make dist`, holding only NK's loader and
+kernel: booted, they run the kernel's self-tests and skip the driver
+tests.
