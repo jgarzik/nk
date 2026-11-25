@@ -131,6 +131,59 @@ const _: () = {
     assert!(offset_of!(KTIMER, Period) == 0x3C);
 };
 
+/// `DISPATCHER_HEADER.Type` values NK knows (`KOBJECTS`).
+pub const EVENT_NOTIFICATION_OBJECT: u8 = 0;
+pub const EVENT_SYNCHRONIZATION_OBJECT: u8 = 1;
+pub const SEMAPHORE_OBJECT: u8 = 5;
+pub const TIMER_SYNCHRONIZATION_OBJECT: u8 = 9;
+/// `TimerMiscFlags`: `Expired`.
+pub const TIMER_EXPIRED: u8 = 1 << 7;
+
+/// `KEVENT`.
+#[repr(C)]
+pub struct KEVENT {
+    pub Header: DISPATCHER_HEADER,
+}
+
+/// `KSEMAPHORE`.
+#[repr(C)]
+pub struct KSEMAPHORE {
+    pub Header: DISPATCHER_HEADER,
+    pub Limit: i32,
+}
+
+/// `KWAIT_BLOCK`: one thread's wait on one object, linked into the
+/// object's wait list. Four of them are built into every thread, where
+/// the two spare fields are used for other things; NK writes the rest
+/// field by field.
+#[repr(C)]
+pub struct KWAIT_BLOCK {
+    pub WaitListEntry: LIST_ENTRY,
+    pub WaitType: u8,
+    pub BlockState: u8,
+    pub WaitKey: u16,
+    pub SpareLong: i32,
+    pub Thread: *mut c_void,
+    pub Object: *mut c_void,
+    pub SparePtr: *mut c_void,
+}
+
+/// `KWAIT_BLOCK.BlockState`: linked into its object's wait list.
+pub const WAIT_BLOCK_ACTIVE: u8 = 4;
+/// `KWAIT_BLOCK.BlockState`: not linked.
+pub const WAIT_BLOCK_INACTIVE: u8 = 5;
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KEVENT>() == 0x18);
+    assert!(size_of::<KSEMAPHORE>() == 0x20);
+    assert!(offset_of!(KSEMAPHORE, Limit) == 0x18);
+    assert!(size_of::<KWAIT_BLOCK>() == 0x30);
+    assert!(offset_of!(KWAIT_BLOCK, BlockState) == 0x11);
+    assert!(offset_of!(KWAIT_BLOCK, Thread) == 0x18);
+    assert!(offset_of!(KWAIT_BLOCK, Object) == 0x20);
+};
+
 /// `KUSER_SHARED_DATA`: a page at a fixed kernel address that code built
 /// with the WDK reads the time from directly. Only the fields NK
 /// maintains are named.

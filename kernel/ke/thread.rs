@@ -44,7 +44,8 @@ use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
 use crate::mm::{self, stack::Stack};
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
-use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues};
+use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
+use nk_ntabi::ke::{KTIMER, KWAIT_BLOCK};
 use nk_ntabi::pcr::NATIVE as PCR;
 use nk_ntabi::thread as layout;
 
@@ -70,6 +71,10 @@ pub struct Thread {
     idle: bool,
     /// Clock ticks left before threads of this priority get a turn.
     quantum: AtomicU8,
+    /// Where the thread stands with respect to waiting.
+    wait: WaitRegister,
+    /// The next thread in a waker's list of threads to make ready.
+    wake_link: *mut Thread,
 }
 
 const _: () = assert!(size_of::<Thread>() <= mm::PAGE_SIZE);
@@ -166,6 +171,9 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).swap_busy).write(AtomicBool::new(false));
         (&raw mut (*thread).idle).write(false);
         (&raw mut (*thread).quantum).write(AtomicU8::new(QUANTUM_TICKS));
+        (&raw mut (*thread).wait).write(WaitRegister::new());
+        (&raw mut (*thread).wake_link).write(core::ptr::null_mut());
+        super::wait::init_thread(thread);
         field::<u8>(thread, 0).write(layout::THREAD_OBJECT);
         field::<u64>(thread, layout::INITIAL_STACK).write(stack.top);
         field::<u64>(thread, layout::STACK_BASE).write(stack.top);
@@ -298,13 +306,65 @@ fn steal() -> Option<*mut Thread> {
     None
 }
 
+/// The thread's wait register.
+pub fn wait_register<'a>(thread: *mut Thread) -> &'a WaitRegister {
+    // SAFETY: a thread's register lives as long as the thread, and
+    // callers hold a thread they found through a linked wait block or
+    // the current-thread slot.
+    unsafe { &(*thread).wait }
+}
+
+/// One of the thread's four built-in wait blocks.
+pub fn wait_block(thread: *mut Thread, index: usize) -> *mut KWAIT_BLOCK {
+    field::<KWAIT_BLOCK>(thread, layout::WAIT_BLOCK).wrapping_add(index)
+}
+
+/// The thread's own timer, for waits with a time limit.
+pub fn timer(thread: *mut Thread) -> *mut KTIMER {
+    field(thread, layout::TIMER)
+}
+
+/// Record what the thread's wait returned, where Windows keeps it.
+///
+/// # Safety
+/// `thread` is the running thread.
+pub unsafe fn set_wait_status(thread: *mut Thread, status: u32) {
+    // SAFETY: per the contract.
+    unsafe { field::<u64>(thread, layout::WAIT_STATUS).write(u64::from(status)) };
+}
+
+/// Chain `thread`, just claimed asleep, in front of `next`.
+///
+/// # Safety
+/// The caller claimed `thread` asleep and has not yet made it ready.
+pub unsafe fn set_wake_link(thread: *mut Thread, next: *mut Thread) {
+    // SAFETY: per the contract, the thread is the caller's alone.
+    unsafe { (&raw mut (*thread).wake_link).write(next) };
+}
+
+/// Unchain `thread`: the thread that was chained after it.
+///
+/// # Safety
+/// As `set_wake_link`.
+pub unsafe fn take_wake_link(thread: *mut Thread) -> *mut Thread {
+    // SAFETY: per the contract.
+    unsafe { (&raw mut (*thread).wake_link).replace(core::ptr::null_mut()) }
+}
+
+/// Give up the processor until a waker makes this thread ready, unless
+/// one has already claimed it. Called at `DISPATCH_LEVEL` by a thread
+/// whose wait has begun.
+pub fn sleep() {
+    dispatch(Leaving::Wait);
+}
+
 /// Put `thread` at the back of a processor's queue for its priority, and
 /// have that processor reconsider what it runs.
 ///
 /// # Safety
 /// `thread` is live, on no queue, and not running (or about to stop:
 /// `swap_busy` set).
-unsafe fn make_ready(thread: *mut Thread) {
+pub unsafe fn make_ready(thread: *mut Thread) {
     let old = irql::current();
     if old < irql::DISPATCH_LEVEL {
         arch::set_irql(irql::DISPATCH_LEVEL);
@@ -387,6 +447,8 @@ enum Leaving {
     /// It was interrupted: a thread of higher priority goes first, and
     /// if its quantum is spent so do its equals.
     Preempt,
+    /// It waits for something, and runs again when made ready.
+    Wait,
 }
 
 /// Pick the next thread for this processor and switch to it. Called at
@@ -397,6 +459,19 @@ fn dispatch(leaving: Leaving) {
     let dispatcher = arch::percpu().dispatcher();
     // SAFETY: `me` is the running thread.
     let (idle_thread, my_priority) = unsafe { ((*me).idle, priority(me)) };
+    if leaving == Leaving::Wait {
+        // From the commit on, a waker may make this thread ready and
+        // another processor may want it: `swap_busy` first. If a waker
+        // has already claimed it, it does not sleep at all.
+        // SAFETY: `me` is the running thread.
+        unsafe {
+            (*me).swap_busy.store(true, Ordering::Release);
+            if !(*me).wait.commit() {
+                (*me).swap_busy.store(false, Ordering::Release);
+                return;
+            }
+        }
+    }
     let next = {
         let mut ready = dispatcher.ready.lock();
         // SAFETY: `me` is the running thread.
@@ -406,12 +481,12 @@ fn dispatch(leaving: Leaving) {
         // has had its quantum, to its equals and betters; one that was
         // merely interrupted, to its betters only.
         let floor = match leaving {
-            Leaving::Exit => 0,
+            Leaving::Exit | Leaving::Wait => 0,
             _ if idle_thread => 0,
             Leaving::Preempt if !spent => my_priority + 1,
             _ => my_priority,
         };
-        if spent || leaving == Leaving::Yield {
+        if spent || matches!(leaving, Leaving::Yield | Leaving::Wait) {
             // Whether or not anyone is waiting, a new turn begins.
             quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
         }
@@ -430,7 +505,9 @@ fn dispatch(leaving: Leaving) {
                 dispatcher.idle.load(Ordering::Acquire)
             }
             Some((link, _)) => thread_of(link),
-            None if leaving == Leaving::Exit => dispatcher.idle.load(Ordering::Acquire),
+            None if matches!(leaving, Leaving::Exit | Leaving::Wait) => {
+                dispatcher.idle.load(Ordering::Acquire)
+            }
             None if idle_thread => {
                 drop(ready);
                 match steal() {
@@ -454,6 +531,7 @@ fn dispatch(leaving: Leaving) {
             (*me).swap_busy.store(true, Ordering::Release);
             match leaving {
                 Leaving::Exit => set_state(me, layout::state::TERMINATED),
+                Leaving::Wait => set_state(me, layout::state::WAITING),
                 _ if idle_thread => set_state(me, layout::state::READY),
                 _ => {
                     set_state(me, layout::state::READY);
@@ -466,7 +544,7 @@ fn dispatch(leaving: Leaving) {
         }
         next
     };
-    if leaving != Leaving::Exit && !idle_thread {
+    if matches!(leaving, Leaving::Yield | Leaving::Preempt) && !idle_thread {
         // This thread is waiting now; a processor with nothing to do
         // may take it.
         // SAFETY: `me` is still on this processor; its affinity changes
@@ -515,6 +593,12 @@ fn after_switch() {
     // nothing else refers to it and it is on no queue.
     unsafe {
         if field::<u8>(previous, layout::STATE).read() == layout::state::TERMINATED {
+            // Its memory is about to be reused: nothing may still point
+            // into it. A wait cancels its own timer, so this holds.
+            assert!(
+                !super::timer::pending(timer(previous)),
+                "a thread exited with its wait timer pending"
+            );
             mm::stack::free((*previous).stack);
             mm::free_frames(mm::virt_to_phys(previous.cast()), 1);
             THREADS.fetch_sub(1, Ordering::AcqRel);

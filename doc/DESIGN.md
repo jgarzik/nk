@@ -211,7 +211,7 @@ after the interrupt controller has been told the interrupt is over.
 Marking the processor one is on also raises the DISPATCH-level
 interrupt, so that moment comes as soon as the IRQL allows, however it
 was lowered. The preempted thread resumes inside that interrupt's frame
-on its own stack. There is no blocking yet. The switch keeps what a call preserves on the outgoing thread's stack
+on its own stack. The switch keeps what a call preserves on the outgoing thread's stack
 (vector registers included: xmm6-15 and MXCSR, or d8-d15 and FPCR) and
 the stack pointer in the thread's `KernelStack`. An exited thread is
 freed by the thread that runs next.
@@ -249,8 +249,26 @@ ones back, and queues their DPCs with the system time as arguments.
 A timer never fires before its due time, and fires at the first tick
 after it. A due time already past fires inside `KeSetTimer`. The driver
 owns the `KTIMER`; its layout, and the header bits NK uses (`Inserted`,
-the lock bit), are Windows'. Nothing waits on a timer yet: threads
-cannot block.
+the lock bit, `Expired`), are Windows'. A timer is also an object threads
+wait on: expiry signals it and wakes them.
+
+### Waits
+
+A thread waits on an event, a semaphore or a timer by linking one of the
+four wait blocks built into every thread on the object's wait list, and
+sleeping until a waker claims it. A wait with a time limit also sets the
+thread's own timer and links a second block there, whose key is
+`STATUS_TIMEOUT`: the time limit is one more object, and the first to be
+signalled ends the wait. `doc/LOCKING.md` gives the rules that make this
+safe on several processors.
+
+Events, semaphores, wait blocks and the dispatcher header are laid out
+as on Windows (`lib/ntabi/ke.rs`, checked against the kernel's symbols).
+Waits are not alertable and deliver no APCs: there are none yet. A wait
+that would have to block at `DISPATCH_LEVEL` stops the system
+(`ATTEMPTED_SWITCH_FROM_DPC` from a DPC routine). There are no priority
+boosts on wake-up. Releasing a semaphore past its limit, which raises an
+exception on Windows, stops the system: NK has no exceptions yet.
 
 ### The kernel is a PE image
 

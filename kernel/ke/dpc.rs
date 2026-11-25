@@ -119,6 +119,11 @@ fn run_queue(_: u32) {
     }
 }
 
+/// Whether a DPC routine is running on this processor.
+pub fn running() -> bool {
+    arch::percpu().dpcs().running_since.load(Ordering::Relaxed) != 0
+}
+
 /// Called from the clock tick: stop the system if the DPC running on
 /// this processor has run too long.
 pub fn watchdog() {

@@ -37,9 +37,10 @@ The drivers are Microsoft's, not written for NK:
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, built with Microsoft's WDK | runs | runs |
 
 **What this is not.** Two software drivers are not general driver
-compatibility. NK has preemptive threads but nothing for them to block on, no device
-interrupts,
-no structured exception handling, no Plug and Play and no user mode. It
+compatibility. NK has preemptive threads that wait on events,
+semaphores and timers, but no APCs or mutexes, no asynchronous I/O, no
+device interrupts, no structured exception handling, no Plug and Play
+and no user mode. It
 has not been run on physical hardware. The two
 drivers' request-by-request results match a run on real Windows 10
 (`oracle/`); the rest of what the tests expect comes from Microsoft's

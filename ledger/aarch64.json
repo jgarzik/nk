@@ -500,7 +500,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetEvent",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

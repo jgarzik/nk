@@ -40,6 +40,14 @@ pub const STATE: usize = 0x184;
 pub const NEXT_PROCESSOR: usize = 0x218;
 /// `BasePriority`: one signed byte.
 pub const BASE_PRIORITY: usize = 0x233;
+/// `Timer`: the thread's own `KTIMER`, for waits with a time limit.
+pub const TIMER: usize = 0x100;
+/// `WaitBlock`: four `KWAIT_BLOCK`s.
+pub const WAIT_BLOCK: usize = 0x140;
+/// The built-in wait block used for the thread's timer.
+pub const TIMER_WAIT_BLOCK: usize = 3;
+/// `WaitStatus`: what the thread's last wait returned.
+pub const WAIT_STATUS: usize = 0xC8;
 /// `Affinity.Mask`: the processors the thread may run on, 64 bits.
 pub const AFFINITY: usize = 0x240;
 /// `IdealProcessor`: the processor it is placed on by preference.
@@ -53,4 +61,5 @@ pub mod state {
     pub const READY: u8 = 1;
     pub const RUNNING: u8 = 2;
     pub const TERMINATED: u8 = 4;
+    pub const WAITING: u8 = 5;
 }

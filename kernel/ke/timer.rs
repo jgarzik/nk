@@ -24,6 +24,7 @@
 
 #![allow(non_snake_case)]
 
+use super::object::{self, ObjectLock};
 use super::{Rank, SpinLock, dpc, irql, pcr, time};
 use crate::arch;
 use core::cell::UnsafeCell;
@@ -32,7 +33,7 @@ use core::mem::offset_of;
 use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, Ordering};
 use nk_ke::{ListEntry, TIMER_BUCKETS, TimerBuckets, hands_to_check, ticks_in, timer_hand};
 use nk_ntabi::ke::{
-    DISPATCHER_HEADER, KDPC, KTIMER, LIST_ENTRY, OBJECT_LOCK, TIMER_INSERTED,
+    DISPATCHER_HEADER, KDPC, KTIMER, LIST_ENTRY, TIMER_EXPIRED, TIMER_INSERTED,
     TIMER_NOTIFICATION_OBJECT,
 };
 
@@ -93,59 +94,27 @@ fn due_of(link: *mut ListEntry) -> u64 {
     unsafe { (&raw const (*timer_of(link)).DueTime).read() }
 }
 
-/// The header byte holding a timer's lock bit.
-///
 /// # Safety
 /// `timer` points to a live `KTIMER`.
-unsafe fn type_byte<'a>(timer: *mut KTIMER) -> &'a AtomicU8 {
-    // SAFETY: per the contract.
-    unsafe { AtomicU8::from_ptr(&raw mut (*timer).Header.Type) }
-}
-
-/// # Safety
-/// As `type_byte`.
 unsafe fn misc_flags<'a>(timer: *mut KTIMER) -> &'a AtomicU8 {
     // SAFETY: per the contract.
     unsafe { AtomicU8::from_ptr(&raw mut (*timer).Header.TimerMiscFlags) }
 }
 
 /// # Safety
-/// As `type_byte`.
+/// `timer` points to a live `KTIMER`.
 unsafe fn signal<'a>(timer: *mut KTIMER) -> &'a AtomicI32 {
     // SAFETY: per the contract.
     unsafe { AtomicI32::from_ptr(&raw mut (*timer).Header.SignalState) }
 }
 
-/// A timer's own lock, held at `DISPATCH_LEVEL`.
-struct TimerLock {
-    timer: *mut KTIMER,
-    old_irql: u8,
-}
-
-impl TimerLock {
-    /// # Safety
-    /// As `type_byte`, for as long as the lock is held.
-    unsafe fn take(timer: *mut KTIMER) -> Self {
-        let old_irql = irql::current();
-        if old_irql < irql::DISPATCH_LEVEL {
-            arch::set_irql(irql::DISPATCH_LEVEL);
-        }
-        // SAFETY: per the contract.
-        let byte = unsafe { type_byte(timer) };
-        while byte.fetch_or(OBJECT_LOCK, Ordering::Acquire) & OBJECT_LOCK != 0 {
-            core::hint::spin_loop();
-        }
-        Self { timer, old_irql }
-    }
-}
-
-impl Drop for TimerLock {
-    fn drop(&mut self) {
-        // SAFETY: the timer was live when the lock was taken and its
-        // owner keeps it so until the call that took it returns.
-        unsafe { type_byte(self.timer) }.fetch_and(!OBJECT_LOCK, Ordering::Release);
-        arch::set_irql(self.old_irql);
-    }
+/// Take a timer's own lock.
+///
+/// # Safety
+/// `timer` points to a `KTIMER` that stays valid while the lock is held.
+unsafe fn lock(timer: *mut KTIMER) -> ObjectLock {
+    // SAFETY: per the contract; a timer begins with its header.
+    unsafe { ObjectLock::take(&raw mut (*timer).Header) }
 }
 
 /// Take `timer` out of whatever table it is in. Returns whether it was
@@ -246,7 +215,7 @@ unsafe extern "C" fn expire(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mu
     let checked = table.checked.load(Ordering::Relaxed);
     for hand in hands_to_check(checked, now_tick) {
         loop {
-            let timer_dpc;
+            let (timer_dpc, expired);
             {
                 let mut buckets = table.buckets.lock();
                 // SAFETY: listed timers are kept valid by their owners.
@@ -260,7 +229,9 @@ unsafe extern "C" fn expire(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mu
                 unsafe {
                     timer_dpc = (&raw const (*timer).Dpc).read();
                     let period = (&raw const (*timer).Period).read();
-                    signal(timer).store(1, Ordering::Release);
+                    // It has gone off, and nobody has set it since.
+                    misc_flags(timer).fetch_or(TIMER_EXPIRED, Ordering::Release);
+                    expired = timer;
                     if period == 0 {
                         misc_flags(timer).fetch_and(!TIMER_INSERTED, Ordering::Release);
                     } else {
@@ -271,14 +242,39 @@ unsafe extern "C" fn expire(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mu
                     }
                 }
             }
-            // The timer itself is not touched again: its DPC may free it.
-            // SAFETY: the DPC pointer was read while the timer was
-            // listed; the driver keeps the DPC valid as long as the
-            // timer can fire.
-            unsafe { fire(timer_dpc) };
+            // Signal it and wake its waiters, under its own lock, unless
+            // it was set again in the meantime: then this expiry is
+            // history. Then its DPC, after which the timer is not
+            // touched again: the DPC may free it.
+            // SAFETY: a timer that has gone off stays valid until its
+            // DPC has run (Windows asks the same of drivers); the DPC
+            // pointer was read while the timer was listed.
+            unsafe {
+                let woken = {
+                    let _lock = lock(expired);
+                    let flags = misc_flags(expired);
+                    if flags.fetch_and(!TIMER_EXPIRED, Ordering::AcqRel) & TIMER_EXPIRED != 0 {
+                        signal(expired).store(1, Ordering::Release);
+                        object::satisfy(&raw mut (*expired).Header)
+                    } else {
+                        object::Woken::none()
+                    }
+                };
+                woken.ready();
+                fire(timer_dpc);
+            }
         }
     }
     table.checked.store(now_tick, Ordering::Relaxed);
+}
+
+/// Whether `timer` is in a timer table.
+///
+/// # Safety
+/// `timer` points to a live `KTIMER`.
+pub unsafe fn pending(timer: *mut KTIMER) -> bool {
+    // SAFETY: per the contract.
+    unsafe { misc_flags(timer) }.load(Ordering::Acquire) & TIMER_INSERTED != 0
 }
 
 /// [`KeInitializeTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimer).
@@ -290,6 +286,7 @@ pub unsafe extern "C" fn KeInitializeTimer(timer: *mut KTIMER) {
     // itself.
     unsafe {
         let waiters = &raw mut (*timer).Header.WaitListHead;
+        object::init_wait_list(&raw mut (*timer).Header);
         timer.write(KTIMER {
             Header: DISPATCHER_HEADER {
                 Type: TIMER_NOTIFICATION_OBJECT,
@@ -330,11 +327,13 @@ pub unsafe extern "C" fn KeSetTimerEx(
 ) -> u8 {
     // SAFETY: per the contract throughout.
     unsafe {
-        let _lock = TimerLock::take(timer);
+        let timer_lock = lock(timer);
         let was_pending = withdraw(timer);
-        // In no table now, so these are this call's to write.
+        // In no table now, so these are this call's to write. An expiry
+        // still on its way to signal the timer finds it set anew.
         (&raw mut (*timer).Dpc).write(timer_dpc);
         (&raw mut (*timer).Period).write(period.max(0) as u32);
+        misc_flags(timer).fetch_and(!TIMER_EXPIRED, Ordering::Release);
         signal(timer).store(0, Ordering::Release);
 
         let now = time::interrupt_time();
@@ -350,10 +349,13 @@ pub unsafe extern "C" fn KeSetTimerEx(
         } else {
             // Already due: it fires here and now.
             signal(timer).store(1, Ordering::Release);
+            let woken = object::satisfy(&raw mut (*timer).Header);
             if period > 0 {
                 let next = now + period as u64 * 10_000;
                 insert(table, &mut table.buckets.lock(), timer, next);
             }
+            drop(timer_lock);
+            woken.ready();
             fire(timer_dpc);
         }
         u8::from(was_pending)
@@ -378,7 +380,7 @@ pub unsafe extern "C" fn KeSetTimer(timer: *mut KTIMER, due_time: i64, timer_dpc
 pub unsafe extern "C" fn KeCancelTimer(timer: *mut KTIMER) -> u8 {
     // SAFETY: per the contract.
     unsafe {
-        let _lock = TimerLock::take(timer);
+        let _lock = lock(timer);
         u8::from(withdraw(timer))
     }
 }

@@ -89,6 +89,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KeReleaseSpinLock),
     export!(Implemented, ke::kspin::KeReleaseSpinLockFromDpcLevel),
     export!(Implemented, ke::timer::KeReadStateTimer),
+    export!(Implemented, ke::wait::KeSetEvent),
     export!(Implemented, ke::dpc::KeRemoveQueueDpc),
     export!(Implemented, ke::timer::KeSetTimer),
     export!(Implemented, ke::timer::KeSetTimerEx),

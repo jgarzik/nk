@@ -103,6 +103,7 @@ tier in parallel:
 | `*-neg-lock-order`, `*-neg-lock-twice`, `*-neg-irql-lower` | breaking a locking or IRQL rule (`doc/LOCKING.md`) stops the system with the right bugcheck |
 | `*-neg-cpu-stuck` | a processor that stops answering interprocessor interrupts stops the system |
 | `*-neg-dpc-watchdog` | a DPC that never returns stops the system, with the limit shortened by `dpc-limit=<ticks>` |
+| `*-neg-wait-at-dispatch`, `*-neg-wait-in-dpc` | a wait that would have to block at `DISPATCH_LEVEL` stops the system |
 | `*-known-bad` | a failing test fails the run |
 | `*-wrong-cpus` | a processor the kernel does not find fails a test |
 

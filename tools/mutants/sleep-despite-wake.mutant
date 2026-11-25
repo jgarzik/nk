@@ -1,0 +1,8 @@
+# A thread that was claimed by a waker while still getting ready to
+# sleep goes to sleep anyway. Nobody will wake it: the waker was told it
+# need not.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/thread.rs
+replace:             if !(*me).wait.commit() {
+with:             if !(*me).wait.commit() && false {

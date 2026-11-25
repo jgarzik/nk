@@ -201,8 +201,58 @@ fn thread_matches_the_kernel() {
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
     assert_eq!(AFFINITY, field("Affinity"));
+    assert_eq!(TIMER, field("Timer"));
+    assert_eq!(WAIT_BLOCK, field("WaitBlock"));
+    assert_eq!(WAIT_STATUS, field("WaitStatus"));
+    // The fields NK keeps inside the wait blocks' spare room are where
+    // the blocks' used fields are not.
+    let block = core::mem::size_of::<crate::ke::KWAIT_BLOCK>();
+    for inside in [STATE, field("WaitIrql")] {
+        let at = (inside - WAIT_BLOCK) % block;
+        assert!(
+            (20..24).contains(&at) || at >= 40,
+            "{inside:#x} overlaps a wait block field"
+        );
+    }
     assert_eq!(IDEAL_PROCESSOR, field("IdealProcessor"));
     let affinity = types.layout("_GROUP_AFFINITY").expect("_GROUP_AFFINITY");
     assert_eq!(offset(&affinity, "_GROUP_AFFINITY", "Mask"), 0);
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
+}
+
+#[test]
+fn wait_objects_match_the_kernel() {
+    use crate::ke::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let block = types.layout("_KWAIT_BLOCK").expect("_KWAIT_BLOCK");
+    let field = |name| offset(&block, "_KWAIT_BLOCK", name);
+    assert_eq!(size_of::<KWAIT_BLOCK>(), block.size as usize);
+    assert_eq!(
+        offset_of!(KWAIT_BLOCK, WaitListEntry),
+        field("WaitListEntry")
+    );
+    assert_eq!(offset_of!(KWAIT_BLOCK, WaitType), field("WaitType"));
+    assert_eq!(offset_of!(KWAIT_BLOCK, BlockState), field("BlockState"));
+    assert_eq!(offset_of!(KWAIT_BLOCK, WaitKey), field("WaitKey"));
+    assert_eq!(offset_of!(KWAIT_BLOCK, SpareLong), field("SpareLong"));
+    assert_eq!(offset_of!(KWAIT_BLOCK, Thread), field("Thread"));
+    assert_eq!(offset_of!(KWAIT_BLOCK, Object), field("Object"));
+    assert_eq!(offset_of!(KWAIT_BLOCK, SparePtr), field("SparePtr"));
+    let semaphore = types.layout("_KSEMAPHORE").expect("_KSEMAPHORE");
+    assert_eq!(size_of::<KSEMAPHORE>(), semaphore.size as usize);
+    assert_eq!(
+        offset_of!(KSEMAPHORE, Limit),
+        offset(&semaphore, "_KSEMAPHORE", "Limit")
+    );
+    let event = types.layout("_KEVENT").expect("_KEVENT");
+    assert_eq!(size_of::<KEVENT>(), event.size as usize);
+    let header = types
+        .layout("_DISPATCHER_HEADER")
+        .expect("_DISPATCHER_HEADER");
+    let expired = header.member("Expired").expect("Expired");
+    assert_eq!(
+        expired.bits,
+        Some((TIMER_EXPIRED.trailing_zeros() as u8, 1))
+    );
 }

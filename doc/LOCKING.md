@@ -116,8 +116,8 @@ Each of these stops the system when broken:
   expects `PASSIVE_LEVEL`; a held lock means `DISPATCH_LEVEL`.
 
 The locks at ranks 10 to 30 protect data that Windows guards with locks a
-thread can sleep on. Spin locks stand in until threads can block; they
-are stricter, never looser.
+thread can sleep on. Spin locks stand in for those; they are stricter,
+never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 bugcheck path uses it, on the console, and never returns.
@@ -156,11 +156,48 @@ of the dispatcher.
 
 ### Object locks
 
-A `KTIMER` has a lock of its own, bit 7 of its header's type byte, as on
-Windows. It is taken at `DISPATCH_LEVEL` before any ranked lock, and
-serialises setting and cancelling one timer. Expiry does not take it:
-what expiry touches belongs to the table's lock. These locks are in the
-driver's memory and are not ranked or recorded; nothing holds two.
+Every object a thread can wait on (event, semaphore, timer) has a lock of
+its own, bit 7 of its header's type byte, as on Windows. It covers the
+object's signal state, its list of wait blocks, and the blocks linked
+there. It is taken at `DISPATCH_LEVEL`, before any ranked lock. These
+locks are in the driver's memory and are not ranked or recorded; nothing
+holds two.
+
+For a timer the lock also serialises setting and cancelling. Expiry
+takes the timer out under the table's lock, lets go, and only then takes
+the timer's own lock to signal it; a timer that was set again in
+between is left alone.
+
+### Waiting and waking
+
+The race between a thread going to sleep and whatever would wake it is
+settled by one word per thread, the wait register
+(`nk_ke::WaitRegister`), changed only by compare-and-swap. Its every
+interleaving with up to three wakers is checked on the host.
+
+- **Begin before linking.** A thread marks its wait begun, under the
+  object's lock, before its wait block is linked there. From then on a
+  waker may claim it.
+- **One claim ends a wait.** A waker that finds a signalled object and a
+  wait block claims the block's thread with the status its wait is to
+  return. One claim succeeds per wait, whether it comes from the object,
+  from the thread's timer (a time limit is a second wait block, on the
+  thread's own timer), or both at once.
+- **The claim says what to do.** If the thread had already committed to
+  sleep, the claimer makes it ready. If it had not, the claimer leaves it
+  alone: the thread's own commit fails and it never sleeps. A thread is
+  never made ready while it is running.
+- **Ready after unlocking.** A waker collects the threads it claimed and
+  makes them ready only after dropping the object's lock, and never
+  touches the object again. So an event on a thread's stack may be freed
+  as soon as that thread's wait returns.
+- **The waiter unlinks what is left.** The winning waker unlinks its own
+  block. Any other block of the wait (the timer's, when the object won;
+  the object's, when time ran out) is unlinked by the thread itself,
+  under that object's lock, before its wait returns. A waker that meets
+  such a leftover block cannot claim its thread and passes over it.
+- **A thread takes no pending timer to its grave.** A wait cancels its
+  timer before it returns; reaping a thread checks.
 
 ## What drivers get
 

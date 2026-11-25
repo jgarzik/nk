@@ -39,6 +39,13 @@ thread.quantum ok
 thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
+wait.notification ok
+wait.synchronization ok
+wait.timeout ok
+wait.delay ok
+wait.semaphore ok
+wait.ping-pong ok
+wait.race ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok

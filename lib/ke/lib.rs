@@ -272,6 +272,94 @@ pub struct ListEntry {
     pub prev: *mut ListEntry,
 }
 
+/// Where a thread stands with respect to waiting. One word, changed only
+/// by compare-and-swap, decides every race between a thread going to
+/// sleep and whatever would wake it:
+///
+/// - the thread `begin`s before any waker can find it;
+/// - when it is ready to give up its processor it `commit`s, which fails
+///   if a waker got there first, and then it does not sleep at all;
+/// - a waker `claim`s the thread with the status the wait is to return.
+///   Exactly one claim succeeds per wait, and it says whether the thread
+///   had committed (it sleeps, or is about to: make it ready) or had not
+///   (it will see the claim when it tries to commit: leave it alone).
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct WaitRegister(AtomicU32);
+
+/// What a successful claim found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claimed {
+    /// The thread had not yet given up its processor and now will not.
+    /// It must not be made ready: it never stopped running.
+    BeforeSleep,
+    /// The thread is asleep or committed to it. The claimer must make it
+    /// ready.
+    Asleep,
+}
+
+impl WaitRegister {
+    const IDLE: u32 = 0;
+    const IN_PROGRESS: u32 = 1;
+    const COMMITTED: u32 = 2;
+    const WOKEN: u32 = 3;
+
+    pub const fn new() -> Self {
+        Self(AtomicU32::new(Self::IDLE))
+    }
+
+    /// The thread is about to become findable by wakers.
+    pub fn begin(&self) {
+        self.0.store(Self::IN_PROGRESS, Ordering::Release);
+    }
+
+    /// The thread gives up its processor. `false` if it was claimed
+    /// first: it must go on running.
+    pub fn commit(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::IN_PROGRESS,
+                Self::COMMITTED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// End this thread's wait with `status`, if nothing else has. `None`
+    /// if another waker won, or the thread is not waiting.
+    pub fn claim(&self, status: u32) -> Option<Claimed> {
+        debug_assert!(status < 1 << 30);
+        let woken = Self::WOKEN | status << 2;
+        for (from, found) in [
+            (Self::IN_PROGRESS, Claimed::BeforeSleep),
+            (Self::COMMITTED, Claimed::Asleep),
+        ] {
+            // The thread moves only forward, from in-progress to
+            // committed, so trying in that order misses neither.
+            if self
+                .0
+                .compare_exchange(from, woken, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// The status the wait was ended with, once it has been.
+    pub fn status(&self) -> Option<u32> {
+        let word = self.0.load(Ordering::Acquire);
+        (word & 3 == Self::WOKEN).then_some(word >> 2)
+    }
+
+    /// The wait is over and cleaned up: wakers will find nothing.
+    pub fn finish(&self) {
+        self.0.store(Self::IDLE, Ordering::Release);
+    }
+}
+
 /// Thread priorities run from 0 to 31, as on Windows.
 pub const PRIORITIES: usize = 32;
 
@@ -583,6 +671,181 @@ mod tests {
                 due,
             })
             .collect()
+    }
+
+    /// One wait, seen from outside: the register, and what the model's
+    /// actors did around it.
+    struct WaitModel {
+        register: WaitRegister,
+        /// The waiter is off its processor.
+        asleep: bool,
+        /// Times the waiter was made ready, and whether any of them came
+        /// while it was still on its processor (the bug the register
+        /// exists to prevent).
+        readied: u32,
+        readied_while_running: bool,
+        /// Claims that succeeded.
+        won: u32,
+        /// The waiter went on without sleeping.
+        went_on: bool,
+        woke: bool,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Step {
+        Begin,
+        /// Commit; on success the waiter is committed but still on its
+        /// processor until `SwitchOut`.
+        Commit,
+        SwitchOut,
+        /// A waker claims, with its own status, and readies the thread
+        /// if told to.
+        Wake(u32),
+    }
+
+    impl WaitModel {
+        fn apply(&mut self, step: Step, committed: &mut bool) {
+            match step {
+                Step::Begin => self.register.begin(),
+                Step::Commit => {
+                    *committed = self.register.commit();
+                    self.went_on = !*committed;
+                }
+                Step::SwitchOut => {
+                    if *committed {
+                        self.asleep = true;
+                        // Whoever readied it before now did so while it
+                        // was committed: that is allowed (`swap_busy`
+                        // makes the processor that takes it wait).
+                        if self.readied > 0 {
+                            self.woke = true;
+                        }
+                    }
+                }
+                Step::Wake(status) => match self.register.claim(status) {
+                    Some(Claimed::Asleep) => {
+                        self.won += 1;
+                        self.readied += 1;
+                        if !*committed {
+                            self.readied_while_running = true;
+                        }
+                        if self.asleep {
+                            self.woke = true;
+                        }
+                    }
+                    Some(Claimed::BeforeSleep) => self.won += 1,
+                    None => {}
+                },
+            }
+        }
+    }
+
+    /// Every way of interleaving the actors' steps, each actor's own
+    /// steps staying in order.
+    fn interleavings(
+        actors: &[&[Step]],
+        prefix: &mut Vec<Step>,
+        at: &mut Vec<usize>,
+        out: &mut Vec<Vec<Step>>,
+    ) {
+        let mut done = true;
+        for a in 0..actors.len() {
+            if at[a] < actors[a].len() {
+                done = false;
+                prefix.push(actors[a][at[a]]);
+                at[a] += 1;
+                interleavings(actors, prefix, at, out);
+                at[a] -= 1;
+                prefix.pop();
+            }
+        }
+        if done {
+            out.push(prefix.clone());
+        }
+    }
+
+    #[test]
+    fn a_wait_is_ended_exactly_once_in_every_interleaving() {
+        let waiter = [Step::Begin, Step::Commit, Step::SwitchOut];
+        let (first, second, third) = ([Step::Wake(7)], [Step::Wake(8)], [Step::Wake(9)]);
+        for wakers in 0..=3 {
+            let mut actors: Vec<&[Step]> = vec![&waiter];
+            actors.extend(
+                [&first[..], &second[..], &third[..]]
+                    .into_iter()
+                    .take(wakers),
+            );
+            let mut orders = Vec::new();
+            interleavings(
+                &actors,
+                &mut Vec::new(),
+                &mut vec![0; actors.len()],
+                &mut orders,
+            );
+            // 3 steps and n single steps: (3 + n)! / 3! orders.
+            assert_eq!(orders.len(), [1, 4, 20, 120][wakers]);
+            for order in orders {
+                let mut m = WaitModel {
+                    register: WaitRegister::new(),
+                    asleep: false,
+                    readied: 0,
+                    readied_while_running: false,
+                    won: 0,
+                    went_on: false,
+                    woke: false,
+                };
+                let mut committed = false;
+                for &step in &order {
+                    m.apply(step, &mut committed);
+                }
+                let begun_at = order.iter().position(|&s| s == Step::Begin).unwrap();
+                let wakes_after_begin = order[begun_at..]
+                    .iter()
+                    .filter(|s| matches!(s, Step::Wake(_)))
+                    .count();
+                let context = format!("{order:?}");
+                // A wake before the wait began finds nothing; any wake
+                // after it ends the wait, and exactly one does.
+                assert_eq!(m.won, u32::from(wakes_after_begin > 0), "{context}");
+                assert!(!m.readied_while_running, "{context}");
+                assert!(m.readied <= 1, "{context}");
+                if m.went_on {
+                    // Claimed before it slept: never readied, and it
+                    // knows why it did not sleep.
+                    assert_eq!((m.readied, m.asleep), (0, false), "{context}");
+                    assert!(matches!(m.register.status(), Some(7..=9)), "{context}");
+                } else if wakes_after_begin > 0 {
+                    // It slept, and was woken: no wake was lost.
+                    assert!(m.asleep && m.woke && m.readied == 1, "{context}");
+                    assert!(matches!(m.register.status(), Some(7..=9)), "{context}");
+                } else {
+                    // It sleeps, and nothing has tried to wake it.
+                    assert!(m.asleep && m.register.status().is_none(), "{context}");
+                }
+                // The status is the winner's, whole.
+                m.register.finish();
+                assert_eq!(m.register.status(), None);
+                assert_eq!(m.register.claim(1), None, "finished: nothing to claim");
+            }
+        }
+    }
+
+    #[test]
+    fn a_wait_register_carries_any_status() {
+        let r = WaitRegister::new();
+        assert_eq!((r.claim(5), r.status()), (None, None));
+        assert!(!r.commit(), "nothing to commit before a wait begins");
+        r.begin();
+        assert_eq!(r.status(), None);
+        assert_eq!(r.claim(0x102), Some(Claimed::BeforeSleep));
+        assert_eq!(r.status(), Some(0x102));
+        assert!(!r.commit());
+        r.finish();
+        r.begin();
+        assert!(r.commit());
+        assert_eq!(r.claim(0), Some(Claimed::Asleep));
+        assert_eq!(r.status(), Some(0));
+        assert_eq!(r.claim(0xC0), None);
     }
 
     fn entries(n: usize) -> Vec<ListEntry> {

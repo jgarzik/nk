@@ -6,6 +6,7 @@ pub mod interrupt;
 pub mod ipi;
 pub mod irql;
 pub mod kspin;
+pub mod object;
 pub mod pcr;
 pub mod percpu;
 pub mod seh;
@@ -14,6 +15,7 @@ pub mod spinlock;
 pub mod thread;
 pub mod time;
 pub mod timer;
+pub mod wait;
 
 pub use spinlock::{Rank, SpinLock};
 
