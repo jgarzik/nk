@@ -1,9 +1,8 @@
 name: CI
 
-# Runs the hosted subset of the commit gate: format, lint, host unit tests,
-# and the main QEMU boot of each architecture with real driver fixtures.
-# The full gate (`make gate`, every boot scenario) needs KVM and is run
-# locally before each commit. See doc/TESTING.md.
+# Runs the commit gate (`make gate`): format, lint, host unit tests, and
+# every boot scenario of the gate tier on both architectures, with real
+# driver fixtures. See doc/TESTING.md.
 on:
   push:
   pull_request:
@@ -36,7 +35,7 @@ jobs:
 
       # Fetches the driver fixtures by URL and SHA-256 as part of the run.
       - name: Gate
-        run: make ci
+        run: make gate
 
       - name: Upload serial and gate logs
         if: failure()

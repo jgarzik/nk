@@ -208,13 +208,16 @@ mutant that removes it.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs `make ci` on every push and pull request:
-formatting, lints, the unit tests, the main boot of each architecture and
-the ledger check. Hosted runners have no KVM, so both architectures are
-emulated there and the other gate scenarios are left to `make gate`,
-which is run locally before every commit. A fixture that cannot be
-downloaded fails the CI run (`NK_REQUIRE_FIXTURES=1`) instead of turning
-its tests into skips.
+`.github/workflows/ci.yml` runs `make gate` on every push and pull
+request: the same gate as locally. Hosted runners have no KVM, so both
+architectures are emulated there and the boots run one at a time. A
+fixture that cannot be downloaded fails the CI run
+(`NK_REQUIRE_FIXTURES=1`) instead of turning its tests into skips.
+
+Not in the gate, and so not in CI: `make mutants` and `make coverage`
+(slow, or needing extra tools) and `make oracle` (needs the Windows
+reference machine). They are run locally when tests change and at the
+end of each phase.
 
 ## Release images
 

@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle mutants coverage gate ci clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle mutants coverage gate clean
 
 help:
 	@echo "NK make targets:"
@@ -27,7 +27,6 @@ help:
 	@echo "  mutants    break the kernel on purpose; each break must fail a test"
 	@echo "  coverage   unit-test coverage of lib/, with a floor (needs cargo-llvm-cov)"
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
-	@echo "  ci         the subset of the gate that hosted CI runs (no KVM there)"
 	@echo "  clean      remove all build and test output"
 
 X86 := x86_64-unknown-uefi
@@ -125,9 +124,6 @@ coverage: fixtures
 
 gate:
 	@tools/gate.sh
-
-ci:
-	@tools/gate.sh ci
 
 clean:
 	$(CARGO) clean
