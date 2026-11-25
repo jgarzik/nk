@@ -60,6 +60,7 @@ pub fn start_all(info: &BootInfo) -> Result<usize, &'static str> {
         if !arch::cpu_prepare(number) {
             return Err("no memory for a processor's state");
         }
+        super::dpc::prepare_cpu(number)?;
         let stack = mm::stack::alloc().ok_or("no memory for a processor's stack")?;
         set_stack(number, stack);
         arch::cpu_start(number, stack.top)?;

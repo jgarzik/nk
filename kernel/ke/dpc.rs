@@ -14,6 +14,11 @@
 //! it. `DpcData` holds the address of the queue the DPC is on, and is
 //! null when it is on none: that is the test for "already queued".
 //!
+//! DPC routines run on a stack of their processor's, as on Windows, not
+//! on the stack of whatever the interrupt found running. Only the routines
+//! do: the interrupt arrives and ends on the interrupted thread's stack,
+//! which is where a thread switch at its end must be made.
+//!
 //! A DPC that runs longer than Windows allows stops the system, as it
 //! does there; the clock tick checks.
 
@@ -21,6 +26,7 @@
 
 use super::{Rank, SpinLock, interrupt, irql, time};
 use crate::arch;
+use crate::mm::stack::{self, Stack};
 use core::ffi::c_void;
 use core::mem::offset_of;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
@@ -34,6 +40,9 @@ pub struct Queue {
     list: SpinLock<Fifo>,
     /// When the DPC now running began, in interrupt time; 0 when none is.
     running_since: AtomicU64,
+    /// Lowest address of the stack the routines run on. Set once, before
+    /// the processor can take the DPC interrupt, and kept for good.
+    stack: AtomicU64,
 }
 
 impl Queue {
@@ -41,8 +50,29 @@ impl Queue {
         Self {
             list: SpinLock::new(Rank::DpcQueue, Fifo::new()),
             running_since: AtomicU64::new(0),
+            stack: AtomicU64::new(0),
         }
     }
+
+    /// The stack this processor's DPC routines run on.
+    pub fn stack(&self) -> Stack {
+        let base = self.stack.load(Ordering::Acquire);
+        Stack {
+            base,
+            top: base + nk_bootinfo::KERNEL_STACK_SIZE,
+        }
+    }
+}
+
+/// Give processor `number` the stack its DPC routines run on. Once for
+/// each processor, before it can take the DPC interrupt.
+pub fn prepare_cpu(number: usize) -> Result<(), &'static str> {
+    let queue = arch::percpu_of(number)
+        .ok_or("a processor without state cannot have a DPC stack")?
+        .dpcs();
+    let stack = stack::alloc().ok_or("no memory for a processor's DPC stack")?;
+    queue.stack.store(stack.base, Ordering::Release);
+    Ok(())
 }
 
 /// How long one DPC may run, in 100 ns units.
@@ -63,19 +93,44 @@ unsafe fn queue_word<'a>(dpc: *mut KDPC) -> &'a AtomicPtr<c_void> {
     unsafe { AtomicPtr::from_ptr(&raw mut (*dpc).DpcData) }
 }
 
-/// Take the DPC interrupt; read the time limit from the command line
-/// (`dpc-limit=<ticks>`, for the test that exceeds it).
-pub fn init(info: &BootInfo) {
+/// Take the DPC interrupt, on the boot processor's DPC stack; read the
+/// time limit from the command line (`dpc-limit=<ticks>`, for the test
+/// that exceeds it).
+pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     if let Some(ticks) = info.option("dpc-limit").and_then(|v| v.parse::<u64>().ok()) {
         TIME_LIMIT.store(ticks * TIME_INCREMENT, Ordering::Relaxed);
     }
+    prepare_cpu(super::pcr::current_processor() as usize)?;
     let (vector, level) = arch::DPC;
     interrupt::register(vector, level, run_queue);
+    Ok(())
 }
 
-/// The DPC interrupt: run this processor's queue until it is empty.
+/// The DPC interrupt: run this processor's queue on its DPC stack.
+///
+/// The interrupt is not taken again while the queue runs: its IRQL is
+/// `DISPATCH_LEVEL`, and so is the queue run's. The exception is a
+/// routine that lowers the IRQL, a driver's bug that is reported when it
+/// returns: the interrupt can then arrive inside it, with the stack in
+/// use. Nothing is run then: the run in progress goes on until the queue
+/// is empty.
 fn run_queue(_: u32) {
     let queue = arch::percpu().dpcs();
+    if queue.running_since.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    let argument = core::ptr::from_ref(queue) as usize;
+    // SAFETY: the stack is this processor's own and mapped for good; per
+    // the above nothing else on this processor is on it, and a thread
+    // switch while a routine runs stops the system (`thread::switch_to`).
+    unsafe { arch::call_on_stack(queue.stack().top, drain, argument) };
+}
+
+/// Run the DPCs of the queue at address `queue`, this processor's, until
+/// it is empty.
+extern "C" fn drain(queue: usize) {
+    // SAFETY: the address of a processor's queue, which lives for ever.
+    let queue = unsafe { &*(queue as *const Queue) };
     loop {
         let (dpc, routine, context, argument1, argument2);
         {
@@ -425,6 +480,116 @@ pub fn other_cpu_test() -> Result<u32, &'static str> {
     }
     if SEEN_IRQL.load(Ordering::Relaxed) != u32::from(irql::DISPATCH_LEVEL) {
         return Err("the routine did not run at DISPATCH_LEVEL");
+    }
+    Ok(target)
+}
+
+/// An address in the frame of the stack tests' routine, when it last ran.
+static SEEN_SP: AtomicU64 = AtomicU64::new(0);
+/// Set by the thread the stack test's routine wakes.
+static WOKEN: AtomicU32 = AtomicU32::new(0);
+static WAKE: crate::test::Slot<nk_ntabi::ke::KEVENT> = crate::test::Slot::new();
+
+/// The stack tests' routine: note where its frame is and on which
+/// processor, and set the event it was given, if any.
+///
+/// # Safety
+/// Called as a DPC routine; `context` is null or an initialised event.
+unsafe extern "C" fn locate(_: *mut KDPC, context: *mut c_void, _: *mut c_void, _: *mut c_void) {
+    let here = 0u8;
+    SEEN_SP.store(
+        core::hint::black_box(&raw const here) as u64,
+        Ordering::Relaxed,
+    );
+    SEEN_CPU.store(super::pcr::current_processor(), Ordering::Relaxed);
+    if !context.is_null() {
+        // SAFETY: per the contract.
+        unsafe { super::wait::KeSetEvent(context.cast(), 0, 0) };
+    }
+    RUNS.fetch_add(1, Ordering::Release);
+}
+
+/// A DPC routine runs on its processor's DPC stack, here and on another
+/// processor, and not on the stack of the thread it interrupts; that
+/// thread is on its own stack afterwards; and a thread the routine wakes
+/// runs before the interrupted one goes on. Returns the other processor
+/// used.
+pub fn stack_test() -> Result<u32, &'static str> {
+    fn holds(stack: Stack, address: u64) -> bool {
+        (stack.base..stack.top).contains(&address)
+    }
+    fn dpc_stack_holds(processor: u32, address: u64) -> bool {
+        arch::percpu_of(processor as usize).is_some_and(|p| holds(p.dpcs().stack(), address))
+    }
+    fn queue(_: usize) {
+        insert(0);
+    }
+    fn waiter(_: usize) {
+        // SAFETY: a static event, initialised before this thread is made.
+        unsafe {
+            super::wait::KeWaitForSingleObject(WAKE.ptr().cast(), 0, 0, 0, core::ptr::null())
+        };
+        WOKEN.store(1, Ordering::Release);
+    }
+    let own = super::thread::current_stack();
+    let me = super::pcr::current_processor();
+
+    // SAFETY: static storage for a `KDPC`, not queued.
+    unsafe { KeInitializeDpc(DPCS[0].ptr(), Some(locate), core::ptr::null_mut()) };
+    RUNS.store(0, Ordering::Relaxed);
+    if !insert(0) || RUNS.load(Ordering::Acquire) != 1 {
+        return Err("a DPC queued at PASSIVE_LEVEL had not run when the insert returned");
+    }
+    let seen = SEEN_SP.load(Ordering::Relaxed);
+    if holds(own, seen) {
+        return Err("a DPC routine ran on the stack of the thread it interrupted");
+    }
+    if !dpc_stack_holds(SEEN_CPU.load(Ordering::Relaxed), seen) {
+        return Err("a DPC routine did not run on its processor's DPC stack");
+    }
+    let here = 0u8;
+    if !holds(own, core::hint::black_box(&raw const here) as u64) {
+        return Err("after a DPC the thread was not on its own stack");
+    }
+
+    let target = super::smp::online_count() as u32 - 1;
+    RUNS.store(0, Ordering::Relaxed);
+    super::ipi::call_on(target as usize, queue, 0);
+    if runs(1) != 1 {
+        return Err("a DPC queued at the interprocessor IRQL did not run once");
+    }
+    if SEEN_CPU.load(Ordering::Relaxed) != target
+        || !dpc_stack_holds(target, SEEN_SP.load(Ordering::Relaxed))
+    {
+        return Err("a DPC routine did not run on the DPC stack of the processor it was queued on");
+    }
+
+    // A thread of higher priority, waiting. The routine wakes it; the
+    // switch to it is made at the end of the DPC interrupt, on this
+    // thread's stack, before the insert returns.
+    let threads = super::thread::count();
+    WOKEN.store(0, Ordering::Relaxed);
+    // SAFETY: static storage for an event nothing waits on; then static
+    // storage for a `KDPC`, not queued.
+    unsafe {
+        super::wait::KeInitializeEvent(WAKE.ptr(), 0, 0);
+        KeInitializeDpc(DPCS[0].ptr(), Some(locate), WAKE.ptr().cast());
+    }
+    super::thread::create(waiter, 0, super::thread::NORMAL_PRIORITY + 1, 1 << me)?;
+    let queued = insert(0);
+    let woken = WOKEN.load(Ordering::Acquire);
+    for _ in 0..2000 {
+        if super::thread::count() == threads {
+            break;
+        }
+        super::thread::yield_now();
+        time::stall(1000);
+    }
+    if super::thread::count() != threads {
+        return Err("the thread a DPC routine woke did not end");
+    }
+    if !queued || woken != 1 {
+        return Err("a thread woken by a DPC routine did not run before the interrupted thread");
     }
     Ok(target)
 }

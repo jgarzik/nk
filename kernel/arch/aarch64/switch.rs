@@ -93,6 +93,30 @@ nk_thread_start:
     brk #0x1
     .seh_endproc
 
+    .globl nk_call_on_stack
+// x0: the top of a stack. x1: a function. x2: its argument. Calls the
+// function on that stack and returns on this one. x29 holds this stack's
+// pointer meanwhile, as the unwind information says, so a stack walk
+// crosses from that stack back to this one.
+nk_call_on_stack:
+    .seh_proc nk_call_on_stack
+    stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    mov x29, sp
+    .seh_set_fp
+    .seh_endprologue
+    mov sp, x0
+    mov x0, x2
+    blr x1
+    .seh_startepilogue
+    mov sp, x29
+    .seh_set_fp
+    ldp x29, x30, [sp], #16
+    .seh_save_fplr_x 16
+    .seh_endepilogue
+    ret
+    .seh_endproc
+
     .globl nk_callee_saved_check
 // x0: a seed. x1: a function to call. Returns 1 in x0 if every
 // register a call preserves came back as it went in.
@@ -734,6 +758,7 @@ nk_all_registers_check:
 unsafe extern "C" {
     fn nk_context_switch(save: *mut u64, load: u64);
     fn nk_thread_start();
+    fn nk_call_on_stack(top: u64, call: extern "C" fn(usize), argument: usize);
     fn nk_callee_saved_check(seed: u64, call: extern "C" fn()) -> u64;
     fn nk_all_registers_check(seed: u64, looks: u64) -> u64;
 }
@@ -770,6 +795,17 @@ pub unsafe fn new_context(stack_top: u64, entry: extern "C" fn() -> !) -> u64 {
         ((sp + 88) as *mut u64).write(nk_thread_start as *const () as usize as u64);
     }
     sp
+}
+
+/// Call `call(argument)` on the stack ending at `top`, and come back to
+/// this one when it returns.
+///
+/// # Safety
+/// `top` is the 16-byte-aligned top of a mapped stack nothing else is
+/// using, and nothing switches threads until `call` has returned.
+pub unsafe fn call_on_stack(top: u64, call: extern "C" fn(usize), argument: usize) {
+    // SAFETY: per the contract.
+    unsafe { nk_call_on_stack(top, call, argument) }
 }
 
 /// Wait for an interrupt, with no gap in which one could be missed.

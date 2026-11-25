@@ -354,9 +354,16 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
     // A stack that overflows faults on the unmapped memory below it. The
     // page fault cannot push its own frame there, so it arrives as a
-    // double fault, on the stack kept for that.
+    // double fault, on the stack kept for that. The stack is the
+    // thread's, or the one this processor runs DPC routines on.
+    let stacks = [
+        super::cpu::kernel_stack(),
+        super::cpu::percpu().dpcs().stack().base,
+    ];
     let overflow = matches!(vector, DOUBLE_FAULT | PAGE_FAULT)
-        && crate::mm::stack::is_overflow(super::cpu::kernel_stack(), cr2);
+        && stacks
+            .iter()
+            .any(|&base| crate::mm::stack::is_overflow(base, cr2));
     let what = match vector {
         _ if overflow => "kernel stack overflow",
         0 => "divide error",

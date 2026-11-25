@@ -1,0 +1,7 @@
+# A thread switch is made while a DPC routine runs: the thread is left
+# on the processor's DPC stack, which the next DPC overwrites.
+scenario: x86_64-neg-switch-in-dpc
+fails: scenario
+file: kernel/ke/thread.rs
+replace:     if super::dpc::running() {
+with:     if false {

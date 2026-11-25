@@ -94,9 +94,26 @@ pub static IN_DPC: Group = Group {
 
 fn in_dpc(r: &mut Report, _: &BootInfo) {
     kprintln!("NK-NEG-ARMED neg.wait-in-dpc");
-    wait::blocked_in_dpc_test();
+    wait::blocked_in_dpc_test(false);
     r.fail(
         "neg.wait-in-dpc",
         format_args!("a wait in a DPC routine returned"),
+    );
+}
+
+/// So must a DPC routine that lowers the IRQL and then waits: the thread
+/// would be left on the processor's DPC stack.
+pub static SWITCH_IN_DPC: Group = Group {
+    names: &["neg.switch-in-dpc"],
+    run: switch_in_dpc,
+    manual: true,
+};
+
+fn switch_in_dpc(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.switch-in-dpc");
+    wait::blocked_in_dpc_test(true);
+    r.fail(
+        "neg.switch-in-dpc",
+        format_args!("a wait in a DPC routine that lowered the IRQL returned"),
     );
 }

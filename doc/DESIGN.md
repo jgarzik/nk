@@ -281,11 +281,22 @@ delivered when the IRQL falls below `DISPATCH_LEVEL` by whatever means:
 WDK-built x86-64 code lowers the IRQL in line, so there is no call to
 hook. The handler runs the queue in order.
 
+DPC routines run on a stack of their processor's, as on Windows: an
+ordinary kernel stack, allocated with the processor's state and kept.
+The handler changes stacks around the queue run only. The interrupt
+itself begins and ends on the interrupted thread's stack, because a
+thread switch at its end leaves that thread there to be resumed. An
+interrupt that arrives during a routine is handled on the DPC stack, and
+an overflow of it is reported as a kernel stack overflow. No thread can
+be left on that stack: a thread switch while a routine runs, possible
+only if the routine lowered the IRQL, stops the system
+(`ATTEMPTED_SWITCH_FROM_DPC`), and a DPC interrupt arriving inside such
+a routine leaves the queue to the run in progress.
+
 The driver owns the `KDPC`. As on Windows `DpcData` is non-null exactly
 while queued; NK stores the queue's address there. A DPC running over 20
 seconds stops the system (`DPC_WATCHDOG_VIOLATION`); the tick checks.
-DPCs run on the interrupted stack. No targeting of another processor and
-no importance ordering.
+No targeting of another processor and no importance ordering.
 
 ## Timers
 
@@ -392,8 +403,9 @@ Not covered:
 - x86-64 MXCSR and arm64 FPCR of interrupted code: they are in the trap
   frame, but unwind codes have no way to name them.
 
-On x86-64 a compiled function that neither calls nor uses the stack has
-no entry either: that is the convention for a leaf there.
+A compiled function that uses no stack has no entry either, on both
+architectures. That is the convention for a leaf: its return address is
+where the call left it, at `[rsp]` or in `x30`.
 
 ## Exports
 

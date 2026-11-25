@@ -889,23 +889,32 @@ pub fn blocked_at_dispatch_test() {
     wait_event(&EVENT, None);
 }
 
-/// A wait that must block, in a DPC routine. The system must stop.
-pub fn blocked_in_dpc_test() {
+/// A wait that must block, in a DPC routine. The system must stop. With
+/// `lowered` the routine first lowers the IRQL, so the wait is allowed
+/// to begin: then the thread switch itself must stop the system.
+pub fn blocked_in_dpc_test(lowered: bool) {
     /// # Safety
     /// Called as a DPC routine; it dereferences none of its arguments.
     unsafe extern "C" fn routine(
         _: *mut nk_ntabi::ke::KDPC,
-        _: *mut c_void,
+        lowered: *mut c_void,
         _: *mut c_void,
         _: *mut c_void,
     ) {
+        if !lowered.is_null() {
+            arch::set_irql(irql::PASSIVE_LEVEL);
+        }
         wait_event(&EVENT, None);
     }
     static DPC: Slot<nk_ntabi::ke::KDPC> = Slot::new();
     init_event(&EVENT, true, false);
     // SAFETY: static storage for a `KDPC`, not queued.
     unsafe {
-        dpc::KeInitializeDpc(DPC.ptr(), Some(routine), core::ptr::null_mut());
+        dpc::KeInitializeDpc(
+            DPC.ptr(),
+            Some(routine),
+            core::ptr::without_provenance_mut(usize::from(lowered)),
+        );
         dpc::KeInsertQueueDpc(DPC.ptr(), core::ptr::null_mut(), core::ptr::null_mut());
     }
 }

@@ -104,6 +104,27 @@ nk_thread_start:
     ud2
     .seh_endproc
 
+    .globl nk_call_on_stack
+// rcx: the top of a stack. rdx: a function. r8: its argument. Calls the
+// function on that stack and returns on this one. rbp holds this stack's
+// pointer meanwhile and is the frame register of the unwind information,
+// so a stack walk crosses from that stack back to this one.
+nk_call_on_stack:
+    .seh_proc nk_call_on_stack
+    push rbp
+    .seh_pushreg rbp
+    mov rbp, rsp
+    .seh_setframe rbp, 0
+    .seh_endprologue
+    mov rsp, rcx
+    sub rsp, 32
+    mov rcx, r8
+    call rdx
+    mov rsp, rbp
+    pop rbp
+    ret
+    .seh_endproc
+
     .globl nk_callee_saved_check
 // rcx: a seed. rdx: a function to call. Returns 1 in eax if every
 // register a call preserves came back as it went in.
@@ -559,6 +580,7 @@ nk_all_registers_check:
 unsafe extern "C" {
     fn nk_context_switch(save: *mut u64, load: u64);
     fn nk_thread_start();
+    fn nk_call_on_stack(top: u64, call: extern "C" fn(usize), argument: usize);
     fn nk_callee_saved_check(seed: u64, call: extern "C" fn()) -> u32;
     fn nk_all_registers_check(seed: u64, looks: u64) -> u32;
 }
@@ -600,6 +622,17 @@ pub unsafe fn new_context(stack_top: u64, entry: extern "C" fn() -> !) -> u64 {
         ((return_slot + 8) as *mut u64).write(0);
     }
     sp
+}
+
+/// Call `call(argument)` on the stack ending at `top`, and come back to
+/// this one when it returns.
+///
+/// # Safety
+/// `top` is the 16-byte-aligned top of a mapped stack nothing else is
+/// using, and nothing switches threads until `call` has returned.
+pub unsafe fn call_on_stack(top: u64, call: extern "C" fn(usize), argument: usize) {
+    // SAFETY: per the contract.
+    unsafe { nk_call_on_stack(top, call, argument) }
 }
 
 /// Wait for an interrupt, with no gap in which one could be missed.

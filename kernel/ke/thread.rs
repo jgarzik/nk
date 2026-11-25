@@ -152,6 +152,13 @@ pub fn current() -> *mut Thread {
     pcr::current_thread().cast()
 }
 
+/// The running thread's stack.
+pub fn current_stack() -> Stack {
+    // SAFETY: the running thread exists, and its stack is set when it is
+    // made and never changed.
+    unsafe { (*current()).stack }
+}
+
 fn set_current(thread: *mut Thread) {
     // SAFETY: the field is this processor's, an aligned pointer; drivers
     // read it but never write it.
@@ -563,6 +570,14 @@ fn dispatch(leaving: Leaving) {
 /// Leave `me`, already marked and queued as its leaving requires, for
 /// `next`, which this processor took off a queue or is its idle thread.
 fn switch_to(me: *mut Thread, next: *mut Thread) {
+    // A DPC routine runs on the processor's DPC stack, which the next DPC
+    // will use: no thread can be left there. Only a routine that lowered
+    // the IRQL gets this far.
+    if super::dpc::running() {
+        crate::kd::bugcheck(format_args!(
+            "0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch while a DPC routine runs"
+        ));
+    }
     let dispatcher = arch::percpu().dispatcher();
     // SAFETY: `next` is this processor's to run; it may still be leaving
     // its last stack, and then `me` is the idle thread (see `dispatch`).
