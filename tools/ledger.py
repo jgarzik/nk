@@ -92,7 +92,10 @@ def build(arch, fixtures):
     for fx in fixtures:
         imports = []
         for module, name in imports_of(CACHE / fx["file"]):
-            state = exports.get((module.lower(), name), "missing")
+            # hal.dll only forwards to the kernel: one name space.
+            state = exports.get((module.lower(), name),
+                                exports.get((KERNEL_MODULES[0], name), "missing")
+                                if module.lower() in KERNEL_MODULES else "missing")
             imports.append({"module": module, "name": name, "state": state})
             if fx.get("boot", True):
                 needed[(module.lower(), name)] = state

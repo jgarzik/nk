@@ -109,6 +109,10 @@ class ExpectOk(unittest.TestCase):
     def test_timeout(self):
         self.assertProblem(GOOD, "timeout after 120s", timed_out=120)
 
+    def test_a_driver_breaking_a_rule_windows_tolerates(self):
+        self.assertProblem(GOOD + "NK-VERIFY IRQL raised from 2 down to 1\n",
+                           "NK-VERIFY IRQL raised from 2 down to 1")
+
     def test_empty_log(self):
         problems = judge("", golden=GOLDEN)
         self.assertTrue(any("NK-TEST-PLAN" in p for p in problems))

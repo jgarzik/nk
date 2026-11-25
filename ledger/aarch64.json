@@ -4,9 +4,9 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 13,
-  "implemented": 8,
-  "partial": 4,
+  "total": 26,
+  "implemented": 20,
+  "partial": 5,
   "traps": 1,
   "missing": 0
  },
@@ -105,7 +105,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExFreePoolWithTag",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -144,12 +144,12 @@
    "file": "nkc-irql.arm64.sys",
    "sha256": "6de03b71204e1d5c2afda9d08f321d2f28bd1f99654fe1415f995b6582fc1a22",
    "status": "nk-authored",
-   "loaded_at_boot": false,
+   "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeSpinLock",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -159,12 +159,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeReleaseSpinLock",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeAcquireSpinLockAtDpcLevel",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -174,7 +174,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeReleaseSpinLockFromDpcLevel",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -184,7 +184,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExFreePoolWithTag",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -194,42 +194,42 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeAcquireInStackQueuedSpinLock",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeTryToAcquireSpinLockAtDpcLevel",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeAcquireSpinLockRaiseToDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ExAllocatePoolWithTag",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeReleaseInStackQueuedSpinLock",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "KeGetCurrentIrql",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "KfLowerIrql",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "KfRaiseIrql",
-     "state": "missing"
+     "state": "implemented"
     }
    ]
   },
@@ -283,17 +283,17 @@
     {
      "module": "HAL.dll",
      "name": "KeGetCurrentIrql",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "KfLowerIrql",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "KfRaiseIrql",
-     "state": "missing"
+     "state": "implemented"
     }
    ]
   },
@@ -362,7 +362,7 @@
     {
      "module": "HAL.dll",
      "name": "KeGetCurrentIrql",
-     "state": "missing"
+     "state": "implemented"
     }
    ]
   },
@@ -406,7 +406,7 @@
     {
      "module": "HAL.dll",
      "name": "KeGetCurrentIrql",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -440,7 +440,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeAcquireSpinLockRaiseToDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -470,7 +470,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeSpinLock",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -495,7 +495,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeReleaseSpinLock",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -515,7 +515,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeAcquireSpinLockAtDpcLevel",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -530,7 +530,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeReleaseSpinLockFromDpcLevel",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -540,7 +540,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExFreePoolWithTag",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

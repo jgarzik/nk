@@ -86,6 +86,24 @@ stricter, never looser.
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 bugcheck path uses it, on the console, and never returns.
 
+## What drivers get
+
+Drivers use Windows' routines, not `ke::SpinLock`
+(`kernel/ke/kspin.rs`). A `KSPIN_LOCK` is one word the driver owns, zero
+when free; NK touches it only with single atomic operations through the
+driver's pointer and keeps no state of its own about it. The acquire
+routines raise the IRQL to `DISPATCH_LEVEL` and return the old level; the
+`AtDpcLevel` ones leave it alone. A queued spin lock fills in the
+driver's handle as Windows does but does not queue its waiters, so the
+arrival order Windows guarantees is absent; the ledger marks that export
+partial.
+
+NK's own rules above are not applied to drivers. A driver that moves the
+IRQL the wrong way gets what a normal Windows build gives it: the move.
+NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
+itself stops the system (freeing memory that is not a pool block, say),
+so does NK, with the same bugcheck code.
+
 ## How it is tested
 
 - `lib/ke`: the rules as pure functions (`Held`, `check_raise`,
@@ -97,3 +115,8 @@ bugcheck path uses it, on the console, and never returns.
   break a rule on purpose and must end in the bugcheck named above.
 - Mutants: a lock that does not raise the IRQL, and a rank check that
   accepts any order.
+- `oracle.nkc-irql`: the conformance driver `nkc-irql` raises and lowers
+  the IRQL, takes each kind of spin lock and allocates pool at
+  `DISPATCH_LEVEL`; the 29 values it reports must be the ones it reported
+  on Windows. Mutants: a driver lock that does not raise the IRQL, and a
+  try that always succeeds.

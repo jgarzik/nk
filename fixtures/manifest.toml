@@ -82,7 +82,6 @@ file = "nkc-irql.x64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-irql.x64.nkc-irql.sys"
 sha256 = "3c9ae3500e7a7265de8d7bf326c3bd7afa1d043a1495fa631ac66e73a94d3303"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-irql.c: IRQL and spin locks"
 
 [[fixture]]
@@ -92,7 +91,6 @@ file = "nkc-irql.arm64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-irql.arm64.nkc-irql.sys"
 sha256 = "6de03b71204e1d5c2afda9d08f321d2f28bd1f99654fe1415f995b6582fc1a22"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-irql.c: IRQL and spin locks"
 
 [[fixture]]

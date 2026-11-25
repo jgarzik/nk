@@ -33,3 +33,4 @@ sioctl.no-leak ok
 sioctl.cycles ok
 oracle.null skip
 oracle.sioctl ok
+oracle.nkc-irql ok

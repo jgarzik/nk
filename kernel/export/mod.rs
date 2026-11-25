@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{io, ke, ldr, rtl};
+use crate::{io, ke, ldr, mm, rtl};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -64,6 +64,8 @@ macro_rules! export {
 }
 
 static EXPORTS: &[Export] = &[
+    export!(Implemented, mm::pool::ExAllocatePoolWithTag),
+    export!(Implemented, mm::pool::ExFreePoolWithTag),
     export!(Partial, io::mdl::IoAllocateMdl),
     export!(Implemented, io::device::IoCreateDevice),
     export!(Implemented, io::symlink::IoCreateSymbolicLink),
@@ -71,6 +73,18 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::symlink::IoDeleteSymbolicLink),
     export!(Implemented, io::mdl::IoFreeMdl),
     export!(Implemented, io::irp::IofCompleteRequest),
+    export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
+    export!(Implemented, ke::kspin::KeAcquireSpinLockAtDpcLevel),
+    export!(Implemented, ke::kspin::KeAcquireSpinLockRaiseToDpc),
+    export!(Implemented, ke::kspin::KeGetCurrentIrql),
+    export!(Implemented, ke::kspin::KeInitializeSpinLock),
+    export!(Implemented, ke::kspin::KeLowerIrql),
+    export!(Implemented, ke::kspin::KeReleaseInStackQueuedSpinLock),
+    export!(Implemented, ke::kspin::KeReleaseSpinLock),
+    export!(Implemented, ke::kspin::KeReleaseSpinLockFromDpcLevel),
+    export!(Implemented, ke::kspin::KeTryToAcquireSpinLockAtDpcLevel),
+    export!(Implemented, ke::kspin::KfLowerIrql),
+    export!(Implemented, ke::kspin::KfRaiseIrql),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
     export!(Partial, io::mdl::MmProbeAndLockPages),
@@ -81,7 +95,16 @@ static EXPORTS: &[Export] = &[
 ];
 
 /// The address a driver's import of `module!name` binds to.
+///
+/// `hal.dll` is another name for the kernel here. In the Windows build NK
+/// follows, every export of `hal.dll` forwards to `ntoskrnl.exe`, and
+/// which of the two a driver names for a routine differs by architecture.
 pub fn resolve(module: &[u8], name: &[u8]) -> Option<u64> {
+    let module: &[u8] = if module.eq_ignore_ascii_case(b"hal.dll") {
+        NT.as_bytes()
+    } else {
+        module
+    };
     EXPORTS
         .iter()
         .find(|e| e.module.as_bytes().eq_ignore_ascii_case(module) && e.name.as_bytes() == name)

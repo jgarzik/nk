@@ -64,6 +64,24 @@ TSS 0x40). That is a debugging convenience, not a driver dependency.
 Any exception other than a breakpoint is a fatal bugcheck with a register
 dump. There is no SEH: a driver's `__try` block cannot catch anything.
 
+## What is a call and what is not
+
+The import tables of the conformance drivers, built with the current WDK,
+show which routines a driver calls and which the headers compile in line:
+
+| | x86-64 | arm64 |
+| --- | --- | --- |
+| `KeGetCurrentIrql`, `KeRaiseIrql` (`KfRaiseIrql`) | imported from `ntoskrnl.exe` | imported from `HAL.dll` |
+| `KeLowerIrql` | imported from `ntoskrnl.exe` | imported from `HAL.dll` as `KfLowerIrql` |
+| `KeStallExecutionProcessor`, `KeQueryPerformanceCounter` | imported from `HAL.dll` | imported from `HAL.dll` |
+| `KeGetCurrentThread` | in line: `gs:[0x188]` | imported |
+| `KeQueryTickCount`, `KeQueryInterruptTime`, `KeQuerySystemTime` | in line: read from the shared data page | in line, likewise |
+
+Code built with older headers reads and writes the IRQL in line on
+x86-64 (register CR8), so both must work. `HAL.dll` is a second name for
+the kernel: in the Windows build NK follows, each of its exports forwards
+to `ntoskrnl.exe`, and NK resolves either module name against one table.
+
 ## Found by reading the fixture binaries
 
 - Drivers reach the current IRP stack location at `IRP+0xB8` and the

@@ -2,6 +2,7 @@
 
 pub mod event;
 pub mod irql;
+pub mod kspin;
 pub mod pcr;
 pub mod percpu;
 pub mod seh;

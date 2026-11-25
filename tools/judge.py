@@ -32,9 +32,12 @@ class Log:
         self.armed = []      # (line number, test name)
         self.fatal = []      # (line number, line)
         self.malformed = []  # lines that mention the protocol but break it
+        self.verify = []     # a driver broke a rule Windows does not enforce
         for n, line in enumerate(self.lines):
             if FATAL.search(line):
                 self.fatal.append((n, line))
+            if line.startswith("NK-VERIFY "):
+                self.verify.append(line)
             if m := TEST.match(line):
                 self.tests.append((m[1], m[2], m[3] or ""))
             elif m := PLAN.match(line):
@@ -62,6 +65,7 @@ class Log:
 def _run_problems(log, timed_out):
     """Problems of a boot that should have run its tests to the end."""
     problems = [f"malformed test line: {l}" for l in log.malformed]
+    problems += log.verify
     problems += [l for _, l in log.fatal]
     problems += [f"NK-TEST {n}:FAIL {d}".rstrip() for n, v, d in log.tests if v == "FAIL"]
     if timed_out:

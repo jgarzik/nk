@@ -62,3 +62,26 @@ fn processor_block_matches_the_kernel() {
         kpcr.size
     );
 }
+
+#[test]
+fn queued_lock_handle_matches_the_kernel() {
+    use crate::ke::{KLOCK_QUEUE_HANDLE, KSPIN_LOCK_QUEUE};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let handle = types
+        .layout("_KLOCK_QUEUE_HANDLE")
+        .expect("_KLOCK_QUEUE_HANDLE");
+    let queue = types
+        .layout("_KSPIN_LOCK_QUEUE")
+        .expect("_KSPIN_LOCK_QUEUE");
+    assert_eq!(size_of::<KLOCK_QUEUE_HANDLE>(), handle.size as usize);
+    assert_eq!(
+        offset_of!(KLOCK_QUEUE_HANDLE, OldIrql),
+        offset(&handle, "_KLOCK_QUEUE_HANDLE", "OldIrql")
+    );
+    assert_eq!(size_of::<KSPIN_LOCK_QUEUE>(), queue.size as usize);
+    assert_eq!(
+        offset_of!(KSPIN_LOCK_QUEUE, Lock),
+        offset(&queue, "_KSPIN_LOCK_QUEUE", "Lock")
+    );
+}

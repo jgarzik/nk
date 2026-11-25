@@ -48,6 +48,13 @@ pub fn bugcheck(why: fmt::Arguments<'_>) -> ! {
     crate::hal::power_off_or_halt()
 }
 
+/// Report that a driver broke a rule Windows itself does not enforce.
+/// The driver carries on, as it would on Windows; the test harness fails
+/// any boot that prints one of these.
+pub fn verify(what: fmt::Arguments<'_>) {
+    print(format_args!("NK-VERIFY {what}\n"));
+}
+
 /// A Rust panic is a kernel bug, reported like any other fatal error.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {

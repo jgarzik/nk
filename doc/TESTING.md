@@ -68,6 +68,9 @@ failure. A boot passes only if:
 - there is exactly one plan line and one totals line, the number of
   verdicts equals the plan, and the totals equal the lines;
 - no test failed, and no line reports a panic or a bugcheck;
+- no line starts `NK-VERIFY`: a driver broke a rule that Windows does not
+  enforce (raised the IRQL downward, say). NK lets the driver carry on,
+  as Windows would, and fails the test run;
 - no line is torn or malformed;
 - the tests and their verdicts are the ones in the scenario's golden list
   (`tools/golden/<name>.txt`): a test that disappears, appears, or turns
