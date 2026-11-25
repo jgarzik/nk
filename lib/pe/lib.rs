@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod exports;
 pub mod modules;
 
 /// `IMAGE_FILE_MACHINE_AMD64`
@@ -29,6 +30,7 @@ pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 pub const SCN_MEM_READ: u32 = 0x4000_0000;
 pub const SCN_MEM_WRITE: u32 = 0x8000_0000;
 
+pub const DIR_EXPORT: usize = 0;
 pub const DIR_IMPORT: usize = 1;
 pub const DIR_EXCEPTION: usize = 3;
 pub const DIR_BASERELOC: usize = 5;
