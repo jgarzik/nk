@@ -21,6 +21,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
+#[cfg(test)]
+mod fixture_tests;
 mod import;
 mod info;
 pub mod query;
