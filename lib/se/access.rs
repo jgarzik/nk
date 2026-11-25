@@ -235,8 +235,10 @@ pub fn access_check(request: &Request<'_>) -> Outcome {
         }
         // A DACL grants neither of these two.
         let mask = map_generic(mask, mapping) & !(ACCESS_SYSTEM_SECURITY | MAXIMUM_ALLOWED);
+        // A right already allowed stays allowed; one denied first is
+        // never allowed after.
         if denies {
-            denied |= mask & !allowed;
+            denied |= mask;
         } else {
             allowed |= mask & !denied;
         }
@@ -264,9 +266,9 @@ mod tests {
         SE_PRIVILEGE_ENABLED, SECURITY_IDENTIFICATION, SidAndAttributes, WORLD,
     };
 
-    // The case table is plain data so that a conformance driver can
-    // replay it on Windows: tokens, descriptors and requests are spelled
-    // out, nothing is computed.
+    // The case table (`cases`) is plain data so that a conformance
+    // driver can replay it on Windows: tokens, descriptors and requests
+    // are spelled out, nothing is computed.
 
     /// A token, as the parts that matter here.
     struct Who {
@@ -376,7 +378,7 @@ mod tests {
 
     /// A case with the common defaults: owned by Bob, user mode,
     /// nothing granted before, no privilege used.
-    const fn case(
+    fn case(
         name: &'static str,
         dacl: Option<&'static [Entry]>,
         desired: u32,
@@ -397,612 +399,614 @@ mod tests {
         }
     }
 
-    const fn owned(owner: &'static [u8], mut case: Case) -> Case {
+    fn owned(owner: &'static [u8], mut case: Case) -> Case {
         case.owner = Some(owner);
         case
     }
-    const fn by(who: &'static Who, used: &'static [Luid], mut case: Case) -> Case {
+    fn by(who: &'static Who, used: &'static [Luid], mut case: Case) -> Case {
         case.who = who;
         case.privileges = used;
         case
     }
-    const fn kernel(mut case: Case) -> Case {
+    fn kernel(mut case: Case) -> Case {
         case.kernel = true;
         case
     }
-    const fn having(previously: u32, mut case: Case) -> Case {
+    fn having(previously: u32, mut case: Case) -> Case {
         case.previously = previously;
         case
     }
 
-    const CASES: &[Case] = &[
-        // Generic rights.
-        case(
-            "a generic right asked for is mapped",
-            Some(&[(ALLOW, 0, 0x0012_0089, ALICE)]),
-            GENERIC_READ,
-            0x0012_0089,
-            OK,
-        ),
-        case(
-            "a generic right in an entry is mapped",
-            Some(&[(ALLOW, 0, GENERIC_READ, ALICE)]),
-            0x0012_0089,
-            0x0012_0089,
-            OK,
-        ),
-        case(
-            "generic all needs every right",
-            Some(&[(ALLOW, 0, GENERIC_READ | GENERIC_WRITE, ALICE)]),
-            GENERIC_ALL,
-            0,
-            NO,
-        ),
-        case(
-            "the user and an enabled group add up",
-            Some(&[
-                (ALLOW, 0, 1, ALICE),
-                (ALLOW, 0, 2, STAFF),
-                (ALLOW, 0, 4, EVERYONE),
-            ]),
-            7,
-            7,
-            OK,
-        ),
-        case(
-            "a stranger's entry gives nothing",
-            Some(&[(ALLOW, 0, 1, BOB)]),
-            1,
-            0,
-            NO,
-        ),
-        // MAXIMUM_ALLOWED.
-        case(
-            "maximum allowed collects every allowed right",
-            Some(&[(ALLOW, 0, 3, ALICE), (ALLOW, 0, SYNCHRONIZE, STAFF)]),
-            MAX,
-            0x0010_0003,
-            OK,
-        ),
-        case(
-            "maximum allowed with a right that is granted",
-            Some(&[(ALLOW, 0, 3, ALICE)]),
-            MAX | 1,
-            3,
-            OK,
-        ),
-        case(
-            "maximum allowed with a right that is not",
-            Some(&[(ALLOW, 0, 3, ALICE)]),
-            MAX | 4,
-            0,
-            NO,
-        ),
-        case(
-            "maximum allowed of nothing is refused",
-            Some(&[(ALLOW, 0, 3, BOB)]),
-            MAX,
-            0,
-            NO,
-        ),
-        having(
-            4,
+    fn cases() -> Vec<Case> {
+        vec![
+            // Generic rights.
             case(
-                "maximum allowed of nothing new keeps what was granted",
-                Some(&[]),
+                "a generic right asked for is mapped",
+                Some(&[(ALLOW, 0, 0x0012_0089, ALICE)]),
+                GENERIC_READ,
+                0x0012_0089,
+                OK,
+            ),
+            case(
+                "a generic right in an entry is mapped",
+                Some(&[(ALLOW, 0, GENERIC_READ, ALICE)]),
+                0x0012_0089,
+                0x0012_0089,
+                OK,
+            ),
+            case(
+                "generic all needs every right",
+                Some(&[(ALLOW, 0, GENERIC_READ | GENERIC_WRITE, ALICE)]),
+                GENERIC_ALL,
+                0,
+                NO,
+            ),
+            case(
+                "the user and an enabled group add up",
+                Some(&[
+                    (ALLOW, 0, 1, ALICE),
+                    (ALLOW, 0, 2, STAFF),
+                    (ALLOW, 0, 4, EVERYONE),
+                ]),
+                7,
+                7,
+                OK,
+            ),
+            case(
+                "a stranger's entry gives nothing",
+                Some(&[(ALLOW, 0, 1, BOB)]),
+                1,
+                0,
+                NO,
+            ),
+            // MAXIMUM_ALLOWED.
+            case(
+                "maximum allowed collects every allowed right",
+                Some(&[(ALLOW, 0, 3, ALICE), (ALLOW, 0, SYNCHRONIZE, STAFF)]),
                 MAX,
+                0x0010_0003,
+                OK,
+            ),
+            case(
+                "maximum allowed with a right that is granted",
+                Some(&[(ALLOW, 0, 3, ALICE)]),
+                MAX | 1,
+                3,
+                OK,
+            ),
+            case(
+                "maximum allowed with a right that is not",
+                Some(&[(ALLOW, 0, 3, ALICE)]),
+                MAX | 4,
+                0,
+                NO,
+            ),
+            case(
+                "maximum allowed of nothing is refused",
+                Some(&[(ALLOW, 0, 3, BOB)]),
+                MAX,
+                0,
+                NO,
+            ),
+            having(
                 4,
-                OK,
-            ),
-        ),
-        case(
-            "a DACL grants neither system security nor maximum allowed",
-            Some(&[(ALLOW, 0, ASS | MAX | 1, ALICE)]),
-            MAX,
-            1,
-            OK,
-        ),
-        // No DACL, empty DACL.
-        case("no DACL grants what is asked", None, ALL, ALL, OK),
-        case(
-            "no DACL grants generic all for maximum allowed",
-            None,
-            MAX,
-            ALL,
-            OK,
-        ),
-        case(
-            "no DACL: maximum allowed plus what is named",
-            None,
-            MAX | 0x0020_0000,
-            ALL | 0x0020_0000,
-            OK,
-        ),
-        case("an empty DACL grants nothing", Some(&[]), 1, 0, NO),
-        // The owner.
-        owned(
-            ALICE,
-            case(
-                "the owner may read and write the DACL",
-                Some(&[]),
-                READ_CONTROL | WRITE_DAC,
-                READ_CONTROL | WRITE_DAC,
-                OK,
-            ),
-        ),
-        owned(
-            ALICE,
-            case(
-                "the owner gets no more than that",
-                Some(&[]),
-                READ_CONTROL | 1,
-                0,
-                NO,
-            ),
-        ),
-        owned(
-            ALICE,
-            case(
-                "the owner's maximum over an empty DACL",
-                Some(&[]),
-                MAX,
-                READ_CONTROL | WRITE_DAC,
-                OK,
-            ),
-        ),
-        owned(
-            ALICE,
-            case(
-                "the owner's rights join the DACL's",
-                Some(&[(ALLOW, 0, 1, EVERYONE)]),
-                WRITE_DAC | 1,
-                WRITE_DAC | 1,
-                OK,
-            ),
-        ),
-        owned(
-            ALICE,
-            case(
-                "a deny entry does not take the owner's rights",
-                Some(&[(DENY, 0, READ_CONTROL | WRITE_DAC, ALICE)]),
-                READ_CONTROL,
-                READ_CONTROL,
-                OK,
-            ),
-        ),
-        owned(
-            STAFF,
-            case(
-                "an enabled group may be the owner",
-                Some(&[]),
-                WRITE_DAC,
-                WRITE_DAC,
-                OK,
-            ),
-        ),
-        owned(
-            DISABLED,
-            case(
-                "a disabled group is not the owner",
-                Some(&[]),
-                WRITE_DAC,
-                0,
-                NO,
-            ),
-        ),
-        owned(
-            DENY_ONLY,
-            case(
-                "a deny-only group is not the owner",
-                Some(&[]),
-                WRITE_DAC,
-                0,
-                NO,
-            ),
-        ),
-        case("someone else's object", Some(&[]), READ_CONTROL, 0, NO),
-        Case {
-            owner: None,
-            ..case(
-                "a descriptor without an owner has none",
-                Some(&[]),
-                READ_CONTROL,
-                0,
-                NO,
-            )
-        },
-        // OWNER RIGHTS.
-        owned(
-            ALICE,
-            case(
-                "owner rights replace the implicit rights",
-                Some(&[(ALLOW, 0, READ_CONTROL, OWNER)]),
-                WRITE_DAC,
-                0,
-                NO,
-            ),
-        ),
-        owned(
-            ALICE,
-            case(
-                "owner rights grant what they say",
-                Some(&[(ALLOW, 0, READ_CONTROL | 1, OWNER)]),
-                READ_CONTROL | 1,
-                READ_CONTROL | 1,
-                OK,
-            ),
-        ),
-        owned(
-            ALICE,
-            case(
-                "owner rights may deny",
-                Some(&[(DENY, 0, WRITE_DAC, OWNER), (ALLOW, 0, ALL, ALICE)]),
-                WRITE_DAC,
-                0,
-                NO,
-            ),
-        ),
-        case(
-            "owner rights are not for others",
-            Some(&[(ALLOW, 0, READ_CONTROL, OWNER)]),
-            READ_CONTROL,
-            0,
-            NO,
-        ),
-        owned(
-            ALICE,
-            case(
-                "an inherit-only owner rights entry changes nothing",
-                Some(&[(ALLOW, IO, 1, OWNER)]),
-                WRITE_DAC,
-                WRITE_DAC,
-                OK,
-            ),
-        ),
-        // Order: as stored.
-        case(
-            "allow before deny allows",
-            Some(&[(ALLOW, 0, 1, ALICE), (DENY, 0, 1, ALICE)]),
-            1,
-            1,
-            OK,
-        ),
-        case(
-            "deny before allow denies",
-            Some(&[(DENY, 0, 1, ALICE), (ALLOW, 0, 1, ALICE)]),
-            1,
-            0,
-            NO,
-        ),
-        case(
-            "a deny of another right does not matter",
-            Some(&[(DENY, 0, 2, ALICE), (ALLOW, 0, 1, ALICE)]),
-            1,
-            1,
-            OK,
-        ),
-        case(
-            "one denied right refuses the request",
-            Some(&[(DENY, 0, 2, EVERYONE), (ALLOW, 0, 3, ALICE)]),
-            3,
-            0,
-            NO,
-        ),
-        case(
-            "maximum allowed leaves out what was denied first",
-            Some(&[(DENY, 0, 2, ALICE), (ALLOW, 0, 3, ALICE)]),
-            MAX,
-            1,
-            OK,
-        ),
-        case(
-            "maximum allowed keeps what was allowed first",
-            Some(&[(ALLOW, 0, 3, ALICE), (DENY, 0, 2, ALICE)]),
-            MAX,
-            3,
-            OK,
-        ),
-        // Deny-only and disabled groups, inherit-only and other entries.
-        case(
-            "a deny-only group is not allowed",
-            Some(&[(ALLOW, 0, 1, DENY_ONLY)]),
-            1,
-            0,
-            NO,
-        ),
-        case(
-            "a deny-only group is denied",
-            Some(&[(DENY, 0, 1, DENY_ONLY), (ALLOW, 0, 1, ALICE)]),
-            1,
-            0,
-            NO,
-        ),
-        case(
-            "a disabled group is not allowed",
-            Some(&[(ALLOW, 0, 1, DISABLED)]),
-            1,
-            0,
-            NO,
-        ),
-        case(
-            "a disabled group is not denied",
-            Some(&[(DENY, 0, 1, DISABLED), (ALLOW, 0, 1, ALICE)]),
-            1,
-            1,
-            OK,
-        ),
-        case(
-            "an inherit-only allow is skipped",
-            Some(&[(ALLOW, IO, 1, ALICE)]),
-            1,
-            0,
-            NO,
-        ),
-        case(
-            "an inherit-only deny is skipped",
-            Some(&[(DENY, IO, 1, ALICE), (ALLOW, 0, 1, ALICE)]),
-            1,
-            1,
-            OK,
-        ),
-        case(
-            "audit, conditional and label entries are skipped",
-            Some(&[(2, 0, 1, ALICE), (9, 0, 1, ALICE), (0x11, 0, 1, ALICE)]),
-            1,
-            0,
-            NO,
-        ),
-        case(
-            "a conditional deny is skipped",
-            Some(&[(10, 0, 1, ALICE), (ALLOW, 0, 1, ALICE)]),
-            1,
-            1,
-            OK,
-        ),
-        // Kernel mode.
-        kernel(case(
-            "kernel mode is granted what it asks",
-            Some(&[]),
-            1,
-            1,
-            OK,
-        )),
-        kernel(case(
-            "kernel mode: generic rights are mapped",
-            Some(&[]),
-            GENERIC_WRITE,
-            0x0012_0116,
-            OK,
-        )),
-        kernel(case(
-            "kernel mode: maximum allowed is generic all",
-            Some(&[]),
-            MAX | 0x0020_0000,
-            ALL | 0x0020_0000,
-            OK,
-        )),
-        kernel(case(
-            "kernel mode needs no privilege",
-            Some(&[]),
-            ASS,
-            ASS,
-            OK,
-        )),
-        kernel(having(
-            SYNCHRONIZE,
-            case(
-                "kernel mode keeps what was granted",
-                Some(&[]),
-                0,
-                SYNCHRONIZE,
-                OK,
-            ),
-        )),
-        kernel(by(
-            IDENTIFIED,
-            &[],
-            case(
-                "kernel mode ignores the impersonation level",
-                Some(&[]),
-                1,
-                1,
-                OK,
-            ),
-        )),
-        // Granted before.
-        having(
-            SYNCHRONIZE,
-            case(
-                "rights granted before are kept",
-                Some(&[(ALLOW, 0, 1, ALICE)]),
-                1,
-                SYNCHRONIZE | 1,
-                OK,
-            ),
-        ),
-        having(
-            2,
-            case(
-                "rights granted before do not survive a refusal",
-                Some(&[]),
-                1,
-                0,
-                NO,
-            ),
-        ),
-        having(
-            2,
-            case("asking nothing keeps what was granted", Some(&[]), 0, 2, OK),
-        ),
-        case(
-            "asking nothing with nothing granted is refused",
-            None,
-            0,
-            0,
-            NO,
-        ),
-        // Privileges.
-        by(
-            PRIVILEGED,
-            &[SE_SECURITY_PRIVILEGE],
-            case(
-                "the security privilege grants system security",
-                Some(&[]),
-                ASS,
-                ASS,
-                OK,
-            ),
-        ),
-        by(
-            PRIVILEGED,
-            &[SE_SECURITY_PRIVILEGE],
-            case(
-                "system security beside a right from the DACL",
-                Some(&[(ALLOW, 0, 1, ALICE)]),
-                ASS | 1,
-                ASS | 1,
-                OK,
-            ),
-        ),
-        by(
-            PRIVILEGED,
-            &[],
-            case("a refusal uses no privilege", Some(&[]), ASS | 1, 0, NO),
-        ),
-        Case {
-            status: Status::PrivilegeNotHeld,
-            ..case(
-                "system security without the privilege",
-                Some(&[(ALLOW, 0, ASS, ALICE)]),
-                ASS,
-                0,
-                NO,
-            )
-        },
-        Case {
-            status: Status::PrivilegeNotHeld,
-            ..by(
-                SWITCHED_OFF,
-                &[],
                 case(
-                    "system security with the privilege disabled",
+                    "maximum allowed of nothing new keeps what was granted",
                     Some(&[]),
-                    ASS,
+                    MAX,
+                    4,
+                    OK,
+                ),
+            ),
+            case(
+                "a DACL grants neither system security nor maximum allowed",
+                Some(&[(ALLOW, 0, ASS | MAX | 1, ALICE)]),
+                MAX,
+                1,
+                OK,
+            ),
+            // No DACL, empty DACL.
+            case("no DACL grants what is asked", None, ALL, ALL, OK),
+            case(
+                "no DACL grants generic all for maximum allowed",
+                None,
+                MAX,
+                ALL,
+                OK,
+            ),
+            case(
+                "no DACL: maximum allowed plus what is named",
+                None,
+                MAX | 0x0020_0000,
+                ALL | 0x0020_0000,
+                OK,
+            ),
+            case("an empty DACL grants nothing", Some(&[]), 1, 0, NO),
+            // The owner.
+            owned(
+                ALICE,
+                case(
+                    "the owner may read and write the DACL",
+                    Some(&[]),
+                    READ_CONTROL | WRITE_DAC,
+                    READ_CONTROL | WRITE_DAC,
+                    OK,
+                ),
+            ),
+            owned(
+                ALICE,
+                case(
+                    "the owner gets no more than that",
+                    Some(&[]),
+                    READ_CONTROL | 1,
                     0,
                     NO,
                 ),
-            )
-        },
-        Case {
-            status: Status::PrivilegeNotHeld,
-            ..case(
-                "system security without the privilege, no DACL",
-                None,
-                ASS,
+            ),
+            owned(
+                ALICE,
+                case(
+                    "the owner's maximum over an empty DACL",
+                    Some(&[]),
+                    MAX,
+                    READ_CONTROL | WRITE_DAC,
+                    OK,
+                ),
+            ),
+            owned(
+                ALICE,
+                case(
+                    "the owner's rights join the DACL's",
+                    Some(&[(ALLOW, 0, 1, EVERYONE)]),
+                    WRITE_DAC | 1,
+                    WRITE_DAC | 1,
+                    OK,
+                ),
+            ),
+            owned(
+                ALICE,
+                case(
+                    "a deny entry does not take the owner's rights",
+                    Some(&[(DENY, 0, READ_CONTROL | WRITE_DAC, ALICE)]),
+                    READ_CONTROL,
+                    READ_CONTROL,
+                    OK,
+                ),
+            ),
+            owned(
+                STAFF,
+                case(
+                    "an enabled group may be the owner",
+                    Some(&[]),
+                    WRITE_DAC,
+                    WRITE_DAC,
+                    OK,
+                ),
+            ),
+            owned(
+                DISABLED,
+                case(
+                    "a disabled group is not the owner",
+                    Some(&[]),
+                    WRITE_DAC,
+                    0,
+                    NO,
+                ),
+            ),
+            owned(
+                DENY_ONLY,
+                case(
+                    "a deny-only group is not the owner",
+                    Some(&[]),
+                    WRITE_DAC,
+                    0,
+                    NO,
+                ),
+            ),
+            case("someone else's object", Some(&[]), READ_CONTROL, 0, NO),
+            Case {
+                owner: None,
+                ..case(
+                    "a descriptor without an owner has none",
+                    Some(&[]),
+                    READ_CONTROL,
+                    0,
+                    NO,
+                )
+            },
+            // OWNER RIGHTS.
+            owned(
+                ALICE,
+                case(
+                    "owner rights replace the implicit rights",
+                    Some(&[(ALLOW, 0, READ_CONTROL, OWNER)]),
+                    WRITE_DAC,
+                    0,
+                    NO,
+                ),
+            ),
+            owned(
+                ALICE,
+                case(
+                    "owner rights grant what they say",
+                    Some(&[(ALLOW, 0, READ_CONTROL | 1, OWNER)]),
+                    READ_CONTROL | 1,
+                    READ_CONTROL | 1,
+                    OK,
+                ),
+            ),
+            owned(
+                ALICE,
+                case(
+                    "owner rights may deny",
+                    Some(&[(DENY, 0, WRITE_DAC, OWNER), (ALLOW, 0, ALL, ALICE)]),
+                    WRITE_DAC,
+                    0,
+                    NO,
+                ),
+            ),
+            case(
+                "owner rights are not for others",
+                Some(&[(ALLOW, 0, READ_CONTROL, OWNER)]),
+                READ_CONTROL,
                 0,
                 NO,
-            )
-        },
-        by(
-            PRIVILEGED,
-            &[SE_TAKE_OWNERSHIP_PRIVILEGE],
+            ),
+            owned(
+                ALICE,
+                case(
+                    "an inherit-only owner rights entry changes nothing",
+                    Some(&[(ALLOW, IO, 1, OWNER)]),
+                    WRITE_DAC,
+                    WRITE_DAC,
+                    OK,
+                ),
+            ),
+            // Order: as stored.
             case(
-                "the take-ownership privilege grants write owner",
-                Some(&[]),
-                WRITE_OWNER,
-                WRITE_OWNER,
+                "allow before deny allows",
+                Some(&[(ALLOW, 0, 1, ALICE), (DENY, 0, 1, ALICE)]),
+                1,
+                1,
                 OK,
             ),
-        ),
-        by(
-            PRIVILEGED,
-            &[SE_TAKE_OWNERSHIP_PRIVILEGE],
             case(
-                "the privilege is used before a deny entry is read",
-                Some(&[(DENY, 0, WRITE_OWNER, ALICE)]),
-                WRITE_OWNER,
-                WRITE_OWNER,
-                OK,
-            ),
-        ),
-        by(
-            PRIVILEGED,
-            &[SE_TAKE_OWNERSHIP_PRIVILEGE],
-            case(
-                "the privilege is used even with no DACL",
-                None,
-                WRITE_OWNER,
-                WRITE_OWNER,
-                OK,
-            ),
-        ),
-        by(
-            PRIVILEGED,
-            &[SE_SECURITY_PRIVILEGE, SE_TAKE_OWNERSHIP_PRIVILEGE],
-            case(
-                "both privileges at once",
-                Some(&[]),
-                ASS | WRITE_OWNER,
-                ASS | WRITE_OWNER,
-                OK,
-            ),
-        ),
-        case(
-            "write owner from the DACL uses no privilege",
-            Some(&[(ALLOW, 0, WRITE_OWNER, ALICE)]),
-            WRITE_OWNER,
-            WRITE_OWNER,
-            OK,
-        ),
-        by(
-            SWITCHED_OFF,
-            &[],
-            case(
-                "write owner with the privilege disabled",
-                Some(&[]),
-                WRITE_OWNER,
+                "deny before allow denies",
+                Some(&[(DENY, 0, 1, ALICE), (ALLOW, 0, 1, ALICE)]),
+                1,
                 0,
                 NO,
             ),
-        ),
-        by(
-            PRIVILEGED,
-            &[],
             case(
-                "maximum allowed consults no privilege",
-                Some(&[(ALLOW, 0, 1, ALICE)]),
+                "a deny of another right does not matter",
+                Some(&[(DENY, 0, 2, ALICE), (ALLOW, 0, 1, ALICE)]),
+                1,
+                1,
+                OK,
+            ),
+            case(
+                "one denied right refuses the request",
+                Some(&[(DENY, 0, 2, EVERYONE), (ALLOW, 0, 3, ALICE)]),
+                3,
+                0,
+                NO,
+            ),
+            case(
+                "maximum allowed leaves out what was denied first",
+                Some(&[(DENY, 0, 2, ALICE), (ALLOW, 0, 3, ALICE)]),
                 MAX,
                 1,
                 OK,
             ),
-        ),
-        // Impersonation.
-        Case {
-            status: Status::BadImpersonationLevel,
-            ..by(
+            case(
+                "maximum allowed keeps what was allowed first",
+                Some(&[(ALLOW, 0, 3, ALICE), (DENY, 0, 2, ALICE)]),
+                MAX,
+                3,
+                OK,
+            ),
+            // Deny-only and disabled groups, inherit-only and other entries.
+            case(
+                "a deny-only group is not allowed",
+                Some(&[(ALLOW, 0, 1, DENY_ONLY)]),
+                1,
+                0,
+                NO,
+            ),
+            case(
+                "a deny-only group is denied",
+                Some(&[(DENY, 0, 1, DENY_ONLY), (ALLOW, 0, 1, ALICE)]),
+                1,
+                0,
+                NO,
+            ),
+            case(
+                "a disabled group is not allowed",
+                Some(&[(ALLOW, 0, 1, DISABLED)]),
+                1,
+                0,
+                NO,
+            ),
+            case(
+                "a disabled group is not denied",
+                Some(&[(DENY, 0, 1, DISABLED), (ALLOW, 0, 1, ALICE)]),
+                1,
+                1,
+                OK,
+            ),
+            case(
+                "an inherit-only allow is skipped",
+                Some(&[(ALLOW, IO, 1, ALICE)]),
+                1,
+                0,
+                NO,
+            ),
+            case(
+                "an inherit-only deny is skipped",
+                Some(&[(DENY, IO, 1, ALICE), (ALLOW, 0, 1, ALICE)]),
+                1,
+                1,
+                OK,
+            ),
+            case(
+                "audit, conditional and label entries are skipped",
+                Some(&[(2, 0, 1, ALICE), (9, 0, 1, ALICE), (0x11, 0, 1, ALICE)]),
+                1,
+                0,
+                NO,
+            ),
+            case(
+                "a conditional deny is skipped",
+                Some(&[(10, 0, 1, ALICE), (ALLOW, 0, 1, ALICE)]),
+                1,
+                1,
+                OK,
+            ),
+            // Kernel mode.
+            kernel(case(
+                "kernel mode is granted what it asks",
+                Some(&[]),
+                1,
+                1,
+                OK,
+            )),
+            kernel(case(
+                "kernel mode: generic rights are mapped",
+                Some(&[]),
+                GENERIC_WRITE,
+                0x0012_0116,
+                OK,
+            )),
+            kernel(case(
+                "kernel mode: maximum allowed is generic all",
+                Some(&[]),
+                MAX | 0x0020_0000,
+                ALL | 0x0020_0000,
+                OK,
+            )),
+            kernel(case(
+                "kernel mode needs no privilege",
+                Some(&[]),
+                ASS,
+                ASS,
+                OK,
+            )),
+            kernel(having(
+                SYNCHRONIZE,
+                case(
+                    "kernel mode keeps what was granted",
+                    Some(&[]),
+                    0,
+                    SYNCHRONIZE,
+                    OK,
+                ),
+            )),
+            kernel(by(
                 IDENTIFIED,
                 &[],
                 case(
-                    "an identification token may not ask",
+                    "kernel mode ignores the impersonation level",
+                    Some(&[]),
+                    1,
+                    1,
+                    OK,
+                ),
+            )),
+            // Granted before.
+            having(
+                SYNCHRONIZE,
+                case(
+                    "rights granted before are kept",
                     Some(&[(ALLOW, 0, 1, ALICE)]),
+                    1,
+                    SYNCHRONIZE | 1,
+                    OK,
+                ),
+            ),
+            having(
+                2,
+                case(
+                    "rights granted before do not survive a refusal",
+                    Some(&[]),
                     1,
                     0,
                     NO,
                 ),
-            )
-        },
-        by(
-            IMPERSONATED,
-            &[],
+            ),
+            having(
+                2,
+                case("asking nothing keeps what was granted", Some(&[]), 0, 2, OK),
+            ),
             case(
-                "an impersonation token may",
-                Some(&[(ALLOW, 0, 1, ALICE)]),
-                1,
-                1,
+                "asking nothing with nothing granted is refused",
+                None,
+                0,
+                0,
+                NO,
+            ),
+            // Privileges.
+            by(
+                PRIVILEGED,
+                &[SE_SECURITY_PRIVILEGE],
+                case(
+                    "the security privilege grants system security",
+                    Some(&[]),
+                    ASS,
+                    ASS,
+                    OK,
+                ),
+            ),
+            by(
+                PRIVILEGED,
+                &[SE_SECURITY_PRIVILEGE],
+                case(
+                    "system security beside a right from the DACL",
+                    Some(&[(ALLOW, 0, 1, ALICE)]),
+                    ASS | 1,
+                    ASS | 1,
+                    OK,
+                ),
+            ),
+            by(
+                PRIVILEGED,
+                &[],
+                case("a refusal uses no privilege", Some(&[]), ASS | 1, 0, NO),
+            ),
+            Case {
+                status: Status::PrivilegeNotHeld,
+                ..case(
+                    "system security without the privilege",
+                    Some(&[(ALLOW, 0, ASS, ALICE)]),
+                    ASS,
+                    0,
+                    NO,
+                )
+            },
+            Case {
+                status: Status::PrivilegeNotHeld,
+                ..by(
+                    SWITCHED_OFF,
+                    &[],
+                    case(
+                        "system security with the privilege disabled",
+                        Some(&[]),
+                        ASS,
+                        0,
+                        NO,
+                    ),
+                )
+            },
+            Case {
+                status: Status::PrivilegeNotHeld,
+                ..case(
+                    "system security without the privilege, no DACL",
+                    None,
+                    ASS,
+                    0,
+                    NO,
+                )
+            },
+            by(
+                PRIVILEGED,
+                &[SE_TAKE_OWNERSHIP_PRIVILEGE],
+                case(
+                    "the take-ownership privilege grants write owner",
+                    Some(&[]),
+                    WRITE_OWNER,
+                    WRITE_OWNER,
+                    OK,
+                ),
+            ),
+            by(
+                PRIVILEGED,
+                &[SE_TAKE_OWNERSHIP_PRIVILEGE],
+                case(
+                    "the privilege is used before a deny entry is read",
+                    Some(&[(DENY, 0, WRITE_OWNER, ALICE)]),
+                    WRITE_OWNER,
+                    WRITE_OWNER,
+                    OK,
+                ),
+            ),
+            by(
+                PRIVILEGED,
+                &[SE_TAKE_OWNERSHIP_PRIVILEGE],
+                case(
+                    "the privilege is used even with no DACL",
+                    None,
+                    WRITE_OWNER,
+                    WRITE_OWNER,
+                    OK,
+                ),
+            ),
+            by(
+                PRIVILEGED,
+                &[SE_SECURITY_PRIVILEGE, SE_TAKE_OWNERSHIP_PRIVILEGE],
+                case(
+                    "both privileges at once",
+                    Some(&[]),
+                    ASS | WRITE_OWNER,
+                    ASS | WRITE_OWNER,
+                    OK,
+                ),
+            ),
+            case(
+                "write owner from the DACL uses no privilege",
+                Some(&[(ALLOW, 0, WRITE_OWNER, ALICE)]),
+                WRITE_OWNER,
+                WRITE_OWNER,
                 OK,
             ),
-        ),
-    ];
+            by(
+                SWITCHED_OFF,
+                &[],
+                case(
+                    "write owner with the privilege disabled",
+                    Some(&[]),
+                    WRITE_OWNER,
+                    0,
+                    NO,
+                ),
+            ),
+            by(
+                PRIVILEGED,
+                &[],
+                case(
+                    "maximum allowed consults no privilege",
+                    Some(&[(ALLOW, 0, 1, ALICE)]),
+                    MAX,
+                    1,
+                    OK,
+                ),
+            ),
+            // Impersonation.
+            Case {
+                status: Status::BadImpersonationLevel,
+                ..by(
+                    IDENTIFIED,
+                    &[],
+                    case(
+                        "an identification token may not ask",
+                        Some(&[(ALLOW, 0, 1, ALICE)]),
+                        1,
+                        0,
+                        NO,
+                    ),
+                )
+            },
+            by(
+                IMPERSONATED,
+                &[],
+                case(
+                    "an impersonation token may",
+                    Some(&[(ALLOW, 0, 1, ALICE)]),
+                    1,
+                    1,
+                    OK,
+                ),
+            ),
+        ]
+    }
 
     fn token(who: &Who) -> Token {
         let mut token = Token::system();
@@ -1040,7 +1044,7 @@ mod tests {
 
     #[test]
     fn the_case_table() {
-        for case in CASES {
+        for case in cases() {
             let token = token(case.who);
             let dacl = case.dacl.map(dacl);
             let descriptor = Parts {
@@ -1069,10 +1073,11 @@ mod tests {
 
     #[test]
     fn case_names_are_unique() {
-        let mut names: Vec<&str> = CASES.iter().map(|case| case.name).collect();
+        let cases = cases();
+        let mut names: Vec<&str> = cases.iter().map(|case| case.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), CASES.len());
+        assert_eq!(names.len(), cases.len());
     }
 
     fn ask(descriptor: &Parts<'_>, desired: u32) -> (u32, Status) {
@@ -1119,6 +1124,17 @@ mod tests {
         };
         assert_eq!(ask(&descriptor, 1), (0, NO));
         assert_eq!(ask(&descriptor, READ_CONTROL), (0, NO));
+    }
+
+    #[test]
+    fn the_accounts_of_the_table_are_sids() {
+        assert_eq!(&account(1001)[..], ALICE);
+        for sid in [ALICE, BOB, STAFF, DISABLED, DENY_ONLY] {
+            assert_eq!(crate::valid_sid(sid), Some(28));
+        }
+        // S-1-5-21-1-2-3-1002.
+        assert_eq!(BOB[..12], [1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0]);
+        assert_eq!(BOB[24..], [0xEA, 3, 0, 0]);
     }
 
     #[test]

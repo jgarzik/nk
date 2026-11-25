@@ -340,6 +340,8 @@ mod tests {
         for sid in [&WORLD[..], &ADMINISTRATORS, &SYSTEM_LABEL] {
             assert_eq!(valid_sid(sid), Some(sid.len()));
         }
+        // Built the same way when not a constant.
+        assert_eq!(known::<16>(5, &[32, 544]), ADMINISTRATORS);
     }
 
     #[test]
