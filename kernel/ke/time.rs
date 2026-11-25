@@ -17,7 +17,10 @@ use super::interrupt;
 use crate::{arch, mm};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ke::{TIME_INCREMENT, counter_to_time, micros_to_counter, ticks_in};
+use nk_ke::{
+    TICK_MULTIPLIER, TIME_INCREMENT, counter_to_time, micros_to_counter, plausible_frequency,
+    ticks_in,
+};
 use nk_mm::pt::Prot;
 use nk_ntabi::ke::{
     SHARED_DATA, SHARED_INTERRUPT_TIME, SHARED_SYSTEM_TIME, SHARED_TICK_COUNT,
@@ -110,9 +113,7 @@ pub fn start_cpu() {
 /// interrupt on this processor.
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let frequency = arch::clock_calibrate()?;
-    // A counter slower than 1 MHz cannot time a microsecond stall, and
-    // one this fast is a calibration gone wrong.
-    if !(1_000_000..=100_000_000_000).contains(&frequency) {
+    if !plausible_frequency(frequency) {
         return Err("the time counter's frequency is implausible");
     }
     FREQUENCY.store(frequency, Ordering::Relaxed);
@@ -140,10 +141,6 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     kprintln!("ke: time counter at {frequency} Hz, clock at 64 Hz");
     Ok(())
 }
-
-/// `TickCountMultiplier`: the tick length in a fixed-point form old code
-/// multiplies the tick count by to get milliseconds.
-const TICK_MULTIPLIER: u32 = (TIME_INCREMENT * (1 << 24) / 10_000) as u32;
 
 /// [`KeQueryTimeIncrement`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerytimeincrement):
 /// the clock tick in 100 ns units.
