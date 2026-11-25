@@ -15,6 +15,8 @@
 
 extern crate alloc;
 
+pub mod access;
+pub mod acl;
 pub mod token;
 
 /// The revision of every SID.
@@ -249,6 +251,20 @@ impl<'a> Parts<'a> {
             }
         }
         Ok(())
+    }
+
+    /// This descriptor as its control bits say to read it: an ACL not
+    /// marked present is not there, whatever the field holds.
+    #[must_use]
+    pub fn present(&self) -> Parts<'a> {
+        let mut parts = *self;
+        if parts.control & SE_DACL_PRESENT == 0 {
+            parts.dacl = None;
+        }
+        if parts.control & SE_SACL_PRESENT == 0 {
+            parts.sacl = None;
+        }
+        parts
     }
 
     /// This descriptor with the parts `information` names replaced by
@@ -537,6 +553,27 @@ mod tests {
             old.replaced(&new, SACL_SECURITY_INFORMATION).sacl,
             Some(&new_acl[..])
         );
+    }
+
+    #[test]
+    fn an_acl_not_marked_present_is_not_there() {
+        let acl = empty_acl(8);
+        let both = Parts {
+            control: SE_DACL_PRESENT | SE_SACL_PRESENT,
+            sacl: Some(&acl),
+            dacl: Some(&acl),
+            ..Parts::default()
+        };
+        let kept = both.present();
+        assert_eq!((kept.sacl, kept.dacl), (Some(&acl[..]), Some(&acl[..])));
+        let dacl_only = Parts {
+            control: SE_DACL_PRESENT,
+            ..both
+        }
+        .present();
+        assert_eq!((dacl_only.sacl, dacl_only.dacl), (None, Some(&acl[..])));
+        let neither = Parts { control: 0, ..both }.present();
+        assert!(neither.sacl.is_none() && neither.dacl.is_none());
     }
 
     #[test]
