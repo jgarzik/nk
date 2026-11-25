@@ -341,6 +341,18 @@ fn bind_fills_iat() {
 }
 
 #[test]
+fn an_image_with_no_import_directory_binds_and_lists_nothing() {
+    let (mut h, mut image) = mapped(&Builder::new().build());
+    h.dirs[DIR_IMPORT] = DataDir::default();
+    let before = image.clone();
+    // The descriptors are still in the image; without the directory
+    // nothing leads to them, and nobody is asked to resolve anything.
+    bind_imports(&mut image, &h, |_, _| panic!("asked to resolve an import")).unwrap();
+    assert_eq!(image, before);
+    for_each_import(&image, &h, |_, _| panic!("an import was listed")).unwrap();
+}
+
+#[test]
 fn unresolved_import_is_named_and_nothing_is_bound() {
     let b = Builder {
         imports: vec![("ntoskrnl.exe", vec!["IoCreateDevice", "NoSuchRoutine"])],

@@ -420,6 +420,41 @@ mod tests {
         assert!(spcr(&[0; 40]).is_none(), "truncated SPCR");
     }
 
+    #[test]
+    fn a_table_whose_length_is_out_of_bounds_reads_as_absent() {
+        // The SPCR is the first table: at 0x1200, its length at 0x1204.
+        let length =
+            |fw: &mut Fake, len: u32| fw.0[0x204..0x208].copy_from_slice(&len.to_le_bytes());
+        let mut fw = firmware(true, &[sdt(b"SPCR", &spcr_body(3, 0, 0x0900_0000))]);
+        // Enough memory that a long table is refused for its length, not
+        // for running off the end.
+        fw.0.resize(0x30_0000, 0);
+        assert!(find_table(&fw, 0x1000, b"SPCR").is_some());
+        // Shorter than its own header.
+        for short in [0, 1, SDT_HEADER as u32 - 1] {
+            length(&mut fw, short);
+            assert!(find_table(&fw, 0x1000, b"SPCR").is_none(), "{short}");
+        }
+        // The header alone is a table, if an empty one.
+        length(&mut fw, SDT_HEADER as u32);
+        assert_eq!(find_table(&fw, 0x1000, b"SPCR").map(<[u8]>::len), Some(36));
+        // Up to the bound, and not a byte past it.
+        length(&mut fw, MAX_TABLE as u32);
+        assert_eq!(
+            find_table(&fw, 0x1000, b"SPCR").map(<[u8]>::len),
+            Some(MAX_TABLE)
+        );
+        for long in [MAX_TABLE as u32 + 1, u32::MAX] {
+            length(&mut fw, long);
+            assert!(find_table(&fw, 0x1000, b"SPCR").is_none(), "{long:#x}");
+        }
+        // A root table with a bad length hides every table.
+        length(&mut fw, 80);
+        assert!(find_table(&fw, 0x1000, b"SPCR").is_some());
+        fw.0[0x104..0x108].copy_from_slice(&35u32.to_le_bytes());
+        assert!(find_table(&fw, 0x1000, b"SPCR").is_none());
+    }
+
     fn madt_table(local_apic: u32, entries: &[Vec<u8>]) -> Vec<u8> {
         let mut body = local_apic.to_le_bytes().to_vec();
         body.extend_from_slice(&1u32.to_le_bytes());

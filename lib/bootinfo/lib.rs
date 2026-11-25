@@ -668,6 +668,27 @@ mod tests {
     }
 
     #[test]
+    fn the_modules_are_the_ones_the_loader_counted() {
+        let mut info = BootInfo::new();
+        assert!(info.modules().is_empty());
+        for (i, name) in [&b"null.sys"[..], b"sioctl.sys"].into_iter().enumerate() {
+            info.modules[i].set_name(name);
+            info.modules[i].size = 100 + i as u64;
+            info.nmodules += 1;
+        }
+        let listed: Vec<_> = info.modules().iter().map(|m| (m.name(), m.size)).collect();
+        assert_eq!(listed, [(&b"null.sys"[..], 100), (b"sioctl.sys", 101)]);
+        // A count the table cannot hold is not believed: reading a
+        // damaged structure stays inside it.
+        info.nmodules = MAX_MODULES as u32;
+        assert_eq!(info.modules().len(), MAX_MODULES);
+        info.nmodules = MAX_MODULES as u32 + 1;
+        assert_eq!(info.modules().len(), MAX_MODULES);
+        info.nmodules = u32::MAX;
+        assert_eq!(info.modules().len(), MAX_MODULES);
+    }
+
+    #[test]
     fn layout_is_stable() {
         // Both loader and kernel are built from this source, but a silent
         // layout change should still be a deliberate VERSION bump.
