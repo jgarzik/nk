@@ -1,0 +1,12 @@
+[package]
+name = "nk-bootinfo"
+description = "Boot handoff block passed from nkload to the kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true

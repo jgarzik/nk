@@ -3,8 +3,37 @@
 version = 4
 
 [[package]]
+name = "nk-acpi"
+version = "0.0.1"
+
+[[package]]
+name = "nk-bootinfo"
+version = "0.0.1"
+
+[[package]]
+name = "nk-mm"
+version = "0.0.1"
+
+[[package]]
 name = "nk-pe"
 version = "0.0.1"
+
+[[package]]
+name = "nkkrnl"
+version = "0.0.1"
+dependencies = [
+ "nk-bootinfo",
+]
+
+[[package]]
+name = "nkload"
+version = "0.0.1"
+dependencies = [
+ "nk-acpi",
+ "nk-bootinfo",
+ "nk-mm",
+ "nk-pe",
+]
 
 [[package]]
 name = "peinfo"

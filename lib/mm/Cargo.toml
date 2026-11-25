@@ -1,0 +1,12 @@
+[package]
+name = "nk-mm"
+description = "Memory-management arithmetic: page tables, frame and pool allocators"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true

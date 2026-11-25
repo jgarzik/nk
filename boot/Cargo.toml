@@ -1,0 +1,20 @@
+[package]
+name = "nkload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nkload"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+nk-acpi = { path = "../lib/acpi" }
+nk-bootinfo = { path = "../lib/bootinfo" }
+nk-mm = { path = "../lib/mm" }
+nk-pe = { path = "../lib/pe" }
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "nkkrnl"
+version.workspace = true
+build = "build.rs"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nkkrnl"
+path = "main.rs"
+test = false
+bench = false
+
+[dependencies]
+nk-bootinfo = { path = "../lib/bootinfo" }
+
+[lints]
+workspace = true

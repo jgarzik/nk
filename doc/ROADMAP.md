@@ -9,9 +9,9 @@ binaries, complete real IRPs and report PASS.
 | --- | --- | --- |
 | 0 | Workspace, gate, docs, compiler ABI probes | done |
 | 1 | `lib/pe`: parse, map, relocate, bind imports | done |
-| 2 | Fixture fetch by URL + SHA-256; ledger from real import tables | |
-| 3 | `nkload`: UEFI loader, boot test harness | |
-| 4 | Kernel entry: own page tables, serial, power off | |
+| 2 | Fixture fetch by URL + SHA-256; ledger from real import tables | done |
+| 3 | `nkload`: UEFI loader, boot test harness | done |
+| 4 | Kernel entry: own page tables, serial, power off | done |
 | 5 | CPU state: descriptor tables, exceptions, processor control region | |
 | 6 | Memory: frames, mappings, pool | |
 | 7 | `lib/ntabi` layouts, runtime library, IRQL and locks | |

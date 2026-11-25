@@ -23,6 +23,9 @@ NK does not use nightly features.
 
 ```sh
 make test     # host unit tests
+make check    # boot x86-64 under QEMU and run the kernel self-tests
+make check-arm
+make run      # boot with the serial console attached (Ctrl-A X quits)
 make gate     # full commit gate
 make clean    # remove target/
 ```

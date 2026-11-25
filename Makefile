@@ -4,12 +4,15 @@
 
 CARGO ?= cargo
 
-.PHONY: help test clippy fmt fmt-check fixtures ledger ledger-check gate clean
+.PHONY: help build build-arm check check-arm run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check gate clean
 
 help:
 	@echo "NK make targets:"
+	@echo "  build      loader + kernel for x86-64      (build-arm: arm64)"
+	@echo "  check      boot test under QEMU, x86-64    (check-arm: arm64)"
+	@echo "  run        boot with a serial console      (run-arm: arm64)"
 	@echo "  test       host unit tests (pure library crates)"
-	@echo "  clippy     lint, warnings are errors"
+	@echo "  clippy     lint x86-64 + host, warnings are errors (clippy-arm: arm64)"
 	@echo "  fmt        format the tree"
 	@echo "  fmt-check  fail if the tree is not formatted"
 	@echo "  fixtures   download and verify the driver fixtures (target/fixtures/)"
@@ -17,11 +20,39 @@ help:
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
 	@echo "  clean      remove all build and test output"
 
+X86 := x86_64-unknown-uefi
+ARM := aarch64-unknown-uefi
+KERNEL_CRATES := -p nkload -p nkkrnl
+
+build:
+	$(CARGO) build --release --target $(X86) $(KERNEL_CRATES)
+
+build-arm:
+	$(CARGO) build --release --target $(ARM) $(KERNEL_CRATES)
+
+# Boot tests pick up whatever fixtures are downloaded; a missing one is
+# reported by the kernel as a SKIP.
+check: build fixtures
+	@tools/boot_test.py x86_64
+
+check-arm: build-arm fixtures
+	@tools/boot_test.py aarch64
+
+run: build fixtures
+	@tools/boot_test.py x86_64 --run
+
+run-arm: build-arm fixtures
+	@tools/boot_test.py aarch64 --run
+
 test:
 	$(CARGO) test
 
 clippy:
 	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --release --target $(X86) $(KERNEL_CRATES) -- -D warnings
+
+clippy-arm:
+	$(CARGO) clippy --release --target $(ARM) $(KERNEL_CRATES) -- -D warnings
 
 fmt:
 	$(CARGO) fmt --all

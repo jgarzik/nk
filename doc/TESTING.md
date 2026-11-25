@@ -11,6 +11,33 @@ Tests build their inputs in code (for example, synthetic PE images) so
 they need no downloaded files. Tests that do use a fetched fixture report
 that they were skipped when it is absent.
 
+## Boot tests
+
+`make check` (x86-64) and `make check-arm` (arm64) boot the real loader
+and kernel under QEMU with UEFI firmware, the way a PC boots, and judge
+the serial log. x86-64 uses KVM when available; arm64 is emulated.
+
+The kernel reports each self-test on the serial console:
+
+```
+NK-TEST <name>:OK
+NK-TEST <name>:FAIL <why>
+NK-TEST <name>:SKIP <why>
+NK-TEST-COMPLETE pass=<n> fail=<n> skip=<n>
+```
+
+A boot passes only if the totals line shows `fail=0`, no line reports a
+failure, panic or bugcheck, and the kernel powered the machine off within
+the timeout. Skips are printed, never counted as passes.
+
+`tools/boot_test.py` owns the run: it builds the EFI system partition
+image, copies the firmware variable store, starts QEMU in its own process
+group, and on every exit path kills QEMU and deletes the image and the
+copy. What remains is `target/qemu/serial-<arch>.log`.
+
+Knobs: `BOOT_TEST_TIMEOUT` (seconds, default 120), `QEMU_SMP`, `QEMU_MEM`,
+`NO_KVM=1`. `make run` / `make run-arm` boot with the console attached.
+
 ## The gate
 
 `make gate` runs every check a commit must pass and prints `GATE-OK`.
