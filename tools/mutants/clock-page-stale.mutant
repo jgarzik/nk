@@ -3,6 +3,5 @@
 scenario: aarch64
 fails: clock.tick
 file: kernel/ke/time.rs
-occurrence: 1
-replace:     update();
-with:     let _ = update;
+replace:         update();
+with:         let _ = update;
