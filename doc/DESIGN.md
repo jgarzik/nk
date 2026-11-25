@@ -419,6 +419,10 @@ A compiled function that uses no stack has no entry either, on both
 architectures. That is the convention for a leaf: its return address is
 where the call left it, at `[rsp]` or in `x30`.
 
+The gate holds the uncovered code to this list (`make unwind-check`,
+`doc/TESTING.md`): a new assembly routine without unwind directives
+fails it.
+
 **Walking a stack** (`kernel/ke/unwind.rs`). A walk starts from the
 registers a function captures of itself (`arch::unwind::capture`) and
 undoes one frame at a time: the image the program counter is in, the
