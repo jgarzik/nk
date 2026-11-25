@@ -9,9 +9,11 @@
 //!
 //! [`pushlock`] is `EX_PUSH_LOCK`, one word. [`resource`] is `ERESOURCE`
 //! and its owner table. [`slist`] is `SLIST_HEADER`.
+//! [`lookaside`] is what initialising a lookaside list writes.
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod lookaside;
 pub mod pushlock;
 pub mod resource;
 pub mod slist;
