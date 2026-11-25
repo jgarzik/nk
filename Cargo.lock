@@ -17,6 +17,13 @@ version = "0.0.1"
 [[package]]
 name = "nk-ntabi"
 version = "0.0.1"
+dependencies = [
+ "nk-pdb",
+]
+
+[[package]]
+name = "nk-pdb"
+version = "0.0.1"
 
 [[package]]
 name = "nk-pe"
@@ -46,6 +53,13 @@ dependencies = [
  "nk-bootinfo",
  "nk-mm",
  "nk-pe",
+]
+
+[[package]]
+name = "pdbinfo"
+version = "0.0.1"
+dependencies = [
+ "nk-pdb",
 ]
 
 [[package]]

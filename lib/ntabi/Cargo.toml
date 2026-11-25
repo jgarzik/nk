@@ -10,5 +10,8 @@ publish.workspace = true
 [lib]
 path = "lib.rs"
 
+[dev-dependencies]
+nk-pdb = { path = "../pdb" }
+
 [lints]
 workspace = true

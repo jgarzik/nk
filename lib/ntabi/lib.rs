@@ -21,4 +21,6 @@ pub mod pcr;
 pub mod status;
 
 #[cfg(test)]
+mod pdb;
+#[cfg(test)]
 mod probe;

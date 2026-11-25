@@ -12,8 +12,9 @@ they need no downloaded files. Tests that do use a fetched fixture report
 that they were skipped when it is absent.
 
 `lib/ntabi` also checks its structure layouts against tables built by
-the WDK (`lib/ntabi/probe.rs`), which `make test` downloads with the other
-fixtures. Without them (offline) the test prints a SKIP note on stderr
+the WDK (`lib/ntabi/probe.rs`) and against the public symbols of the
+pinned Windows kernel (`lib/ntabi/pdb.rs`), which `make test` downloads
+with the other fixtures. Without them (offline) the test prints a SKIP note on stderr
 and passes.
 
 ## Boot tests

@@ -1,0 +1,18 @@
+[package]
+name = "pdbinfo"
+description = "Print structure layouts from a Microsoft PDB"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pdbinfo"
+path = "main.rs"
+
+[dependencies]
+nk-pdb = { path = "../../lib/pdb" }
+
+[lints]
+workspace = true

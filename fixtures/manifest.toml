@@ -93,3 +93,21 @@ status = "wdk-built"
 kind = "abi-table"
 boot = false
 note = "nk-fixtures v2 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+
+# Microsoft's public symbols for the kernel of the pinned build
+# (ntoskrnl.exe 10.0.19041.2006, the kernel of Windows 10 22H2 19045.2006).
+# They hold the layouts of the kernel's private structures, which
+# Microsoft's own drivers were compiled against; lib/ntabi/pdb.rs compares
+# NK's definitions with them. The name on the symbol server is the GUID
+# and age recorded in that kernel's debug directory.
+
+[[fixture]]
+name = "ntkrnlmp"
+arch = "x86_64"
+file = "ntkrnlmp.x64.pdb"
+url = "https://msdl.microsoft.com/download/symbols/ntkrnlmp.pdb/68A17FAF3012B7846079AEECDBE0A5831/ntkrnlmp.pdb"
+sha256 = "380dbab8f5958b602f977fe5a96b84548675146809ef5ec05ec259da9b41abbb"
+status = "microsoft-inbox"
+kind = "pdb"
+boot = false
+note = "public symbols of ntoskrnl.exe 10.0.19041.2006 (sha256 cc9b3a6c057ca31d0886c8efb7965a4c47e2d80fd0185d9b9fa55c5dc1d0dc55)"

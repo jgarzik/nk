@@ -47,7 +47,7 @@ def boot_drivers(arch):
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     drivers, missing = [], []
     for fx in manifest:
-        if fx.get("kind") == "abi-table":
+        if "kind" in fx:  # a table or symbol file, not a driver
             continue
         path = FIXTURES / fx["file"]
         if not path.exists():

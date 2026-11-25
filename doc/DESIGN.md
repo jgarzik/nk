@@ -162,9 +162,10 @@ to other drivers.
 
 Everything a driver can see is declared once in `lib/ntabi` as
 `#[repr(C)]` with compile-time size and offset checks for each
-architecture. So far these are documented structures, checked against a
-table built by the WDK. Private structures (principle 2) will be checked
-against the public symbols of the pinned build in the same way.
+architecture. Documented structures are compared with a table built by
+the WDK; private ones (principle 2) with the type information in the
+public symbols of the pinned kernel, read by NK's own PDB reader
+(`lib/pdb`). `doc/ABI.md` has the state of both.
 
 ### Pure logic lives in `lib/`
 

@@ -10,10 +10,11 @@
 //! - arm64: register x18 is the KPCR. `KeGetCurrentThread()` is
 //!   `[x18, #0x988]`.
 //!
-//! Only the handful of fields NK fills in are named. Source: the public
-//! `KPCR` definition in the WDK's `ntddk.h` (x86-64), and the documented
-//! arm64 convention. The arm64 offsets have not yet been confirmed
-//! against a WDK-built probe; see `doc/ABI.md`.
+//! Only the handful of fields NK fills in are named. The x86-64 offsets
+//! are checked against the public symbols of the pinned kernel build
+//! (`pdb.rs`), which cover the private processor block as well as the
+//! public head of the KPCR. The arm64 offsets are the documented
+//! convention and are not yet confirmed; see `doc/ABI.md`.
 
 /// Bytes NK reserves for the KPCR plus the KPRCB that follows it.
 pub const PCR_SIZE: usize = 0x2000;

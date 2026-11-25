@@ -66,8 +66,9 @@ dump. There is no SEH: a driver's `__try` block cannot catch anything.
 
 ## Structure layouts
 
-`lib/ntabi` declares the structures; its tests pin every size and offset.
-Three sources back those numbers, in increasing order of authority:
+`lib/ntabi` declares the structures and asserts every size and offset at
+compile time. Three sources back those numbers, in increasing order of
+authority:
 
 1. Microsoft's documentation and public symbols (what the definitions
    were written from).
@@ -87,13 +88,36 @@ downloaded the test prints SKIP rather than pass silently on nothing.
 
 One thing the probe cannot tell: where the KPRCB and the current-thread
 slot sit. The public `KPCR` is 0x178 bytes and stops short of the PRCB.
-NK's `gs:[0x188]` comes from the WDK's inlined `KeGetCurrentThread`, and
-is exercised by no fixture yet.
+
+## Private layouts: the kernel's public symbols
+
+Microsoft's own drivers were compiled against private headers, so they
+can read fields the WDK never declares. For those the authority is the
+type information in the public PDB of the pinned kernel
+(`ntoskrnl.exe` 10.0.19041.2006), a fixture fetched from Microsoft's
+symbol server by the GUID and age in that kernel's debug directory.
+`lib/pdb` reads it, `tools/pdbinfo` prints any structure from it, and
+`lib/ntabi/pdb.rs` compares NK's definitions with it in `make test`.
+
+The PDB holds two bodies named `_KPCR`: the public 0x178-byte head, and
+the full 0xB080-byte region that ends with the processor block. NK takes
+the largest body of a name and requires every smaller one to agree with
+it on the fields they share.
+
+**Status: agrees, x86-64.** `KPCR.Self` 0x18, `CurrentPrcb` 0x20, `Prcb`
+0x180 and `KPRCB.CurrentThread` 0x8 are what `lib/ntabi/pcr.rs` states,
+so `gs:[0x188]` is the current thread. A structure is added to the
+comparison by the commit that starts using it.
+
+There is nothing to compare arm64 with: NK has no source of Windows 10
+arm64 kernels or symbols. arm64 uses the documented structures, the facts
+the WDK compiles into the probe, and layouts of NK's own for whatever no
+available binary can observe.
 
 ## Not yet verified
 
-- The current-thread offsets in the PCR, on either architecture: neither
-  the probe nor a fixture driver exercises them yet.
+- The current-thread offset in the PCR on arm64 (`[x18, #0x988]`): no
+  symbol file, probe fact or fixture driver confirms it yet.
 - Behaviour against a real Windows 10 installation: there is no
   reference VM yet, so "expected" results come from documentation, sample
   source and the binaries themselves.

@@ -115,10 +115,10 @@ SHA-256; the tests download them and reject a mismatch.
 | --- | --- |
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/` | the kernel: `arch/` (CPU-specific), `mm/`, `io/`, `ldr/`, `ob/`, `ke/`, `export/`, `selftest/` |
-| `lib/` | hardware-independent logic, unit-tested on the build host: PE loading, page tables, allocators, structure layouts, ACPI lookup |
+| `lib/` | hardware-independent logic, unit-tested on the build host: PE loading, page tables, allocators, structure layouts, ACPI tables, PDB symbol files |
 | `fixtures/` | the manifest of test drivers |
 | `ledger/` | generated compatibility ledger |
-| `tools/` | fixture fetcher, boot-test harness, image builder, the gate |
+| `tools/` | fixture fetcher, boot-test harness and judge, image builder, PE and PDB dumpers, the gate |
 | `doc/` | design and reference notes |
 
 ## Documentation
