@@ -7,6 +7,9 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod format;
+pub mod upcase;
+
+pub use upcase::upcase_char;
 
 /// Largest `Length`, in bytes, `RtlInitUnicodeString` will report: the
 /// 16-bit field must also leave room for the terminator in
@@ -26,6 +29,7 @@ pub fn init_unicode_lengths(chars: usize) -> (u16, u16) {
 /// Covers ASCII and Latin-1. Windows uses a full upcase table; names
 /// outside these ranges compare case-sensitively here, which can only
 /// make NK stricter, never match two names Windows keeps apart.
+/// [`upcase_char`] is the full table.
 pub fn upcase(c: u16) -> u16 {
     match c {
         0x61..=0x7A => c - 0x20,
