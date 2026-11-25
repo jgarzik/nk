@@ -38,10 +38,12 @@ class Oracle(unittest.TestCase):
                 body = [l for l in lines if not l.startswith("#")]
                 self.assertIn(f"# script sha256 {hashlib.sha256(text.encode()).hexdigest()}",
                               header, "the script changed since it was recorded")
-                loads = [l.split()[2] for l in text.splitlines() if l.split()[:1] == ["load"]]
+                # The file is the last field of `load` and of `install`.
+                files = {l.split()[-1] for l in text.splitlines()
+                         if l.split()[:1] in (["load"], ["install"])}
                 recorded = dict(re.findall(r"^# driver (\S+) sha256 (\S+)$",
                                            "\n".join(header), re.M))
-                self.assertEqual(sorted(recorded), sorted(loads))
+                self.assertEqual(sorted(recorded), sorted(files))
                 for file_name, digest in recorded.items():
                     self.assertEqual(digest, fixture_sha256(file_name),
                                      f"{file_name} is not the fixture it was recorded with")

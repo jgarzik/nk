@@ -7,7 +7,7 @@
 //! the formats.
 
 use crate::io::file::{self, IoResult};
-use crate::io::service;
+use crate::io::service::{self, ServiceError};
 use crate::ldr;
 use crate::test::{Group, Report};
 use alloc::format;
@@ -55,6 +55,24 @@ impl<'a> Replay<'a> {
         }
     }
 
+    /// A service that is part of the system: started unless it is
+    /// running, and then stopped when the script ends. Its key is made
+    /// here if the registry has none, naming `<service>.sys`.
+    fn use_service(&mut self, service: &'a str) -> &'static str {
+        match service::start(service) {
+            Ok(_) => {
+                self.drivers.push(service);
+                "ok"
+            }
+            Err(ServiceError::Running) => "ok",
+            Err(ServiceError::NoKey) => self.load(service, &format!("{service}.sys")),
+            Err(e) => {
+                kprintln!("oracle: use {service}: {e:?}");
+                "failed"
+            }
+        }
+    }
+
     fn unload(&mut self, service: &str) -> &'static str {
         let Some(i) = self.drivers.iter().position(|s| *s == service) else {
             return "failed";
@@ -80,10 +98,18 @@ impl<'a> Replay<'a> {
             }
             .into(),
             Step::Load { service, file } => self.load(service, file).into(),
-            // Part of Windows there; here it is a boot module like any other.
-            Step::Use { service } => self.load(service, &format!("{service}.sys")).into(),
+            Step::Use { service } => self.use_service(service).into(),
             Step::Unload { service } => self.unload(service).into(),
-            Step::Open { handle, path } => match file::open(path) {
+            Step::Install { .. }
+            | Step::Pipe { .. }
+            | Step::IoctlAt { .. }
+            | Step::Fsctl { .. } => {
+                return Err("not yet supported on NK".into());
+            }
+            Step::Open { args, .. } if !args.is_plain() => {
+                return Err("not yet supported on NK".into());
+            }
+            Step::Open { handle, path, .. } => match file::open(path) {
                 Ok(file) => {
                     self.files.push((handle, file));
                     format!("{:08x}", 0)
