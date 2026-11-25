@@ -1,0 +1,7 @@
+# An object's header carries its type's index hidden by the cookie
+# alone, the same byte for every object of the type.
+scenario: x86_64
+fails: ob.types
+file: lib/ob/header.rs
+replace:     index ^ cookie ^ (header >> 8) as u8
+with:     index ^ cookie ^ (header >> 63 >> 1) as u8

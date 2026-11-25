@@ -148,7 +148,7 @@ fn open(key: KeyId) -> Result<*mut c_void, NTSTATUS> {
 ///
 /// # Safety
 /// `body` is a key object nothing refers to any more.
-pub unsafe fn closed(body: *mut u8) {
+pub unsafe extern "C" fn closed(body: *mut c_void) {
     // SAFETY: per the contract: the body is the key's number.
     let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
     HIVE.lock().closed(key);

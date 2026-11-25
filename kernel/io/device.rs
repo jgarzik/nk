@@ -149,7 +149,7 @@ unsafe fn destroy(device: *mut DEVICE_OBJECT) {
 ///
 /// # Safety
 /// `body` is a device object nothing refers to any more.
-pub unsafe fn deleted(body: *mut u8) {
+pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
     // SAFETY: per the contract; the descriptor is a pool block of the
     // kernel's, put there by `replace_security`.
     unsafe {

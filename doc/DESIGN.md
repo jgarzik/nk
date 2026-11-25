@@ -331,9 +331,14 @@ signalled object.
 Kernel handles are entries in one table, with Windows' kernel-handle
 bits; a handle holds a reference until closed. No per-process tables, no
 access checks. `NtCurrentThread()` (-2) names the caller;
-`NtCurrentProcess()` names nothing. A type is named by address: a driver
-imports a variable holding it (`ExEventObjectType`) and passes the value
-back, so the type structure is NK's own.
+`NtCurrentProcess()` names nothing.
+
+A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
+driver imports a variable holding it (`ExEventObjectType`). Its index
+numbers are NK's own. An object's header names its type as Windows 10
+does, by the index combined with a cookie chosen at boot and a byte of
+the header's address (`nk_ob::header`). The fields of a type NK does not
+keep (its counts, its lists) are zero.
 
 The namespace is a flat, case-insensitive table of device names and
 symbolic links, with `\DosDevices`, `\??` and `\GLOBAL??` as one

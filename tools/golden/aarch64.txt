@@ -52,6 +52,7 @@ wait.any ok
 wait.all ok
 wait.many-blocking ok
 wait.all-race ok
+ob.types ok
 ob.references ok
 ob.handles ok
 ob.thread ok

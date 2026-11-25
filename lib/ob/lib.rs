@@ -10,6 +10,8 @@
 
 extern crate alloc;
 
+pub mod header;
+
 use alloc::vec::Vec;
 
 /// How many symbolic links a lookup follows before giving up.

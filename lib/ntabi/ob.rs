@@ -40,6 +40,83 @@ const _: () = {
     assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, Attributes) == 24);
 };
 
+/// `GENERIC_MAPPING`: the specific rights each generic right stands for.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GENERIC_MAPPING {
+    pub GenericRead: u32,
+    pub GenericWrite: u32,
+    pub GenericExecute: u32,
+    pub GenericAll: u32,
+}
+
+/// What an object's type does with a body nothing refers to any more.
+pub type OB_DELETE_METHOD = unsafe extern "C" fn(object: *mut c_void);
+
+/// `OBJECT_TYPE_INITIALIZER`: what a type is made from, kept inside it.
+/// Private to Windows, but handed to `ObCreateObjectType` and read back
+/// by Microsoft's own drivers, so it has Windows' layout (x86-64: checked
+/// against the kernel's symbols; arm64: the same, by NK's choice).
+#[repr(C)]
+pub struct OBJECT_TYPE_INITIALIZER {
+    pub Length: u16,
+    pub ObjectTypeFlags: u16,
+    pub ObjectTypeCode: u32,
+    pub InvalidAttributes: u32,
+    pub GenericMapping: GENERIC_MAPPING,
+    pub ValidAccessMask: u32,
+    pub RetainAccess: u32,
+    pub PoolType: i32,
+    pub DefaultPagedPoolCharge: u32,
+    pub DefaultNonPagedPoolCharge: u32,
+    pub DumpProcedure: *mut c_void,
+    pub OpenProcedure: *mut c_void,
+    pub CloseProcedure: *mut c_void,
+    pub DeleteProcedure: Option<OB_DELETE_METHOD>,
+    pub ParseProcedure: *mut c_void,
+    pub SecurityProcedure: *mut c_void,
+    pub QueryNameProcedure: *mut c_void,
+    pub OkayToCloseProcedure: *mut c_void,
+    pub WaitObjectFlagMask: u32,
+    pub WaitObjectFlagOffset: u16,
+    pub WaitObjectPointerOffset: u16,
+}
+
+/// `OBJECT_TYPE`: a kind of object. A driver holds its address (the
+/// value of `*ExEventObjectType`).
+#[repr(C)]
+pub struct OBJECT_TYPE {
+    pub TypeList: crate::ke::LIST_ENTRY,
+    pub Name: crate::io::UNICODE_STRING,
+    pub DefaultObject: *mut c_void,
+    pub Index: u8,
+    pub TotalNumberOfObjects: u32,
+    pub TotalNumberOfHandles: u32,
+    pub HighWaterNumberOfObjects: u32,
+    pub HighWaterNumberOfHandles: u32,
+    pub TypeInfo: OBJECT_TYPE_INITIALIZER,
+    pub TypeLock: usize,
+    pub Key: u32,
+    pub CallbackList: crate::ke::LIST_ENTRY,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<OBJECT_TYPE_INITIALIZER>() == 0x78);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, GenericMapping) == 0xC);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, ValidAccessMask) == 0x1C);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, PoolType) == 0x24);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, OpenProcedure) == 0x38);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, DeleteProcedure) == 0x48);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, ParseProcedure) == 0x50);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, OkayToCloseProcedure) == 0x68);
+    assert!(size_of::<OBJECT_TYPE>() == 0xD8);
+    assert!(offset_of!(OBJECT_TYPE, Name) == 0x10);
+    assert!(offset_of!(OBJECT_TYPE, Index) == 0x28);
+    assert!(offset_of!(OBJECT_TYPE, TypeInfo) == 0x40);
+    assert!(offset_of!(OBJECT_TYPE, CallbackList) == 0xC8);
+};
+
 /// Where the object begins, from the start of its header.
 pub const OBJECT_BODY: usize = 0x30;
 

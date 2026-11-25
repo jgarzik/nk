@@ -288,6 +288,76 @@ fn object_header_matches_the_kernel() {
 }
 
 #[test]
+fn object_types_match_the_kernel() {
+    use crate::ob::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let ty = types.layout("_OBJECT_TYPE").expect("_OBJECT_TYPE");
+    let field = |name| offset(&ty, "_OBJECT_TYPE", name);
+    assert_eq!(size_of::<OBJECT_TYPE>(), ty.size as usize);
+    assert_eq!(offset_of!(OBJECT_TYPE, TypeList), field("TypeList"));
+    assert_eq!(offset_of!(OBJECT_TYPE, Name), field("Name"));
+    assert_eq!(
+        offset_of!(OBJECT_TYPE, DefaultObject),
+        field("DefaultObject")
+    );
+    assert_eq!(offset_of!(OBJECT_TYPE, Index), field("Index"));
+    assert_eq!(
+        offset_of!(OBJECT_TYPE, TotalNumberOfObjects),
+        field("TotalNumberOfObjects")
+    );
+    assert_eq!(
+        offset_of!(OBJECT_TYPE, HighWaterNumberOfHandles),
+        field("HighWaterNumberOfHandles")
+    );
+    assert_eq!(offset_of!(OBJECT_TYPE, TypeInfo), field("TypeInfo"));
+    assert_eq!(offset_of!(OBJECT_TYPE, TypeLock), field("TypeLock"));
+    assert_eq!(offset_of!(OBJECT_TYPE, Key), field("Key"));
+    assert_eq!(offset_of!(OBJECT_TYPE, CallbackList), field("CallbackList"));
+
+    let init = types
+        .layout("_OBJECT_TYPE_INITIALIZER")
+        .expect("_OBJECT_TYPE_INITIALIZER");
+    let field = |name| offset(&init, "_OBJECT_TYPE_INITIALIZER", name);
+    assert_eq!(size_of::<OBJECT_TYPE_INITIALIZER>(), init.size as usize);
+    macro_rules! same {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(OBJECT_TYPE_INITIALIZER, $name), field(stringify!($name)));
+        )*};
+    }
+    same!(
+        Length,
+        ObjectTypeFlags,
+        ObjectTypeCode,
+        InvalidAttributes,
+        GenericMapping,
+        ValidAccessMask,
+        RetainAccess,
+        PoolType,
+        DefaultPagedPoolCharge,
+        DefaultNonPagedPoolCharge,
+        DumpProcedure,
+        OpenProcedure,
+        CloseProcedure,
+        DeleteProcedure,
+        ParseProcedure,
+        SecurityProcedure,
+        QueryNameProcedure,
+        OkayToCloseProcedure,
+        WaitObjectFlagMask,
+        WaitObjectFlagOffset,
+        WaitObjectPointerOffset
+    );
+    assert_eq!(
+        size_of::<GENERIC_MAPPING>(),
+        types
+            .layout("_GENERIC_MAPPING")
+            .expect("_GENERIC_MAPPING")
+            .size as usize
+    );
+}
+
+#[test]
 fn mutexes_match_the_kernel() {
     use crate::ke::{FAST_MUTEX, KMUTANT};
     use core::mem::{offset_of, size_of};

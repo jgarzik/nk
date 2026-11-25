@@ -1,11 +1,11 @@
 //! Tests of reference-counted objects and kernel handles.
 
-use crate::ob::handle;
+use crate::ob::{handle, object};
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["ob.references", "ob.handles", "ob.thread"],
+    names: &["ob.types", "ob.references", "ob.handles", "ob.thread"],
     run,
     manual: false,
 };
@@ -18,6 +18,7 @@ fn counted(r: &mut Report, name: &str, what: &str, result: Result<u32, &'static 
 }
 
 fn run(r: &mut Report, _: &BootInfo) {
+    r.check("ob.types", object::type_test);
     counted(
         r,
         "ob.references",
