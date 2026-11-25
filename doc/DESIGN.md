@@ -1,15 +1,107 @@
 # NK design
 
-Decisions and their reasons. Where NK departs from `doc/handoff.md`, it
-says so. Windows concepts are not explained here; see Microsoft's
+What NK is, the principles every phase follows, and the decisions already
+built into the code, each with its reason. Windows concepts are not
+explained here; see Microsoft's
 [driver documentation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/_kernel/)
 and the [PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
+The order of work is in `doc/ROADMAP.md`.
 
-## The first milestone: 0.0.1, driver bootstrap
+## What NK is
 
-On QEMU, x86-64 and arm64 alike:
+NK is a replacement for two files of Windows 10: `ntoskrnl.exe` and
+`hal.dll`, plus a loader (`nkload`) that stands in for Microsoft's boot
+manager and `winload`. Nothing else is NK's.
 
-1. UEFI firmware starts `nkload`, NK's own loader.
+- **Every other kernel-mode component is Microsoft's binary, loaded as a
+  driver:** the ACPI and PCI drivers, the storage port and its miniports,
+  the file systems, the driver framework (KMDF), the network stack, the
+  window system. NK does not write its own PCI bus driver, AML
+  interpreter, SCSI layer or file system.
+- **All of user mode is Microsoft's:** `ntdll.dll`, the session manager,
+  `csrss.exe`, `cmd.exe`. NK serves them the system calls of one exact
+  Windows build.
+- **NK ships none of it.** The Windows files come from Microsoft's own
+  servers or the user's media, at test or install time.
+
+The reason is the golden rule turned on Microsoft's own code: if an
+unmodified driver cannot tell NK from Windows, then Microsoft's inbox
+drivers are simply more drivers. Measurement supports it: the whole
+surveyed set of 46 inbox kernel binaries needs about 1700 of the kernel's
+3070 exports, and stacking Microsoft's KMDF and USB drivers on top of the
+storage and file-system set adds only 40 of those (`doc/ROADMAP.md`).
+Rewriting those layers would take years and create second ABIs (storport,
+NDIS, KMDF) for third-party drivers to find fault with.
+
+The destination is a Windows rescue disk: Microsoft's Windows PE image at
+a `cmd.exe` prompt on QEMU x86-64, QEMU arm64 and a Dell OptiPlex.
+
+## Principles
+
+1. **An unmodified Windows driver binary must not be able to tell NK from
+   Windows.** Exports, calling conventions, structure layouts, IRQL and
+   lifetime rules are binding. This outranks every other principle.
+2. **Windows-shaped wherever a binary can look; NK's own everywhere
+   else.** Third-party drivers see the documented structures. Microsoft's
+   inbox drivers and the window system were built against private headers
+   and may also read the thread, process, processor and object-header
+   structures in line. Any object a binary can reach has Windows' size and
+   field offsets for the pinned build, and NK keeps its private state
+   beside it, never inside a larger struct in its place. What no binary
+   can observe (algorithms, internal tables, the loader hand-off) is NK's
+   to design.
+3. **No fake success.** A missing import rejects the driver and names the
+   symbol. A routine that cannot do its job fails as its contract says or
+   stops the machine. A feature NK lacks (hypervisor, secure kernel, code
+   integrity) answers "not present" the way Windows does without it.
+4. **Windows is the oracle.** A behaviour is verified when the same test
+   gives the same result on a reference Windows installation and on NK.
+   Until then the ledger says "implemented", not "verified".
+5. **Scope follows evidence.** NK exports a routine because a binary in
+   the pinned corpus imports it. The ledger carries the denominators.
+6. **One exact build.** Drivers of the whole Windows 10 2004-22H2 family
+   must run. User mode, the system-call numbers and the private layouts
+   come from a single revision of it, chosen in roadmap phase 0.
+7. **Hardware is found through ACPI on both architectures,** because
+   Microsoft's `acpi.sys` and `pci.sys` do the enumerating.
+8. **Sources.** Microsoft's documentation, headers and samples; the
+   public symbols of the pinned build; the fixture binaries themselves,
+   read for what they expect of a kernel; a reference Windows VM. ReactOS
+   and Wine may be read to understand behaviour. No code is copied or
+   translated from them, and nothing from leaked Windows source or the
+   Windows Research Kernel is used at all.
+9. **Written fresh.** The kernel has no external crates and takes no code
+   from its sibling Linux-compatible kernel,
+   [hk](https://github.com/jgarzik/hk). hk is a reference for hardware
+   bring-up and the model for the gate, the boot-test harness and
+   differential testing against the real system.
+10. **Both architectures are first class.** Every commit builds and boots
+    x86-64 and arm64. Where a Microsoft arm64 binary cannot be obtained,
+    its test prints SKIP; the NK code beneath it is still built and run.
+
+Drivers are trusted but memory-unsafe code: NK never holds a Rust
+reference into memory a driver can write.
+
+## Boot, mirroring Windows
+
+Windows on QEMU boots as: UEFI firmware, `bootmgfw.efi` from the EFI
+system partition, `winload.efi`, which loads `ntoskrnl.exe`, `hal.dll`,
+the `SYSTEM` registry hive and the boot-start drivers it names, builds a
+loader block, leaves boot services and jumps to the kernel. On arm64 the
+`virt` machine is described by ACPI, as on x86.
+
+NK keeps that shape with one loader, `nkload`, standing in for both
+Microsoft stages. It hands the kernel a private `BootInfo` block. NK does
+not imitate the Windows loader block: no driver sees it, so it is not part
+of the contract. Today `nkload` loads the kernel and a fixed list of test
+drivers; reading the hive and its driver list arrives with the registry.
+
+## As built in 0.0.1
+
+The rest of this file records what the code does today. On QEMU, x86-64
+and arm64 alike:
+
+1. UEFI firmware starts `nkload`.
 2. `nkload` reads the kernel and the driver files from the EFI system
    partition, maps the kernel, leaves boot services and jumps to it.
 3. The kernel takes over the CPU and memory, then loads each driver:
@@ -23,24 +115,11 @@ There is no user mode, no scheduler and only the boot CPU runs. The
 proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
 sample built with the WDK (see `doc/TESTING.md`).
 
-## Boot, mirroring Windows
+### The kernel is a PE image
 
-Windows on QEMU boots as: UEFI firmware, `bootmgfw.efi` from the EFI
-system partition, `winload.efi`, which loads `ntoskrnl.exe`, `hal.dll`
-and the boot-start drivers as PE images, builds a loader block, leaves
-boot services and jumps to the kernel. On arm64 the `virt` machine is
-described by ACPI, as on x86.
-
-NK keeps that shape with one loader, `nkload`, standing in for both
-Microsoft stages. It hands the kernel a private `BootInfo` block. NK does
-not imitate the Windows loader block: no driver sees it, so it is not part
-of the contract.
-
-## The kernel is a PE image
-
-The handoff suggests a freestanding ELF kernel. NK builds the kernel for
-Rust's stock `x86_64-unknown-uefi` and `aarch64-unknown-uefi` targets
-instead, which produce PE images. Reasons:
+NK builds the kernel for Rust's stock `x86_64-unknown-uefi` and
+`aarch64-unknown-uefi` targets, which produce PE images, rather than as a
+freestanding ELF. Reasons:
 
 - They are prebuilt targets on stable Rust. No nightly, no `build-std`,
   no custom target file.
@@ -50,9 +129,9 @@ instead, which produce PE images. Reasons:
 - One PE loader, `lib/pe`, is used twice: the loader maps the kernel with
   it and the kernel maps drivers with it. The code that must be right for
   drivers is exercised on every boot.
-- PE images carry unwind tables, which SEH will need later.
+- PE images carry unwind tables, which SEH needs.
 
-## Exports are a table, not a PE export directory
+### Exports are a table, not a PE export directory
 
 Drivers import from `ntoskrnl.exe` and `HAL.dll` by name. NK resolves
 those names against a static registry built by a macro. Each entry
@@ -62,21 +141,26 @@ ledger cannot drift from what the kernel really exports.
 
 An import with no entry rejects the driver and names the symbol.
 
-## ABI structures
+Not yet handled, and needed by Microsoft's inbox drivers: imports by
+ordinal, kernel-mode API-set names (`ext-ms-*`), and drivers that export
+to other drivers.
+
+### ABI structures
 
 Everything a driver can see is declared once in `lib/ntabi` as
 `#[repr(C)]` with compile-time size and offset checks for each
-architecture. The kernel keeps its private state beside these objects,
-never inside a larger struct in their place.
+architecture. So far these are documented structures, checked against a
+table built by the WDK. Private structures (principle 2) will be checked
+against the public symbols of the pinned build in the same way.
 
-## Pure logic lives in `lib/`
+### Pure logic lives in `lib/`
 
 Anything that can be written without touching hardware goes in a
 `no_std` library crate and is unit-tested on the build host: PE loading,
 structure layouts, string and list routines, allocator arithmetic, page
 table construction. The kernel binary is the glue and the `unsafe`.
 
-## Memory
+### Memory
 
 - **Frames.** A bitmap allocator over `EfiConventionalMemory` only.
   Loader allocations and firmware boot-services memory stay reserved (on
@@ -94,7 +178,7 @@ table construction. The kernel binary is the glue and the `unsafe`.
   with 4 KiB pages and each section's own protection. Address space is
   bump-allocated and not reused; frames are freed on unmap.
 
-## Loading a driver
+### Loading a driver
 
 `kernel/ldr` checks the image is a native PE32+ for this machine, lays it
 out in fresh frames, relocates it to a fresh kernel address, binds every
@@ -111,7 +195,7 @@ section's protection. Two things the import table does not show:
 
 A refused image leaves nothing allocated; the boot tests check that.
 
-## I/O
+### I/O
 
 Driver, device and file objects and IRPs are pool allocations of exactly
 their Windows size, reached by raw pointer. A device object is followed
@@ -140,7 +224,7 @@ The object namespace is a flat table of device names and symbolic links,
 case-insensitive, with `\DosDevices`, `\??` and `\GLOBAL??` as one
 directory. There are no handles, no directories and no security checks.
 
-## What 0.0.1 leaves out, and how it stays honest
+### What 0.0.1 leaves out, and how it stays honest
 
 No threads, waits, timers, SEH, PnP or power management. Where a proof
 driver imports something in that territory but never reaches it on the
@@ -154,9 +238,7 @@ the Windows checks, but where Windows raises an exception NK bugchecks,
 and so does `MmProbeAndLockPages` on an inaccessible buffer. A driver's
 `__try` block protects nothing on NK yet.
 
-## Dependencies
+### Dependencies
 
 The loader speaks UEFI through its own small bindings and the kernel has
-no external crates. NK shares conventions (the gate, boot-test harness, lint set) with
-its sibling Linux-compatible kernel, [hk](https://github.com/jgarzik/hk),
-but no code.
+no external crates.

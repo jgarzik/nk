@@ -2,15 +2,18 @@
 
 A Windows NT-compatible kernel written in Rust, for x86-64 and arm64.
 
-NK's goal is to run existing, unmodified Windows kernel-mode drivers: the
-same `.sys` file that loads on Windows loads on NK. The compatibility
-target is fixed at Windows 10 22H2 (NT 10.0, build 19045). Windows defines
-the driver ABI and the behaviour drivers observe; the implementation
-behind it is NK's own.
+NK's rule is that an unmodified Windows kernel-mode driver cannot tell NK
+from Windows: the same `.sys` file that loads on Windows loads on NK. The
+compatibility target is the Windows 10 2004-22H2 family (NT 10.0, builds
+19041 to 19045). Windows defines the driver ABI and the behaviour drivers
+observe; the implementation behind it is NK's own.
 
-NK is not a Windows desktop clone and not a Linux compatibility layer. It
-boots on its own through UEFI, with no Windows or Linux code in the boot
-path.
+NK replaces only the Windows kernel and HAL. The long-term goal is to
+boot the rest of Windows on top of it, unmodified: Microsoft's own bus,
+storage and file-system drivers, then Microsoft's user mode, up to a
+Windows rescue disk at a `cmd.exe` prompt. `doc/ROADMAP.md` lays out the
+phases. NK contains and ships no Windows code, and boots on its own
+through UEFI.
 
 ## Status: 0.0.1, driver bootstrap
 
@@ -39,7 +42,7 @@ structured exception handling, no Plug and Play, no user mode, and runs
 only the boot CPU. It has not been run on physical hardware, and its
 results have been checked against Microsoft's documentation, sample source
 and binaries, not yet against a run on real Windows. `doc/ROADMAP.md` says
-what is open and what comes next.
+what is open and the path from here to Windows user mode.
 
 ## Try it
 
@@ -120,15 +123,14 @@ SHA-256; the tests download them and reject a mismatch.
 
 ## Documentation
 
-- `doc/DESIGN.md`: the decisions behind NK and their reasons
+- `doc/DESIGN.md`: what NK is, its principles, and the decisions behind
+  the code
 - `doc/BOOT.md`: from firmware to the kernel's first instruction
 - `doc/ABI.md`: what was measured about compilers and layouts, and what is
   still unverified
 - `doc/TESTING.md`: unit tests, boot tests, fixtures
-- `doc/ROADMAP.md`: what 0.0.1 covers and what follows
+- `doc/ROADMAP.md`: the phases from 0.0.1 to a Windows rescue disk
 - `doc/UNSAFE.md`: rules for `unsafe` code
-- `doc/handoff.md`: the original project brief, kept for reference; where
-  NK departs from it, `doc/DESIGN.md` says why
 
 ## Releases
 
