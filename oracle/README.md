@@ -8,6 +8,10 @@ Windows produced; the kernel test fails at the first line where NK's
 differs. That is what "the driver cannot tell NK from Windows" means, one
 request at a time.
 
+If a step stops Windows (a bugcheck), the oracle says so and gives the
+bugcheck code and its four parameters, which Windows hands to the
+hypervisor as it stops.
+
 `make oracle` re-records every transcript on Windows and fails if one no
 longer matches its file. It needs KVM and the reference VM, so it is not
 part of the gate; the gate runs the NK side against the committed files.

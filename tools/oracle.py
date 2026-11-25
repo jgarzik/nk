@@ -231,14 +231,19 @@ def qemu(directory, disk, extra, timeout, on_tick=None):
     """Run Windows until it powers off. `directory` holds vars.fd and the
     QMP socket. Returns True if it powered off within `timeout`."""
     cmd = [
-        "qemu-system-x86_64", "-machine", "q35", "-enable-kvm", "-cpu", "host",
+        "qemu-system-x86_64", "-machine", "q35", "-enable-kvm",
+        # hv_crash: Windows hands its bugcheck code and parameters to the
+        # hypervisor when it stops, and QEMU writes them to its log.
+        "-cpu", "host,hv_relaxed,hv_crash",
+        "-d", "guest_errors", "-D", "qemu.log", "-action", "panic=shutdown",
         "-smp", "4", "-m", "4096",
         "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
         "-drive", "if=pflash,format=raw,file=vars.fd",
         "-drive", f"if=none,id=hd,format=qcow2,file={disk}",
         "-device", "ide-hd,drive=hd,bus=ide.0,bootindex=1",
         "-nic", "none", "-display", "none", "-vga", "std", "-monitor", "none",
-        "-serial", "none", "-qmp", "unix:qmp.sock,server=on,wait=off",
+        "-serial", os.environ.get("ORACLE_SERIAL", "none"),
+        "-qmp", "unix:qmp.sock,server=on,wait=off",
     ] + extra
     proc = subprocess.Popen(cmd, cwd=directory, stdin=subprocess.DEVNULL,
                             start_new_session=True, preexec_fn=die_with_parent)
@@ -368,9 +373,25 @@ def run(source):
                 extras[name] = data.stdout
         if not ok and os.environ.get("KEEP"):
             shutil.copyfile(work / "timeout.png", VM / "run-timeout.png")
+        crash = bugcheck(work / "qemu.log")
+        if crash:
+            sys.exit(f"oracle: Windows stopped: bugcheck {crash}")
         return (out.stdout.decode(errors="replace") if out.returncode == 0 else None), ok, extras
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def bugcheck(qemu_log):
+    """The bugcheck Windows reported to the hypervisor, if it stopped:
+    its code and four parameters, as QEMU logged them."""
+    try:
+        text = Path(qemu_log).read_text(errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if "crash parameters" in line:
+            return line.split("crash parameters", 1)[1].strip(" :")
+    return None
 
 
 def sha256(data):
