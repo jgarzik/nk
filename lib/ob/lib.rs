@@ -8,11 +8,13 @@
 //!
 //! [`tree`] is the namespace with directories: a path walk that follows
 //! symbolic links and stops at the object whose type parses the rest.
+//! [`handles`] is handle slots with granted access and attributes.
 
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
+pub mod handles;
 pub mod tree;
 
 use alloc::vec::Vec;
