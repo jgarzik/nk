@@ -37,7 +37,7 @@ The drivers are Microsoft's, not written for NK:
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, built with Microsoft's WDK | runs | runs |
 
 **What this is not.** Two software drivers are not general driver
-compatibility. NK has threads but no preemption and nothing to block on, no device
+compatibility. NK has preemptive threads but nothing for them to block on, no device
 interrupts,
 no structured exception handling, no Plug and Play and no user mode. It
 has not been run on physical hardware. The two

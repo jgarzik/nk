@@ -162,12 +162,481 @@ nk_callee_saved_check:
     ldp d14, d15, [sp, #144]
     add sp, sp, #192
     ret
+
+    .globl nk_all_registers_check
+// x0: a seed. x1: how many times to look. Fills the general registers
+// (but x16-x18, x29, x30) and every vector register, both halves, with
+// values made from the seed and checks them over and over without
+// calling anything. Returns 1 in x0 if none changed.
+nk_all_registers_check:
+    sub sp, sp, #192
+    stp x19, x20, [sp, #0]
+    stp x21, x22, [sp, #16]
+    stp x23, x24, [sp, #32]
+    stp x25, x26, [sp, #48]
+    stp x27, x28, [sp, #64]
+    stp x29, x30, [sp, #80]
+    stp d8, d9, [sp, #96]
+    stp d10, d11, [sp, #112]
+    stp d12, d13, [sp, #128]
+    stp d14, d15, [sp, #144]
+    str x0, [sp, #160]
+    str x1, [sp, #168]
+    mov x16, x0
+    add x17, x16, #100
+    dup v0.2d, x17
+    add x17, x16, #101
+    dup v1.2d, x17
+    add x17, x16, #102
+    dup v2.2d, x17
+    add x17, x16, #103
+    dup v3.2d, x17
+    add x17, x16, #104
+    dup v4.2d, x17
+    add x17, x16, #105
+    dup v5.2d, x17
+    add x17, x16, #106
+    dup v6.2d, x17
+    add x17, x16, #107
+    dup v7.2d, x17
+    add x17, x16, #108
+    dup v8.2d, x17
+    add x17, x16, #109
+    dup v9.2d, x17
+    add x17, x16, #110
+    dup v10.2d, x17
+    add x17, x16, #111
+    dup v11.2d, x17
+    add x17, x16, #112
+    dup v12.2d, x17
+    add x17, x16, #113
+    dup v13.2d, x17
+    add x17, x16, #114
+    dup v14.2d, x17
+    add x17, x16, #115
+    dup v15.2d, x17
+    add x17, x16, #116
+    dup v16.2d, x17
+    add x17, x16, #117
+    dup v17.2d, x17
+    add x17, x16, #118
+    dup v18.2d, x17
+    add x17, x16, #119
+    dup v19.2d, x17
+    add x17, x16, #120
+    dup v20.2d, x17
+    add x17, x16, #121
+    dup v21.2d, x17
+    add x17, x16, #122
+    dup v22.2d, x17
+    add x17, x16, #123
+    dup v23.2d, x17
+    add x17, x16, #124
+    dup v24.2d, x17
+    add x17, x16, #125
+    dup v25.2d, x17
+    add x17, x16, #126
+    dup v26.2d, x17
+    add x17, x16, #127
+    dup v27.2d, x17
+    add x17, x16, #128
+    dup v28.2d, x17
+    add x17, x16, #129
+    dup v29.2d, x17
+    add x17, x16, #130
+    dup v30.2d, x17
+    add x17, x16, #131
+    dup v31.2d, x17
+    add x1, x16, #1
+    add x2, x16, #2
+    add x3, x16, #3
+    add x4, x16, #4
+    add x5, x16, #5
+    add x6, x16, #6
+    add x7, x16, #7
+    add x8, x16, #8
+    add x9, x16, #9
+    add x10, x16, #10
+    add x11, x16, #11
+    add x12, x16, #12
+    add x13, x16, #13
+    add x14, x16, #14
+    add x15, x16, #15
+    add x19, x16, #16
+    add x20, x16, #17
+    add x21, x16, #18
+    add x22, x16, #19
+    add x23, x16, #20
+    add x24, x16, #21
+    add x25, x16, #22
+    add x26, x16, #23
+    add x27, x16, #24
+    add x28, x16, #25
+    add x0, x16, #0
+3:
+    ldr x16, [sp, #160]
+    sub x17, x0, x16
+    cmp x17, #0
+    b.ne 2f
+    sub x17, x1, x16
+    cmp x17, #1
+    b.ne 2f
+    sub x17, x2, x16
+    cmp x17, #2
+    b.ne 2f
+    sub x17, x3, x16
+    cmp x17, #3
+    b.ne 2f
+    sub x17, x4, x16
+    cmp x17, #4
+    b.ne 2f
+    sub x17, x5, x16
+    cmp x17, #5
+    b.ne 2f
+    sub x17, x6, x16
+    cmp x17, #6
+    b.ne 2f
+    sub x17, x7, x16
+    cmp x17, #7
+    b.ne 2f
+    sub x17, x8, x16
+    cmp x17, #8
+    b.ne 2f
+    sub x17, x9, x16
+    cmp x17, #9
+    b.ne 2f
+    sub x17, x10, x16
+    cmp x17, #10
+    b.ne 2f
+    sub x17, x11, x16
+    cmp x17, #11
+    b.ne 2f
+    sub x17, x12, x16
+    cmp x17, #12
+    b.ne 2f
+    sub x17, x13, x16
+    cmp x17, #13
+    b.ne 2f
+    sub x17, x14, x16
+    cmp x17, #14
+    b.ne 2f
+    sub x17, x15, x16
+    cmp x17, #15
+    b.ne 2f
+    sub x17, x19, x16
+    cmp x17, #16
+    b.ne 2f
+    sub x17, x20, x16
+    cmp x17, #17
+    b.ne 2f
+    sub x17, x21, x16
+    cmp x17, #18
+    b.ne 2f
+    sub x17, x22, x16
+    cmp x17, #19
+    b.ne 2f
+    sub x17, x23, x16
+    cmp x17, #20
+    b.ne 2f
+    sub x17, x24, x16
+    cmp x17, #21
+    b.ne 2f
+    sub x17, x25, x16
+    cmp x17, #22
+    b.ne 2f
+    sub x17, x26, x16
+    cmp x17, #23
+    b.ne 2f
+    sub x17, x27, x16
+    cmp x17, #24
+    b.ne 2f
+    sub x17, x28, x16
+    cmp x17, #25
+    b.ne 2f
+    fmov x17, d0
+    sub x17, x17, x16
+    cmp x17, #100
+    b.ne 2f
+    mov x17, v0.d[1]
+    sub x17, x17, x16
+    cmp x17, #100
+    b.ne 2f
+    fmov x17, d1
+    sub x17, x17, x16
+    cmp x17, #101
+    b.ne 2f
+    mov x17, v1.d[1]
+    sub x17, x17, x16
+    cmp x17, #101
+    b.ne 2f
+    fmov x17, d2
+    sub x17, x17, x16
+    cmp x17, #102
+    b.ne 2f
+    mov x17, v2.d[1]
+    sub x17, x17, x16
+    cmp x17, #102
+    b.ne 2f
+    fmov x17, d3
+    sub x17, x17, x16
+    cmp x17, #103
+    b.ne 2f
+    mov x17, v3.d[1]
+    sub x17, x17, x16
+    cmp x17, #103
+    b.ne 2f
+    fmov x17, d4
+    sub x17, x17, x16
+    cmp x17, #104
+    b.ne 2f
+    mov x17, v4.d[1]
+    sub x17, x17, x16
+    cmp x17, #104
+    b.ne 2f
+    fmov x17, d5
+    sub x17, x17, x16
+    cmp x17, #105
+    b.ne 2f
+    mov x17, v5.d[1]
+    sub x17, x17, x16
+    cmp x17, #105
+    b.ne 2f
+    fmov x17, d6
+    sub x17, x17, x16
+    cmp x17, #106
+    b.ne 2f
+    mov x17, v6.d[1]
+    sub x17, x17, x16
+    cmp x17, #106
+    b.ne 2f
+    fmov x17, d7
+    sub x17, x17, x16
+    cmp x17, #107
+    b.ne 2f
+    mov x17, v7.d[1]
+    sub x17, x17, x16
+    cmp x17, #107
+    b.ne 2f
+    fmov x17, d8
+    sub x17, x17, x16
+    cmp x17, #108
+    b.ne 2f
+    mov x17, v8.d[1]
+    sub x17, x17, x16
+    cmp x17, #108
+    b.ne 2f
+    fmov x17, d9
+    sub x17, x17, x16
+    cmp x17, #109
+    b.ne 2f
+    mov x17, v9.d[1]
+    sub x17, x17, x16
+    cmp x17, #109
+    b.ne 2f
+    fmov x17, d10
+    sub x17, x17, x16
+    cmp x17, #110
+    b.ne 2f
+    mov x17, v10.d[1]
+    sub x17, x17, x16
+    cmp x17, #110
+    b.ne 2f
+    fmov x17, d11
+    sub x17, x17, x16
+    cmp x17, #111
+    b.ne 2f
+    mov x17, v11.d[1]
+    sub x17, x17, x16
+    cmp x17, #111
+    b.ne 2f
+    fmov x17, d12
+    sub x17, x17, x16
+    cmp x17, #112
+    b.ne 2f
+    mov x17, v12.d[1]
+    sub x17, x17, x16
+    cmp x17, #112
+    b.ne 2f
+    fmov x17, d13
+    sub x17, x17, x16
+    cmp x17, #113
+    b.ne 2f
+    mov x17, v13.d[1]
+    sub x17, x17, x16
+    cmp x17, #113
+    b.ne 2f
+    fmov x17, d14
+    sub x17, x17, x16
+    cmp x17, #114
+    b.ne 2f
+    mov x17, v14.d[1]
+    sub x17, x17, x16
+    cmp x17, #114
+    b.ne 2f
+    fmov x17, d15
+    sub x17, x17, x16
+    cmp x17, #115
+    b.ne 2f
+    mov x17, v15.d[1]
+    sub x17, x17, x16
+    cmp x17, #115
+    b.ne 2f
+    fmov x17, d16
+    sub x17, x17, x16
+    cmp x17, #116
+    b.ne 2f
+    mov x17, v16.d[1]
+    sub x17, x17, x16
+    cmp x17, #116
+    b.ne 2f
+    fmov x17, d17
+    sub x17, x17, x16
+    cmp x17, #117
+    b.ne 2f
+    mov x17, v17.d[1]
+    sub x17, x17, x16
+    cmp x17, #117
+    b.ne 2f
+    fmov x17, d18
+    sub x17, x17, x16
+    cmp x17, #118
+    b.ne 2f
+    mov x17, v18.d[1]
+    sub x17, x17, x16
+    cmp x17, #118
+    b.ne 2f
+    fmov x17, d19
+    sub x17, x17, x16
+    cmp x17, #119
+    b.ne 2f
+    mov x17, v19.d[1]
+    sub x17, x17, x16
+    cmp x17, #119
+    b.ne 2f
+    fmov x17, d20
+    sub x17, x17, x16
+    cmp x17, #120
+    b.ne 2f
+    mov x17, v20.d[1]
+    sub x17, x17, x16
+    cmp x17, #120
+    b.ne 2f
+    fmov x17, d21
+    sub x17, x17, x16
+    cmp x17, #121
+    b.ne 2f
+    mov x17, v21.d[1]
+    sub x17, x17, x16
+    cmp x17, #121
+    b.ne 2f
+    fmov x17, d22
+    sub x17, x17, x16
+    cmp x17, #122
+    b.ne 2f
+    mov x17, v22.d[1]
+    sub x17, x17, x16
+    cmp x17, #122
+    b.ne 2f
+    fmov x17, d23
+    sub x17, x17, x16
+    cmp x17, #123
+    b.ne 2f
+    mov x17, v23.d[1]
+    sub x17, x17, x16
+    cmp x17, #123
+    b.ne 2f
+    fmov x17, d24
+    sub x17, x17, x16
+    cmp x17, #124
+    b.ne 2f
+    mov x17, v24.d[1]
+    sub x17, x17, x16
+    cmp x17, #124
+    b.ne 2f
+    fmov x17, d25
+    sub x17, x17, x16
+    cmp x17, #125
+    b.ne 2f
+    mov x17, v25.d[1]
+    sub x17, x17, x16
+    cmp x17, #125
+    b.ne 2f
+    fmov x17, d26
+    sub x17, x17, x16
+    cmp x17, #126
+    b.ne 2f
+    mov x17, v26.d[1]
+    sub x17, x17, x16
+    cmp x17, #126
+    b.ne 2f
+    fmov x17, d27
+    sub x17, x17, x16
+    cmp x17, #127
+    b.ne 2f
+    mov x17, v27.d[1]
+    sub x17, x17, x16
+    cmp x17, #127
+    b.ne 2f
+    fmov x17, d28
+    sub x17, x17, x16
+    cmp x17, #128
+    b.ne 2f
+    mov x17, v28.d[1]
+    sub x17, x17, x16
+    cmp x17, #128
+    b.ne 2f
+    fmov x17, d29
+    sub x17, x17, x16
+    cmp x17, #129
+    b.ne 2f
+    mov x17, v29.d[1]
+    sub x17, x17, x16
+    cmp x17, #129
+    b.ne 2f
+    fmov x17, d30
+    sub x17, x17, x16
+    cmp x17, #130
+    b.ne 2f
+    mov x17, v30.d[1]
+    sub x17, x17, x16
+    cmp x17, #130
+    b.ne 2f
+    fmov x17, d31
+    sub x17, x17, x16
+    cmp x17, #131
+    b.ne 2f
+    mov x17, v31.d[1]
+    sub x17, x17, x16
+    cmp x17, #131
+    b.ne 2f
+    ldr x17, [sp, #168]
+    subs x17, x17, #1
+    str x17, [sp, #168]
+    b.ne 3b
+    mov x0, #1
+    b 4f
+2:
+    mov x0, #0
+4:
+    ldp x19, x20, [sp, #0]
+    ldp x21, x22, [sp, #16]
+    ldp x23, x24, [sp, #32]
+    ldp x25, x26, [sp, #48]
+    ldp x27, x28, [sp, #64]
+    ldp x29, x30, [sp, #80]
+    ldp d8, d9, [sp, #96]
+    ldp d10, d11, [sp, #112]
+    ldp d12, d13, [sp, #128]
+    ldp d14, d15, [sp, #144]
+    add sp, sp, #192
+    ret
 "#
 );
 
 unsafe extern "C" {
     fn nk_context_switch(save: *mut u64, load: u64);
     fn nk_callee_saved_check(seed: u64, call: extern "C" fn()) -> u64;
+    fn nk_all_registers_check(seed: u64, looks: u64) -> u64;
 }
 
 /// Save this thread's state on its stack, store its stack pointer in
@@ -214,4 +683,13 @@ pub fn wait_for_interrupt() {
 pub fn callee_saved_survive(seed: u64, call: extern "C" fn()) -> bool {
     // SAFETY: the routine saves and restores everything it changes.
     unsafe { nk_callee_saved_check(seed, call) == 1 }
+}
+
+/// Fill every general and vector register with values made from `seed`
+/// and look at them `looks` times, calling nothing. Whether none
+/// changed. For the test that is interrupted and switched away from
+/// while this runs.
+pub fn all_registers_survive(seed: u64, looks: u64) -> bool {
+    // SAFETY: the routine saves and restores what a call must preserve.
+    unsafe { nk_all_registers_check(seed, looks) == 1 }
 }

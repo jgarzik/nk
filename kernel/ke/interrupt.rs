@@ -62,6 +62,16 @@ pub fn dispatch(vector: u32, level: u8, eoi: impl FnOnce()) {
     }
     arch::disable_interrupts();
     eoi();
+    // Back to the thread's own level: if a switch is wanted, this is the
+    // place. The controller has been told the interrupt is over, and the
+    // thread resumes here, inside the interrupt's frame on its own
+    // stack, when it next runs.
+    if old < irql::DISPATCH_LEVEL && super::thread::switch_wanted() {
+        arch::set_irql(irql::DISPATCH_LEVEL);
+        arch::enable_interrupts();
+        super::thread::preempt();
+        arch::disable_interrupts();
+    }
     arch::set_irql(old);
 }
 

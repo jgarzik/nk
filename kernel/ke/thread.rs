@@ -9,7 +9,16 @@
 //! Each processor has ready queues, one per priority, and an idle thread
 //! (the context the processor booted in) that runs when they are empty.
 //! A thread belongs to one processor's queues. A processor gives up a
-//! thread only at a call into the dispatcher: when it yields, or exits.
+//! thread when the thread yields or exits, when a thread of higher
+//! priority becomes ready there, or when the thread has run for its
+//! quantum and another of its priority is waiting.
+//!
+//! Preemption is asked for, not done on the spot: readying a thread or
+//! the clock tick marks the processor, and the switch happens at the end
+//! of the next interrupt that returns below `DISPATCH_LEVEL`
+//! (`interrupt::dispatch`). Marking the processor one is running on also
+//! requests the DISPATCH-level interrupt, so that end comes as soon as
+//! the IRQL allows.
 //!
 //! Switching, the rules (`doc/LOCKING.md`):
 //!
@@ -25,8 +34,8 @@
 use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
 use crate::mm::{self, stack::Stack};
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
-use nk_ke::{ListEntry, ReadyQueues};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues};
 use nk_ntabi::pcr::NATIVE as PCR;
 use nk_ntabi::thread as layout;
 
@@ -50,6 +59,8 @@ pub struct Thread {
     swap_busy: AtomicBool,
     /// A processor's idle thread: never queued.
     idle: bool,
+    /// Clock ticks left before threads of this priority get a turn.
+    quantum: AtomicU8,
 }
 
 const _: () = assert!(size_of::<Thread>() <= mm::PAGE_SIZE);
@@ -63,6 +74,8 @@ pub struct Dispatcher {
     previous: AtomicPtr<Thread>,
     /// Switches made here.
     switches: AtomicU64,
+    /// Something happened that may call for a different thread here.
+    switch_wanted: AtomicBool,
 }
 
 impl Dispatcher {
@@ -72,6 +85,7 @@ impl Dispatcher {
             idle: AtomicPtr::new(core::ptr::null_mut()),
             previous: AtomicPtr::new(core::ptr::null_mut()),
             switches: AtomicU64::new(0),
+            switch_wanted: AtomicBool::new(false),
         }
     }
 }
@@ -139,6 +153,7 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).entry).write(None);
         (&raw mut (*thread).swap_busy).write(AtomicBool::new(false));
         (&raw mut (*thread).idle).write(false);
+        (&raw mut (*thread).quantum).write(AtomicU8::new(QUANTUM_TICKS));
         field::<u8>(thread, 0).write(layout::THREAD_OBJECT);
         field::<u64>(thread, layout::INITIAL_STACK).write(stack.top);
         field::<u64>(thread, layout::STACK_BASE).write(stack.top);
@@ -217,11 +232,51 @@ unsafe fn make_ready(thread: *mut Thread) {
             ready.insert(link_of(thread), priority(thread), false);
         }
     }
-    if processor != pcr::current_processor() as usize {
-        // It may be idle, halted until an interrupt.
+    // The new thread may outrank what that processor is running. Have
+    // it look, at the end of an interrupt: its own DISPATCH-level one
+    // here, the interprocessor one there (which also wakes it if it is
+    // halted, idle).
+    dispatcher.switch_wanted.store(true, Ordering::Release);
+    if processor == pcr::current_processor() as usize {
+        arch::self_interrupt(arch::DPC.0);
+    } else {
         arch::ipi_send(processor);
     }
     arch::set_irql(old);
+}
+
+/// Whether this processor has been asked to reconsider what it runs.
+pub fn switch_wanted() -> bool {
+    arch::percpu()
+        .dispatcher()
+        .switch_wanted
+        .load(Ordering::Acquire)
+}
+
+/// Reconsider what this processor runs. Called at `DISPATCH_LEVEL`, from
+/// the end of an interrupt, with no lock held.
+pub fn preempt() {
+    arch::percpu()
+        .dispatcher()
+        .switch_wanted
+        .store(false, Ordering::Release);
+    dispatch(Leaving::Preempt);
+}
+
+/// Called from the clock tick: charge the running thread for the tick,
+/// and when its quantum is spent ask for a switch.
+pub fn tick() {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    let quantum = unsafe { &(*me).quantum };
+    let left = quantum.load(Ordering::Relaxed).saturating_sub(1);
+    quantum.store(left, Ordering::Relaxed);
+    if left == 0 {
+        arch::percpu()
+            .dispatcher()
+            .switch_wanted
+            .store(true, Ordering::Release);
+    }
 }
 
 /// Why the running thread is calling the dispatcher.
@@ -231,6 +286,9 @@ enum Leaving {
     Yield,
     /// It has finished.
     Exit,
+    /// It was interrupted: a thread of higher priority goes first, and
+    /// if its quantum is spent so do its equals.
+    Preempt,
 }
 
 /// Pick the next thread for this processor and switch to it. Called at
@@ -243,12 +301,22 @@ fn dispatch(leaving: Leaving) {
     let (idle_thread, my_priority) = unsafe { ((*me).idle, priority(me)) };
     let next = {
         let mut ready = dispatcher.ready.lock();
-        // The idle thread gives way to anything; a thread that yields,
-        // to its equals and betters.
+        // SAFETY: `me` is the running thread.
+        let quantum = unsafe { &(*me).quantum };
+        let spent = quantum.load(Ordering::Relaxed) == 0;
+        // The idle thread gives way to anything; a thread that yields or
+        // has had its quantum, to its equals and betters; one that was
+        // merely interrupted, to its betters only.
         let floor = match leaving {
-            Leaving::Yield if !idle_thread => my_priority,
-            _ => 0,
+            Leaving::Exit => 0,
+            _ if idle_thread => 0,
+            Leaving::Preempt if !spent => my_priority + 1,
+            _ => my_priority,
         };
+        if spent || leaving == Leaving::Yield {
+            // Whether or not anyone is waiting, a new turn begins.
+            quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
+        }
         // SAFETY: queued threads are live.
         let next = match unsafe { ready.take(floor) } {
             Some((link, _)) => thread_of(link),
@@ -261,10 +329,13 @@ fn dispatch(leaving: Leaving) {
             (*me).swap_busy.store(true, Ordering::Release);
             match leaving {
                 Leaving::Exit => set_state(me, layout::state::TERMINATED),
-                Leaving::Yield if idle_thread => set_state(me, layout::state::READY),
-                Leaving::Yield => {
+                _ if idle_thread => set_state(me, layout::state::READY),
+                _ => {
                     set_state(me, layout::state::READY);
-                    ready.insert(link_of(me), my_priority, false);
+                    // Pushed aside before its turn was over, it is next
+                    // among its equals; otherwise it goes to the back.
+                    let front = leaving == Leaving::Preempt && !spent;
+                    ready.insert(link_of(me), my_priority, front);
                 }
             }
         }
@@ -552,4 +623,115 @@ pub fn registers_test() -> Result<u32, &'static str> {
         return Err("a register a call preserves changed across a thread switch");
     }
     Ok(150)
+}
+
+/// A thread of higher priority runs the moment it is made ready, before
+/// its creator's next step; one of lower priority does not.
+pub fn preempt_test() -> Result<(), &'static str> {
+    fn body(tag: usize) {
+        note(tag as u64);
+    }
+    let before = count();
+    TRACE.store(0, Ordering::Relaxed);
+    let me = pcr::current_processor() as usize;
+    create(body, 1, NORMAL_PRIORITY - 1, me)?;
+    let after_lower = TRACE.load(Ordering::Acquire);
+    create(body, 2, NORMAL_PRIORITY + 1, me)?;
+    let after_higher = TRACE.load(Ordering::Acquire);
+    // SAFETY: the lower thread is still on this processor's queue.
+    let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
+    if !moved || !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if after_lower != 0 {
+        return Err("a thread of lower priority ran ahead of its creator");
+    }
+    if after_higher != 0x2 {
+        return Err("a thread of higher priority did not run as soon as it was ready");
+    }
+    Ok(())
+}
+
+static STOP: AtomicBool = AtomicBool::new(false);
+static SPINS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+
+/// Threads of one priority that never give up the processor still share
+/// it: the clock takes it from each in turn. Returns the switches made.
+pub fn quantum_test() -> Result<u64, &'static str> {
+    fn body(which: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            SPINS[which].fetch_add(1, Ordering::Relaxed);
+            core::hint::spin_loop();
+        }
+    }
+    let before = count();
+    let dispatcher = arch::percpu().dispatcher();
+    STOP.store(false, Ordering::Release);
+    for spins in &SPINS {
+        spins.store(0, Ordering::Relaxed);
+    }
+    let me = pcr::current_processor() as usize;
+    for which in 0..3 {
+        create(body, which, NORMAL_PRIORITY, me)?;
+    }
+    let switches = dispatcher.switches.load(Ordering::Relaxed);
+    // This thread spins too, as the fourth: about half a second each.
+    super::time::stall(2_000_000);
+    STOP.store(true, Ordering::Release);
+    let switches = dispatcher.switches.load(Ordering::Relaxed) - switches;
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    let spins = SPINS.each_ref().map(|s| s.load(Ordering::Relaxed));
+    let (least, most) = (
+        spins.iter().min().unwrap_or(&0),
+        spins.iter().max().unwrap_or(&0),
+    );
+    if *least == 0 {
+        return Err("a thread that never yields starved its equals");
+    }
+    if *most > 10 * *least {
+        return Err("equal threads' shares of the processor differ more than tenfold");
+    }
+    // Two seconds of two-tick turns is about 64 switches.
+    if switches < 16 {
+        return Err("the processor hardly changed hands");
+    }
+    Ok(switches)
+}
+
+/// Every register, vector ones included, survives being interrupted and
+/// switched away from: threads that never call anything hold values in
+/// all of them while the clock moves the processor between them.
+/// Returns the checks made.
+pub fn preempt_registers_test() -> Result<u64, &'static str> {
+    fn body(seed: usize) {
+        let until = super::time::interrupt_time() + 2_500_000;
+        while super::time::interrupt_time() < until {
+            if !arch::all_registers_survive(seed as u64 * 0x1_0000, 2000) {
+                WRONG.fetch_add(1, Ordering::Relaxed);
+            }
+            SPINS[seed - 1].fetch_add(2000, Ordering::Relaxed);
+        }
+    }
+    let before = count();
+    WRONG.store(0, Ordering::Relaxed);
+    for spins in &SPINS {
+        spins.store(0, Ordering::Relaxed);
+    }
+    let me = pcr::current_processor() as usize;
+    for seed in 1..=3 {
+        create(body, seed, NORMAL_PRIORITY, me)?;
+    }
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a register changed under a thread that was preempted");
+    }
+    let checks: u64 = SPINS.iter().map(|s| s.load(Ordering::Relaxed)).sum();
+    if SPINS.iter().any(|s| s.load(Ordering::Relaxed) == 0) {
+        return Err("a thread made no checks");
+    }
+    Ok(checks)
 }

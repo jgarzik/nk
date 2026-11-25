@@ -191,10 +191,22 @@ ready queue per priority (0 to 31) with a summary word, and an idle
 thread. A thread belongs to the queues of one processor, chosen when it
 is created.
 
-A processor leaves a thread only when the thread calls the dispatcher:
-to yield, which gives way to ready threads of its own priority or
-higher, or to exit. There is no preemption and no blocking yet. The
-switch keeps what a call preserves on the outgoing thread's stack
+A processor leaves a thread when the thread yields (giving way to ready
+threads of its own priority or higher) or exits; when a thread of higher
+priority becomes ready on that processor; or when the thread has run for
+its quantum, two clock ticks as on Windows client systems, and another
+of its priority is waiting. A thread pushed aside by a higher priority
+goes to the front of its queue; one whose quantum is spent, to the back.
+There are no priority boosts.
+
+Preemption is requested, then done at the end of an interrupt: readying
+a thread, or the clock tick, marks the processor, and the switch happens
+when an interrupt handler is about to return below `DISPATCH_LEVEL`,
+after the interrupt controller has been told the interrupt is over.
+Marking the processor one is on also raises the DISPATCH-level
+interrupt, so that moment comes as soon as the IRQL allows, however it
+was lowered. The preempted thread resumes inside that interrupt's frame
+on its own stack. There is no blocking yet. The switch keeps what a call preserves on the outgoing thread's stack
 (vector registers included: xmm6-15 and MXCSR, or d8-d15 and FPCR) and
 the stack pointer in the thread's `KernelStack`. An exited thread is
 freed by the thread that runs next.

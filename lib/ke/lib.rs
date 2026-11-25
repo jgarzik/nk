@@ -381,6 +381,10 @@ impl ReadyQueues {
     }
 }
 
+/// How many clock ticks a thread runs before threads of its own priority
+/// get a turn: two, as on Windows client systems.
+pub const QUANTUM_TICKS: u8 = 2;
+
 /// How many buckets a timer table has, as on Windows.
 pub const TIMER_BUCKETS: usize = 256;
 

@@ -11,12 +11,20 @@ pub static GROUP: Group = Group {
         "thread.priority",
         "thread.other-cpu",
         "thread.registers",
+        "thread.preempt",
+        "thread.quantum",
+        "thread.preempt-registers",
     ],
     run,
     manual: false,
 };
 
-fn counted(r: &mut Report, name: &str, what: &str, result: Result<u32, &'static str>) {
+fn counted<N: core::fmt::Display>(
+    r: &mut Report,
+    name: &str,
+    what: &str,
+    result: Result<N, &'static str>,
+) {
     match result {
         Ok(n) => r.ok_with(name, format_args!("{what} {n}")),
         Err(why) => r.fail(name, format_args!("{why}")),
@@ -43,5 +51,18 @@ fn run(r: &mut Report, _: &BootInfo) {
         "thread.registers",
         "switches checked:",
         thread::registers_test(),
+    );
+    r.check("thread.preempt", thread::preempt_test);
+    counted(
+        r,
+        "thread.quantum",
+        "switches in 2 s:",
+        thread::quantum_test(),
+    );
+    counted(
+        r,
+        "thread.preempt-registers",
+        "register checks under preemption:",
+        thread::preempt_registers_test(),
     );
 }

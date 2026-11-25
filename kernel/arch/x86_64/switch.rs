@@ -207,6 +207,280 @@ nk_callee_saved_check:
     pop rbp
     pop rbx
     ret
+
+    .globl nk_all_registers_check
+// rcx: a seed. rdx: how many times to look. Fills every general and
+// vector register with values made from the seed and checks them over
+// and over without calling anything. Returns 1 in eax if none changed.
+nk_all_registers_check:
+    push rbp
+    push rbx
+    push rdi
+    push rsi
+    push r12
+    push r13
+    push r14
+    push r15
+    sub rsp, 0xC8
+    movaps [rsp + 0x20], xmm6
+    movaps [rsp + 0x30], xmm7
+    movaps [rsp + 0x40], xmm8
+    movaps [rsp + 0x50], xmm9
+    movaps [rsp + 0x60], xmm10
+    movaps [rsp + 0x70], xmm11
+    movaps [rsp + 0x80], xmm12
+    movaps [rsp + 0x90], xmm13
+    movaps [rsp + 0xa0], xmm14
+    movaps [rsp + 0xb0], xmm15
+    mov [rsp + 0xC0], rcx
+    mov [rsp], rdx
+    lea rax, [rcx + 100]
+    movq xmm0, rax
+    lea rax, [rcx + 101]
+    movq xmm1, rax
+    lea rax, [rcx + 102]
+    movq xmm2, rax
+    lea rax, [rcx + 103]
+    movq xmm3, rax
+    lea rax, [rcx + 104]
+    movq xmm4, rax
+    lea rax, [rcx + 105]
+    movq xmm5, rax
+    lea rax, [rcx + 106]
+    movq xmm6, rax
+    lea rax, [rcx + 107]
+    movq xmm7, rax
+    lea rax, [rcx + 108]
+    movq xmm8, rax
+    lea rax, [rcx + 109]
+    movq xmm9, rax
+    lea rax, [rcx + 110]
+    movq xmm10, rax
+    lea rax, [rcx + 111]
+    movq xmm11, rax
+    lea rax, [rcx + 112]
+    movq xmm12, rax
+    lea rax, [rcx + 113]
+    movq xmm13, rax
+    lea rax, [rcx + 114]
+    movq xmm14, rax
+    lea rax, [rcx + 115]
+    movq xmm15, rax
+    lea rax, [rcx + 0]
+    lea rbx, [rcx + 1]
+    lea rdx, [rcx + 3]
+    lea rsi, [rcx + 4]
+    lea rdi, [rcx + 5]
+    lea rbp, [rcx + 6]
+    lea r8, [rcx + 7]
+    lea r9, [rcx + 8]
+    lea r10, [rcx + 9]
+    lea r11, [rcx + 10]
+    lea r12, [rcx + 11]
+    lea r13, [rcx + 12]
+    lea r14, [rcx + 13]
+    lea r15, [rcx + 14]
+    lea rcx, [rcx + 2]
+3:
+    sub rax, [rsp + 0xC0]
+    cmp rax, 0
+    jne 2f
+    add rax, [rsp + 0xC0]
+    sub rbx, [rsp + 0xC0]
+    cmp rbx, 1
+    jne 2f
+    add rbx, [rsp + 0xC0]
+    sub rcx, [rsp + 0xC0]
+    cmp rcx, 2
+    jne 2f
+    add rcx, [rsp + 0xC0]
+    sub rdx, [rsp + 0xC0]
+    cmp rdx, 3
+    jne 2f
+    add rdx, [rsp + 0xC0]
+    sub rsi, [rsp + 0xC0]
+    cmp rsi, 4
+    jne 2f
+    add rsi, [rsp + 0xC0]
+    sub rdi, [rsp + 0xC0]
+    cmp rdi, 5
+    jne 2f
+    add rdi, [rsp + 0xC0]
+    sub rbp, [rsp + 0xC0]
+    cmp rbp, 6
+    jne 2f
+    add rbp, [rsp + 0xC0]
+    sub r8, [rsp + 0xC0]
+    cmp r8, 7
+    jne 2f
+    add r8, [rsp + 0xC0]
+    sub r9, [rsp + 0xC0]
+    cmp r9, 8
+    jne 2f
+    add r9, [rsp + 0xC0]
+    sub r10, [rsp + 0xC0]
+    cmp r10, 9
+    jne 2f
+    add r10, [rsp + 0xC0]
+    sub r11, [rsp + 0xC0]
+    cmp r11, 10
+    jne 2f
+    add r11, [rsp + 0xC0]
+    sub r12, [rsp + 0xC0]
+    cmp r12, 11
+    jne 2f
+    add r12, [rsp + 0xC0]
+    sub r13, [rsp + 0xC0]
+    cmp r13, 12
+    jne 2f
+    add r13, [rsp + 0xC0]
+    sub r14, [rsp + 0xC0]
+    cmp r14, 13
+    jne 2f
+    add r14, [rsp + 0xC0]
+    sub r15, [rsp + 0xC0]
+    cmp r15, 14
+    jne 2f
+    add r15, [rsp + 0xC0]
+    movq [rsp + 0x08], xmm0
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 100
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm1
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 101
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm2
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 102
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm3
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 103
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm4
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 104
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm5
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 105
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm6
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 106
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm7
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 107
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm8
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 108
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm9
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 109
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm10
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 110
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm11
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 111
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm12
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 112
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm13
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 113
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm14
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 114
+    pop rax
+    jne 2f
+    movq [rsp + 0x08], xmm15
+    push rax
+    mov rax, [rsp + 0x10]
+    sub rax, [rsp + 0xC8]
+    cmp rax, 115
+    pop rax
+    jne 2f
+    sub qword ptr [rsp], 1
+    jnz 3b
+    mov eax, 1
+    jmp 4f
+2:
+    xor eax, eax
+4:
+    movaps xmm6, [rsp + 0x20]
+    movaps xmm7, [rsp + 0x30]
+    movaps xmm8, [rsp + 0x40]
+    movaps xmm9, [rsp + 0x50]
+    movaps xmm10, [rsp + 0x60]
+    movaps xmm11, [rsp + 0x70]
+    movaps xmm12, [rsp + 0x80]
+    movaps xmm13, [rsp + 0x90]
+    movaps xmm14, [rsp + 0xa0]
+    movaps xmm15, [rsp + 0xb0]
+    add rsp, 0xC8
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rsi
+    pop rdi
+    pop rbx
+    pop rbp
+    ret
 "#
 );
 
@@ -214,6 +488,7 @@ unsafe extern "C" {
     fn nk_context_switch(save: *mut u64, load: u64);
     fn nk_thread_start();
     fn nk_callee_saved_check(seed: u64, call: extern "C" fn()) -> u32;
+    fn nk_all_registers_check(seed: u64, looks: u64) -> u32;
 }
 
 /// Save this thread's state on its stack, store its stack pointer in
@@ -266,4 +541,13 @@ pub fn wait_for_interrupt() {
 pub fn callee_saved_survive(seed: u64, call: extern "C" fn()) -> bool {
     // SAFETY: the routine saves and restores everything it changes.
     unsafe { nk_callee_saved_check(seed, call) == 1 }
+}
+
+/// Fill every general and vector register with values made from `seed`
+/// and look at them `looks` times, calling nothing. Whether none
+/// changed. For the test that is interrupted and switched away from
+/// while this runs.
+pub fn all_registers_survive(seed: u64, looks: u64) -> bool {
+    // SAFETY: the routine saves and restores what a call must preserve.
+    unsafe { nk_all_registers_check(seed, looks) == 1 }
 }

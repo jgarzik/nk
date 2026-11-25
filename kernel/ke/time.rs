@@ -93,6 +93,7 @@ fn tick(_: u32) {
     arch::percpu().tick();
     super::dpc::watchdog();
     super::timer::tick(interrupt_time());
+    super::thread::tick();
     // Every processor takes the tick; one of them keeps the time.
     if super::pcr::current_processor() == 0 {
         update();

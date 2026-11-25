@@ -15,7 +15,9 @@ pub use apic::{
 
 pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql, set_kernel_stack};
 pub use smp::{finish as smp_finish, prepare as smp_prepare};
-pub use switch::{callee_saved_survive, context_switch, new_context, wait_for_interrupt};
+pub use switch::{
+    all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
+};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use nk_bootinfo::{BootInfo, Serial};

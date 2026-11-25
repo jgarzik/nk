@@ -138,6 +138,11 @@ rules stand in for the lock:
   of the one before it, or frees it if it exited. A thread never frees
   its own stack.
 
+A thread at `DISPATCH_LEVEL` or above is never switched away from:
+preemption happens only at the end of an interrupt that returns below
+`DISPATCH_LEVEL`. So a held spin lock, which raises the IRQL, also pins
+the thread to its processor.
+
 The IRQL belongs to the processor, not the thread. Every switch happens
 at `DISPATCH_LEVEL`, and each thread lowers it again on its own way out
 of the dispatcher.
