@@ -2,10 +2,10 @@
 //! `io::service` decides which image and when; nothing else loads a
 //! driver.
 
-use super::{TAG_DRIVER, irp};
+use super::irp;
 use crate::ke::{Rank, SpinLock, irql};
 use crate::ldr::{self, Image, LoadError};
-use crate::mm::pool;
+use crate::ob;
 use alloc::vec::Vec;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -29,6 +29,8 @@ static DRIVERS: SpinLock<Vec<Record>> = SpinLock::new(Rank::Drivers, Vec::new())
 pub enum DriverError {
     Load(LoadError),
     NoMemory,
+    /// The driver object could not be named `\Driver\<service>`.
+    Name(NTSTATUS),
     /// The driver's own entry point refused to initialise.
     EntryFailed(NTSTATUS),
 }
@@ -73,13 +75,26 @@ pub(super) fn load(
 ) -> Result<*mut DRIVER_OBJECT, DriverError> {
     irql::expect_passive("loading a driver");
     let image = ldr::load(file_name, file).map_err(DriverError::Load)?;
+    let mut driver_name = wide("\\Driver\\", name);
+    // The driver object is an object called `\Driver\<service>`, with
+    // its extension behind it.
     let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
-    let object = pool::alloc_zeroed(size, TAG_DRIVER).cast::<DRIVER_OBJECT>();
-    if object.is_null() {
+    let path = &driver_name[..driver_name.len() - 1];
+    let Some(body) = ob::object::create_named(&ob::object::DRIVER_TYPE, size, ob::leaf(path))
+    else {
         ldr::unload(&image);
         return Err(DriverError::NoMemory);
+    };
+    let object = body.cast::<DRIVER_OBJECT>();
+    // SAFETY: a named object made above; `free` takes the name away
+    // before it gives up the reference.
+    let named = unsafe { ob::insert(path, body) };
+    if !nt_success(named) {
+        // SAFETY: the creating reference of an object nothing else has.
+        unsafe { ob::object::dereference(body) };
+        ldr::unload(&image);
+        return Err(DriverError::Name(named));
     }
-    let mut driver_name = wide("\\Driver\\", name);
     let mut registry_path = wide(
         "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\",
         name,
@@ -131,10 +146,14 @@ pub(super) fn load(
 }
 
 fn free(object: *mut DRIVER_OBJECT, image: &Image) {
-    // SAFETY: `object` is a driver object this module allocated; clearing
-    // Type makes a stale pointer recognisable.
-    unsafe { (*object).Type = 0 };
-    let _ = pool::free(object.cast());
+    // SAFETY: `object` is a driver object this module made and named;
+    // clearing Type makes a stale pointer recognisable. The name goes
+    // before the reference the object was made with.
+    unsafe {
+        ob::remove(object.cast());
+        (*object).Type = 0;
+        ob::object::dereference(object.cast());
+    }
     ldr::unload(image);
 }
 

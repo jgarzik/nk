@@ -1,4 +1,6 @@
 //! Symbolic links to devices: `IoCreateSymbolicLink`, `IoDeleteSymbolicLink`.
+//! A link is a symbolic-link object in the directory its name puts it
+//! in (`ob`).
 
 #![allow(non_snake_case)]
 
@@ -20,7 +22,7 @@ pub unsafe extern "C" fn IoCreateSymbolicLink(
     if !nk_rtl::is_valid_object_name(&target) {
         return STATUS_OBJECT_NAME_INVALID;
     }
-    ob::insert(&link, ob::Target::SymbolicLink(target))
+    ob::insert_link(&link, &target)
 }
 
 /// `IoDeleteSymbolicLink`.

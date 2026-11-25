@@ -16,7 +16,6 @@ pub mod service;
 pub mod symlink;
 
 /// Pool tags, as Windows spells its own.
-pub const TAG_DRIVER: u32 = u32::from_le_bytes(*b"Driv");
 pub const TAG_FILE: u32 = u32::from_le_bytes(*b"File");
 pub const TAG_IRP: u32 = u32::from_le_bytes(*b"Irp ");
 /// Buffers the I/O manager allocates for buffered requests.

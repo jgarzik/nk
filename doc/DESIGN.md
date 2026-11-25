@@ -352,9 +352,36 @@ does, by the index combined with a cookie chosen at boot and a byte of
 the header's address (`nk_ob::header`). The fields of a type NK does not
 keep (its counts, its lists) are zero.
 
-The namespace is a flat, case-insensitive table of device names and
-symbolic links, with `\DosDevices`, `\??` and `\GLOBAL??` as one
-directory. No directories, no opening by handle, no security checks.
+### The namespace
+
+A tree of directories holding named objects and symbolic links
+(`nk_ob::tree`, under one lock; `kernel/ob/mod.rs`). The root and the
+directories every Windows system has (`\Device`, `\Driver`,
+`\FileSystem`, `\GLOBAL??`, `\BaseNamedObjects`, `\KernelObjects`) are
+directory objects made at boot; nothing else makes or removes one. `\??`
+is `\GLOBAL??`, there being one session, and `\DosDevices` is a symbolic
+link to `\??`. A named device is an entry in the directory its name puts
+it in, a symbolic link is a symbolic-link object there, and a loaded
+driver's object is `\Driver\<service>`.
+
+Names compare case-insensitively whatever the caller asks, which is
+Windows' default configuration. A look-up follows symbolic links, at
+most eight, and stops at the first object on the path, handing back the
+object, referenced, and the rest of the path. A directory missing on the
+way is `STATUS_OBJECT_PATH_NOT_FOUND`; a missing last name is
+`STATUS_OBJECT_NAME_NOT_FOUND`.
+
+An entry does not keep its object alive (a symbolic link's excepted,
+which nothing else holds): whoever names an object takes the name away
+before giving up the reference the object was made with.
+
+A named object carries Windows' `OBJECT_HEADER_NAME_INFO` in front of
+its header, as the header's `InfoMask` says: its directory and its name
+there, both emptied when the object loses its name. Name information,
+header, body and the name's characters are one pool block. Directory and
+symbolic-link bodies have Windows' sizes: a link's holds its target and
+creation time; a directory's is zero, the entries being in NK's tree. No
+opening by handle, no security checks.
 
 ## The kernel is a PE image
 
@@ -427,8 +454,9 @@ driver's unload routine and frees its image; the key stays.
 
 ## I/O
 
-Driver, device and file objects and IRPs are pool allocations of exactly
-their Windows size, reached by raw pointer. An IRP's allocation ends, past
+Driver, device and file objects and IRPs are allocations of exactly
+their Windows size, reached by raw pointer; driver and device objects
+are object-manager objects. An IRP's allocation ends, past
 its stack locations, with one word of NK's: the room in the requestor's
 buffer. A device object is followed by the driver's extension, then a
 private NK block. A device is an object-manager object; its own

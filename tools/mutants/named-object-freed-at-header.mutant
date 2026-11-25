@@ -1,0 +1,9 @@
+# Freeing an object takes its pool block to begin at its header, though
+# a named object's begins at the name information in front: the pool
+# refuses the address, and the first named object freed stops the
+# system.
+scenario: x86_64
+fails: scenario
+file: kernel/ob/object.rs
+replace:     if info.is_null() {
+with:     if true {

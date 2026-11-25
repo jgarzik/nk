@@ -320,6 +320,51 @@ fn object_header_matches_the_kernel() {
         offset_of!(OBJECT_HEADER, SecurityDescriptor),
         field("SecurityDescriptor")
     );
+    assert_eq!(offset_of!(OBJECT_HEADER, InfoMask), field("InfoMask"));
+}
+
+#[test]
+fn named_objects_match_the_kernel() {
+    use crate::ob::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let info = types
+        .layout("_OBJECT_HEADER_NAME_INFO")
+        .expect("_OBJECT_HEADER_NAME_INFO");
+    let field = |name| offset(&info, "_OBJECT_HEADER_NAME_INFO", name);
+    assert_eq!(size_of::<OBJECT_HEADER_NAME_INFO>(), info.size as usize);
+    assert_eq!(
+        offset_of!(OBJECT_HEADER_NAME_INFO, Directory),
+        field("Directory")
+    );
+    assert_eq!(offset_of!(OBJECT_HEADER_NAME_INFO, Name), field("Name"));
+    assert_eq!(
+        offset_of!(OBJECT_HEADER_NAME_INFO, ReferenceCount),
+        field("ReferenceCount")
+    );
+
+    let directory = types
+        .layout("_OBJECT_DIRECTORY")
+        .expect("_OBJECT_DIRECTORY");
+    assert_eq!(OBJECT_DIRECTORY_SIZE, directory.size as usize);
+
+    let link = types
+        .layout("_OBJECT_SYMBOLIC_LINK")
+        .expect("_OBJECT_SYMBOLIC_LINK");
+    let field = |name| offset(&link, "_OBJECT_SYMBOLIC_LINK", name);
+    assert_eq!(size_of::<OBJECT_SYMBOLIC_LINK>(), link.size as usize);
+    macro_rules! same {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(OBJECT_SYMBOLIC_LINK, $name), field(stringify!($name)));
+        )*};
+    }
+    same!(
+        CreationTime,
+        LinkTarget,
+        DosDeviceDriveIndex,
+        Flags,
+        AccessMask
+    );
 }
 
 #[test]

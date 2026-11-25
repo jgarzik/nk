@@ -60,7 +60,7 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
-| 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
+| 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
@@ -80,10 +80,15 @@ Why this order:
   under the I/O database lock, so "the last reference went" and "the
   device was deleted" are seen together by whichever comes second. That
   one frees the device, after dropping the lock.
-- A device found by name is given a pointer reference under the
-  namespace lock, which a device loses its names under before it gives
-  up its own; the database lock is taken only after the namespace lock
-  is dropped, to count the open or refuse it.
+- The namespace is one lock: every directory, every entry. An object
+  found by name is given a pointer reference under it, and whoever named
+  an object takes the name away under it before giving up the reference
+  the object was made with; so a name leads to a live object. A look-up
+  returns with the lock dropped and that reference held: whatever is
+  done with the object (counting an open under the database lock,
+  calling a driver) happens outside it.
+- No object's last reference is dropped under the namespace lock: a
+  removed symbolic link's object is released after it.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The

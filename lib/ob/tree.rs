@@ -2,8 +2,9 @@
 //! resolves a path in it.
 //!
 //! A directory holds named entries; an entry is another directory, a
-//! symbolic link (a target path) or an object the kernel supplies and
-//! this module never looks inside. The kernel wraps the tree in a lock,
+//! symbolic link (a target path, with the kernel's object for the link)
+//! or an object. Objects are the kernel's, and this module never looks
+//! inside one. The kernel wraps the tree in a lock,
 //! does the reference counting and owns everything a type decides:
 //! [`Tree::lookup`] stops at the first object on the path and hands
 //! back the rest of the path for that object's parse procedure.
@@ -146,8 +147,8 @@ impl Options {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Found<'a, T> {
     Directory(DirId),
-    /// A symbolic link, with its target.
-    SymbolicLink(&'a [u16]),
+    /// A symbolic link: its target, and the kernel's object for it.
+    SymbolicLink(&'a [u16], &'a T),
     Object(&'a T),
 }
 
@@ -164,8 +165,8 @@ pub struct Outcome<'a, T> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Removed<T> {
     Directory,
-    /// A symbolic link, with its target.
-    SymbolicLink(Vec<u16>),
+    /// A symbolic link: its target, and the kernel's object for it.
+    SymbolicLink(Vec<u16>, T),
     Object(T),
 }
 
@@ -192,7 +193,7 @@ impl Counts {
 #[derive(Debug)]
 enum Node<T> {
     Directory(DirId),
-    SymbolicLink(Vec<u16>),
+    SymbolicLink(Vec<u16>, T),
     Object(T),
 }
 
@@ -254,13 +255,15 @@ fn find<T>(entries: &[Entry<T>], name: &[u16], case_insensitive: bool) -> Option
 fn shown<T>(node: &Node<T>) -> Found<'_, T> {
     match node {
         Node::Directory(dir) => Found::Directory(*dir),
-        Node::SymbolicLink(target) => Found::SymbolicLink(target),
+        Node::SymbolicLink(target, object) => Found::SymbolicLink(target, object),
         Node::Object(object) => Found::Object(object),
     }
 }
 
 /// The object namespace: a root directory and what is below it. See the
-/// module for the rules. An empty tree holds no memory.
+/// module for the rules. An empty tree holds no memory, and a tree
+/// reserves none ahead: what it holds depends on its entries alone, so
+/// an entry added and removed leaves the memory in use as it was.
 #[derive(Debug)]
 pub struct Tree<T> {
     root: Vec<Entry<T>>,
@@ -375,7 +378,7 @@ impl<T> Tree<T> {
                     dir = *below;
                     at = end;
                 }
-                Node::SymbolicLink(target) if !last || follow_last => {
+                Node::SymbolicLink(target, _) if !last || follow_last => {
                     let mut to = copy(target)?;
                     to.try_reserve_exact(path.len() - end)
                         .map_err(|_| Error::NoMemory)?;
@@ -459,7 +462,7 @@ impl<T> Tree<T> {
             Stop::Missing { dir, begin, end } => {
                 let name = copy(&path[begin..end])?;
                 let entries = self.entries_of_mut(dir).ok_or(Error::PathNotFound)?;
-                entries.try_reserve(1).map_err(|_| Error::NoMemory)?;
+                entries.try_reserve_exact(1).map_err(|_| Error::NoMemory)?;
                 Ok((dir, name))
             }
             Stop::Entry { rest, .. } if rest != path.len() => Err(Error::TypeMismatch),
@@ -487,7 +490,7 @@ impl<T> Tree<T> {
             Some(free) => free,
             None => {
                 self.directories
-                    .try_reserve(1)
+                    .try_reserve_exact(1)
                     .map_err(|_| Error::NoMemory)?;
                 self.directories.push(None);
                 self.directories.len() - 1
@@ -504,32 +507,36 @@ impl<T> Tree<T> {
         Ok(dir)
     }
 
-    /// Add a symbolic link called `path` that leads to `target`. The
-    /// target is not looked at until the link is followed.
+    /// Add a symbolic link called `path` that leads to `target`, and
+    /// say which directory it went into. The target is not looked at
+    /// until the link is followed; `object` is the kernel's object for
+    /// the link, handed back when the link is found or removed.
     pub fn insert_link(
         &mut self,
         start: Option<DirId>,
         path: &[u16],
         options: Options,
         target: &[u16],
-    ) -> Result<(), Error> {
+        object: T,
+    ) -> Result<DirId, Error> {
         let target = copy(target)?;
         let (parent, name) = self.place(start, path, options)?;
-        self.add(parent, name, Node::SymbolicLink(target));
-        Ok(())
+        self.add(parent, name, Node::SymbolicLink(target, object));
+        Ok(parent)
     }
 
-    /// Give `object` the name `path`.
+    /// Give `object` the name `path`, and say which directory the name
+    /// went into.
     pub fn insert_object(
         &mut self,
         start: Option<DirId>,
         path: &[u16],
         options: Options,
         object: T,
-    ) -> Result<(), Error> {
+    ) -> Result<DirId, Error> {
         let (parent, name) = self.place(start, path, options)?;
         self.add(parent, name, Node::Object(object));
-        Ok(())
+        Ok(parent)
     }
 
     /// Forget directory `dir`, and give back the memory of the table's
@@ -571,7 +578,7 @@ impl<T> Tree<T> {
         entries.shrink_to_fit();
         Ok(match entry.node {
             Node::Directory(_) => Removed::Directory,
-            Node::SymbolicLink(target) => Removed::SymbolicLink(target),
+            Node::SymbolicLink(target, object) => Removed::SymbolicLink(target, object),
             Node::Object(object) => Removed::Object(object),
         })
     }
@@ -608,7 +615,7 @@ impl<T> Tree<T> {
         for entry in core::iter::once(&self.root).chain(below).flatten() {
             match entry.node {
                 Node::Directory(_) => counts.directories += 1,
-                Node::SymbolicLink(_) => counts.symbolic_links += 1,
+                Node::SymbolicLink(..) => counts.symbolic_links += 1,
                 Node::Object(_) => counts.objects += 1,
             }
         }
@@ -628,6 +635,9 @@ mod tests {
     use super::*;
 
     type Shown = Result<(String, String), Error>;
+
+    /// The object of every link the tests make, unless they say.
+    const LINK: u32 = 1000;
 
     const ANY_CASE: Options = Options::new(true);
     const EXACT: Options = Options::new(false);
@@ -673,7 +683,7 @@ mod tests {
         outcome.map(|o| {
             let found = match o.found {
                 Found::Directory(dir) => format!("dir:{}", dir_name(tree, dir)),
-                Found::SymbolicLink(target) => format!("link:{}", s(target)),
+                Found::SymbolicLink(target, _) => format!("link:{}", s(target)),
                 Found::Object(object) => format!("obj:{object}"),
             };
             (found, s(&o.remainder))
@@ -697,7 +707,7 @@ mod tests {
     }
 
     fn link(tree: &mut Tree<u32>, path: &str, target: &str) {
-        tree.insert_link(None, &w(path), EXACT, &w(target))
+        tree.insert_link(None, &w(path), EXACT, &w(target), LINK)
             .expect(path);
     }
 
@@ -866,7 +876,7 @@ mod tests {
         ];
         check(&tree, options, &cases);
         // New names go there too.
-        assert_eq!(tree.insert_object(None, &w("\\??\\X"), options, 10), Ok(()));
+        assert!(tree.insert_object(None, &w("\\??\\X"), options, 10).is_ok());
         check(&tree, ANY_CASE, &[("\\Local\\X", ok("obj:10", ""))]);
         // Once the directory is gone, `??` is a name like any other.
         for name in ["\\Local\\NUL", "\\Local\\X", "\\Local"] {
@@ -949,7 +959,7 @@ mod tests {
             tree.insert_object(None, &at, ANY_CASE, 5),
             Err(Error::Collision)
         );
-        assert_eq!(tree.insert_object(None, &at, EXACT, 5), Ok(()));
+        assert!(tree.insert_object(None, &at, EXACT, 5).is_ok());
         check(&tree, EXACT, &[("\\Device\\NULL", ok("obj:5", ""))]);
         check(&tree, EXACT, &[("\\Device\\Null", ok("obj:1", ""))]);
         // Ignoring case, the older name is the one found.
@@ -1002,7 +1012,7 @@ mod tests {
             assert_eq!(look_from(&tree, start, path), expected, "{path:?}");
         }
         // New entries and removals take a starting directory too.
-        assert_eq!(tree.insert_object(Some(sub), &w("New"), EXACT, 12), Ok(()));
+        assert_eq!(tree.insert_object(Some(sub), &w("New"), EXACT, 12), Ok(sub));
         check(&tree, EXACT, &[("\\Device\\Sub\\New", ok("obj:12", ""))]);
         assert_eq!(
             tree.remove(Some(device), &w("Sub\\New"), EXACT),
@@ -1070,7 +1080,7 @@ mod tests {
         check(&tree, THE_LINK, &[("\\Self", ok("link:\\Self", ""))]);
         assert_eq!(
             tree.remove(None, &w("\\Self"), EXACT),
-            Ok(Removed::SymbolicLink(w("\\Self")))
+            Ok(Removed::SymbolicLink(w("\\Self"), LINK))
         );
     }
 
@@ -1113,7 +1123,7 @@ mod tests {
                 "{path:?}"
             );
             assert_eq!(
-                tree.insert_link(None, &at, ANY_CASE, &w("\\X")),
+                tree.insert_link(None, &at, ANY_CASE, &w("\\X"), LINK),
                 Err(error),
                 "{path:?}"
             );
@@ -1168,7 +1178,7 @@ mod tests {
     fn list(tree: &Tree<u32>, dir: DirId) -> Vec<String> {
         let shown = |(name, found): (&[u16], Found<'_, u32>)| match found {
             Found::Directory(_) => format!("{}/", s(name)),
-            Found::SymbolicLink(to) => format!("{}>{}", s(name), s(to)),
+            Found::SymbolicLink(to, _) => format!("{}>{}", s(name), s(to)),
             Found::Object(object) => format!("{}={object}", s(name)),
         };
         tree.entries(dir).unwrap().map(shown).collect()
@@ -1219,7 +1229,7 @@ mod tests {
         assert_eq!(tree.remove(None, &nul, EXACT), Err(Error::PathNotFound));
         assert_eq!(
             tree.remove(None, &nul, ANY_CASE),
-            Ok(Removed::SymbolicLink(null.clone()))
+            Ok(Removed::SymbolicLink(null.clone(), LINK))
         );
         check(&tree, ANY_CASE, &[("\\Device\\Null", ok("obj:30", ""))]);
         check(&tree, ANY_CASE, &[("\\??\\PIPE", ok("obj:2", ""))]);
@@ -1292,6 +1302,52 @@ mod tests {
         check(&tree, ANY_CASE, &cases);
         assert_eq!(tree.counts().objects, 2);
         assert_eq!(tree.counts().symbolic_links, 7);
+    }
+
+    #[test]
+    fn a_link_keeps_the_object_it_was_given() {
+        let mut tree = booted();
+        let at = w("\\DosDevices\\COM1");
+        let target = w("\\Device\\Null");
+        // The new name goes where the links on its path lead, and the
+        // tree says where that is.
+        let global = tree.dos_devices(ANY_CASE).unwrap();
+        assert_eq!(
+            tree.insert_link(None, &at, ANY_CASE, &target, 77),
+            Ok(global)
+        );
+        let device = tree.insert_object(None, &w("\\Device\\Beep"), EXACT, 4);
+        assert_eq!(
+            device.map(|dir| dir_name(&tree, dir)),
+            Ok("\\Device".into())
+        );
+        // Asked for the link itself, a look-up shows its object.
+        let found = tree.lookup(None, &at, THE_LINK).map(|o| match o.found {
+            Found::SymbolicLink(to, object) => (s(to), *object),
+            _ => panic!("a link"),
+        });
+        assert_eq!(found, Ok(("\\Device\\Null".into(), 77)));
+        assert_eq!(
+            tree.remove(None, &at, ANY_CASE),
+            Ok(Removed::SymbolicLink(target, 77))
+        );
+    }
+
+    #[test]
+    fn an_entry_added_and_removed_leaves_the_memory_as_it_was() {
+        let mut tree = booted();
+        let before = (tree.root.capacity(), tree.directories.capacity());
+        assert_eq!(before, (tree.root.len(), tree.directories.len()));
+        for round in 0..3 {
+            dir(&mut tree, "\\Extra");
+            object(&mut tree, "\\Extra\\X", round);
+            link(&mut tree, "\\ExtraLink", "\\Extra");
+            assert!(tree.root.capacity() > before.0);
+            for path in ["\\Extra\\X", "\\Extra", "\\ExtraLink"] {
+                tree.remove(None, &w(path), EXACT).expect(path);
+            }
+            assert_eq!((tree.root.capacity(), tree.directories.capacity()), before);
+        }
     }
 
     #[test]
@@ -1440,8 +1496,12 @@ mod tests {
                 };
                 let result = match &kind {
                     Kind::Directory => tree.create_directory(None, &path, ANY_CASE).map(|_| ()),
-                    Kind::Link(to) => tree.insert_link(None, &path, ANY_CASE, &w(to)),
-                    Kind::Object(object) => tree.insert_object(None, &path, ANY_CASE, *object),
+                    Kind::Link(to) => tree
+                        .insert_link(None, &path, ANY_CASE, &w(to), LINK)
+                        .map(|_| ()),
+                    Kind::Object(object) => tree
+                        .insert_object(None, &path, ANY_CASE, *object)
+                        .map(|_| ()),
                 };
                 if model.iter().any(|(k, _)| *k == key) {
                     assert_eq!(result, Err(Error::Collision), "seed {seed}: {key}");

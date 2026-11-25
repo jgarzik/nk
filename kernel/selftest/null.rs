@@ -21,14 +21,18 @@ const SECURE_OPEN: u32 = 0x100;
 
 fn device_checks() -> Result<(), &'static str> {
     let name: alloc::vec::Vec<u16> = DEVICE.encode_utf16().collect();
-    let device = ob::lookup_device(&name).ok_or("\\Device\\Null was not created")?;
-    // SAFETY: the namespace only holds live device objects.
+    let device =
+        ob::lookup_device_referenced(&name).map_err(|_| "\\Device\\Null was not created")?;
+    // SAFETY: the look-up's reference keeps the device's memory, and is
+    // given up once the fields are read.
     let (kind, characteristics, flags) = unsafe {
-        (
+        let fields = (
             (*device).DeviceType,
             (*device).Characteristics,
             (*device).Flags,
-        )
+        );
+        ob::object::dereference(device.cast());
+        fields
     };
     if kind != FILE_DEVICE_NULL {
         return Err("device type is not FILE_DEVICE_NULL");

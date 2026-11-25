@@ -11,6 +11,9 @@ pub static GROUP: Group = Group {
         "ob.handles",
         "ob.thread",
         "ps.system",
+        "ob.namespace.paths",
+        "ob.namespace.links",
+        "ob.namespace.name-info",
     ],
     run,
     manual: false,
@@ -34,4 +37,17 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "ob.handles", "look-ups:", handle::handle_test());
     counted(r, "ob.thread", "waits:", handle::thread_test());
     r.check("ps.system", crate::ps::process::self_test);
+    counted(
+        r,
+        "ob.namespace.paths",
+        "look-ups:",
+        crate::ob::paths_test(),
+    );
+    counted(
+        r,
+        "ob.namespace.links",
+        "look-ups:",
+        crate::ob::links_test(),
+    );
+    r.check("ob.namespace.name-info", crate::ob::name_info_test);
 }

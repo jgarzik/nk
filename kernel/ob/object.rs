@@ -6,6 +6,11 @@
 //! its last reference is dropped: handles hold references, and so does
 //! anything that was given a pointer by `ObReferenceObjectByHandle`.
 //!
+//! An object made to be named has an `OBJECT_HEADER_NAME_INFO` in front
+//! of its header, which the header's `InfoMask` says, as on Windows.
+//! One pool block holds the name information, the header, the body and
+//! the characters of the name, in that order.
+//!
 //! A type is an `OBJECT_TYPE` laid out as on Windows. A driver names a
 //! type by the value of a variable it imports (`*ExEventObjectType`),
 //! the type's address. An object's header names its type the way
@@ -20,8 +25,8 @@ use core::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ke::LIST_ENTRY;
 use nk_ntabi::ob::{
-    GENERIC_MAPPING, OB_DELETE_METHOD, OBJECT_BODY, OBJECT_HEADER, OBJECT_TYPE,
-    OBJECT_TYPE_INITIALIZER,
+    GENERIC_MAPPING, OB_DELETE_METHOD, OB_INFOMASK_NAME, OBJECT_BODY, OBJECT_HEADER,
+    OBJECT_HEADER_NAME_INFO, OBJECT_TYPE, OBJECT_TYPE_INITIALIZER,
 };
 use nk_ob::header::{FIRST_TYPE_INDEX, type_index};
 
@@ -118,6 +123,9 @@ static DEVICE_NAME: [u16; 6] = wide(b"Device");
 static KEY_NAME: [u16; 3] = wide(b"Key");
 static PROCESS_NAME: [u16; 7] = wide(b"Process");
 static TOKEN_NAME: [u16; 5] = wide(b"Token");
+static DIRECTORY_NAME: [u16; 9] = wide(b"Directory");
+static SYMBOLIC_LINK_NAME: [u16; 12] = wide(b"SymbolicLink");
+static DRIVER_NAME: [u16; 6] = wide(b"Driver");
 
 /// Events (`KEVENT`).
 pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
@@ -143,14 +151,27 @@ pub static TOKEN_TYPE: ObjectType = ObjectType::new(
     Some(crate::se::token::deleted),
 );
 
+/// Directories of the namespace (`OBJECT_DIRECTORY`): what is in one
+/// is the namespace's to know (`ob`).
+pub static DIRECTORY_TYPE: ObjectType =
+    ObjectType::new(FIRST_TYPE_INDEX + 6, &DIRECTORY_NAME, None);
+/// Symbolic links (`OBJECT_SYMBOLIC_LINK`).
+pub static SYMBOLIC_LINK_TYPE: ObjectType =
+    ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None);
+/// Drivers (`DRIVER_OBJECT`).
+pub static DRIVER_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 8, &DRIVER_NAME, None);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 6] = [
+static TYPES: [&ObjectType; 9] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
     &KEY_TYPE,
     &PROCESS_TYPE,
     &TOKEN_TYPE,
+    &DIRECTORY_TYPE,
+    &SYMBOLIC_LINK_TYPE,
+    &DRIVER_TYPE,
 ];
 
 /// What hides type indices in object headers. Chosen once, before the
@@ -213,25 +234,118 @@ pub unsafe fn handle_count<'a>(body: *mut u8) -> &'a AtomicI64 {
     unsafe { AtomicI64::from_ptr(&raw mut (*header(body)).HandleCount) }
 }
 
+/// The name information in front of an object's header, or null for an
+/// object made without.
+///
+/// # Safety
+/// `body` is a live object from [`create`] or [`create_named`].
+pub unsafe fn name_info(body: *mut u8) -> *mut OBJECT_HEADER_NAME_INFO {
+    let header = header(body);
+    // SAFETY: per the contract; the mask was written when the object
+    // was made and never changes.
+    if unsafe { (&raw const (*header).InfoMask).read() } & OB_INFOMASK_NAME == 0 {
+        return core::ptr::null_mut();
+    }
+    header.cast::<OBJECT_HEADER_NAME_INFO>().wrapping_sub(1)
+}
+
+/// Where the pool block of an object begins: at its name information
+/// if it has any, else at its header.
+///
+/// # Safety
+/// As [`name_info`].
+unsafe fn block(body: *mut u8) -> *mut u8 {
+    // SAFETY: per the contract.
+    let info = unsafe { name_info(body) };
+    if info.is_null() {
+        header(body).cast()
+    } else {
+        info.cast()
+    }
+}
+
 /// Allocate a zeroed object of `size` bytes and type `ty`, with one
 /// reference: the caller's.
 pub fn create(ty: &'static ObjectType, size: usize) -> Option<*mut u8> {
-    let block = pool::alloc_zeroed(OBJECT_BODY + size, TAG);
+    allocate(ty, size, None)
+}
+
+/// As [`create`], for an object that will be given a name in the
+/// namespace (`ob::insert`): `name` is the name it will have in its
+/// directory, the last component of its path. The object carries
+/// Windows' name information; it is in no directory yet.
+pub fn create_named(ty: &'static ObjectType, size: usize, name: &[u16]) -> Option<*mut u8> {
+    allocate(ty, size, Some(name))
+}
+
+fn allocate(ty: &'static ObjectType, size: usize, name: Option<&[u16]>) -> Option<*mut u8> {
+    let front = match name {
+        Some(_) => size_of::<OBJECT_HEADER_NAME_INFO>(),
+        None => 0,
+    };
+    let name = name.unwrap_or(&[]);
+    // A counted string's length is 16 bits.
+    let name_bytes = u16::try_from(name.len() * 2).ok()?;
+    // The name's characters follow the body.
+    let characters = (front + OBJECT_BODY + size).next_multiple_of(align_of::<u16>());
+    let block = pool::alloc_zeroed(characters + usize::from(name_bytes), TAG);
     if block.is_null() {
         return None;
     }
-    // SAFETY: a fresh, zeroed block large enough for the header, which
-    // the pool aligns to 16 bytes.
+    // SAFETY: a fresh, zeroed block large enough for the name
+    // information, the header and the name, which the pool aligns to 16
+    // bytes; the name information's size keeps the header so aligned.
     unsafe {
-        let header = block.cast::<OBJECT_HEADER>();
+        let header = block.add(front).cast::<OBJECT_HEADER>();
         (&raw mut (*header).PointerCount).write(1);
         (&raw mut (*header).TypeIndex).write(type_index(
             ty.0.Index,
             COOKIE.load(Ordering::Relaxed),
             header as u64,
         ));
+        if front != 0 {
+            let info = block.cast::<OBJECT_HEADER_NAME_INFO>();
+            let buffer = block.add(characters).cast::<u16>();
+            buffer.copy_from_nonoverlapping(name.as_ptr(), name.len());
+            (&raw mut (*info).Name).write(UNICODE_STRING {
+                Length: name_bytes,
+                MaximumLength: name_bytes,
+                Buffer: buffer,
+            });
+            (&raw mut (*info).ReferenceCount).write(1);
+            (&raw mut (*header).InfoMask).write(OB_INFOMASK_NAME);
+        }
+        Some(block.add(front + OBJECT_BODY))
     }
-    Some(block.wrapping_add(OBJECT_BODY))
+}
+
+/// Record that a named object is now in `directory` (a directory
+/// object). The namespace calls this under its lock.
+///
+/// # Safety
+/// `body` is a live object from [`create_named`].
+pub unsafe fn entered(body: *mut u8, directory: *mut u8) {
+    // SAFETY: per the contract: the object has name information.
+    unsafe { (&raw mut (*name_info(body)).Directory).write(directory.cast()) };
+}
+
+/// Record that a named object has lost its name: it is in no
+/// directory and its name is empty, as Windows leaves it. The
+/// namespace calls this under its lock.
+///
+/// # Safety
+/// `body` is a live object from [`create_named`].
+pub unsafe fn left(body: *mut u8) {
+    // SAFETY: per the contract: the object has name information.
+    unsafe {
+        let info = name_info(body);
+        (&raw mut (*info).Directory).write(core::ptr::null_mut());
+        (&raw mut (*info).Name).write(UNICODE_STRING {
+            Length: 0,
+            MaximumLength: 0,
+            Buffer: core::ptr::null_mut(),
+        });
+    }
 }
 
 /// The type of an object.
@@ -279,7 +393,9 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
                 delete(body.cast());
             }
         }
-        let freed = pool::free(header(body).cast());
+        // SAFETY: still the object's memory; its block is found before
+        // it is given back.
+        let freed = pool::free(unsafe { block(body) });
         debug_assert!(freed.is_ok());
     } else if left < 0 {
         crate::kd::bugcheck(format_args!(

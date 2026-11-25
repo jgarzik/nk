@@ -39,38 +39,6 @@ pub fn names_equal(a: &[u16], b: &[u16]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| upcase(x) == upcase(y))
 }
 
-fn strip_prefix_ignore_case<'a>(name: &'a [u16], prefix: &str) -> Option<&'a [u16]> {
-    let n = prefix.len();
-    let head = name.get(..n)?;
-    head.iter()
-        .zip(prefix.bytes())
-        .all(|(&c, p)| upcase(c) == upcase(u16::from(p)))
-        .then(|| &name[n..])
-}
-
-/// The directories that hold MS-DOS device names. `\DosDevices` and
-/// `\GLOBAL??` are aliases of `\??`.
-const DOS_DEVICE_DIRS: [&str; 3] = ["\\??\\", "\\DosDevices\\", "\\GLOBAL??\\"];
-
-/// If `name` is in a DOS-devices directory, the part after the directory.
-/// `\DosDevices\Foo`, `\??\Foo` and `\GLOBAL??\Foo` all yield `Foo`, so the
-/// three spellings name one object.
-pub fn dos_device_name(name: &[u16]) -> Option<&[u16]> {
-    DOS_DEVICE_DIRS
-        .iter()
-        .find_map(|dir| strip_prefix_ignore_case(name, dir))
-}
-
-/// True if two object names refer to the same object: equal ignoring case,
-/// with the DOS-devices directory aliases folded together.
-pub fn same_object_name(a: &[u16], b: &[u16]) -> bool {
-    match (dos_device_name(a), dos_device_name(b)) {
-        (Some(x), Some(y)) => names_equal(x, y),
-        (None, None) => names_equal(a, b),
-        _ => false,
-    }
-}
-
 /// The file an image path names: what follows its last backslash, up to
 /// the terminator if the path carries one (`\\SystemRoot\\System32\\
 /// drivers\\null.sys` names `null.sys`).
@@ -155,31 +123,6 @@ mod tests {
         assert_eq!(upcase(0xE9), 0xC9, "e-acute");
         assert_eq!(upcase(0xF7), 0xF7, "division sign has no upper case");
         assert_eq!(upcase(u16::from(b'[')), u16::from(b'['));
-    }
-
-    #[test]
-    fn dos_device_aliases() {
-        assert_eq!(
-            dos_device_name(&w("\\DosDevices\\IoctlTest")),
-            Some(&w("IoctlTest")[..])
-        );
-        assert_eq!(
-            dos_device_name(&w("\\??\\IoctlTest")),
-            Some(&w("IoctlTest")[..])
-        );
-        assert_eq!(dos_device_name(&w("\\global??\\X")), Some(&w("X")[..]));
-        assert_eq!(dos_device_name(&w("\\Device\\IoctlTest")), None);
-        assert_eq!(
-            dos_device_name(&w("\\DosDevices")),
-            None,
-            "the directory itself"
-        );
-        assert!(same_object_name(
-            &w("\\DosDevices\\IoctlTest"),
-            &w("\\??\\IOCTLTEST")
-        ));
-        assert!(!same_object_name(&w("\\DosDevices\\A"), &w("\\Device\\A")));
-        assert!(same_object_name(&w("\\Device\\A"), &w("\\device\\a")));
     }
 
     #[test]

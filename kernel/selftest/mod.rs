@@ -87,6 +87,9 @@ pub struct Resources {
     /// (pool arenas, page tables). Those stores grow on first use; that
     /// is not a leak, and anything else that takes frames is.
     spare_frames: u64,
+    /// Entries in the object namespace: device names, symbolic links,
+    /// driver objects. The directories made at boot are counted too,
+    /// and never change.
     names: usize,
     /// Threads that exist: a test waits for the ones it made to end.
     threads: u32,

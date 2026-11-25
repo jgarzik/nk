@@ -201,7 +201,7 @@ pub fn open(name: &str) -> Result<*mut FILE_OBJECT, NTSTATUS> {
     // and the device may be deleted between them: its memory is held
     // from the look-up until the device's own count has been taken, or
     // the open has been refused.
-    let device = ob::lookup_device_referenced(&wide).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+    let device = ob::lookup_device_referenced(&wide)?;
     // SAFETY: the look-up's pointer reference keeps the memory, and is
     // given up here. A device still being set up is not opened.
     let live = unsafe {
