@@ -21,7 +21,12 @@ pub const IPI: (u32, u8) = (1, 14);
 
 /// Interrupt processor `number` on the interprocessor interrupt.
 pub fn ipi_send(number: usize) {
-    gic::send_interrupt(number, IPI.0);
+    interrupt_processor(number, IPI.0);
+}
+
+/// Send processor `number` the software-generated interrupt `vector`.
+pub fn interrupt_processor(number: usize, vector: u32) {
+    gic::send_interrupt(number, vector);
 }
 
 pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};

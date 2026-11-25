@@ -18,6 +18,7 @@ smp.each ok
 smp.calls ok
 smp.counter ok
 smp.tlb ok
+smp.lock-interrupted ok
 dpc.run ok
 dpc.order ok
 dpc.remove ok

@@ -107,7 +107,12 @@ pub const IPI: (u32, u8) = (0xE1, 14);
 
 /// Interrupt processor `number` on the interprocessor vector.
 pub fn ipi_send(number: usize) {
-    apic::send_interrupt(smp::hardware_id(number) as u32, IPI.0);
+    interrupt_processor(number, IPI.0);
+}
+
+/// Interrupt processor `number` on `vector`.
+pub fn interrupt_processor(number: usize, vector: u32) {
+    apic::send_interrupt(smp::hardware_id(number) as u32, vector);
 }
 
 /// Stop every other processor where it stands, interrupts off or not:

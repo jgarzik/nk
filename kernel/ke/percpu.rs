@@ -16,9 +16,9 @@ pub struct PerCpu {
     dpcs: Queue,
 }
 
-// SAFETY: a processor only touches its own `PerCpu`, and only at
-// DISPATCH_LEVEL or above, where nothing else on that processor can
-// interleave with it at the same level (see `held`).
+// SAFETY: a processor only touches the non-atomic part of its own
+// `PerCpu`, and only at HIGH_LEVEL, where nothing else on that processor
+// can interleave (see `held`).
 unsafe impl Sync for PerCpu {}
 
 impl PerCpu {
@@ -49,8 +49,9 @@ impl PerCpu {
     ///
     /// # Safety
     /// The caller is running on the processor this belongs to, at
-    /// DISPATCH_LEVEL or above, and drops the reference before the IRQL
-    /// can fall or anything that takes or releases a lock can run.
+    /// HIGH_LEVEL, and drops the reference before the IRQL falls: an
+    /// interrupt handler may take a lock, and must not find the record
+    /// half updated.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn held(&self) -> &mut Held {
         // SAFETY: per the contract, this is the only live reference.

@@ -108,7 +108,7 @@ pub fn self_test() -> Result<(), &'static str> {
             return Err("releasing the innermost lock did not restore DISPATCH_LEVEL");
         }
     }
-    let old = raise(DISPATCH_LEVEL);
+    let old = raise(HIGH_LEVEL);
     // SAFETY: raised for the read, which ends with the statement.
     let depth = unsafe { arch::percpu().held() }.depth();
     lower(old);

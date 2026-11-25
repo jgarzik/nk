@@ -1,6 +1,6 @@
 //! Tests of running on every processor.
 
-use crate::ke::{ipi, smp};
+use crate::ke::{ipi, smp, spinlock};
 use crate::test::{Group, Report};
 use core::fmt::Display;
 use nk_bootinfo::BootInfo;
@@ -12,6 +12,7 @@ pub static GROUP: Group = Group {
         "smp.calls",
         "smp.counter",
         "smp.tlb",
+        "smp.lock-interrupted",
     ],
     run,
     manual: false,
@@ -45,6 +46,12 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "smp.counter", "readings in order", ipi::counter_test());
     counted(r, "smp.tlb", "processors saw the new page", ipi::tlb_test());
+    counted(
+        r,
+        "smp.lock-interrupted",
+        "locks taken by the interrupt handler",
+        spinlock::interrupted_test(),
+    );
 }
 
 /// A processor that stops answering must stop the system.

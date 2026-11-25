@@ -54,8 +54,9 @@ gives access to the `T` inside until the guard is dropped, which restores
 the IRQL.
 
 Per processor, the kernel records which locks are held
-(`ke::percpu::PerCpu`). That state is touched only at `DISPATCH_LEVEL` or
-above, where nothing else on the processor can interleave.
+(`ke::percpu::PerCpu`). The record is updated at `HIGH_LEVEL`, whatever
+the lock's own level: an interrupt handler may take a lock too, and must
+never find the record half written.
 
 ### Order
 
