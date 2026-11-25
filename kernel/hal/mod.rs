@@ -3,6 +3,7 @@
 
 pub mod platform;
 
+use crate::arch;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
@@ -21,19 +22,35 @@ pub fn init(info: &BootInfo) {
     EFI_RUNTIME.store(info.efi_runtime, Ordering::Relaxed);
 }
 
+/// Run `call`, which calls into firmware's runtime code. Every such call
+/// is made through here, from any processor and any context, the path
+/// that stops the system included.
+///
+/// Runtime code runs at its physical addresses, on the caller's stack.
+/// The architecture makes the address space what that needs before the
+/// call and puts it back after one that returns.
+fn firmware_call<R>(call: impl FnOnce() -> R) -> R {
+    arch::firmware_enter();
+    let result = call();
+    arch::firmware_leave();
+    result
+}
+
 /// Power the machine off through UEFI runtime services; halt if firmware
-/// offers none. Runtime code is called at its physical address: nkload
-/// keeps firmware's memory identity mapped for this.
+/// offers none.
 pub fn power_off_or_halt() -> ! {
     let table = EFI_RUNTIME.load(Ordering::Relaxed);
     if table != 0 {
-        // SAFETY: `table` is firmware's runtime services table, identity
-        // mapped and valid for the life of the system; the slot holds
-        // ResetSystem, which takes no pointers for a shutdown.
-        unsafe {
-            let reset = ((table + RESET_SYSTEM) as *const ResetSystem).read();
-            reset(RESET_SHUTDOWN, 0, 0, core::ptr::null());
-        }
+        firmware_call(|| {
+            // SAFETY: `table` is firmware's runtime services table,
+            // identity mapped and valid for the life of the system; the
+            // slot holds ResetSystem, which takes no pointers for a
+            // shutdown.
+            unsafe {
+                let reset = ((table + RESET_SYSTEM) as *const ResetSystem).read();
+                reset(RESET_SHUTDOWN, 0, 0, core::ptr::null())
+            }
+        })
     }
     crate::kd::halt()
 }

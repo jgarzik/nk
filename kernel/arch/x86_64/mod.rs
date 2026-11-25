@@ -149,6 +149,14 @@ pub fn cpu_init() {
 
 pub fn mm_init(_info: &BootInfo) {}
 
+/// Before a call into firmware's runtime code: nothing to do. Its
+/// regions are identity-mapped in the low half of the one address space
+/// every processor runs on.
+pub fn firmware_enter() {}
+
+/// After a firmware call that returned: nothing to undo.
+pub fn firmware_leave() {}
+
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::X86_64 {
     nk_mm::pt::X86_64

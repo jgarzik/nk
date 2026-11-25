@@ -135,6 +135,13 @@ pub fn mm_init(info: &BootInfo) {
     MAIR_DEVICE.store(info.mair_device, Ordering::Relaxed);
 }
 
+/// Before a call into firmware's runtime code: nothing to do. Firmware's
+/// own identity map is the low half on every processor.
+pub fn firmware_enter() {}
+
+/// After a firmware call that returned: nothing to undo.
+pub fn firmware_leave() {}
+
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::Aarch64 {
     nk_mm::pt::Aarch64 {

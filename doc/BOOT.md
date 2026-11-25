@@ -67,6 +67,11 @@ The kernel calls UEFI `ResetSystem` at its physical address through the
 identity map. The same path works on QEMU for both architectures and on
 real hardware. NK never calls `SetVirtualAddressMap`.
 
+Every call into firmware's runtime code is made through one function,
+`hal::firmware_call`, on whichever processor and stack the caller is on;
+an architecture hook on each side of the call makes the address space
+what runtime code needs and puts it back.
+
 ## Known limits
 
 - Firmware runtime code regions are mapped writable and executable,
