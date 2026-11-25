@@ -6,7 +6,9 @@
 //! naturally when they match.
 
 use core::cell::UnsafeCell;
-use nk_ntabi::pcr::{NATIVE as PCR, PCR_SIZE};
+use nk_ntabi::pcr::NATIVE as PCR;
+
+const PCR_SIZE: usize = PCR.size;
 
 pub const KERNEL_CODE: u16 = 0x10;
 const KERNEL_DATA: u16 = 0x18;
@@ -70,8 +72,9 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     },
 }));
 
-/// Load this CPU's GDT, TSS and PCR. Boot CPU only for now.
-pub fn init() {
+/// Load this CPU's GDT, TSS and PCR, and record that it is processor
+/// `number`. Boot CPU only for now.
+pub fn init(number: u32) {
     let area = BOOT_CPU.0.get();
     // SAFETY: single-threaded early boot: this is the only reference to
     // the boot CPU's area, and the pointers written stay valid forever
@@ -99,6 +102,11 @@ pub fn init() {
         pcr.add(PCR.current_thread)
             .cast::<u64>()
             .write((&raw mut (*area).thread) as u64);
+        pcr.add(PCR.number).cast::<u32>().write(number);
+        if let Some(legacy) = PCR.legacy_number {
+            // One byte: enough for the 64 processors of a group.
+            pcr.add(legacy).write(number as u8);
+        }
 
         let pointer = TablePointer {
             limit: (size_of::<[u64; 10]>() - 1) as u16,

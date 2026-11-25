@@ -41,6 +41,7 @@ loads, so these are ABI even though no import shows them. Offsets are in
 | --- | --- | --- |
 | Processor control region | GS base | x18 (also kept in `TPIDR_EL1`) |
 | Current thread | `gs:[0x188]` | `[x18, #0x988]` |
+| Processor number | `gs:[0x1A4]` (32 bits); `gs:[0x184]` (one byte, older headers) | NK's own: `[x18, #0x9A4]` |
 | Current IRQL | register CR8 | kernel-private; drivers call an export |
 
 There are no threads yet. The current-thread slot points at a zeroed
@@ -105,8 +106,9 @@ the largest body of a name and requires every smaller one to agree with
 it on the fields they share.
 
 **Status: agrees, x86-64.** `KPCR.Self` 0x18, `CurrentPrcb` 0x20, `Prcb`
-0x180 and `KPRCB.CurrentThread` 0x8 are what `lib/ntabi/pcr.rs` states,
-so `gs:[0x188]` is the current thread. A structure is added to the
+0x180, `KPRCB.CurrentThread` 0x8, `Number` 0x24, `LegacyNumber` 0x4 and
+the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
+`gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number. A structure is added to the
 comparison by the commit that starts using it.
 
 There is nothing to compare arm64 with: NK has no source of Windows 10
@@ -116,8 +118,10 @@ available binary can observe.
 
 ## Not yet verified
 
-- The current-thread offset in the PCR on arm64 (`[x18, #0x988]`): no
-  symbol file, probe fact or fixture driver confirms it yet.
+- The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
+  documented convention; no symbol file, probe fact or fixture driver
+  confirms it yet. Where the processor number sits, and the PCR's size,
+  are NK's own until something shows what Windows uses.
 - Behaviour beyond the oracle scripts. What `oracle/` replays on real
   Windows is verified line for line (`doc/TESTING.md`); every other
   expectation still comes from documentation, sample source and the

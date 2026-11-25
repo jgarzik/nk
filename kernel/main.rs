@@ -36,6 +36,9 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     // SAFETY: nkload passes a valid, initialised BootInfo that nothing
     // else writes; it lives in loader-reserved memory for the whole run.
     let info: &'static BootInfo = unsafe { &*info };
+    // First of all: the processor block is where locks and IRQL keep
+    // their state, and the console takes a lock.
+    arch::cpu_init();
     kd::console_init(info);
     hal::init(info);
     kprintln!("NK {} ({})", env!("CARGO_PKG_VERSION"), arch::NAME);
@@ -45,7 +48,6 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
             format_args!("BootInfo magic/version mismatch: loader and kernel differ"),
         );
     }
-    arch::cpu_init();
     arch::mm_init(info);
     if let Err(why) = mm::init(info) {
         test::abort("mm.init", format_args!("{why}"));

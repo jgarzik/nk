@@ -49,7 +49,13 @@ fn processor_block_matches_the_kernel() {
         l.prcb + offset(&kprcb, "_KPRCB", "CurrentThread"),
         "what the WDK's inlined KeGetCurrentThread reads"
     );
+    assert_eq!(l.number, l.prcb + offset(&kprcb, "_KPRCB", "Number"));
+    assert_eq!(
+        l.legacy_number,
+        Some(l.prcb + offset(&kprcb, "_KPRCB", "LegacyNumber"))
+    );
     // The control region ends with the processor block.
+    assert_eq!(l.size, kpcr.size as usize);
     assert_eq!(kpcr.size as usize, l.prcb + kprcb.size as usize);
     eprintln!(
         "x64: processor block matches the kernel symbols (KPCR {:#x} bytes)",

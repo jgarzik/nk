@@ -6,7 +6,9 @@
 //! it once per CPU is enough: nothing NK compiles will disturb it.
 
 use core::cell::UnsafeCell;
-use nk_ntabi::pcr::{NATIVE as PCR, PCR_SIZE};
+use nk_ntabi::pcr::NATIVE as PCR;
+
+const PCR_SIZE: usize = PCR.size;
 
 /// Everything one CPU owns. Page aligned so the PCR is too.
 #[repr(C, align(4096))]
@@ -29,14 +31,15 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     thread: [0; 4096],
 }));
 
-/// Point x18 at this CPU's PCR. Boot CPU only for now.
-pub fn init() {
+/// Point x18 at this CPU's PCR and record that it is processor `number`.
+/// Boot CPU only for now.
+pub fn init(number: u32) {
     let area = BOOT_CPU.0.get();
     // SAFETY: single-threaded early boot: this is the only reference to
     // the boot CPU's area, which is static, so the pointers stay valid.
     // x18 is reserved on this target; writing it cannot clobber compiler
-    // state. TPIDR_EL1 holds the same pointer so exception entry can
-    // restore x18 if a driver ever corrupts it.
+    // state. TPIDR_EL1 holds the same pointer: it survives whatever a
+    // lower exception level does to x18, once there is one.
     unsafe {
         let pcr = (&raw mut (*area).pcr).cast::<u8>();
         pcr.add(PCR.self_ptr).cast::<u64>().write(pcr as u64);
@@ -46,6 +49,7 @@ pub fn init() {
         pcr.add(PCR.current_thread)
             .cast::<u64>()
             .write((&raw mut (*area).thread) as u64);
+        pcr.add(PCR.number).cast::<u32>().write(number);
         core::arch::asm!("msr tpidr_el1, {0}", "mov x18, {0}", in(reg) pcr as u64, options(nomem, nostack));
     }
 }

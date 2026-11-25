@@ -49,10 +49,11 @@ pub fn halt() -> ! {
     }
 }
 
-/// Take over the boot CPU: exception vectors, PCR.
+/// Take over the boot CPU, processor 0: exception vectors, PCR. Prints
+/// nothing and takes no lock: it runs before either works.
 pub fn cpu_init() {
     trap::init();
-    cpu::init();
+    cpu::init(0);
 }
 
 /// Indices into firmware's `MAIR_EL1`, which the loader looked up.

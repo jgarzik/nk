@@ -58,9 +58,11 @@ pub fn halt() -> ! {
     }
 }
 
-/// Take over the boot CPU: descriptor tables, exception vectors, PCR.
+/// Take over the boot CPU, processor 0: descriptor tables, exception
+/// vectors, PCR. Prints nothing and takes no lock: it runs before either
+/// works.
 pub fn cpu_init() {
-    cpu::init();
+    cpu::init(0);
     trap::init(cpu::KERNEL_CODE, cpu::FAULT_IST);
 }
 
