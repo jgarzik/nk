@@ -88,10 +88,7 @@ fn ioctl_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
 
 pub fn run(info: &BootInfo) {
     let Some(image) = module(info, "null.sys") else {
-        return test::skip(
-            "null",
-            format_args!("module null.sys not provided (no fixture for this architecture)"),
-        );
+        return test::skip("null", format_args!("module null.sys not provided"));
     };
     let before = resources();
     let object = match driver::load("Null", image) {

@@ -18,7 +18,7 @@ Consequences:
 - Exported functions are plain `extern "C"` and are Windows-ABI correct
   for integer and pointer arguments on both targets.
 - **x86-64 floating-point arguments are not Windows-ABI correct.** The
-  target does not use SSE registers. No kernel export in the MVP takes a
+  target does not use SSE registers. No kernel export in 0.0.1 takes a
   float, and the kernel itself uses none (`clippy::float_arithmetic`
   warns). An export that needs one must go through an assembly thunk.
 - Because NK's own code never touches XMM registers on x86-64, a driver's

@@ -1,46 +1,62 @@
 # Roadmap
 
-## 0.0.1: driver bootstrap
+## 0.0.1: driver bootstrap (this release)
 
-Stop goal: both architectures boot under QEMU, load real Windows driver
-binaries, complete real IRPs and report PASS. **Reached** for the fixtures
-that exist: `sioctl.sys` on both architectures, `null.sys` on x86-64.
+The first milestone: prove, end to end and on both architectures, that a
+kernel written from scratch can run an unmodified Windows driver binary.
 
-| # | Phase | State |
-| --- | --- | --- |
-| 0 | Workspace, gate, docs, compiler ABI probes | done |
-| 1 | `lib/pe`: parse, map, relocate, bind imports | done |
-| 2 | Fixture fetch by URL + SHA-256; ledger from real import tables | done |
-| 3 | `nkload`: UEFI loader, boot test harness | done |
-| 4 | Kernel entry: own page tables, serial, power off | done |
-| 5 | CPU state: descriptor tables, exceptions, processor control region | done |
-| 6 | Memory: frames, mappings, pool | done |
-| 7 | `lib/ntabi` layouts, runtime library | done |
-| 8 | Export registry and driver loader | done |
-| 9 | Object and I/O managers: devices, IRPs | done |
-| 10 | `null.sys` proof | done (x86-64; arm64 blocked on the fixture) |
-| 11 | `sioctl.sys` buffered I/O proof, unload, leak check | done, both architectures |
-| 12 | MDLs and direct I/O | done, both architectures |
-| 13 | WDK-built ABI probe for layout verification | done: `make test` checks layouts against the WDK tables |
-| 14 | Ledger and documentation pass | done |
+What is in it:
 
-### Open against the 0.0.1 acceptance gates
+| Area | State |
+| --- | --- |
+| Boot | UEFI loader (`nkload`), own page tables, power-off through UEFI runtime services, on x86-64 and arm64 under QEMU |
+| CPU | Descriptor tables and exception vectors; a fault is a bugcheck with a register dump; the processor control region drivers reach through GS / x18 |
+| Memory | Frame allocator, kernel mappings with per-page protection, pool with overrun and bad-free detection |
+| Loader | PE32+ drivers mapped, relocated and import-bound; stack cookie set; wrong-architecture and unresolved-import images refused |
+| I/O | Driver, device and file objects; IRPs with completion routines; buffered and direct (MDL) transfers; symbolic links |
+| Drivers | `null.sys` from Windows 10 (x86-64); the WDK-built `sioctl.sys` sample (both), including 100 load/unload cycles without a leak |
+| Verification | Structure layouts checked against a WDK-built table; every import of the test drivers tracked in `ledger/` |
 
-- **arm64 `null.sys`:** blocked. Microsoft's symbol server needs the
-  binary's timestamp and image size, and no public index lists them for
-  Windows 10 arm64. Needs a copy from a licensed Windows 10 arm64 image.
-- **ABI verification:** structure layouts are checked against a WDK-built
-  probe. PCR thread offsets and function signatures are not.
-- **Windows reference results:** no Windows 10 VM yet; nothing has been
-  compared with a run on Windows.
-- **Physical boot** on the Dell OptiPlex: not attempted.
-- **`METHOD_NEITHER`:** needs SEH and a user address range.
+What 0.0.1 deliberately leaves out: threads and scheduling, interrupts
+and timers, more than one CPU, structured exception handling, Plug and
+Play and power management, user mode, and any real hardware device.
 
-## After 0.0.1
+### Known gaps in this release
 
-- Application processors online; scheduler, waits, timers.
-- SEH unwinding, then `METHOD_NEITHER` I/O.
-- KMDF: `echo.sys` through a WDF runtime.
-- A Windows 10 reference VM for differential testing.
-- Physical boot on the Dell OptiPlex.
-- A real hardware driver against a QEMU virtual device.
+These fall short of what the milestone set out to do, and are stated
+rather than hidden:
+
+- **`null.sys` on arm64 is untested.** The test binary comes from
+  Microsoft's symbol server, which needs the file's timestamp and size;
+  no public index lists them for Windows 10 arm64. It needs a copy from a
+  licensed Windows 10 arm64 installation. A Windows 11 binary would not
+  be a valid substitute.
+- **Nothing has been compared with real Windows.** Expected results come
+  from Microsoft's documentation, the sample's source and the binaries.
+  A Windows 10 reference machine running the same drivers is needed to
+  call any behaviour verified.
+- **`METHOD_NEITHER` requests are not exercised.** `sioctl.sys` handles
+  them by probing user memory inside `__try`, which needs a user address
+  space and structured exception handling.
+- **Not run on physical hardware.**
+- **Partly verified ABI.** Structure layouts are checked against the WDK.
+  The offsets of the current-thread pointer in the processor control
+  region, and function signatures in general, are not.
+
+## Next
+
+In rough order; each step is chosen because a real driver needs it.
+
+1. **Threads, waits and timers; all CPUs online.** Most drivers block,
+   queue work or take locks at raised IRQL. This is the largest missing
+   piece and unlocks asynchronous I/O.
+2. **Structured exception handling.** Unwinding on both architectures,
+   then `METHOD_NEITHER` and the rest of the IOCTL sample.
+3. **A Windows 10 reference machine**, so tests assert what Windows does
+   rather than what the documentation says.
+4. **KMDF.** Microsoft's `echo.sys` sample through a driver-framework
+   runtime: device add and start, queues, timers, cancellation.
+5. **Physical hardware:** boot on a PC.
+6. **A real device.** An existing Windows driver doing I/O against a QEMU
+   virtual device, chosen by how much it needs rather than by how simple
+   the device is. Then storage, then networking.

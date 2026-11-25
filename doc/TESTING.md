@@ -69,6 +69,20 @@ published source and reading the driver binaries. They have not been compared wi
 Each driver test compares pool usage, free frames and namespace entries
 before loading the driver and after unloading it.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs `make gate` on every push and pull
+request. Both architectures are emulated there, and a fixture that cannot
+be downloaded fails the run (`NK_REQUIRE_FIXTURES=1`) instead of turning
+its tests into skips.
+
+## Release images
+
+`make dist` builds one boot image per architecture with only NK's loader
+and kernel on it, boots each to confirm it works, and writes them with
+their checksums to `target/dist/`. With no drivers present the kernel
+reports the driver tests as skipped.
+
 ## The gate
 
 `make gate` runs every check a commit must pass and prints `GATE-OK`.

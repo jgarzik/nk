@@ -8,7 +8,15 @@ Layout, mirroring where Windows keeps its boot files:
     \\NK\\drivers\\<name>.sys         boot drivers, from the fixture cache
 
 The image is a bare FAT filesystem made with mtools: no root, no loop device.
+
+Usage: mkesp.py <x86_64|aarch64> <output.img> [--no-drivers]
+
+`--no-drivers` leaves the fixture drivers out. Such an image contains only
+NK's own code and can be redistributed; the kernel boots and reports the
+driver tests as skipped.
 """
+
+import sys
 
 import subprocess
 import tomllib
@@ -49,7 +57,7 @@ def boot_drivers(arch):
     return drivers
 
 
-def build(arch, image, extra_drivers=()):
+def build(arch, image, drivers=True):
     """Write the ESP image for `arch` to `image`."""
     loader, kernel = binaries(arch)
     for f in (loader, kernel):
@@ -68,5 +76,12 @@ def build(arch, image, extra_drivers=()):
         mtools("mmd", "-i", image, f"::/{d}")
     mtools("mcopy", "-i", image, loader, f"::/EFI/BOOT/{BOOT_NAME[arch]}")
     mtools("mcopy", "-i", image, kernel, "::/NK/nkkrnl.exe")
-    for name, path in [*boot_drivers(arch), *extra_drivers]:
+    for name, path in boot_drivers(arch) if drivers else []:
         mtools("mcopy", "-i", image, path, f"::/NK/drivers/{name}")
+
+
+if __name__ == "__main__":
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) != 2 or args[0] not in BOOT_NAME:
+        sys.exit(__doc__)
+    build(args[0], Path(args[1]), drivers="--no-drivers" not in sys.argv)

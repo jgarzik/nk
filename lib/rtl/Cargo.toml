@@ -4,6 +4,8 @@ description = "Pure runtime-library logic: counted strings and object names"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+publish.workspace = true
 
 [lib]
 path = "lib.rs"

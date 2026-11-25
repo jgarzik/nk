@@ -4,6 +4,8 @@ description = "Print what the NK loader sees in a PE image"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "peinfo"

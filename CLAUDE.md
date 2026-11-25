@@ -13,8 +13,9 @@ where the host can unit-test it.
 
 ## Build / verify
 - Makefile targets only. Done = `make gate` prints GATE-OK.
-- Bisectable: every commit passes the gate alone. Commit locally; never
-  push, never amend.
+- Bisectable: every commit passes the gate alone. `main` is protected:
+  commit on a branch (`updates`); the maintainer pushes and merges. Never
+  amend. Never commit after a gate whose exit status was hidden by a pipe.
 - Tests grow with the kernel: a pure function gets a host unit test, a
   kernel behaviour gets a boot test line (`NK-TEST name:OK`).
 - Tests clean up after themselves; all output lives under `target/`.
@@ -38,5 +39,7 @@ where the host can unit-test it.
 - Document as you go, in the same commit. Record NK's decisions; link to
   Microsoft's documentation instead of restating it.
 - No CHANGELOG/NEWS files. No dead or speculative code.
+- Releases: version in the workspace `Cargo.toml`, tag `vX.Y.Z`, images
+  from `make dist` (no Windows binaries in them).
 
 Design: `doc/DESIGN.md`. Phases: `doc/ROADMAP.md`. Tests: `doc/TESTING.md`.

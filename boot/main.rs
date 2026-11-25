@@ -239,7 +239,11 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
 extern "efiapi" fn efi_main(image: efi::Handle, st: *mut efi::SystemTable) -> efi::Status {
     // SAFETY: firmware passes its system table to the image entry point.
     unsafe { efi::init(st) };
-    println!("nkload: NK loader ({})", arch::NAME);
+    println!(
+        "nkload: NK loader {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        arch::NAME
+    );
     let Err(why) = load(image);
     // The boot test reads this line; then power off rather than hang.
     println!("NK-TEST boot:FAIL nkload: {why}");
