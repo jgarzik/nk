@@ -23,6 +23,7 @@ dpc.run ok
 dpc.order ok
 dpc.remove ok
 dpc.other-cpu ok
+dpc.stack ok
 timer.never-early ok
 timer.shared-bucket ok
 timer.cancel ok

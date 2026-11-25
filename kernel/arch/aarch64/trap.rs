@@ -13,20 +13,26 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 /// All 32 vector registers are saved, not only the ones the calling
 /// convention calls volatile: the kernel itself is compiled to use them,
 /// and a function need only preserve the low half of v8-v15.
+///
+/// The order serves the entry stub's unwind information, whose codes
+/// reach only so far and step by 16 bytes: `sp` and `elr` are a pair at
+/// a multiple of 16, and the low halves of v8-v15 lie below offset 512.
 #[repr(C)]
 pub struct Frame {
     pub x: [u64; 31],
+    pub spsr: u64,
+    pub q: [[u64; 2]; 32],
     pub sp: u64,
     pub elr: u64,
-    pub spsr: u64,
     pub esr: u64,
     pub far: u64,
-    pub q: [[u64; 2]; 32],
     pub fpcr: u64,
     pub fpsr: u64,
 }
 
 const _: () = assert!(size_of::<Frame>() == 816);
+const _: () = assert!(core::mem::offset_of!(Frame, q) == 256);
+const _: () = assert!(core::mem::offset_of!(Frame, sp) == 768);
 
 /// Exception class (ESR_EL1 bits 31:26) of a `brk` instruction.
 const EC_BRK: u64 = 0x3C;
@@ -57,6 +63,10 @@ pub fn breakpoints() -> u32 {
 // The common path saves the rest, including the vector registers and the
 // floating-point control and status registers, and gives the handler the
 // kernel's own control word (round to nearest, no traps).
+//
+// The vector table has no unwind information: while a vector's first
+// instructions run, the interrupted code's pc is only in ELR_EL1, and
+// for a few of them sp is not a stack pointer at all.
 global_asm!(
     r#"
     .text
@@ -273,7 +283,9 @@ nk_vectors:
     b nk_stack_overflow
 
 // Entered with sp and every register as at the exception, less the frame
-// already subtracted from sp. Nothing can be saved on that stack.
+// already subtracted from sp. Nothing can be saved on that stack. The
+// report is entered with no return address: a walk of the overflow stack
+// ends there.
 nk_stack_overflow:
     msr tpidrro_el0, x0
     mrs x0, tpidr_el1
@@ -283,76 +295,131 @@ nk_stack_overflow:
     add x0, x1, #816
     mrs x1, elr_el1
     mrs x2, far_el1
-    bl {overflow}
+    mov x29, xzr
+    mov x30, xzr
+    b {overflow}
 
+// Unwind information: from the call of the handler until the frame is
+// given up, a stack walk gets the interrupted code's sp and pc (the pair
+// at #768 is what Windows' unwind codes call a machine frame), x19-x30
+// and d8-d15 from where the frame holds them. The codes are attached to
+// the instructions that store those, or to later ones. The entry
+// sequence cannot be walked: until its last stores the interrupted pc is
+// only in ELR_EL1, where no unwind code can find it.
 nk_trap_common:
+    .seh_proc nk_trap_common
     mov x1, x0
+    .seh_pushframe
     stp x2, x3, [sp, #16]
+    .seh_stackalloc 768
     stp x4, x5, [sp, #32]
+    .seh_nop
     stp x6, x7, [sp, #48]
+    .seh_nop
     stp x8, x9, [sp, #64]
+    .seh_nop
     stp x10, x11, [sp, #80]
+    .seh_nop
     stp x12, x13, [sp, #96]
+    .seh_nop
     stp x14, x15, [sp, #112]
+    .seh_nop
     stp x16, x17, [sp, #128]
+    .seh_nop
     stp x18, x19, [sp, #144]
+    .seh_save_reg x19, 152
     stp x20, x21, [sp, #160]
+    .seh_save_regp x20, 160
     stp x22, x23, [sp, #176]
+    .seh_save_regp x22, 176
     stp x24, x25, [sp, #192]
+    .seh_save_regp x24, 192
     stp x26, x27, [sp, #208]
+    .seh_save_regp x26, 208
     stp x28, x29, [sp, #224]
-    add x9, sp, #816
-    stp x30, x9, [sp, #240]
-    mrs x9, elr_el1
+    .seh_save_reg x28, 224
     mrs x10, spsr_el1
-    stp x9, x10, [sp, #256]
-    mrs x9, esr_el1
-    mrs x10, far_el1
-    stp x9, x10, [sp, #272]
-    stp q0, q1, [sp, #288]
-    stp q2, q3, [sp, #320]
-    stp q4, q5, [sp, #352]
-    stp q6, q7, [sp, #384]
-    stp q8, q9, [sp, #416]
-    stp q10, q11, [sp, #448]
-    stp q12, q13, [sp, #480]
-    stp q14, q15, [sp, #512]
-    stp q16, q17, [sp, #544]
-    stp q18, q19, [sp, #576]
-    stp q20, q21, [sp, #608]
-    stp q22, q23, [sp, #640]
-    stp q24, q25, [sp, #672]
-    stp q26, q27, [sp, #704]
-    stp q28, q29, [sp, #736]
-    stp q30, q31, [sp, #768]
-    mrs x9, fpcr
-    mrs x10, fpsr
-    add x11, sp, #800
+    .seh_nop
+    stp x30, x10, [sp, #240]
+    .seh_save_fplr 232
+    add x11, sp, #768
+    .seh_nop
+    add x9, sp, #816
+    .seh_nop
+    mrs x10, elr_el1
+    .seh_nop
     stp x9, x10, [x11]
+    .seh_nop
+    mrs x9, esr_el1
+    .seh_nop
+    mrs x10, far_el1
+    .seh_nop
+    stp x9, x10, [x11, #16]
+    .seh_nop
+    stp q0, q1, [sp, #256]
+    .seh_nop
+    stp q2, q3, [sp, #288]
+    .seh_nop
+    stp q4, q5, [sp, #320]
+    .seh_nop
+    stp q6, q7, [sp, #352]
+    .seh_nop
+    stp q8, q9, [sp, #384]
+    .seh_save_freg d8, 384
+    stp q10, q11, [sp, #416]
+    .seh_save_freg d9, 400
+    stp q12, q13, [sp, #448]
+    .seh_save_freg d10, 416
+    stp q14, q15, [sp, #480]
+    .seh_save_freg d11, 432
+    stp q16, q17, [sp, #512]
+    .seh_save_freg d12, 448
+    stp q18, q19, [sp, #544]
+    .seh_save_freg d13, 464
+    stp q20, q21, [sp, #576]
+    .seh_save_freg d14, 480
+    stp q22, q23, [sp, #608]
+    .seh_save_freg d15, 496
+    stp q24, q25, [sp, #640]
+    .seh_nop
+    stp q26, q27, [sp, #672]
+    .seh_nop
+    stp q28, q29, [sp, #704]
+    .seh_nop
+    stp q30, q31, [sp, #736]
+    .seh_nop
+    mrs x9, fpcr
+    .seh_nop
+    mrs x10, fpsr
+    .seh_nop
+    stp x9, x10, [x11, #32]
+    .seh_nop
+    .seh_endprologue
     msr fpcr, xzr
     mov x0, sp
     bl {handler}
-    add x11, sp, #800
-    ldp x9, x10, [x11]
+    add x11, sp, #768
+    ldp x9, x10, [x11, #32]
     msr fpcr, x9
     msr fpsr, x10
-    ldp q0, q1, [sp, #288]
-    ldp q2, q3, [sp, #320]
-    ldp q4, q5, [sp, #352]
-    ldp q6, q7, [sp, #384]
-    ldp q8, q9, [sp, #416]
-    ldp q10, q11, [sp, #448]
-    ldp q12, q13, [sp, #480]
-    ldp q14, q15, [sp, #512]
-    ldp q16, q17, [sp, #544]
-    ldp q18, q19, [sp, #576]
-    ldp q20, q21, [sp, #608]
-    ldp q22, q23, [sp, #640]
-    ldp q24, q25, [sp, #672]
-    ldp q26, q27, [sp, #704]
-    ldp q28, q29, [sp, #736]
-    ldp q30, q31, [sp, #768]
-    ldp x9, x10, [sp, #256]
+    ldp q0, q1, [sp, #256]
+    ldp q2, q3, [sp, #288]
+    ldp q4, q5, [sp, #320]
+    ldp q6, q7, [sp, #352]
+    ldp q8, q9, [sp, #384]
+    ldp q10, q11, [sp, #416]
+    ldp q12, q13, [sp, #448]
+    ldp q14, q15, [sp, #480]
+    ldp q16, q17, [sp, #512]
+    ldp q18, q19, [sp, #544]
+    ldp q20, q21, [sp, #576]
+    ldp q22, q23, [sp, #608]
+    ldp q24, q25, [sp, #640]
+    ldp q26, q27, [sp, #672]
+    ldp q28, q29, [sp, #704]
+    ldp q30, q31, [sp, #736]
+    ldr x9, [x11, #8]
+    ldr x10, [sp, #248]
     msr elr_el1, x9
     msr spsr_el1, x10
     ldr x30, [sp, #240]
@@ -377,6 +444,7 @@ nk_trap_common:
     ldp x28, x29, [sp, #224]
     add sp, sp, #816
     eret
+    .seh_endproc
 
 // For `fp_trap_test`. Load v0-v31 and FPCR from the block at x0, take a
 // breakpoint, store what they hold afterwards in the block at x1. A block
@@ -384,11 +452,18 @@ nk_trap_common:
 // are the caller's to keep, so they are saved around it.
     .globl nk_fp_trap_probe
 nk_fp_trap_probe:
+    .seh_proc nk_fp_trap_probe
     sub sp, sp, #80
+    .seh_stackalloc 80
     stp d8, d9, [sp]
+    .seh_save_fregp d8, 0
     stp d10, d11, [sp, #16]
+    .seh_save_fregp d10, 16
     stp d12, d13, [sp, #32]
+    .seh_save_fregp d12, 32
     stp d14, d15, [sp, #48]
+    .seh_save_fregp d14, 48
+    .seh_endprologue
     mrs x9, fpcr
     str x9, [sp, #64]
     ldp q0, q1, [x0]
@@ -430,18 +505,27 @@ nk_fp_trap_probe:
     str x9, [x1, #512]
     ldr x9, [sp, #64]
     msr fpcr, x9
+    .seh_startepilogue
     ldp d8, d9, [sp]
+    .seh_save_fregp d8, 0
     ldp d10, d11, [sp, #16]
+    .seh_save_fregp d10, 16
     ldp d12, d13, [sp, #32]
+    .seh_save_fregp d12, 32
     ldp d14, d15, [sp, #48]
+    .seh_save_fregp d14, 48
     add sp, sp, #80
+    .seh_stackalloc 80
+    .seh_endepilogue
     ret
-
+    .seh_endproc
 // What code run from an interrupt is entitled to do: overwrite every
 // vector register except the low halves of v8-v15. Returns the FPCR it
 // runs with.
     .globl nk_fp_clobber
 nk_fp_clobber:
+    .seh_proc nk_fp_clobber
+    .seh_endprologue
     mrs x0, fpcr
     mov x9, #-1
     movi v0.16b, #0xff
@@ -477,6 +561,7 @@ nk_fp_clobber:
     movi v30.16b, #0xff
     movi v31.16b, #0xff
     ret
+    .seh_endproc
 "#,
     handler = sym trap_handler,
     overflow = sym stack_overflow,

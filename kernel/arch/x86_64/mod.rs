@@ -26,7 +26,8 @@ pub fn hardware_processor() -> u64 {
 }
 
 pub use switch::{
-    all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
+    all_registers_survive, call_on_stack, callee_saved_survive, context_switch, new_context,
+    wait_for_interrupt,
 };
 pub use trap::{breakpoint, breakpoints, driver_breakpoint, fp_trap_test};
 
@@ -89,15 +90,17 @@ pub fn switch_stack(
     info: &'static BootInfo,
 ) -> ! {
     // SAFETY: `top` is the top of a mapped stack nothing else uses, 16-byte
-    // aligned; the 32 bytes are the callee's shadow space, and the call
-    // leaves the stack as the convention requires at function entry.
+    // aligned; the 32 bytes are the callee's shadow space, and the push
+    // leaves the stack as the convention requires at function entry. The
+    // return address pushed is zero: `entry` never returns, and a walk of
+    // the new stack ends there.
     unsafe {
         core::arch::asm!(
             "mov rsp, {top}",
             "xor ebp, ebp",
             "sub rsp, 32",
-            "call {entry}",
-            "ud2",
+            "push 0",
+            "jmp {entry}",
             top = in(reg) top,
             entry = in(reg) entry,
             in("rcx") info,

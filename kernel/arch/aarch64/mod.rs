@@ -40,7 +40,8 @@ pub fn hardware_processor() -> u64 {
 }
 
 pub use switch::{
-    all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
+    all_registers_survive, call_on_stack, callee_saved_survive, context_switch, new_context,
+    wait_for_interrupt,
 };
 pub use trap::{breakpoint, breakpoints, driver_breakpoint, fp_trap_test};
 

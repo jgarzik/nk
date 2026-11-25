@@ -16,15 +16,19 @@ global_asm!(
     .macro nk_variadic entry, target
     .globl \entry
 \entry:
+    .seh_proc \entry
     mov [rsp + 8], rcx
     mov [rsp + 16], rdx
     mov [rsp + 24], r8
     mov [rsp + 32], r9
     lea rcx, [rsp + 8]
     sub rsp, 40
+    .seh_stackalloc 40
+    .seh_endprologue
     call \target
     add rsp, 40
     ret
+    .seh_endproc
     .endm
 
     nk_variadic nk_variadic_DbgPrint, nk_dbg_print

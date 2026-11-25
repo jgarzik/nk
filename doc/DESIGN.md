@@ -290,11 +290,22 @@ delivered when the IRQL falls below `DISPATCH_LEVEL` by whatever means:
 WDK-built x86-64 code lowers the IRQL in line, so there is no call to
 hook. The handler runs the queue in order.
 
+DPC routines run on a stack of their processor's, as on Windows: an
+ordinary kernel stack, allocated with the processor's state and kept.
+The handler changes stacks around the queue run only. The interrupt
+itself begins and ends on the interrupted thread's stack, because a
+thread switch at its end leaves that thread there to be resumed. An
+interrupt that arrives during a routine is handled on the DPC stack, and
+an overflow of it is reported as a kernel stack overflow. No thread can
+be left on that stack: a thread switch while a routine runs, possible
+only if the routine lowered the IRQL, stops the system
+(`ATTEMPTED_SWITCH_FROM_DPC`), and a DPC interrupt arriving inside such
+a routine leaves the queue to the run in progress.
+
 The driver owns the `KDPC`. As on Windows `DpcData` is non-null exactly
 while queued; NK stores the queue's address there. A DPC running over 20
 seconds stops the system (`DPC_WATCHDOG_VIOLATION`); the tick checks.
-DPCs run on the interrupted stack. No targeting of another processor and
-no importance ordering.
+No targeting of another processor and no importance ordering.
 
 ## Timers
 
@@ -365,8 +376,50 @@ The kernel builds for Rust's stock `x86_64-unknown-uefi` and
   (in the kernel), so the code that must be right for drivers runs on
   every boot.
 
-The kernel image itself has no unwind tables (no `.pdata`): SEH through
-NK's own frames needs them built in.
+### Unwind tables
+
+The kernel image has a function table (`.pdata`) like any driver's, so
+its frames can be walked by the rules of
+[x64](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64)
+and [arm64](https://learn.microsoft.com/en-us/cpp/build/arm64-exception-handling)
+exception handling. The Makefile builds the loader and kernel with
+`-C force-unwind-tables=yes`; every assembly routine states its own with
+`.seh_*` directives.
+
+- **A stack ends at return address zero.** A thread's start stub, the
+  boot stack, a started processor's stack and arm64's overflow stack are
+  all entered as if called from address zero.
+- **Interrupt frames are crossed like any other frame.** x86-64: each
+  vector's stub calls the common path, so the frame holds an ordinary
+  return address above the saved registers and below the error code and
+  the CPU's frame. From any instruction of entry or exit a walk recovers
+  the interrupted code's `rip`, `rsp`, every integer register and
+  XMM0-XMM5. arm64: from the handler's call until the frame is given up
+  a walk recovers `pc`, `sp`, x19-x30 and d8-d15; `sp` and `pc` sit in
+  the frame as the pair the unwind codes call a machine frame.
+- **A thread that is not running** is walked from its saved stack
+  pointer as if stopped inside the switch routine.
+
+Not covered:
+
+- arm64 exception entry up to the frame's last store, and the final
+  `eret`: the interrupted `pc` is in `ELR_EL1` alone there, where no
+  unwind code reaches. The vector table and the overflow stub have no
+  entries.
+- Code that starts a processor before it is on the kernel's page tables
+  (the x86-64 trampoline, arm64's `nk_ap_stub`).
+- The prebuilt `core`, `alloc` and `compiler_builtins`: Rust ships them
+  without tables. What NK instantiates from them (generic code) is
+  compiled with NK and has entries; their own non-generic functions
+  (formatting, `memcpy`, 128-bit division) do not. A function with no
+  entry is taken for a leaf, which these need not be, so a walk cannot
+  be trusted beneath one.
+- x86-64 MXCSR and arm64 FPCR of interrupted code: they are in the trap
+  frame, but unwind codes have no way to name them.
+
+A compiled function that uses no stack has no entry either, on both
+architectures. That is the convention for a leaf: its return address is
+where the call left it, at `[rsp]` or in `x30`.
 
 ## Exports
 

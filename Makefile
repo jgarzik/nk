@@ -34,6 +34,14 @@ X86 := x86_64-unknown-uefi
 ARM := aarch64-unknown-uefi
 KERNEL_CRATES := -p nkload -p nkkrnl
 
+# Every function of the loader and kernel gets an unwind-table entry
+# (`.pdata`), so the kernel's own frames can be walked. The variables
+# name the target, so the host builds (`test`, the first half of
+# `clippy`) are not touched.
+UNWIND_TABLES := -C force-unwind-tables=yes
+export CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS := $(UNWIND_TABLES)
+export CARGO_TARGET_AARCH64_UNKNOWN_UEFI_RUSTFLAGS := $(UNWIND_TABLES)
+
 build:
 	$(CARGO) build --release --target $(X86) $(KERNEL_CRATES)
 

@@ -10,10 +10,12 @@
 //! judge accepts a bugcheck only after that line, so a crash on the way
 //! to the test is not mistaken for the one the test meant to cause.
 
-use crate::ke::{Rank, SpinLock, irql};
+use crate::ke::{Rank, SpinLock, dpc, irql};
 use crate::mm;
-use crate::test::{Group, Report};
+use crate::test::{Group, Report, Slot};
+use core::ffi::c_void;
 use nk_bootinfo::BootInfo;
+use nk_ntabi::ke::KDPC;
 
 /// A Rust panic in the kernel must become a bugcheck.
 pub static PANIC: Group = Group {
@@ -84,6 +86,33 @@ fn stack_overflow(r: &mut Report, _: &BootInfo) {
     r.fail(
         "neg.stack-overflow",
         format_args!("unbounded recursion returned {depth}"),
+    );
+}
+
+/// The same in a DPC routine, which runs on its processor's DPC stack,
+/// not on the thread's.
+pub static DPC_STACK_OVERFLOW: Group = Group {
+    names: &["neg.dpc-stack-overflow"],
+    run: dpc_stack_overflow,
+    manual: true,
+};
+
+fn dpc_stack_overflow(r: &mut Report, _: &BootInfo) {
+    /// # Safety
+    /// Called as a DPC routine; it dereferences none of its arguments.
+    unsafe extern "C" fn routine(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        descend(0);
+    }
+    static DPC: Slot<KDPC> = Slot::new();
+    kprintln!("NK-NEG-ARMED neg.dpc-stack-overflow");
+    // SAFETY: static storage for a `KDPC`, not queued.
+    unsafe {
+        dpc::KeInitializeDpc(DPC.ptr(), Some(routine), core::ptr::null_mut());
+        dpc::KeInsertQueueDpc(DPC.ptr(), core::ptr::null_mut(), core::ptr::null_mut());
+    }
+    r.fail(
+        "neg.dpc-stack-overflow",
+        format_args!("unbounded recursion in a DPC routine returned"),
     );
 }
 

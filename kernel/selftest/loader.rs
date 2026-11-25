@@ -51,7 +51,8 @@ pub static GROUP: Group = Group {
     manual: false,
 };
 
-/// The kernel's own image is in the table, under Windows' name for it.
+/// The kernel's own image is in the table, under Windows' name for it,
+/// with the function table its frames are walked by.
 fn kernel_module() -> Result<(), &'static str> {
     let here = kernel_module as *const () as u64;
     let module = ldr::module_containing(here).ok_or("the kernel's code is in no image")?;
@@ -63,6 +64,13 @@ fn kernel_module() -> Result<(), &'static str> {
     }
     if ldr::module_containing(module.base + module.size).is_some_and(|m| m.base == module.base) {
         return Err("the kernel's image reaches past its end");
+    }
+    // The kernel's own frames are walked by its function table.
+    if module.pdata.size == 0 {
+        return Err("the kernel's image has no function table");
+    }
+    if u64::from(module.pdata.rva) + u64::from(module.pdata.size) > module.size {
+        return Err("the kernel's function table lies outside its image");
     }
     Ok(())
 }

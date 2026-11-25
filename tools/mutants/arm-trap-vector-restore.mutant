@@ -2,4 +2,4 @@
 scenario: aarch64
 fails: cpu.fp-preserved
 file: kernel/arch/aarch64/trap.rs
-remove:     ldp q16, q17, [sp, #544]
+remove:     ldp q16, q17, [sp, #512]

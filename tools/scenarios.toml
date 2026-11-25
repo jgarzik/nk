@@ -167,6 +167,22 @@ cmdline = "test=neg.stack-overflow"
 expect = "bugcheck"
 match = "BUGCHECK: kernel stack overflow"
 
+# So must running off a processor's DPC stack, in a DPC routine.
+
+[x86_64-neg-dpc-stack-overflow]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.dpc-stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
+[aarch64-neg-dpc-stack-overflow]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.dpc-stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
 # Broken IRQL and locking rules must stop the system, with Windows'
 # bugcheck code where Windows has one.
 
@@ -287,7 +303,7 @@ arch = "x86_64"
 tier = "gate"
 cmdline = "test=neg.wait-in-dpc"
 expect = "bugcheck"
-match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a DPC routine waited"
 
 [aarch64-neg-wait-at-dispatch]
 arch = "aarch64"
@@ -301,7 +317,24 @@ arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.wait-in-dpc"
 expect = "bugcheck"
-match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a DPC routine waited"
+
+# A DPC routine that lowers the IRQL can begin a wait; the thread switch
+# would leave the thread on the processor's DPC stack, and is refused.
+
+[x86_64-neg-switch-in-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.switch-in-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch"
+
+[aarch64-neg-switch-in-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.switch-in-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch"
 
 [x86_64-neg-mutex-held-at-exit]
 arch = "x86_64"

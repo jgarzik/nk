@@ -1,0 +1,7 @@
+# The fault handler knows only the thread's stack: a DPC routine that
+# runs off the DPC stack stops the machine with a bare "double fault".
+scenario: x86_64-neg-dpc-stack-overflow
+fails: scenario
+file: kernel/arch/x86_64/trap.rs
+replace:         super::cpu::percpu().dpcs().stack().base,
+with:         0,
