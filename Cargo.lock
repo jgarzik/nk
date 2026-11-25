@@ -23,6 +23,7 @@ name = "nk-ntabi"
 version = "0.0.1"
 dependencies = [
  "nk-pdb",
+ "nk-se",
 ]
 
 [[package]]
@@ -39,6 +40,10 @@ version = "0.0.1"
 
 [[package]]
 name = "nk-rtl"
+version = "0.0.1"
+
+[[package]]
+name = "nk-se"
 version = "0.0.1"
 
 [[package]]
@@ -60,6 +65,7 @@ dependencies = [
  "nk-oracle",
  "nk-pe",
  "nk-rtl",
+ "nk-se",
  "nk-selftest",
 ]
 

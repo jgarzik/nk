@@ -354,3 +354,61 @@ fn remove_lock_matches_the_kernel() {
         field("RemoveEvent")
     );
 }
+
+#[test]
+fn security_structures_match_the_kernel() {
+    use crate::se::{LUID, SECURITY_DESCRIPTOR};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let sd = types
+        .layout("_SECURITY_DESCRIPTOR")
+        .expect("_SECURITY_DESCRIPTOR");
+    let field = |name| offset(&sd, "_SECURITY_DESCRIPTOR", name);
+    assert_eq!(size_of::<SECURITY_DESCRIPTOR>(), sd.size as usize);
+    assert_eq!(offset_of!(SECURITY_DESCRIPTOR, Control), field("Control"));
+    assert_eq!(offset_of!(SECURITY_DESCRIPTOR, Owner), field("Owner"));
+    assert_eq!(offset_of!(SECURITY_DESCRIPTOR, Group), field("Group"));
+    assert_eq!(offset_of!(SECURITY_DESCRIPTOR, Sacl), field("Sacl"));
+    assert_eq!(offset_of!(SECURITY_DESCRIPTOR, Dacl), field("Dacl"));
+    assert_eq!(
+        size_of::<LUID>(),
+        types.layout("_LUID").expect("_LUID").size as usize
+    );
+
+    // The byte layouts `nk_se` works with.
+    let relative = types
+        .layout("_SECURITY_DESCRIPTOR_RELATIVE")
+        .expect("_SECURITY_DESCRIPTOR_RELATIVE");
+    let field = |name| offset(&relative, "_SECURITY_DESCRIPTOR_RELATIVE", name);
+    assert_eq!(nk_se::RELATIVE_HEADER, relative.size as usize);
+    assert_eq!(
+        (
+            field("Control"),
+            field("Owner"),
+            field("Group"),
+            field("Sacl"),
+            field("Dacl")
+        ),
+        (2, 4, 8, 12, 16)
+    );
+    let acl = types.layout("_ACL").expect("_ACL");
+    assert_eq!(nk_se::ACL_HEADER, acl.size as usize);
+    assert_eq!(
+        (
+            offset(&acl, "_ACL", "AclSize"),
+            offset(&acl, "_ACL", "AceCount")
+        ),
+        (2, 4)
+    );
+    let sid = types.layout("_SID").expect("_SID");
+    assert_eq!(
+        (
+            offset(&sid, "_SID", "SubAuthorityCount"),
+            offset(&sid, "_SID", "IdentifierAuthority"),
+            offset(&sid, "_SID", "SubAuthority")
+        ),
+        (1, 2, 8)
+    );
+    // One sub-authority is declared; the size is that of such a SID.
+    assert_eq!(nk_se::sid_length(1), sid.size as usize);
+}

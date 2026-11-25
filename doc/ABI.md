@@ -155,7 +155,9 @@ it on the fields they share.
 **Status: agrees, x86-64.** `KPCR.Self` 0x18, `CurrentPrcb` 0x20, `Prcb`
 0x180, `KPRCB.CurrentThread` 0x8, `Number` 0x24, `LegacyNumber` 0x4 and
 the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
-`gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number. A structure is added to the
+`gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number.
+Security descriptors (absolute and self-relative), ACL and SID headers
+agree too. A structure is added to the
 comparison by the commit that starts using it.
 
 There is nothing to compare arm64 with: NK has no source of Windows 10
@@ -164,6 +166,12 @@ the WDK compiles into the probe, and layouts of NK's own for whatever no
 available binary can observe.
 
 ## Not yet verified
+
+- `SE_EXPORTS` past `SeUserModeDriversSid` (0x210). Up to there, the
+  offsets are the ones Microsoft's device-security library, linked into
+  the `cancel` fixture, reads SIDs from. The two SIDs and one privilege
+  after it, and the structure's size (0x230), are the header's as NK
+  reads it; no fixture reads them yet.
 
 - The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
   documented convention; no symbol file, probe fact or fixture driver

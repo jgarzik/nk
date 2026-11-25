@@ -23,6 +23,7 @@ mod ob;
 mod ps;
 mod rt;
 mod rtl;
+mod se;
 mod selftest;
 mod test;
 

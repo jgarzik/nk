@@ -1284,27 +1284,27 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlGetDaclSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlGetGroupSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlGetOwnerSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlGetSaclSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "SeCaptureSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1314,17 +1314,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlLengthSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "SeExports",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlCreateSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1344,17 +1344,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlAbsoluteToSelfRelativeSD",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlAddAccessAllowedAce",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlLengthSid",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1364,7 +1364,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlSetDaclSecurityDescriptor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

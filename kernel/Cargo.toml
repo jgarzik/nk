@@ -23,6 +23,7 @@ nk-ntabi = { path = "../lib/ntabi" }
 nk-oracle = { path = "../lib/oracle" }
 nk-pe = { path = "../lib/pe" }
 nk-rtl = { path = "../lib/rtl" }
+nk-se = { path = "../lib/se" }
 nk-selftest = { path = "../lib/selftest" }
 
 [lints]

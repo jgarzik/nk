@@ -380,12 +380,27 @@ the WDK; private ones (principle 2) with the type information in the
 public symbols of the pinned kernel, read by NK's own PDB reader
 (`lib/pdb`). `doc/ABI.md` has the state of both.
 
+### Security descriptors
+
+SIDs, access lists and security descriptors are byte layouts with rules,
+so they live in `lib/se` and are tested on the host; `kernel/se` is the
+routines drivers call. A driver's descriptor is the driver's memory: the
+routines read and write it through raw pointers and run the rules on
+copies. `SeExports` points to a table of the well-known SIDs and
+privilege numbers, laid out as in `ntifs.h`.
+
+NK checks no access: there is no user mode to check. Descriptors are
+built, converted, captured and stored faithfully, so that they are right
+when something reads them. A forced capture
+(`SeCaptureSecurityDescriptor`) is a self-relative copy in the pool, the
+caller's to free.
+
 ### Pure logic lives in `lib/`
 
 Anything that can be written without touching hardware goes in a
 `no_std` library crate and is unit-tested on the build host: PE loading,
-structure layouts, string and list routines, allocator arithmetic, page
-table construction. The kernel binary is the glue and the `unsafe`.
+structure layouts, string and list routines, formatted output, security
+descriptors, allocator arithmetic, page table construction. The kernel binary is the glue and the `unsafe`.
 
 ### Memory
 
