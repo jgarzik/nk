@@ -17,6 +17,8 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod arm64;
+pub mod dispatch;
+pub mod scope;
 pub mod x64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,5 +99,7 @@ fn last_at_or_below(
 
 #[cfg(test)]
 mod arm64_tests;
+#[cfg(test)]
+mod scope_tests;
 #[cfg(test)]
 mod x64_tests;
