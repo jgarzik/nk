@@ -1490,9 +1490,11 @@ pub fn fp_trap_test() -> Result<(), &'static str> {
         mxcsr: 0,
     };
     FP_CLOBBER.store(true, Ordering::Relaxed);
+    crate::kd::expect_breakpoint(true);
     // SAFETY: both blocks are live and of the size the probe reads and
     // writes; it restores the caller's MXCSR, and XMM0-XMM5 are volatile.
     unsafe { nk_fp_trap_probe(&raw const load, &raw mut store) };
+    crate::kd::expect_breakpoint(false);
     FP_CLOBBER.store(false, Ordering::Relaxed);
     if HANDLER_MXCSR.load(Ordering::Relaxed) != KERNEL_MXCSR {
         return Err("the handler ran with the interrupted code's MXCSR");
@@ -1508,7 +1510,9 @@ pub fn fp_trap_test() -> Result<(), &'static str> {
 
 extern "C" fn trap_handler(frame: &mut Frame) {
     if frame.vector == BREAKPOINT {
-        // `int3` is a trap: rip already points past it.
+        // `int3` is a trap: rip already points past it. Whether to go
+        // on is not this layer's to say.
+        crate::kd::breakpoint(frame.rip - 1);
         BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
         if FP_CLOBBER.load(Ordering::Relaxed) {
             let mut mxcsr = 0;
@@ -1655,8 +1659,17 @@ pub fn load() {
     };
 }
 
-/// Execute a breakpoint instruction.
+/// Execute a breakpoint instruction: the kernel's own, for its tests.
 pub fn breakpoint() {
+    crate::kd::expect_breakpoint(true);
     // SAFETY: `int3` traps to the handler above, which resumes after it.
+    unsafe { core::arch::asm!("int3", options(nomem, nostack)) };
+    crate::kd::expect_breakpoint(false);
+}
+
+/// Execute a breakpoint instruction the way a driver's `DbgBreakPoint`
+/// does: unannounced.
+pub fn driver_breakpoint() {
+    // SAFETY: `int3` traps to the handler above.
     unsafe { core::arch::asm!("int3", options(nomem, nostack)) };
 }

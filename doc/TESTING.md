@@ -58,6 +58,8 @@ The kernel command line is the file `\NK\cmdline.txt` on the boot volume:
 | --- | --- |
 | `test=<pattern>` | run only the groups with a matching test name (`*` matches any run of characters) |
 | `cpus=<n>` | the machine has `n` processors; `hal.cpus` fails if the kernel finds another number. The harness sets it to what it asked QEMU for |
+| `dpc-limit=<ticks>` | how long one DPC may run before the system stops, instead of Windows' 20 seconds |
+| `debug=on` | behave as with a kernel debugger attached that continues at every breakpoint |
 
 ### What passing means
 
@@ -106,6 +108,8 @@ tier in parallel:
 | `*-neg-wait-at-dispatch`, `*-neg-wait-in-dpc` | a wait that would have to block at `DISPATCH_LEVEL` stops the system |
 | `*-neg-mutex-held-at-exit` | a thread that ends holding a mutex stops the system |
 | `*-neg-work-bad-irql` | a work routine that returns with the IRQL raised stops the system |
+| `*-neg-breakpoint` | a driver's breakpoint, with no debugger, stops the system as on Windows (`0x7E`) |
+| `*-debugger-breakpoint` | with `debug=on` the same breakpoint is passed over |
 | `*-known-bad` | a failing test fails the run |
 | `*-wrong-cpus` | a processor the kernel does not find fails a test |
 

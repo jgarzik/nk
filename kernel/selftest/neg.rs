@@ -141,3 +141,19 @@ fn irql_lower(r: &mut Report, _: &BootInfo) {
         format_args!("the IRQL was lowered upward"),
     );
 }
+
+/// A breakpoint executed as a driver's `DbgBreakPoint` would execute it:
+/// with no debugger, the system must stop, as Windows does.
+pub static BREAKPOINT: Group = Group {
+    names: &["neg.breakpoint"],
+    run: breakpoint,
+    manual: true,
+};
+
+fn breakpoint(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.breakpoint");
+    crate::arch::driver_breakpoint();
+    // With `debug=on` a debugger is taken to be attached and to say go:
+    // then getting here is right, and the scenario expects it.
+    r.ok("neg.breakpoint");
+}

@@ -257,6 +257,21 @@ An I/O work item is allocated by the kernel at Windows' size and tied to
 a device, which is referenced from queueing until the routine has
 returned.
 
+### Breakpoints and the debugger
+
+A driver that executes a breakpoint (`DbgBreakPoint`, which is in-line
+code) gets what Windows gives it, and Windows has two answers. Booted
+normally, with no kernel debugger, the breakpoint is an exception nobody
+handles, and the system stops: bugcheck `0x7E` with exception
+`0x80000003`. Booted with debugging enabled, it is the debugger's to
+decide, and the system waits for it.
+
+NK does the first by default. With `debug=on` on the kernel command line
+it behaves as with a debugger attached that says "go" at every
+breakpoint: it notes the breakpoint on the console and continues. NK has
+no debugger protocol; `debug=on` only stands for the answer one would
+give. The kernel's own tests announce the breakpoints they execute.
+
 ### Objects, references and handles
 
 What the object manager allocates has Windows' `OBJECT_HEADER` in front

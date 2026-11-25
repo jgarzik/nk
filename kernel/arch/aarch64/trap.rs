@@ -531,9 +531,11 @@ pub fn fp_trap_test() -> Result<(), &'static str> {
         fpcr: 0,
     };
     FP_CLOBBER.store(true, Ordering::Relaxed);
+    crate::kd::expect_breakpoint(true);
     // SAFETY: both blocks are live and of the size the probe reads and
     // writes; it preserves what the calling convention says it must.
     unsafe { nk_fp_trap_probe(&raw const load, &raw mut store) };
+    crate::kd::expect_breakpoint(false);
     FP_CLOBBER.store(false, Ordering::Relaxed);
     if HANDLER_FPCR.load(Ordering::Relaxed) != 0 {
         return Err("the handler ran with the interrupted code's FPCR");
@@ -550,7 +552,9 @@ pub fn fp_trap_test() -> Result<(), &'static str> {
 extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
     let brk = (vector & 3 == 0 && frame.esr >> 26 == EC_BRK).then_some(frame.esr & 0xFFFF);
     if brk == Some(BRK_BREAKPOINT) {
-        // `brk` is a fault: step past the 4-byte instruction.
+        // Whether to go on is not this layer's to say. `brk` is a
+        // fault: going on means stepping past the 4-byte instruction.
+        crate::kd::breakpoint(frame.elr);
         BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
         frame.elr += 4;
         if FP_CLOBBER.load(Ordering::Relaxed) {
@@ -608,8 +612,17 @@ pub fn init() {
     }
 }
 
-/// Execute a breakpoint instruction.
+/// Execute a breakpoint instruction: the kernel's own, for its tests.
 pub fn breakpoint() {
+    crate::kd::expect_breakpoint(true);
     // SAFETY: `brk` traps to the handler above, which resumes after it.
+    unsafe { core::arch::asm!("brk #0xf000", options(nomem, nostack)) };
+    crate::kd::expect_breakpoint(false);
+}
+
+/// Execute a breakpoint instruction the way a driver's `DbgBreakPoint`
+/// does: unannounced.
+pub fn driver_breakpoint() {
+    // SAFETY: `brk` traps to the handler above.
     unsafe { core::arch::asm!("brk #0xf000", options(nomem, nostack)) };
 }

@@ -50,6 +50,7 @@ pub static GROUPS: &[&Group] = &[
     &neg::LOCK_TWICE,
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
+    &neg::BREAKPOINT,
     &smp::STUCK,
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,

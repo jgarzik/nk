@@ -330,3 +330,27 @@ tier = "gate"
 cmdline = "test=neg.work-bad-irql"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
+
+[x86_64-neg-breakpoint]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.breakpoint"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+[x86_64-debugger-breakpoint]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.breakpoint debug=on"
+
+[aarch64-neg-breakpoint]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.breakpoint"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+[aarch64-debugger-breakpoint]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.breakpoint debug=on"
