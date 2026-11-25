@@ -1133,45 +1133,80 @@ pub fn affinity_test() -> Result<u64, &'static str> {
     Ok(SPINS[0].load(Ordering::Relaxed))
 }
 
-/// A thread is itself, at its own IRQL, wherever it runs. Threads free
-/// to run anywhere ask who they are and what the IRQL is, and raise and
-/// lower it, over and over while they are moved between processors.
-/// What a processor keeps per processor must never be mistaken for, or
-/// written in place of, another processor's. Returns the checks made.
+/// A thread is itself, on the processor it is on, wherever it runs and
+/// however it got there. Some threads never give up the processor, so
+/// that they are moved only by being interrupted, pushed aside and taken
+/// by another processor; others sleep and wake to keep processors
+/// coming free. Each keeps asking who it is, what the IRQL is, and
+/// whether the processor it reaches through the per-processor register
+/// is the one it is running on. Returns the checks made.
 pub fn identity_test() -> Result<u64, &'static str> {
-    fn body(_: usize) {
+    fn check(me: *mut Thread) {
+        if current() != me || irql::current() != irql::PASSIVE_LEVEL {
+            WRONG.fetch_add(1, Ordering::Relaxed);
+        }
+        // At DISPATCH_LEVEL the thread cannot move: what the
+        // per-processor register leads to must be this processor's.
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let here = arch::hardware_processor();
+        if old != irql::PASSIVE_LEVEL
+            || platform_number(here) != Some(pcr::current_processor())
+            || arch::percpu_of(pcr::current_processor() as usize)
+                .is_none_or(|p| !core::ptr::eq(p, arch::percpu()))
+        {
+            WRONG.fetch_add(1, Ordering::Relaxed);
+        }
+        irql::lower(old);
+    }
+    /// The processor number firmware's list gives hardware id `id`.
+    fn platform_number(id: u64) -> Option<u32> {
+        crate::hal::platform::get()
+            .cpus()
+            .iter()
+            .position(|cpu| cpu.hw_id == id)
+            .map(|n| n as u32)
+    }
+    fn spinner(_: usize) {
         let me = current();
         let mut checks = 0u64;
-        let until = super::time::interrupt_time() + 3_000_000;
+        let until = super::time::interrupt_time() + 6_000_000;
         while super::time::interrupt_time() < until {
-            for _ in 0..200 {
-                if current() != me || irql::current() != irql::PASSIVE_LEVEL {
-                    WRONG.fetch_add(1, Ordering::Relaxed);
-                }
-                let old = irql::raise(irql::DISPATCH_LEVEL);
-                if old != irql::PASSIVE_LEVEL || irql::current() != irql::DISPATCH_LEVEL {
-                    WRONG.fetch_add(1, Ordering::Relaxed);
-                }
-                irql::lower(old);
+            for _ in 0..500 {
+                check(me);
                 checks += 1;
             }
-            yield_now();
         }
         SPINS[0].fetch_add(checks, Ordering::Relaxed);
     }
+    fn sleeper(_: usize) {
+        let me = current();
+        let until = super::time::interrupt_time() + 6_000_000;
+        while super::time::interrupt_time() < until {
+            // SAFETY: no object is involved.
+            unsafe { super::wait::wait(None, Some(-10_000)) };
+            for _ in 0..2000 {
+                check(me);
+            }
+        }
+    }
     let before = count();
+    let processors = super::smp::online_count();
     WRONG.store(0, Ordering::Relaxed);
     SPINS[0].store(0, Ordering::Relaxed);
-    // More threads than processors, so that they wait and are taken by
-    // whichever processor is free.
-    for _ in 0..2 * super::smp::online_count() + 1 {
-        create(body, 0, NORMAL_PRIORITY, ANYWHERE)?;
+    for _ in 0..processors + 1 {
+        create(spinner, 0, NORMAL_PRIORITY, ANYWHERE)?;
+        create(sleeper, 0, NORMAL_PRIORITY, ANYWHERE)?;
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
+    let deadline = super::time::interrupt_time() + 300_000_000;
+    while count() != before {
+        if super::time::interrupt_time() > deadline {
+            return Err("the threads did not finish");
+        }
+        // SAFETY: no object is involved.
+        unsafe { super::wait::wait(None, Some(-100_000)) };
     }
     if WRONG.load(Ordering::Relaxed) != 0 {
-        return Err("a thread saw another thread's identity, or a wrong IRQL");
+        return Err("a thread saw another's identity, a wrong IRQL, or another processor's state");
     }
     Ok(SPINS[0].load(Ordering::Relaxed))
 }

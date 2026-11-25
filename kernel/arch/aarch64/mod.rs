@@ -32,6 +32,12 @@ pub fn interrupt_processor(number: usize, vector: u32) {
 
 pub use cpu::{current_thread, irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
 pub use smp::{prepare as smp_prepare, start as cpu_start};
+/// The hardware's own name for the processor running this code: its
+/// MPIDR affinity, asked of the processor itself.
+pub fn hardware_processor() -> u64 {
+    platform::current_cpu_id()
+}
+
 pub use switch::{
     all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
 };

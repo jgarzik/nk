@@ -18,6 +18,12 @@ pub use cpu::{
     set_kernel_stack,
 };
 pub use smp::{finish as smp_finish, prepare as smp_prepare};
+/// The hardware's own name for the processor running this code: its
+/// local APIC id, asked of the processor itself.
+pub fn hardware_processor() -> u64 {
+    platform::current_cpu_id()
+}
+
 pub use switch::{
     all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
 };

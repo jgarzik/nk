@@ -365,7 +365,11 @@ nk_trap_common:
     ldp x12, x13, [sp, #96]
     ldp x14, x15, [sp, #112]
     ldp x16, x17, [sp, #128]
-    ldp x18, x19, [sp, #144]
+    // x18 names the processor, not the thread: the thread being
+    // resumed may have been taken by another processor since this
+    // frame was saved. It comes from the processor, never the frame.
+    ldr x19, [sp, #152]
+    mrs x18, tpidr_el1
     ldp x20, x21, [sp, #160]
     ldp x22, x23, [sp, #176]
     ldp x24, x25, [sp, #192]

@@ -142,6 +142,12 @@ is no longer on. Therefore:
 A processor number read below `DISPATCH_LEVEL` is where the thread was a
 moment ago, and is treated as no more than that.
 
+The register itself belongs to the processor too. A thread's saved state
+never carries it: the thread switch leaves it alone, and the arm64
+interrupt exit takes x18 from the processor (`TPIDR_EL1`), not from the
+frame it saved on entry, because the thread being resumed may have been
+taken by another processor in between.
+
 ### Switching threads
 
 The dispatcher runs at `DISPATCH_LEVEL` and holds no lock across a
