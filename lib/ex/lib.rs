@@ -7,11 +7,13 @@
 //! each transition atomic, and supplies the blocking and waking with its
 //! own wait machinery.
 //!
-//! [`pushlock`] is `EX_PUSH_LOCK`, one word.
+//! [`pushlock`] is `EX_PUSH_LOCK`, one word. [`resource`] is `ERESOURCE`
+//! and its owner table.
 
 #![cfg_attr(not(test), no_std)]
 
 pub mod pushlock;
+pub mod resource;
 
 #[cfg(test)]
 mod model;
