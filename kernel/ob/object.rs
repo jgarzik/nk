@@ -117,6 +117,7 @@ static THREAD_NAME: [u16; 6] = wide(b"Thread");
 static DEVICE_NAME: [u16; 6] = wide(b"Device");
 static KEY_NAME: [u16; 3] = wide(b"Key");
 static PROCESS_NAME: [u16; 7] = wide(b"Process");
+static TOKEN_NAME: [u16; 5] = wide(b"Token");
 
 /// Events (`KEVENT`).
 pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
@@ -135,13 +136,21 @@ pub static KEY_TYPE: ObjectType =
 /// Processes (`EPROCESS`).
 pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None);
 
+/// Access tokens: the body is NK's own (`se::token`).
+pub static TOKEN_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 5,
+    &TOKEN_NAME,
+    Some(crate::se::token::deleted),
+);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 5] = [
+static TYPES: [&ObjectType; 6] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
     &KEY_TYPE,
     &PROCESS_TYPE,
+    &TOKEN_TYPE,
 ];
 
 /// What hides type indices in object headers. Chosen once, before the

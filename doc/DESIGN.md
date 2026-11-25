@@ -248,7 +248,10 @@ There is one process, System, with Windows' id for it (4). Its block has
 is zero. Every thread belongs to it, the idle threads included (Windows
 gives those a process of their own), and carries a client id: the
 process id and a thread id from the same sequence of multiples of four.
-The kernel handle table is its handle table.
+The kernel handle table is its handle table. `EPROCESS.Token` holds its
+primary token the way Windows stores it, as a fast reference: a pointer
+whose low four bits count references handed out in advance. NK hands out
+none, so the bits are zero.
 
 ## Waits
 
@@ -508,6 +511,25 @@ replaces the named parts of a device's descriptor
 `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one is set,
 where Windows gives a default. `SeCaptureSecurityDescriptor`, forced,
 returns a self-relative pool copy, the caller's to free.
+
+## Tokens and access state
+
+A token is an object whose body is NK's own (`nk_se::token::Token`):
+drivers treat `TOKEN` as opaque and ask through routines. There is one,
+the System process's, with the user, groups and privileges of Windows'
+SYSTEM token (the table at `Token::system` says which of those facts
+Microsoft documents). No thread impersonates.
+
+What an open carries about its requestor has Windows' layout, because a
+file system reads it in line (`kernel/se/token.rs`):
+
+- the subject context: no client token, the primary token (referenced
+  until the context is released), the process id for auditing;
+- the access state: the subject, an operation id of its own, the access
+  asked for as both original and remaining, generic rights as given (the
+  type being opened maps them), nothing granted yet, and the traverse
+  flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
+  security descriptor, auxiliary data, privileges and names are empty.
 
 ## Breakpoints and the debugger
 

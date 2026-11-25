@@ -18,6 +18,13 @@ pub const PROCESS_OBJECT: u8 = 3;
 pub const UNIQUE_PROCESS_ID: usize = 0x440;
 /// `CreateTime`: when the process was made, as system time.
 pub const CREATE_TIME: usize = 0x468;
+/// `Token`: the process's primary token, as an `EX_FAST_REF`: a pointer
+/// to the token object whose low four bits ([`FAST_REF_COUNT_MASK`])
+/// count references handed out in advance.
+pub const TOKEN: usize = 0x4B8;
+/// The bits of an `EX_FAST_REF` that are a count, not part of the
+/// pointer. Objects are 16-byte aligned, so a pointer has them clear.
+pub const FAST_REF_COUNT_MASK: usize = 0xF;
 /// `ImageFileName`: the image's name, 15 bytes, zero padded.
 pub const IMAGE_FILE_NAME: usize = 0x5A8;
 pub const IMAGE_FILE_NAME_LEN: usize = 15;
