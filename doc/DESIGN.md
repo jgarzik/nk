@@ -213,7 +213,10 @@ when an interrupt handler is about to return below `DISPATCH_LEVEL`,
 after the interrupt controller has been told the interrupt is over.
 Marking the processor one is on also raises the DISPATCH-level
 interrupt, so that moment comes as soon as the IRQL allows, however it
-was lowered. The preempted thread resumes inside that interrupt's frame
+was lowered. So does an interrupt that ends at `DISPATCH_LEVEL` or above
+on a marked processor (the mark came from another processor, say): the
+switch cannot happen yet, and the pending interrupt makes it happen the
+moment the IRQL comes down rather than at whatever interrupt is next. The preempted thread resumes inside that interrupt's frame
 on its own stack. The switch keeps what a call preserves on the outgoing thread's stack
 (vector registers included: xmm6-15 and MXCSR, or d8-d15 and FPCR) and
 the stack pointer in the thread's `KernelStack`. An exited thread is
@@ -246,9 +249,11 @@ asks whether APCs are disabled gets Windows' answer.
 
 ### Work items
 
-Three queues, as on Windows (critical, delayed, hypercritical), each
-with a couple of worker threads at that queue's priority, started at
-boot and free to run on any processor. A work item is the driver's
+Three queues (critical, delayed, hypercritical), each with a couple of
+worker threads at that queue's priority, started at boot and free to
+run on any processor. Windows 10 names four more kinds; NK serves
+normal and background items from the delayed queue, real-time ones from
+the hypercritical, super-critical ones from the critical. A work item is the driver's
 memory, linked through its list entry, whose forward link is null
 exactly while it is on no queue, as Windows keeps it. A worker takes an
 item off before running it, so a routine may queue its item again or
@@ -258,7 +263,7 @@ stops (`WORKER_THREAD_RETURNED_AT_BAD_IRQL`).
 
 An I/O work item is allocated by the kernel at Windows' size and tied to
 a device, which is referenced from queueing until the routine has
-returned.
+returned, or to a driver object, which has no count to hold it by.
 
 ### Breakpoints and the debugger
 
@@ -289,7 +294,9 @@ to stays a valid object, signalled, after it ends.
 
 Kernel handles are entries in one table; a handle holds a reference
 until closed and has Windows' kernel-handle bits set. There are no
-per-process tables and no access checks. A type is named by its address:
+per-process tables and no access checks. `NtCurrentThread()` (-2) names
+the calling thread, as on Windows; `NtCurrentProcess()` names nothing,
+there being no process objects. A type is named by its address:
 a driver imports a variable holding it (`ExEventObjectType`) and passes
 the value back, so the type structure itself is NK's own.
 
@@ -479,7 +486,9 @@ A refused image leaves nothing allocated; the boot tests check that.
 ### I/O
 
 Driver, device and file objects and IRPs are pool allocations of exactly
-their Windows size, reached by raw pointer. A device is an object-manager
+their Windows size, reached by raw pointer (an IRP's allocation ends
+with one word of NK's own, after the stack locations: how much room the
+requestor's buffer has). A device is an object-manager
 object, so a handle can be opened to it (`ObOpenObjectByPointer`); its
 own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes. A device object is followed
@@ -490,7 +499,15 @@ its own private extension).
 resolves a name, builds a real IRP and calls the driver's dispatch
 routine. Completion follows the Windows sequence: unwind the stack
 locations running completion routines, then copy results to the
-requestor and signal its event.
+requestor and signal its event. A buffered request's results are copied
+only as far as the requestor asked: a driver that reports more bytes
+than that stops the system, since they cannot be delivered.
+
+Opening by name takes two steps, finding the device and counting the
+open against it, and the device may be deleted between them. The
+look-up therefore takes a pointer reference while the name still leads
+to the device, which keeps its memory; the open is then counted under
+the I/O database lock, or refused if the device has been deleted.
 
 A dispatch routine is called inside a critical region, as on Windows for
 a synchronous request: a driver that asks finds kernel APCs disabled.

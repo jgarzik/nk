@@ -331,6 +331,20 @@ cmdline = "test=neg.work-bad-irql"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
 
+[x86_64-neg-information-overstated]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.information-overstated"
+expect = "bugcheck"
+match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
+
+[aarch64-neg-information-overstated]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.information-overstated"
+expect = "bugcheck"
+match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
+
 [x86_64-neg-breakpoint]
 arch = "x86_64"
 tier = "gate"

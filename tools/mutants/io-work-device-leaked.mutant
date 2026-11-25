@@ -3,4 +3,4 @@
 scenario: aarch64
 fails: work.io
 file: kernel/ex/work.rs
-remove:             device::dereference(device);
+remove:                 device::dereference(object.cast());

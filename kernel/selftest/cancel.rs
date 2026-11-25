@@ -38,9 +38,18 @@ const DONE: [u8; 4] = [0xFF; 4];
 /// Returns how many were cancelled.
 fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
     const READS: usize = 8;
-    const ROUNDS: usize = 3;
+    // The sample decides by the clock whether its thread completes a
+    // read at once or half a second later, the same way for reads that
+    // arrive within one clock tick. A round in which it completes all
+    // eight at once has nothing left to cancel; a tick later the answer
+    // is as good as a coin's. Rounds go on until one has cancellations.
+    const ROUNDS: usize = 40;
     let mut seen = 0;
     for _ in 0..ROUNDS {
+        if seen != 0 {
+            break;
+        }
+        crate::ke::time::stall(16_000);
         let mut buffers = [[0xEEu8; 4]; READS];
         let mut pending = alloc::vec::Vec::new();
         for buffer in &mut buffers {
@@ -66,9 +75,6 @@ fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
             }
         }
     }
-    // The thread holds one read at a time, for half a second at most
-    // times in two; the others were cancelled before it could reach
-    // them all.
     if seen == 0 {
         return Err("no read was cancelled while it waited on the queue");
     }
@@ -149,7 +155,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     match result {
         Ok(n) if resources() == before => r.ok_with(
             "cancel.cancelled",
-            format_args!("of 24 reads, cancelled: {n}"),
+            format_args!("reads cancelled while queued: {n}"),
         ),
         Ok(_) => r.fail(
             "cancel.cancelled",

@@ -197,9 +197,29 @@ unsafe fn request(
 /// symbolic link to one). Returns the file object or the failure status.
 pub fn open(name: &str) -> Result<*mut FILE_OBJECT, NTSTATUS> {
     let wide: Vec<u16> = name.encode_utf16().collect();
-    let device = ob::lookup_device(&wide).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+    // The name is looked up and the device referenced in two steps,
+    // and the device may be deleted between them: its memory is held
+    // from the look-up until the device's own count has been taken, or
+    // the open has been refused.
+    let device = ob::lookup_device_referenced(&wide).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+    // SAFETY: the look-up's pointer reference keeps the memory, and is
+    // given up here. A device still being set up is not opened.
+    let live = unsafe {
+        let counted = device::reference_unless_deleted(device);
+        let ready = counted && (*device).Flags & DO_DEVICE_INITIALIZING == 0;
+        if counted && !ready {
+            device::dereference(device);
+        }
+        ob::object::dereference(device.cast());
+        ready
+    };
+    if !live {
+        return Err(STATUS_NO_SUCH_DEVICE);
+    }
     let file = pool::alloc_zeroed(size_of::<FILE_OBJECT>(), TAG_FILE).cast::<FILE_OBJECT>();
     if file.is_null() {
+        // SAFETY: the count taken above.
+        unsafe { device::dereference(device) };
         return Err(STATUS_INSUFFICIENT_RESOURCES);
     }
     let mut security = SecurityContext {
@@ -208,13 +228,9 @@ pub fn open(name: &str) -> Result<*mut FILE_OBJECT, NTSTATUS> {
         desired_access: GENERIC_READ_WRITE,
         full_create_options: CREATE_OPTIONS & 0xFF_FFFF,
     };
-    // SAFETY: `device` came from the namespace, so it is live; `file` is a
-    // fresh zeroed block of the right size.
+    // SAFETY: `device` is referenced, so it is live; `file` is a fresh
+    // zeroed block of the right size.
     let result = unsafe {
-        if (*device).Flags & DO_DEVICE_INITIALIZING != 0 {
-            let _ = pool::free(file.cast());
-            return Err(STATUS_NO_SUCH_DEVICE);
-        }
         (*file).Type = IO_TYPE_FILE;
         (*file).Size = size_of::<FILE_OBJECT>() as i16;
         (*file).DeviceObject = device;
@@ -223,7 +239,6 @@ pub fn open(name: &str) -> Result<*mut FILE_OBJECT, NTSTATUS> {
         ke::wait::KeInitializeEvent(&raw mut (*file).Event, 0, 0);
         (*file).IrpList.Flink = &raw mut (*file).IrpList;
         (*file).IrpList.Blink = &raw mut (*file).IrpList;
-        device::reference(device);
         let parameters = [&raw mut security as u64, u64::from(CREATE_OPTIONS), 0, 0];
         request(file, IRP_MJ_CREATE, parameters).and_then(|irp| submit(file, irp))
     };
@@ -293,6 +308,7 @@ unsafe fn transfer(
                 if major == IRP_MJ_READ {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = buffer.cast();
+                    irp::requestor_room(irp).write(len);
                 } else {
                     core::ptr::copy_nonoverlapping(buffer, system, len);
                 }
@@ -385,6 +401,7 @@ pub unsafe fn device_control_start(
                     if !output.is_empty() {
                         (*irp).Flags |= IRP_INPUT_OPERATION;
                         (*irp).UserBuffer = output.as_mut_ptr().cast();
+                        irp::requestor_room(irp).write(output.len());
                     }
                 }
             }

@@ -113,9 +113,14 @@ pub unsafe extern "C" fn IoCreateDevice(
             }
             (*device).Flags |= DO_DEVICE_HAS_NAME;
         }
-        // Newest device first, as on Windows.
-        (*device).NextDevice = (*driver).DeviceObject;
-        (*driver).DeviceObject = device;
+        // Newest device first, as on Windows. The list belongs to the
+        // database lock: devices are deleted, and others created, at the
+        // same time.
+        {
+            let _database = DATABASE.lock();
+            (*device).NextDevice = (*driver).DeviceObject;
+            (*driver).DeviceObject = device;
+        }
         device_out.write_unaligned(device);
     }
     STATUS_SUCCESS
@@ -224,6 +229,25 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
             destroy(device);
         }
     }
+}
+
+/// Take a reference on a device found by name, for a file about to be
+/// opened on it, unless it has been deleted since it was found.
+///
+/// # Safety
+/// `device` is a device object whose memory the caller keeps alive (a
+/// pointer reference).
+pub unsafe fn reference_unless_deleted(device: *mut DEVICE_OBJECT) -> bool {
+    let _database = DATABASE.lock();
+    // SAFETY: per the contract; the mark and the count belong to the
+    // lock. The private block is part of the device's own allocation.
+    unsafe {
+        if (*extra(device)).delete_pending {
+            return false;
+        }
+        (*device).ReferenceCount += 1;
+    }
+    true
 }
 
 /// Take a reference on the device: an open file, a work item on its way.

@@ -65,6 +65,12 @@ io.csq ok
 io.csq-cancel ok
 io.csq-race ok
 io.wdm-version ok
+ob.current-thread ok
+io.device-list ok
+io.open-delete ok
+thread.wake-at-dispatch ok
+work.driver-object ok
+work.queue-types ok
 mutex.ownership ok
 mutex.exclusion ok
 mutex.fast ok

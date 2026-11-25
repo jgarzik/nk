@@ -1,9 +1,10 @@
 //! Work items: routines a driver hands to a system thread to run at
 //! `PASSIVE_LEVEL`, where it may block.
 //!
-//! There are three queues, as on Windows (critical, delayed,
-//! hypercritical), each served by a few worker threads at that queue's
-//! priority. A work item is the driver's memory; it is linked into a
+//! There are three queues (critical, delayed, hypercritical), each
+//! served by a few worker threads at that queue's priority. Windows 10
+//! names four more kinds of queue; NK serves each from the nearest of
+//! its three ([`queue_of`]). A work item is the driver's memory; it is linked into a
 //! queue through its list entry, whose forward link is null exactly
 //! while the item is on no queue, as Windows keeps it. A worker takes an
 //! item off before running it, so a routine may queue its own item
@@ -25,8 +26,24 @@ use nk_ntabi::ex::{IO_WORKITEM, WORK_QUEUE_ITEM};
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::ke::{KSEMAPHORE, LIST_ENTRY};
 
-/// `WORK_QUEUE_TYPE` values a driver may pass.
+/// The queues NK keeps.
 const QUEUES: usize = 3;
+
+/// The queue that serves a `WORK_QUEUE_TYPE`: `CriticalWorkQueue`,
+/// `DelayedWorkQueue` and `HyperCriticalWorkQueue` their own;
+/// `NormalWorkQueue` and `BackgroundWorkQueue` the delayed one;
+/// `RealTimeWorkQueue` the hypercritical; `SuperCriticalWorkQueue` the
+/// critical. `None` for a value Windows does not define.
+fn queue_of(queue_type: u32) -> Option<&'static Queue> {
+    let index = match queue_type {
+        0..=2 => queue_type as usize,
+        3 | 4 => 1,
+        5 => 2,
+        6 => 0,
+        _ => return None,
+    };
+    Some(&QUEUE[index])
+}
 /// Each queue's worker threads: how many, and at what priority. Indexed
 /// by `WORK_QUEUE_TYPE`: critical, delayed, hypercritical.
 const WORKERS: [(usize, u8); QUEUES] = [(2, 13), (2, 12), (1, 15)];
@@ -148,7 +165,7 @@ fn worker(index: usize) {
 /// `item` was set up by `ExInitializeWorkItem`, is on no queue, and
 /// stays valid until its routine is called.
 pub unsafe extern "C" fn ExQueueWorkItem(item: *mut WORK_QUEUE_ITEM, queue_type: u32) {
-    let Some(queue) = QUEUE.get(queue_type as usize) else {
+    let Some(queue) = queue_of(queue_type) else {
         crate::kd::bugcheck(format_args!(
             "0x000000E4 WORKER_INVALID: a work item for queue {queue_type}"
         ));
@@ -180,11 +197,23 @@ pub unsafe extern "C" fn ExQueueWorkItem(item: *mut WORK_QUEUE_ITEM, queue_type:
 /// What an I/O work item's routine looks like to a driver.
 type IoWorkRoutine = unsafe extern "C" fn(*mut DEVICE_OBJECT, *mut c_void);
 
+/// Whether an I/O work item's object is a device. It may be a driver
+/// object instead, which has no reference count to hold it by: the
+/// driver must not unload with such an item outstanding, as on Windows
+/// it could not.
+///
+/// # Safety
+/// `object` is a live device or driver object.
+unsafe fn is_device(object: *mut c_void) -> bool {
+    // SAFETY: per the contract; both begin with their type.
+    unsafe { object.cast::<i16>().read() == nk_ntabi::io::IO_TYPE_DEVICE }
+}
+
 /// [`IoAllocateWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateworkitem).
 /// Null if memory ran out.
 ///
 /// # Safety
-/// `device` is a live device object.
+/// `device` is a live device object, or a driver object.
 pub unsafe extern "C" fn IoAllocateWorkItem(device: *mut DEVICE_OBJECT) -> *mut IO_WORKITEM {
     let item = pool::alloc_zeroed(size_of::<IO_WORKITEM>(), TAG).cast::<IO_WORKITEM>();
     if !item.is_null() {
@@ -225,12 +254,15 @@ pub unsafe extern "C" fn IoQueueWorkItem(
         unsafe {
             let routine: Option<IoWorkRoutine> =
                 core::mem::transmute((&raw const (*item).Routine).read());
-            let device = (&raw const (*item).IoObject).read().cast::<DEVICE_OBJECT>();
+            let object = (&raw const (*item).IoObject).read();
             let context = (&raw const (*item).Context).read();
+            let referenced = is_device(object);
             if let Some(routine) = routine {
-                routine(device, context);
+                routine(object.cast(), context);
             }
-            device::dereference(device);
+            if referenced {
+                device::dereference(object.cast());
+            }
         }
     }
     // SAFETY: per the contract.
@@ -241,8 +273,11 @@ pub unsafe extern "C" fn IoQueueWorkItem(
         (&raw mut (*item).Context).write(context);
         (&raw mut (*item).WorkItem.WorkerRoutine).write(Some(run));
         (&raw mut (*item).WorkItem.Parameter).write(item.cast());
-        // The device stays until the routine has returned.
-        device::reference((&raw const (*item).IoObject).read().cast());
+        // A device stays until the routine has returned.
+        let object = (&raw const (*item).IoObject).read();
+        if is_device(object) {
+            device::reference(object.cast());
+        }
         ExQueueWorkItem(&raw mut (*item).WorkItem, queue_type);
     }
 }

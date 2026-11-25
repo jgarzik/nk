@@ -71,6 +71,13 @@ pub fn dispatch(vector: u32, level: u8, eoi: impl FnOnce()) {
         arch::enable_interrupts();
         super::thread::preempt();
         arch::disable_interrupts();
+    } else if old >= irql::DISPATCH_LEVEL && vector != arch::DPC.0 && super::thread::switch_wanted()
+    {
+        // The interrupted code is at DISPATCH_LEVEL or above, so the
+        // switch must wait; but nothing would look again when it comes
+        // down. Leave the DISPATCH-level interrupt pending: it arrives
+        // the moment the IRQL allows, and its end is the place above.
+        arch::self_interrupt(arch::DPC.0);
     }
     arch::set_irql(old);
 }

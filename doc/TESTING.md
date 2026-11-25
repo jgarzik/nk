@@ -108,6 +108,7 @@ tier in parallel:
 | `*-neg-wait-at-dispatch`, `*-neg-wait-in-dpc` | a wait that would have to block at `DISPATCH_LEVEL` stops the system |
 | `*-neg-mutex-held-at-exit` | a thread that ends holding a mutex stops the system |
 | `*-neg-work-bad-irql` | a work routine that returns with the IRQL raised stops the system |
+| `*-neg-information-overstated` | a driver that reports more output than the requestor has room for stops the system |
 | `*-neg-breakpoint` | a driver's breakpoint, with no debugger, stops the system as on Windows (`0x7E`) |
 | `*-debugger-breakpoint` | with `debug=on` the same breakpoint is passed over |
 | `*-oracle-event` | Microsoft's event sample, whose first act is a breakpoint, stops NK with the bugcheck it stops Windows with (`oracle/event.txt`), at the same step |

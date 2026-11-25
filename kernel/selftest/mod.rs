@@ -19,6 +19,7 @@ mod null;
 mod ob;
 mod oracle;
 mod pend;
+mod review;
 mod se;
 mod sioctl;
 mod smp;
@@ -44,6 +45,7 @@ pub static GROUPS: &[&Group] = &[
     &se::GROUP,
     &cm::GROUP,
     &csq::GROUP,
+    &review::GROUP,
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,
@@ -69,6 +71,7 @@ pub static GROUPS: &[&Group] = &[
     &wait::IN_DPC,
     &mutex::EXIT_HOLDING,
     &work::BAD_RETURN,
+    &pend::OVERSTATED,
 ];
 
 /// The bytes of the boot module called `name`, if the loader supplied it.

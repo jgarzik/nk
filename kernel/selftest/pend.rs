@@ -47,6 +47,9 @@ const HOLD: u32 = 0x904;
 /// Held, cancellable, and completed by a timer if not cancelled first.
 /// The delay in milliseconds is the first input byte.
 const HOLD_OR_TIMER: u32 = 0x905;
+/// Completed at once, claiming to have returned as many bytes as the
+/// input held, whatever room the requestor has for output.
+const OVERSTATE: u32 = 0x906;
 
 const fn code(function: u32) -> u32 {
     ctl_code(0x22, function, METHOD_BUFFERED, 0)
@@ -171,6 +174,12 @@ unsafe extern "C" fn control(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
         (*location).Control |= SL_PENDING_RETURNED;
         if how == code(BEFORE_RETURN) {
             complete(irp, STATUS_SUCCESS);
+            return STATUS_PENDING;
+        }
+        if how == code(OVERSTATE) {
+            (*irp).IoStatus.Status = STATUS_SUCCESS;
+            (*irp).IoStatus.Information = (*location).Parameters[1] as usize;
+            irp::IofCompleteRequest(irp, 0);
             return STATUS_PENDING;
         }
         if how == code(HOLD) || how == code(HOLD_OR_TIMER) {
@@ -350,6 +359,31 @@ fn cancel_race(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
         return Err("the requestor and the driver disagree on what was cancelled");
     }
     Ok(seen_cancelled)
+}
+
+/// A driver that claims to have returned more than the requestor has
+/// room for must stop the system: the bytes cannot be delivered, and
+/// handing over only some would pass a broken driver off as working.
+pub static OVERSTATED: Group = Group {
+    names: &["neg.information-overstated"],
+    run: overstated,
+    manual: true,
+};
+
+fn overstated(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.information-overstated");
+    let _ = with_driver(|opened| {
+        let mut output = [0u8; 8];
+        // SAFETY: an open file; the output outlives the request.
+        let _ = unsafe { file::device_control(opened, code(OVERSTATE), &[0x55; 64], &mut output) };
+        Ok(0)
+    });
+    r.fail(
+        "neg.information-overstated",
+        format_args!(
+            "a driver claimed 64 bytes of output for an 8-byte buffer, and nothing happened"
+        ),
+    );
 }
 
 fn counted<N: Display>(r: &mut Report, name: &str, what: &str, result: Result<N, &'static str>) {

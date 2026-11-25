@@ -94,6 +94,32 @@ pub fn lookup_device(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
     None
 }
 
+/// The device `name` refers to, with a pointer reference taken while
+/// the name still led to it: its memory stays until the caller drops
+/// the reference (`object::dereference`), whatever becomes of the
+/// device meanwhile.
+pub fn lookup_device_referenced(name: &[u16]) -> Option<*mut DEVICE_OBJECT> {
+    let ns = NAMESPACE.lock();
+    let mut name = name;
+    for _ in 0..MAX_LINK_DEPTH {
+        match &ns
+            .iter()
+            .find(|e| nk_rtl::same_object_name(&e.name, name))?
+            .target
+        {
+            Target::Device(d) => {
+                // SAFETY: a device loses its names, under this lock,
+                // before it gives up the reference it was created with;
+                // so one that still has a name is alive.
+                unsafe { object::reference(d.cast()) };
+                return Some(*d);
+            }
+            Target::SymbolicLink(to) => name = to,
+        }
+    }
+    None
+}
+
 /// Number of names in the namespace (for leak checks).
 pub fn count() -> usize {
     NAMESPACE.lock().len()

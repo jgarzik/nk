@@ -1,0 +1,8 @@
+# An interrupt that ends at DISPATCH_LEVEL on a processor asked to
+# switch does not leave the DISPATCH-level interrupt pending: a thread
+# made ready from another processor waits for the next interrupt that
+# happens along, up to a clock tick.
+scenario: x86_64
+fails: thread.wake-at-dispatch
+file: kernel/ke/interrupt.rs
+remove:         arch::self_interrupt(arch::DPC.0);

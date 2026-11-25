@@ -68,7 +68,7 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 20 | `ldr::LOADED` | table of loaded images | DISPATCH |
-| 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer | DISPATCH |
+| 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
 | 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
@@ -88,6 +88,10 @@ Why this order:
   under the I/O database lock, so "the last reference went" and "the
   device was deleted" are seen together by whichever comes second. That
   one frees the device, after dropping the lock.
+- A device found by name is given a pointer reference under the
+  namespace lock, which a device loses its names under before it gives
+  up its own; the database lock is taken only after the namespace lock
+  is dropped, to count the open or refuse it.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The

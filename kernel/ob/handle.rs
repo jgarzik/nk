@@ -15,6 +15,11 @@ use core::sync::atomic::Ordering;
 use nk_ntabi::ob::{kernel_handle, kernel_handle_index};
 use nk_ntabi::status::*;
 
+/// `NtCurrentThread()`: not an entry of any table, it names whichever
+/// thread uses it. (`NtCurrentProcess()`, -1, names nothing here: NK
+/// has no process objects yet.)
+const CURRENT_THREAD: u64 = -2i64 as u64;
+
 /// An object in the table.
 struct Entry(*mut u8);
 
@@ -67,6 +72,15 @@ pub unsafe fn open(body: *mut u8) -> u64 {
 /// The object a handle names, with a new reference for the caller, if
 /// it is of type `ty` (or of any type, given none).
 pub fn reference(handle: u64, ty: Option<*const ObjectType>) -> Result<*mut u8, NTSTATUS> {
+    if handle == CURRENT_THREAD {
+        let body = crate::ke::thread::current().cast::<u8>();
+        if ty.is_some_and(|ty| !core::ptr::eq(ty, &raw const object::THREAD_TYPE)) {
+            return Err(STATUS_OBJECT_TYPE_MISMATCH);
+        }
+        // SAFETY: the running thread holds a reference on itself.
+        unsafe { object::reference(body) };
+        return Ok(body);
+    }
     let index = kernel_handle_index(handle).ok_or(STATUS_INVALID_HANDLE)?;
     let table = TABLE.lock();
     let Some(Some(Entry(body))) = table.get(index) else {

@@ -14,8 +14,10 @@ use nk_ntabi::status::*;
 /// the "next" location and `call_driver` steps onto it.
 pub fn alloc(stack_size: i8) -> *mut IRP {
     let locations = stack_size.max(1) as usize;
+    // The IRP and its stack locations, as large as Windows makes them,
+    // then a word of NK's own (`requestor_room`).
     let size = size_of::<IRP>() + locations * size_of::<IO_STACK_LOCATION>();
-    let irp = pool::alloc_zeroed(size, TAG_IRP).cast::<IRP>();
+    let irp = pool::alloc_zeroed(size + size_of::<usize>(), TAG_IRP).cast::<IRP>();
     if irp.is_null() {
         return irp;
     }
@@ -32,6 +34,23 @@ pub fn alloc(stack_size: i8) -> *mut IRP {
         (*head).Blink = head;
     }
     irp
+}
+
+/// How many bytes the requestor's own buffer (`UserBuffer`) holds, for
+/// a buffered request whose results are copied to it on completion. It
+/// is kept after the stack locations, outside what Windows lays out,
+/// because the locations are cleared as the request completes.
+///
+/// # Safety
+/// `irp` came from [`alloc`].
+pub unsafe fn requestor_room(irp: *mut IRP) -> *mut usize {
+    // SAFETY: per the contract: `alloc` left room for it there.
+    unsafe {
+        irp.add(1)
+            .cast::<IO_STACK_LOCATION>()
+            .add((*irp).StackCount as usize)
+            .cast()
+    }
 }
 
 /// The stack location the next driver will see (`IoGetNextIrpStackLocation`).
@@ -177,6 +196,16 @@ unsafe fn finish(irp: *mut IRP) {
                     _ => kd::bugcheck(format_args!(
                         "driver completed a buffered request with Information={count:#x}, larger than its buffer"
                     )),
+                }
+                // Nor may it report more than the requestor has room
+                // for: the system buffer is as large as the larger of
+                // input and output, the requestor's buffer only as
+                // large as the output.
+                let room = requestor_room(irp).read();
+                if count > room {
+                    kd::bugcheck(format_args!(
+                        "a driver completed a buffered request with Information={count:#x}, more than the {room:#x} bytes its requestor has room for"
+                    ));
                 }
                 core::ptr::copy_nonoverlapping(buffer, (*irp).UserBuffer.cast::<u8>(), count);
             }
