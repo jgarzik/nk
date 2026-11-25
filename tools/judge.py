@@ -117,6 +117,14 @@ def _clock_problems(log, marks):
     return []
 
 
+def firmware_hung(text, timed_out):
+    """Whether a boot that had to be killed never got as far as NK: the
+    machine's firmware did not start the loader, whose first act is to
+    print a line beginning `nkload:`. Nothing of NK's ran, so the boot
+    says nothing about NK and may be tried again."""
+    return bool(timed_out) and "nkload:" not in text
+
+
 def _golden_problems(log, golden, degraded):
     """Compare the verdicts with the committed list for this scenario.
 

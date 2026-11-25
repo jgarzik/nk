@@ -111,6 +111,15 @@ All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
 way to the test is not taken for the one it meant to cause.
 
+### When the firmware hangs
+
+Now and then the emulated machine's UEFI firmware hangs before it starts
+NK's loader (seen on arm64, a few boots in a thousand, under heavy host
+load). Such a boot ran nothing of NK's. The harness recognises it by the
+absence of the loader's first line, says so, keeps the serial log and
+register dump as `firmware-hang.*`, and boots once more. A hang after
+the loader has printed is never retried: that is NK's to explain.
+
 ### The harness cleans up
 
 `tools/boot_test.py` runs each scenario in `target/qemu/<scenario>/`:

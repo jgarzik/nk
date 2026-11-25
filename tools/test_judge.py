@@ -4,6 +4,7 @@ caught, and a good boot must pass. Run by `make test`."""
 import unittest
 
 from judge import judge
+import judge as judge_module
 
 GOOD = """\
 nkload: starting kernel
@@ -108,6 +109,17 @@ class ExpectOk(unittest.TestCase):
 
     def test_timeout(self):
         self.assertProblem(GOOD, "timeout after 120s", timed_out=120)
+
+    def test_a_firmware_hang_is_told_from_a_kernel_hang(self):
+        firmware = "UEFI firmware (version 2024.02)\n\x1b[2J\x1b[01;01H"
+        self.assertTrue(judge_module.firmware_hung(firmware, 120))
+        self.assertTrue(judge_module.firmware_hung("", 120))
+        # The loader ran: whatever hung after that is NK's.
+        started = firmware + "nkload: NK loader 0.0.1 (aarch64)\n"
+        self.assertFalse(judge_module.firmware_hung(started, 120))
+        self.assertFalse(judge_module.firmware_hung(started + "NK 0.0.1\n", 120))
+        # Not killed: not a hang at all.
+        self.assertFalse(judge_module.firmware_hung(firmware, 0))
 
     def test_clock_marks(self):
         marked = GOOD + "NK-CLOCK-MARK start\nNK-CLOCK-MARK end\n"

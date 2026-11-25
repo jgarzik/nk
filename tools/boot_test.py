@@ -274,6 +274,17 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False):
             return 0
 
         text = (directory / "serial.log").read_text(errors="replace")
+        if judge.firmware_hung(text, timed_out):
+            # Rare, and not NK: the firmware itself hung before starting
+            # the loader. Say so, keep what was saved, and boot once
+            # more; a second hang is judged like any other.
+            print(f"boot test {name}: firmware never started the loader; booting once more")
+            for kept in ("serial.log", "hang-registers.txt"):
+                if (directory / kept).exists():
+                    (directory / kept).rename(directory / f"firmware-hang.{kept}")
+            shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
+            timed_out, marks = boot(arch, smp_of(sc), directory, interactive)
+            text = (directory / "serial.log").read_text(errors="replace")
         log = judge.Log(text)
         golden = load_golden(sc["golden"]) if "golden" in sc and not bless else None
         problems = judge.judge(
