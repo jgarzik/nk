@@ -288,16 +288,17 @@ fn a_cell_must_be_allocated_aligned_and_inside_the_bins() {
         changed(|h, c| resize(h, c.alpha, 0)),
         Err(RegfError::FreeCell)
     );
-    // A size that is no multiple of eight; an offset that is none,
-    // though an allocated size can be read there.
+    // A size that is no multiple of eight, though the key fits it; an
+    // offset that is none, though a cell that holds the class could be
+    // read there.
     assert_eq!(
-        changed(|h, c| resize(h, c.alpha, -0x54)),
+        changed(|h, c| resize(h, c.alpha, -0x5C)),
         Err(RegfError::BadCell)
     );
     assert_eq!(
         fails(|h, c| {
-            let inner = h.cell(&(-16i32).to_le_bytes().repeat(3));
-            h.patch(c.root, 0x1C, inner + 4);
+            let inner = h.cell(&(-16i32).to_le_bytes().repeat(4));
+            h.patch(c.alpha, 0x30, inner + 4);
         }),
         RegfError::BadCell
     );
