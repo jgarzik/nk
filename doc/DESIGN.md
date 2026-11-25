@@ -270,7 +270,8 @@ NK does the first by default. With `debug=on` on the kernel command line
 it behaves as with a debugger attached that says "go" at every
 breakpoint: it notes the breakpoint on the console and continues. NK has
 no debugger protocol; `debug=on` only stands for the answer one would
-give. The kernel's own tests announce the breakpoints they execute.
+give. The reference Windows machine is given a real one: `tools/kd.py`
+plays the debugger over its serial port and says go. The kernel's own tests announce the breakpoints they execute.
 
 ### Objects, references and handles
 

@@ -168,6 +168,13 @@ foreach ($raw in Get-Content (Join-Path $Dir "$Name.script")) {
             # A driver that is part of Windows: nothing to load.
             Say "use $($w[1]): ok"
         }
+        "debugger" {
+            # The oracle boots Windows with debugging enabled for a
+            # script that begins this way, and is the debugger.
+            $on = (bcdedit /enum "{current}" | Select-String -Pattern "^debug\s+Yes") -ne $null
+            $state = if ($on) { "attached" } else { "absent" }
+            Say "debugger: $state"
+        }
         "load" {
             $file = Join-Path $Dir $w[2]
             sc.exe create $w[1] type= kernel binPath= $file | Out-Null

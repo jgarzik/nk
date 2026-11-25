@@ -54,6 +54,7 @@ pub static GROUPS: &[&Group] = &[
     &neg::META_FAIL,
     &neg::BREAKPOINT,
     &oracle::EVENT,
+    &oracle::EVENT_DEBUG,
     &smp::STUCK,
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,

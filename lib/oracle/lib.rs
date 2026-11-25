@@ -17,6 +17,9 @@ pub const FILL: u8 = 0xEE;
 /// One step of a script. Byte strings stay as the hex text of the script.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step<'a> {
+    /// The script is for a system with a kernel debugger attached that
+    /// says "go" at every breakpoint. The step reports whether one is.
+    Debugger,
     /// Load a test driver from a file.
     Load {
         service: &'a str,
@@ -104,6 +107,7 @@ pub fn parse_line(line: &str) -> Result<Option<Step<'_>>, &'static str> {
             .map_err(|_| "a length is not a number")
     };
     let step = match next()? {
+        "debugger" => Step::Debugger,
         "load" => Step::Load {
             service: next()?,
             file: next()?,
@@ -149,6 +153,7 @@ pub fn steps(script: &str) -> impl Iterator<Item = Result<Step<'_>, &'static str
 impl fmt::Display for Step<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
+            Step::Debugger => write!(f, "debugger"),
             Step::Load { service, .. } => write!(f, "load {service}"),
             Step::Use { service } => write!(f, "use {service}"),
             Step::Unload { service } => write!(f, "unload {service}"),
@@ -306,6 +311,7 @@ mod tests {
     #[test]
     fn every_step_parses_and_echoes() {
         for (line, echo) in [
+            ("debugger", "debugger"),
             ("load sioctl sioctl.sys", "load sioctl"),
             ("use null", "use null"),
             ("unload sioctl", "unload sioctl"),

@@ -46,6 +46,15 @@ class Oracle(unittest.TestCase):
                     self.assertEqual(digest, fixture_sha256(file_name),
                                      f"{file_name} is not the fixture it was recorded with")
                 steps = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
+                if steps[0] == "debugger":
+                    # Recorded with a debugger attached: NK must be run
+                    # the same way, in a boot that says so.
+                    self.assertEqual(body[0], "debugger: attached")
+                    held = [sc for sc in SCENARIOS.values()
+                            if f"test=oracle.{script.stem}" in sc.get("cmdline", "").split()]
+                    self.assertTrue(held, "no scenario runs this script")
+                    for sc in held:
+                        self.assertIn("debug=on", sc["cmdline"].split())
                 stopped = re.fullmatch(r".*: stopped ([0-9a-f]{8}) ([0-9a-f]{8})", body[-1])
                 if stopped:
                     # Windows did not survive the last step recorded:

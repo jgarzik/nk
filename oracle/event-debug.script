@@ -1,0 +1,38 @@
+# Microsoft's event sample (general/event/wdm), unmodified, on a system
+# with a kernel debugger attached.
+#
+# The sample's DriverEntry begins with DbgBreakPoint(). The debugger
+# says go, and the driver gets to run.
+#
+# A request registers for a notification that the driver delivers when a
+# timer goes off. Here the notification is the request itself: the
+# driver marks it pending, and its timer's DPC completes it. The
+# request's input is a REGISTER_EVENT: a notification type (0: by
+# completing the request), a handle (unused for that type), and a due
+# time in 100 ns units, which the driver takes as relative whatever its
+# sign.
+
+debugger
+load event event.sys
+open dev \Device\Event_Sample
+open dos \DosDevices\Event_Sample
+
+# An input shorter than a REGISTER_EVENT is refused.
+ioctl dev 00222000 00000000 0
+
+# Due in 100 ms: the request pends, and completes with success and no
+# data when the timer goes off.
+ioctl dev 00222000 00000000000000000000000000000000c0bdf0ffffffffff 0
+
+# The same through the other name, with the due time given as positive.
+ioctl dos 00222000 0000000000000000000000000000000040420f0000000000 0
+
+# A notification type the driver does not know.
+ioctl dev 00222000 02000000000000000000000000000000c0bdf0ffffffffff 0
+
+# A control code the driver does not know.
+ioctl dev 00222004 - 0
+
+close dos
+close dev
+unload event

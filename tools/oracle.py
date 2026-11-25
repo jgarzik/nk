@@ -44,6 +44,9 @@ import sys
 import tempfile
 import time
 import tomllib
+import threading
+
+import kd
 import urllib.request
 from pathlib import Path
 
@@ -227,7 +230,58 @@ def screenshot(directory, name="screen.png"):
                             "arguments": {"filename": name, "format": "png"}}])
 
 
-def qemu(directory, disk, extra, timeout, on_tick=None):
+def debug(directory):
+    """Be the kernel debugger on the machine's serial line until the
+    machine goes away. What the kernel printed and the breakpoints it was
+    told to go on from are left in kd.log."""
+    line = socket.socket(socket.AF_UNIX)
+    for _ in range(100):
+        try:
+            line.connect(str(Path(directory) / "kd.sock"))
+            break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        return
+    debugger = kd.Debugger()
+    # ORACLE_KD_TRACE names a file to which every packet either way is
+    # noted as it passes: for working on the debugger itself.
+    trace = open(os.environ["ORACLE_KD_TRACE"], "a") if os.environ.get("ORACLE_KD_TRACE") else None
+    tap_in, tap_out = kd.Stream(), kd.Stream()
+
+    def note(direction, stream, data):
+        if trace:
+            for control, kind, packet_id, body in stream.feed(data):
+                size = "damaged" if body is None else len(body)
+                head = "" if not body else body[:24].hex()
+                trace.write(f"{time.monotonic():.3f} {direction} control={control} type={kind} "
+                            f"id={packet_id:#x} len={size} {head}\n")
+            trace.flush()
+
+    try:
+        while True:
+            received = line.recv(65536)
+            if not received:
+                break
+            if trace:
+                trace.write(f"{time.monotonic():.3f} raw {len(received)} {received[:32].hex()}\n")
+            note("kernel", tap_in, received)
+            answer = debugger.receive(received)
+            if answer:
+                note("debugger", tap_out, answer)
+                line.sendall(answer)
+    except OSError:
+        pass
+    finally:
+        log_lines = [f"breakpoint {address:#x}" for address in debugger.breakpoints]
+        log_lines += [f"print {text!r}" for text in debugger.printed]
+        try:
+            (Path(directory) / "kd.log").write_text("\n".join(log_lines) + "\n")
+        except OSError:
+            pass
+
+
+def qemu(directory, disk, extra, timeout, on_tick=None, serial=None):
     """Run Windows until it powers off. `directory` holds vars.fd and the
     QMP socket. Returns True if it powered off within `timeout`."""
     cmd = [
@@ -242,12 +296,17 @@ def qemu(directory, disk, extra, timeout, on_tick=None):
         "-drive", f"if=none,id=hd,format=qcow2,file={disk}",
         "-device", "ide-hd,drive=hd,bus=ide.0,bootindex=1",
         "-nic", "none", "-display", "none", "-vga", "std", "-monitor", "none",
-        "-serial", os.environ.get("ORACLE_SERIAL", "none"),
         "-qmp", "unix:qmp.sock,server=on,wait=off",
     ] + extra
+    serial = serial or os.environ.get("ORACLE_SERIAL", "none")
+    # "kd": the serial port is Windows' kernel-debugger line, and this
+    # program is the debugger at the other end (tools/kd.py).
+    cmd += ["-serial", "unix:kd.sock,server=on,wait=off" if serial == "kd" else serial]
     proc = subprocess.Popen(cmd, cwd=directory, stdin=subprocess.DEVNULL,
                             start_new_session=True, preexec_fn=die_with_parent)
     start = time.monotonic()
+    if serial == "kd":
+        threading.Thread(target=debug, args=(directory,), daemon=True).start()
     try:
         while proc.poll() is None:
             elapsed = time.monotonic() - start
@@ -347,7 +406,7 @@ def make_job_disk(image, source):
     return target
 
 
-def run(source):
+def run(source, serial=None):
     """Boot Windows with the files of `source` as a disk and return what
     its nk-run.cmd printed (None if Windows never powered off)."""
     if not base_ready():
@@ -362,7 +421,7 @@ def run(source):
         ok = qemu(work, "overlay.qcow2", [
             "-drive", "if=none,id=job,format=raw,file=job.img",
             "-device", "ide-hd,drive=job,bus=ide.1",
-        ], RUN_TIMEOUT)
+        ], RUN_TIMEOUT, serial=serial)
         out = subprocess.run(["mtype", "-i", target, "::nk-out.txt"], capture_output=True)
         extras = {}
         listing = subprocess.run(["mdir", "-b", "-i", target, "::"], capture_output=True, text=True)
@@ -373,6 +432,8 @@ def run(source):
                 extras[name] = data.stdout
         if not ok and os.environ.get("KEEP"):
             shutil.copyfile(work / "timeout.png", VM / "run-timeout.png")
+        if (work / "kd.log").exists():
+            extras["kd.log"] = (work / "kd.log").read_bytes()
         crash = bugcheck(work / "qemu.log")
         text = out.stdout.decode(errors="replace") if out.returncode == 0 else None
         return text, ok, extras, crash
@@ -391,6 +452,22 @@ def bugcheck(qemu_log):
         if "crash parameters" in line:
             return line.split("crash parameters", 1)[1].strip(" :")
     return None
+
+
+# The first boot of a debugged replay turns kernel debugging on, over
+# the serial port, and restarts; the second finds it on and goes ahead.
+# The wait keeps the agent, which powers the machine off when this
+# script returns, from getting in before the restart.
+DEBUG_CMD = (
+    'bcdedit /enum {current} | findstr /i /r /c:"^debug  *Yes" >nul\r\n'
+    "if errorlevel 1 (\r\n"
+    "  bcdedit /debug on\r\n"
+    "  bcdedit /dbgsettings serial debugport:1 baudrate:115200\r\n"
+    "  shutdown /r /t 0\r\n"
+    "  ping -n 120 127.0.0.1 >nul\r\n"
+    "  exit /b\r\n"
+    ")\r\n"
+)
 
 
 def step_echo(line):
@@ -459,8 +536,12 @@ def replay(name):
     script = (ORACLE / f"{name}.script").read_text()
     runner = (ORACLE / "runner.ps1").read_bytes()
     drivers = drivers_of(script)
+    # A script that begins with `debugger` is replayed on Windows booted
+    # with kernel debugging enabled, with tools/kd.py as the debugger.
+    debugged = any(line.split() == ["debugger"] for line in script.splitlines())
     key = sha256(b"\0".join([script.encode(), runner, ISO_SHA256.encode(),
                              AGENT_CMD.encode(), SETUP_CMD.encode()]
+                            + ([Path(kd.__file__).read_bytes()] if debugged else [])
                             + [n.encode() + d for n, d in sorted(drivers.items())]))
     cached = CACHE / "oracle" / f"{name}-{key[:32]}.txt"
     if cached.exists():
@@ -475,14 +556,15 @@ def replay(name):
             (job / f"{name}.script").write_text(script)
             for file, data in drivers.items():
                 (job / file).write_bytes(data)
+            replay_cmd = ("powershell -NoProfile -ExecutionPolicy Bypass "
+                          f'-File "%~dp0runner.ps1" "%~dp0." {name}\r\n')
             (job / "nk-run.cmd").write_text(
-                "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass "
-                f'-File "%~dp0runner.ps1" "%~dp0." {name}\r\n')
+                "@echo off\r\n" + (DEBUG_CMD if debugged else "") + replay_cmd)
             # Room for the runner's record of its steps, written in
             # place so that it survives Windows stopping.
             (job / "nk-save-steps.txt").write_bytes(b" " * 65536)
             log(f"{name}: replaying on Windows ({attempt} of 2)")
-            text, ok, extras, crash = run(job)
+            text, ok, extras, crash = run(job, serial="kd" if debugged else None)
         if crash:
             lines = stopped_transcript(extras.get("nk-save-steps.txt", b""), crash)
             if lines is None:

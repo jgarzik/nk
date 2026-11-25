@@ -111,6 +111,7 @@ tier in parallel:
 | `*-neg-breakpoint` | a driver's breakpoint, with no debugger, stops the system as on Windows (`0x7E`) |
 | `*-debugger-breakpoint` | with `debug=on` the same breakpoint is passed over |
 | `*-oracle-event` | Microsoft's event sample, whose first act is a breakpoint, stops NK with the bugcheck it stops Windows with (`oracle/event.txt`), at the same step |
+| `*-oracle-event-debug` | with `debug=on` the same sample runs, and does what it does on Windows with a debugger attached (`oracle/event-debug.txt`) |
 | `*-known-bad` | a failing test fails the run |
 | `*-wrong-cpus` | a processor the kernel does not find fails a test |
 

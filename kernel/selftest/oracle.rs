@@ -74,6 +74,12 @@ impl<'a> Replay<'a> {
     /// transcript line.
     fn step(&mut self, step: Step<'a>) -> Result<String, String> {
         Ok(match step {
+            Step::Debugger => if crate::kd::debugger_attached() {
+                "attached"
+            } else {
+                "absent"
+            }
+            .into(),
             Step::Load { service, file } => self.load(service, file).into(),
             // Part of Windows there; here it is a boot module like any other.
             Step::Use { service } => self.load(service, &format!("{service}.sys")).into(),
@@ -275,5 +281,25 @@ fn event(r: &mut Report, info: &BootInfo) {
         "event.sys",
         include_str!("../../oracle/event.script"),
         include_str!("../../oracle/event.txt"),
+    );
+}
+
+/// Microsoft's event sample with a debugger attached that says go at
+/// its breakpoint: the driver runs. Needs `debug=on`, so it has a boot
+/// of its own.
+pub static EVENT_DEBUG: Group = Group {
+    names: &["oracle.event-debug"],
+    run: event_debug,
+    manual: true,
+};
+
+fn event_debug(r: &mut Report, info: &BootInfo) {
+    check(
+        r,
+        info,
+        "oracle.event-debug",
+        "event.sys",
+        include_str!("../../oracle/event-debug.script"),
+        include_str!("../../oracle/event-debug.txt"),
     );
 }

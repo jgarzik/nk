@@ -20,6 +20,11 @@ static DEBUGGER: AtomicBool = AtomicBool::new(false);
 /// The kernel's own tests are about to execute a breakpoint on purpose.
 static EXPECTED_BREAKPOINT: AtomicBool = AtomicBool::new(false);
 
+/// Whether a debugger that says go is taken to be attached.
+pub fn debugger_attached() -> bool {
+    DEBUGGER.load(Ordering::Relaxed)
+}
+
 /// Say that the breakpoint about to be executed is the kernel's own.
 pub fn expect_breakpoint(expected: bool) {
     EXPECTED_BREAKPOINT.store(expected, Ordering::Relaxed);

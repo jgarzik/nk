@@ -24,6 +24,7 @@ One step per line; `#` starts a comment. Fields are separated by spaces.
 
 | Step | Meaning |
 | --- | --- |
+| `debugger` | first step of a script for a system with a kernel debugger attached that says "go" at every breakpoint; reports `attached` or `absent` |
 | `load <service> <file>` | load the test driver `<file>` as `<service>` |
 | `use <service>` | a driver that is part of Windows: already running there; NK loads `<service>.sys` |
 | `open <handle> <path>` | open an object-manager path for synchronous I/O |
@@ -35,6 +36,22 @@ One step per line; `#` starts a comment. Fields are separated by spaces.
 
 Every output buffer starts filled with `0xEE`, so bytes the driver or
 the I/O manager did not write are visible.
+
+## With a debugger
+
+A driver that executes a breakpoint stops a normally booted Windows
+(bugcheck `0x7E`); with kernel debugging enabled Windows instead waits
+for its debugger. A script that begins with `debugger` is replayed on
+Windows booted with debugging enabled over the serial port, and
+`tools/kd.py` is the debugger at the other end: it speaks just enough of
+the kernel-debugger serial protocol to acknowledge what the kernel
+reports, answer that it has no file to put in a driver's place, step
+over a hard-coded breakpoint, and continue. On NK the same script needs
+`debug=on` on the command line, which stands for that debugger.
+
+Microsoft's event sample is replayed both ways: `event.script` without
+a debugger (loading it stops the system), `event-debug.script` with one
+(it runs).
 
 ## Transcript
 

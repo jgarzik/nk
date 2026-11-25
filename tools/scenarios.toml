@@ -372,3 +372,16 @@ tier = "gate"
 cmdline = "test=oracle.event"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+# The same sample with a debugger attached that says go: it runs, and
+# must do what it does on Windows (oracle/event-debug.txt).
+
+[x86_64-oracle-event-debug]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.event-debug debug=on"
+
+[aarch64-oracle-event-debug]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.event-debug debug=on"
