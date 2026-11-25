@@ -89,15 +89,17 @@ pub fn switch_stack(
     info: &'static BootInfo,
 ) -> ! {
     // SAFETY: `top` is the top of a mapped stack nothing else uses, 16-byte
-    // aligned; the 32 bytes are the callee's shadow space, and the call
-    // leaves the stack as the convention requires at function entry.
+    // aligned; the 32 bytes are the callee's shadow space, and the push
+    // leaves the stack as the convention requires at function entry. The
+    // return address pushed is zero: `entry` never returns, and a walk of
+    // the new stack ends there.
     unsafe {
         core::arch::asm!(
             "mov rsp, {top}",
             "xor ebp, ebp",
             "sub rsp, 32",
-            "call {entry}",
-            "ud2",
+            "push 0",
+            "jmp {entry}",
             top = in(reg) top,
             entry = in(reg) entry,
             in("rcx") info,

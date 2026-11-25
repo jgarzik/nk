@@ -15,17 +15,30 @@ global_asm!(
     .macro nk_variadic entry, target
     .globl \entry
 \entry:
+    .seh_proc \entry
     sub sp, sp, #64
+    .seh_stackalloc 64
     stp x0, x1, [sp, #0]
+    .seh_nop
     stp x2, x3, [sp, #16]
+    .seh_nop
     stp x4, x5, [sp, #32]
+    .seh_nop
     stp x6, x7, [sp, #48]
+    .seh_nop
     stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    .seh_endprologue
     add x0, sp, #16
     bl \target
+    .seh_startepilogue
     ldp x29, x30, [sp], #16
+    .seh_save_fplr_x 16
     add sp, sp, #64
+    .seh_stackalloc 64
+    .seh_endepilogue
     ret
+    .seh_endproc
     .endm
 
     nk_variadic nk_variadic_DbgPrint, nk_dbg_print

@@ -18,17 +18,30 @@ global_asm!(
 // x0: where to save the outgoing stack pointer. x1: the stack pointer to
 // continue on.
 nk_context_switch:
+    .seh_proc nk_context_switch
     sub sp, sp, #176
+    .seh_stackalloc 176
     stp x19, x20, [sp, #0]
+    .seh_save_regp x19, 0
     stp x21, x22, [sp, #16]
+    .seh_save_regp x21, 16
     stp x23, x24, [sp, #32]
+    .seh_save_regp x23, 32
     stp x25, x26, [sp, #48]
+    .seh_save_regp x25, 48
     stp x27, x28, [sp, #64]
+    .seh_save_regp x27, 64
     stp x29, x30, [sp, #80]
+    .seh_save_fplr 80
     stp d8, d9, [sp, #96]
+    .seh_save_fregp d8, 96
     stp d10, d11, [sp, #112]
+    .seh_save_fregp d10, 112
     stp d12, d13, [sp, #128]
+    .seh_save_fregp d12, 128
     stp d14, d15, [sp, #144]
+    .seh_save_fregp d14, 144
+    .seh_endprologue
     mrs x9, fpcr
     str x9, [sp, #160]
     mov x9, sp
@@ -36,34 +49,78 @@ nk_context_switch:
     mov sp, x1
     ldr x9, [sp, #160]
     msr fpcr, x9
+    .seh_startepilogue
     ldp x19, x20, [sp, #0]
+    .seh_save_regp x19, 0
     ldp x21, x22, [sp, #16]
+    .seh_save_regp x21, 16
     ldp x23, x24, [sp, #32]
+    .seh_save_regp x23, 32
     ldp x25, x26, [sp, #48]
+    .seh_save_regp x25, 48
     ldp x27, x28, [sp, #64]
+    .seh_save_regp x27, 64
     ldp x29, x30, [sp, #80]
+    .seh_save_fplr 80
     ldp d8, d9, [sp, #96]
+    .seh_save_fregp d8, 96
     ldp d10, d11, [sp, #112]
+    .seh_save_fregp d10, 112
     ldp d12, d13, [sp, #128]
+    .seh_save_fregp d12, 128
     ldp d14, d15, [sp, #144]
+    .seh_save_fregp d14, 144
     add sp, sp, #176
+    .seh_stackalloc 176
+    .seh_endepilogue
     ret
+    .seh_endproc
+
+// Where a new thread's first switch "returns": `nk_thread_start`, with
+// the thread's entry point in x19. The first instruction is never
+// executed. It is there for the unwind information, which says of the
+// instructions after it that a frame record was pushed: `new_context`
+// leaves one at the stack pointer, all zero, and a return address of
+// zero ends a walk of this stack.
+nk_thread_start_frame:
+    .seh_proc nk_thread_start_frame
+    stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    .seh_endprologue
+    .globl nk_thread_start
+nk_thread_start:
+    blr x19
+    brk #0x1
+    .seh_endproc
 
     .globl nk_callee_saved_check
 // x0: a seed. x1: a function to call. Returns 1 in x0 if every
 // register a call preserves came back as it went in.
 nk_callee_saved_check:
+    .seh_proc nk_callee_saved_check
     sub sp, sp, #192
+    .seh_stackalloc 192
     stp x19, x20, [sp, #0]
+    .seh_save_regp x19, 0
     stp x21, x22, [sp, #16]
+    .seh_save_regp x21, 16
     stp x23, x24, [sp, #32]
+    .seh_save_regp x23, 32
     stp x25, x26, [sp, #48]
+    .seh_save_regp x25, 48
     stp x27, x28, [sp, #64]
+    .seh_save_regp x27, 64
     stp x29, x30, [sp, #80]
+    .seh_save_fplr 80
     stp d8, d9, [sp, #96]
+    .seh_save_fregp d8, 96
     stp d10, d11, [sp, #112]
+    .seh_save_fregp d10, 112
     stp d12, d13, [sp, #128]
+    .seh_save_fregp d12, 128
     stp d14, d15, [sp, #144]
+    .seh_save_fregp d14, 144
+    .seh_endprologue
     str x0, [sp, #160]
     add x19, x0, #0
     add x20, x0, #1
@@ -150,18 +207,32 @@ nk_callee_saved_check:
     b.ne 2f
     mov x0, #1
 2:
+    .seh_startepilogue
     ldp x19, x20, [sp, #0]
+    .seh_save_regp x19, 0
     ldp x21, x22, [sp, #16]
+    .seh_save_regp x21, 16
     ldp x23, x24, [sp, #32]
+    .seh_save_regp x23, 32
     ldp x25, x26, [sp, #48]
+    .seh_save_regp x25, 48
     ldp x27, x28, [sp, #64]
+    .seh_save_regp x27, 64
     ldp x29, x30, [sp, #80]
+    .seh_save_fplr 80
     ldp d8, d9, [sp, #96]
+    .seh_save_fregp d8, 96
     ldp d10, d11, [sp, #112]
+    .seh_save_fregp d10, 112
     ldp d12, d13, [sp, #128]
+    .seh_save_fregp d12, 128
     ldp d14, d15, [sp, #144]
+    .seh_save_fregp d14, 144
     add sp, sp, #192
+    .seh_stackalloc 192
+    .seh_endepilogue
     ret
+    .seh_endproc
 
     .globl nk_all_registers_check
 // x0: a seed. x1: how many times to look. Fills the general registers
@@ -169,17 +240,30 @@ nk_callee_saved_check:
 // values made from the seed and checks them over and over without
 // calling anything. Returns 1 in x0 if none changed.
 nk_all_registers_check:
+    .seh_proc nk_all_registers_check
     sub sp, sp, #192
+    .seh_stackalloc 192
     stp x19, x20, [sp, #0]
+    .seh_save_regp x19, 0
     stp x21, x22, [sp, #16]
+    .seh_save_regp x21, 16
     stp x23, x24, [sp, #32]
+    .seh_save_regp x23, 32
     stp x25, x26, [sp, #48]
+    .seh_save_regp x25, 48
     stp x27, x28, [sp, #64]
+    .seh_save_regp x27, 64
     stp x29, x30, [sp, #80]
+    .seh_save_fplr 80
     stp d8, d9, [sp, #96]
+    .seh_save_fregp d8, 96
     stp d10, d11, [sp, #112]
+    .seh_save_fregp d10, 112
     stp d12, d13, [sp, #128]
+    .seh_save_fregp d12, 128
     stp d14, d15, [sp, #144]
+    .seh_save_fregp d14, 144
+    .seh_endprologue
     str x0, [sp, #160]
     str x1, [sp, #168]
     mov x16, x0
@@ -618,23 +702,38 @@ nk_all_registers_check:
 2:
     mov x0, #0
 4:
+    .seh_startepilogue
     ldp x19, x20, [sp, #0]
+    .seh_save_regp x19, 0
     ldp x21, x22, [sp, #16]
+    .seh_save_regp x21, 16
     ldp x23, x24, [sp, #32]
+    .seh_save_regp x23, 32
     ldp x25, x26, [sp, #48]
+    .seh_save_regp x25, 48
     ldp x27, x28, [sp, #64]
+    .seh_save_regp x27, 64
     ldp x29, x30, [sp, #80]
+    .seh_save_fplr 80
     ldp d8, d9, [sp, #96]
+    .seh_save_fregp d8, 96
     ldp d10, d11, [sp, #112]
+    .seh_save_fregp d10, 112
     ldp d12, d13, [sp, #128]
+    .seh_save_fregp d12, 128
     ldp d14, d15, [sp, #144]
+    .seh_save_fregp d14, 144
     add sp, sp, #192
+    .seh_stackalloc 192
+    .seh_endepilogue
     ret
+    .seh_endproc
 "#
 );
 
 unsafe extern "C" {
     fn nk_context_switch(save: *mut u64, load: u64);
+    fn nk_thread_start();
     fn nk_callee_saved_check(seed: u64, call: extern "C" fn()) -> u64;
     fn nk_all_registers_check(seed: u64, looks: u64) -> u64;
 }
@@ -659,12 +758,16 @@ pub unsafe fn context_switch(save: *mut u64, load: u64) {
 /// `stack_top` is the 16-byte-aligned top of a mapped stack nothing else
 /// uses.
 pub unsafe fn new_context(stack_top: u64, entry: extern "C" fn() -> !) -> u64 {
-    let sp = stack_top - FRAME;
+    // Above the switch's frame, the zero frame record that ends a walk of
+    // this stack (see `nk_thread_start`).
+    let sp = stack_top - 16 - FRAME;
     // SAFETY: per the contract; everything written is inside the stack.
-    // The switch "returns" through x30, with no frame behind it.
+    // The switch "returns" through x30, to the start stub, which finds
+    // the entry point in x19, the first register of the frame.
     unsafe {
-        core::ptr::write_bytes(sp as *mut u8, 0, FRAME as usize);
-        ((sp + 88) as *mut u64).write(entry as usize as u64);
+        core::ptr::write_bytes(sp as *mut u8, 0, FRAME as usize + 16);
+        (sp as *mut u64).write(entry as usize as u64);
+        ((sp + 88) as *mut u64).write(nk_thread_start as *const () as usize as u64);
     }
     sp
 }
