@@ -17,8 +17,6 @@ use nk_pe::{Pe, PeError, Symbol};
 
 /// `IMAGE_SUBSYSTEM_NATIVE`: what a kernel driver is linked as.
 const SUBSYSTEM_NATIVE: u16 = 1;
-/// The value MSVC leaves in `__security_cookie` for the loader to replace.
-const DEFAULT_COOKIE: u64 = 0x2B99_2DDF_A232;
 
 /// A driver image in memory.
 #[derive(Clone, Copy)]
@@ -54,21 +52,10 @@ fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// A stack-protector cookie for one image: unpredictable-ish, never zero,
-/// never the default, and with the top 16 bits clear, which the x64 check
-/// routine requires. The entropy is only the CPU's cycle counter; a real
-/// random source is future work.
+/// A stack-protector cookie for one image. The entropy is only the CPU's
+/// cycle counter; a real random source is future work.
 fn security_cookie() -> u64 {
-    let mut x = arch::counter() ^ 0x9E37_79B9_7F4A_7C15;
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    x ^= x >> 27;
-    let cookie = x & 0x0000_FFFF_FFFF_FFFF;
-    if cookie == 0 || cookie == DEFAULT_COOKIE {
-        0x0000_1F2E_3D4C_5B6A
-    } else {
-        cookie
-    }
+    nk_pe::security_cookie(arch::counter())
 }
 
 /// Load a driver image from the bytes of its file.
