@@ -10,6 +10,7 @@
 pub mod map;
 pub mod pool;
 pub mod stack;
+pub mod user;
 
 use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};

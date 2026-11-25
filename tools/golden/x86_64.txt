@@ -7,6 +7,9 @@ ke.interrupts ok
 mm.frames ok
 mm.map ok
 mm.low-half ok
+mm.user.map ok
+mm.user.refused ok
+mm.user.other-cpu ok
 mm.pool ok
 mm.stack ok
 hal.cpus ok

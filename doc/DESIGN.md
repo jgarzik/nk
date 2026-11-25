@@ -119,11 +119,25 @@ Any step that fails prints a `FAIL` line and stops. There is no user mode.
 
 | Range | Contents |
 | --- | --- |
-| low half | NK's own table on both architectures: firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`). Nothing at address zero. No user space |
+| low half | NK's own table on both architectures: firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`), and the user range. Nothing at address zero |
 | `0xFFFF_8000_0000_0000` + phys | direct map of physical memory: 2 MiB blocks, not executable; ranges without RAM as device memory |
 | `0xFFFF_F780_0000_0000` | `KUSER_SHARED_DATA`, one page, Windows' address |
 | `0xFFFF_F800_0000_0000` | the kernel image: 4 KiB pages, each section's own protection |
 | `0xFFFF_F880_0000_0000` to `0xFFFF_F900_0000_0000` | dynamic mappings: driver images and the views of images, kernel stacks, MDL views |
+
+**The user range** (`kernel/mm/user.rs`) is `0x1_0000` up to Windows'
+`MmUserProbeAddress`, `0x7FFF_FFFF_0000`, on both architectures (the
+low half is 47 bits wide on x86-64 and 48 on arm64). There is one
+address space, the System process's, so the range is every thread's.
+`mm::user` maps fresh zeroed frames there and unmaps them, with page
+tables made on demand and every processor's translation dropped on
+unmap; it has no exports. A range that touches a firmware runtime
+region is refused, since those share the low half.
+
+The pages are kernel-only: writable, not executable, not marked
+user-accessible. Nothing runs in user mode, and a kernel-only page is
+one the kernel can always touch: x86-64 SMAP and arm64 PAN, neither of
+which NK enables, restrict only pages marked for user mode.
 
 ## Memory
 

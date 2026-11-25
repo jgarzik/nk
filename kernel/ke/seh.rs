@@ -12,7 +12,7 @@ use crate::kd;
 use core::ffi::c_void;
 
 /// `MmUserProbeAddress`: the first address beyond user space.
-const USER_PROBE_ADDRESS: usize = 0x7FFF_FFFF_0000;
+const USER_PROBE_ADDRESS: usize = crate::mm::user::USER_PROBE_ADDRESS as usize;
 const STATUS_DATATYPE_MISALIGNMENT: u32 = 0x8000_0002;
 const STATUS_ACCESS_VIOLATION: u32 = 0xC000_0005;
 
