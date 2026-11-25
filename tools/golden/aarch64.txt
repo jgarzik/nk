@@ -69,6 +69,7 @@ se.access-state ok
 cm.keys ok
 cm.values ok
 cm.delete ok
+cm.namespace ok
 io.csq ok
 io.csq-cancel ok
 io.csq-race ok

@@ -134,17 +134,6 @@ fn exact<T: Copy>(items: &[T]) -> Result<Vec<T>, Error> {
     Ok(copy)
 }
 
-/// What an absolute path names below the root: `\Registry\Machine\X`
-/// gives `Machine\X`. `None` if the path does not start at the root.
-pub fn below_root(path: &[u16]) -> Option<&[u16]> {
-    let rest = path.strip_prefix(&[u16::from(b'\\')])?;
-    let end = rest
-        .iter()
-        .position(|&c| c == u16::from(b'\\'))
-        .unwrap_or(rest.len());
-    same(&rest[..end], ROOT).then(|| &rest[end..])
-}
-
 impl Default for Hive {
     fn default() -> Self {
         Self::new()
@@ -439,20 +428,6 @@ mod tests {
         let (system, new) = hive.create(root, &w("Machine\\System")).unwrap();
         assert!(new);
         (hive, system)
-    }
-
-    #[test]
-    fn absolute_paths_start_at_the_root() {
-        assert_eq!(
-            below_root(&w("\\Registry\\Machine\\X")),
-            Some(&w("\\Machine\\X")[..])
-        );
-        assert_eq!(below_root(&w("\\REGISTRY")), Some(&[][..]));
-        assert_eq!(below_root(&w("\\registry\\")), Some(&w("\\")[..]));
-        assert_eq!(below_root(&w("\\Device\\Null")), None);
-        assert_eq!(below_root(&w("\\RegistryX\\Machine")), None);
-        assert_eq!(below_root(&w("Registry\\Machine")), None);
-        assert_eq!(below_root(&[]), None);
     }
 
     #[test]

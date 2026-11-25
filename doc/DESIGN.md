@@ -363,8 +363,9 @@ directories every Windows system has (`\Device`, `\Driver`,
 directory objects made at boot; nothing else makes or removes one. `\??`
 is `\GLOBAL??`, there being one session, and `\DosDevices` is a symbolic
 link to `\??`. A named device is an entry in the directory its name puts
-it in, a symbolic link is a symbolic-link object there, and a loaded
-driver's object is `\Driver\<service>`.
+it in, a symbolic link is a symbolic-link object there, a loaded
+driver's object is `\Driver\<service>`, and `\Registry` is the
+registry's root key.
 
 Names compare case-insensitively whatever the caller asks, which is
 Windows' default configuration. A look-up follows symbolic links, at
@@ -550,7 +551,12 @@ Nothing is loaded from or saved to a hive: it starts with
 `\Registry\Machine\System\CurrentControlSet` (`Control\Class`,
 `Services`) and holds what drivers write until power-off. Names compare
 case-insensitively. A key handle is a handle to a small object naming
-the key; a name is absolute from `\Registry` or relative to an open key.
+the key. The root key is such an object too, called `\Registry` in the
+object namespace: an absolute name, or one relative to a directory, is
+looked up there, through symbolic links like any other, and must end at
+that key, which walks the rest of the path in the registry's own tree. A
+name relative to an open key starts at that key. A key is no file:
+opening one through the I/O manager is `STATUS_OBJECT_TYPE_MISMATCH`.
 
 Creating makes only the last key of a path, as on Windows. Values are
 read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other

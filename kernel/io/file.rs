@@ -307,6 +307,9 @@ fn resolve(root: Option<u64>, name: &[u16]) -> Result<Target, NTSTATUS> {
             }
             let found = if is(root, &object::DIRECTORY_TYPE) {
                 ob::lookup(Some(root), name)
+            } else if is(root, &object::KEY_TYPE) {
+                // A key parses a name into a key, never a file.
+                Err(STATUS_OBJECT_TYPE_MISMATCH)
             } else {
                 // Nothing parses a name below such an object.
                 Err(STATUS_INVALID_HANDLE)
