@@ -75,6 +75,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-unwind"
+version = "0.0.2"
+dependencies = [
+ "nk-pe",
+]
+
+[[package]]
 name = "nkkrnl"
 version = "0.0.2"
 dependencies = [
