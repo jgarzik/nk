@@ -139,9 +139,11 @@ pub type IO_COMPLETION_ROUTINE =
     unsafe extern "C" fn(*mut DEVICE_OBJECT, *mut IRP, PVOID) -> NTSTATUS;
 
 pub const IRP_MJ_CREATE: u8 = 0x00;
+pub const IRP_MJ_CREATE_NAMED_PIPE: u8 = 0x01;
 pub const IRP_MJ_CLOSE: u8 = 0x02;
 pub const IRP_MJ_READ: u8 = 0x03;
 pub const IRP_MJ_WRITE: u8 = 0x04;
+pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_CLEANUP: u8 = 0x12;
 pub const IRP_MJ_MAXIMUM_FUNCTION: usize = 0x1B;
@@ -231,6 +233,55 @@ pub struct DEVICE_OBJECT {
 
 /// `FILE_OBJECT.Flags`
 pub const FO_SYNCHRONOUS_IO: u32 = 0x0000_0002;
+/// The last handle has been closed and the cleanup request completed.
+pub const FO_CLEANUP_COMPLETE: u32 = 0x0000_4000;
+/// A handle has been made for the file object.
+pub const FO_HANDLE_CREATED: u32 = 0x0004_0000;
+
+/// Create options (`NtCreateFile`'s `CreateOptions`): requests on the
+/// file are synchronous, alertable or not.
+pub const FILE_SYNCHRONOUS_IO_ALERT: u32 = 0x0000_0010;
+pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
+pub const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
+/// Create disposition: open what exists, fail otherwise.
+pub const FILE_OPEN: u32 = 1;
+
+/// What the generic rights mean for a file
+/// ([`IoGetFileObjectGenericMapping`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetfileobjectgenericmapping)):
+/// `FILE_GENERIC_READ`, `FILE_GENERIC_WRITE`, `FILE_GENERIC_EXECUTE`,
+/// `FILE_ALL_ACCESS`.
+pub const FILE_GENERIC_MAPPING: crate::ob::GENERIC_MAPPING = crate::ob::GENERIC_MAPPING {
+    GenericRead: 0x0012_0089,
+    GenericWrite: 0x0012_0116,
+    GenericExecute: 0x0012_00A0,
+    GenericAll: 0x001F_01FF,
+};
+
+/// [`IO_SECURITY_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_io_security_context):
+/// what `Parameters.Create.SecurityContext` points to.
+#[repr(C)]
+pub struct IO_SECURITY_CONTEXT {
+    pub SecurityQos: PVOID,
+    pub AccessState: *mut crate::se::ACCESS_STATE,
+    /// The access asked for, generic rights mapped to the file rights.
+    pub DesiredAccess: u32,
+    pub FullCreateOptions: u32,
+}
+
+/// [`NAMED_PIPE_CREATE_PARAMETERS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_named_pipe_create_parameters):
+/// what `Parameters.CreatePipe.Parameters` points to.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NAMED_PIPE_CREATE_PARAMETERS {
+    pub NamedPipeType: u32,
+    pub ReadMode: u32,
+    pub CompletionMode: u32,
+    pub MaximumInstances: u32,
+    pub InboundQuota: u32,
+    pub OutboundQuota: u32,
+    pub DefaultTimeout: i64,
+    pub TimeoutSpecified: u8,
+}
 
 #[repr(C)]
 pub struct FILE_OBJECT {
@@ -267,9 +318,13 @@ pub struct FILE_OBJECT {
 }
 
 /// `IRP.Flags`
+pub const IRP_SYNCHRONOUS_API: u32 = 0x0000_0004;
 pub const IRP_BUFFERED_IO: u32 = 0x0000_0010;
 pub const IRP_DEALLOCATE_BUFFER: u32 = 0x0000_0020;
 pub const IRP_INPUT_OPERATION: u32 = 0x0000_0040;
+pub const IRP_CREATE_OPERATION: u32 = 0x0000_0080;
+pub const IRP_CLOSE_OPERATION: u32 = 0x0000_0400;
+pub const IRP_DEFER_IO_COMPLETION: u32 = 0x0000_0800;
 
 /// `KPROCESSOR_MODE`
 pub const KERNEL_MODE: i8 = 0;
@@ -368,6 +423,46 @@ pub const fn rw_parameters(length: u32, byte_offset: i64) -> [u64; 4] {
 /// IoControlCode, Type3InputBuffer.
 pub const fn ioctl_parameters(out_len: u32, in_len: u32, code: u32, type3_input: u64) -> [u64; 4] {
     [out_len as u64, in_len as u64, code as u64, type3_input]
+}
+
+/// `Parameters.Create.Options`: the create disposition in the high
+/// eight bits, the create options in the low twenty-four.
+pub const fn create_options(disposition: u32, options: u32) -> u32 {
+    disposition << 24 | options & 0x00FF_FFFF
+}
+
+/// `Parameters.Create`: SecurityContext, Options, FileAttributes and
+/// ShareAccess (16 bits each, sharing a slot), EaLength.
+pub const fn create_parameters(
+    security_context: u64,
+    options: u32,
+    file_attributes: u16,
+    share_access: u16,
+    ea_length: u32,
+) -> [u64; 4] {
+    [
+        security_context,
+        options as u64,
+        file_attributes as u64 | (share_access as u64) << 16,
+        ea_length as u64,
+    ]
+}
+
+/// `Parameters.CreatePipe`: as `Parameters.Create`, with a reserved
+/// word where the file attributes are and a pointer to the
+/// `NAMED_PIPE_CREATE_PARAMETERS` where the EA length is.
+pub const fn create_pipe_parameters(
+    security_context: u64,
+    options: u32,
+    share_access: u16,
+    parameters: u64,
+) -> [u64; 4] {
+    [
+        security_context,
+        options as u64,
+        (share_access as u64) << 16,
+        parameters,
+    ]
 }
 
 /// Buffer-passing method of an I/O control code: its low two bits.
@@ -506,6 +601,15 @@ const _: () = {
     assert!(offset_of!(MDL, ByteCount) == 0x28);
     assert!(offset_of!(MDL, ByteOffset) == 0x2C);
     assert!(offset_of!(IO_STATUS_BLOCK, Information) == 0x08);
+    assert!(size_of::<IO_SECURITY_CONTEXT>() == 0x18);
+    assert!(offset_of!(IO_SECURITY_CONTEXT, AccessState) == 0x08);
+    assert!(offset_of!(IO_SECURITY_CONTEXT, DesiredAccess) == 0x10);
+    assert!(offset_of!(IO_SECURITY_CONTEXT, FullCreateOptions) == 0x14);
+    assert!(size_of::<NAMED_PIPE_CREATE_PARAMETERS>() == 0x28);
+    assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, MaximumInstances) == 0x0C);
+    assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, OutboundQuota) == 0x14);
+    assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, DefaultTimeout) == 0x18);
+    assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, TimeoutSpecified) == 0x20);
     assert!(offset_of!(DISPATCHER_HEADER, SignalState) == 0x04);
     assert!(offset_of!(DISPATCHER_HEADER, WaitListHead) == 0x08);
 };
@@ -529,6 +633,20 @@ mod layout {
     fn parameters() {
         assert_eq!(rw_parameters(0x1234, 0x55), [0x1234, 0, 0x55, 0]);
         assert_eq!(ioctl_parameters(1, 2, 3, 4), [1, 2, 3, 4]);
+        // `FILE_OPEN_IF` with two options; an option bit above the low
+        // twenty-four does not reach the disposition.
+        assert_eq!(create_options(3, 0x60), 0x0300_0060);
+        assert_eq!(create_options(1, 0xFF00_0021), 0x0100_0021);
+        // `FileAttributes` at +0x10 of the parameters and `ShareAccess`
+        // at +0x12, as `wdm.h` lays the structure out.
+        assert_eq!(
+            create_parameters(0x1000, 0x0100_0060, 0x80, 3, 0x20),
+            [0x1000, 0x0100_0060, 0x0003_0080, 0x20]
+        );
+        assert_eq!(
+            create_pipe_parameters(0x1000, 0x0300_0020, 3, 0x2000),
+            [0x1000, 0x0300_0020, 0x0003_0000, 0x2000]
+        );
         // The four codes of Microsoft's SIOCTL sample (device type 40000).
         assert_eq!(ctl_code(40000, 0x900, METHOD_IN_DIRECT, 0), 0x9C40_2401);
         assert_eq!(ctl_code(40000, 0x901, METHOD_OUT_DIRECT, 0), 0x9C40_2406);

@@ -17,7 +17,7 @@ pub mod object;
 
 use crate::ke::{Rank, SpinLock};
 use alloc::vec::Vec;
-use nk_ntabi::io::{DEVICE_OBJECT, UNICODE_STRING};
+use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::{OBJECT_DIRECTORY_SIZE, OBJECT_SYMBOLIC_LINK};
 use nk_ntabi::status::*;
 use nk_ob::tree::{DirId, Error, Found, Options, Removed, Tree};
@@ -241,10 +241,25 @@ pub fn remove_link(path: &[u16]) -> NTSTATUS {
 /// What `path` leads to, following symbolic links: the object, with a
 /// reference for the caller to drop (`object::dereference`), and what
 /// is left of the path if it goes on below the object, starting with
-/// its backslash. The rest is the business of the object's type.
-pub fn lookup(path: &[u16]) -> Result<(*mut u8, Vec<u16>), NTSTATUS> {
+/// its backslash. The rest is the business of the object's type: the
+/// lock is dropped before anything is done with it.
+///
+/// The path is absolute, or relative to the directory object `start`
+/// (the `RootDirectory` of `OBJECT_ATTRIBUTES`).
+pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(*mut u8, Vec<u16>), NTSTATUS> {
     let ns = NAMESPACE.lock();
-    let outcome = ns.tree.lookup(None, path, OPTIONS).map_err(status)?;
+    let start = match start {
+        None => None,
+        Some(object) if object == ns.root.0 => Some(DirId::ROOT),
+        Some(object) => Some(
+            ns.directories
+                .iter()
+                .find(|(_, directory)| directory.0 == object)
+                .map(|(id, _)| *id)
+                .ok_or(STATUS_OBJECT_TYPE_MISMATCH)?,
+        ),
+    };
+    let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
     let body = match outcome.found {
         Found::Object(object) | Found::SymbolicLink(_, object) => object.0,
         Found::Directory(dir) => directory(&ns, dir),
@@ -254,22 +269,6 @@ pub fn lookup(path: &[u16]) -> Result<(*mut u8, Vec<u16>), NTSTATUS> {
     // name is alive. Directories live for ever.
     unsafe { object::reference(body) };
     Ok((body, outcome.remainder))
-}
-
-/// The device called `name`, with a pointer reference taken while the
-/// name still led to it: its memory stays until the caller drops the
-/// reference (`object::dereference`), whatever becomes of the device
-/// meanwhile.
-pub fn lookup_device_referenced(name: &[u16]) -> Result<*mut DEVICE_OBJECT, NTSTATUS> {
-    let (body, rest) = lookup(name)?;
-    // SAFETY: the look-up's reference keeps the object.
-    unsafe {
-        if rest.is_empty() && core::ptr::eq(object::type_of(body), &raw const object::DEVICE_TYPE) {
-            return Ok(body.cast());
-        }
-        object::dereference(body);
-    }
-    Err(STATUS_OBJECT_TYPE_MISMATCH)
 }
 
 /// Number of entries in the namespace, the boot directories included
@@ -294,7 +293,7 @@ fn named_event(path: &str) -> Result<*mut u8, &'static str> {
 /// look-up's reference is dropped at once, so the pointer is only an
 /// identity.
 fn find(path: &str) -> Result<(*mut u8, alloc::string::String), NTSTATUS> {
-    let (body, rest) = lookup(&wide(path))?;
+    let (body, rest) = lookup(None, &wide(path))?;
     // SAFETY: the reference the look-up took.
     unsafe { object::dereference(body) };
     Ok((body, alloc::string::String::from_utf16_lossy(&rest)))

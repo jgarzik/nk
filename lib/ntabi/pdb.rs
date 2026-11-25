@@ -743,6 +743,51 @@ fn access_state_matches_the_kernel() {
 }
 
 #[test]
+fn create_requests_match_the_kernel() {
+    use crate::io::{IO_SECURITY_CONTEXT, NAMED_PIPE_CREATE_PARAMETERS};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let context = types
+        .layout("_IO_SECURITY_CONTEXT")
+        .expect("_IO_SECURITY_CONTEXT");
+    let field = |name| offset(&context, "_IO_SECURITY_CONTEXT", name);
+    assert_eq!(size_of::<IO_SECURITY_CONTEXT>(), context.size as usize);
+    macro_rules! same_context {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(IO_SECURITY_CONTEXT, $name), field(stringify!($name)));
+        )*};
+    }
+    same_context!(SecurityQos, AccessState, DesiredAccess, FullCreateOptions);
+
+    let pipe = types
+        .layout("_NAMED_PIPE_CREATE_PARAMETERS")
+        .expect("_NAMED_PIPE_CREATE_PARAMETERS");
+    let field = |name| offset(&pipe, "_NAMED_PIPE_CREATE_PARAMETERS", name);
+    assert_eq!(
+        size_of::<NAMED_PIPE_CREATE_PARAMETERS>(),
+        pipe.size as usize
+    );
+    macro_rules! same_pipe {
+        ($($name:ident),*) => {$(
+            assert_eq!(
+                offset_of!(NAMED_PIPE_CREATE_PARAMETERS, $name),
+                field(stringify!($name))
+            );
+        )*};
+    }
+    same_pipe!(
+        NamedPipeType,
+        ReadMode,
+        CompletionMode,
+        MaximumInstances,
+        InboundQuota,
+        OutboundQuota,
+        DefaultTimeout,
+        TimeoutSpecified
+    );
+}
+
+#[test]
 fn object_attributes_match_the_kernel() {
     use crate::ob::OBJECT_ATTRIBUTES;
     use core::mem::{offset_of, size_of};

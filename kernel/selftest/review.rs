@@ -295,11 +295,10 @@ fn open_delete() -> Result<u32, &'static str> {
     .is_ok()
     {
         while FINISHED.load(Ordering::Acquire) != 1 {
-            match crate::io::file::open(NAME) {
+            match super::open(NAME) {
                 Ok(file) => {
                     opened = true;
-                    // SAFETY: an open file, closed once.
-                    let _ = unsafe { crate::io::file::close(file) };
+                    crate::io::file::close(file);
                 }
                 Err(_) => tried += 1,
             }

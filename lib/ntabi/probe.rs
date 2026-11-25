@@ -137,6 +137,8 @@ fn nk_facts() -> Vec<(&'static str, usize)> {
         off!(IO_STACK_LOCATION, FileObject),
         off!(IO_STACK_LOCATION, CompletionRoutine),
         off!(IO_STACK_LOCATION, Context),
+        sz!(IO_SECURITY_CONTEXT),
+        off!(IO_SECURITY_CONTEXT, DesiredAccess),
         sz!(MDL),
         off!(MDL, Size),
         off!(MDL, MdlFlags),

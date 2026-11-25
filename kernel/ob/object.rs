@@ -25,8 +25,8 @@ use core::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ke::LIST_ENTRY;
 use nk_ntabi::ob::{
-    GENERIC_MAPPING, OB_DELETE_METHOD, OB_INFOMASK_NAME, OBJECT_BODY, OBJECT_HEADER,
-    OBJECT_HEADER_NAME_INFO, OBJECT_TYPE, OBJECT_TYPE_INITIALIZER,
+    GENERIC_MAPPING, OB_CLOSE_METHOD, OB_DELETE_METHOD, OB_INFOMASK_NAME, OBJECT_BODY,
+    OBJECT_HEADER, OBJECT_HEADER_NAME_INFO, OBJECT_TYPE, OBJECT_TYPE_INITIALIZER,
 };
 use nk_ob::header::{FIRST_TYPE_INDEX, type_index};
 
@@ -92,7 +92,7 @@ impl ObjectType {
                 DefaultNonPagedPoolCharge: 0,
                 DumpProcedure: core::ptr::null_mut(),
                 OpenProcedure: core::ptr::null_mut(),
-                CloseProcedure: core::ptr::null_mut(),
+                CloseProcedure: None,
                 DeleteProcedure: delete,
                 ParseProcedure: core::ptr::null_mut(),
                 SecurityProcedure: core::ptr::null_mut(),
@@ -106,6 +106,36 @@ impl ObjectType {
             Key: 0,
             CallbackList: EMPTY,
         })
+    }
+
+    /// The same type, whose `close` is called whenever a handle to one
+    /// of its objects is closed, and for which the generic rights mean
+    /// what `mapping` says.
+    const fn with_handles(mut self, close: OB_CLOSE_METHOD, mapping: GENERIC_MAPPING) -> Self {
+        self.0.TypeInfo.CloseProcedure = Some(close);
+        self.0.TypeInfo.ValidAccessMask = mapping.GenericAll;
+        self.0.TypeInfo.GenericMapping = mapping;
+        self
+    }
+
+    /// What the type does when a handle to one of its objects closes.
+    pub fn close_procedure(&self) -> Option<OB_CLOSE_METHOD> {
+        self.0.TypeInfo.CloseProcedure
+    }
+
+    /// `access` with its generic rights replaced by the rights they
+    /// stand for in this type.
+    pub fn map_generic(&self, access: u32) -> u32 {
+        let mapping = &self.0.TypeInfo.GenericMapping;
+        nk_se::access::map_generic(
+            access,
+            &nk_se::access::GenericMapping {
+                read: mapping.GenericRead,
+                write: mapping.GenericWrite,
+                execute: mapping.GenericExecute,
+                all: mapping.GenericAll,
+            },
+        )
     }
 
     /// The type's name.
@@ -126,6 +156,7 @@ static TOKEN_NAME: [u16; 5] = wide(b"Token");
 static DIRECTORY_NAME: [u16; 9] = wide(b"Directory");
 static SYMBOLIC_LINK_NAME: [u16; 12] = wide(b"SymbolicLink");
 static DRIVER_NAME: [u16; 6] = wide(b"Driver");
+static FILE_NAME: [u16; 4] = wide(b"File");
 
 /// Events (`KEVENT`).
 pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
@@ -161,8 +192,21 @@ pub static SYMBOLIC_LINK_TYPE: ObjectType =
 /// Drivers (`DRIVER_OBJECT`).
 pub static DRIVER_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 8, &DRIVER_NAME, None);
 
+/// Open files (`FILE_OBJECT`): the last handle closing sends the
+/// driver a cleanup request, the last reference going a close request
+/// (`io::file`).
+pub static FILE_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 9,
+    &FILE_NAME,
+    Some(crate::io::file::deleted),
+)
+.with_handles(
+    crate::io::file::handle_closed,
+    nk_ntabi::io::FILE_GENERIC_MAPPING,
+);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 9] = [
+static TYPES: [&ObjectType; 10] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -172,6 +216,7 @@ static TYPES: [&ObjectType; 9] = [
     &DIRECTORY_TYPE,
     &SYMBOLIC_LINK_TYPE,
     &DRIVER_TYPE,
+    &FILE_TYPE,
 ];
 
 /// What hides type indices in object headers. Chosen once, before the

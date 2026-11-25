@@ -6,7 +6,7 @@
 //! produces must be the line Windows produced. `oracle/README.md` defines
 //! the formats.
 
-use crate::io::file::{self, IoResult};
+use crate::io::file::{self, IoResult, Kind, OpenRequest};
 use crate::io::service::{self, ServiceError};
 use crate::ldr;
 use crate::test::{Group, Report};
@@ -15,12 +15,13 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::FILE_OBJECT;
+use nk_ntabi::io::{FILE_OPEN, KERNEL_MODE, NAMED_PIPE_CREATE_PARAMETERS};
 use nk_oracle::{Checker, Dump, FILL, Mismatch, Outcome, Step};
 
 /// What a script has open and loaded while it runs.
 struct Replay<'a> {
-    files: Vec<(&'a str, *mut FILE_OBJECT)>,
+    /// The handles the script has open, by the names it gave them.
+    files: Vec<(&'a str, u64)>,
     /// The services the script started and has not stopped.
     drivers: Vec<&'a str>,
 }
@@ -33,7 +34,7 @@ fn outcome(r: IoResult) -> Outcome {
 }
 
 impl<'a> Replay<'a> {
-    fn file(&self, handle: &str) -> Result<*mut FILE_OBJECT, String> {
+    fn file(&self, handle: &str) -> Result<u64, String> {
         self.files
             .iter()
             .find(|(h, _)| *h == handle)
@@ -100,29 +101,72 @@ impl<'a> Replay<'a> {
             Step::Load { service, file } => self.load(service, file).into(),
             Step::Use { service } => self.use_service(service).into(),
             Step::Unload { service } => self.unload(service).into(),
-            Step::Install { .. }
-            | Step::Pipe { .. }
-            | Step::IoctlAt { .. }
-            | Step::Fsctl { .. } => {
+            Step::Install { .. } | Step::IoctlAt { .. } => {
                 return Err("not yet supported on NK".into());
             }
-            Step::Open { args, .. } if !args.is_plain() => {
-                return Err("not yet supported on NK".into());
-            }
-            Step::Open { handle, path, .. } => match file::open(path) {
-                Ok(file) => {
-                    self.files.push((handle, file));
-                    format!("{:08x}", 0)
+            Step::Open { handle, path, args } => {
+                let root = match args.root {
+                    Some(root) => Some(self.file(root)?),
+                    None => None,
+                };
+                let opened = file::open(&OpenRequest {
+                    name: path,
+                    root,
+                    desired_access: args.access,
+                    share_access: args.share,
+                    create_options: args.options,
+                    disposition: FILE_OPEN,
+                    kind: Kind::File,
+                    requestor_mode: KERNEL_MODE,
+                });
+                match opened {
+                    Ok((file, _)) => {
+                        self.files.push((handle, file));
+                        format!("{:08x}", 0)
+                    }
+                    Err(status) => format!("{:08x}", status as u32),
                 }
-                Err(status) => format!("{:08x}", status as u32),
-            },
+            }
+            Step::Pipe { handle, path, args } => {
+                let opened = file::open(&OpenRequest {
+                    name: path,
+                    root: None,
+                    desired_access: args.access,
+                    share_access: args.share,
+                    create_options: args.options,
+                    disposition: args.disposition,
+                    kind: Kind::NamedPipe(NAMED_PIPE_CREATE_PARAMETERS {
+                        NamedPipeType: args.kind,
+                        ReadMode: args.read,
+                        CompletionMode: args.completion,
+                        MaximumInstances: args.instances,
+                        InboundQuota: args.inquota,
+                        OutboundQuota: args.outquota,
+                        // Relative, in units of 100 ns.
+                        DefaultTimeout: -10_000 * i64::from(args.timeout),
+                        TimeoutSpecified: 1,
+                    }),
+                    requestor_mode: KERNEL_MODE,
+                });
+                let (status, information) = match opened {
+                    Ok((file, information)) => {
+                        self.files.push((handle, file));
+                        (0, information)
+                    }
+                    Err(status) => (status as u32, 0),
+                };
+                format!(
+                    "{}",
+                    Outcome {
+                        status,
+                        information
+                    }
+                )
+            }
             Step::Close { handle } => {
                 let file = self.file(handle)?;
                 self.files.retain(|(h, _)| *h != handle);
-                // SAFETY: the file came from `open` and was just removed
-                // from the table, so it is closed exactly once.
-                let r = unsafe { file::close(file) }.map_err(|e| format!("{e:?}"))?;
-                format!("{:08x}", r.status as u32)
+                format!("{:08x}", file::close(file) as u32)
             }
             Step::Ioctl {
                 handle,
@@ -132,24 +176,31 @@ impl<'a> Replay<'a> {
             } => {
                 let input: Vec<u8> = input.bytes().collect();
                 let mut output = vec![FILL; output_len];
-                // SAFETY: the file is open until its `close` step.
-                let r =
-                    unsafe { file::device_control(self.file(handle)?, code, &input, &mut output) }
-                        .map_err(|e| format!("{e:?}"))?;
+                let r = file::device_control(self.file(handle)?, code, &input, &mut output)
+                    .map_err(|e| format!("{e:?}"))?;
+                format!("{} {}", outcome(r), Dump(&output))
+            }
+            Step::Fsctl {
+                handle,
+                code,
+                input,
+                output_len,
+            } => {
+                let input: Vec<u8> = input.bytes().collect();
+                let mut output = vec![FILL; output_len];
+                let r = file::fs_control(self.file(handle)?, code, &input, &mut output)
+                    .map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&output))
             }
             Step::Read { handle, len } => {
                 let mut buffer = vec![FILL; len];
-                // SAFETY: as above.
-                let r = unsafe { file::read(self.file(handle)?, &mut buffer) }
-                    .map_err(|e| format!("{e:?}"))?;
+                let r =
+                    file::read(self.file(handle)?, &mut buffer).map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&buffer))
             }
             Step::Write { handle, data } => {
                 let data: Vec<u8> = data.bytes().collect();
-                // SAFETY: as above.
-                let r = unsafe { file::write(self.file(handle)?, &data) }
-                    .map_err(|e| format!("{e:?}"))?;
+                let r = file::write(self.file(handle)?, &data).map_err(|e| format!("{e:?}"))?;
                 format!("{}", outcome(r))
             }
         })
@@ -159,8 +210,7 @@ impl<'a> Replay<'a> {
     /// stopped early does not also leak.
     fn finish(&mut self) {
         for (_, file) in self.files.drain(..) {
-            // SAFETY: still open, and removed from the table by `drain`.
-            let _ = unsafe { file::close(file) };
+            file::close(file);
         }
         for service in self.drivers.drain(..).rev() {
             let _ = service::stop(service);

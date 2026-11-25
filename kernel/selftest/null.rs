@@ -10,7 +10,6 @@ use crate::ldr;
 use crate::ob;
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::FILE_OBJECT;
 use nk_ntabi::status::*;
 
 const DEVICE: &str = "\\Device\\Null";
@@ -21,18 +20,25 @@ const SECURE_OPEN: u32 = 0x100;
 
 fn device_checks() -> Result<(), &'static str> {
     let name: alloc::vec::Vec<u16> = DEVICE.encode_utf16().collect();
-    let device =
-        ob::lookup_device_referenced(&name).map_err(|_| "\\Device\\Null was not created")?;
-    // SAFETY: the look-up's reference keeps the device's memory, and is
-    // given up once the fields are read.
+    let (body, _) = ob::lookup(None, &name).map_err(|_| "\\Device\\Null was not created")?;
+    // SAFETY: the look-up's reference keeps the object's memory, and is
+    // given up once the fields are read; they are read only if it is a
+    // device.
     let (kind, characteristics, flags) = unsafe {
-        let fields = (
-            (*device).DeviceType,
-            (*device).Characteristics,
-            (*device).Flags,
-        );
-        ob::object::dereference(device.cast());
-        fields
+        let device = body.cast::<nk_ntabi::io::DEVICE_OBJECT>();
+        let fields = core::ptr::eq(
+            ob::object::type_of(body),
+            &raw const ob::object::DEVICE_TYPE,
+        )
+        .then(|| {
+            (
+                (*device).DeviceType,
+                (*device).Characteristics,
+                (*device).Flags,
+            )
+        });
+        ob::object::dereference(body);
+        fields.ok_or("\\Device\\Null is not a device")?
     };
     if kind != FILE_DEVICE_NULL {
         return Err("device type is not FILE_DEVICE_NULL");
@@ -46,11 +52,9 @@ fn device_checks() -> Result<(), &'static str> {
     Ok(())
 }
 
-fn read_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
+fn read_test(file: u64) -> Result<(), &'static str> {
     let mut buffer = [0xAAu8; 64];
-    // SAFETY: `file` is open for the duration of the tests.
-    let r = unsafe { file::read(file, &mut buffer) }
-        .map_err(|_| "read was not completed synchronously")?;
+    let r = file::read(file, &mut buffer).map_err(|_| "read was not completed synchronously")?;
     if r != (IoResult {
         status: STATUS_END_OF_FILE,
         information: 0,
@@ -63,12 +67,10 @@ fn read_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn write_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
+fn write_test(file: u64) -> Result<(), &'static str> {
     for len in [0usize, 1, 64, 5000] {
         let data = alloc::vec![0x5Au8; len];
-        // SAFETY: `file` is open for the duration of the tests.
-        let r = unsafe { file::write(file, &data) }
-            .map_err(|_| "write was not completed synchronously")?;
+        let r = file::write(file, &data).map_err(|_| "write was not completed synchronously")?;
         if r != (IoResult {
             status: STATUS_SUCCESS,
             information: len,
@@ -80,11 +82,10 @@ fn write_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
 }
 
 /// A request type the driver does not handle keeps the kernel's default.
-fn ioctl_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
+fn ioctl_test(file: u64) -> Result<(), &'static str> {
     let code = nk_ntabi::io::ctl_code(FILE_DEVICE_NULL, 0x800, nk_ntabi::io::METHOD_BUFFERED, 0);
     let mut out = [0u8; 8];
-    // SAFETY: `file` is open for the duration of the tests.
-    let r = unsafe { file::device_control(file, code, b"ping", &mut out) }
+    let r = file::device_control(file, code, b"ping", &mut out)
         .map_err(|_| "ioctl was not completed")?;
     if r.status != STATUS_INVALID_DEVICE_REQUEST {
         return Err("an unhandled request type must fail with STATUS_INVALID_DEVICE_REQUEST");
@@ -120,24 +121,20 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.ok("null.load");
     r.check("null.device", device_checks);
 
-    match file::open(DEVICE) {
+    match super::open(DEVICE) {
         Ok(file) => {
             r.ok("null.open");
             r.check("null.read", || read_test(file));
             r.check("null.write", || write_test(file));
             r.check("null.unhandled-request", || ioctl_test(file));
-            // SAFETY: `file` came from `open` and is closed exactly once.
-            match unsafe { file::close(file) } {
-                Ok(IoResult {
-                    status: STATUS_SUCCESS,
-                    ..
-                }) => r.ok("null.close"),
-                other => r.fail("null.close", format_args!("{other:?}")),
+            match file::close(file) {
+                STATUS_SUCCESS => r.ok("null.close"),
+                other => r.fail("null.close", format_args!("status {other:#x}")),
             }
         }
         Err(status) => r.fail("null.open", format_args!("status {status:#x}")),
     }
-    if file::open("\\Device\\NoSuchDevice") == Err(STATUS_OBJECT_NAME_NOT_FOUND) {
+    if super::open("\\Device\\NoSuchDevice") == Err(STATUS_OBJECT_NAME_NOT_FOUND) {
         r.ok("io.open.missing-name");
     } else {
         r.fail(
@@ -147,7 +144,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     }
 
     match service::stop("Null") {
-        Ok(()) if file::open(DEVICE).is_err() => r.ok("null.unload"),
+        Ok(()) if super::open(DEVICE).is_err() => r.ok("null.unload"),
         Ok(()) => r.fail(
             "null.unload",
             format_args!("device still opens after unload"),

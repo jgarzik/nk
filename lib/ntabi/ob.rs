@@ -102,6 +102,16 @@ pub struct GENERIC_MAPPING {
 /// What an object's type does with a body nothing refers to any more.
 pub type OB_DELETE_METHOD = unsafe extern "C" fn(object: *mut c_void);
 
+/// What an object's type does when a handle to an object is closed:
+/// the process whose handle it was, the object, and how many handles
+/// that process and the whole system had to it before this one went.
+pub type OB_CLOSE_METHOD = unsafe extern "C" fn(
+    process: *mut c_void,
+    object: *mut c_void,
+    process_handle_count: usize,
+    system_handle_count: usize,
+);
+
 /// `OBJECT_TYPE_INITIALIZER`: what a type is made from, kept inside it.
 /// Private to Windows, but handed to `ObCreateObjectType` and read back
 /// by Microsoft's own drivers, so it has Windows' layout (x86-64: checked
@@ -120,7 +130,7 @@ pub struct OBJECT_TYPE_INITIALIZER {
     pub DefaultNonPagedPoolCharge: u32,
     pub DumpProcedure: *mut c_void,
     pub OpenProcedure: *mut c_void,
-    pub CloseProcedure: *mut c_void,
+    pub CloseProcedure: Option<OB_CLOSE_METHOD>,
     pub DeleteProcedure: Option<OB_DELETE_METHOD>,
     pub ParseProcedure: *mut c_void,
     pub SecurityProcedure: *mut c_void,

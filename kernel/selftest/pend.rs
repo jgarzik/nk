@@ -210,9 +210,7 @@ unsafe extern "C" fn control(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
 
 /// Make the driver and its device, run `test` with the device open, and
 /// take everything down again.
-fn with_driver(
-    test: impl FnOnce(*mut FILE_OBJECT) -> Result<u32, &'static str>,
-) -> Result<u32, &'static str> {
+fn with_driver(test: impl FnOnce(u64) -> Result<u32, &'static str>) -> Result<u32, &'static str> {
     let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
     let driver = pool::alloc_zeroed(size, u32::from_le_bytes(*b"Test")).cast::<DRIVER_OBJECT>();
     if driver.is_null() {
@@ -249,15 +247,13 @@ fn with_driver(
             return Err("could not create the test device");
         }
         (*device_object).Flags &= !DO_DEVICE_INITIALIZING;
-        let result = match file::open("\\Device\\NkPend") {
+        let result = match super::open("\\Device\\NkPend") {
             Ok(opened) => {
                 let result = test(opened);
-                let closed = file::close(opened);
-                result.and_then(|n| {
-                    closed
-                        .map(|_| n)
-                        .map_err(|_| "closing the test device failed")
-                })
+                match file::close(opened) {
+                    STATUS_SUCCESS => result,
+                    _ => result.and(Err("closing the test device failed")),
+                }
             }
             Err(_) => Err("could not open the test device"),
         };
@@ -269,16 +265,15 @@ fn with_driver(
 }
 
 /// Send one request and wait for it.
-fn request(opened: *mut FILE_OBJECT, how: u32) -> Result<(IoResult, [u8; 4]), &'static str> {
+fn request(opened: u64, how: u32) -> Result<(IoResult, [u8; 4]), &'static str> {
     let mut output = [0u8; 4];
-    // SAFETY: an open file; the output outlives the request.
-    let result = unsafe { file::device_control(opened, code(how), &[], &mut output) }
+    let result = file::device_control(opened, code(how), &[], &mut output)
         .map_err(|_| "the request was not carried out")?;
     Ok((result, output))
 }
 
 /// A request pended and completed later, by `how`, comes back whole.
-fn pended(opened: *mut FILE_OBJECT, how: u32, least: u64) -> Result<u32, &'static str> {
+fn pended(opened: u64, how: u32, least: u64) -> Result<u32, &'static str> {
     const ROUNDS: u32 = 20;
     for _ in 0..ROUNDS {
         let before = time::interrupt_time();
@@ -295,11 +290,11 @@ fn pended(opened: *mut FILE_OBJECT, how: u32, least: u64) -> Result<u32, &'stati
 
 /// A held request is cancelled: it completes as cancelled, once, and
 /// cancelling again finds nothing to cancel.
-fn cancel(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
+fn cancel(opened: u64) -> Result<u32, &'static str> {
     let cancelled = CANCELLED.load(Ordering::Acquire);
     let mut output = [0u8; 4];
-    // SAFETY: an open file; the output outlives the request, which is
-    // waited for below.
+    // SAFETY: the output outlives the request, which is waited for
+    // below.
     let pending = unsafe { file::device_control_start(opened, code(HOLD), &[], &mut output) }
         .map_err(|_| "the request could not be sent")?;
     // SAFETY: no object is involved.
@@ -326,7 +321,7 @@ fn cancel(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
 /// the timer goes off, so that the two meet in every order. Each
 /// request completes exactly once, as done or as cancelled. Returns how
 /// many came back cancelled.
-fn cancel_race(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
+fn cancel_race(opened: u64) -> Result<u32, &'static str> {
     const ROUNDS: u32 = 300;
     let (completed, cancelled) = (
         COMPLETED.load(Ordering::Acquire),
@@ -337,7 +332,8 @@ fn cancel_race(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
         let mut output = [0u8; 4];
         // The timer goes off at the next clock tick after one
         // millisecond; the cancel comes somewhere around it.
-        // SAFETY: an open file; the output outlives the request.
+        // SAFETY: the output outlives the request, which is waited for
+        // below.
         let pending =
             unsafe { file::device_control_start(opened, code(HOLD_OR_TIMER), &[1], &mut output) }
                 .map_err(|_| "the request could not be sent")?;
@@ -374,8 +370,7 @@ fn overstated(r: &mut Report, _: &BootInfo) {
     kprintln!("NK-NEG-ARMED neg.information-overstated");
     let _ = with_driver(|opened| {
         let mut output = [0u8; 8];
-        // SAFETY: an open file; the output outlives the request.
-        let _ = unsafe { file::device_control(opened, code(OVERSTATE), &[0x55; 64], &mut output) };
+        let _ = file::device_control(opened, code(OVERSTATE), &[0x55; 64], &mut output);
         Ok(0)
     });
     r.fail(

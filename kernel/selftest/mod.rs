@@ -17,6 +17,7 @@ mod mutex;
 mod neg;
 mod null;
 mod ob;
+mod open;
 mod oracle;
 mod pend;
 mod review;
@@ -28,8 +29,16 @@ mod timer;
 mod wait;
 mod work;
 
+use crate::io::file::{self, OpenRequest};
 use crate::mm;
 use crate::test::Group;
+use nk_ntabi::status::NTSTATUS;
+
+/// Open `name` the way the oracle's plain `open` step does, for a
+/// handle.
+fn open(name: &str) -> Result<u64, NTSTATUS> {
+    file::open(&OpenRequest::new(name)).map(|(handle, _)| handle)
+}
 
 /// Every test group. `test=` on the command line selects among them.
 pub static GROUPS: &[&Group] = &[
@@ -48,6 +57,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,
+    &open::GROUP,
     &driver_api::GROUP,
     &loader::GROUP,
     &null::GROUP,

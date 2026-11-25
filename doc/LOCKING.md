@@ -85,8 +85,9 @@ Why this order:
   an object takes the name away under it before giving up the reference
   the object was made with; so a name leads to a live object. A look-up
   returns with the lock dropped and that reference held: whatever is
-  done with the object (counting an open under the database lock,
-  calling a driver) happens outside it.
+  done with the object and the rest of the path (counting an open under
+  the database lock, sending a driver the create request) happens
+  outside it.
 - No object's last reference is dropped under the namespace lock: a
   removed symbolic link's object is released after it.
 - A device's security descriptor is replaced under the same lock, new
@@ -98,7 +99,9 @@ Why this order:
   memory is read and written outside it.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
-  dropped under the handle table's lock: freeing takes the pool's.
+  dropped under the handle table's lock, nor is its type told of a
+  closed handle there: freeing takes the pool's lock, and a file's close
+  and delete procedures call its driver.
 - The pool and the address space each take frames while holding their own
   lock (a new arena; a new page table). They never take each other.
 - An interprocessor call may be made with any of the above held:

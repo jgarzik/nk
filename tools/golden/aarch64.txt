@@ -93,6 +93,12 @@ io.pend-work ok
 io.pend-inline ok
 io.cancel ok
 io.cancel-race ok
+io.open.remainder ok
+io.open.relative ok
+io.open.create-request ok
+io.open.named-pipe ok
+io.fs-control ok
+io.close.cleanup-then-close ok
 io.remove-lock ok
 rtl.version ok
 mm.routine-address ok

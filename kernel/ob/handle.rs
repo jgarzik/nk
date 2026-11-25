@@ -96,8 +96,9 @@ pub fn reference(handle: u64, ty: Option<*const ObjectType>) -> Result<*mut u8, 
     Ok(*body)
 }
 
-/// Close a handle: it stops naming its object and gives up its
-/// reference.
+/// Close a handle: it stops naming its object, the object's type is
+/// told (with the number of handles there were, this one included),
+/// and the handle's reference is given up. What `NtClose` returns.
 pub fn close(handle: u64) -> NTSTATUS {
     let Some(index) = kernel_handle_index(handle) else {
         return STATUS_INVALID_HANDLE;
@@ -106,9 +107,19 @@ pub fn close(handle: u64) -> NTSTATUS {
         return STATUS_INVALID_HANDLE;
     };
     // SAFETY: the entry held a reference, which this gives up, outside
-    // the table's lock: freeing takes the pool's.
+    // the table's lock: the type's procedure may call a driver, and
+    // freeing takes the pool's lock. Every handle is the System
+    // process's, so its count of handles is the system's.
     unsafe {
-        object::handle_count(body).fetch_sub(1, Ordering::AcqRel);
+        let handles = object::handle_count(body).fetch_sub(1, Ordering::AcqRel) as usize;
+        if let Some(closed) = object::type_of(body).close_procedure() {
+            closed(
+                crate::ps::process::system().cast(),
+                body.cast(),
+                handles,
+                handles,
+            );
+        }
         object::dereference(body);
     }
     STATUS_SUCCESS

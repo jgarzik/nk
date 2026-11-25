@@ -15,7 +15,6 @@ use crate::io::service;
 use crate::ldr;
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::FILE_OBJECT;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
@@ -37,7 +36,7 @@ const DONE: [u8; 4] = [0xFF; 4];
 /// on the queue unless the thread gets to them first. Each comes back
 /// exactly once: done, with its four bytes, or cancelled, with none.
 /// Returns how many were cancelled.
-fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
+fn cancelled(opened: u64) -> Result<u32, &'static str> {
     const READS: usize = 8;
     // The sample decides by the clock whether its thread completes a
     // read at once or half a second later, the same way for reads that
@@ -54,8 +53,8 @@ fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
         let mut buffers = [[0xEEu8; 4]; READS];
         let mut pending = alloc::vec::Vec::new();
         for buffer in &mut buffers {
-            // SAFETY: an open file; each buffer outlives its request,
-            // which is waited for below.
+            // SAFETY: each buffer outlives its request, which is waited
+            // for below.
             pending.push(
                 unsafe { file::read_start(opened, buffer) }
                     .map_err(|_| "a read could not be sent")?,
@@ -87,12 +86,11 @@ fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
 fn cycle(whole_read: bool) -> Result<(), &'static str> {
     service::start("cancel").map_err(|_| "load failed")?;
     let verdict = (|| {
-        let by_device = file::open(DEVICE).map_err(|_| "open by device name failed")?;
-        let by_link = file::open(DOS_NAME).map_err(|_| "open by link failed");
+        let by_device = super::open(DEVICE).map_err(|_| "open by device name failed")?;
+        let by_link = super::open(DOS_NAME).map_err(|_| "open by link failed");
         let mut short = [0xEEu8; 2];
         let mut whole = [0xEEu8; 4];
-        // SAFETY: `by_device` is open until the close below.
-        let checks = unsafe {
+        let checks = {
             let refused = matches!(
                 file::read(by_device, &mut short),
                 Ok(IoResult {
@@ -112,14 +110,7 @@ fn cycle(whole_read: bool) -> Result<(), &'static str> {
         };
         let mut closed = true;
         for file in [Ok(by_device), by_link].into_iter().flatten() {
-            // SAFETY: each file came from `open` and is closed once.
-            closed &= matches!(
-                unsafe { file::close(file) },
-                Ok(IoResult {
-                    status: STATUS_SUCCESS,
-                    ..
-                })
-            );
+            closed &= file::close(file) == STATUS_SUCCESS;
         }
         by_link?;
         match (checks, closed) {
@@ -142,13 +133,11 @@ fn run(r: &mut Report, _: &BootInfo) {
         .and_then(|()| service::start("cancel"))
         .map_err(|_| "load failed")
         .and_then(|_| {
-            let result = file::open(DEVICE)
+            let result = super::open(DEVICE)
                 .map_err(|_| "open failed")
                 .and_then(|opened| {
                     let result = cancelled(opened);
-                    // SAFETY: `opened` came from `open` and is closed once; no
-                    // request of it is outstanding.
-                    let _ = unsafe { file::close(opened) };
+                    file::close(opened);
                     result
                 });
             service::stop("cancel")?;

@@ -148,12 +148,6 @@ impl<'a> OpenArgs<'a> {
         })?;
         Ok(args)
     }
-
-    /// Whether the step has no options: the path alone, opened with the
-    /// defaults.
-    pub fn is_plain(&self) -> bool {
-        self.text.trim_ascii().is_empty()
-    }
 }
 
 /// What a `pipe` step asks of `NtCreateNamedPipeFile`: what its options
@@ -648,12 +642,11 @@ mod tests {
     }
 
     #[test]
-    fn an_open_without_options_is_plain() {
+    fn an_open_without_options_has_the_defaults() {
         let Step::Open { handle, path, args } = one("open n \\Device\\Null ") else {
             panic!("not an open");
         };
         assert_eq!((handle, path), ("n", "\\Device\\Null"));
-        assert!(args.is_plain());
         assert_eq!(
             (args.root, args.access, args.share, args.options),
             (None, 0xC010_0000, 0, 0x60)
@@ -662,7 +655,6 @@ mod tests {
         let Step::Open { args, .. } = one("open a a root=a access=80 share=3 options=21") else {
             panic!("not an open");
         };
-        assert!(!args.is_plain());
         assert_eq!(
             (args.root, args.access, args.share, args.options),
             (Some("a"), 0x80, 3, 0x21)
