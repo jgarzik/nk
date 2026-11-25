@@ -23,7 +23,17 @@ Consequences:
   warns). An export that needs one must go through an assembly thunk.
 - Because NK's own code never touches XMM registers on x86-64, a driver's
   SSE state survives calls into the kernel without save/restore. The
-  kernel still has to keep SSE enabled, since drivers use it.
+  kernel keeps SSE enabled (CR0 and CR4 are set on each processor), since
+  drivers use it.
+- Exceptions and interrupts preserve vector state. On x86-64 the entry
+  stub saves XMM0-XMM5 and MXCSR, the registers Windows saves in a trap
+  frame: code an interrupt goes on to run may use them, and the other ten
+  are preserved by any function that touches them. On arm64 it saves all
+  of v0-v31 with FPCR and FPSR, because the kernel's own code is compiled
+  to use them. In both cases the handler runs with the kernel's control
+  word (round to nearest, exceptions masked), not the interrupted code's.
+  `cpu.fp-preserved` checks this with a handler that overwrites every
+  register it is entitled to.
 - x18 holds the processor control region on arm64 Windows; the target
   leaves it alone, so the kernel can set it once per CPU.
 - `DbgPrint` and friends can be written in Rust.

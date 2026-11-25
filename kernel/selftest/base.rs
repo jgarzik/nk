@@ -2,7 +2,7 @@
 //! the description of the machine.
 
 use crate::test::{Group, Report};
-use crate::{hal, ke, mm};
+use crate::{arch, hal, ke, mm};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
@@ -10,6 +10,7 @@ pub static GROUP: Group = Group {
         "boot",
         "cpu.pcr",
         "cpu.breakpoint",
+        "cpu.fp-preserved",
         "mm.frames",
         "mm.map",
         "mm.pool",
@@ -29,6 +30,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     });
     r.check("cpu.pcr", ke::pcr::self_test);
     r.check("cpu.breakpoint", ke::trap_self_test);
+    r.check("cpu.fp-preserved", arch::fp_trap_test);
     r.check("mm.frames", mm::frames_self_test);
     r.check("mm.map", mm::map::self_test);
     r.check("mm.pool", mm::pool::self_test);

@@ -5,7 +5,7 @@ pub mod platform;
 mod trap;
 
 pub use cpu::pcr;
-pub use trap::{breakpoint, breakpoints};
+pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use nk_bootinfo::{BootInfo, Serial};
 

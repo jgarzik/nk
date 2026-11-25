@@ -108,6 +108,22 @@ pub fn init(number: u32) {
             pcr.add(legacy).write(number as u8);
         }
 
+        // Drivers use SSE, and the trap entry saves it: make sure it is
+        // on. CR0: no emulation, monitor the coprocessor, no lazy
+        // switching. CR4: FXSAVE and SSE exceptions enabled.
+        core::arch::asm!(
+            "mov {t}, cr0",
+            "and {t}, {cr0_clear}",
+            "or {t}, 2",
+            "mov cr0, {t}",
+            "mov {t}, cr4",
+            "or {t}, 0x600",
+            "mov cr4, {t}",
+            t = out(reg) _,
+            cr0_clear = const !0xCu64,
+            options(nomem, nostack),
+        );
+
         let pointer = TablePointer {
             limit: (size_of::<[u64; 10]>() - 1) as u16,
             base: gdt.as_ptr() as u64,

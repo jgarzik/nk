@@ -6,9 +6,13 @@
 //! there is no SEH yet, so no driver or kernel code can handle a fault.
 
 use core::arch::global_asm;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 /// Registers saved by the entry stub, lowest address first.
+///
+/// All 32 vector registers are saved, not only the ones the calling
+/// convention calls volatile: the kernel itself is compiled to use them,
+/// and a function need only preserve the low half of v8-v15.
 #[repr(C)]
 pub struct Frame {
     pub x: [u64; 31],
@@ -17,7 +21,12 @@ pub struct Frame {
     pub spsr: u64,
     pub esr: u64,
     pub far: u64,
+    pub q: [[u64; 2]; 32],
+    pub fpcr: u64,
+    pub fpsr: u64,
 }
+
+const _: () = assert!(size_of::<Frame>() == 816);
 
 /// Exception class (ESR_EL1 bits 31:26) of a `brk` instruction.
 const EC_BRK: u64 = 0x3C;
@@ -37,6 +46,9 @@ pub fn breakpoints() -> u32 {
 // Sixteen vectors of 0x80 bytes each: {current EL with SP0, current EL
 // with SPx, lower EL 64-bit, lower EL 32-bit} x {sync, IRQ, FIQ, SError}.
 // Each makes room for a Frame, saves x0/x1, and passes its index in x0.
+// The common path saves the rest, including the vector registers and the
+// floating-point control and status registers, and gives the handler the
+// kernel's own control word (round to nearest, no traps).
 global_asm!(
     r#"
     .text
@@ -44,82 +56,82 @@ global_asm!(
     .globl nk_vectors
 nk_vectors:
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #0
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #1
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #2
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #3
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #4
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #5
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #6
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #7
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #8
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #9
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #10
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #11
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #12
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #13
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #14
     b nk_trap_common
     .balign 0x80
-    sub sp, sp, #288
+    sub sp, sp, #816
     stp x0, x1, [sp]
     mov x0, #15
     b nk_trap_common
@@ -140,7 +152,7 @@ nk_trap_common:
     stp x24, x25, [sp, #192]
     stp x26, x27, [sp, #208]
     stp x28, x29, [sp, #224]
-    add x9, sp, #0x120
+    add x9, sp, #816
     stp x30, x9, [sp, #240]
     mrs x9, elr_el1
     mrs x10, spsr_el1
@@ -148,8 +160,49 @@ nk_trap_common:
     mrs x9, esr_el1
     mrs x10, far_el1
     stp x9, x10, [sp, #272]
+    stp q0, q1, [sp, #288]
+    stp q2, q3, [sp, #320]
+    stp q4, q5, [sp, #352]
+    stp q6, q7, [sp, #384]
+    stp q8, q9, [sp, #416]
+    stp q10, q11, [sp, #448]
+    stp q12, q13, [sp, #480]
+    stp q14, q15, [sp, #512]
+    stp q16, q17, [sp, #544]
+    stp q18, q19, [sp, #576]
+    stp q20, q21, [sp, #608]
+    stp q22, q23, [sp, #640]
+    stp q24, q25, [sp, #672]
+    stp q26, q27, [sp, #704]
+    stp q28, q29, [sp, #736]
+    stp q30, q31, [sp, #768]
+    mrs x9, fpcr
+    mrs x10, fpsr
+    add x11, sp, #800
+    stp x9, x10, [x11]
+    msr fpcr, xzr
     mov x0, sp
     bl {handler}
+    add x11, sp, #800
+    ldp x9, x10, [x11]
+    msr fpcr, x9
+    msr fpsr, x10
+    ldp q0, q1, [sp, #288]
+    ldp q2, q3, [sp, #320]
+    ldp q4, q5, [sp, #352]
+    ldp q6, q7, [sp, #384]
+    ldp q8, q9, [sp, #416]
+    ldp q10, q11, [sp, #448]
+    ldp q12, q13, [sp, #480]
+    ldp q14, q15, [sp, #512]
+    ldp q16, q17, [sp, #544]
+    ldp q18, q19, [sp, #576]
+    ldp q20, q21, [sp, #608]
+    ldp q22, q23, [sp, #640]
+    ldp q24, q25, [sp, #672]
+    ldp q26, q27, [sp, #704]
+    ldp q28, q29, [sp, #736]
+    ldp q30, q31, [sp, #768]
     ldp x9, x10, [sp, #256]
     msr elr_el1, x9
     msr spsr_el1, x10
@@ -169,14 +222,165 @@ nk_trap_common:
     ldp x24, x25, [sp, #192]
     ldp x26, x27, [sp, #208]
     ldp x28, x29, [sp, #224]
-    add sp, sp, #0x120
+    add sp, sp, #816
     eret
+
+// For `fp_trap_test`. Load v0-v31 and FPCR from the block at x0, take a
+// breakpoint, store what they hold afterwards in the block at x1. A block
+// is 32 16-byte registers, then FPCR. The low halves of v8-v15 and FPCR
+// are the caller's to keep, so they are saved around it.
+    .globl nk_fp_trap_probe
+nk_fp_trap_probe:
+    sub sp, sp, #80
+    stp d8, d9, [sp]
+    stp d10, d11, [sp, #16]
+    stp d12, d13, [sp, #32]
+    stp d14, d15, [sp, #48]
+    mrs x9, fpcr
+    str x9, [sp, #64]
+    ldp q0, q1, [x0]
+    ldp q2, q3, [x0, #32]
+    ldp q4, q5, [x0, #64]
+    ldp q6, q7, [x0, #96]
+    ldp q8, q9, [x0, #128]
+    ldp q10, q11, [x0, #160]
+    ldp q12, q13, [x0, #192]
+    ldp q14, q15, [x0, #224]
+    ldp q16, q17, [x0, #256]
+    ldp q18, q19, [x0, #288]
+    ldp q20, q21, [x0, #320]
+    ldp q22, q23, [x0, #352]
+    ldp q24, q25, [x0, #384]
+    ldp q26, q27, [x0, #416]
+    ldp q28, q29, [x0, #448]
+    ldp q30, q31, [x0, #480]
+    ldr x9, [x0, #512]
+    msr fpcr, x9
+    brk #0xf000
+    stp q0, q1, [x1]
+    stp q2, q3, [x1, #32]
+    stp q4, q5, [x1, #64]
+    stp q6, q7, [x1, #96]
+    stp q8, q9, [x1, #128]
+    stp q10, q11, [x1, #160]
+    stp q12, q13, [x1, #192]
+    stp q14, q15, [x1, #224]
+    stp q16, q17, [x1, #256]
+    stp q18, q19, [x1, #288]
+    stp q20, q21, [x1, #320]
+    stp q22, q23, [x1, #352]
+    stp q24, q25, [x1, #384]
+    stp q26, q27, [x1, #416]
+    stp q28, q29, [x1, #448]
+    stp q30, q31, [x1, #480]
+    mrs x9, fpcr
+    str x9, [x1, #512]
+    ldr x9, [sp, #64]
+    msr fpcr, x9
+    ldp d8, d9, [sp]
+    ldp d10, d11, [sp, #16]
+    ldp d12, d13, [sp, #32]
+    ldp d14, d15, [sp, #48]
+    add sp, sp, #80
+    ret
+
+// What code run from an interrupt is entitled to do: overwrite every
+// vector register except the low halves of v8-v15. Returns the FPCR it
+// runs with.
+    .globl nk_fp_clobber
+nk_fp_clobber:
+    mrs x0, fpcr
+    mov x9, #-1
+    movi v0.16b, #0xff
+    movi v1.16b, #0xff
+    movi v2.16b, #0xff
+    movi v3.16b, #0xff
+    movi v4.16b, #0xff
+    movi v5.16b, #0xff
+    movi v6.16b, #0xff
+    movi v7.16b, #0xff
+    ins v8.d[1], x9
+    ins v9.d[1], x9
+    ins v10.d[1], x9
+    ins v11.d[1], x9
+    ins v12.d[1], x9
+    ins v13.d[1], x9
+    ins v14.d[1], x9
+    ins v15.d[1], x9
+    movi v16.16b, #0xff
+    movi v17.16b, #0xff
+    movi v18.16b, #0xff
+    movi v19.16b, #0xff
+    movi v20.16b, #0xff
+    movi v21.16b, #0xff
+    movi v22.16b, #0xff
+    movi v23.16b, #0xff
+    movi v24.16b, #0xff
+    movi v25.16b, #0xff
+    movi v26.16b, #0xff
+    movi v27.16b, #0xff
+    movi v28.16b, #0xff
+    movi v29.16b, #0xff
+    movi v30.16b, #0xff
+    movi v31.16b, #0xff
+    ret
 "#,
     handler = sym trap_handler,
 );
 
 unsafe extern "C" {
     static nk_vectors: u8;
+    fn nk_fp_trap_probe(load: *const FpBlock, store: *mut FpBlock);
+    fn nk_fp_clobber() -> u64;
+}
+
+/// v0-v31 and FPCR, as `nk_fp_trap_probe` loads and stores them.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FpBlock {
+    q: [[u64; 2]; 32],
+    fpcr: u64,
+}
+
+/// Set while `fp_trap_test` wants the breakpoint handler to overwrite the
+/// vector registers.
+static FP_CLOBBER: AtomicBool = AtomicBool::new(false);
+/// The FPCR the handler ran with during that breakpoint.
+static HANDLER_FPCR: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// An exception must not disturb the vector registers or FPCR of the
+/// code it interrupts, even when the handler (as a driver's code may)
+/// overwrites every one the calling convention lets it; and the handler
+/// must run with the kernel's own FPCR, not the interrupted code's.
+pub fn fp_trap_test() -> Result<(), &'static str> {
+    let mut load = FpBlock {
+        q: [[0; 2]; 32],
+        // Round toward zero (RMode = 0b11): a value no kernel code sets,
+        // so finding it again afterwards means it was restored.
+        fpcr: 0b11 << 22,
+    };
+    for (i, reg) in load.q.iter_mut().enumerate() {
+        *reg = [0x0101_0101_0101_0101 * (i as u64 + 1), !(i as u64)];
+    }
+    let mut store = FpBlock {
+        q: [[0; 2]; 32],
+        fpcr: 0,
+    };
+    FP_CLOBBER.store(true, Ordering::Relaxed);
+    // SAFETY: both blocks are live and of the size the probe reads and
+    // writes; it preserves what the calling convention says it must.
+    unsafe { nk_fp_trap_probe(&raw const load, &raw mut store) };
+    FP_CLOBBER.store(false, Ordering::Relaxed);
+    if HANDLER_FPCR.load(Ordering::Relaxed) != 0 {
+        return Err("the handler ran with the interrupted code's FPCR");
+    }
+    if store.fpcr != load.fpcr {
+        return Err("FPCR was not restored after the exception");
+    }
+    if store.q != load.q {
+        return Err("a vector register was not restored after the exception");
+    }
+    Ok(())
 }
 
 extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
@@ -185,6 +389,11 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
         // `brk` is a fault: step past the 4-byte instruction.
         BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
         frame.elr += 4;
+        if FP_CLOBBER.load(Ordering::Relaxed) {
+            // SAFETY: the routine only writes registers, as any function
+            // may.
+            HANDLER_FPCR.store(unsafe { nk_fp_clobber() }, Ordering::Relaxed);
+        }
         return;
     }
     let kind = match brk {
