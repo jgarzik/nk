@@ -19,3 +19,6 @@
 pub mod io;
 pub mod pcr;
 pub mod status;
+
+#[cfg(test)]
+mod probe;

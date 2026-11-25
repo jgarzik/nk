@@ -64,10 +64,37 @@ dump. There is no SEH: a driver's `__try` block cannot catch anything.
 - `null.sys` writes a `FAST_IO_DISPATCH` table into its device extension.
   NK never calls fast I/O routines; every request is an IRP.
 
+## Structure layouts
+
+`lib/ntabi` declares the structures; its tests pin every size and offset.
+Three sources back those numbers, in increasing order of authority:
+
+1. Microsoft's documentation and public symbols (what the definitions
+   were written from).
+2. The fixture binaries: the offsets Microsoft's `null.sys` and the
+   WDK-built `sioctl.sys` actually use agree, on both architectures, and
+   the drivers work.
+3. The ABI probe: a table of `sizeof`/`FIELD_OFFSET` values compiled by
+   the WDK itself in the nk-fixtures repository. `lib/ntabi/probe.rs`
+   compares all of NK's facts against it when the table is downloaded.
+
+**Status of 3: pending.** The probe source is committed in nk-fixtures
+but no release contains it yet, so the comparison test reports SKIP. A
+preview run against the mingw-w64 DDK headers (an independent header set,
+but not Microsoft's) agreed on every fact except two sizes,
+`DEVICE_OBJECT` (0x148 there, 0x150 here) and the public `KPCR` (0x178
+there, 0x180 here). Both differences are trailing alignment padding:
+Windows declares these types 16-byte aligned, which
+`MEMORY_ALLOCATION_ALIGNMENT` in the same headers confirms is 16. The
+WDK-built table is what will settle it.
+
 ## Not yet verified
 
-- The arm64 PCR offsets above.
-
-- Structure layouts against WDK headers: pending the ABI probe in the
-  fixtures repository.
-- Behaviour against a real Windows 10 installation: no reference VM yet.
+- Structure layouts against the WDK-built probe (see above).
+- The arm64 PCR offsets: the public arm64 headers do not expose them.
+- Behaviour against a real Windows 10 installation: there is no
+  reference VM yet, so "expected" results come from documentation, sample
+  source and the binaries themselves.
+- Pointer authentication on arm64: WDK-built arm64 drivers contain
+  `pacibsp`/`autibsp`. They execute as no-ops on the emulated CPU used
+  for testing; NK does not enable or manage PAC keys.

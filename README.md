@@ -20,8 +20,19 @@ boots on its own, with no Windows or Linux component in the boot path.
 
 ## Status
 
-Pre-0.0.1. See `doc/ROADMAP.md` for what works and what is next, and
-`doc/handoff.md` for the original brief.
+NK boots through UEFI under QEMU on x86-64 and arm64, loads unmodified
+Windows driver binaries and runs real I/O requests through them:
+
+- Microsoft's inbox `null.sys` from Windows 10 (x86-64).
+- Microsoft's WDM IOCTL sample `sioctl.sys`, built with the WDK (both
+  architectures): buffered and direct I/O, unload, 100 load/unload cycles
+  without a leak.
+
+That is two software drivers, not general driver compatibility. There are
+no threads, no interrupts, no SEH and no user mode yet, and results have
+not been compared with a run on real Windows. `doc/ROADMAP.md` lists what
+is open, `ledger/` what each driver imports and how NK answers it, and
+`doc/handoff.md` is the original brief.
 
 ## Build and test
 

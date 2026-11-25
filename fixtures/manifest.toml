@@ -66,3 +66,8 @@ sha256 = "f9784299f0b929e65ed720450e95b506a803e658ae5ed69cbde5b029ae6dd081"
 status = "wdk-built"
 boot = false
 note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
+
+# ABI probe tables (abi-probe.<arch>.txt): not listed yet. The probe is in
+# nk-fixtures but in no release; add entries with their hashes once a
+# release carries them. lib/ntabi/probe.rs picks the tables up from
+# target/fixtures/ and reports SKIP until then.

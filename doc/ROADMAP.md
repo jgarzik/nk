@@ -1,9 +1,10 @@
 # Roadmap
 
-## 0.0.1: driver bootstrap (in progress)
+## 0.0.1: driver bootstrap
 
 Stop goal: both architectures boot under QEMU, load real Windows driver
-binaries, complete real IRPs and report PASS.
+binaries, complete real IRPs and report PASS. **Reached** for the fixtures
+that exist: `sioctl.sys` on both architectures, `null.sys` on x86-64.
 
 | # | Phase | State |
 | --- | --- | --- |
@@ -20,8 +21,19 @@ binaries, complete real IRPs and report PASS.
 | 10 | `null.sys` proof | done (x86-64; arm64 blocked on the fixture) |
 | 11 | `sioctl.sys` buffered I/O proof, unload, leak check | done, both architectures |
 | 12 | MDLs and direct I/O | done, both architectures |
-| 13 | WDK-built ABI probe for layout verification | |
-| 14 | Ledger and documentation pass | |
+| 13 | WDK-built ABI probe for layout verification | probe and comparison test written; waiting on an nk-fixtures release |
+| 14 | Ledger and documentation pass | done |
+
+### Open against the 0.0.1 acceptance gates
+
+- **arm64 `null.sys`:** blocked. Microsoft's symbol server needs the
+  binary's timestamp and image size, and no public index lists them for
+  Windows 10 arm64. Needs a copy from a licensed Windows 10 arm64 image.
+- **ABI verification:** waits on the probe release (phase 13).
+- **Windows reference results:** no Windows 10 VM yet; nothing has been
+  compared with a run on Windows.
+- **Physical boot** on the Dell OptiPlex: not attempted.
+- **`METHOD_NEITHER`:** needs SEH and a user address range.
 
 ## After 0.0.1
 
