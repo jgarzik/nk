@@ -17,6 +17,7 @@ extern crate alloc;
 
 pub mod access;
 pub mod acl;
+pub mod privilege;
 pub mod token;
 
 /// The revision of every SID.
