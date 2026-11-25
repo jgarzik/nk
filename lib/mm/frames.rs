@@ -183,6 +183,27 @@ impl Layout {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_run_is_refused_when_the_free_frames_are_not_adjacent() {
+        let mut bits = [0u64; 2];
+        let mut f = FrameBitmap::new(&mut bits, 128);
+        // Every other frame of the first sixteen.
+        for pfn in (0..16).step_by(2) {
+            f.release(pfn, 1);
+        }
+        assert_eq!(f.free_frames(), 8);
+        // Eight frames are free and no two of them touch.
+        assert_eq!(f.alloc(2), None);
+        assert_eq!(f.alloc(8), None);
+        assert_eq!(f.free_frames(), 8, "a refused run takes nothing");
+        assert_eq!(f.alloc(1), Some(0));
+        // A run that ends with the bitmap is found; one that would have
+        // to go past its end is not.
+        f.release(126, 2);
+        assert_eq!(f.alloc(3), None);
+        assert_eq!(f.alloc(2), Some(126));
+    }
+
     const MIB: u64 = 1 << 20;
 
     #[test]
