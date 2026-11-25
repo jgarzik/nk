@@ -13,6 +13,10 @@
 
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
+pub mod token;
+
 /// The revision of every SID.
 pub const SID_REVISION: u8 = 1;
 /// The most sub-authorities a SID may have.
