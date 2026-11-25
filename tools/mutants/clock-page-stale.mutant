@@ -1,0 +1,8 @@
+# The clock tick stops updating the page drivers read time from. Their
+# tick count, interrupt time and system time would stand still.
+scenario: aarch64
+fails: clock.tick
+file: kernel/ke/time.rs
+occurrence: 1
+replace:     update();
+with:     let _ = update;

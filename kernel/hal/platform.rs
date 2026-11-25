@@ -20,6 +20,8 @@ pub struct Platform {
     cpus: [Cpu; MAX_CPUS],
     ncpus: usize,
     pub controllers: Controllers,
+    /// What firmware says about this architecture's time source.
+    pub timer: arch_platform::Timer,
 }
 
 impl Platform {
@@ -86,6 +88,7 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
         cpus,
         ncpus: n,
         controllers: Controllers::from_madt(&madt),
+        timer: arch_platform::timer(|signature| nk_acpi::find_table(&mem, info.rsdp, signature)),
     }));
     kprintln!("hal: {n} processors; {}", platform.controllers);
     PLATFORM.store(platform, Ordering::Release);

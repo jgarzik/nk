@@ -59,7 +59,7 @@ fn lossy(bytes: &[u8]) -> String {
 /// routine requires. The entropy is only the CPU's cycle counter; a real
 /// random source is future work.
 fn security_cookie() -> u64 {
-    let mut x = arch::cycle_counter() ^ 0x9E37_79B9_7F4A_7C15;
+    let mut x = arch::counter() ^ 0x9E37_79B9_7F4A_7C15;
     x ^= x >> 30;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     x ^= x >> 27;

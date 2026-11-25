@@ -103,3 +103,12 @@ pub fn boot_cpu_id() -> u64 {
     }
     u64::from(__cpuid_count(1, 0).ebx >> 24)
 }
+
+/// The reference the time counter is calibrated against: the ACPI
+/// power-management timer, where the machine has one.
+pub type Timer = Option<nk_acpi::PmTimer>;
+
+/// Read the time source's description from the ACPI table `find` returns.
+pub fn timer<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Timer {
+    find(b"FACP").and_then(nk_acpi::pm_timer)
+}

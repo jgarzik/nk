@@ -171,6 +171,9 @@ SEH is deliberately second, not first: nothing in phase 1's proofs needs
 it, and it needs no hardware. It must not slip later than phase 2, since
 file systems use it on every path.
 
+Recorded gaps of phase 1: the clock always ticks (no tickless idle), and
+its rate is fixed at 64 Hz; thread priorities are not boosted.
+
 ## Risks
 
 - **Private layouts and private HAL contracts.** `acpi.sys`, `pci.sys`

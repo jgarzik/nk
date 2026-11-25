@@ -6,6 +6,7 @@
 //! architecture) makes its tests SKIP.
 
 mod base;
+mod clock;
 mod loader;
 mod neg;
 mod null;
@@ -19,6 +20,7 @@ use nk_bootinfo::BootInfo;
 /// Every test group. `test=` on the command line selects among them.
 pub static GROUPS: &[&Group] = &[
     &base::GROUP,
+    &clock::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,

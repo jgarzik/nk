@@ -1,5 +1,6 @@
 //! arm64.
 
+mod clock;
 mod cpu;
 mod gic;
 pub mod platform;
@@ -130,8 +131,15 @@ pub fn mapping_sync() {
     unsafe { core::arch::asm!("dsb ishst", "isb", options(nostack)) };
 }
 
-/// A fast-changing counter, used only to vary stack-protector cookies.
-pub fn cycle_counter() -> u64 {
+pub use clock::{CLOCK, calibrate as clock_calibrate, next as clock_next};
+
+/// Start the clock interrupt, every `period` counter ticks.
+pub fn clock_start(period: u64) {
+    clock::start(period, crate::ke::time::frequency());
+}
+
+/// The time counter: the generic timer's virtual count.
+pub fn counter() -> u64 {
     let count: u64;
     // SAFETY: reading the virtual counter touches no memory.
     unsafe { core::arch::asm!("mrs {}, cntvct_el0", out(reg) count, options(nomem, nostack)) };

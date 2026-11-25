@@ -1,6 +1,7 @@
 //! x86-64.
 
 mod apic;
+mod clock;
 mod cpu;
 pub mod platform;
 mod trap;
@@ -121,8 +122,15 @@ pub fn flush_tlb_page(va: u64) {
 /// Make new mappings visible. x86 needs nothing after adding an entry.
 pub fn mapping_sync() {}
 
-/// A fast-changing counter, used only to vary stack-protector cookies.
-pub fn cycle_counter() -> u64 {
+pub use clock::{CLOCK, calibrate as clock_calibrate, next as clock_next};
+
+/// Start the clock interrupt, every `period` counter ticks.
+pub fn clock_start(period: u64) {
+    clock::start(period, crate::ke::time::frequency());
+}
+
+/// The time counter: the processor's time-stamp counter.
+pub fn counter() -> u64 {
     let (lo, hi): (u32, u32);
     // SAFETY: rdtsc reads a counter and touches no memory.
     unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)) };

@@ -8,6 +8,7 @@ pub mod pcr;
 pub mod percpu;
 pub mod seh;
 pub mod spinlock;
+pub mod time;
 
 pub use spinlock::{Rank, SpinLock};
 

@@ -32,3 +32,16 @@ const _: () = {
     assert!(size_of::<KLOCK_QUEUE_HANDLE>() == 0x18);
     assert!(offset_of!(KLOCK_QUEUE_HANDLE, OldIrql) == 0x10);
 };
+
+/// `KUSER_SHARED_DATA`: a page at a fixed kernel address that code built
+/// with the WDK reads the time from directly. Only the fields NK
+/// maintains are named.
+pub const SHARED_DATA: u64 = 0xFFFF_F780_0000_0000;
+/// `TickCountMultiplier`, 32 bits.
+pub const SHARED_TICK_MULTIPLIER: usize = 0x004;
+/// `InterruptTime`: 100 ns units since boot.
+pub const SHARED_INTERRUPT_TIME: usize = 0x008;
+/// `SystemTime`: 100 ns units since 1601, UTC.
+pub const SHARED_SYSTEM_TIME: usize = 0x014;
+/// `TickCount`: clock ticks since boot.
+pub const SHARED_TICK_COUNT: usize = 0x320;

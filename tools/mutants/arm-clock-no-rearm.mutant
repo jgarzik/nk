@@ -1,0 +1,8 @@
+# The arm64 clock interrupt is not set again after it fires. Its
+# condition stays true, so it fires again at once, for ever, and the
+# kernel gets no further: the boot hangs.
+scenario: aarch64
+fails: scenario
+file: kernel/arch/aarch64/clock.rs
+replace:     arm(due);
+with:     let _ = due;

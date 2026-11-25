@@ -114,3 +114,12 @@ pub fn boot_cpu_id() -> u64 {
     unsafe { core::arch::asm!("mrs {}, mpidr_el1", out(reg) mpidr, options(nomem, nostack)) };
     mpidr & MPIDR_AFFINITY
 }
+
+/// The interrupt of the generic timer's virtual timer, where firmware
+/// names one.
+pub type Timer = Option<u32>;
+
+/// Read the time source's description from the ACPI table `find` returns.
+pub fn timer<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Timer {
+    find(b"GTDT").and_then(nk_acpi::virtual_timer_interrupt)
+}

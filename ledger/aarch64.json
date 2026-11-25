@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 26,
-  "implemented": 20,
+  "total": 29,
+  "implemented": 23,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -278,7 +278,7 @@
     {
      "module": "HAL.dll",
      "name": "KeStallExecutionProcessor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -357,7 +357,7 @@
     {
      "module": "HAL.dll",
      "name": "KeStallExecutionProcessor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -371,7 +371,7 @@
    "file": "nkc-time.arm64.sys",
    "sha256": "ff56a5f0cb65a18feb1cddabc718cb54d3cf6b1ce4c705d09c7d3a3f5610243a",
    "status": "nk-authored",
-   "loaded_at_boot": false,
+   "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",
@@ -396,12 +396,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeQueryTimeIncrement",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "KeStallExecutionProcessor",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -411,7 +411,7 @@
     {
      "module": "HAL.dll",
      "name": "KeQueryPerformanceCounter",
-     "state": "missing"
+     "state": "implemented"
     }
    ]
   },

@@ -11,7 +11,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
@@ -50,6 +50,39 @@ pub const fn stack_top_in(start: u64, len: u64) -> Option<u64> {
 /// A `base` of 0 means "no stack recorded" and matches nothing.
 pub const fn below_stack(base: u64, address: u64) -> bool {
     base >= KERNEL_STACK_SIZE && address < base && address >= base - KERNEL_STACK_SIZE
+}
+
+/// A calendar date and time (UTC, Gregorian) as Windows counts time:
+/// 100 ns units since 1601-01-01. `None` for a date that does not exist
+/// or lies before 1601.
+pub const fn windows_time(
+    year: u32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<u64> {
+    const DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    if year < 1601 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    let in_month = DAYS[month as usize - 1] + (leap && month == 2) as u32;
+    if day < 1 || day > in_month {
+        return None;
+    }
+    // Days in the whole years since 1601, then in this year's whole months.
+    let y = (year - 1601) as u64;
+    let mut days = y * 365 + y / 4 - y / 100 + y / 400;
+    let mut m = 0;
+    while m < month as usize - 1 {
+        days += (DAYS[m] + (leap && m == 1) as u32) as u64;
+        m += 1;
+    }
+    days += (day - 1) as u64;
+    let seconds = days * 86_400 + (hour * 3600 + minute * 60 + second) as u64;
+    Some(seconds * 10_000_000)
 }
 
 /// `EFI_MEMORY_TYPE` values the kernel cares about.
@@ -146,6 +179,9 @@ pub struct BootInfo {
     pub mair_normal: u8,
     pub mair_device: u8,
     _pad: [u8; 6],
+    /// Wall-clock time when the loader ran, as Windows counts it: 100 ns
+    /// units since 1601-01-01 UTC. 0 if firmware could not say.
+    pub boot_time: u64,
     /// The kernel command line: `key=value` words separated by spaces,
     /// NUL padded. Empty when the boot volume has no command-line file.
     pub cmdline: [u8; CMDLINE_LEN],
@@ -170,6 +206,7 @@ impl BootInfo {
             mair_normal: 0,
             mair_device: 0,
             _pad: [0; 6],
+            boot_time: 0,
             cmdline: [0; CMDLINE_LEN],
             modules: [Module::EMPTY; MAX_MODULES],
         }
@@ -311,7 +348,7 @@ mod tests {
         // Both loader and kernel are built from this source, but a silent
         // layout change should still be a deliberate VERSION bump.
         assert_eq!(size_of::<Module>(), 48);
-        assert_eq!(size_of::<BootInfo>(), 104 + CMDLINE_LEN + 48 * MAX_MODULES);
+        assert_eq!(size_of::<BootInfo>(), 112 + CMDLINE_LEN + 48 * MAX_MODULES);
         assert!(BootInfo::new().is_valid());
     }
 
@@ -360,6 +397,46 @@ mod tests {
         assert!(!below_stack(0, 0x1000), "no stack recorded");
         assert!(!below_stack(0, u64::MAX));
         assert!(!below_stack(S / 2, 0), "a base too low to have a gap");
+    }
+
+    #[test]
+    fn windows_times() {
+        assert_eq!(windows_time(1601, 1, 1, 0, 0, 0), Some(0));
+        assert_eq!(windows_time(1601, 1, 2, 0, 0, 1), Some(864_010_000_000));
+        // The Unix epoch, a constant every Windows programmer knows.
+        assert_eq!(
+            windows_time(1970, 1, 1, 0, 0, 0),
+            Some(116_444_736_000_000_000)
+        );
+        // 2020-01-01, the bound the clock conformance driver checks against.
+        assert_eq!(
+            windows_time(2020, 1, 1, 0, 0, 0),
+            Some(132_223_104_000_000_000)
+        );
+        // Leap days: 2000 had one, 1900 did not, 2024 did.
+        assert_eq!(
+            windows_time(2000, 3, 1, 0, 0, 0).unwrap()
+                - windows_time(2000, 2, 28, 0, 0, 0).unwrap(),
+            2 * 864_000_000_000
+        );
+        assert!(windows_time(1900, 2, 29, 0, 0, 0).is_none());
+        assert!(windows_time(2024, 2, 29, 23, 59, 59).is_some());
+        assert!(windows_time(2023, 2, 29, 0, 0, 0).is_none());
+        for bad in [
+            (1600, 12, 31, 0, 0, 0),
+            (2026, 0, 1, 0, 0, 0),
+            (2026, 13, 1, 0, 0, 0),
+            (2026, 4, 31, 0, 0, 0),
+            (2026, 1, 0, 0, 0, 0),
+            (2026, 1, 1, 24, 0, 0),
+            (2026, 1, 1, 0, 60, 0),
+            (2026, 1, 1, 0, 0, 60),
+        ] {
+            assert!(
+                windows_time(bad.0, bad.1, bad.2, bad.3, bad.4, bad.5).is_none(),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

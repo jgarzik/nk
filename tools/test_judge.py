@@ -109,6 +109,20 @@ class ExpectOk(unittest.TestCase):
     def test_timeout(self):
         self.assertProblem(GOOD, "timeout after 120s", timed_out=120)
 
+    def test_clock_marks(self):
+        marked = GOOD + "NK-CLOCK-MARK start\nNK-CLOCK-MARK end\n"
+        self.assertEqual(judge(marked, golden=GOLDEN, marks=[10.0, 12.05]), [])
+        self.assertEqual(judge(marked, golden=GOLDEN, marks=[10.0, 17.0]), [],
+                         "a busy host may stretch a stall")
+        self.assertProblem(marked, "runs fast", marks=[10.0, 11.0])
+        self.assertProblem(marked, "runs fast", marks=[10.0, 11.8])
+        self.assertProblem(marked, "runs slow", marks=[10.0, 40.0])
+        self.assertProblem(marked, "two clock marks", marks=[10.0])
+        self.assertProblem(marked, "two clock marks")
+        self.assertProblem(GOOD + "NK-CLOCK-MARK start\n", "two clock marks", marks=[1.0])
+        # No marks in the log: nothing to check.
+        self.assertEqual(judge(GOOD, golden=GOLDEN, marks=[]), [])
+
     def test_a_driver_breaking_a_rule_windows_tolerates(self):
         self.assertProblem(GOOD + "NK-VERIFY IRQL raised from 2 down to 1\n",
                            "NK-VERIFY IRQL raised from 2 down to 1")

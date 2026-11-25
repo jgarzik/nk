@@ -140,7 +140,6 @@ file = "nkc-time.x64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-time.x64.nkc-time.sys"
 sha256 = "908d17b4e5b7418940f63e703ac525e62fbe3ad867bcdaed1e8d419efc1202c2"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-time.c: clocks"
 
 [[fixture]]
@@ -150,7 +149,6 @@ file = "nkc-time.arm64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-time.arm64.nkc-time.sys"
 sha256 = "ff56a5f0cb65a18feb1cddabc718cb54d3cf6b1ce4c705d09c7d3a3f5610243a"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-time.c: clocks"
 
 # Microsoft's WDM event sample: a timer and a DPC completing requests.

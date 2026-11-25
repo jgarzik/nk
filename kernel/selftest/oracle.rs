@@ -182,7 +182,12 @@ fn check(r: &mut Report, info: &BootInfo, name: &str, driver: &str, script: &str
 }
 
 pub static GROUP: Group = Group {
-    names: &["oracle.null", "oracle.sioctl", "oracle.nkc-irql"],
+    names: &[
+        "oracle.null",
+        "oracle.sioctl",
+        "oracle.nkc-irql",
+        "oracle.nkc-time",
+    ],
     run,
     manual: false,
 };
@@ -211,5 +216,13 @@ fn run(r: &mut Report, info: &BootInfo) {
         "nkc-irql.sys",
         include_str!("../../oracle/nkc-irql.script"),
         include_str!("../../oracle/nkc-irql.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-time",
+        "nkc-time.sys",
+        include_str!("../../oracle/nkc-time.script"),
+        include_str!("../../oracle/nkc-time.txt"),
     );
 }

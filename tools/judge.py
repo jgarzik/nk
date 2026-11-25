@@ -92,6 +92,31 @@ def _run_problems(log, timed_out):
     return problems
 
 
+# The kernel marks the start and end of a stall it believes lasts this
+# long; the harness times the marks with the host's clock.
+MARKED_SECONDS = 2.0
+
+
+def _clock_problems(log, marks):
+    """Check NK's second against the host's. The lower bound is strict: a
+    stall may run long on a busy host but never short, and a kernel whose
+    clock runs fast shows up as a short one. `marks` are the host times at
+    which the kernel's NK-CLOCK-MARK lines arrived."""
+    printed = sum(1 for l in log.lines if l.startswith("NK-CLOCK-MARK"))
+    if printed == 0:
+        return []
+    if printed != 2 or marks is None or len(marks) != 2:
+        return [f"expected two clock marks, the log has {printed}"]
+    elapsed = marks[1] - marks[0]
+    if elapsed < 0.95 * MARKED_SECONDS:
+        return [f"{MARKED_SECONDS:g} s by NK's clock took {elapsed:.2f} s by the host's: "
+                "NK's clock runs fast"]
+    if elapsed > 10 * MARKED_SECONDS:
+        return [f"{MARKED_SECONDS:g} s by NK's clock took {elapsed:.2f} s by the host's: "
+                "NK's clock runs slow"]
+    return []
+
+
 def _golden_problems(log, golden, degraded):
     """Compare the verdicts with the committed list for this scenario.
 
@@ -137,7 +162,7 @@ def _bugcheck_problems(log, match, timed_out):
 
 
 def judge(text, expect="ok", *, golden=None, degraded=False, match=None,
-          must_fail=(), timed_out=0):
+          must_fail=(), timed_out=0, marks=None):
     """Return the list of problems; an empty list means the boot passed.
 
     text       the serial log
@@ -147,12 +172,13 @@ def judge(text, expect="ok", *, golden=None, degraded=False, match=None,
     match      regular expression the bugcheck line must contain
     must_fail  for expect="fail": exactly these tests must fail
     timed_out  the timeout in seconds if QEMU had to be killed, else 0
+    marks      host times at which the kernel's clock marks arrived
     """
     log = Log(text)
     if expect == "bugcheck":
         return _bugcheck_problems(log, match or "", timed_out)
 
-    problems = _run_problems(log, timed_out)
+    problems = _run_problems(log, timed_out) + _clock_problems(log, marks)
     # A run that never finished has said why above; listing every test it
     # did not reach would only bury that.
     if golden is not None and len(log.completes) == 1:

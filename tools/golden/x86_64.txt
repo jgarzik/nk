@@ -9,6 +9,10 @@ mm.map ok
 mm.pool ok
 mm.stack ok
 hal.cpus ok
+clock.monotonic ok
+clock.tick ok
+clock.shared-page ok
+clock.host-mark ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok
@@ -35,3 +39,4 @@ sioctl.cycles ok
 oracle.null ok
 oracle.sioctl ok
 oracle.nkc-irql ok
+oracle.nkc-time ok

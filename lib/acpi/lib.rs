@@ -208,6 +208,46 @@ impl<'a> Madt<'a> {
     }
 }
 
+/// The ACPI power-management timer: a free-running counter at a fixed,
+/// known rate, which makes it a reference to calibrate other clocks by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PmTimer {
+    /// I/O port of the 32-bit counter register.
+    pub port: u16,
+    /// Whether all 32 bits count; otherwise only the low 24 do.
+    pub wide: bool,
+}
+
+/// The power-management timer's rate, in ticks per second.
+pub const PM_TIMER_HZ: u64 = 3_579_545;
+
+/// The power-management timer described by a FADT (`FACP`) table, if it
+/// has one on I/O ports.
+pub fn pm_timer(fadt: &[u8]) -> Option<PmTimer> {
+    let port = u32_at(fadt, 76)?;
+    let length = *fadt.get(91)?;
+    let flags = u32_at(fadt, 112)?;
+    if port == 0 || port > 0xFFFF || length != 4 {
+        return None;
+    }
+    Some(PmTimer {
+        port: port as u16,
+        wide: flags & 1 << 8 != 0,
+    })
+}
+
+/// Ticks of the power-management timer from reading `earlier` to reading
+/// `later`, allowing for the counter wrapping once.
+pub fn pm_timer_delta(timer: PmTimer, earlier: u32, later: u32) -> u32 {
+    let mask = if timer.wide { u32::MAX } else { 0x00FF_FFFF };
+    later.wrapping_sub(earlier) & mask
+}
+
+/// The interrupt of the ARM virtual timer, from a GTDT table.
+pub fn virtual_timer_interrupt(gtdt: &[u8]) -> Option<u32> {
+    u32_at(gtdt, 64).filter(|&id| id != 0)
+}
+
 /// A processor as firmware names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cpu {
@@ -565,5 +605,62 @@ mod tests {
         // A duplicate among the ones that did not fit is not noticed, and
         // does not matter: they are not used.
         assert!(census(0, cpus(&[0, 1, 2, 3, 3]), &mut out).is_ok());
+    }
+
+    fn fadt_table(port: u32, length: u8, flags: u32) -> Vec<u8> {
+        let mut body = vec![0u8; 116 - SDT_HEADER];
+        body[76 - SDT_HEADER..80 - SDT_HEADER].copy_from_slice(&port.to_le_bytes());
+        body[91 - SDT_HEADER] = length;
+        body[112 - SDT_HEADER..116 - SDT_HEADER].copy_from_slice(&flags.to_le_bytes());
+        sdt(b"FACP", &body)
+    }
+
+    #[test]
+    fn pm_timer_from_the_fadt() {
+        let at = |wide| Some(PmTimer { port: 0x608, wide });
+        assert_eq!(pm_timer(&fadt_table(0x608, 4, 1 << 8)), at(true));
+        assert_eq!(pm_timer(&fadt_table(0x608, 4, 0)), at(false));
+        assert_eq!(pm_timer(&fadt_table(0, 4, 0)), None, "no timer");
+        assert_eq!(
+            pm_timer(&fadt_table(0x608, 0, 0)),
+            None,
+            "no register length"
+        );
+        assert_eq!(
+            pm_timer(&fadt_table(0x1_0000, 4, 0)),
+            None,
+            "not an I/O port"
+        );
+        assert_eq!(pm_timer(&fadt_table(0x608, 4, 0)[..100]), None, "truncated");
+    }
+
+    #[test]
+    fn pm_timer_deltas_survive_a_wrap() {
+        let narrow = PmTimer {
+            port: 0x608,
+            wide: false,
+        };
+        let wide = PmTimer {
+            port: 0x608,
+            wide: true,
+        };
+        assert_eq!(pm_timer_delta(narrow, 100, 350), 250);
+        assert_eq!(pm_timer_delta(narrow, 0x00FF_FFF0, 0x10), 0x20);
+        assert_eq!(pm_timer_delta(wide, 0xFFFF_FFF0, 0x10), 0x20);
+        assert_eq!(pm_timer_delta(wide, 0x00FF_FFF0, 0x0100_0010), 0x20);
+    }
+
+    #[test]
+    fn virtual_timer_from_the_gtdt() {
+        let mut body = vec![0u8; 80 - SDT_HEADER];
+        body[64 - SDT_HEADER..68 - SDT_HEADER].copy_from_slice(&27u32.to_le_bytes());
+        let table = sdt(b"GTDT", &body);
+        assert_eq!(virtual_timer_interrupt(&table), Some(27));
+        assert_eq!(virtual_timer_interrupt(&table[..66]), None, "truncated");
+        assert_eq!(
+            virtual_timer_interrupt(&sdt(b"GTDT", &[0; 44])),
+            None,
+            "no interrupt"
+        );
     }
 }

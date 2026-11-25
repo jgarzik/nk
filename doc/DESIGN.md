@@ -138,6 +138,22 @@ by its affinity, not by position. The IRQL is the controller's priority
 mask (`doc/LOCKING.md`). So far the only interrupts are ones a processor
 sends itself, in the tests: there is no clock and no device interrupt.
 
+### Time
+
+One free-running counter is the source of all time: the TSC on x86-64,
+whose rate is measured against the ACPI power-management timer at boot;
+the generic timer's counter on arm64, which states its own rate. The
+clock interrupt fires 64 times a second, Windows' default, from the local
+APIC timer or the generic timer's virtual timer, at IRQL 13. Each tick
+recomputes the time from the counter rather than counting ticks, so a
+late or lost tick costs nothing.
+
+Code built with the WDK reads the tick count, interrupt time and system
+time directly from `KUSER_SHARED_DATA`, a page at a fixed address; the
+tick keeps that page current, and its layout is checked against the
+kernel's public symbols. The wall clock starts from the firmware's time,
+read by the loader.
+
 ### The kernel is a PE image
 
 NK builds the kernel for Rust's stock `x86_64-unknown-uefi` and

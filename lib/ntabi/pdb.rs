@@ -85,3 +85,24 @@ fn queued_lock_handle_matches_the_kernel() {
         offset(&queue, "_KSPIN_LOCK_QUEUE", "Lock")
     );
 }
+
+#[test]
+fn shared_data_page_matches_the_kernel() {
+    use crate::ke::*;
+    let Some(types) = kernel_types() else { return };
+    let page = types
+        .layout("_KUSER_SHARED_DATA")
+        .expect("_KUSER_SHARED_DATA");
+    let field = |name| offset(&page, "_KUSER_SHARED_DATA", name);
+    assert_eq!(SHARED_TICK_MULTIPLIER, field("TickCountMultiplier"));
+    assert_eq!(SHARED_INTERRUPT_TIME, field("InterruptTime"));
+    assert_eq!(SHARED_SYSTEM_TIME, field("SystemTime"));
+    assert_eq!(SHARED_TICK_COUNT, field("TickCount"));
+    assert!(page.size <= 4096, "it must fit the one page NK maps");
+    // Each time is low word, high word, high word again.
+    let time = types.layout("_KSYSTEM_TIME").expect("_KSYSTEM_TIME");
+    assert_eq!(
+        (time.size, offset(&time, "_KSYSTEM_TIME", "High2Time")),
+        (12, 8)
+    );
+}

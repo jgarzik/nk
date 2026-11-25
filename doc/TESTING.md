@@ -76,6 +76,11 @@ failure. A boot passes only if:
   (`tools/golden/<name>.txt`): a test that disappears, appears, or turns
   from OK into SKIP fails the boot until the list is changed on purpose
   (`tools/boot_test.py <scenario> --bless`);
+- NK's second is a second. The kernel prints `NK-CLOCK-MARK` before and
+  after a stall it believes lasts two seconds, and the harness times the
+  two marks with the host's clock. Less than 1.9 s fails: a stall may run
+  long on a busy host, never short, so a short one means NK's clock runs
+  fast;
 - the kernel powered the machine off within the timeout.
 
 Skips are printed, never counted as passes. A test that is skipped in

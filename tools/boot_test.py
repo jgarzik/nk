@@ -193,14 +193,15 @@ def kill_stale(directory):
 
 def boot(arch, smp, directory, interactive):
     """Run QEMU in `directory` (which holds esp.img and vars.fd). Returns
-    the timeout in seconds if it had to be killed, else 0. The serial
-    output goes to serial.log there."""
-    proc, timed_out = None, 0
+    the timeout in seconds if it had to be killed (else 0), and the host
+    times at which the kernel's clock marks arrived. The serial output
+    goes to serial.log there."""
+    proc, timed_out, marks = None, 0, []
     try:
         if interactive:
             proc = subprocess.Popen(qemu_command(arch, smp, True), cwd=directory)
             proc.wait()
-            return 0
+            return 0, marks
         with open(directory / "serial.log", "wb") as log, \
                 open(directory / "qemu.err", "wb") as err:
             proc = subprocess.Popen(
@@ -211,9 +212,13 @@ def boot(arch, smp, directory, interactive):
 
             def pump():
                 # Unbuffered copy: a hung boot still leaves what it printed.
+                # Note when each clock mark arrives, by the host's clock.
+                tail = b""
                 for chunk in iter(lambda: proc.stdout.read1(4096), b""):
                     log.write(chunk)
                     log.flush()
+                    *lines, tail = (tail + chunk).split(b"\n")
+                    marks.extend(time.monotonic() for l in lines if b"NK-CLOCK-MARK" in l)
 
             reader = threading.Thread(target=pump, daemon=True)
             reader.start()
@@ -225,7 +230,7 @@ def boot(arch, smp, directory, interactive):
             finally:
                 kill(proc)
                 reader.join()
-        return timed_out
+        return timed_out, marks
     finally:
         if proc:
             kill(proc)
@@ -263,7 +268,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False):
         else:
             missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc))
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
-        timed_out = boot(arch, smp_of(sc), directory, interactive)
+        timed_out, marks = boot(arch, smp_of(sc), directory, interactive)
         if interactive:
             passed = True
             return 0
@@ -274,7 +279,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False):
         problems = judge.judge(
             text, sc.get("expect", "ok"), golden=golden, degraded=bool(missing),
             match=sc.get("match"), must_fail=sc.get("must_fail", ()),
-            timed_out=timed_out,
+            timed_out=timed_out, marks=marks,
         )
         if sc.get("canonical") and not image:
             shutil.copyfile(directory / "serial.log", OUT / f"serial-{arch}.log")

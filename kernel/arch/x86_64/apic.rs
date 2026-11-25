@@ -32,6 +32,12 @@ const REG_SPURIOUS: u32 = 0x0F0;
 const REG_ERROR_STATUS: u32 = 0x280;
 const REG_ICR_LOW: u32 = 0x300;
 const REG_LVT_TIMER: u32 = 0x320;
+const REG_TIMER_INITIAL: u32 = 0x380;
+const REG_TIMER_CURRENT: u32 = 0x390;
+const REG_TIMER_DIVIDE: u32 = 0x3E0;
+const LVT_PERIODIC: u32 = 1 << 17;
+/// Divide the timer's input clock by 16.
+const DIVIDE_BY_16: u32 = 0b0011;
 const REG_LVT_LINT0: u32 = 0x350;
 const REG_LVT_LINT1: u32 = 0x360;
 const REG_LVT_ERROR: u32 = 0x370;
@@ -46,6 +52,8 @@ const MSR_X2APIC_SELF_IPI: u32 = 0x83F;
 
 /// Whether this machine's processors run in x2APIC mode.
 static X2APIC: AtomicBool = AtomicBool::new(false);
+/// The APIC timer's counts per second, at the divisor NK uses.
+static TIMER_HZ: AtomicU64 = AtomicU64::new(0);
 /// Address of the memory-mapped registers, in the direct map.
 static MMIO: AtomicU64 = AtomicU64::new(0);
 
@@ -199,4 +207,32 @@ pub fn enable_interrupts() {
 pub fn disable_interrupts() {
     // SAFETY: masking interrupts touches no memory.
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+}
+
+/// Start the timer counting down from its maximum, with its interrupt
+/// masked: the first half of measuring its rate.
+pub fn timer_count_down() {
+    write(REG_TIMER_DIVIDE, DIVIDE_BY_16);
+    write(REG_LVT_TIMER, LVT_MASKED);
+    write(REG_TIMER_INITIAL, u32::MAX);
+}
+
+/// How far the timer has counted since `timer_count_down`.
+pub fn timer_elapsed() -> u32 {
+    u32::MAX - read(REG_TIMER_CURRENT)
+}
+
+/// Record the timer's measured rate, in counts per second.
+pub fn set_timer_rate(hz: u64) {
+    TIMER_HZ.store(hz, Ordering::Relaxed);
+}
+
+/// Interrupt on `vector` every `period` ticks of a counter that runs at
+/// `frequency` ticks per second.
+pub fn timer_periodic(vector: u32, period: u64, frequency: u64) {
+    let rate = u128::from(TIMER_HZ.load(Ordering::Relaxed));
+    let counts = (u128::from(period) * rate / u128::from(frequency)).clamp(1, u128::from(u32::MAX));
+    write(REG_TIMER_DIVIDE, DIVIDE_BY_16);
+    write(REG_LVT_TIMER, LVT_PERIODIC | vector);
+    write(REG_TIMER_INITIAL, counts as u32);
 }

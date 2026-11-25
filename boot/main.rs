@@ -16,6 +16,7 @@ mod efi;
 use nk_bootinfo::{
     BootInfo, EFI_ATTR_RUNTIME, EFI_LOADER_CODE, EFI_RUNTIME_CODE, HHDM_BASE, KERNEL_BASE,
     KERNEL_STACK_SIZE, MAX_MODULES, MODULE_NAME_LEN, Module, Serial, regions, stack_top_in,
+    windows_time,
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
@@ -202,6 +203,9 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
     info.kernel_phys = image_phys;
     info.kernel_size = size as u64;
     info.rsdp = efi::rsdp();
+    info.boot_time = efi::time()
+        .and_then(|[y, mo, d, h, mi, s]| windows_time(y, mo, d, h, mi, s))
+        .unwrap_or(0);
     info.efi_runtime = efi::runtime() as u64;
     info.serial = serial();
     load_modules(&root_dir, &mut info)?;

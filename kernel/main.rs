@@ -73,6 +73,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     }
     // From here on interrupts are held back by the IRQL alone.
     arch::enable_interrupts();
+    if let Err(why) = ke::time::init(info) {
+        test::abort("ke.time", format_args!("{why}"));
+    }
 
     export::print_all();
     test::run_all(selftest::GROUPS, info)

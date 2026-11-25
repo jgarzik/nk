@@ -165,6 +165,28 @@ impl TicketLock {
     }
 }
 
+/// The clock tick, in 100 ns units: 15.625 ms, Windows' default, which is
+/// what `KeQueryTimeIncrement` reports.
+pub const TIME_INCREMENT: u64 = 156_250;
+
+/// A count of a counter running at `frequency` ticks per second, in the
+/// 100 ns units Windows measures time in. Exact for any count: the
+/// product is taken in 128 bits.
+pub const fn counter_to_time(count: u64, frequency: u64) -> u64 {
+    (count as u128 * 10_000_000 / frequency as u128) as u64
+}
+
+/// Counter ticks in `micros` microseconds, rounded up: a wait must never
+/// come out short.
+pub const fn micros_to_counter(micros: u64, frequency: u64) -> u64 {
+    (micros as u128 * frequency as u128).div_ceil(1_000_000) as u64
+}
+
+/// How many clock ticks fit in `time` (100 ns units since boot).
+pub const fn ticks_in(time: u64) -> u64 {
+    time / TIME_INCREMENT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +328,35 @@ mod tests {
         // SAFETY: every thread has finished.
         assert_eq!(unsafe { *shared.1.0.get() }, THREADS * ROUNDS);
         assert!(!shared.0.is_locked());
+    }
+
+    #[test]
+    fn counter_arithmetic() {
+        // One second of any counter is ten million units.
+        for frequency in [1_000_000, 3_579_545, 62_500_000, 2_999_999_999, 1 << 40] {
+            assert_eq!(counter_to_time(frequency, frequency), 10_000_000);
+            assert_eq!(counter_to_time(0, frequency), 0);
+            assert_eq!(micros_to_counter(1_000_000, frequency), frequency);
+        }
+        // No overflow after a century of a fast counter.
+        let century = 3_000_000_000u64 * 86_400 * 365 * 100;
+        assert_eq!(
+            counter_to_time(century, 3_000_000_000),
+            86_400 * 365 * 100 * 10_000_000
+        );
+        // Rounds down: time never runs ahead of the counter.
+        assert_eq!(counter_to_time(1, 3), 3_333_333);
+        // A wait rounds up: never short.
+        assert_eq!(micros_to_counter(1, 3_579_545), 4);
+        assert_eq!(micros_to_counter(0, 3_579_545), 0);
+        assert!(counter_to_time(micros_to_counter(1500, 3_579_545), 3_579_545) >= 15_000);
+    }
+
+    #[test]
+    fn ticks() {
+        assert_eq!(ticks_in(0), 0);
+        assert_eq!(ticks_in(TIME_INCREMENT - 1), 0);
+        assert_eq!(ticks_in(TIME_INCREMENT), 1);
+        assert_eq!(ticks_in(10_000_000), 64, "64 ticks a second");
     }
 }
