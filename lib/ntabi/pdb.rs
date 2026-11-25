@@ -383,6 +383,126 @@ fn object_types_match_the_kernel() {
 }
 
 #[test]
+fn exception_structures_match_the_kernel() {
+    use crate::seh::x64::{CONTEXT, RUNTIME_FUNCTION, XSAVE_FORMAT};
+    use crate::seh::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let context = types.layout("_CONTEXT").expect("_CONTEXT");
+    let field = |name| offset(&context, "_CONTEXT", name);
+    assert_eq!(size_of::<CONTEXT>(), context.size as usize);
+    assert_eq!(offset_of!(CONTEXT, PHome), field("P1Home"));
+    macro_rules! same {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(CONTEXT, $name), field(stringify!($name)));
+        )*};
+    }
+    same!(
+        ContextFlags,
+        MxCsr,
+        SegCs,
+        SegDs,
+        SegEs,
+        SegFs,
+        SegGs,
+        SegSs,
+        EFlags,
+        Dr0,
+        Dr1,
+        Dr2,
+        Dr3,
+        Dr6,
+        Dr7,
+        Rax,
+        Rcx,
+        Rdx,
+        Rbx,
+        Rsp,
+        Rbp,
+        Rsi,
+        Rdi,
+        R8,
+        R9,
+        R10,
+        R11,
+        R12,
+        R13,
+        R14,
+        R15,
+        Rip,
+        FltSave,
+        VectorRegister,
+        VectorControl,
+        DebugControl,
+        LastBranchToRip,
+        LastBranchFromRip,
+        LastExceptionToRip,
+        LastExceptionFromRip
+    );
+    // The SSE registers by name are the legacy save area's by number.
+    for (n, name) in ["Xmm0", "Xmm6", "Xmm15"].into_iter().zip([0, 6, 15]) {
+        assert_eq!(
+            field(n),
+            offset_of!(CONTEXT, FltSave) + offset_of!(XSAVE_FORMAT, XmmRegisters) + 16 * name
+        );
+    }
+    let save = types.layout("_XSAVE_FORMAT").expect("_XSAVE_FORMAT");
+    assert_eq!(size_of::<XSAVE_FORMAT>(), save.size as usize);
+    assert_eq!(
+        offset_of!(XSAVE_FORMAT, MxCsr),
+        offset(&save, "_XSAVE_FORMAT", "MxCsr")
+    );
+    assert_eq!(
+        offset_of!(XSAVE_FORMAT, XmmRegisters),
+        offset(&save, "_XSAVE_FORMAT", "XmmRegisters")
+    );
+
+    let record = types
+        .layout("_EXCEPTION_RECORD")
+        .expect("_EXCEPTION_RECORD");
+    let field = |name| offset(&record, "_EXCEPTION_RECORD", name);
+    assert_eq!(size_of::<EXCEPTION_RECORD>(), record.size as usize);
+    assert_eq!(
+        offset_of!(EXCEPTION_RECORD, ExceptionFlags),
+        field("ExceptionFlags")
+    );
+    assert_eq!(
+        offset_of!(EXCEPTION_RECORD, ExceptionRecord),
+        field("ExceptionRecord")
+    );
+    assert_eq!(
+        offset_of!(EXCEPTION_RECORD, ExceptionAddress),
+        field("ExceptionAddress")
+    );
+    assert_eq!(
+        offset_of!(EXCEPTION_RECORD, NumberParameters),
+        field("NumberParameters")
+    );
+    assert_eq!(
+        offset_of!(EXCEPTION_RECORD, ExceptionInformation),
+        field("ExceptionInformation")
+    );
+    assert_eq!(
+        size_of::<EXCEPTION_POINTERS>(),
+        types
+            .layout("_EXCEPTION_POINTERS")
+            .expect("_EXCEPTION_POINTERS")
+            .size as usize
+    );
+    assert_eq!(
+        size_of::<M128A>(),
+        types.layout("_M128A").expect("_M128A").size as usize
+    );
+    assert_eq!(
+        size_of::<RUNTIME_FUNCTION>(),
+        types
+            .layout("_IMAGE_RUNTIME_FUNCTION_ENTRY")
+            .expect("_IMAGE_RUNTIME_FUNCTION_ENTRY")
+            .size as usize
+    );
+}
+
+#[test]
 fn mutexes_match_the_kernel() {
     use crate::ke::{FAST_MUTEX, KMUTANT};
     use core::mem::{offset_of, size_of};
