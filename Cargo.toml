@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["lib/pe", "lib/pdb", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "tools/peinfo", "tools/pdbinfo", "boot", "kernel"]
+members = ["lib/pe", "lib/pdb", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/hal", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "tools/peinfo", "tools/pdbinfo", "boot", "kernel"]
 # Bare `cargo test` / `cargo clippy` cover the host-testable crates. The
 # loader and kernel only build for the UEFI targets: use the Makefile.
-default-members = ["lib/pe", "lib/pdb", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "tools/peinfo", "tools/pdbinfo", "boot", "kernel"]
+default-members = ["lib/pe", "lib/pdb", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/hal", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "tools/peinfo", "tools/pdbinfo", "boot", "kernel"]
 
 [workspace.package]
 version = "0.0.2"

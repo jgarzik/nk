@@ -53,9 +53,8 @@ pub fn start(period: u64, _frequency: u64) {
     arm(super::counter() + period);
 }
 
-/// The clock interrupt was taken: set the next one. Each is due one
-/// period after the last was due, not after it was handled, so lateness
-/// does not accumulate; if a whole period was missed, start afresh.
+/// The clock interrupt was taken: set the next one
+/// (`nk_hal::arm::next_tick`).
 pub fn next() {
     let period = PERIOD.load(Ordering::Relaxed);
     let now = super::counter();
@@ -63,9 +62,6 @@ pub fn next() {
     // SAFETY: reading this processor's timer compare value: when the
     // interrupt being handled was due.
     unsafe { asm!("mrs {}, cntv_cval_el0", out(reg) last, options(nomem, nostack)) };
-    let mut due = last + period;
-    if due <= now {
-        due = now + period;
-    }
+    let due = nk_hal::arm::next_tick(last, period, now);
     arm(due);
 }

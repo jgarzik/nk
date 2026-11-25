@@ -16,6 +16,9 @@ use crate::ke::irql::HIGH_LEVEL;
 use crate::mm;
 use core::arch::asm;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use nk_hal::arm::{
+    acknowledged, distributor_lines, level_of, priority, redistributor_affinity, sgi,
+};
 
 /// `(interrupt id, IRQL)` pairs the interrupt self-test uses: software
 /// generated interrupts this processor sends itself.
@@ -26,8 +29,6 @@ pub const TEST_STRAY: (u32, u8) = (6, 6);
 /// Interrupt ids below this are private to each processor (software
 /// generated 0-15, private peripheral 16-31).
 const PRIVATE: u32 = 32;
-/// Ids from here up mean "nothing to acknowledge".
-const SPURIOUS: u32 = 1020;
 /// The software-generated interrupt that stops a processor for good.
 const STOP: u32 = 2;
 
@@ -54,12 +55,6 @@ static ENABLED: AtomicU32 = AtomicU32::new(0);
 /// IRQL of each private interrupt that has been enabled.
 static LEVELS: [AtomicU8; PRIVATE as usize] = [const { AtomicU8::new(0) }; PRIVATE as usize];
 
-/// The priority of interrupts that run at IRQL `level`, which is also the
-/// mask value that holds them back.
-pub const fn priority(level: u8) -> u8 {
-    0xF0 - 0x10 * level
-}
-
 fn read32(base: u64, offset: usize) -> u32 {
     // SAFETY: `base` is a GIC register frame in the direct map; device
     // registers are read with volatile accesses.
@@ -74,8 +69,7 @@ fn write32(base: u64, offset: usize, value: u32) {
 /// The affinity fields of this processor's `MPIDR_EL1`, packed as the
 /// redistributor's type register packs them.
 fn affinity() -> u32 {
-    let id = super::platform::current_cpu_id();
-    ((id >> 32 & 0xFF) << 24 | id & 0xFF_FFFF) as u32
+    redistributor_affinity(super::platform::current_cpu_id())
 }
 
 /// Find this processor's redistributor by its affinity. Never by
@@ -108,12 +102,12 @@ pub fn set_mask(level: u8) {
     }
 }
 
-/// The IRQL the priority mask stands for: the inverse of [`priority`].
+/// The IRQL the priority mask stands for.
 pub fn mask_level() -> u8 {
     let mask: u64;
     // SAFETY: reading the priority mask has no side effects.
     unsafe { asm!("mrs {}, icc_pmr_el1", out(reg) mask, options(nomem, nostack)) };
-    (priority(0) - mask as u8) >> 4
+    level_of(mask as u8)
 }
 
 /// Turn on the system-register interface to the GIC. Needed before the
@@ -134,7 +128,7 @@ pub fn init() -> Result<(), &'static str> {
     let distributor = mm::phys_to_virt(controllers.distributor) as u64;
     // Firmware may have left device interrupts enabled; nothing here
     // handles them yet.
-    let lines = 32 * ((read32(distributor, GICD_TYPER) & 0x1F) + 1);
+    let lines = distributor_lines(read32(distributor, GICD_TYPER));
     for word in 1..lines / 32 {
         write32(distributor, GICD_ICENABLER + 4 * word as usize, u32::MAX);
     }
@@ -236,17 +230,7 @@ pub fn interrupt_enable(vector: u32, level: u8) {
 /// Send software-generated interrupt `vector` to the processor with
 /// MPIDR affinity `id`.
 fn send(id: u64, vector: u32) {
-    // Affinity levels 3..1 name a group of sixteen; the low bits list
-    // the targets within it by their level-0 number.
-    assert!(
-        id & 0xFF < 16,
-        "affinity level 0 above 15 needs a range selector"
-    );
-    let value = (id >> 32 & 0xFF) << 48
-        | (id >> 16 & 0xFF) << 32
-        | (id >> 8 & 0xFF) << 16
-        | u64::from(vector) << 24
-        | 1 << (id & 0xF);
+    let value = sgi(id, vector).expect("affinity level 0 above 15 needs a range selector");
     // SAFETY: generating an interrupt for a processor.
     unsafe { asm!("msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nomem, nostack)) };
 }
@@ -276,10 +260,9 @@ pub fn interrupt() {
     let id: u64;
     // SAFETY: acknowledging takes the most urgent pending interrupt.
     unsafe { asm!("mrs {}, icc_iar1_el1", out(reg) id, options(nomem, nostack)) };
-    let vector = id as u32 & 0xFF_FFFF;
-    if vector >= SPURIOUS {
+    let Some(vector) = acknowledged(id) else {
         return;
-    }
+    };
     if vector == STOP && crate::kd::stopping() {
         // Another processor is stopping the system and said so.
         super::halt();
