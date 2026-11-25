@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod sched;
+pub mod wait;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
