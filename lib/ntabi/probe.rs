@@ -184,10 +184,11 @@ fn nk_facts() -> Vec<(&'static str, usize)> {
     ]
 }
 
-/// x86-64 only: the public KPCR, which ends where the KPRCB begins.
+/// x86-64 only: the public part of the KPCR. The header's KPCR stops
+/// short of the embedded KPRCB, so the probe cannot state where the PRCB
+/// or the current-thread slot are; those stay documented, not probed.
 fn nk_facts_x64() -> Vec<(&'static str, usize)> {
     vec![
-        ("sizeof KPCR", pcr::X86_64.prcb),
         ("offsetof KPCR Self", pcr::X86_64.self_ptr),
         ("offsetof KPCR CurrentPrcb", pcr::X86_64.current_prcb),
     ]

@@ -78,20 +78,26 @@ Three sources back those numbers, in increasing order of authority:
    the WDK itself in the nk-fixtures repository. `lib/ntabi/probe.rs`
    compares all of NK's facts against it when the table is downloaded.
 
-**Status of 3: pending.** The probe source is committed in nk-fixtures
-but no release contains it yet, so the comparison test reports SKIP. A
-preview run against the mingw-w64 DDK headers (an independent header set,
-but not Microsoft's) agreed on every fact except two sizes,
-`DEVICE_OBJECT` (0x148 there, 0x150 here) and the public `KPCR` (0x178
-there, 0x180 here). Both differences are trailing alignment padding:
-Windows declares these types 16-byte aligned, which
-`MEMORY_ALLOCATION_ALIGNMENT` in the same headers confirms is 16. The
-WDK-built table is what will settle it.
+**Status of 3: agrees, not yet pinned.** The probe was built by the WDK
+in nk-fixtures CI (run 45539084606, branch `updates`), and the comparison
+was run by hand against its tables: all 120 facts NK states match on x64
+and all 118 on arm64, including `sizeof DEVICE_OBJECT` = 0x150. The two
+architectures' tables are identical apart from the x64-only KPCR lines.
+
+That run is a CI artifact, not a release, so the tables are not in
+`fixtures/manifest.toml` and the test reports SKIP in normal runs. Once an
+nk-fixtures release carries `abi-probe.<arch>.txt`, pin them by hash and
+the check becomes part of `make test`.
+
+One thing the probe cannot tell: where the KPRCB and the current-thread
+slot sit. The public `KPCR` is 0x178 bytes and stops short of the PRCB.
+NK's `gs:[0x188]` comes from the WDK's inlined `KeGetCurrentThread`, and
+is exercised by no fixture yet.
 
 ## Not yet verified
 
-- Structure layouts against the WDK-built probe (see above).
-- The arm64 PCR offsets: the public arm64 headers do not expose them.
+- The current-thread offsets in the PCR, on either architecture: neither
+  the probe nor a fixture driver exercises them yet.
 - Behaviour against a real Windows 10 installation: there is no
   reference VM yet, so "expected" results come from documentation, sample
   source and the binaries themselves.

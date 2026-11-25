@@ -21,7 +21,7 @@ that exist: `sioctl.sys` on both architectures, `null.sys` on x86-64.
 | 10 | `null.sys` proof | done (x86-64; arm64 blocked on the fixture) |
 | 11 | `sioctl.sys` buffered I/O proof, unload, leak check | done, both architectures |
 | 12 | MDLs and direct I/O | done, both architectures |
-| 13 | WDK-built ABI probe for layout verification | probe and comparison test written; waiting on an nk-fixtures release |
+| 13 | WDK-built ABI probe for layout verification | layouts agree with a WDK CI build; pinning waits on an nk-fixtures release |
 | 14 | Ledger and documentation pass | done |
 
 ### Open against the 0.0.1 acceptance gates
@@ -29,7 +29,9 @@ that exist: `sioctl.sys` on both architectures, `null.sys` on x86-64.
 - **arm64 `null.sys`:** blocked. Microsoft's symbol server needs the
   binary's timestamp and image size, and no public index lists them for
   Windows 10 arm64. Needs a copy from a licensed Windows 10 arm64 image.
-- **ABI verification:** waits on the probe release (phase 13).
+- **ABI verification:** structure layouts agree with a WDK-built probe,
+  checked by hand; the automated check waits on a fixtures release.
+  PCR thread offsets are unverified.
 - **Windows reference results:** no Windows 10 VM yet; nothing has been
   compared with a run on Windows.
 - **Physical boot** on the Dell OptiPlex: not attempted.
