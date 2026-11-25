@@ -3,5 +3,5 @@
 scenario: aarch64
 fails: thread.migrate
 file: kernel/ke/thread.rs
-replace:     for other in (1..processors).map(|step| (me + step) % processors) {
-with:     for other in (1..1).map(|step| (me + step) % processors) {
+replace:     for other in sched::steal_order(me, processors) {
+with:     for other in sched::steal_order(me, 1) {

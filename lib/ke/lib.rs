@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod sched;
+
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// A rule broken. Each is a kernel bug; the kernel stops on it.

@@ -48,6 +48,7 @@ use crate::arch;
 use crate::mm::{self, stack::Stack};
 use crate::ob;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use nk_ke::sched::{self, Leaving};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
 use nk_ntabi::ke::{DISPATCHER_HEADER, KTIMER, KWAIT_BLOCK};
 use nk_ntabi::pcr::NATIVE as PCR;
@@ -230,11 +231,8 @@ fn create_thread(
         return Err("a thread's affinity names no running processor");
     }
     // The ideal processor: the next in turn among those allowed.
-    let turn = NEXT_IDEAL.fetch_add(1, Ordering::Relaxed) % allowed.count_ones();
-    let ideal = (0..64)
-        .filter(|n| allowed & 1 << n != 0)
-        .nth(turn as usize)
-        .unwrap_or(0);
+    let turn = NEXT_IDEAL.fetch_add(1, Ordering::Relaxed);
+    let ideal = sched::ideal_processor(allowed, turn).unwrap_or(0);
     let stack = mm::stack::alloc().ok_or("no memory for a thread's stack")?;
     let Some(thread) = allocate(stack, thread_priority, layout::state::INITIALIZED) else {
         mm::stack::free(stack);
@@ -246,7 +244,7 @@ fn create_thread(
         (&raw mut (*thread).argument).write(argument);
         field::<u64>(thread, layout::START_ADDRESS).write(entry as usize as u64);
         field::<u64>(thread, layout::AFFINITY).write(allowed);
-        field::<u32>(thread, layout::IDEAL_PROCESSOR).write(ideal);
+        field::<u32>(thread, layout::IDEAL_PROCESSOR).write(ideal as u32);
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
     }
     THREADS.fetch_add(1, Ordering::AcqRel);
@@ -288,23 +286,11 @@ fn idling(number: usize) -> bool {
     arch::percpu_of(number).is_some_and(|p| p.dispatcher().idling.load(Ordering::Acquire))
 }
 
-/// The processor a thread with this affinity and ideal processor should
-/// be made ready on.
-fn place(allowed: u64, ideal: usize) -> usize {
-    if idling(ideal) {
-        return ideal;
-    }
-    (0..64)
-        .filter(|n| allowed & 1 << n != 0)
-        .find(|&n| idling(n))
-        .unwrap_or(ideal)
-}
-
 /// Wake one idle processor among `allowed`, other than this one, so
 /// that it looks for work to take.
 fn wake_an_idle(allowed: u64) {
     let me = pcr::current_processor() as usize;
-    if let Some(number) = (0..64).find(|&n| n != me && allowed & 1 << n != 0 && idling(n))
+    if let Some(number) = sched::idle_to_wake(allowed, me, idling)
         && let Some(there) = arch::percpu_of(number)
     {
         // The request outlives the interrupt: if that processor is
@@ -322,7 +308,7 @@ fn wake_an_idle(allowed: u64) {
 fn steal() -> Option<*mut Thread> {
     let me = pcr::current_processor() as usize;
     let processors = super::smp::online_count();
-    for other in (1..processors).map(|step| (me + step) % processors) {
+    for other in sched::steal_order(me, processors) {
         let Some(dispatcher) = arch::percpu_of(other).map(|p| p.dispatcher()) else {
             continue;
         };
@@ -416,9 +402,10 @@ pub unsafe fn make_ready(thread: *mut Thread) {
     }
     // SAFETY: per the contract; on no queue, the thread is the caller's.
     let processor = unsafe {
-        let processor = place(
+        let processor = sched::place(
             field::<u64>(thread, layout::AFFINITY).read(),
             field::<u32>(thread, layout::IDEAL_PROCESSOR).read() as usize,
+            idling,
         );
         field::<u32>(thread, layout::NEXT_PROCESSOR).write(processor as u32);
         processor
@@ -482,20 +469,6 @@ pub fn tick() {
     }
 }
 
-/// Why the running thread is calling the dispatcher.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Leaving {
-    /// It can go on running; others at its priority or above go first.
-    Yield,
-    /// It has finished.
-    Exit,
-    /// It was interrupted: a thread of higher priority goes first, and
-    /// if its quantum is spent so do its equals.
-    Preempt,
-    /// It waits for something, and runs again when made ready.
-    Wait,
-}
-
 /// Pick the next thread for this processor and switch to it. Called at
 /// `DISPATCH_LEVEL` with no lock held. Returns (unless `Exit`) when the
 /// calling thread next runs, possibly at once.
@@ -522,16 +495,8 @@ fn dispatch(leaving: Leaving) {
         // SAFETY: `me` is the running thread.
         let quantum = unsafe { &(*me).quantum };
         let spent = quantum.load(Ordering::Relaxed) == 0;
-        // The idle thread gives way to anything; a thread that yields or
-        // has had its quantum, to its equals and betters; one that was
-        // merely interrupted, to its betters only.
-        let floor = match leaving {
-            Leaving::Exit | Leaving::Wait => 0,
-            _ if idle_thread => 0,
-            Leaving::Preempt if !spent => my_priority + 1,
-            _ => my_priority,
-        };
-        if spent || matches!(leaving, Leaving::Yield | Leaving::Wait) {
+        let floor = leaving.floor(idle_thread, spent, my_priority);
+        if leaving.new_turn(spent) {
             // Whether or not anyone is waiting, a new turn begins.
             quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
         }
@@ -550,9 +515,7 @@ fn dispatch(leaving: Leaving) {
                 dispatcher.idle.load(Ordering::Acquire)
             }
             Some((link, _)) => thread_of(link),
-            None if matches!(leaving, Leaving::Exit | Leaving::Wait) => {
-                dispatcher.idle.load(Ordering::Acquire)
-            }
+            None if leaving.stops() => dispatcher.idle.load(Ordering::Acquire),
             None if idle_thread => {
                 drop(ready);
                 match steal() {
@@ -580,16 +543,14 @@ fn dispatch(leaving: Leaving) {
                 _ if idle_thread => set_state(me, layout::state::READY),
                 _ => {
                     set_state(me, layout::state::READY);
-                    // Pushed aside before its turn was over, it is next
-                    // among its equals; otherwise it goes to the back.
-                    let front = leaving == Leaving::Preempt && !spent;
+                    let front = leaving.requeue_in_front(spent);
                     ready.insert(link_of(me), my_priority, front);
                 }
             }
         }
         next
     };
-    if matches!(leaving, Leaving::Yield | Leaving::Preempt) && !idle_thread {
+    if !leaving.stops() && !idle_thread {
         // This thread is waiting now; a processor with nothing to do
         // may take it.
         // SAFETY: `me` is still on this processor; its affinity changes
