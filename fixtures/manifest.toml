@@ -10,6 +10,8 @@
 #                    public symbol server
 #   wdk-built        Microsoft sample source, unmodified, built with the WDK
 #                    by github.com/jgarzik/nk-fixtures
+#   nk-authored      NK's own test driver source, built with the WDK by
+#                    github.com/jgarzik/nk-fixtures
 # The drivers that oracle/ has a script for are also run on real Windows,
 # and NK must reproduce what they did there; see oracle/README.md.
 
@@ -66,6 +68,114 @@ sha256 = "f9784299f0b929e65ed720450e95b506a803e658ae5ed69cbde5b029ae6dd081"
 status = "wdk-built"
 boot = false
 note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
+
+# NK's conformance drivers (nk-fixtures nkc/): each exercises a few kernel
+# routines and returns what it observed; oracle/ holds what real Windows
+# returned. Listed here before the kernel can load them, so the ledger
+# shows what each still needs; a driver is turned on (boot = true) by the
+# commit that completes its imports.
+
+[[fixture]]
+name = "nkc-irql"
+arch = "x86_64"
+file = "nkc-irql.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-irql.x64.nkc-irql.sys"
+sha256 = "3c9ae3500e7a7265de8d7bf326c3bd7afa1d043a1495fa631ac66e73a94d3303"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-irql.c: IRQL and spin locks"
+
+[[fixture]]
+name = "nkc-irql"
+arch = "aarch64"
+file = "nkc-irql.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-irql.arm64.nkc-irql.sys"
+sha256 = "6de03b71204e1d5c2afda9d08f321d2f28bd1f99654fe1415f995b6582fc1a22"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-irql.c: IRQL and spin locks"
+
+[[fixture]]
+name = "nkc-dpc"
+arch = "x86_64"
+file = "nkc-dpc.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-dpc.x64.nkc-dpc.sys"
+sha256 = "261373cb691d48ad82aa5df4afbf543588b5f0ea38c29030d756956f7ef6f3e2"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-dpc.c: deferred procedure calls"
+
+[[fixture]]
+name = "nkc-dpc"
+arch = "aarch64"
+file = "nkc-dpc.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-dpc.arm64.nkc-dpc.sys"
+sha256 = "ed931fd7432e9754c471a700cbe20854ccbd45932f33a9ca543c4850b9b6f05d"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-dpc.c: deferred procedure calls"
+
+[[fixture]]
+name = "nkc-timer"
+arch = "x86_64"
+file = "nkc-timer.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-timer.x64.nkc-timer.sys"
+sha256 = "8c0b4f9b9314fd35ebee3ee41175537a39c6c6d2b8b555dea814df0964a09f9b"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-timer.c: kernel timers"
+
+[[fixture]]
+name = "nkc-timer"
+arch = "aarch64"
+file = "nkc-timer.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-timer.arm64.nkc-timer.sys"
+sha256 = "fea08e3df02ddd79140393e8d959e1aaf82e0f4387bbee09d2e9aa42796c6614"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-timer.c: kernel timers"
+
+[[fixture]]
+name = "nkc-time"
+arch = "x86_64"
+file = "nkc-time.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-time.x64.nkc-time.sys"
+sha256 = "908d17b4e5b7418940f63e703ac525e62fbe3ad867bcdaed1e8d419efc1202c2"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-time.c: clocks"
+
+[[fixture]]
+name = "nkc-time"
+arch = "aarch64"
+file = "nkc-time.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-time.arm64.nkc-time.sys"
+sha256 = "ff56a5f0cb65a18feb1cddabc718cb54d3cf6b1ce4c705d09c7d3a3f5610243a"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v3 nkc/nkc-time.c: clocks"
+
+# Microsoft's WDM event sample: a timer and a DPC completing requests.
+
+[[fixture]]
+name = "event"
+arch = "x86_64"
+file = "event.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/wdm-event.x64.event.sys"
+sha256 = "90e510f121b2307610341f9e6c2963e94584bc2c3763a998c8bba7ad1e3f5b79"
+status = "wdk-built"
+boot = false
+note = "Windows-driver-samples d49bb7d7 general/event/wdm"
+
+[[fixture]]
+name = "event"
+arch = "aarch64"
+file = "event.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/wdm-event.arm64.event.sys"
+sha256 = "6ff61898c7f247210b38a39e04cf2a3049d5a48eba79be552b6bc83c8959b803"
+status = "wdk-built"
+boot = false
+note = "Windows-driver-samples d49bb7d7 general/event/wdm"
 
 # Structure sizes and offsets as Microsoft's compiler and WDK headers
 # produce them: the table the nk-fixtures ABI probe was built with.

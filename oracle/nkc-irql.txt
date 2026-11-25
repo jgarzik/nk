@@ -1,0 +1,10 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 b94fa22bb26280cb573e711595ab0149c23da41ba5a4d02b770d2d86b21afb90
+# driver nkc-irql.sys sha256 3c9ae3500e7a7265de8d7bf326c3bd7afa1d043a1495fa631ac66e73a94d3303
+load nkc-irql: ok
+open d \Device\NkcIrql: 00000000
+ioctl d 00222000 - 256: 00000000 116 00000000000000000100000001000000020000000100000000000000000000000200000000000000000000000f00000000000000000000000200000000000000020000000200000000000000010000000000000001000000000000000200000000000000010000005a0000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222000 - 8: c0000023 - eeeeeeeeeeeeeeee
+close d: 00000000
+unload nkc-irql: ok
+end
