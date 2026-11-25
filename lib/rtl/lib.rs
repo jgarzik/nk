@@ -8,8 +8,10 @@
 
 extern crate alloc;
 
+pub mod codepage;
 pub mod format;
 pub mod prefix;
+pub mod string;
 pub mod upcase;
 pub mod wildcard;
 
