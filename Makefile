@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check gate ci clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check oracle gate ci clean
 
 help:
 	@echo "NK make targets:"
@@ -22,6 +22,7 @@ help:
 	@echo "  fmt-check  fail if the tree is not formatted"
 	@echo "  fixtures   download and verify the driver fixtures (target/fixtures/)"
 	@echo "  ledger     regenerate the compatibility ledger (ledger/)"
+	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
 	@echo "  ci         the subset of the gate that hosted CI runs (no KVM there)"
 	@echo "  clean      remove all build and test output"
@@ -96,6 +97,12 @@ ledger: fixtures
 
 ledger-check: fixtures
 	@tools/ledger.py --check
+
+# Replays oracle/*.script in the reference Windows VM and compares with
+# the committed transcripts. Needs KVM; the first run downloads the
+# evaluation ISO and installs it. See oracle/README.md.
+oracle: fixtures
+	@tools/oracle.py check
 
 gate:
 	@tools/gate.sh

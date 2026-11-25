@@ -10,8 +10,8 @@
 #                    public symbol server
 #   wdk-built        Microsoft sample source, unmodified, built with the WDK
 #                    by github.com/jgarzik/nk-fixtures
-# Nothing here has been run on a reference Windows installation yet, so no
-# entry is "windows-verified".
+# The drivers that oracle/ has a script for are also run on real Windows,
+# and NK must reproduce what they did there; see oracle/README.md.
 
 [[fixture]]
 name = "null"

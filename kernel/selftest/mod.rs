@@ -9,6 +9,7 @@ mod base;
 mod loader;
 mod neg;
 mod null;
+mod oracle;
 mod sioctl;
 
 use crate::mm;
@@ -21,6 +22,7 @@ pub static GROUPS: &[&Group] = &[
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
+    &oracle::GROUP,
     &neg::PANIC,
     &neg::FAULT,
     &neg::META_FAIL,

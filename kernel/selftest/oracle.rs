@@ -1,0 +1,212 @@
+//! Replay the oracle scripts and hold NK to what Windows did.
+//!
+//! `oracle/<name>.script` lists requests to make of a driver. It was
+//! replayed on real Windows, which produced `oracle/<name>.txt`. Here the
+//! same script runs against the same driver binary on NK, and each line NK
+//! produces must be the line Windows produced. `oracle/README.md` defines
+//! the formats.
+
+use super::module;
+use crate::io::driver;
+use crate::io::file::{self, IoResult};
+use crate::test::{Group, Report};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use nk_bootinfo::BootInfo;
+use nk_ntabi::io::{DRIVER_OBJECT, FILE_OBJECT};
+use nk_oracle::{Dump, FILL, Outcome, Step};
+
+/// What a script has open and loaded while it runs.
+struct Replay<'a> {
+    info: &'a BootInfo,
+    files: Vec<(&'a str, *mut FILE_OBJECT)>,
+    drivers: Vec<(&'a str, *mut DRIVER_OBJECT)>,
+}
+
+fn outcome(r: IoResult) -> Outcome {
+    Outcome {
+        status: r.status as u32,
+        information: r.information,
+    }
+}
+
+impl<'a> Replay<'a> {
+    fn file(&self, handle: &str) -> Result<*mut FILE_OBJECT, String> {
+        self.files
+            .iter()
+            .find(|(h, _)| *h == handle)
+            .map(|(_, f)| *f)
+            .ok_or_else(|| format!("handle {handle} is not open"))
+    }
+
+    fn load(&mut self, service: &'a str, file: &str) -> &'static str {
+        let Some(image) = module(self.info, file) else {
+            return "failed";
+        };
+        match driver::load(service, image) {
+            Ok(object) => {
+                self.drivers.push((service, object));
+                "ok"
+            }
+            Err(e) => {
+                kprintln!("oracle: load {service}: {e:?}");
+                "failed"
+            }
+        }
+    }
+
+    fn unload(&mut self, service: &str) -> &'static str {
+        let Some(i) = self.drivers.iter().position(|(s, _)| *s == service) else {
+            return "failed";
+        };
+        match driver::unload(self.drivers.remove(i).1) {
+            Ok(()) => "ok",
+            Err(why) => {
+                kprintln!("oracle: unload {service}: {why}");
+                "failed"
+            }
+        }
+    }
+
+    /// Carry out one step; the text is what follows the step in its
+    /// transcript line.
+    fn step(&mut self, step: Step<'a>) -> Result<String, String> {
+        Ok(match step {
+            Step::Load { service, file } => self.load(service, file).into(),
+            // Part of Windows there; here it is a boot module like any other.
+            Step::Use { service } => self.load(service, &format!("{service}.sys")).into(),
+            Step::Unload { service } => self.unload(service).into(),
+            Step::Open { handle, path } => match file::open(path) {
+                Ok(file) => {
+                    self.files.push((handle, file));
+                    format!("{:08x}", 0)
+                }
+                Err(status) => format!("{:08x}", status as u32),
+            },
+            Step::Close { handle } => {
+                let file = self.file(handle)?;
+                self.files.retain(|(h, _)| *h != handle);
+                // SAFETY: the file came from `open` and was just removed
+                // from the table, so it is closed exactly once.
+                let r = unsafe { file::close(file) }.map_err(|e| format!("{e:?}"))?;
+                format!("{:08x}", r.status as u32)
+            }
+            Step::Ioctl {
+                handle,
+                code,
+                input,
+                output_len,
+            } => {
+                let input: Vec<u8> = input.bytes().collect();
+                let mut output = vec![FILL; output_len];
+                // SAFETY: the file is open until its `close` step.
+                let r =
+                    unsafe { file::device_control(self.file(handle)?, code, &input, &mut output) }
+                        .map_err(|e| format!("{e:?}"))?;
+                format!("{} {}", outcome(r), Dump(&output))
+            }
+            Step::Read { handle, len } => {
+                let mut buffer = vec![FILL; len];
+                // SAFETY: as above.
+                let r = unsafe { file::read(self.file(handle)?, &mut buffer) }
+                    .map_err(|e| format!("{e:?}"))?;
+                format!("{} {}", outcome(r), Dump(&buffer))
+            }
+            Step::Write { handle, data } => {
+                let data: Vec<u8> = data.bytes().collect();
+                // SAFETY: as above.
+                let r = unsafe { file::write(self.file(handle)?, &data) }
+                    .map_err(|e| format!("{e:?}"))?;
+                format!("{}", outcome(r))
+            }
+        })
+    }
+
+    /// Close and unload whatever the script left behind, so a script that
+    /// stopped early does not also leak.
+    fn finish(&mut self) {
+        for (_, file) in self.files.drain(..) {
+            // SAFETY: still open, and removed from the table by `drain`.
+            let _ = unsafe { file::close(file) };
+        }
+        for (_, object) in self.drivers.drain(..).rev() {
+            let _ = driver::unload(object);
+        }
+    }
+}
+
+/// Replay `script`; `Err` names the first line that differs from what
+/// Windows printed. Returns how many lines matched.
+fn replay(info: &BootInfo, script: &str, windows: &str) -> Result<usize, String> {
+    let mut replay = Replay {
+        info,
+        files: Vec::new(),
+        drivers: Vec::new(),
+    };
+    let mut expected = nk_oracle::transcript(windows);
+    let mut matched = 0;
+    let mut run = || -> Result<(), String> {
+        for step in nk_oracle::steps(script) {
+            let step = step.map_err(|why| format!("script: {why}"))?;
+            let line = match replay.step(step) {
+                Ok(result) => format!("{step}: {result}"),
+                Err(why) => format!("{step}: NK could not: {why}"),
+            };
+            match expected.next() {
+                Some(want) if want == line => matched += 1,
+                Some(want) => {
+                    return Err(format!(
+                        "line {}: NK `{line}`, Windows `{want}`",
+                        matched + 1
+                    ));
+                }
+                None => return Err(format!("NK `{line}`, but the Windows transcript has ended")),
+            }
+        }
+        match expected.next() {
+            Some("end") => Ok(()),
+            other => Err(format!("the Windows transcript continues: {other:?}")),
+        }
+    };
+    let verdict = run();
+    replay.finish();
+    verdict.map(|()| matched)
+}
+
+/// One script: skipped without its driver, else replayed and compared.
+fn check(r: &mut Report, info: &BootInfo, name: &str, driver: &str, script: &str, windows: &str) {
+    if module(info, driver).is_none() {
+        return r.skip(name, format_args!("module {driver} not provided"));
+    }
+    match replay(info, script, windows) {
+        Ok(lines) => r.ok_with(name, format_args!("{lines} lines as on Windows")),
+        Err(why) => r.fail(name, format_args!("{why}")),
+    }
+}
+
+pub static GROUP: Group = Group {
+    names: &["oracle.null", "oracle.sioctl"],
+    run,
+    manual: false,
+};
+
+fn run(r: &mut Report, info: &BootInfo) {
+    check(
+        r,
+        info,
+        "oracle.null",
+        "null.sys",
+        include_str!("../../oracle/null.script"),
+        include_str!("../../oracle/null.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.sioctl",
+        "sioctl.sys",
+        include_str!("../../oracle/sioctl.script"),
+        include_str!("../../oracle/sioctl.txt"),
+    );
+}

@@ -22,6 +22,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-oracle"
+version = "0.0.1"
+
+[[package]]
 name = "nk-pdb"
 version = "0.0.1"
 
@@ -41,6 +45,7 @@ dependencies = [
  "nk-bootinfo",
  "nk-mm",
  "nk-ntabi",
+ "nk-oracle",
  "nk-pe",
  "nk-rtl",
 ]

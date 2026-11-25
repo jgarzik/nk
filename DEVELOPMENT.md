@@ -21,6 +21,10 @@ sudo apt-get install make qemu-system-x86 qemu-system-arm \
 No C compiler or cross toolchain is needed: the loader and kernel are
 linked by the linker that ships with Rust.
 
+`make oracle`, which replays the oracle scripts on real Windows, also
+needs KVM, `qemu-utils` (for `qemu-img`) and `xorriso`. Nothing else
+uses them; see `doc/TESTING.md`.
+
 ## Rust
 
 Install [rustup](https://rustup.rs). `rust-toolchain.toml` names the

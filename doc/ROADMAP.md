@@ -18,9 +18,10 @@ unload without leaks.
 
 Not there: interrupts, timers, threads, more than one CPU, structured
 exception handling, Plug and Play, any hardware device, user mode. Open
-gaps carried into the phases below: no arm64 `null.sys` (no usable source; stays SKIP), nothing
-compared with real Windows (phase 0), `METHOD_NEITHER` untested (phase 2),
-never run on a physical machine (phase 3).
+gaps carried into the phases below: no arm64 `null.sys` (no usable
+source; stays SKIP), `METHOD_NEITHER` untested (phase 2), never run on a
+physical machine (phase 3). Since 0.0.1 the two drivers' results have
+been compared with a run on real Windows, request by request (`oracle/`).
 
 ## Destination
 

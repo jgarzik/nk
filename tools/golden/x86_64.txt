@@ -28,3 +28,5 @@ sioctl.close ok
 sioctl.unload ok
 sioctl.no-leak ok
 sioctl.cycles ok
+oracle.null ok
+oracle.sioctl ok

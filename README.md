@@ -39,10 +39,11 @@ The drivers are Microsoft's, not written for NK:
 **What this is not.** Two software drivers are not general driver
 compatibility. 0.0.1 has no threads or scheduler, no interrupts, no
 structured exception handling, no Plug and Play, no user mode, and runs
-only the boot CPU. It has not been run on physical hardware, and its
-results have been checked against Microsoft's documentation, sample source
-and binaries, not yet against a run on real Windows. `doc/ROADMAP.md` says
-what is open and the path from here to Windows user mode.
+only the boot CPU. It has not been run on physical hardware. The two
+drivers' request-by-request results match a run on real Windows 10
+(`oracle/`); the rest of what the tests expect comes from Microsoft's
+documentation, sample source and binaries. `doc/ROADMAP.md` says what is
+open and the path from here to Windows user mode.
 
 ## Try it
 

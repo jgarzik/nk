@@ -19,6 +19,7 @@ nk-acpi = { path = "../lib/acpi" }
 nk-bootinfo = { path = "../lib/bootinfo" }
 nk-mm = { path = "../lib/mm" }
 nk-ntabi = { path = "../lib/ntabi" }
+nk-oracle = { path = "../lib/oracle" }
 nk-pe = { path = "../lib/pe" }
 nk-rtl = { path = "../lib/rtl" }
 

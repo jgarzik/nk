@@ -118,9 +118,10 @@ available binary can observe.
 
 - The current-thread offset in the PCR on arm64 (`[x18, #0x988]`): no
   symbol file, probe fact or fixture driver confirms it yet.
-- Behaviour against a real Windows 10 installation: there is no
-  reference VM yet, so "expected" results come from documentation, sample
-  source and the binaries themselves.
+- Behaviour beyond the oracle scripts. What `oracle/` replays on real
+  Windows is verified line for line (`doc/TESTING.md`); every other
+  expectation still comes from documentation, sample source and the
+  binaries themselves.
 - Pointer authentication on arm64: WDK-built arm64 drivers contain
   `pacibsp`/`autibsp`. They execute as no-ops on the emulated CPU used
   for testing; NK does not enable or manage PAC keys.

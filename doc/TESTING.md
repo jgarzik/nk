@@ -1,8 +1,9 @@
 # Testing
 
-Windows defines the expected behaviour. Until a Windows reference VM
-exists, expectations come from Microsoft's documentation and from reading
-the fixture binaries, and the ledger says so.
+Windows defines the expected behaviour. Where a test's expectation was
+recorded from real Windows it says so (the oracle, below); elsewhere
+expectations come from Microsoft's documentation and from reading the
+fixture binaries.
 
 ## Host unit tests
 
@@ -127,8 +128,41 @@ Windows 10 arm64 `null.sys` fixture yet, so those tests skip on arm64.
 buffers as user memory inside `__try`, which needs user address space and
 SEH. That test prints SKIP.
 
-Expected results come from Microsoft's documentation, the sample's
-published source and reading the driver binaries. They have not been compared with a run on Windows.
+The expected results of these hand-written tests come from Microsoft's
+documentation, the sample's published source and reading the driver
+binaries. The oracle tests below check the same two drivers against a run
+on Windows.
+
+## The Windows oracle
+
+`oracle/<name>.script` lists requests to make of a driver: load it, open
+its device, send control requests, read, write, close, unload. The script
+is replayed in two places:
+
+- on real Windows 10 (build 19045.2006), in a reference VM, by
+  `oracle/runner.ps1`. The transcript it prints is committed as
+  `oracle/<name>.txt`;
+- on NK, by the kernel tests `oracle.<name>`, against the same driver
+  binary. Each line NK produces must be the line Windows produced: same
+  status, same byte count, same bytes in the output buffer, including the
+  bytes nobody wrote.
+
+`oracle/README.md` defines the script and the transcript. The transcripts
+do not depend on the architecture, so arm64 NK is held to the lines
+recorded on x86-64 Windows.
+
+`make oracle` replays every script on Windows again and fails if a
+committed transcript is not what Windows says. It is not part of the gate
+or of CI: it needs KVM, and its first run downloads Microsoft's Windows
+10 Enterprise evaluation ISO (5.5 GB, pinned by SHA-256) and installs it
+unattended, about ten minutes. After that a replay takes half a minute
+and is cached by the hash of its inputs. `tools/oracle.py` documents the
+VM: a base image under `$NK_CACHE` (default `~/.cache/nk`) that is never
+modified, and a throwaway overlay per replay.
+
+The gate runs only the NK side, against the committed transcripts. A
+transcript records the hashes of its script and driver;
+`tools/test_oracle.py` fails if either changed without recording again.
 
 Each driver test compares pool usage, frames and namespace entries before
 loading the driver and after unloading it, in addition to the check the

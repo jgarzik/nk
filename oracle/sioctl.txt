@@ -1,0 +1,31 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 df374c30add8f0b9be59399ec95641e350523760be1ee4de2b41177990ebcb06
+# driver sioctl.sys sha256 068db52604e5373cc34faa343438cdfb56c1dcf3a222096e3546cd7528bd76ac
+load sioctl: ok
+open dev \Device\SIOCTL: 00000000
+open dos \DosDevices\IoctlTest: 00000000
+open alias \??\ioctltest: 00000000
+open missing \Device\NoSuchDevice: c0000034
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 100: 00000000 38 5468697320537472696e672069732066726f6d20446576696365204472697665722021212100eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 38: 00000000 38 5468697320537472696e672069732066726f6d20446576696365204472697665722021212100
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 10: 00000000 10 5468697320537472696e
+ioctl dos 9c402408 68656c6c6f2066726f6d204e4b00 1: 00000000 1 54
+ioctl dos 9c402406 68656c6c6f2066726f6d204e4b00 38: 00000000 38 5468697320537472696e672069732066726f6d20446576696365204472697665722021212100
+ioctl dos 9c402406 68656c6c6f2066726f6d204e4b00 10: 00000000 10 5468697320537472696e
+ioctl dos 9c402406 68656c6c6f2066726f6d204e4b00 1: 00000000 1 54
+ioctl dos 9c402401 68656c6c6f2066726f6d204e4b00 64: 00000000 64 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c402401 68656c6c6f2066726f6d204e4b00 1: 00000000 1 ee
+ioctl dos 9c402408 - 16: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c402408 78 0: c000000d - -
+ioctl dos 9c402401 - 16: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c402401 78 0: c000000d - -
+ioctl dos 9c402406 - 16: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c402406 78 0: c000000d - -
+ioctl dos 9c402410 78 16: c0000010 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+read dos 16: c0000010 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+write dos 616263: c0000010 -
+close alias: 00000000
+close dos: 00000000
+close dev: 00000000
+unload sioctl: ok
+end
