@@ -104,7 +104,7 @@ pub fn resources() -> Resources {
         pool_blocks: pool.blocks - table_blocks - registry_blocks,
         pool_bytes: pool.bytes - table_bytes - registry_bytes,
         irql: crate::ke::irql::current(),
-        spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
+        spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),
         threads: crate::ke::thread::count(),
         handles: crate::ob::handle::count(),
