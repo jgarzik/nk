@@ -335,124 +335,105 @@ pub const fn mdl_size(va: usize, len: usize) -> usize {
     size_of::<MDL>() + span_pages(va, len) * 8
 }
 
+/// The layouts drivers were compiled against, from the Windows 10 x64
+/// public symbols; arm64 is identical. Checked when this crate is built,
+/// for every target, so a definition that drifts cannot reach a driver.
+/// `probe.rs` compares the same definitions with tables the WDK produced.
+const _: () = {
+    use core::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<UNICODE_STRING>() == 0x10);
+    assert!(size_of::<LIST_ENTRY>() == 0x10);
+    assert!(size_of::<IO_STATUS_BLOCK>() == 0x10);
+    assert!(size_of::<DISPATCHER_HEADER>() == 0x18);
+    assert!(size_of::<KEVENT>() == 0x18);
+    assert!(size_of::<KDEVICE_QUEUE>() == 0x28);
+    assert!(size_of::<KDPC>() == 0x40);
+    assert!(size_of::<WAIT_CONTEXT_BLOCK>() == 0x48);
+    assert!(size_of::<DRIVER_EXTENSION>() == 0x28);
+    assert!(size_of::<DRIVER_OBJECT>() == 0x150);
+    assert!(size_of::<DEVICE_OBJECT>() == 0x150);
+    assert!(align_of::<DEVICE_OBJECT>() == 16);
+    assert!(size_of::<FILE_OBJECT>() == 0xD8);
+    assert!(size_of::<IRP>() == 0xD0);
+    assert!(size_of::<IO_STACK_LOCATION>() == 0x48);
+    assert!(size_of::<MDL>() == 0x30);
+    assert!(offset_of!(DRIVER_OBJECT, DeviceObject) == 0x08);
+    assert!(offset_of!(DRIVER_OBJECT, DriverStart) == 0x18);
+    assert!(offset_of!(DRIVER_OBJECT, DriverExtension) == 0x30);
+    assert!(offset_of!(DRIVER_OBJECT, DriverName) == 0x38);
+    assert!(offset_of!(DRIVER_OBJECT, FastIoDispatch) == 0x50);
+    assert!(offset_of!(DRIVER_OBJECT, DriverInit) == 0x58);
+    assert!(offset_of!(DRIVER_OBJECT, DriverUnload) == 0x68);
+    assert!(offset_of!(DRIVER_OBJECT, MajorFunction) == 0x70);
+    assert!(offset_of!(DEVICE_OBJECT, ReferenceCount) == 0x04);
+    assert!(offset_of!(DEVICE_OBJECT, DriverObject) == 0x08);
+    assert!(offset_of!(DEVICE_OBJECT, NextDevice) == 0x10);
+    assert!(offset_of!(DEVICE_OBJECT, AttachedDevice) == 0x18);
+    assert!(offset_of!(DEVICE_OBJECT, Flags) == 0x30);
+    assert!(offset_of!(DEVICE_OBJECT, Characteristics) == 0x34);
+    assert!(offset_of!(DEVICE_OBJECT, DeviceExtension) == 0x40);
+    assert!(offset_of!(DEVICE_OBJECT, DeviceType) == 0x48);
+    assert!(offset_of!(DEVICE_OBJECT, StackSize) == 0x4C);
+    assert!(offset_of!(DEVICE_OBJECT, Queue) == 0x50);
+    assert!(offset_of!(DEVICE_OBJECT, AlignmentRequirement) == 0x98);
+    assert!(offset_of!(DEVICE_OBJECT, DeviceQueue) == 0xA0);
+    assert!(offset_of!(DEVICE_OBJECT, Dpc) == 0xC8);
+    assert!(offset_of!(DEVICE_OBJECT, ActiveThreadCount) == 0x108);
+    assert!(offset_of!(DEVICE_OBJECT, SecurityDescriptor) == 0x110);
+    assert!(offset_of!(DEVICE_OBJECT, DeviceLock) == 0x118);
+    assert!(offset_of!(DEVICE_OBJECT, SectorSize) == 0x130);
+    assert!(offset_of!(DEVICE_OBJECT, DeviceObjectExtension) == 0x138);
+    assert!(offset_of!(DEVICE_OBJECT, Reserved) == 0x140);
+    assert!(offset_of!(FILE_OBJECT, DeviceObject) == 0x08);
+    assert!(offset_of!(FILE_OBJECT, FsContext) == 0x18);
+    assert!(offset_of!(FILE_OBJECT, PrivateCacheMap) == 0x30);
+    assert!(offset_of!(FILE_OBJECT, FinalStatus) == 0x38);
+    assert!(offset_of!(FILE_OBJECT, RelatedFileObject) == 0x40);
+    assert!(offset_of!(FILE_OBJECT, Flags) == 0x50);
+    assert!(offset_of!(FILE_OBJECT, FileName) == 0x58);
+    assert!(offset_of!(FILE_OBJECT, CurrentByteOffset) == 0x68);
+    assert!(offset_of!(FILE_OBJECT, Lock) == 0x80);
+    assert!(offset_of!(FILE_OBJECT, Event) == 0x98);
+    assert!(offset_of!(FILE_OBJECT, CompletionContext) == 0xB0);
+    assert!(offset_of!(FILE_OBJECT, IrpList) == 0xC0);
+    assert!(offset_of!(FILE_OBJECT, FileObjectExtension) == 0xD0);
+    assert!(offset_of!(IRP, MdlAddress) == 0x08);
+    assert!(offset_of!(IRP, Flags) == 0x10);
+    assert!(offset_of!(IRP, SystemBuffer) == 0x18);
+    assert!(offset_of!(IRP, IoStatus) == 0x30);
+    assert!(offset_of!(IRP, RequestorMode) == 0x40);
+    assert!(offset_of!(IRP, PendingReturned) == 0x41);
+    assert!(offset_of!(IRP, StackCount) == 0x42);
+    assert!(offset_of!(IRP, CurrentLocation) == 0x43);
+    assert!(offset_of!(IRP, Cancel) == 0x44);
+    assert!(offset_of!(IRP, UserIosb) == 0x48);
+    assert!(offset_of!(IRP, UserEvent) == 0x50);
+    assert!(offset_of!(IRP, CancelRoutine) == 0x68);
+    assert!(offset_of!(IRP, UserBuffer) == 0x70);
+    assert!(offset_of!(IRP, DriverContext) == 0x78);
+    assert!(offset_of!(IRP, Thread) == 0x98);
+    assert!(offset_of!(IRP, ListEntry) == 0xA8);
+    assert!(offset_of!(IRP, CurrentStackLocation) == 0xB8);
+    assert!(offset_of!(IRP, OriginalFileObject) == 0xC0);
+    assert!(offset_of!(IO_STACK_LOCATION, Control) == 0x03);
+    assert!(offset_of!(IO_STACK_LOCATION, Parameters) == 0x08);
+    assert!(offset_of!(IO_STACK_LOCATION, DeviceObject) == 0x28);
+    assert!(offset_of!(IO_STACK_LOCATION, FileObject) == 0x30);
+    assert!(offset_of!(IO_STACK_LOCATION, CompletionRoutine) == 0x38);
+    assert!(offset_of!(IO_STACK_LOCATION, Context) == 0x40);
+    assert!(offset_of!(MDL, MdlFlags) == 0x0A);
+    assert!(offset_of!(MDL, MappedSystemVa) == 0x18);
+    assert!(offset_of!(MDL, StartVa) == 0x20);
+    assert!(offset_of!(MDL, ByteCount) == 0x28);
+    assert!(offset_of!(MDL, ByteOffset) == 0x2C);
+    assert!(offset_of!(IO_STATUS_BLOCK, Information) == 0x08);
+    assert!(offset_of!(DISPATCHER_HEADER, SignalState) == 0x04);
+    assert!(offset_of!(DISPATCHER_HEADER, WaitListHead) == 0x08);
+};
+
 #[cfg(test)]
 mod layout {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    /// Sizes from the Windows 10 x64 public symbols; arm64 is identical.
-    #[test]
-    fn sizes() {
-        assert_eq!(size_of::<UNICODE_STRING>(), 0x10);
-        assert_eq!(size_of::<LIST_ENTRY>(), 0x10);
-        assert_eq!(size_of::<IO_STATUS_BLOCK>(), 0x10);
-        assert_eq!(size_of::<DISPATCHER_HEADER>(), 0x18);
-        assert_eq!(size_of::<KEVENT>(), 0x18);
-        assert_eq!(size_of::<KDEVICE_QUEUE>(), 0x28);
-        assert_eq!(size_of::<KDPC>(), 0x40);
-        assert_eq!(size_of::<WAIT_CONTEXT_BLOCK>(), 0x48);
-        assert_eq!(size_of::<DRIVER_EXTENSION>(), 0x28);
-        assert_eq!(size_of::<DRIVER_OBJECT>(), 0x150);
-        assert_eq!(size_of::<DEVICE_OBJECT>(), 0x150);
-        assert_eq!(align_of::<DEVICE_OBJECT>(), 16);
-        assert_eq!(size_of::<FILE_OBJECT>(), 0xD8);
-        assert_eq!(size_of::<IRP>(), 0xD0);
-        assert_eq!(size_of::<IO_STACK_LOCATION>(), 0x48);
-        assert_eq!(size_of::<MDL>(), 0x30);
-    }
-
-    #[test]
-    fn driver_object() {
-        assert_eq!(offset_of!(DRIVER_OBJECT, DeviceObject), 0x08);
-        assert_eq!(offset_of!(DRIVER_OBJECT, DriverStart), 0x18);
-        assert_eq!(offset_of!(DRIVER_OBJECT, DriverExtension), 0x30);
-        assert_eq!(offset_of!(DRIVER_OBJECT, DriverName), 0x38);
-        assert_eq!(offset_of!(DRIVER_OBJECT, FastIoDispatch), 0x50);
-        assert_eq!(offset_of!(DRIVER_OBJECT, DriverInit), 0x58);
-        assert_eq!(offset_of!(DRIVER_OBJECT, DriverUnload), 0x68);
-        assert_eq!(offset_of!(DRIVER_OBJECT, MajorFunction), 0x70);
-    }
-
-    #[test]
-    fn device_object() {
-        assert_eq!(offset_of!(DEVICE_OBJECT, ReferenceCount), 0x04);
-        assert_eq!(offset_of!(DEVICE_OBJECT, DriverObject), 0x08);
-        assert_eq!(offset_of!(DEVICE_OBJECT, NextDevice), 0x10);
-        assert_eq!(offset_of!(DEVICE_OBJECT, AttachedDevice), 0x18);
-        assert_eq!(offset_of!(DEVICE_OBJECT, Flags), 0x30);
-        assert_eq!(offset_of!(DEVICE_OBJECT, Characteristics), 0x34);
-        assert_eq!(offset_of!(DEVICE_OBJECT, DeviceExtension), 0x40);
-        assert_eq!(offset_of!(DEVICE_OBJECT, DeviceType), 0x48);
-        assert_eq!(offset_of!(DEVICE_OBJECT, StackSize), 0x4C);
-        assert_eq!(offset_of!(DEVICE_OBJECT, Queue), 0x50);
-        assert_eq!(offset_of!(DEVICE_OBJECT, AlignmentRequirement), 0x98);
-        assert_eq!(offset_of!(DEVICE_OBJECT, DeviceQueue), 0xA0);
-        assert_eq!(offset_of!(DEVICE_OBJECT, Dpc), 0xC8);
-        assert_eq!(offset_of!(DEVICE_OBJECT, ActiveThreadCount), 0x108);
-        assert_eq!(offset_of!(DEVICE_OBJECT, SecurityDescriptor), 0x110);
-        assert_eq!(offset_of!(DEVICE_OBJECT, DeviceLock), 0x118);
-        assert_eq!(offset_of!(DEVICE_OBJECT, SectorSize), 0x130);
-        assert_eq!(offset_of!(DEVICE_OBJECT, DeviceObjectExtension), 0x138);
-        assert_eq!(offset_of!(DEVICE_OBJECT, Reserved), 0x140);
-    }
-
-    #[test]
-    fn file_object() {
-        assert_eq!(offset_of!(FILE_OBJECT, DeviceObject), 0x08);
-        assert_eq!(offset_of!(FILE_OBJECT, FsContext), 0x18);
-        assert_eq!(offset_of!(FILE_OBJECT, PrivateCacheMap), 0x30);
-        assert_eq!(offset_of!(FILE_OBJECT, FinalStatus), 0x38);
-        assert_eq!(offset_of!(FILE_OBJECT, RelatedFileObject), 0x40);
-        assert_eq!(offset_of!(FILE_OBJECT, Flags), 0x50);
-        assert_eq!(offset_of!(FILE_OBJECT, FileName), 0x58);
-        assert_eq!(offset_of!(FILE_OBJECT, CurrentByteOffset), 0x68);
-        assert_eq!(offset_of!(FILE_OBJECT, Lock), 0x80);
-        assert_eq!(offset_of!(FILE_OBJECT, Event), 0x98);
-        assert_eq!(offset_of!(FILE_OBJECT, CompletionContext), 0xB0);
-        assert_eq!(offset_of!(FILE_OBJECT, IrpList), 0xC0);
-        assert_eq!(offset_of!(FILE_OBJECT, FileObjectExtension), 0xD0);
-    }
-
-    #[test]
-    fn irp() {
-        assert_eq!(offset_of!(IRP, MdlAddress), 0x08);
-        assert_eq!(offset_of!(IRP, Flags), 0x10);
-        assert_eq!(offset_of!(IRP, SystemBuffer), 0x18);
-        assert_eq!(offset_of!(IRP, IoStatus), 0x30);
-        assert_eq!(offset_of!(IRP, RequestorMode), 0x40);
-        assert_eq!(offset_of!(IRP, PendingReturned), 0x41);
-        assert_eq!(offset_of!(IRP, StackCount), 0x42);
-        assert_eq!(offset_of!(IRP, CurrentLocation), 0x43);
-        assert_eq!(offset_of!(IRP, Cancel), 0x44);
-        assert_eq!(offset_of!(IRP, UserIosb), 0x48);
-        assert_eq!(offset_of!(IRP, UserEvent), 0x50);
-        assert_eq!(offset_of!(IRP, CancelRoutine), 0x68);
-        assert_eq!(offset_of!(IRP, UserBuffer), 0x70);
-        assert_eq!(offset_of!(IRP, DriverContext), 0x78);
-        assert_eq!(offset_of!(IRP, Thread), 0x98);
-        assert_eq!(offset_of!(IRP, ListEntry), 0xA8);
-        assert_eq!(offset_of!(IRP, CurrentStackLocation), 0xB8);
-        assert_eq!(offset_of!(IRP, OriginalFileObject), 0xC0);
-    }
-
-    #[test]
-    fn stack_location_and_mdl() {
-        assert_eq!(offset_of!(IO_STACK_LOCATION, Control), 0x03);
-        assert_eq!(offset_of!(IO_STACK_LOCATION, Parameters), 0x08);
-        assert_eq!(offset_of!(IO_STACK_LOCATION, DeviceObject), 0x28);
-        assert_eq!(offset_of!(IO_STACK_LOCATION, FileObject), 0x30);
-        assert_eq!(offset_of!(IO_STACK_LOCATION, CompletionRoutine), 0x38);
-        assert_eq!(offset_of!(IO_STACK_LOCATION, Context), 0x40);
-        assert_eq!(offset_of!(MDL, MdlFlags), 0x0A);
-        assert_eq!(offset_of!(MDL, MappedSystemVa), 0x18);
-        assert_eq!(offset_of!(MDL, StartVa), 0x20);
-        assert_eq!(offset_of!(MDL, ByteCount), 0x28);
-        assert_eq!(offset_of!(MDL, ByteOffset), 0x2C);
-        assert_eq!(offset_of!(IO_STATUS_BLOCK, Information), 0x08);
-        assert_eq!(offset_of!(DISPATCHER_HEADER, SignalState), 0x04);
-        assert_eq!(offset_of!(DISPATCHER_HEADER, WaitListHead), 0x08);
-    }
-
     /// `Parameters` offsets as drivers compile them (cross-checked against
     /// the disassembly of Microsoft's null.sys, which reads Write.Length at
     /// +0x08 and QueryFile.FileInformationClass at +0x10 of the location).
