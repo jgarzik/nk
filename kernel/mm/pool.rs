@@ -160,6 +160,12 @@ pub fn usage() -> Usage {
     total
 }
 
+/// Frames held as arenas. An arena is kept once made, so a leak check
+/// must not count its frames as lost.
+pub fn arena_frames() -> u64 {
+    (POOL.lock().arenas.iter().flatten().count() * ARENA_PAGES) as u64
+}
+
 /// Walk every arena checking headers and guard bytes.
 pub fn check() -> Result<(), HeapError> {
     POOL.lock()

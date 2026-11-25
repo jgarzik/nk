@@ -6,6 +6,7 @@ Layout, mirroring where Windows keeps its boot files:
     \\EFI\\BOOT\\BOOT{X64,AA64}.EFI   nkload (the path firmware boots by default)
     \\NK\\nkkrnl.exe                  the kernel
     \\NK\\drivers\\<name>.sys         boot drivers, from the fixture cache
+    \\NK\\cmdline.txt                 the kernel command line, if any
 
 The image is a bare FAT filesystem made with mtools: no root, no loop device.
 
@@ -34,8 +35,9 @@ def binaries(arch):
 
 
 def boot_drivers(arch):
-    """[(name on the ESP, path)] for the fixtures the kernel uses on this arch.
-    A fixture that is not downloaded is left out; the kernel reports it.
+    """([(name on the ESP, path)], [missing file names]) for the fixtures
+    the kernel uses on this arch. A fixture that is not downloaded is left
+    out and named in the second list; the kernel skips its tests.
 
     Besides the drivers it loads, the kernel is given two real binaries it
     must refuse:
@@ -43,10 +45,13 @@ def boot_drivers(arch):
       unresolved.sys  the KMDF sample, whose framework imports NK lacks
     """
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
-    drivers = []
+    drivers, missing = [], []
     for fx in manifest:
+        if fx.get("kind") == "abi-table":
+            continue
         path = FIXTURES / fx["file"]
         if not path.exists():
+            missing.append(fx["file"])
             continue
         if fx["arch"] == arch and fx.get("boot", True):
             drivers.append((fx["name"] + ".sys", path))
@@ -54,11 +59,13 @@ def boot_drivers(arch):
             drivers.append(("wrongarch.sys", path))
         elif fx["arch"] == arch and fx["name"] == "kmdf-echo":
             drivers.append(("unresolved.sys", path))
-    return drivers
+    return drivers, missing
 
 
-def build(arch, image, drivers=True):
-    """Write the ESP image for `arch` to `image`."""
+def build(arch, image, drivers=True, cmdline=""):
+    """Write the ESP image for `arch` to `image`. Returns the names of the
+    driver fixtures that should be on it but are not downloaded (or a
+    marker when drivers were left out on purpose)."""
     loader, kernel = binaries(arch)
     for f in (loader, kernel):
         if not f.exists():
@@ -76,8 +83,17 @@ def build(arch, image, drivers=True):
         mtools("mmd", "-i", image, f"::/{d}")
     mtools("mcopy", "-i", image, loader, f"::/EFI/BOOT/{BOOT_NAME[arch]}")
     mtools("mcopy", "-i", image, kernel, "::/NK/nkkrnl.exe")
-    for name, path in boot_drivers(arch) if drivers else []:
+    found, missing = boot_drivers(arch) if drivers else ([], ["(no drivers)"])
+    for name, path in found:
         mtools("mcopy", "-i", image, path, f"::/NK/drivers/{name}")
+    if cmdline:
+        text = image.with_suffix(".cmdline")
+        text.write_text(cmdline + "\n")
+        try:
+            mtools("mcopy", "-i", image, text, "::/NK/cmdline.txt")
+        finally:
+            text.unlink()
+    return missing
 
 
 if __name__ == "__main__":

@@ -1,155 +1,385 @@
 #!/usr/bin/env python3
 """Boot NK under QEMU and judge the result from the serial log.
 
-Usage: boot_test.py <x86_64|aarch64> [--run] [--image <esp.img>]
+Usage:
+  boot_test.py <scenario>            run one scenario from tools/scenarios.toml
+  boot_test.py --tier <tier>         run every scenario of a tier, in parallel
+  boot_test.py <scenario> --run      serial console on this terminal, no verdict
+  boot_test.py <scenario> --image <esp.img>
+                                     boot an existing image (e.g. from `make
+                                     dist`) instead of building one
+  boot_test.py <scenario> --bless    rewrite the scenario's golden list from
+                                     this run
 
-Default (test) mode boots headless with a timeout and passes only if all of
-these hold:
-  - the kernel printed `NK-TEST-COMPLETE ... fail=0`
-  - no line reports a failure, a panic or a bugcheck
-  - QEMU exited by itself (the kernel powered the machine off)
+What passing means is the scenario's `expect` (see tools/judge.py). A hung
+boot is killed at the timeout, after every CPU's registers are saved.
 
-`--run` boots with the serial console on this terminal instead (Ctrl-A X
-quits) and judges nothing.
+Each scenario works in target/qemu/<scenario>/. QEMU runs in its own
+session, is killed on every exit path (success, failure, timeout, Ctrl-C,
+SIGTERM), and dies with this process even if this process is killed
+outright. A passing run deletes its directory; a failing run keeps the
+logs and says where. The logs of the scenarios marked `canonical` are also
+kept as target/qemu/serial-<arch>.log and exports-<arch>.txt.
 
-`--image` boots an existing EFI system partition image (for example one
-from `make dist`) instead of building one. The image is opened as a
-snapshot and never written.
-
-Everything the run creates lives in target/qemu/. The ESP image and the
-firmware variable copy are removed afterwards; the serial log and the
-kernel's export list are kept. QEMU runs in its own process group and is
-killed on any exit path, including Ctrl-C.
+Environment: BOOT_TEST_TIMEOUT (seconds, default 120), QEMU_SMP, QEMU_MEM,
+NO_KVM=1 (emulate x86-64 too), JOBS (parallel boots in a tier), KEEP=1
+(keep every scenario directory), QEMU_LOG_DIR (default target/qemu).
 """
 
+import concurrent.futures
+import ctypes
+import json
 import os
-import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import threading
+import time
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import judge  # noqa: E402
 import mkesp  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = Path(os.environ.get("QEMU_LOG_DIR", ROOT / "target" / "qemu"))
+TOOLS = ROOT / "tools"
+OUT = Path(os.environ.get("QEMU_LOG_DIR", ROOT / "target" / "qemu")).resolve()
 TIMEOUT = int(os.environ.get("BOOT_TEST_TIMEOUT", "120"))
 SMP = os.environ.get("QEMU_SMP", "4")
 MEM = os.environ.get("QEMU_MEM", "512M")
-BAD = re.compile(r"NK-TEST \S+:FAIL|KERNEL PANIC|BUGCHECK")
+KEEP = bool(os.environ.get("KEEP"))
 
 FIRMWARE = {
     "x86_64": ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
     "aarch64": ("/usr/share/AAVMF/AAVMF_CODE.fd", "/usr/share/AAVMF/AAVMF_VARS.fd"),
 }
 
+_LIBC = ctypes.CDLL(None, use_errno=True)
+PR_SET_PDEATHSIG = 1
 
-def qemu_command(arch, esp, variables, serial):
+
+def die_with_parent():
+    """Run in a child before exec: be killed when the parent dies, however
+    it dies. Without this a SIGKILLed harness would leave QEMU running."""
+    _LIBC.prctl(PR_SET_PDEATHSIG, signal.SIGKILL)
+
+
+def load_scenarios():
+    return tomllib.loads((TOOLS / "scenarios.toml").read_text())
+
+
+def golden_path(name):
+    return TOOLS / "golden" / f"{name}.txt"
+
+
+def load_golden(name):
+    """{test name: "ok"|"skip"} from tools/golden/<name>.txt."""
+    golden = {}
+    for line in golden_path(name).read_text().splitlines():
+        if line and not line.startswith("#"):
+            test, verdict = line.split()
+            golden[test] = verdict
+    return golden
+
+
+def kvm_usable():
+    return os.access("/dev/kvm", os.R_OK | os.W_OK) and not os.environ.get("NO_KVM")
+
+
+def qemu_command(arch, interactive):
+    """The command line. Paths are relative to the scenario directory, where
+    QEMU is started, so the QMP socket path stays short."""
     code, _ = FIRMWARE[arch]
     if arch == "x86_64":
-        kvm = os.access("/dev/kvm", os.R_OK | os.W_OK) and not os.environ.get("NO_KVM")
         cmd = ["qemu-system-x86_64", "-machine", "q35"]
-        cmd += ["-enable-kvm", "-cpu", "host"] if kvm else ["-cpu", "max"]
+        cmd += ["-enable-kvm", "-cpu", "host"] if kvm_usable() else ["-cpu", "max"]
     else:
         # TCG on an x86 host. gic-version=3 and ACPI are what Windows on
         # arm64 expects of the `virt` machine.
         cmd = ["qemu-system-aarch64", "-machine", "virt,gic-version=3", "-cpu", "neoverse-n1"]
-    return cmd + [
+    cmd += [
         "-m", MEM, "-smp", SMP,
         "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
-        "-drive", f"if=pflash,format=raw,file={variables}",
-        "-drive", f"if=none,id=esp,format=raw,snapshot=on,file={esp}",
+        "-drive", "if=pflash,format=raw,file=vars.fd",
+        "-drive", "if=none,id=esp,format=raw,snapshot=on,file=esp.img",
         "-device", "virtio-blk-pci,drive=esp,bootindex=0",
-        "-nic", "none", "-display", "none", "-monitor", "none", "-no-reboot",
-        "-serial", serial,
+        "-nic", "none", "-display", "none", "-no-reboot",
+    ]
+    if interactive:
+        return cmd + ["-serial", "mon:stdio"]
+    return cmd + [
+        "-monitor", "none", "-serial", "stdio", "-pidfile", "qemu.pid",
+        "-qmp", "unix:qmp.sock,server=on,wait=off",
     ]
 
 
-def judge(arch, log_path, timed_out):
-    text = log_path.read_text(errors="replace") if log_path.exists() else ""
-    lines = [l.strip() for l in text.splitlines()]
-    exports = [l for l in lines if l.startswith("NK-EXPORT ")]
-    if exports:
-        (OUT / f"exports-{arch}.txt").write_text("\n".join(exports) + "\n")
-    tests = [l for l in lines if l.startswith("NK-TEST ")]
-    done = [l for l in lines if l.startswith("NK-TEST-COMPLETE")]
-    problems = [l for l in lines if BAD.search(l)]
-    if timed_out:
-        problems.append(f"timeout after {TIMEOUT}s: the kernel did not power off")
-    if not done:
-        problems.append("no NK-TEST-COMPLETE line")
-    elif "fail=0" not in done[-1]:
-        problems.append(done[-1])
+def qmp(directory, commands):
+    """Send QMP commands to the scenario's QEMU; return their results.
+    Best effort: a QEMU too far gone to answer yields an error string."""
+    results = []
+    try:
+        with socket.socket(socket.AF_UNIX) as s:
+            s.settimeout(5)
+            # A relative path keeps within the socket-name length limit.
+            cwd = os.getcwd()
+            os.chdir(directory)
+            try:
+                s.connect("qmp.sock")
+            finally:
+                os.chdir(cwd)
+            f = s.makefile("rw")
 
-    for l in tests:
-        if ":OK" not in l:
-            print(f"  {l}")
-    print(f"  {done[-1] if done else '(no totals)'}")
-    if problems:
-        print(f"boot test {arch}: FAILED")
-        for p in problems:
-            print(f"  {p}")
-        print(f"  last serial lines ({log_path}):")
-        for l in [l for l in lines if l][-8:]:
-            print(f"    {l}")
+            def reply():
+                while True:
+                    msg = json.loads(f.readline())
+                    if "return" in msg or "error" in msg:
+                        return msg
+
+            json.loads(f.readline())  # greeting
+            for command in [{"execute": "qmp_capabilities"}] + commands:
+                f.write(json.dumps(command) + "\n")
+                f.flush()
+                results.append(reply())
+    except (OSError, ValueError) as e:
+        results.append({"error": str(e)})
+    return results[1:]
+
+
+def hang_evidence(arch, directory):
+    """A hung kernel says nothing more on its own: record where every CPU
+    is, then (x86) send an NMI so the kernel dumps its own view."""
+    dump = qmp(directory, [{
+        "execute": "human-monitor-command",
+        "arguments": {"command-line": "info registers -a"},
+    }])
+    text = "\n".join(str(r.get("return", r)) for r in dump)
+    (directory / "hang-registers.txt").write_text(text + "\n")
+    if arch == "x86_64":
+        qmp(directory, [{"execute": "inject-nmi"}])
+        time.sleep(1)
+
+
+def kill_stale(directory):
+    """Kill a QEMU left behind by an earlier run of this scenario."""
+    try:
+        pid = int((directory / "qemu.pid").read_text())
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+        cwd = os.readlink(f"/proc/{pid}/cwd")
+    except (OSError, ValueError):
+        return
+    if b"qemu-system" in cmdline and Path(cwd) == directory:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def boot(arch, directory, interactive):
+    """Run QEMU in `directory` (which holds esp.img and vars.fd). Returns
+    the timeout in seconds if it had to be killed, else 0. The serial
+    output goes to serial.log there."""
+    proc, timed_out = None, 0
+    try:
+        if interactive:
+            proc = subprocess.Popen(qemu_command(arch, True), cwd=directory)
+            proc.wait()
+            return 0
+        with open(directory / "serial.log", "wb") as log, \
+                open(directory / "qemu.err", "wb") as err:
+            proc = subprocess.Popen(
+                qemu_command(arch, False), cwd=directory,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+                start_new_session=True, preexec_fn=die_with_parent,
+            )
+
+            def pump():
+                # Unbuffered copy: a hung boot still leaves what it printed.
+                for chunk in iter(lambda: proc.stdout.read1(4096), b""):
+                    log.write(chunk)
+                    log.flush()
+
+            reader = threading.Thread(target=pump, daemon=True)
+            reader.start()
+            try:
+                proc.wait(timeout=TIMEOUT)
+            except subprocess.TimeoutExpired:
+                timed_out = TIMEOUT
+                hang_evidence(arch, directory)
+            finally:
+                kill(proc)
+                reader.join()
+        return timed_out
+    finally:
+        if proc:
+            kill(proc)
+
+
+def kill(proc):
+    if proc.poll() is None:
+        try:
+            # QEMU leads its own session: take the whole group.
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+    proc.wait()
+
+
+def run_scenario(name, sc, image=None, interactive=False, bless=False):
+    arch = sc["arch"]
+    for f in FIRMWARE[arch]:
+        if not Path(f).exists():
+            sys.exit(f"boot_test: firmware {f} not found (see DEVELOPMENT.md)")
+    if image and not image.exists():
+        sys.exit(f"boot_test: {image} not found")
+
+    directory = OUT / name
+    kill_stale(directory)
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir(parents=True)
+    esp = directory / "esp.img"
+    passed = False
+    try:
+        if image:
+            # Booted as a snapshot, never written; a link keeps it in place.
+            esp.symlink_to(image.resolve())
+            missing = ["(prebuilt image)"]
+        else:
+            missing = mkesp.build(arch, esp, cmdline=sc.get("cmdline", ""))
+        shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
+        timed_out = boot(arch, directory, interactive)
+        if interactive:
+            passed = True
+            return 0
+
+        text = (directory / "serial.log").read_text(errors="replace")
+        log = judge.Log(text)
+        golden = load_golden(sc["golden"]) if "golden" in sc and not bless else None
+        problems = judge.judge(
+            text, sc.get("expect", "ok"), golden=golden, degraded=bool(missing),
+            match=sc.get("match"), must_fail=sc.get("must_fail", ()),
+            timed_out=timed_out,
+        )
+        if sc.get("canonical") and not image:
+            shutil.copyfile(directory / "serial.log", OUT / f"serial-{arch}.log")
+            if log.exports():
+                (OUT / f"exports-{arch}.txt").write_text("\n".join(log.exports()) + "\n")
+
+        for test, verdict, detail in log.tests:
+            if verdict != "OK":
+                print(f"  NK-TEST {test}:{verdict} {detail}".rstrip())
+        if missing:
+            print(f"  fixtures absent, their tests may skip: {', '.join(missing)}")
+        if problems:
+            print(f"boot test {name}: FAILED")
+            for p in problems:
+                print(f"  {p}")
+            print(f"  last serial lines ({directory / 'serial.log'}):")
+            for line in log.tail():
+                print(f"    {line}")
+            return 1
+        if bless and "golden" in sc:
+            lines = [f"{t} {v.lower()}" for t, v, _ in log.tests]
+            golden_path(sc["golden"]).write_text("\n".join(lines) + "\n")
+            print(f"  wrote {golden_path(sc['golden']).relative_to(ROOT)}")
+        expect = sc.get("expect", "ok")
+        counts = log.completes[0] if log.completes else (0, 0, 0)
+        detail = f"pass={counts[0]} skip={counts[2]}" if expect == "ok" else f"expected {expect}"
+        print(f"boot test {name}: PASSED ({detail})")
+        passed = True
+        return 0
+    finally:
+        # The image and the firmware variables are rebuilt each run and
+        # never help a diagnosis; the logs stay unless the run passed.
+        for scratch in ("esp.img", "vars.fd", "qmp.sock", "qemu.pid"):
+            (directory / scratch).unlink(missing_ok=True)
+        if passed and not KEEP:
+            shutil.rmtree(directory, ignore_errors=True)
+
+
+def run_tier(tier, scenarios):
+    """Run every scenario of `tier`, several at a time, each in its own
+    process so that one cannot disturb another."""
+    names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
+    if not names:
+        sys.exit(f"boot_test: no scenario in tier {tier!r}")
+    # Each boot runs up to SMP guest CPUs flat out.
+    jobs = int(os.environ.get("JOBS", max(1, (os.cpu_count() or 1) // max(1, int(SMP)))))
+    children, lock = [], threading.Lock()
+
+    def one(name):
+        proc = subprocess.Popen(
+            [sys.executable, __file__, name], stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, preexec_fn=die_with_parent,
+        )
+        with lock:
+            children.append(proc)
+        out, _ = proc.communicate()
+        return name, proc.returncode, out
+
+    failed = []
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
+    try:
+        for name, status, out in pool.map(one, names):
+            if status == 0:
+                print(out.strip().splitlines()[-1])
+            else:
+                failed.append(name)
+                print(out.rstrip())
+    finally:
+        # Reached on Ctrl-C or SIGTERM too: each child then cleans up its
+        # own QEMU and files.
+        with lock:
+            for proc in children:
+                if proc.poll() is None:
+                    proc.terminate()
+        pool.shutdown(wait=True, cancel_futures=True)
+    if failed:
+        print(f"tier {tier}: FAILED ({', '.join(failed)})")
         return 1
-    print(f"boot test {arch}: PASSED")
+    print(f"tier {tier}: {len(names)} scenarios passed")
     return 0
 
 
 def main():
     argv = sys.argv[1:]
-    given = None
-    if "--image" in argv:
-        i = argv.index("--image")
+
+    def option(flag):
+        if flag not in argv:
+            return None
+        i = argv.index(flag)
         if i + 1 >= len(argv):
             sys.exit(__doc__)
-        given = Path(argv[i + 1])
+        value = argv[i + 1]
         del argv[i:i + 2]
-    args = [a for a in argv if not a.startswith("--")]
-    if len(args) != 1 or args[0] not in FIRMWARE:
-        sys.exit(__doc__)
-    arch, interactive = args[0], "--run" in argv
-    for f in FIRMWARE[arch]:
-        if not Path(f).exists():
-            sys.exit(f"boot_test: firmware {f} not found (see DEVELOPMENT.md)")
-    if given and not given.exists():
-        sys.exit(f"boot_test: {given} not found")
+        return value
 
+    image, tier = option("--image"), option("--tier")
+    flags = {a for a in argv if a.startswith("--")}
+    args = [a for a in argv if not a.startswith("--")]
+    scenarios = load_scenarios()
+    if flags - {"--run", "--bless"}:
+        sys.exit(__doc__)
+    # Turn a polite kill into an exception, so every `finally` runs.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda n, _: sys.exit(128 + n))
     OUT.mkdir(parents=True, exist_ok=True)
-    esp = given or OUT / f"esp-{arch}.img"
-    variables = OUT / f"vars-{arch}.fd"
-    log = OUT / f"serial-{arch}.log"
-    log.unlink(missing_ok=True)
-    proc, timed_out = None, False
-    try:
-        if not given:
-            mkesp.build(arch, esp)
-        shutil.copyfile(FIRMWARE[arch][1], variables)
-        serial = "mon:stdio" if interactive else f"file:{log}"
-        proc = subprocess.Popen(
-            qemu_command(arch, esp, variables, serial),
-            stdin=None if interactive else subprocess.DEVNULL,
-            start_new_session=not interactive,
-        )
-        try:
-            proc.wait(timeout=None if interactive else TIMEOUT)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-    finally:
-        if proc and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL) if not interactive else proc.kill()
-            except ProcessLookupError:
-                pass
-            proc.wait()
-        if not given:
-            esp.unlink(missing_ok=True)
-        variables.unlink(missing_ok=True)
-    return 0 if interactive else judge(arch, log, timed_out)
+    if tier:
+        if args or flags or image:
+            sys.exit(__doc__)
+        return run_tier(tier, scenarios)
+    if len(args) != 1 or args[0] not in scenarios:
+        sys.exit(f"{__doc__}\nscenarios: {', '.join(scenarios)}")
+    return run_scenario(
+        args[0], scenarios[args[0]], image=Path(image) if image else None,
+        interactive="--run" in flags, bless="--bless" in flags,
+    )
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

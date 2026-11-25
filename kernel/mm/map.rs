@@ -10,7 +10,17 @@
 use super::{PAGE_SIZE, alloc_frames, phys_to_virt};
 use crate::arch;
 use crate::ke::SpinLock;
+use core::sync::atomic::{AtomicU64, Ordering};
 use nk_mm::pt::{self, MapError, Prot, TableMem};
+
+/// Frames taken for page tables. They are kept for good, so a leak check
+/// must not count them as lost.
+static TABLE_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// Frames this module holds as page tables.
+pub fn table_frames() -> u64 {
+    TABLE_FRAMES.load(Ordering::Relaxed)
+}
 
 /// Start of the region for dynamic kernel mappings.
 const REGION_BASE: u64 = 0xFFFF_F880_0000_0000;
@@ -36,7 +46,9 @@ struct Tables;
 
 impl TableMem for Tables {
     fn alloc_table(&mut self) -> Option<u64> {
-        alloc_frames(1)
+        let frame = alloc_frames(1)?;
+        TABLE_FRAMES.fetch_add(1, Ordering::Relaxed);
+        Some(frame)
     }
 
     fn read(&self, table: u64, index: usize) -> u64 {

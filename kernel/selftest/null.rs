@@ -6,7 +6,8 @@
 use super::{module, resources};
 use crate::io::driver;
 use crate::io::file::{self, IoResult};
-use crate::{ob, test};
+use crate::ob;
+use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::FILE_OBJECT;
 use nk_ntabi::status::*;
@@ -86,57 +87,74 @@ fn ioctl_test(file: *mut FILE_OBJECT) -> Result<(), &'static str> {
     Ok(())
 }
 
-pub fn run(info: &BootInfo) {
+pub static GROUP: Group = Group {
+    names: &[
+        "null.load",
+        "null.device",
+        "null.open",
+        "null.read",
+        "null.write",
+        "null.unhandled-request",
+        "null.close",
+        "io.open.missing-name",
+        "null.unload",
+        "null.no-leak",
+    ],
+    run,
+    manual: false,
+};
+
+fn run(r: &mut Report, info: &BootInfo) {
     let Some(image) = module(info, "null.sys") else {
-        return test::skip("null", format_args!("module null.sys not provided"));
+        return r.skip_rest(format_args!("module null.sys not provided"));
     };
     let before = resources();
     let object = match driver::load("Null", image) {
         Ok(object) => object,
-        Err(e) => return test::fail("null.load", format_args!("{e:?}")),
+        Err(e) => return r.fail("null.load", format_args!("{e:?}")),
     };
-    test::ok("null.load");
-    test::run("null.device", device_checks);
+    r.ok("null.load");
+    r.check("null.device", device_checks);
 
     match file::open(DEVICE) {
         Ok(file) => {
-            test::ok("null.open");
-            test::run("null.read", || read_test(file));
-            test::run("null.write", || write_test(file));
-            test::run("null.unhandled-request", || ioctl_test(file));
+            r.ok("null.open");
+            r.check("null.read", || read_test(file));
+            r.check("null.write", || write_test(file));
+            r.check("null.unhandled-request", || ioctl_test(file));
             // SAFETY: `file` came from `open` and is closed exactly once.
             match unsafe { file::close(file) } {
                 Ok(IoResult {
                     status: STATUS_SUCCESS,
                     ..
-                }) => test::ok("null.close"),
-                other => test::fail("null.close", format_args!("{other:?}")),
+                }) => r.ok("null.close"),
+                other => r.fail("null.close", format_args!("{other:?}")),
             }
         }
-        Err(status) => test::fail("null.open", format_args!("status {status:#x}")),
+        Err(status) => r.fail("null.open", format_args!("status {status:#x}")),
     }
     if file::open("\\Device\\NoSuchDevice") == Err(STATUS_OBJECT_NAME_NOT_FOUND) {
-        test::ok("io.open.missing-name");
+        r.ok("io.open.missing-name");
     } else {
-        test::fail(
+        r.fail(
             "io.open.missing-name",
             format_args!("opening a name that does not exist must fail"),
         );
     }
 
     match driver::unload(object) {
-        Ok(()) if file::open(DEVICE).is_err() => test::ok("null.unload"),
-        Ok(()) => test::fail(
+        Ok(()) if file::open(DEVICE).is_err() => r.ok("null.unload"),
+        Ok(()) => r.fail(
             "null.unload",
             format_args!("device still opens after unload"),
         ),
-        Err(why) => test::fail("null.unload", format_args!("{why}")),
+        Err(why) => r.fail("null.unload", format_args!("{why}")),
     }
     let after = resources();
     if after == before {
-        test::ok("null.no-leak");
+        r.ok("null.no-leak");
     } else {
-        test::fail(
+        r.fail(
             "null.no-leak",
             format_args!("before {before:?}, after {after:?}"),
         );

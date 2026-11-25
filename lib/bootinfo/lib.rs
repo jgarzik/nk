@@ -11,7 +11,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
@@ -20,6 +20,8 @@ pub const KERNEL_BASE: u64 = 0xFFFF_F800_0000_0000;
 
 pub const MAX_MODULES: usize = 16;
 pub const MODULE_NAME_LEN: usize = 32;
+/// Room for the kernel command line, including its NUL padding.
+pub const CMDLINE_LEN: usize = 256;
 
 /// `EFI_MEMORY_TYPE` values the kernel cares about.
 pub const EFI_LOADER_CODE: u32 = 1;
@@ -115,6 +117,9 @@ pub struct BootInfo {
     pub mair_normal: u8,
     pub mair_device: u8,
     _pad: [u8; 6],
+    /// The kernel command line: `key=value` words separated by spaces,
+    /// NUL padded. Empty when the boot volume has no command-line file.
+    pub cmdline: [u8; CMDLINE_LEN],
     pub modules: [Module; MAX_MODULES],
 }
 
@@ -136,8 +141,47 @@ impl BootInfo {
             mair_normal: 0,
             mair_device: 0,
             _pad: [0; 6],
+            cmdline: [0; CMDLINE_LEN],
             modules: [Module::EMPTY; MAX_MODULES],
         }
+    }
+
+    /// Store the command line read from the boot volume. Line ends and
+    /// other control characters become spaces. `Err` if it does not fit
+    /// or is not ASCII: a truncated option would silently change a test.
+    pub fn set_cmdline(&mut self, text: &[u8]) -> Result<(), &'static str> {
+        if text.len() >= CMDLINE_LEN {
+            return Err("kernel command line is too long");
+        }
+        if !text.is_ascii() {
+            return Err("kernel command line is not ASCII");
+        }
+        self.cmdline = [0; CMDLINE_LEN];
+        for (dst, &src) in self.cmdline.iter_mut().zip(text) {
+            *dst = if src < b' ' { b' ' } else { src };
+        }
+        Ok(())
+    }
+
+    /// The command line without its padding.
+    pub fn cmdline(&self) -> &str {
+        let len = self
+            .cmdline
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(CMDLINE_LEN);
+        core::str::from_utf8(&self.cmdline[..len]).unwrap_or("")
+    }
+
+    /// The value of the command-line word `key=value`, if present. The
+    /// last occurrence wins.
+    pub fn option(&self, key: &str) -> Option<&str> {
+        self.cmdline()
+            .split(' ')
+            .filter_map(|word| word.split_once('='))
+            .filter(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+            .next_back()
     }
 
     pub fn is_valid(&self) -> bool {
@@ -238,7 +282,32 @@ mod tests {
         // Both loader and kernel are built from this source, but a silent
         // layout change should still be a deliberate VERSION bump.
         assert_eq!(size_of::<Module>(), 48);
-        assert_eq!(size_of::<BootInfo>(), 104 + 48 * MAX_MODULES);
+        assert_eq!(size_of::<BootInfo>(), 104 + CMDLINE_LEN + 48 * MAX_MODULES);
         assert!(BootInfo::new().is_valid());
+    }
+
+    #[test]
+    fn cmdline_options() {
+        let mut info = BootInfo::new();
+        assert_eq!(info.cmdline(), "");
+        assert_eq!(info.option("test"), None);
+        info.set_cmdline(b"test=neg.panic  cpus=4\r\n").unwrap();
+        assert_eq!(info.option("test"), Some("neg.panic"));
+        assert_eq!(info.option("cpus"), Some("4"));
+        assert_eq!(info.option("cpu"), None, "a key is matched whole");
+        assert_eq!(info.option("neg.panic"), None, "values are not keys");
+        info.set_cmdline(b"test=a test=b").unwrap();
+        assert_eq!(info.option("test"), Some("b"), "the last word wins");
+        info.set_cmdline(b"test=").unwrap();
+        assert_eq!(info.option("test"), Some(""));
+    }
+
+    #[test]
+    fn cmdline_rejects_what_it_cannot_hold() {
+        let mut info = BootInfo::new();
+        assert!(info.set_cmdline(&[b'a'; CMDLINE_LEN]).is_err());
+        assert!(info.set_cmdline(&[b'a'; CMDLINE_LEN - 1]).is_ok());
+        assert_eq!(info.cmdline().len(), CMDLINE_LEN - 1);
+        assert!(info.set_cmdline("test=\u{e9}".as_bytes()).is_err());
     }
 }

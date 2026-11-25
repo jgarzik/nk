@@ -22,26 +22,84 @@ and passes.
 and kernel under QEMU with UEFI firmware, the way a PC boots, and judge
 the serial log. x86-64 uses KVM when available; arm64 is emulated.
 
-The kernel reports each self-test on the serial console:
+### What the kernel reports
+
+Tests are declared in groups (`kernel/test.rs`, `kernel/selftest/`). A
+group names every verdict it will report; the runner holds it to that
+list, and compares the kernel's resources (pool blocks and bytes, frames,
+object names) before and after each group.
 
 ```
+NK-TEST-PLAN <n>                 verdicts to expect, printed first
 NK-TEST <name>:OK
 NK-TEST <name>:FAIL <why>
 NK-TEST <name>:SKIP <why>
 NK-TEST-COMPLETE pass=<n> fail=<n> skip=<n>
 ```
 
-A boot passes only if the totals line shows `fail=0`, no line reports a
-failure, panic or bugcheck, and the kernel powered the machine off within
-the timeout. Skips are printed, never counted as passes.
+A declared verdict that is never reported is a FAIL, as is one reported
+twice, one that was not declared, and a group that does not give back
+what it took (`NK-TEST leak:FAIL`).
 
-`tools/boot_test.py` owns the run: it builds the EFI system partition
-image, copies the firmware variable store, starts QEMU in its own process
-group, and on every exit path kills QEMU and deletes the image and the
-copy. What remains is `target/qemu/serial-<arch>.log`.
+The kernel command line is the file `\NK\cmdline.txt` on the boot volume.
+`test=<pattern>` runs only the groups with a matching test name (`*`
+matches any run of characters).
+
+### What passing means
+
+`tools/judge.py` decides, from the serial log alone, and
+`tools/test_judge.py` tests it against canned logs of every kind of
+failure. A boot passes only if:
+
+- there is exactly one plan line and one totals line, the number of
+  verdicts equals the plan, and the totals equal the lines;
+- no test failed, and no line reports a panic or a bugcheck;
+- no line is torn or malformed;
+- the tests and their verdicts are the ones in the scenario's golden list
+  (`tools/golden/<name>.txt`): a test that disappears, appears, or turns
+  from OK into SKIP fails the boot until the list is changed on purpose
+  (`tools/boot_test.py <scenario> --bless`);
+- the kernel powered the machine off within the timeout.
+
+Skips are printed, never counted as passes. A test that is skipped in
+every scenario must be listed with its reason in
+`tools/golden/blocked.txt`. When driver fixtures are not downloaded the
+harness says so and accepts SKIP where the golden list says OK.
+
+### Scenarios
+
+`tools/scenarios.toml` lists the boots: architecture, kernel command line,
+and what is expected. `make boot-gate` runs every scenario of the `gate`
+tier in parallel:
+
+| Scenario | Proves |
+| --- | --- |
+| `x86_64`, `aarch64` | the tests pass |
+| `*-neg-panic`, `*-neg-fault` | a kernel panic or a stray memory access ends the boot in a bugcheck, and the harness sees it |
+| `*-known-bad` | a failing test fails the run |
+
+The last two kinds are the tests of the tests. An expected bugcheck counts
+only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
+way to the test is not taken for the one it meant to cause.
+
+### The harness cleans up
+
+`tools/boot_test.py` runs each scenario in `target/qemu/<scenario>/`:
+EFI system partition image, firmware variable copy, serial log. QEMU runs
+in its own session and is killed on every exit path (pass, fail, timeout,
+Ctrl-C, SIGTERM); if the harness itself is killed outright, QEMU dies with
+it. A scenario that passes deletes its directory. One that fails keeps
+its logs and prints the path; the image and the variable copy are always
+removed. The logs of the main scenario of each architecture stay as
+`target/qemu/serial-<arch>.log` and `exports-<arch>.txt`.
+
+A boot that reaches the timeout is a hang: before killing it the harness
+saves every CPU's registers to `hang-registers.txt` in the scenario
+directory, and on x86-64 sends an NMI so the kernel prints its own state.
 
 Knobs: `BOOT_TEST_TIMEOUT` (seconds, default 120), `QEMU_SMP`, `QEMU_MEM`,
-`NO_KVM=1`. `make run` / `make run-arm` boot with the console attached.
+`NO_KVM=1`, `JOBS` (boots at once), `KEEP=1` (keep every scenario
+directory). `make run` / `make run-arm` boot with the console attached.
 
 ## Driver fixtures
 
@@ -66,14 +124,18 @@ SEH. That test prints SKIP.
 Expected results come from Microsoft's documentation, the sample's
 published source and reading the driver binaries. They have not been compared with a run on Windows.
 
-Each driver test compares pool usage, free frames and namespace entries
-before loading the driver and after unloading it.
+Each driver test compares pool usage, frames and namespace entries before
+loading the driver and after unloading it, in addition to the check the
+runner makes around every group.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs `make gate` on every push and pull
-request. Both architectures are emulated there, and a fixture that cannot
-be downloaded fails the run (`NK_REQUIRE_FIXTURES=1`) instead of turning
+`.github/workflows/ci.yml` runs `make ci` on every push and pull request:
+formatting, lints, the unit tests, the main boot of each architecture and
+the ledger check. Hosted runners have no KVM, so both architectures are
+emulated there and the other gate scenarios are left to `make gate`,
+which is run locally before every commit. A fixture that cannot be
+downloaded fails the CI run (`NK_REQUIRE_FIXTURES=1`) instead of turning
 its tests into skips.
 
 ## Release images
@@ -85,5 +147,7 @@ reports the driver tests as skipped.
 
 ## The gate
 
-`make gate` runs every check a commit must pass and prints `GATE-OK`.
-Each commit passes it alone, so history is bisectable.
+`make gate` runs every check a commit must pass and prints `GATE-OK`:
+formatting, lints, the unit tests (library crates and the harness's own),
+every gate-tier boot scenario, and the ledger check. Each commit passes
+it alone, so history is bisectable.

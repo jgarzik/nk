@@ -1,15 +1,30 @@
-//! Boot self-tests that exercise real driver binaries.
+//! The boot self-tests, in the order they run.
 //!
-//! Each driver is a boot module the loader read from the EFI system
-//! partition. A module that is not there (its fixture was not downloaded,
-//! or does not exist for this architecture) makes its tests SKIP.
+//! The driver tests exercise real driver binaries. Each driver is a boot
+//! module the loader read from the EFI system partition. A module that is
+//! not there (its fixture was not downloaded, or does not exist for this
+//! architecture) makes its tests SKIP.
 
+mod base;
 mod loader;
+mod neg;
 mod null;
 mod sioctl;
 
 use crate::mm;
+use crate::test::Group;
 use nk_bootinfo::BootInfo;
+
+/// Every test group. `test=` on the command line selects among them.
+pub static GROUPS: &[&Group] = &[
+    &base::GROUP,
+    &loader::GROUP,
+    &null::GROUP,
+    &sioctl::GROUP,
+    &neg::PANIC,
+    &neg::FAULT,
+    &neg::META_FAIL,
+];
 
 /// The bytes of the boot module called `name`, if the loader supplied it.
 fn module<'a>(info: &'a BootInfo, name: &str) -> Option<&'a [u8]> {
@@ -22,13 +37,17 @@ fn module<'a>(info: &'a BootInfo, name: &str) -> Option<&'a [u8]> {
     Some(unsafe { core::slice::from_raw_parts(mm::phys_to_virt(m.phys), m.size as usize) })
 }
 
-/// Everything the kernel owns that a driver can leak. Compared before
-/// loading a driver and after unloading it.
+/// Everything the kernel owns that a test or a driver can leak. Compared
+/// around every test group, and before loading a driver and after
+/// unloading it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resources {
     pool_blocks: usize,
     pool_bytes: usize,
-    free_frames: u64,
+    /// Frames that are free or held in a store the kernel keeps for good
+    /// (pool arenas, page tables). Those stores grow on first use; that
+    /// is not a leak, and anything else that takes frames is.
+    spare_frames: u64,
     names: usize,
 }
 
@@ -37,13 +56,7 @@ pub fn resources() -> Resources {
     Resources {
         pool_blocks: pool.blocks,
         pool_bytes: pool.bytes,
-        free_frames: mm::free_frame_count(),
+        spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
         names: crate::ob::count(),
     }
-}
-
-pub fn run(info: &BootInfo) {
-    loader::run(info);
-    null::run(info);
-    sioctl::run(info);
 }

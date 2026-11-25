@@ -74,6 +74,31 @@ pub fn is_valid_object_name(name: &[u16]) -> bool {
     name.len() > 1 && name[0] == u16::from(b'\\') && !name.contains(&0)
 }
 
+/// Whether `text` matches `pattern`, where `*` in the pattern stands for
+/// any run of characters (including none) and everything else is literal.
+pub fn glob_match(pattern: &str, text: &str) -> bool {
+    let (p, t) = (pattern.as_bytes(), text.as_bytes());
+    // `star`: where the last `*` was, and how much text it has taken.
+    let (mut pi, mut ti, mut star) = (0, 0, None);
+    while ti < t.len() {
+        if pi < p.len() && p[pi] == b'*' {
+            star = Some((pi, ti));
+            pi += 1;
+        } else if pi < p.len() && p[pi] == t[ti] {
+            pi += 1;
+            ti += 1;
+        } else if let Some((sp, st)) = star {
+            // Let the last `*` take one more character and retry.
+            star = Some((sp, st + 1));
+            pi = sp + 1;
+            ti = st + 1;
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|&c| c == b'*')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +165,33 @@ mod tests {
             !is_valid_object_name(&[0x5C, 0x41, 0, 0x42]),
             "embedded NUL"
         );
+    }
+
+    #[test]
+    fn globs() {
+        for (pattern, text, expected) in [
+            ("", "", true),
+            ("", "a", false),
+            ("*", "", true),
+            ("*", "anything.at.all", true),
+            ("null.read", "null.read", true),
+            ("null.read", "null.reads", false),
+            ("null.*", "null.read", true),
+            ("null.*", "null.", true),
+            ("null.*", "nullx", false),
+            ("*.load", "sioctl.load", true),
+            ("*.load", "sioctl.loader", false),
+            ("s*t*l.*", "sioctl.open", true),
+            ("a*b*c", "abcbc", true),
+            ("a*b*c", "abcb", false),
+            ("**", "x", true),
+            ("neg.panic", "neg.panic", true),
+        ] {
+            assert_eq!(
+                glob_match(pattern, text),
+                expected,
+                "{pattern:?} vs {text:?}"
+            );
+        }
     }
 }

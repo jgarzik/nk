@@ -2,20 +2,21 @@
 
 use super::{module, resources};
 use crate::ldr::{self, LoadError};
-use crate::test;
+use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 use nk_pe::PeError;
 
 /// Load `file`, expecting a refusal that `expected` recognises, and
 /// expecting the failed load to give back everything it allocated.
 fn expect_refusal(
+    r: &mut Report,
     name: &str,
     module_name: &str,
     info: &BootInfo,
     expected: impl FnOnce(&LoadError) -> bool,
 ) {
     let Some(file) = module(info, module_name) else {
-        return test::skip(name, format_args!("module {module_name} not provided"));
+        return r.skip(name, format_args!("module {module_name} not provided"));
     };
     let before = resources();
     let result = ldr::load(file);
@@ -31,16 +32,23 @@ fn expect_refusal(
     drop(result);
     match verdict {
         Ok(()) if resources() != before => {
-            test::fail(name, format_args!("rejected, but leaked memory"))
+            r.fail(name, format_args!("rejected, but leaked memory"))
         }
-        Ok(()) => test::ok(name),
-        Err(why) => test::fail(name, format_args!("{why}")),
+        Ok(()) => r.ok(name),
+        Err(why) => r.fail(name, format_args!("{why}")),
     }
 }
 
-pub fn run(info: &BootInfo) {
+pub static GROUP: Group = Group {
+    names: &["ldr.reject.wrong-machine", "ldr.reject.unresolved-import"],
+    run,
+    manual: false,
+};
+
+fn run(r: &mut Report, info: &BootInfo) {
     // A real driver built for the other architecture.
     expect_refusal(
+        r,
         "ldr.reject.wrong-machine",
         "wrongarch.sys",
         info,
@@ -55,6 +63,7 @@ pub fn run(info: &BootInfo) {
     // A real driver that needs a module the kernel does not provide: the
     // KMDF sample imports the framework loader.
     expect_refusal(
+        r,
         "ldr.reject.unresolved-import",
         "unresolved.sys",
         info,

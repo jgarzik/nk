@@ -10,6 +10,7 @@ in `lib/bootinfo/lib.rs`.
 \EFI\BOOT\BOOTX64.EFI     nkload on x86-64 (BOOTAA64.EFI on arm64)
 \NK\nkkrnl.exe            the kernel
 \NK\drivers\*.sys         boot drivers
+\NK\cmdline.txt           optional: the kernel command line
 ```
 
 `tools/mkesp.py` builds it. Firmware starts the `\EFI\BOOT` file because
@@ -17,7 +18,9 @@ it is the default path for a volume with no boot entry.
 
 ## What nkload does
 
-1. Reads the kernel and every file in `\NK\drivers` into memory.
+1. Reads the kernel and every file in `\NK\drivers` into memory, and
+   the command line if there is one: a single line of `key=value` words
+   (`doc/TESTING.md` lists them), at most 255 ASCII characters.
 2. Maps the kernel image with `lib/pe` and relocates it to its fixed
    virtual base. The kernel links at a low default base on purpose, so the
    relocation path runs on every boot.

@@ -1,0 +1,74 @@
+# Boot scenarios: one QEMU run each, judged by tools/judge.py.
+#
+#   arch      x86_64 | aarch64
+#   tier      which runs include it: "gate" (every commit) or "soak"
+#   cmdline   kernel command line (\NK\cmdline.txt); see kernel/test.rs
+#   expect    "ok" (default), "bugcheck" or "fail"
+#   match     expect = "bugcheck": regular expression the BUGCHECK line
+#             must contain
+#   must_fail expect = "fail": exactly these tests fail
+#   golden    file in tools/golden/ listing every test and its verdict
+#   canonical true: this run's log and export list are kept as
+#             target/qemu/serial-<arch>.log and exports-<arch>.txt (the
+#             ledger is generated from the latter)
+#
+# `make check` / `check-arm` run the scenario named after the architecture.
+
+[x86_64]
+arch = "x86_64"
+tier = "gate"
+golden = "x86_64"
+canonical = true
+
+[aarch64]
+arch = "aarch64"
+tier = "gate"
+golden = "aarch64"
+canonical = true
+
+# The harness must tell a kernel bug from a pass: a Rust panic and a stray
+# memory access each have to end the boot with a bugcheck.
+
+[x86_64-neg-panic]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.panic"
+expect = "bugcheck"
+match = "KERNEL PANIC: panicked at kernel/selftest/neg\\.rs"
+
+[aarch64-neg-panic]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.panic"
+expect = "bugcheck"
+match = "KERNEL PANIC: panicked at kernel/selftest/neg\\.rs"
+
+[x86_64-neg-fault]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.fault"
+expect = "bugcheck"
+match = "BUGCHECK: page fault"
+
+[aarch64-neg-fault]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.fault"
+expect = "bugcheck"
+match = "BUGCHECK: synchronous exception"
+
+# And a failing test must fail the run.
+
+[x86_64-known-bad]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=meta.fail"
+expect = "fail"
+must_fail = ["meta.fail"]
+
+[aarch64-known-bad]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=meta.fail"
+expect = "fail"
+must_fail = ["meta.fail"]

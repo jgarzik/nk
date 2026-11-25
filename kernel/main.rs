@@ -40,29 +40,18 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     hal::init(info);
     kprintln!("NK {} ({})", env!("CARGO_PKG_VERSION"), arch::NAME);
     if !info.is_valid() {
-        test::fail(
+        test::abort(
             "boot",
             format_args!("BootInfo magic/version mismatch: loader and kernel differ"),
         );
-        test::complete();
     }
-    test::ok("boot");
-
     arch::cpu_init();
-    test::run("cpu.pcr", ke::pcr::self_test);
-    test::run("cpu.breakpoint", ke::trap_self_test);
-
     arch::mm_init(info);
     if let Err(why) = mm::init(info) {
-        test::fail("mm.init", format_args!("{why}"));
-        test::complete();
+        test::abort("mm.init", format_args!("{why}"));
     }
     kprintln!("memory: {} MiB free", mm::free_frame_count() * 4 / 1024);
-    test::run("mm.frames", mm::frames_self_test);
-    test::run("mm.map", mm::map::self_test);
-    test::run("mm.pool", mm::pool::self_test);
 
     export::print_all();
-    selftest::run(info);
-    test::complete()
+    test::run_all(selftest::GROUPS, info)
 }

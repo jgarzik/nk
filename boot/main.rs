@@ -22,6 +22,8 @@ use nk_pe::Pe;
 
 const KERNEL_PATH: &str = "\\NK\\nkkrnl.exe";
 const DRIVER_DIR: &str = "\\NK\\drivers";
+/// Optional: one line of `key=value` words for the kernel.
+const CMDLINE_PATH: &str = "\\NK\\cmdline.txt";
 const STACK_PAGES: usize = 16;
 /// Room for the final memory map; firmware maps are a few KiB.
 const MMAP_PAGES: usize = 16;
@@ -202,6 +204,11 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
     info.efi_runtime = efi::runtime() as u64;
     info.serial = serial();
     load_modules(&root_dir, &mut info)?;
+    if let Some(file) = root_dir.open(CMDLINE_PATH) {
+        let text = file.read_all().ok_or("cannot read \\NK\\cmdline.txt")?;
+        info.set_cmdline(text.trim_ascii())?;
+        println!("nkload: command line: {}", info.cmdline());
+    }
     drop(root_dir);
 
     let pt_arch = arch::pt_arch(&mut info)?;
