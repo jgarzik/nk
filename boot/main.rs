@@ -14,7 +14,8 @@ mod arch;
 mod efi;
 
 use nk_bootinfo::{
-    BootInfo, HHDM_BASE, KERNEL_BASE, MAX_MODULES, MODULE_NAME_LEN, Module, Serial, regions,
+    BootInfo, EFI_ATTR_RUNTIME, EFI_LOADER_CODE, EFI_RUNTIME_CODE, HHDM_BASE, KERNEL_BASE,
+    MAX_MODULES, MODULE_NAME_LEN, Module, Serial, regions,
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
