@@ -20,44 +20,31 @@ no WIM filter, no NTFS. Booting an untouched `boot.wim` comes after.
 
 ## Measurements
 
-58 kernel-mode binaries of the pinned build (x86-64) are listed in
-`fixtures/corpus.toml`: Microsoft's drivers and the libraries they import
-from. `tools/corpus.py` fetches them from Microsoft's symbol server and
-writes down what each imports; `ledger/x86_64.json` counts, per binary,
-how much of that NK provides. Counts below are distinct names imported
-from `ntoskrnl.exe` and `hal.dll`.
+Microsoft's kernel-mode binaries of the pinned build (x86-64), the
+drivers and the libraries they import from, are listed in
+`fixtures/corpus.toml`. `tools/corpus.py` fetches them and writes down
+what each imports; `ledger/x86_64.json` has the counts, per binary, of
+names imported from `ntoskrnl.exe` and `hal.dll` and how many NK
+provides. What the counts say:
 
-| Corpus, growing | Names needed |
-| --- | --- |
-| `null`, `sioctl` | 14 |
-| `fastfat.sys` alone | 326 |
-| + `ntfs`, `fltmgr`, `ksecdd`, `cng`, `clfs` | 919 |
-| + ACPI, PCI, storport, AHCI, NVMe, disk, partition, volume, mount manager | 1237 |
-| + KMDF (`wdf01000`, `wdfldr`) | 1254 |
-| + named pipes, mailslots, console driver, PS/2, keyboard, serial | 1302 |
-| + USB 3 host, hub, HID | 1325 |
-| + NDIS, TCP/IP, sockets | 1427 |
-| + `win32k`, `win32kbase`, `win32kfull` | 1630 |
-| the whole corpus | 1740 (of the kernel's roughly 3070 named exports) |
-
-The user-mode counts further down are from a later servicing build and
-are not yet reproducible from the tree; phase 6 pins them.
-
-What the numbers say:
-
+- **The whole corpus needs a little over half of the kernel's named
+  exports.**
 - **Running Microsoft's frameworks is cheap at the kernel boundary.** KMDF
-  adds 17 names and the USB stack 23, because the Microsoft binaries
-  carry the rest. `storahci.sys` imports nothing from the kernel at all,
-  only from `storport.sys`. Writing those layers ourselves would cost
-  years and add a second ABI to get wrong.
-- **`hal.dll` is a shell.** In this build all 91 of its exports forward to
-  `ntoskrnl.exe`. NK is one image answering to both names.
-- **File systems are the widest single step** (326 names for FAT, 919 with
-  NTFS) and the deepest: they bind to the cache and memory managers.
-- **Names are not effort.** The cache manager is 47 names and among the
-  hardest work here.
-- **User mode:** `ntdll.dll` has 473 system calls. `smss.exe` uses 76;
-  the path to `cmd.exe` about 242. The window system adds 1318 more.
+  and the USB stack each add a couple of dozen names, because the
+  Microsoft binaries carry the rest. `storahci.sys` imports nothing from
+  the kernel at all, only from `storport.sys`. Writing those layers
+  ourselves would cost years and add a second ABI to get wrong.
+- **`hal.dll` is a shell.** In this build every one of its exports
+  forwards to `ntoskrnl.exe`. NK is one image answering to both names.
+- **File systems are the widest single step** (FAT alone needs several
+  hundred names, NTFS and its libraries about three times that) and the
+  deepest: they bind to the cache and memory managers.
+- **Names are not effort.** The cache manager is a few dozen names and
+  among the hardest work here.
+- **User mode:** the path to `cmd.exe` uses about half of `ntdll.dll`'s
+  system calls, `smss.exe` alone a sixth; the window system has a table
+  of its own, nearly three times the size. Phase 6 pins these counts in the
+  tree.
 - **The Win32 base does not import the window system.** `cmd.exe`,
   `csrss.exe` and its server DLLs import no window or graphics library;
   `conhost.exe` does so only by delay-load. That is why phase 8 can prove
@@ -84,7 +71,7 @@ The parts of an NT kernel, and the phase that first builds each:
 | Mm | address spaces, sections, faults, MDLs | `mm/` | 4, 6 |
 | Cc, FsRtl | file cache and file-system helper library | page cache, `fs/` libs | 4 |
 | Ps, Se | processes, threads' user side, tokens, access checks | task, cred, LSM hooks | 6 |
-| System calls | the 473-entry table, user entry and exit, user APCs and exceptions | syscall entry, signals | 6 |
+| System calls | the system-call table, user entry and exit, user APCs and exceptions | syscall entry, signals | 6 |
 | ALPC | message ports between system processes | AF_UNIX / binder | 7 |
 | Session space, callbacks | what `win32k` needs from the kernel | (none) | 9 |
 
@@ -96,8 +83,8 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 0 | Ground truth (done) | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; the ledger carries the denominator, 1740 names |
-| 1 | Kernel core (done: release 0.0.2) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, timers, work queues, cancellable requests; a registry in memory and security descriptors, as far as Microsoft's samples ask | Microsoft's `event` and `cancel` samples and eleven conformance drivers answer as on Windows; the tests pass on 1 to 8 CPUs, repeated under load |
+| 0 | Ground truth (done) | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; the ledger carries the denominator |
+| 1 | Kernel core (done: release 0.0.2) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, timers, work queues, cancellable requests; a registry in memory and security descriptors, as far as Microsoft's samples ask | Microsoft's `event` and `cancel` samples and the conformance drivers answer as on Windows; the tests pass on 1 to 8 CPUs, repeated under load |
 | 2 | **Exceptions, objects, registry** (next) | SEH on both architectures; APCs; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
 | 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
@@ -110,8 +97,7 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 
 Phases 1 to 9 each end in a release, 0.0.2 to 0.0.10.
 
-After 0.1.0, unordered: networking (`ndis`, `tcpip`, a NIC driver: 102
-more names); booting an unmodified `boot.wim` from a RAM disk; paging to
+After 0.1.0, unordered: networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
 logon.
 

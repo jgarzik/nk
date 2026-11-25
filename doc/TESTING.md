@@ -99,28 +99,19 @@ SKIP where the golden list says OK.
 
 ### Scenarios
 
-`tools/scenarios.toml` lists the boots (its header documents the
-fields). Gate tier, each for both architectures:
+`tools/scenarios.toml` lists the boots and documents their fields. The
+gate tier has, for each architecture:
 
-| Scenario | Proves |
-| --- | --- |
-| `x86_64`, `aarch64` | the tests pass, on four processors |
-| `*-smp1` | they pass on one |
-| `*-neg-panic`, `*-neg-fault` | a panic or stray memory access ends in a bugcheck, and the harness sees it |
-| `*-neg-stack-overflow` | running off the kernel stack is reported as such |
-| `*-neg-lock-order`, `*-neg-lock-twice`, `*-neg-irql-lower` | breaking a locking or IRQL rule (`doc/LOCKING.md`) stops the system with the right bugcheck |
-| `*-neg-cpu-stuck` | a processor that stops answering IPIs stops the system |
-| `*-neg-dpc-watchdog` | a DPC that never returns stops the system |
-| `*-neg-wait-at-dispatch`, `*-neg-wait-in-dpc` | a wait that would block at `DISPATCH_LEVEL` stops the system |
-| `*-neg-mutex-held-at-exit` | a thread that ends holding a mutex stops the system |
-| `*-neg-work-bad-irql` | a work routine that returns with the IRQL raised stops the system |
-| `*-neg-information-overstated` | a driver reporting more output than the requestor has room for stops the system |
-| `*-neg-breakpoint` | a driver's breakpoint, with no debugger, stops the system as on Windows (`0x7E`) |
-| `*-debugger-breakpoint` | with `debug=on` the same breakpoint is passed over |
-| `*-oracle-event` | Microsoft's event sample, whose first act is a breakpoint, stops NK with Windows' bugcheck at the same step |
-| `*-oracle-event-debug` | with `debug=on` it runs as on Windows with a debugger attached |
-| `*-known-bad` | a failing test fails the run |
-| `*-wrong-cpus` | a processor the kernel does not find fails a test |
+- the main scenario (`x86_64`, `aarch64`): the tests pass on several
+  processors; and `*-smp1`: on one;
+- `*-neg-*`: boots that break a rule on purpose (a panic, a stack
+  overflow, a lock taken out of order, a wait at `DISPATCH_LEVEL`, a
+  driver breakpoint with no debugger, ...) and must end in the named
+  bugcheck;
+- `*-oracle-event*`, `*-debugger-breakpoint`: Microsoft's event sample,
+  whose first act is a breakpoint, stops NK with Windows' bugcheck at
+  the same step, and with `debug=on` runs as on Windows with a debugger;
+- `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
 All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
@@ -128,8 +119,8 @@ way is not taken for the one intended.
 
 ### Soak
 
-`make soak` runs the soak tier `SOAK_REPEAT` times each (default 20):
-the whole list with 1, 2, 3, 4 and 8 processors on both architectures,
+`make soak` runs the soak tier `SOAK_REPEAT` times each: the whole list
+with one to eight processors on both architectures,
 x86-64 both virtualised and emulated. It starts twice as many guest
 processors as the host has, on purpose: an overloaded host stalls guest
 processors at arbitrary instants, which is what shakes out races. Run it
@@ -154,9 +145,9 @@ reaches the timeout is a hang: the harness saves every CPU's registers
 to `hang-registers.txt` and, on x86-64, sends an NMI so the kernel
 prints its own state.
 
-Knobs: `BOOT_TEST_TIMEOUT` (seconds, default 120), `QEMU_SMP` (default
-4), `QEMU_MEM`, `NO_KVM=1`, `JOBS` (boots at once), `KEEP=1` (keep every
-scenario directory).
+Knobs: `BOOT_TEST_TIMEOUT` (seconds), `QEMU_SMP`, `QEMU_MEM`,
+`NO_KVM=1`, `JOBS` (boots at once), `KEEP=1` (keep every scenario
+directory).
 
 ## Driver fixtures
 
@@ -167,10 +158,10 @@ None is committed. An absent fixture makes its tests SKIP.
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | read gives end-of-file, write accepts all bytes; unloads without leaks |
-| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; 100 load/exercise/unload cycles leak nothing |
+| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
-| `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; 100 cycles leak nothing |
-| `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`): irql, time, dpc, timer, thread, wait, mutex, waitn, work, se, reg | each returns the values it observed, the same list as on Windows |
+| `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
+| `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
@@ -201,11 +192,11 @@ transcript records the hashes of its script and driver, and
 `tools/test_oracle.py` fails if either changed without re-recording.
 
 `make oracle` re-records and fails on any difference. Its first run
-downloads Microsoft's Windows 10 Enterprise evaluation ISO (5.5 GB,
-pinned by SHA-256) and installs it unattended; later replays take half a
-minute and are cached by the hash of their inputs. `tools/oracle.py`
-documents the VM: a base image under `$NK_CACHE` (default `~/.cache/nk`)
-that is never modified, and a throwaway overlay per replay.
+downloads Microsoft's Windows 10 Enterprise evaluation ISO (several GB,
+pinned by SHA-256) and installs it unattended; later replays are cached
+by the hash of their inputs. `tools/oracle.py` documents the VM: a base
+image under `$NK_CACHE` (default `~/.cache/nk`) that is never modified,
+and a throwaway overlay per replay.
 
 ## Mutants
 

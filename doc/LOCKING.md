@@ -221,7 +221,7 @@ itself changes them.
 The race between a thread going to sleep and whatever would wake it is
 settled by one word per thread, the wait register
 (`nk_ke::WaitRegister`), changed only by compare-and-swap. Its every
-interleaving with up to three wakers is checked on the host.
+interleaving with several wakers is checked on the host.
 
 - **Begin before linking.** A thread marks its wait begun, under the
   object's lock, before its wait block is linked there. From then on a
@@ -285,8 +285,8 @@ so does NK, with the same bugcheck code.
 ## How it is tested
 
 - `lib/ke`: the rules as pure functions (`Held`, `check_raise`,
-  `check_lower`), the lock (`TicketLock`, eight host threads contending)
-  and the wait register (every interleaving with up to three wakers).
+  `check_lower`), the lock (`TicketLock`, host threads contending) and
+  the wait register (every interleaving with several wakers).
 - `ke.irql-and-locks`, `ke.interrupts`: on the booted kernel, the IRQL
   moves as stated, interrupts arrive once, at their level and in order of
   urgency, and nothing is left held. x86-64 runs x2APIC under KVM and

@@ -23,10 +23,11 @@ loader (`nkload`) standing in for Microsoft's boot manager and `winload`.
   does not cover testing.
 
 Why: if an unmodified driver cannot tell NK from Windows, Microsoft's
-inbox drivers are just more drivers. The 58-binary inbox corpus needs
-1740 of the kernel's roughly 3070 exports, and KMDF plus USB add only 40
-of those (`doc/ROADMAP.md`). Rewriting those layers would cost years and
-create second ABIs (storport, NDIS, KMDF) to get wrong.
+inbox drivers are just more drivers. The inbox corpus needs a little
+over half of the kernel's exports, and Microsoft's frameworks (KMDF,
+USB) add few of those, because they carry the rest themselves
+(`doc/ROADMAP.md`). Rewriting those layers would cost years and create
+second ABIs (storport, NDIS, KMDF) to get wrong.
 
 Destination: Microsoft's Windows PE at a `cmd.exe` prompt on QEMU x86-64,
 QEMU arm64 and a Dell OptiPlex.
@@ -78,22 +79,14 @@ into memory a driver can write.
 
 | Path | Contents |
 | --- | --- |
-| `boot/` | `nkload`, the UEFI loader, with its own UEFI bindings |
+| `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
-| `kernel/arch/{x86_64,aarch64}/` | CPU set-up, traps, thread switch, interrupt controller, clock, processor start, variadic entry stubs. The only place `cfg(target_arch)` appears |
-| `kernel/hal/` | firmware runtime calls, the machine description (MADT) |
-| `kernel/ke/` | IRQL, spin locks, per-processor state, interrupts, IPIs, threads, waits, mutexes, DPCs, timers, time, driver spin locks, SEH stubs |
-| `kernel/ex/` | work items |
-| `kernel/mm/` | frames, pool, kernel mappings, stacks |
-| `kernel/ob/` | object headers, references, kernel handles, the namespace |
-| `kernel/io/` | driver, device and file objects, IRPs, MDLs, cancel-safe queues, remove locks |
-| `kernel/ldr/` | driver image loading |
-| `kernel/ps/`, `se/`, `cm/`, `rtl/` | system threads; security descriptors; registry; strings and `DbgPrint` |
-| `kernel/kd/` | serial console, bugcheck |
+| `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (driver loading), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
-| `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and its groups |
-| `lib/` | pure, host-tested crates: `pe`, `pdb`, `acpi`, `mm` (frame bitmap, heap, page tables), `ke` (lock rules, ready queues, timer buckets, wait register), `ntabi` (layouts), `rtl` (format), `se`, `cm`, `bootinfo`, `selftest`, `oracle` |
-| `tools/` | fixture fetcher, boot harness and judge, image builder, ledger, oracle VM, mutants, PE and PDB dumpers, the gate |
+| `kernel/selftest/` | the boot-test groups |
+| `lib/` | pure, host-tested crates: PE and PDB readers, page tables and allocators, scheduler and wait logic (`ke`), structure layouts (`ntabi`), registry, security descriptors |
+| `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
 Anything that can be written without touching hardware goes in a
@@ -145,7 +138,7 @@ Any step that fails prints a `FAIL` line and stops. There is no user mode.
   free of anything but a live block is refused, and live counts are kept;
   leak tests compare them. These are bug detectors, not mitigations.
 - **Dynamic mappings.** Address space is bump-allocated with one unmapped
-  page after each range, plus a 32-entry cache of freed ranges reused by
+  page after each range, plus a small cache of freed ranges reused by
   exact size, so a driver loaded and unloaded repeatedly lands on the
   same addresses and leak checks can compare frame counts. Frames are
   freed on unmap; intermediate page tables never are.
