@@ -16,6 +16,7 @@ pub static GROUP: Group = Group {
         "thread.preempt-registers",
         "thread.migrate",
         "thread.affinity",
+        "thread.identity",
     ],
     run,
     manual: false,
@@ -74,4 +75,5 @@ fn run(r: &mut Report, _: &BootInfo) {
         thread::migrate_test(),
     );
     counted(r, "thread.affinity", "checks:", thread::affinity_test());
+    counted(r, "thread.identity", "checks:", thread::identity_test());
 }

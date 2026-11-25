@@ -6,9 +6,7 @@ use nk_ntabi::pcr::NATIVE as PCR;
 /// The current thread object, found the way a driver's inlined
 /// `KeGetCurrentThread()` finds it.
 pub fn current_thread() -> *mut u8 {
-    // SAFETY: the PCR is initialised by `arch::cpu_init` and the field is
-    // an aligned pointer-sized slot inside it.
-    unsafe { arch::pcr().add(PCR.current_thread).cast::<*mut u8>().read() }
+    arch::current_thread()
 }
 
 /// The index of the processor running this code, read from where the

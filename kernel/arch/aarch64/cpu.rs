@@ -10,7 +10,7 @@ use crate::ke::percpu::PerCpu;
 use crate::mm;
 use core::cell::UnsafeCell;
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicPtr, Ordering};
 use nk_bootinfo::{KERNEL_STACK_SIZE, stack_top_in};
 use nk_ntabi::pcr::NATIVE as PCR;
 
@@ -25,9 +25,6 @@ struct CpuArea {
     /// from here, relative to `TPIDR_EL1`, when it finds the stack it
     /// arrived on has overflowed.
     overflow_top: u64,
-    /// The current IRQL. Drivers on arm64 ask the kernel for it, so where
-    /// it is kept is NK's choice.
-    irql: AtomicU8,
     /// State the generic kernel keeps per processor.
     generic: PerCpu,
     /// Room for one stack at the alignment every kernel stack has.
@@ -49,7 +46,6 @@ unsafe impl Sync for Shared {}
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
     overflow_top: 0,
-    irql: AtomicU8::new(0),
     generic: PerCpu::new(),
     overflow_stack: [0; OVERFLOW_ROOM],
 }));
@@ -112,9 +108,11 @@ pub fn init(number: u32) {
             OVERFLOW_ROOM as u64,
         )
         .unwrap_or(0);
-        // The IRQL is enforced through the GIC's system registers, and
-        // the first lock taken sets it.
+        // The IRQL is the GIC's priority mask, reached through its
+        // system registers: PASSIVE_LEVEL to begin with, whatever
+        // firmware left there.
         super::gic::enable_system_registers();
+        super::gic::set_mask(0);
         core::arch::asm!("msr tpidr_el1, {0}", "mov x18, {0}", in(reg) pcr as u64, options(nomem, nostack));
     }
 }
@@ -143,14 +141,29 @@ pub fn percpu() -> &'static PerCpu {
     &area().generic
 }
 
-/// The current IRQL.
+/// The current IRQL. It is the interrupt controller's priority mask and
+/// nothing else: one register of this processor, read in one
+/// instruction. A copy kept in memory would have to be found through
+/// x18 first, and a thread below DISPATCH_LEVEL can be moved to another
+/// processor between finding it and using it.
 pub fn irql() -> u8 {
-    area().irql.load(Ordering::Relaxed)
+    super::gic::mask_level()
 }
 
-/// Set the IRQL: record it, and have the interrupt controller hold back
-/// everything at or below it. The caller has checked the change is legal.
+/// Set the IRQL: have the interrupt controller hold back everything at
+/// or below it. The caller has checked the change is legal.
 pub fn set_irql(level: u8) {
-    area().irql.store(level, Ordering::Relaxed);
     super::gic::set_mask(level);
+}
+
+/// The thread running on this processor, loaded from the PCR in one
+/// instruction, as a driver's in-line `KeGetCurrentThread()` does: the
+/// thread cannot be moved between finding the PCR and reading it.
+pub fn current_thread() -> *mut u8 {
+    let thread: u64;
+    // SAFETY: x18 points at this processor's PCR once `init` has run.
+    unsafe {
+        core::arch::asm!("ldr {}, [x18, #{}]", out(reg) thread, const PCR.current_thread, options(readonly, nostack));
+    }
+    thread as *mut u8
 }

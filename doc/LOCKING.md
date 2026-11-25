@@ -16,8 +16,9 @@ the same processor. The levels NK uses so far:
 | `HIGH_LEVEL` | 15 | code holding the console lock; the path that stops the system |
 
 On x86-64 the IRQL is register CR8, because code built with the WDK reads
-it there. On arm64 drivers call the kernel for it, and it is a field of
-NK's per-processor state.
+it there. On arm64 drivers call the kernel for it, and it is the GIC's
+priority mask register and nothing else. On neither is it a copy in
+memory, for the reason in "Per-processor state" below.
 
 The interrupt controller enforces it. An interrupt runs at an IRQL of its
 own, and the controller holds back every interrupt whose IRQL is not
@@ -123,6 +124,23 @@ never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 bugcheck path uses it, on the console, and never returns.
+
+### Per-processor state
+
+What a processor keeps for itself is found through a register that
+names the processor (GS, x18). Below `DISPATCH_LEVEL` a thread can be
+preempted and moved to another processor at any instruction, so finding
+the processor and then using what was found is two steps with a hole
+between them: the thread may read, or write, the state of a processor it
+is no longer on. Therefore:
+
+- per-processor state is used at `DISPATCH_LEVEL` or above, where the
+  thread cannot move; or
+- it is read in one instruction that both finds and reads (the current
+  thread, as drivers' in-line code does; the IRQL, which is a register).
+
+A processor number read below `DISPATCH_LEVEL` is where the thread was a
+moment ago, and is treated as no more than that.
 
 ### Switching threads
 

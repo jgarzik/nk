@@ -1132,3 +1132,46 @@ pub fn affinity_test() -> Result<u64, &'static str> {
     }
     Ok(SPINS[0].load(Ordering::Relaxed))
 }
+
+/// A thread is itself, at its own IRQL, wherever it runs. Threads free
+/// to run anywhere ask who they are and what the IRQL is, and raise and
+/// lower it, over and over while they are moved between processors.
+/// What a processor keeps per processor must never be mistaken for, or
+/// written in place of, another processor's. Returns the checks made.
+pub fn identity_test() -> Result<u64, &'static str> {
+    fn body(_: usize) {
+        let me = current();
+        let mut checks = 0u64;
+        let until = super::time::interrupt_time() + 3_000_000;
+        while super::time::interrupt_time() < until {
+            for _ in 0..200 {
+                if current() != me || irql::current() != irql::PASSIVE_LEVEL {
+                    WRONG.fetch_add(1, Ordering::Relaxed);
+                }
+                let old = irql::raise(irql::DISPATCH_LEVEL);
+                if old != irql::PASSIVE_LEVEL || irql::current() != irql::DISPATCH_LEVEL {
+                    WRONG.fetch_add(1, Ordering::Relaxed);
+                }
+                irql::lower(old);
+                checks += 1;
+            }
+            yield_now();
+        }
+        SPINS[0].fetch_add(checks, Ordering::Relaxed);
+    }
+    let before = count();
+    WRONG.store(0, Ordering::Relaxed);
+    SPINS[0].store(0, Ordering::Relaxed);
+    // More threads than processors, so that they wait and are taken by
+    // whichever processor is free.
+    for _ in 0..2 * super::smp::online_count() + 1 {
+        create(body, 0, NORMAL_PRIORITY, ANYWHERE)?;
+    }
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a thread saw another thread's identity, or a wrong IRQL");
+    }
+    Ok(SPINS[0].load(Ordering::Relaxed))
+}

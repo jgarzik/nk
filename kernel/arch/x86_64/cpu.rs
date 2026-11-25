@@ -229,6 +229,18 @@ pub fn pcr() -> *mut u8 {
     pcr as *mut u8
 }
 
+/// The thread running on this processor, loaded from the PCR in one
+/// instruction, as a driver's in-line `KeGetCurrentThread()` does: the
+/// thread cannot be moved between finding the PCR and reading it.
+pub fn current_thread() -> *mut u8 {
+    let thread: u64;
+    // SAFETY: GS points at this processor's PCR once `init` has run.
+    unsafe {
+        core::arch::asm!("mov {}, gs:[{}]", out(reg) thread, const PCR.current_thread, options(readonly, nostack));
+    }
+    thread as *mut u8
+}
+
 /// This CPU's private state.
 fn private() -> &'static Private {
     // SAFETY: the PCR is the first field of this CPU's `CpuArea`, which

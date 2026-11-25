@@ -30,7 +30,7 @@ pub fn interrupt_processor(number: usize, vector: u32) {
     gic::send_interrupt(number, vector);
 }
 
-pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
+pub use cpu::{current_thread, irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
 pub use smp::{prepare as smp_prepare, start as cpu_start};
 pub use switch::{
     all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,

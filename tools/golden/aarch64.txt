@@ -39,6 +39,7 @@ thread.quantum ok
 thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
+thread.identity ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok

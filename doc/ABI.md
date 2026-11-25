@@ -51,7 +51,7 @@ loads, so these are ABI even though no import shows them. Offsets are in
 | Processor control region | GS base | x18 (also kept in `TPIDR_EL1`) |
 | Current thread | `gs:[0x188]` | `[x18, #0x988]` |
 | Processor number | `gs:[0x1A4]` (32 bits); `gs:[0x184]` (one byte, older headers) | NK's own: `[x18, #0x9A4]` |
-| Current IRQL | register CR8 | kernel-private; drivers call an export |
+| Current IRQL | register CR8 | the GIC's priority mask (`ICC_PMR_EL1`); drivers call an export |
 
 The current-thread slot holds the address of the running thread's
 `ETHREAD`-sized block. The fields NK maintains in it are at Windows'

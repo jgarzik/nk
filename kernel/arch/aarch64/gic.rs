@@ -109,6 +109,14 @@ pub fn set_mask(level: u8) {
     }
 }
 
+/// The IRQL the priority mask stands for: the inverse of [`priority`].
+pub fn mask_level() -> u8 {
+    let mask: u64;
+    // SAFETY: reading the priority mask has no side effects.
+    unsafe { asm!("mrs {}, icc_pmr_el1", out(reg) mask, options(nomem, nostack)) };
+    (priority(0) - mask as u8) >> 4
+}
+
 /// Turn on the system-register interface to the GIC. Needed before the
 /// priority mask can be written, which the first lock does.
 pub fn enable_system_registers() {
