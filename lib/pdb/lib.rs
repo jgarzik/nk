@@ -28,18 +28,14 @@ const NIL_STREAM: u32 = u32::MAX;
 /// Type indices below this are built-in types, not records.
 const FIRST_RECORD: u32 = 0x1000;
 
-const LF_MODIFIER: u16 = 0x1001;
-const LF_POINTER: u16 = 0x1002;
 const LF_FIELDLIST: u16 = 0x1203;
 const LF_BITFIELD: u16 = 0x1205;
 const LF_BCLASS: u16 = 0x1400;
 const LF_INDEX: u16 = 0x1404;
 const LF_ENUMERATE: u16 = 0x1502;
-const LF_ARRAY: u16 = 0x1503;
 const LF_CLASS: u16 = 0x1504;
 const LF_STRUCTURE: u16 = 0x1505;
 const LF_UNION: u16 = 0x1506;
-const LF_ENUM: u16 = 0x1507;
 const LF_MEMBER: u16 = 0x150D;
 const LF_STMEMBER: u16 = 0x150E;
 const LF_NESTTYPE: u16 = 0x1510;
@@ -444,11 +440,6 @@ impl Types {
         Ok(Some((b[1], b[0])))
     }
 }
-
-/// Record kinds this reader understands but callers never need to name;
-/// listed so the constants above document the format in one place.
-#[allow(dead_code)]
-const OTHER_KINDS: [u16; 4] = [LF_MODIFIER, LF_POINTER, LF_ARRAY, LF_ENUM];
 
 #[cfg(test)]
 mod tests {

@@ -182,6 +182,11 @@ class ExpectBugcheck(unittest.TestCase):
     def test_armed_bugcheck_passes(self):
         self.assertEqual(self.problems(ARMED), [])
 
+    def test_verifier_line_fails_an_expected_bugcheck_too(self):
+        text = edit(ARMED, "NK-NEG-ARMED neg.panic\n",
+                    "NK-NEG-ARMED neg.panic\nNK-VERIFY IRQL raised from 2 down to 1\n")
+        self.assertIn("NK-VERIFY IRQL raised from 2 down to 1", self.problems(text))
+
     def test_bugcheck_before_the_test_armed(self):
         text = "BUGCHECK: KERNEL PANIC: panicked at kernel/selftest/neg.rs:1:1:\n" \
                "NK-NEG-ARMED neg.panic\n"

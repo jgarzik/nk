@@ -10,7 +10,8 @@
 //!
 //! - flags `-` `+` space `#` `0`; width and precision as digits or `*`;
 //! - sizes `h` `hh` `l` `ll` `w` `I` `I32` `I64`;
-//! - `d` `i` `u` `x` `X` `o` (32 bits unless the size says 64), `p` (a
+//! - `d` `i` `u` `x` `X` `o` (32 bits unless the size says 64 or, with
+//!   `h`, 16), `p` (a
 //!   pointer: sixteen upper-case hex digits);
 //! - `c` `C`, `s` `S` (a string of the format's own width, or of the
 //!   other; `hs`/`ws`/`ls` say which outright), `Z` (`ANSI_STRING`),
@@ -253,8 +254,11 @@ pub fn format(
             b'%' => out(u16::from(b'%')),
             b'd' | b'i' => {
                 let raw = args.next();
+                // `h` marks a short, as it marks a narrow string.
                 let value = if spec.long {
                     raw as i64
+                } else if spec.wide == Some(false) {
+                    i64::from(raw as i16)
                 } else {
                     i64::from(raw as i32)
                 };
@@ -264,6 +268,8 @@ pub fn format(
                 let raw = args.next();
                 let value = if spec.long {
                     raw
+                } else if spec.wide == Some(false) {
+                    u64::from(raw as u16)
                 } else {
                     u64::from(raw as u32)
                 };
@@ -408,6 +414,20 @@ mod tests {
         );
         assert_eq!(narrow("%d", &[0]), "0");
         assert_eq!(narrow("[%.0d]", &[0]), "[]");
+    }
+
+    #[test]
+    fn a_short_integer_is_sixteen_bits_of_its_argument() {
+        // A short is promoted to an int on the way in; `h` takes it
+        // back to the sixteen bits that were passed.
+        assert_eq!(
+            narrow("%hx %hu %ho", &[0xFFFF_FFFF, 0xFFFF_FFFF, 0x1_0008]),
+            "ffff 65535 10"
+        );
+        assert_eq!(narrow("%hd %hi", &[0xFFFF_FFFF, 0x1_8000]), "-1 -32768");
+        assert_eq!(narrow("%hd", &[0x1_0005]), "5");
+        // It still marks a string or character as narrow.
+        assert_eq!(run(true, "%hs%hc", &[1, 0x1241]), "helloA");
     }
 
     #[test]

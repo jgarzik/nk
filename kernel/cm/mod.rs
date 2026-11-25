@@ -75,15 +75,16 @@ fn key_of(handle: *mut c_void) -> Result<KeyId, NTSTATUS> {
     }
 }
 
-/// Where the name in `attributes` starts, and the path from there.
+/// Where the name in `attributes` starts (`None`: at the root), and
+/// the path from there. Reads the driver's memory and resolves its
+/// handle, so it is called before the registry's lock is taken.
 ///
 /// # Safety
 /// `attributes` points to an `OBJECT_ATTRIBUTES` whose name is null or
 /// a counted string.
 unsafe fn named(
     attributes: *const OBJECT_ATTRIBUTES,
-    hive: &mut Hive,
-) -> Result<(KeyId, Vec<u16>), NTSTATUS> {
+) -> Result<(Option<KeyId>, Vec<u16>), NTSTATUS> {
     if attributes.is_null() {
         return Err(STATUS_INVALID_PARAMETER);
     }
@@ -100,7 +101,7 @@ unsafe fn named(
         if path.first() == Some(&u16::from(b'\\')) {
             return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
         }
-        return Ok((key_of(root)?, path));
+        return Ok((Some(key_of(root)?), path));
     }
     if path.first() != Some(&u16::from(b'\\')) {
         return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
@@ -111,7 +112,15 @@ unsafe fn named(
         .ok_or(STATUS_OBJECT_TYPE_MISMATCH)?
         .len();
     path.drain(..path.len() - below);
-    Ok((hive.root().map_err(status)?, path))
+    Ok((None, path))
+}
+
+/// The key a name from [`named`] starts at.
+fn start_of(hive: &mut Hive, start: Option<KeyId>) -> Result<KeyId, NTSTATUS> {
+    match start {
+        Some(key) => Ok(key),
+        None => hive.root().map_err(status),
+    }
 }
 
 /// A handle to `key`.
@@ -139,12 +148,12 @@ pub unsafe extern "C" fn ZwOpenKey(
     _desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
-    let found = {
+    // SAFETY: per the contract.
+    let found = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
-        // SAFETY: per the contract.
-        unsafe { named(attributes, &mut hive) }
-            .and_then(|(start, path)| hive.open(start, &path).map_err(status))
-    };
+        let start = start_of(&mut hive, start)?;
+        hive.open(start, &path).map_err(status)
+    });
     match found.and_then(open) {
         Ok(handle) => {
             // SAFETY: per the contract.
@@ -172,12 +181,12 @@ pub unsafe extern "C" fn ZwCreateKey(
     _create_options: u32,
     disposition: *mut u32,
 ) -> NTSTATUS {
-    let made = {
+    // SAFETY: per the contract.
+    let made = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
-        // SAFETY: per the contract.
-        unsafe { named(attributes, &mut hive) }
-            .and_then(|(start, path)| hive.create(start, &path).map_err(status))
-    };
+        let start = start_of(&mut hive, start)?;
+        hive.create(start, &path).map_err(status)
+    });
     match made.and_then(|(key, new)| Ok((open(key)?, new))) {
         Ok((handle, new)) => {
             // SAFETY: per the contract.

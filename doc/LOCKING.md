@@ -271,6 +271,14 @@ driver's handle as Windows does but does not queue its waiters, so the
 arrival order Windows guarantees is absent; the ledger marks that export
 partial.
 
+The cancel spin lock (`IoAcquireCancelSpinLock`, `io::irp::CANCEL_LOCK`)
+is a driver's kind of lock too: one for the whole system, taken by
+`IoCancelIrp` and released by the driver's cancel routine, so it cannot
+be a guard and has no rank. It is held at `DISPATCH_LEVEL`. NK takes
+none of its ranked locks while holding it, except through what the
+driver's routine calls; the cancel routine of a cancel-safe queue
+releases it before it takes the queue's lock.
+
 NK's own rules above are not applied to drivers. A driver that moves the
 IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows

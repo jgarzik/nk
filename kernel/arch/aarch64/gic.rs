@@ -47,8 +47,7 @@ const SGI_ISENABLER0: usize = GICR_FRAME + 0x100;
 const SGI_ICENABLER0: usize = GICR_FRAME + 0x180;
 const SGI_IPRIORITYR: usize = GICR_FRAME + 0x400;
 
-/// This processor's redistributor, in the direct map. Boot CPU only for
-/// now, so one cell.
+/// Each processor's redistributor, in the direct map.
 static REDISTRIBUTORS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 /// The private interrupts NK has enabled; each processor enables them.
 static ENABLED: AtomicU32 = AtomicU32::new(0);

@@ -151,6 +151,7 @@ def _golden_problems(log, golden, degraded):
 def _bugcheck_problems(log, match, timed_out):
     """Problems of a boot that should have ended in an armed bugcheck."""
     problems = [f"malformed test line: {l}" for l in log.malformed]
+    problems += log.verify
     problems += [f"NK-TEST {n}:FAIL {d}".rstrip() for n, v, d in log.tests if v == "FAIL"]
     if timed_out:
         problems.append(f"timeout after {timed_out}s: the kernel did not power off")

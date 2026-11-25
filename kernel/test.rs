@@ -143,7 +143,17 @@ pub fn run_all(groups: &[&Group], info: &BootInfo) -> ! {
         };
         (group.run)(&mut report, info);
         report.finish();
-        let after = resources();
+        // A thread that has ended is buried by whatever runs next on
+        // its processor, a moment after those waiting for it are woken:
+        // give a group's last threads that moment before counting.
+        let mut after = resources();
+        for _ in 0..200 {
+            if after == before {
+                break;
+            }
+            crate::ke::time::stall(1_000);
+            after = resources();
+        }
         if after != before {
             // Outside the plan on purpose: the judge fails the boot on it.
             count_fail(
