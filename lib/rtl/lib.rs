@@ -1,5 +1,9 @@
-//! Runtime-library logic with no hardware or allocator behind it: UTF-16
-//! counted-string arithmetic and object-name handling.
+//! Runtime-library logic with no hardware behind it: UTF-16
+//! counted-string arithmetic and object-name handling here; in the
+//! modules, formatted output, upper-casing and comparison, the prefix
+//! table, wildcard matching, text forms and length rules, code pages,
+//! and the C string functions. Only the prefix table and the wildcard
+//! matcher allocate.
 //!
 //! The kernel's `Rtl*` exports and its object namespace are thin wrappers
 //! over these functions, so the behaviour is tested on the build host.
@@ -9,6 +13,7 @@
 extern crate alloc;
 
 pub mod codepage;
+pub mod crt;
 pub mod format;
 pub mod prefix;
 pub mod string;
