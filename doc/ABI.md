@@ -1,15 +1,14 @@
 # ABI notes
 
-What the compiler targets do, and what the kernel relies on. Layout
-verification of individual structures is tracked in the ledger, not here.
+What the compiler targets do, what the kernel relies on, and how the
+layouts in `lib/ntabi` are verified.
 
-## Compiler targets (stable rustc 1.100.0)
+## Compiler targets (stable Rust)
 
 | Question | x86_64-unknown-uefi | aarch64-unknown-uefi |
 | --- | --- | --- |
 | Integer argument registers for `extern "C"` | rcx, rdx, r8, r9, then stack above 32 bytes of shadow space: the Microsoft x64 convention | x0-x7 |
 | Platform register | n/a | x18 never appears in generated code |
-| Defining C-variadic functions (`...`) | compiles; `VaList::next_arg` | compiles |
 | Floating point | soft-float: `f64` arguments travel in integer registers and arithmetic calls `__muldf3` | hardware (NEON) |
 
 Consequences:
@@ -35,8 +34,6 @@ Consequences:
   register it is entitled to.
 - x18 holds the processor control region on arm64 Windows; the target
   leaves it alone, so the kernel can set it once per CPU.
-- `DbgPrint` and friends can be written in Rust.
-
 How to re-measure: compile a small `#![no_std]` library for each target
 with `rustc --emit asm` and read the argument registers.
 
@@ -60,9 +57,6 @@ symbols); the rest of the block is zero.
 
 Segment selectors on x86-64 match Windows (kernel code 0x10, data 0x18,
 TSS 0x40). That is a debugging convenience, not a driver dependency.
-
-Any exception other than a breakpoint is a fatal bugcheck with a register
-dump. There is no SEH: a driver's `__try` block cannot catch anything.
 
 ## What is a call and what is not
 
@@ -127,12 +121,11 @@ authority:
    the WDK itself in the nk-fixtures repository. `lib/ntabi/probe.rs`
    compares all of NK's facts against it when the table is downloaded.
 
-**Status of 3: agrees.** The tables from the nk-fixtures v2 release are
-pinned by hash in `fixtures/manifest.toml`, and `make test` compares
-against them: all 120 facts NK states match on x64 and all 118 on arm64,
-including `sizeof DEVICE_OBJECT` = 0x150. The two architectures' tables
-are identical apart from the x64-only KPCR lines. If the tables cannot be
-downloaded the test prints SKIP rather than pass silently on nothing.
+**Status of 3: agrees.** The tables are pinned by hash in
+`fixtures/manifest.toml` and `make test` compares against them: every
+fact NK states matches on both architectures, whose tables are identical
+apart from the x64-only KPCR lines. Without the tables the test prints
+SKIP.
 
 One thing the probe cannot tell: where the KPRCB and the current-thread
 slot sit. The public `KPCR` is 0x178 bytes and stops short of the PRCB.
@@ -142,7 +135,8 @@ slot sit. The public `KPCR` is 0x178 bytes and stops short of the PRCB.
 Microsoft's own drivers were compiled against private headers, so they
 can read fields the WDK never declares. For those the authority is the
 type information in the public PDB of the pinned kernel
-(`ntoskrnl.exe` 10.0.19041.2006), a fixture fetched from Microsoft's
+(`ntoskrnl.exe` 10.0.19041.2006, the kernel of Windows build
+19045.2006), a fixture fetched from Microsoft's
 symbol server by the GUID and age in that kernel's debug directory.
 `lib/pdb` reads it, `tools/pdbinfo` prints any structure from it, and
 `lib/ntabi/pdb.rs` compares NK's definitions with it in `make test`.

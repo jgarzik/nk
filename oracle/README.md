@@ -5,8 +5,7 @@ Each `<name>.script` here is replayed twice: on real Windows, by
 the kernel self-test `oracle.<name>` (`kernel/selftest/oracle.rs`). Both
 print a transcript, one line per step. `<name>.txt` is the transcript
 Windows produced; the kernel test fails at the first line where NK's
-differs. That is what "the driver cannot tell NK from Windows" means, one
-request at a time.
+differs.
 
 `make oracle` re-records every transcript on Windows and fails if one no
 longer matches its file. It needs KVM and the reference VM, so it is not
