@@ -49,6 +49,7 @@ pub struct Frame {
 }
 
 const BREAKPOINT: u64 = 3;
+const NMI: u64 = 2;
 const DOUBLE_FAULT: u64 = 8;
 const PAGE_FAULT: u64 = 14;
 /// `int 0x29`: `__fastfail`, how MSVC-built code reports fatal corruption
@@ -1516,6 +1517,10 @@ extern "C" fn trap_handler(frame: &mut Frame) {
             HANDLER_MXCSR.store(mxcsr, Ordering::Relaxed);
         }
         return;
+    }
+    if frame.vector == NMI && crate::kd::stopping() {
+        // Another processor is stopping the system and said so.
+        super::halt();
     }
     if frame.vector >= 32 && frame.vector != FAST_FAIL {
         return super::apic::interrupt(frame.vector as u32);

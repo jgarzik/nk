@@ -9,8 +9,16 @@ mod trap;
 
 pub use gic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
-    init as interrupts_init, interrupt_enable, self_interrupt,
+    init as interrupts_init, interrupt_enable, self_interrupt, stop_others,
 };
+
+/// `(interrupt id, IRQL)` of the interprocessor interrupt.
+pub const IPI: (u32, u8) = (1, 14);
+
+/// Interrupt processor `number` on the interprocessor interrupt.
+pub fn ipi_send(number: usize) {
+    gic::send_interrupt(number, IPI.0);
+}
 
 pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
 pub use smp::{prepare as smp_prepare, start as cpu_start};
@@ -127,7 +135,8 @@ pub fn pt_root() -> u64 {
     ttbr & 0x0000_FFFF_FFFF_F000
 }
 
-/// Drop any cached translation for the page at `va`.
+/// Drop any cached translation for the page at `va`, on every processor:
+/// the instruction broadcasts.
 pub fn flush_tlb_page(va: u64) {
     // SAFETY: TLB invalidation only discards cached translations.
     unsafe {

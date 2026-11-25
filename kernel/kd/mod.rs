@@ -3,6 +3,7 @@
 use crate::arch::{self, Uart};
 use crate::ke::{Rank, SpinLock};
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 use nk_bootinfo::BootInfo;
 
 static CONSOLE: SpinLock<Option<Uart>> = SpinLock::new(Rank::Console, None);
@@ -38,14 +39,29 @@ macro_rules! kprintln {
     };
 }
 
+/// Set by the first processor to stop the system.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
 /// Stop the system on an unrecoverable error: print `BUGCHECK: <why>` in
 /// a form the boot test recognises, then power off.
 pub fn bugcheck(why: fmt::Arguments<'_>) -> ! {
+    // One processor reports; any other that gets here just stops.
+    if STOPPING.swap(true, Ordering::SeqCst) {
+        arch::halt();
+    }
+    if crate::ke::smp::online_count() > 1 {
+        arch::stop_others();
+    }
     // The error may have struck while printing: take the console anyway.
     if let Some(uart) = CONSOLE.force_lock().as_ref() {
         let _ = fmt::Write::write_fmt(&mut Writer(uart), format_args!("\nBUGCHECK: {why}\n"));
     }
     crate::hal::power_off_or_halt()
+}
+
+/// Whether the system is being stopped.
+pub fn stopping() -> bool {
+    STOPPING.load(Ordering::SeqCst)
 }
 
 /// Report that a driver broke a rule Windows itself does not enforce.

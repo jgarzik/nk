@@ -44,6 +44,10 @@ const REG_LVT_ERROR: u32 = 0x370;
 const LVT_MASKED: u32 = 1 << 16;
 const ICR_SELF: u32 = 1 << 18;
 const REG_ICR_HIGH: u32 = 0x310;
+/// Delivery mode NMI.
+const ICR_NMI: u32 = 0x400;
+/// Destination shorthand: every processor but the sender.
+const ICR_ALL_BUT_SELF: u32 = 3 << 18;
 /// Delivery mode INIT, level asserted.
 const ICR_INIT: u32 = 0x4500;
 /// Delivery mode start-up.
@@ -196,6 +200,16 @@ pub fn send_init(target: u32) {
 /// Start the processor `target` in real mode at physical page `page`.
 pub fn send_startup(target: u32, page: u32) {
     command(target, ICR_STARTUP | page);
+}
+
+/// Interrupt the processor `target` on `vector`.
+pub fn send_interrupt(target: u32, vector: u32) {
+    command(target, vector);
+}
+
+/// Send every other processor a non-maskable interrupt.
+pub fn send_nmi_to_others() {
+    command(0, ICR_ALL_BUT_SELF | ICR_NMI);
 }
 
 /// Nothing to do: a vector's IRQL is its upper four bits, and a local

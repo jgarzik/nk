@@ -70,6 +70,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
+| 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
 Why this order:
@@ -78,6 +79,12 @@ Why this order:
   while the table's lock is held.
 - The pool and the address space each take frames while holding their own
   lock (a new arena; a new page table). They never take each other.
+- An interprocessor call may be made with any of the above held:
+  unmapping a page holds the address-space lock while every processor
+  drops the translation. The call lock is held at `DISPATCH_LEVEL`, below
+  the interprocessor interrupt, so a processor waiting for it still
+  answers the call in progress. A routine run by a call takes no lock
+  below rank 200: its caller may hold any of them.
 - The console is innermost and at `HIGH_LEVEL` so that anything can print
   from anywhere, a fault handler included.
 

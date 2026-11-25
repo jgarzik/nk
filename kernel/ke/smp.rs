@@ -18,6 +18,11 @@ static ONLINE: AtomicU64 = AtomicU64::new(1);
 /// emulated machine with many processors starts them slowly.
 const START_TIMEOUT: u64 = 5 * 10_000_000;
 
+/// The mask of running processors.
+pub fn online() -> u64 {
+    ONLINE.load(Ordering::Acquire)
+}
+
 pub fn online_count() -> usize {
     ONLINE.load(Ordering::Acquire).count_ones() as usize
 }

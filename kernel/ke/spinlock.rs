@@ -37,6 +37,8 @@ pub enum Rank {
     AddressSpace = 50,
     /// The frame allocator (`mm`).
     Frames = 60,
+    /// The interprocessor call in progress (`ke::ipi`).
+    Ipi = 200,
     /// The diagnostic console (`kd`): innermost, so anything can print.
     Console = 250,
 }

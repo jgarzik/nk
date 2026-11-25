@@ -169,3 +169,17 @@ smp = 4
 cmdline = "test=hal.cpus cpus=3"
 expect = "fail"
 must_fail = ["hal.cpus"]
+
+[x86_64-neg-cpu-stuck]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.cpu-stuck"
+expect = "bugcheck"
+match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"
+
+[aarch64-neg-cpu-stuck]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.cpu-stuck"
+expect = "bugcheck"
+match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"

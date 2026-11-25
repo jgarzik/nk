@@ -1,0 +1,5 @@
+# A processor answers an interprocessor call without running the routine.
+scenario: aarch64
+fails: smp.each
+file: kernel/ke/ipi.rs
+remove:     routine(ARGUMENT.load(Ordering::Acquire));

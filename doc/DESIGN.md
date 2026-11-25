@@ -143,6 +143,19 @@ is). Each brings up its own interrupt controller and clock interrupt.
 Processor 0 alone keeps the time. Until there is a scheduler a started
 processor idles, taking interrupts.
 
+`ke::ipi` has other processors run a routine, at the interprocessor
+IRQL (14), and waits for all of them; one call is in progress at a time.
+A processor that does not answer within five seconds is stuck with
+interrupts off, and the system stops. x86-64 uses this to drop a
+translation everywhere when a page is unmapped; arm64's invalidation
+instruction broadcasts by itself.
+
+The processor that stops the system stops the others first: by a
+non-maskable interrupt on x86-64, by the most urgent software-generated
+interrupt on arm64 (which a processor with interrupts masked altogether
+does not take). A second processor reaching a bugcheck halts silently, so
+one report is printed.
+
 ### Interrupts
 
 Each processor's interrupt controller is brought up with everything

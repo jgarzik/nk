@@ -12,6 +12,7 @@
 
 use crate::hal::platform::{self, MAX_CPUS};
 use crate::ke::interrupt;
+use crate::ke::irql::HIGH_LEVEL;
 use crate::mm;
 use core::arch::asm;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -27,6 +28,8 @@ pub const TEST_STRAY: (u32, u8) = (6, 6);
 const PRIVATE: u32 = 32;
 /// Ids from here up mean "nothing to acknowledge".
 const SPURIOUS: u32 = 1020;
+/// The software-generated interrupt that stops a processor for good.
+const STOP: u32 = 2;
 
 // Distributor.
 const GICD_CTLR: usize = 0x0;
@@ -134,6 +137,9 @@ pub fn init() -> Result<(), &'static str> {
         GICD_CTLR_ARE_NS | GICD_CTLR_GROUP1NS,
     );
 
+    // Urgent enough to interrupt anything that has not masked interrupts.
+    LEVELS[STOP as usize].store(HIGH_LEVEL, Ordering::Relaxed);
+    ENABLED.fetch_or(1 << STOP, Ordering::Relaxed);
     init_cpu(0)?;
     kprintln!("hal: GICv3, redistributor for affinity {:#x}", affinity());
     Ok(())
@@ -220,18 +226,41 @@ pub fn interrupt_enable(vector: u32, level: u8) {
     }
 }
 
-/// Send software-generated interrupt `vector` to this processor.
-pub fn self_interrupt(vector: u32) {
-    let id = super::platform::current_cpu_id();
-    // Affinity levels 3..1 name the group of sixteen; the low bits list
+/// Send software-generated interrupt `vector` to the processor with
+/// MPIDR affinity `id`.
+fn send(id: u64, vector: u32) {
+    // Affinity levels 3..1 name a group of sixteen; the low bits list
     // the targets within it by their level-0 number.
+    assert!(
+        id & 0xFF < 16,
+        "affinity level 0 above 15 needs a range selector"
+    );
     let value = (id >> 32 & 0xFF) << 48
         | (id >> 16 & 0xFF) << 32
         | (id >> 8 & 0xFF) << 16
         | u64::from(vector) << 24
         | 1 << (id & 0xF);
-    // SAFETY: generating an interrupt for this processor.
+    // SAFETY: generating an interrupt for a processor.
     unsafe { asm!("msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nomem, nostack)) };
+}
+
+/// Send software-generated interrupt `vector` to this processor.
+pub fn self_interrupt(vector: u32) {
+    send(super::platform::current_cpu_id(), vector);
+}
+
+/// Send software-generated interrupt `vector` to processor `number`.
+pub fn send_interrupt(number: usize, vector: u32) {
+    send(platform::get().cpus()[number].hw_id, vector);
+}
+
+/// Send every other running processor the interrupt that stops it. One
+/// that has interrupts masked altogether does not take it.
+pub fn stop_others() {
+    let me = super::platform::current_cpu_id();
+    for cpu in platform::get().cpus().iter().filter(|c| c.hw_id != me) {
+        send(cpu.hw_id, STOP);
+    }
 }
 
 /// An interrupt exception arrived. Called from the trap handler with
@@ -243,6 +272,10 @@ pub fn interrupt() {
     let vector = id as u32 & 0xFF_FFFF;
     if vector >= SPURIOUS {
         return;
+    }
+    if vector == STOP && crate::kd::stopping() {
+        // Another processor is stopping the system and said so.
+        super::halt();
     }
     let level = LEVELS
         .get(vector as usize)

@@ -98,6 +98,20 @@ pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// `(vector, IRQL)` of the interprocessor interrupt: Windows' IPI_LEVEL.
+pub const IPI: (u32, u8) = (0xE1, 14);
+
+/// Interrupt processor `number` on the interprocessor vector.
+pub fn ipi_send(number: usize) {
+    apic::send_interrupt(smp::hardware_id(number) as u32, IPI.0);
+}
+
+/// Stop every other processor where it stands, interrupts off or not:
+/// each takes a non-maskable interrupt and halts in its handler.
+pub fn stop_others() {
+    apic::send_nmi_to_others();
+}
+
 /// Wait for an interrupt. Interrupts must be enabled.
 pub fn idle() {
     // SAFETY: `hlt` stops the processor until the next interrupt.
@@ -127,8 +141,13 @@ pub fn pt_root() -> u64 {
     cr3 & 0x000F_FFFF_FFFF_F000
 }
 
-/// Drop any cached translation for the page at `va` on this CPU.
+/// Drop any cached translation for the page at `va`, on every processor:
+/// each has to be asked.
 pub fn flush_tlb_page(va: u64) {
+    crate::ke::ipi::call_all(flush_local, va as usize);
+}
+
+fn flush_local(va: usize) {
     // SAFETY: invlpg only discards a TLB entry.
     unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack)) };
 }

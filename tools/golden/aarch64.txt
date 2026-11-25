@@ -14,6 +14,10 @@ clock.tick ok
 clock.shared-page ok
 clock.host-mark ok
 smp.running ok
+smp.each ok
+smp.calls ok
+smp.counter ok
+smp.tlb ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load skip

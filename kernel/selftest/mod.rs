@@ -34,6 +34,7 @@ pub static GROUPS: &[&Group] = &[
     &neg::LOCK_TWICE,
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
+    &smp::STUCK,
 ];
 
 /// The bytes of the boot module called `name`, if the loader supplied it.
