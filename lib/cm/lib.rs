@@ -14,6 +14,12 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+pub mod regf;
+#[cfg(test)]
+mod regf_tests;
+#[cfg(test)]
+mod writer;
+
 /// A key in a hive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyId(usize);
