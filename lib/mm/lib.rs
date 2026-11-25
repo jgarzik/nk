@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod frames;
+pub mod heap;
 pub mod pt;
 
 pub const PAGE_SIZE: u64 = 4096;

@@ -76,6 +76,24 @@ Anything that can be written without touching hardware goes in a
 structure layouts, string and list routines, allocator arithmetic, page
 table construction. The kernel binary is the glue and the `unsafe`.
 
+## Memory
+
+- **Frames.** A bitmap allocator over `EfiConventionalMemory` only.
+  Loader allocations and firmware boot-services memory stay reserved (on
+  arm64 the latter holds firmware's live page tables). Reclaiming them is
+  future work.
+- **Pool.** Small requests come from 1 MiB arenas with 16-byte alignment;
+  requests of about a page or more get their own page-aligned frames, as
+  on Windows. All pool memory is in the direct map: non-paged and
+  physically contiguous. There is no paged pool; a paged-pool request
+  gets non-paged memory, which is always a legal answer.
+- **Pool checking.** Each block ends in guard bytes checked on free, a
+  free of anything but a live block is refused, and live counts are kept.
+  The driver-unload leak test compares those counts.
+- **Kernel mappings.** Driver images are mapped above the kernel image
+  with 4 KiB pages and each section's own protection. Address space is
+  bump-allocated and not reused; frames are freed on unmap.
+
 ## What the MVP leaves out, and how it stays honest
 
 No threads, waits, timers, SEH, PnP or power management. Where a proof

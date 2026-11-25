@@ -18,6 +18,8 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 
 [workspace.lints.clippy]
 new_without_default = "allow"
+# `x % ALIGN != 0` is the idiom for alignment checks throughout.
+manual_is_multiple_of = "allow"
 if_then_some_else_none = "warn"
 manual_let_else = "warn"
 missing_safety_doc = "deny"

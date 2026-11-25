@@ -62,3 +62,27 @@ pub fn cpu_init() {
     cpu::init();
     trap::init(cpu::KERNEL_CODE, cpu::FAULT_IST);
 }
+
+pub fn mm_init(_info: &BootInfo) {}
+
+/// Page-table entry encoding for this CPU.
+pub fn pt_arch() -> nk_mm::pt::X86_64 {
+    nk_mm::pt::X86_64
+}
+
+/// Physical address of the root page table.
+pub fn pt_root() -> u64 {
+    let cr3: u64;
+    // SAFETY: reading CR3 has no side effects.
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack)) };
+    cr3 & 0x000F_FFFF_FFFF_F000
+}
+
+/// Drop any cached translation for the page at `va` on this CPU.
+pub fn flush_tlb_page(va: u64) {
+    // SAFETY: invlpg only discards a TLB entry.
+    unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack)) };
+}
+
+/// Make new mappings visible. x86 needs nothing after adding an entry.
+pub fn mapping_sync() {}

@@ -6,6 +6,7 @@ mod trap;
 pub use cpu::pcr;
 pub use trap::{breakpoint, breakpoints};
 
+use core::sync::atomic::{AtomicU8, Ordering};
 use nk_bootinfo::{BootInfo, Serial};
 
 pub const NAME: &str = "aarch64";
@@ -51,4 +52,44 @@ pub fn halt() -> ! {
 pub fn cpu_init() {
     trap::init();
     cpu::init();
+}
+
+/// Indices into firmware's `MAIR_EL1`, which the loader looked up.
+static MAIR_NORMAL: AtomicU8 = AtomicU8::new(0);
+static MAIR_DEVICE: AtomicU8 = AtomicU8::new(0);
+
+pub fn mm_init(info: &BootInfo) {
+    MAIR_NORMAL.store(info.mair_normal, Ordering::Relaxed);
+    MAIR_DEVICE.store(info.mair_device, Ordering::Relaxed);
+}
+
+/// Page-table entry encoding for this CPU.
+pub fn pt_arch() -> nk_mm::pt::Aarch64 {
+    nk_mm::pt::Aarch64 {
+        mair_normal: MAIR_NORMAL.load(Ordering::Relaxed),
+        mair_device: MAIR_DEVICE.load(Ordering::Relaxed),
+    }
+}
+
+/// Physical address of the root of the kernel (TTBR1) page tables.
+pub fn pt_root() -> u64 {
+    let ttbr: u64;
+    // SAFETY: reading TTBR1_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, ttbr1_el1", out(reg) ttbr, options(nomem, nostack)) };
+    ttbr & 0x0000_FFFF_FFFF_F000
+}
+
+/// Drop any cached translation for the page at `va`.
+pub fn flush_tlb_page(va: u64) {
+    // SAFETY: TLB invalidation only discards cached translations.
+    unsafe {
+        core::arch::asm!("tlbi vaae1is, {}", "dsb ish", "isb", in(reg) va >> 12, options(nostack));
+    }
+}
+
+/// Make new mappings visible: a table write must be synchronised before
+/// the mapping is used.
+pub fn mapping_sync() {
+    // SAFETY: barriers have no memory-safety effect.
+    unsafe { core::arch::asm!("dsb ishst", "isb", options(nostack)) };
 }

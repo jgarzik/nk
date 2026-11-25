@@ -12,6 +12,7 @@ mod kd;
 mod arch;
 mod hal;
 mod ke;
+mod mm;
 mod test;
 
 use nk_bootinfo::BootInfo;
@@ -41,5 +42,15 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     arch::cpu_init();
     test::run("cpu.pcr", ke::pcr::self_test);
     test::run("cpu.breakpoint", ke::trap_self_test);
+
+    arch::mm_init(info);
+    if let Err(why) = mm::init(info) {
+        test::fail("mm.init", format_args!("{why}"));
+        test::complete();
+    }
+    kprintln!("memory: {} MiB free", mm::free_frame_count() * 4 / 1024);
+    test::run("mm.frames", mm::frames_self_test);
+    test::run("mm.map", mm::map::self_test);
+    test::run("mm.pool", mm::pool::self_test);
     test::complete()
 }

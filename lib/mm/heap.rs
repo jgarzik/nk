@@ -1,0 +1,473 @@
+//! A small-block allocator over one contiguous arena: the arithmetic
+//! behind the executive pool.
+//!
+//! Blocks carry a 16-byte header and sit back to back, so the arena can be
+//! walked from either end of a block (boundary tags). Free neighbours are
+//! merged on free. Allocation is first-fit by walking the arena, which is
+//! slow for a big heap and fine for boot-time driver bring-up.
+//!
+//! Built to catch driver bugs rather than hide them:
+//! - every block ends in at least 8 guard bytes, checked on free, so a
+//!   write past the end of an allocation is reported;
+//! - a free of an address that is not a live block is reported, not
+//!   obeyed;
+//! - `tag` and requested size are kept per block for leak reports.
+//!
+//! The arena is a byte slice and offsets are returned, so this is safe
+//! code and the host tests can drive it.
+
+/// Allocation granularity and payload alignment.
+pub const ALIGN: usize = 16;
+const HEADER: usize = 16;
+const GUARD: usize = 8;
+const GUARD_BYTE: u8 = 0xC5;
+/// Top bit of the `req` header field: the block is allocated.
+const USED: u32 = 1 << 31;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeapError {
+    /// The offset is not the payload of a live allocation.
+    NotAllocated,
+    /// Bytes past the end of the allocation were overwritten.
+    Overrun { tag: u32, size: usize },
+    /// Block headers are inconsistent: the arena is corrupt.
+    Corrupt,
+}
+
+/// Counts of live allocations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub blocks: usize,
+    pub bytes: usize,
+}
+
+/// Header fields, all `u32`: block size and previous block's size in
+/// `ALIGN` units, the caller's tag, and the requested size with `USED`.
+struct Block {
+    units: u32,
+    prev_units: u32,
+    tag: u32,
+    req: u32,
+}
+
+pub struct Arena<'a> {
+    mem: &'a mut [u8],
+    usage: Usage,
+}
+
+impl<'a> Arena<'a> {
+    /// Take over `mem` as one free block. Its length is rounded down to a
+    /// multiple of `ALIGN`; an arena too small to hold a block is useless
+    /// but harmless.
+    pub fn new(mem: &'a mut [u8]) -> Self {
+        let len = mem.len() & !(ALIGN - 1);
+        let mut a = Self {
+            mem: &mut mem[..len],
+            usage: Usage::default(),
+        };
+        if len >= HEADER {
+            let whole = Block {
+                units: (len / ALIGN) as u32,
+                prev_units: 0,
+                tag: 0,
+                req: 0,
+            };
+            a.put(0, &whole);
+        }
+        a
+    }
+
+    pub fn len(&self) -> usize {
+        self.mem.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.mem.is_empty()
+    }
+
+    pub fn usage(&self) -> Usage {
+        self.usage
+    }
+
+    fn word(&self, off: usize) -> u32 {
+        u32::from_le_bytes([
+            self.mem[off],
+            self.mem[off + 1],
+            self.mem[off + 2],
+            self.mem[off + 3],
+        ])
+    }
+
+    fn get(&self, off: usize) -> Block {
+        Block {
+            units: self.word(off),
+            prev_units: self.word(off + 4),
+            tag: self.word(off + 8),
+            req: self.word(off + 12),
+        }
+    }
+
+    fn put(&mut self, off: usize, b: &Block) {
+        for (i, v) in [b.units, b.prev_units, b.tag, b.req]
+            .into_iter()
+            .enumerate()
+        {
+            self.mem[off + 4 * i..off + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+
+    /// A block header is plausible: nonzero size, inside the arena.
+    fn sane(&self, off: usize, b: &Block) -> bool {
+        b.units != 0 && off + b.units as usize * ALIGN <= self.mem.len()
+    }
+
+    /// Allocate `size` bytes labelled `tag`. Returns the payload offset,
+    /// which is a multiple of `ALIGN` plus `HEADER`.
+    pub fn alloc(&mut self, size: usize, tag: u32) -> Option<usize> {
+        if size >= USED as usize {
+            return None;
+        }
+        let need = (HEADER + size + GUARD).next_multiple_of(ALIGN);
+        let mut off = 0;
+        while off + HEADER <= self.mem.len() {
+            let b = self.get(off);
+            if !self.sane(off, &b) {
+                return None; // corrupt arena: refuse rather than guess
+            }
+            let total = b.units as usize * ALIGN;
+            if b.req & USED == 0 && total >= need {
+                // Split unless the remainder could not hold a block.
+                let take = if total - need >= HEADER + GUARD {
+                    need
+                } else {
+                    total
+                };
+                if take < total {
+                    let rest = Block {
+                        units: ((total - take) / ALIGN) as u32,
+                        prev_units: (take / ALIGN) as u32,
+                        tag: 0,
+                        req: 0,
+                    };
+                    self.put(off + take, &rest);
+                    if off + total < self.mem.len() {
+                        let mut next = self.get(off + total);
+                        next.prev_units = rest.units;
+                        self.put(off + total, &next);
+                    }
+                }
+                self.put(
+                    off,
+                    &Block {
+                        units: (take / ALIGN) as u32,
+                        prev_units: b.prev_units,
+                        tag,
+                        req: size as u32 | USED,
+                    },
+                );
+                self.mem[off + HEADER + size..off + take].fill(GUARD_BYTE);
+                self.usage.blocks += 1;
+                self.usage.bytes += size;
+                return Some(off + HEADER);
+            }
+            off += total;
+        }
+        None
+    }
+
+    /// Validate that `payload` is a live block; return its header offset.
+    fn live(&self, payload: usize) -> Result<(usize, Block), HeapError> {
+        if payload < HEADER || !payload.is_multiple_of(ALIGN) || payload > self.mem.len() {
+            return Err(HeapError::NotAllocated);
+        }
+        let off = payload - HEADER;
+        let b = self.get(off);
+        if b.req & USED == 0 || !self.sane(off, &b) {
+            return Err(HeapError::NotAllocated);
+        }
+        let total = b.units as usize * ALIGN;
+        let size = (b.req & !USED) as usize;
+        if HEADER + size + GUARD > total {
+            return Err(HeapError::NotAllocated);
+        }
+        // The neighbours must agree about this block, or it is not one.
+        if off + total < self.mem.len() && self.get(off + total).prev_units != b.units {
+            return Err(HeapError::NotAllocated);
+        }
+        if off > 0 {
+            let prev = b.prev_units as usize * ALIGN;
+            if prev == 0 || prev > off || self.get(off - prev).units != b.prev_units {
+                return Err(HeapError::NotAllocated);
+            }
+        } else if b.prev_units != 0 {
+            return Err(HeapError::NotAllocated);
+        }
+        Ok((off, b))
+    }
+
+    /// Size and tag of the live allocation at `payload`.
+    pub fn info(&self, payload: usize) -> Result<(usize, u32), HeapError> {
+        self.live(payload)
+            .map(|(_, b)| ((b.req & !USED) as usize, b.tag))
+    }
+
+    /// Free the allocation at `payload`. On `Overrun` the block is still
+    /// freed; the error reports the damage. Returns the size and tag.
+    pub fn free(&mut self, payload: usize) -> Result<(usize, u32), HeapError> {
+        let (mut off, b) = self.live(payload)?;
+        let size = (b.req & !USED) as usize;
+        let mut total = b.units as usize * ALIGN;
+        let intact = self.mem[off + HEADER + size..off + total]
+            .iter()
+            .all(|&g| g == GUARD_BYTE);
+        self.usage.blocks -= 1;
+        self.usage.bytes -= size;
+
+        let mut prev_units = b.prev_units;
+        // Merge with a free successor, then a free predecessor.
+        if off + total < self.mem.len() {
+            let next = self.get(off + total);
+            if next.req & USED == 0 {
+                total += next.units as usize * ALIGN;
+            }
+        }
+        if off > 0 {
+            let prev_off = off - b.prev_units as usize * ALIGN;
+            let prev = self.get(prev_off);
+            if prev.req & USED == 0 {
+                total += off - prev_off;
+                off = prev_off;
+                prev_units = prev.prev_units;
+            }
+        }
+        self.put(
+            off,
+            &Block {
+                units: (total / ALIGN) as u32,
+                prev_units,
+                tag: 0,
+                req: 0,
+            },
+        );
+        if off + total < self.mem.len() {
+            let mut next = self.get(off + total);
+            next.prev_units = (total / ALIGN) as u32;
+            self.put(off + total, &next);
+        }
+        if intact {
+            Ok((size, b.tag))
+        } else {
+            Err(HeapError::Overrun { tag: b.tag, size })
+        }
+    }
+
+    /// Walk the whole arena, checking every header and guard, and call
+    /// `each(tag, size)` for every live allocation.
+    pub fn walk(&self, mut each: impl FnMut(u32, usize)) -> Result<(), HeapError> {
+        let (mut off, mut prev_units, mut seen) = (0, 0, Usage::default());
+        while off < self.mem.len() {
+            let b = self.get(off);
+            if !self.sane(off, &b) || b.prev_units != prev_units {
+                return Err(HeapError::Corrupt);
+            }
+            let total = b.units as usize * ALIGN;
+            if b.req & USED != 0 {
+                let size = (b.req & !USED) as usize;
+                if HEADER + size + GUARD > total {
+                    return Err(HeapError::Corrupt);
+                }
+                if self.mem[off + HEADER + size..off + total]
+                    .iter()
+                    .any(|&g| g != GUARD_BYTE)
+                {
+                    return Err(HeapError::Overrun { tag: b.tag, size });
+                }
+                seen.blocks += 1;
+                seen.bytes += size;
+                each(b.tag, size);
+            }
+            prev_units = b.units;
+            off += total;
+        }
+        if seen == self.usage {
+            Ok(())
+        } else {
+            Err(HeapError::Corrupt)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TAG: u32 = u32::from_le_bytes(*b"Test");
+
+    fn payload<'m>(a: &'m mut Arena<'_>, off: usize, len: usize) -> &'m mut [u8] {
+        &mut a.mem[off..off + len]
+    }
+
+    #[test]
+    fn alloc_is_aligned_and_accounted() {
+        let mut mem = vec![0u8; 4096];
+        let mut a = Arena::new(&mut mem);
+        let p = a.alloc(100, TAG).unwrap();
+        let q = a.alloc(1, TAG).unwrap();
+        assert_eq!((p % ALIGN, q % ALIGN), (0, 0));
+        assert!(q >= p + 100 + GUARD);
+        assert_eq!(
+            a.usage(),
+            Usage {
+                blocks: 2,
+                bytes: 101
+            }
+        );
+        assert_eq!(a.info(p), Ok((100, TAG)));
+        payload(&mut a, p, 100).fill(0xFF);
+        assert_eq!(
+            a.walk(|_, _| {}),
+            Ok(()),
+            "writing the whole payload is legal"
+        );
+        assert_eq!(a.free(p), Ok((100, TAG)));
+        assert_eq!(a.free(q), Ok((1, TAG)));
+        assert_eq!(a.usage(), Usage::default());
+    }
+
+    #[test]
+    fn zero_size_allocations_are_distinct() {
+        let mut mem = vec![0u8; 256];
+        let mut a = Arena::new(&mut mem);
+        let (p, q) = (a.alloc(0, TAG).unwrap(), a.alloc(0, TAG).unwrap());
+        assert_ne!(p, q);
+        assert_eq!(a.free(p), Ok((0, TAG)));
+        assert_eq!(a.free(q), Ok((0, TAG)));
+    }
+
+    #[test]
+    fn free_merges_neighbours_so_the_arena_is_whole_again() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        let big = 1024 - HEADER - GUARD;
+        let blocks: Vec<usize> = (0..6).map(|_| a.alloc(100, TAG).unwrap()).collect();
+        assert_eq!(a.alloc(big, TAG), None);
+        // Free in an order that exercises merge-with-next, merge-with-prev and both.
+        for i in [1, 3, 2, 5, 0, 4] {
+            assert!(a.free(blocks[i]).is_ok());
+            assert_eq!(a.walk(|_, _| {}), Ok(()));
+        }
+        assert!(
+            a.alloc(big, TAG).is_some(),
+            "all free space merged back into one block"
+        );
+    }
+
+    #[test]
+    fn overrun_is_detected_on_free_and_on_walk() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        let p = a.alloc(24, TAG).unwrap();
+        a.mem[p + 24] = 0; // one byte past the end
+        assert_eq!(
+            a.walk(|_, _| {}),
+            Err(HeapError::Overrun { tag: TAG, size: 24 })
+        );
+        assert_eq!(a.free(p), Err(HeapError::Overrun { tag: TAG, size: 24 }));
+        assert_eq!(a.usage(), Usage::default(), "the block is released even so");
+    }
+
+    #[test]
+    fn bad_frees_are_refused() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        let p = a.alloc(64, TAG).unwrap();
+        for bad in [0, 8, p + 16, p + 1, 4096, usize::MAX & !15] {
+            assert_eq!(a.free(bad), Err(HeapError::NotAllocated), "offset {bad:#x}");
+        }
+        assert!(a.free(p).is_ok());
+        assert_eq!(a.free(p), Err(HeapError::NotAllocated), "double free");
+        assert_eq!(a.usage(), Usage::default());
+    }
+
+    #[test]
+    fn forged_header_inside_a_payload_is_not_a_block() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        let p = a.alloc(128, TAG).unwrap();
+        // Write something shaped like a used header into the payload.
+        let fake = p + 32;
+        a.mem[fake..fake + 4].copy_from_slice(&3u32.to_le_bytes());
+        a.mem[fake + 12..fake + 16].copy_from_slice(&(8 | USED).to_le_bytes());
+        assert_eq!(a.free(fake + HEADER), Err(HeapError::NotAllocated));
+        assert!(a.free(p).is_ok());
+    }
+
+    #[test]
+    fn walk_reports_tags() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        a.alloc(10, 1).unwrap();
+        let q = a.alloc(20, 2).unwrap();
+        a.alloc(30, 3).unwrap();
+        a.free(q).unwrap();
+        let mut seen = Vec::new();
+        a.walk(|tag, size| seen.push((tag, size))).unwrap();
+        assert_eq!(seen, [(1, 10), (3, 30)]);
+    }
+
+    #[test]
+    fn exhaustion_and_tiny_arenas() {
+        let mut mem = vec![0u8; 64];
+        let mut a = Arena::new(&mut mem);
+        assert_eq!(a.alloc(64, TAG), None);
+        let p = a.alloc(40, TAG).unwrap();
+        assert_eq!(a.alloc(1, TAG), None);
+        assert!(a.free(p).is_ok());
+        let mut tiny = [0u8; 8];
+        let mut t = Arena::new(&mut tiny);
+        assert_eq!(t.alloc(0, TAG), None);
+        assert!(t.is_empty());
+        assert_eq!(t.walk(|_, _| {}), Ok(()));
+    }
+
+    /// Random alloc/free against a model, checking contents and the walk.
+    #[test]
+    fn stress_against_model() {
+        let mut mem = vec![0u8; 16 * 1024];
+        let mut a = Arena::new(&mut mem);
+        let mut live: Vec<(usize, usize, u8)> = Vec::new();
+        let mut seed = 0x1234_5678_9ABC_DEF0u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for step in 0..4000u32 {
+            if rnd() % 3 != 0 || live.is_empty() {
+                let size = (rnd() % 300) as usize;
+                if let Some(p) = a.alloc(size, step) {
+                    let fill = step as u8;
+                    payload(&mut a, p, size).fill(fill);
+                    live.push((p, size, fill));
+                }
+            } else {
+                let (p, size, fill) = live.swap_remove((rnd() % live.len() as u64) as usize);
+                assert!(
+                    payload(&mut a, p, size).iter().all(|&b| b == fill),
+                    "payload intact"
+                );
+                assert_eq!(a.free(p).map(|r| r.0), Ok(size));
+            }
+            if step % 97 == 0 {
+                assert_eq!(a.walk(|_, _| {}), Ok(()));
+            }
+        }
+        assert_eq!(a.usage().blocks, live.len());
+        for (p, _, _) in live {
+            assert!(a.free(p).is_ok());
+        }
+        assert_eq!(a.usage(), Usage::default());
+        assert!(a.alloc(16 * 1024 - HEADER - GUARD, 0).is_some());
+    }
+}
