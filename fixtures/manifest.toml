@@ -301,3 +301,23 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/nkc-work.arm6
 sha256 = "71d92802c6f73fc4dd9b5bf0358773a4443a5516cbeded38f8eab274fae98060"
 status = "nk-authored"
 note = "nk-fixtures v4 nkc/nkc-work.c: work items"
+
+[[fixture]]
+name = "cancel"
+arch = "x86_64"
+file = "cancel.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/wdm-cancel.x64.cancel.sys"
+sha256 = "63aec27a5b75c6f6a9f1146846edbe8f0dccdeb31e204274209105c5995c7334"
+status = "wdk-built"
+boot = false
+note = "Windows-driver-samples d49bb7d7 general/cancel/sys"
+
+[[fixture]]
+name = "cancel"
+arch = "aarch64"
+file = "cancel.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/wdm-cancel.arm64.cancel.sys"
+sha256 = "a624875c461bfb1e0ca341bfad466c9631f9132eb537556b20315ce447842b4f"
+status = "wdk-built"
+boot = false
+note = "Windows-driver-samples d49bb7d7 general/cancel/sys"

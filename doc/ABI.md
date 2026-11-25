@@ -82,6 +82,25 @@ x86-64 (register CR8), so both must work. `HAL.dll` is a second name for
 the kernel: in the Windows build NK follows, each of its exports forwards
 to `ntoskrnl.exe`, and NK resolves either module name against one table.
 
+## Functions with a variable number of arguments
+
+`DbgPrint` and `_snwprintf` take a variable number of arguments, and
+stable Rust cannot define such a function. Each is entered through a few
+instructions of assembly (`kernel/arch/*/variadic.rs`) that make the
+call's arguments one array and pass its address on:
+
+- x86-64: the caller leaves room above the return address for the four
+  register arguments, and the rest follow on the stack; storing the four
+  registers there completes the array.
+- arm64: Windows passes a variadic call's arguments in x0-x7, floating
+  point included, then on the stack; pushing the eight registers
+  directly below the stack arguments completes it.
+
+The formatting itself is `nk_rtl::format`, tested on the host: flags,
+width, precision, the Microsoft size prefixes (`I64`, `w`, `h`), `%p` as
+sixteen upper-case digits, strings of either width, counted strings.
+No floating point.
+
 ## What the fixture binaries show
 
 - Drivers reach the current IRP stack location at `IRP+0xB8` and the

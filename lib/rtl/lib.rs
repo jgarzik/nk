@@ -6,6 +6,8 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod format;
+
 /// Largest `Length`, in bytes, `RtlInitUnicodeString` will report: the
 /// 16-bit field must also leave room for the terminator in
 /// `MaximumLength`.

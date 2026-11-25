@@ -7,6 +7,7 @@ pub mod platform;
 mod smp;
 mod switch;
 mod trap;
+mod variadic;
 
 pub use gic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,

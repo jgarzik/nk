@@ -75,6 +75,19 @@ macro_rules! export_variable {
     };
 }
 
+/// A function entered through an assembly stub, exported under the
+/// name drivers import, which is not the stub's.
+macro_rules! export_entry {
+    ($state:ident, $name:literal, $entry:path) => {
+        Export {
+            module: NT,
+            name: $name,
+            addr: $entry as *const (),
+            state: State::$state,
+        }
+    };
+}
+
 static EXPORTS: &[Export] = &[
     export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
@@ -160,6 +173,15 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ps::PsTerminateSystemThread),
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Implemented, ps::ZwClose),
+    export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
+    export!(Implemented, rtl::print::RtlFreeUnicodeString),
+    export_entry!(
+        Implemented,
+        "_snwprintf",
+        rtl::print::nk_variadic__snwprintf
+    ),
+    export!(Implemented, rtl::print::_wcsnicmp),
+    export!(Implemented, rtl::print::wcschr),
 ];
 
 /// The address a driver's import of `module!name` binds to.

@@ -1083,6 +1083,310 @@
      "state": "implemented"
     }
    ]
+  },
+  {
+   "name": "cancel",
+   "file": "cancel.arm64.sys",
+   "sha256": "a624875c461bfb1e0ca341bfad466c9631f9132eb537556b20315ce447842b4f",
+   "status": "wdk-built",
+   "loaded_at_boot": false,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAcquireRemoveLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseRemoveLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAcquireSpinLockRaiseToDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseRemoveLockAndWaitEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithQuotaTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeEnterCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoInitializeRemoveLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetVersion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCsqInitialize",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCsqRemoveNextIrp",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmGetSystemRoutineAddress",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCsqInsertIrp",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "DbgPrint",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetPriorityThread",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeLeaveCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwCreateKey",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetSecurityObject",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeviceObjectType",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObOpenObjectByPointer",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetDaclSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetGroupSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetOwnerSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetSaclSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCaptureSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_snwprintf",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeExports",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_wcsnicmp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "wcschr",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAbsoluteToSelfRelativeSD",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddAccessAllowedAce",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSid",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoIsWdmVersionAvailable",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetDaclSecurityDescriptor",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenKey",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetValueKey",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryValueKey",
+     "state": "missing"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeUnicodeString",
+     "state": "implemented"
+    }
+   ]
   }
  ]
 }

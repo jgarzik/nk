@@ -1,0 +1,7 @@
+# The entry stub for variadic C functions does not store the fourth
+# register argument where the others are: a format's later arguments
+# are read from whatever was there.
+scenario: x86_64
+fails: rtl.printf
+file: kernel/arch/x86_64/variadic.rs
+remove:     mov [rsp + 32], r9

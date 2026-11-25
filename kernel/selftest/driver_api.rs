@@ -17,6 +17,8 @@ pub static GROUP: Group = Group {
         "rtl.version",
         "mm.routine-address",
         "ex.pool-quota",
+        "rtl.printf",
+        "rtl.strings",
     ],
     run,
     manual: false,
@@ -177,9 +179,135 @@ fn pool_quota() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A wide, NUL-terminated copy of `text`.
+fn wide(text: &str) -> alloc::vec::Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
+}
+
+/// Formatted output through the entry points drivers call, with enough
+/// arguments that some travel in registers and some on the stack.
+fn printf() -> Result<(), &'static str> {
+    use crate::rtl::print::{nk_variadic__snwprintf, nk_variadic_DbgPrint};
+    let guid = wide("{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}");
+    let expected = wide("{4D36E96C-E325-11CE-BFC1-08002BE10318}");
+    let mut buffer = [0xEEEEu16; 48];
+    // SAFETY: a local buffer of 48 characters and a format with eleven
+    // integer arguments, passed as C passes them.
+    let written = unsafe {
+        nk_variadic__snwprintf(
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            guid.as_ptr(),
+            0x4D36_E96Cu32,
+            0xE325u32,
+            0x11CEu32,
+            0xBFu32,
+            0xC1u32,
+            0x08u32,
+            0x00u32,
+            0x2Bu32,
+            0xE1u32,
+            0x03u32,
+            0x18u32,
+        )
+    };
+    if written != 38 || buffer[..39] != expected[..] || buffer[39] != 0xEEEE {
+        return Err("a GUID was not formatted as the C runtime formats it");
+    }
+    // Strings, a pointer, and a 64-bit number after them.
+    let format = wide("%s|%S|%p|%I64u");
+    let (text, narrow) = (wide("wide"), b"narrow\0");
+    let mut buffer = [0u16; 64];
+    // SAFETY: as above; the strings are NUL-terminated locals.
+    let written = unsafe {
+        nk_variadic__snwprintf(
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            format.as_ptr(),
+            text.as_ptr(),
+            narrow.as_ptr(),
+            0xFFFF_F880_0013_8040u64,
+            u64::MAX,
+        )
+    };
+    let expected = wide("wide|narrow|FFFFF88000138040|18446744073709551615");
+    if written != expected.len() as i32 - 1 || buffer[..expected.len()] != expected[..] {
+        return Err("strings, a pointer and a 64-bit number were not formatted right");
+    }
+    // The bounded forms: an exact fit has no terminator; too long is -1
+    // with the buffer full.
+    let format = wide("%d");
+    let mut small = [0xEEEEu16; 4];
+    // SAFETY: as above, with the count the buffer really has room for.
+    let (fits, exact, over) = unsafe {
+        (
+            nk_variadic__snwprintf(small.as_mut_ptr(), 4, format.as_ptr(), 123u32),
+            nk_variadic__snwprintf(small.as_mut_ptr(), 3, format.as_ptr(), 456u32),
+            nk_variadic__snwprintf(small.as_mut_ptr(), 2, format.as_ptr(), 789u32),
+        )
+    };
+    // After the three calls: "78" from the last, "6" left from the
+    // second, and the first call's terminator.
+    if (fits, exact, over) != (3, 3, -1) || small != [0x37, 0x38, 0x36, 0] {
+        return Err("a bounded format did not report or write what fits");
+    }
+    // SAFETY: a NUL-terminated format and the one argument it names.
+    let status = unsafe {
+        nk_variadic_DbgPrint(
+            c"DeviceObject %p\n".as_ptr().cast(),
+            0xFFFF_F880_0013_8040u64,
+        )
+    };
+    if status != 0 {
+        return Err("DbgPrint did not return success");
+    }
+    Ok(())
+}
+
+/// The C-runtime string routines, and freeing a counted string.
+fn strings() -> Result<(), &'static str> {
+    use crate::rtl::print::{_wcsnicmp, RtlFreeUnicodeString, wcschr};
+    let text = wide("Class\\{GUID}");
+    // SAFETY: NUL-terminated locals throughout.
+    unsafe {
+        let brace = wcschr(text.as_ptr(), u16::from(b'{'));
+        if brace != text.as_ptr().add(6).cast_mut()
+            || !wcschr(text.as_ptr(), u16::from(b'#')).is_null()
+            || wcschr(text.as_ptr(), 0) != text.as_ptr().add(12).cast_mut()
+        {
+            return Err("wcschr did not find a character, or found one that is not there");
+        }
+        let (a, b, c) = (wide("Security"), wide("SECURITY!"), wide("Secure"));
+        if _wcsnicmp(a.as_ptr(), b.as_ptr(), 8) != 0
+            || _wcsnicmp(a.as_ptr(), b.as_ptr(), 9) >= 0
+            || _wcsnicmp(a.as_ptr(), c.as_ptr(), 100) <= 0
+            || _wcsnicmp(a.as_ptr(), c.as_ptr(), 5) != 0
+            || _wcsnicmp(a.as_ptr(), b.as_ptr(), 0) != 0
+        {
+            return Err("_wcsnicmp compared wrongly");
+        }
+        let before = pool::usage().blocks;
+        let buffer = pool::ExAllocatePoolWithTag(0, 32, u32::from_le_bytes(*b"Test"));
+        let mut counted = UNICODE_STRING {
+            Length: 8,
+            MaximumLength: 32,
+            Buffer: buffer.cast(),
+        };
+        RtlFreeUnicodeString(&raw mut counted);
+        if !counted.Buffer.is_null() || counted.Length != 0 || pool::usage().blocks != before {
+            return Err("RtlFreeUnicodeString did not free and empty the string");
+        }
+        // An empty string is left alone.
+        RtlFreeUnicodeString(&raw mut counted);
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("io.remove-lock", remove_lock);
     r.check("rtl.version", version);
     r.check("mm.routine-address", routine_address);
     r.check("ex.pool-quota", pool_quota);
+    r.check("rtl.printf", printf);
+    r.check("rtl.strings", strings);
 }
