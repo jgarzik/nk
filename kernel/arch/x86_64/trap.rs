@@ -38,8 +38,9 @@ pub struct Frame {
 
 const BREAKPOINT: u64 = 3;
 const PAGE_FAULT: u64 = 14;
-/// Vectors 32 and up share one stub, which reports this number.
-const UNEXPECTED: u64 = 255;
+/// `int 0x29`: `__fastfail`, how MSVC-built code reports fatal corruption
+/// (a failed stack-cookie check, for one). The reason code is in rcx.
+const FAST_FAIL: u64 = 0x29;
 
 static BREAKPOINTS: AtomicU32 = AtomicU32::new(0);
 
@@ -48,7 +49,7 @@ pub fn breakpoints() -> u32 {
     BREAKPOINTS.load(Ordering::Relaxed)
 }
 
-// Vectors 0-31 each get a stub that pushes a zero error code where the CPU
+// Every vector gets a stub that pushes a zero error code where the CPU
 // pushes none, then the vector number. The common path saves the
 // general-purpose registers and calls the handler with the Windows x64
 // convention: argument in rcx, 32 bytes of shadow space, 16-byte aligned.
@@ -173,9 +174,902 @@ nk_trap_31:
     push 0
     push 31
     jmp nk_trap_common
-nk_trap_other:
+nk_trap_32:
+    push 0
+    push 32
+    jmp nk_trap_common
+nk_trap_33:
+    push 0
+    push 33
+    jmp nk_trap_common
+nk_trap_34:
+    push 0
+    push 34
+    jmp nk_trap_common
+nk_trap_35:
+    push 0
+    push 35
+    jmp nk_trap_common
+nk_trap_36:
+    push 0
+    push 36
+    jmp nk_trap_common
+nk_trap_37:
+    push 0
+    push 37
+    jmp nk_trap_common
+nk_trap_38:
+    push 0
+    push 38
+    jmp nk_trap_common
+nk_trap_39:
+    push 0
+    push 39
+    jmp nk_trap_common
+nk_trap_40:
+    push 0
+    push 40
+    jmp nk_trap_common
+nk_trap_41:
+    push 0
+    push 41
+    jmp nk_trap_common
+nk_trap_42:
+    push 0
+    push 42
+    jmp nk_trap_common
+nk_trap_43:
+    push 0
+    push 43
+    jmp nk_trap_common
+nk_trap_44:
+    push 0
+    push 44
+    jmp nk_trap_common
+nk_trap_45:
+    push 0
+    push 45
+    jmp nk_trap_common
+nk_trap_46:
+    push 0
+    push 46
+    jmp nk_trap_common
+nk_trap_47:
+    push 0
+    push 47
+    jmp nk_trap_common
+nk_trap_48:
+    push 0
+    push 48
+    jmp nk_trap_common
+nk_trap_49:
+    push 0
+    push 49
+    jmp nk_trap_common
+nk_trap_50:
+    push 0
+    push 50
+    jmp nk_trap_common
+nk_trap_51:
+    push 0
+    push 51
+    jmp nk_trap_common
+nk_trap_52:
+    push 0
+    push 52
+    jmp nk_trap_common
+nk_trap_53:
+    push 0
+    push 53
+    jmp nk_trap_common
+nk_trap_54:
+    push 0
+    push 54
+    jmp nk_trap_common
+nk_trap_55:
+    push 0
+    push 55
+    jmp nk_trap_common
+nk_trap_56:
+    push 0
+    push 56
+    jmp nk_trap_common
+nk_trap_57:
+    push 0
+    push 57
+    jmp nk_trap_common
+nk_trap_58:
+    push 0
+    push 58
+    jmp nk_trap_common
+nk_trap_59:
+    push 0
+    push 59
+    jmp nk_trap_common
+nk_trap_60:
+    push 0
+    push 60
+    jmp nk_trap_common
+nk_trap_61:
+    push 0
+    push 61
+    jmp nk_trap_common
+nk_trap_62:
+    push 0
+    push 62
+    jmp nk_trap_common
+nk_trap_63:
+    push 0
+    push 63
+    jmp nk_trap_common
+nk_trap_64:
+    push 0
+    push 64
+    jmp nk_trap_common
+nk_trap_65:
+    push 0
+    push 65
+    jmp nk_trap_common
+nk_trap_66:
+    push 0
+    push 66
+    jmp nk_trap_common
+nk_trap_67:
+    push 0
+    push 67
+    jmp nk_trap_common
+nk_trap_68:
+    push 0
+    push 68
+    jmp nk_trap_common
+nk_trap_69:
+    push 0
+    push 69
+    jmp nk_trap_common
+nk_trap_70:
+    push 0
+    push 70
+    jmp nk_trap_common
+nk_trap_71:
+    push 0
+    push 71
+    jmp nk_trap_common
+nk_trap_72:
+    push 0
+    push 72
+    jmp nk_trap_common
+nk_trap_73:
+    push 0
+    push 73
+    jmp nk_trap_common
+nk_trap_74:
+    push 0
+    push 74
+    jmp nk_trap_common
+nk_trap_75:
+    push 0
+    push 75
+    jmp nk_trap_common
+nk_trap_76:
+    push 0
+    push 76
+    jmp nk_trap_common
+nk_trap_77:
+    push 0
+    push 77
+    jmp nk_trap_common
+nk_trap_78:
+    push 0
+    push 78
+    jmp nk_trap_common
+nk_trap_79:
+    push 0
+    push 79
+    jmp nk_trap_common
+nk_trap_80:
+    push 0
+    push 80
+    jmp nk_trap_common
+nk_trap_81:
+    push 0
+    push 81
+    jmp nk_trap_common
+nk_trap_82:
+    push 0
+    push 82
+    jmp nk_trap_common
+nk_trap_83:
+    push 0
+    push 83
+    jmp nk_trap_common
+nk_trap_84:
+    push 0
+    push 84
+    jmp nk_trap_common
+nk_trap_85:
+    push 0
+    push 85
+    jmp nk_trap_common
+nk_trap_86:
+    push 0
+    push 86
+    jmp nk_trap_common
+nk_trap_87:
+    push 0
+    push 87
+    jmp nk_trap_common
+nk_trap_88:
+    push 0
+    push 88
+    jmp nk_trap_common
+nk_trap_89:
+    push 0
+    push 89
+    jmp nk_trap_common
+nk_trap_90:
+    push 0
+    push 90
+    jmp nk_trap_common
+nk_trap_91:
+    push 0
+    push 91
+    jmp nk_trap_common
+nk_trap_92:
+    push 0
+    push 92
+    jmp nk_trap_common
+nk_trap_93:
+    push 0
+    push 93
+    jmp nk_trap_common
+nk_trap_94:
+    push 0
+    push 94
+    jmp nk_trap_common
+nk_trap_95:
+    push 0
+    push 95
+    jmp nk_trap_common
+nk_trap_96:
+    push 0
+    push 96
+    jmp nk_trap_common
+nk_trap_97:
+    push 0
+    push 97
+    jmp nk_trap_common
+nk_trap_98:
+    push 0
+    push 98
+    jmp nk_trap_common
+nk_trap_99:
+    push 0
+    push 99
+    jmp nk_trap_common
+nk_trap_100:
+    push 0
+    push 100
+    jmp nk_trap_common
+nk_trap_101:
+    push 0
+    push 101
+    jmp nk_trap_common
+nk_trap_102:
+    push 0
+    push 102
+    jmp nk_trap_common
+nk_trap_103:
+    push 0
+    push 103
+    jmp nk_trap_common
+nk_trap_104:
+    push 0
+    push 104
+    jmp nk_trap_common
+nk_trap_105:
+    push 0
+    push 105
+    jmp nk_trap_common
+nk_trap_106:
+    push 0
+    push 106
+    jmp nk_trap_common
+nk_trap_107:
+    push 0
+    push 107
+    jmp nk_trap_common
+nk_trap_108:
+    push 0
+    push 108
+    jmp nk_trap_common
+nk_trap_109:
+    push 0
+    push 109
+    jmp nk_trap_common
+nk_trap_110:
+    push 0
+    push 110
+    jmp nk_trap_common
+nk_trap_111:
+    push 0
+    push 111
+    jmp nk_trap_common
+nk_trap_112:
+    push 0
+    push 112
+    jmp nk_trap_common
+nk_trap_113:
+    push 0
+    push 113
+    jmp nk_trap_common
+nk_trap_114:
+    push 0
+    push 114
+    jmp nk_trap_common
+nk_trap_115:
+    push 0
+    push 115
+    jmp nk_trap_common
+nk_trap_116:
+    push 0
+    push 116
+    jmp nk_trap_common
+nk_trap_117:
+    push 0
+    push 117
+    jmp nk_trap_common
+nk_trap_118:
+    push 0
+    push 118
+    jmp nk_trap_common
+nk_trap_119:
+    push 0
+    push 119
+    jmp nk_trap_common
+nk_trap_120:
+    push 0
+    push 120
+    jmp nk_trap_common
+nk_trap_121:
+    push 0
+    push 121
+    jmp nk_trap_common
+nk_trap_122:
+    push 0
+    push 122
+    jmp nk_trap_common
+nk_trap_123:
+    push 0
+    push 123
+    jmp nk_trap_common
+nk_trap_124:
+    push 0
+    push 124
+    jmp nk_trap_common
+nk_trap_125:
+    push 0
+    push 125
+    jmp nk_trap_common
+nk_trap_126:
+    push 0
+    push 126
+    jmp nk_trap_common
+nk_trap_127:
+    push 0
+    push 127
+    jmp nk_trap_common
+nk_trap_128:
+    push 0
+    push 128
+    jmp nk_trap_common
+nk_trap_129:
+    push 0
+    push 129
+    jmp nk_trap_common
+nk_trap_130:
+    push 0
+    push 130
+    jmp nk_trap_common
+nk_trap_131:
+    push 0
+    push 131
+    jmp nk_trap_common
+nk_trap_132:
+    push 0
+    push 132
+    jmp nk_trap_common
+nk_trap_133:
+    push 0
+    push 133
+    jmp nk_trap_common
+nk_trap_134:
+    push 0
+    push 134
+    jmp nk_trap_common
+nk_trap_135:
+    push 0
+    push 135
+    jmp nk_trap_common
+nk_trap_136:
+    push 0
+    push 136
+    jmp nk_trap_common
+nk_trap_137:
+    push 0
+    push 137
+    jmp nk_trap_common
+nk_trap_138:
+    push 0
+    push 138
+    jmp nk_trap_common
+nk_trap_139:
+    push 0
+    push 139
+    jmp nk_trap_common
+nk_trap_140:
+    push 0
+    push 140
+    jmp nk_trap_common
+nk_trap_141:
+    push 0
+    push 141
+    jmp nk_trap_common
+nk_trap_142:
+    push 0
+    push 142
+    jmp nk_trap_common
+nk_trap_143:
+    push 0
+    push 143
+    jmp nk_trap_common
+nk_trap_144:
+    push 0
+    push 144
+    jmp nk_trap_common
+nk_trap_145:
+    push 0
+    push 145
+    jmp nk_trap_common
+nk_trap_146:
+    push 0
+    push 146
+    jmp nk_trap_common
+nk_trap_147:
+    push 0
+    push 147
+    jmp nk_trap_common
+nk_trap_148:
+    push 0
+    push 148
+    jmp nk_trap_common
+nk_trap_149:
+    push 0
+    push 149
+    jmp nk_trap_common
+nk_trap_150:
+    push 0
+    push 150
+    jmp nk_trap_common
+nk_trap_151:
+    push 0
+    push 151
+    jmp nk_trap_common
+nk_trap_152:
+    push 0
+    push 152
+    jmp nk_trap_common
+nk_trap_153:
+    push 0
+    push 153
+    jmp nk_trap_common
+nk_trap_154:
+    push 0
+    push 154
+    jmp nk_trap_common
+nk_trap_155:
+    push 0
+    push 155
+    jmp nk_trap_common
+nk_trap_156:
+    push 0
+    push 156
+    jmp nk_trap_common
+nk_trap_157:
+    push 0
+    push 157
+    jmp nk_trap_common
+nk_trap_158:
+    push 0
+    push 158
+    jmp nk_trap_common
+nk_trap_159:
+    push 0
+    push 159
+    jmp nk_trap_common
+nk_trap_160:
+    push 0
+    push 160
+    jmp nk_trap_common
+nk_trap_161:
+    push 0
+    push 161
+    jmp nk_trap_common
+nk_trap_162:
+    push 0
+    push 162
+    jmp nk_trap_common
+nk_trap_163:
+    push 0
+    push 163
+    jmp nk_trap_common
+nk_trap_164:
+    push 0
+    push 164
+    jmp nk_trap_common
+nk_trap_165:
+    push 0
+    push 165
+    jmp nk_trap_common
+nk_trap_166:
+    push 0
+    push 166
+    jmp nk_trap_common
+nk_trap_167:
+    push 0
+    push 167
+    jmp nk_trap_common
+nk_trap_168:
+    push 0
+    push 168
+    jmp nk_trap_common
+nk_trap_169:
+    push 0
+    push 169
+    jmp nk_trap_common
+nk_trap_170:
+    push 0
+    push 170
+    jmp nk_trap_common
+nk_trap_171:
+    push 0
+    push 171
+    jmp nk_trap_common
+nk_trap_172:
+    push 0
+    push 172
+    jmp nk_trap_common
+nk_trap_173:
+    push 0
+    push 173
+    jmp nk_trap_common
+nk_trap_174:
+    push 0
+    push 174
+    jmp nk_trap_common
+nk_trap_175:
+    push 0
+    push 175
+    jmp nk_trap_common
+nk_trap_176:
+    push 0
+    push 176
+    jmp nk_trap_common
+nk_trap_177:
+    push 0
+    push 177
+    jmp nk_trap_common
+nk_trap_178:
+    push 0
+    push 178
+    jmp nk_trap_common
+nk_trap_179:
+    push 0
+    push 179
+    jmp nk_trap_common
+nk_trap_180:
+    push 0
+    push 180
+    jmp nk_trap_common
+nk_trap_181:
+    push 0
+    push 181
+    jmp nk_trap_common
+nk_trap_182:
+    push 0
+    push 182
+    jmp nk_trap_common
+nk_trap_183:
+    push 0
+    push 183
+    jmp nk_trap_common
+nk_trap_184:
+    push 0
+    push 184
+    jmp nk_trap_common
+nk_trap_185:
+    push 0
+    push 185
+    jmp nk_trap_common
+nk_trap_186:
+    push 0
+    push 186
+    jmp nk_trap_common
+nk_trap_187:
+    push 0
+    push 187
+    jmp nk_trap_common
+nk_trap_188:
+    push 0
+    push 188
+    jmp nk_trap_common
+nk_trap_189:
+    push 0
+    push 189
+    jmp nk_trap_common
+nk_trap_190:
+    push 0
+    push 190
+    jmp nk_trap_common
+nk_trap_191:
+    push 0
+    push 191
+    jmp nk_trap_common
+nk_trap_192:
+    push 0
+    push 192
+    jmp nk_trap_common
+nk_trap_193:
+    push 0
+    push 193
+    jmp nk_trap_common
+nk_trap_194:
+    push 0
+    push 194
+    jmp nk_trap_common
+nk_trap_195:
+    push 0
+    push 195
+    jmp nk_trap_common
+nk_trap_196:
+    push 0
+    push 196
+    jmp nk_trap_common
+nk_trap_197:
+    push 0
+    push 197
+    jmp nk_trap_common
+nk_trap_198:
+    push 0
+    push 198
+    jmp nk_trap_common
+nk_trap_199:
+    push 0
+    push 199
+    jmp nk_trap_common
+nk_trap_200:
+    push 0
+    push 200
+    jmp nk_trap_common
+nk_trap_201:
+    push 0
+    push 201
+    jmp nk_trap_common
+nk_trap_202:
+    push 0
+    push 202
+    jmp nk_trap_common
+nk_trap_203:
+    push 0
+    push 203
+    jmp nk_trap_common
+nk_trap_204:
+    push 0
+    push 204
+    jmp nk_trap_common
+nk_trap_205:
+    push 0
+    push 205
+    jmp nk_trap_common
+nk_trap_206:
+    push 0
+    push 206
+    jmp nk_trap_common
+nk_trap_207:
+    push 0
+    push 207
+    jmp nk_trap_common
+nk_trap_208:
+    push 0
+    push 208
+    jmp nk_trap_common
+nk_trap_209:
+    push 0
+    push 209
+    jmp nk_trap_common
+nk_trap_210:
+    push 0
+    push 210
+    jmp nk_trap_common
+nk_trap_211:
+    push 0
+    push 211
+    jmp nk_trap_common
+nk_trap_212:
+    push 0
+    push 212
+    jmp nk_trap_common
+nk_trap_213:
+    push 0
+    push 213
+    jmp nk_trap_common
+nk_trap_214:
+    push 0
+    push 214
+    jmp nk_trap_common
+nk_trap_215:
+    push 0
+    push 215
+    jmp nk_trap_common
+nk_trap_216:
+    push 0
+    push 216
+    jmp nk_trap_common
+nk_trap_217:
+    push 0
+    push 217
+    jmp nk_trap_common
+nk_trap_218:
+    push 0
+    push 218
+    jmp nk_trap_common
+nk_trap_219:
+    push 0
+    push 219
+    jmp nk_trap_common
+nk_trap_220:
+    push 0
+    push 220
+    jmp nk_trap_common
+nk_trap_221:
+    push 0
+    push 221
+    jmp nk_trap_common
+nk_trap_222:
+    push 0
+    push 222
+    jmp nk_trap_common
+nk_trap_223:
+    push 0
+    push 223
+    jmp nk_trap_common
+nk_trap_224:
+    push 0
+    push 224
+    jmp nk_trap_common
+nk_trap_225:
+    push 0
+    push 225
+    jmp nk_trap_common
+nk_trap_226:
+    push 0
+    push 226
+    jmp nk_trap_common
+nk_trap_227:
+    push 0
+    push 227
+    jmp nk_trap_common
+nk_trap_228:
+    push 0
+    push 228
+    jmp nk_trap_common
+nk_trap_229:
+    push 0
+    push 229
+    jmp nk_trap_common
+nk_trap_230:
+    push 0
+    push 230
+    jmp nk_trap_common
+nk_trap_231:
+    push 0
+    push 231
+    jmp nk_trap_common
+nk_trap_232:
+    push 0
+    push 232
+    jmp nk_trap_common
+nk_trap_233:
+    push 0
+    push 233
+    jmp nk_trap_common
+nk_trap_234:
+    push 0
+    push 234
+    jmp nk_trap_common
+nk_trap_235:
+    push 0
+    push 235
+    jmp nk_trap_common
+nk_trap_236:
+    push 0
+    push 236
+    jmp nk_trap_common
+nk_trap_237:
+    push 0
+    push 237
+    jmp nk_trap_common
+nk_trap_238:
+    push 0
+    push 238
+    jmp nk_trap_common
+nk_trap_239:
+    push 0
+    push 239
+    jmp nk_trap_common
+nk_trap_240:
+    push 0
+    push 240
+    jmp nk_trap_common
+nk_trap_241:
+    push 0
+    push 241
+    jmp nk_trap_common
+nk_trap_242:
+    push 0
+    push 242
+    jmp nk_trap_common
+nk_trap_243:
+    push 0
+    push 243
+    jmp nk_trap_common
+nk_trap_244:
+    push 0
+    push 244
+    jmp nk_trap_common
+nk_trap_245:
+    push 0
+    push 245
+    jmp nk_trap_common
+nk_trap_246:
+    push 0
+    push 246
+    jmp nk_trap_common
+nk_trap_247:
+    push 0
+    push 247
+    jmp nk_trap_common
+nk_trap_248:
+    push 0
+    push 248
+    jmp nk_trap_common
+nk_trap_249:
+    push 0
+    push 249
+    jmp nk_trap_common
+nk_trap_250:
+    push 0
+    push 250
+    jmp nk_trap_common
+nk_trap_251:
+    push 0
+    push 251
+    jmp nk_trap_common
+nk_trap_252:
+    push 0
+    push 252
+    jmp nk_trap_common
+nk_trap_253:
+    push 0
+    push 253
+    jmp nk_trap_common
+nk_trap_254:
+    push 0
+    push 254
+    jmp nk_trap_common
+nk_trap_255:
     push 0
     push 255
+    jmp nk_trap_common
 nk_trap_common:
     push rax
     push rcx
@@ -253,14 +1147,237 @@ nk_trap_table:
     .quad nk_trap_29
     .quad nk_trap_30
     .quad nk_trap_31
-    .quad nk_trap_other
+    .quad nk_trap_32
+    .quad nk_trap_33
+    .quad nk_trap_34
+    .quad nk_trap_35
+    .quad nk_trap_36
+    .quad nk_trap_37
+    .quad nk_trap_38
+    .quad nk_trap_39
+    .quad nk_trap_40
+    .quad nk_trap_41
+    .quad nk_trap_42
+    .quad nk_trap_43
+    .quad nk_trap_44
+    .quad nk_trap_45
+    .quad nk_trap_46
+    .quad nk_trap_47
+    .quad nk_trap_48
+    .quad nk_trap_49
+    .quad nk_trap_50
+    .quad nk_trap_51
+    .quad nk_trap_52
+    .quad nk_trap_53
+    .quad nk_trap_54
+    .quad nk_trap_55
+    .quad nk_trap_56
+    .quad nk_trap_57
+    .quad nk_trap_58
+    .quad nk_trap_59
+    .quad nk_trap_60
+    .quad nk_trap_61
+    .quad nk_trap_62
+    .quad nk_trap_63
+    .quad nk_trap_64
+    .quad nk_trap_65
+    .quad nk_trap_66
+    .quad nk_trap_67
+    .quad nk_trap_68
+    .quad nk_trap_69
+    .quad nk_trap_70
+    .quad nk_trap_71
+    .quad nk_trap_72
+    .quad nk_trap_73
+    .quad nk_trap_74
+    .quad nk_trap_75
+    .quad nk_trap_76
+    .quad nk_trap_77
+    .quad nk_trap_78
+    .quad nk_trap_79
+    .quad nk_trap_80
+    .quad nk_trap_81
+    .quad nk_trap_82
+    .quad nk_trap_83
+    .quad nk_trap_84
+    .quad nk_trap_85
+    .quad nk_trap_86
+    .quad nk_trap_87
+    .quad nk_trap_88
+    .quad nk_trap_89
+    .quad nk_trap_90
+    .quad nk_trap_91
+    .quad nk_trap_92
+    .quad nk_trap_93
+    .quad nk_trap_94
+    .quad nk_trap_95
+    .quad nk_trap_96
+    .quad nk_trap_97
+    .quad nk_trap_98
+    .quad nk_trap_99
+    .quad nk_trap_100
+    .quad nk_trap_101
+    .quad nk_trap_102
+    .quad nk_trap_103
+    .quad nk_trap_104
+    .quad nk_trap_105
+    .quad nk_trap_106
+    .quad nk_trap_107
+    .quad nk_trap_108
+    .quad nk_trap_109
+    .quad nk_trap_110
+    .quad nk_trap_111
+    .quad nk_trap_112
+    .quad nk_trap_113
+    .quad nk_trap_114
+    .quad nk_trap_115
+    .quad nk_trap_116
+    .quad nk_trap_117
+    .quad nk_trap_118
+    .quad nk_trap_119
+    .quad nk_trap_120
+    .quad nk_trap_121
+    .quad nk_trap_122
+    .quad nk_trap_123
+    .quad nk_trap_124
+    .quad nk_trap_125
+    .quad nk_trap_126
+    .quad nk_trap_127
+    .quad nk_trap_128
+    .quad nk_trap_129
+    .quad nk_trap_130
+    .quad nk_trap_131
+    .quad nk_trap_132
+    .quad nk_trap_133
+    .quad nk_trap_134
+    .quad nk_trap_135
+    .quad nk_trap_136
+    .quad nk_trap_137
+    .quad nk_trap_138
+    .quad nk_trap_139
+    .quad nk_trap_140
+    .quad nk_trap_141
+    .quad nk_trap_142
+    .quad nk_trap_143
+    .quad nk_trap_144
+    .quad nk_trap_145
+    .quad nk_trap_146
+    .quad nk_trap_147
+    .quad nk_trap_148
+    .quad nk_trap_149
+    .quad nk_trap_150
+    .quad nk_trap_151
+    .quad nk_trap_152
+    .quad nk_trap_153
+    .quad nk_trap_154
+    .quad nk_trap_155
+    .quad nk_trap_156
+    .quad nk_trap_157
+    .quad nk_trap_158
+    .quad nk_trap_159
+    .quad nk_trap_160
+    .quad nk_trap_161
+    .quad nk_trap_162
+    .quad nk_trap_163
+    .quad nk_trap_164
+    .quad nk_trap_165
+    .quad nk_trap_166
+    .quad nk_trap_167
+    .quad nk_trap_168
+    .quad nk_trap_169
+    .quad nk_trap_170
+    .quad nk_trap_171
+    .quad nk_trap_172
+    .quad nk_trap_173
+    .quad nk_trap_174
+    .quad nk_trap_175
+    .quad nk_trap_176
+    .quad nk_trap_177
+    .quad nk_trap_178
+    .quad nk_trap_179
+    .quad nk_trap_180
+    .quad nk_trap_181
+    .quad nk_trap_182
+    .quad nk_trap_183
+    .quad nk_trap_184
+    .quad nk_trap_185
+    .quad nk_trap_186
+    .quad nk_trap_187
+    .quad nk_trap_188
+    .quad nk_trap_189
+    .quad nk_trap_190
+    .quad nk_trap_191
+    .quad nk_trap_192
+    .quad nk_trap_193
+    .quad nk_trap_194
+    .quad nk_trap_195
+    .quad nk_trap_196
+    .quad nk_trap_197
+    .quad nk_trap_198
+    .quad nk_trap_199
+    .quad nk_trap_200
+    .quad nk_trap_201
+    .quad nk_trap_202
+    .quad nk_trap_203
+    .quad nk_trap_204
+    .quad nk_trap_205
+    .quad nk_trap_206
+    .quad nk_trap_207
+    .quad nk_trap_208
+    .quad nk_trap_209
+    .quad nk_trap_210
+    .quad nk_trap_211
+    .quad nk_trap_212
+    .quad nk_trap_213
+    .quad nk_trap_214
+    .quad nk_trap_215
+    .quad nk_trap_216
+    .quad nk_trap_217
+    .quad nk_trap_218
+    .quad nk_trap_219
+    .quad nk_trap_220
+    .quad nk_trap_221
+    .quad nk_trap_222
+    .quad nk_trap_223
+    .quad nk_trap_224
+    .quad nk_trap_225
+    .quad nk_trap_226
+    .quad nk_trap_227
+    .quad nk_trap_228
+    .quad nk_trap_229
+    .quad nk_trap_230
+    .quad nk_trap_231
+    .quad nk_trap_232
+    .quad nk_trap_233
+    .quad nk_trap_234
+    .quad nk_trap_235
+    .quad nk_trap_236
+    .quad nk_trap_237
+    .quad nk_trap_238
+    .quad nk_trap_239
+    .quad nk_trap_240
+    .quad nk_trap_241
+    .quad nk_trap_242
+    .quad nk_trap_243
+    .quad nk_trap_244
+    .quad nk_trap_245
+    .quad nk_trap_246
+    .quad nk_trap_247
+    .quad nk_trap_248
+    .quad nk_trap_249
+    .quad nk_trap_250
+    .quad nk_trap_251
+    .quad nk_trap_252
+    .quad nk_trap_253
+    .quad nk_trap_254
+    .quad nk_trap_255
 "#,
     handler = sym trap_handler,
 );
 
 unsafe extern "C" {
-    /// Addresses of the 32 exception stubs, then the shared one.
-    static nk_trap_table: [u64; 33];
+    /// Addresses of the 256 entry stubs, by vector.
+    static nk_trap_table: [u64; 256];
 }
 
 extern "C" fn trap_handler(frame: &mut Frame) {
@@ -278,7 +1395,8 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         8 => "double fault",
         13 => "general protection fault",
         PAGE_FAULT => "page fault",
-        UNEXPECTED => "unexpected interrupt",
+        FAST_FAIL => "driver fast-fail (reason code in rcx)",
+        32.. => "unexpected interrupt",
         _ => "exception",
     };
     crate::kd::bugcheck(format_args!(
@@ -349,12 +1467,12 @@ static IDT: Idt = Idt(UnsafeCell::new(
 /// `fault_ist` is the interrupt-stack index for faults that must not trust
 /// the current stack (double fault, NMI).
 pub fn init(code_selector: u16, fault_ist: u8) {
-    // SAFETY: the assembly above defines 33 addresses at this symbol.
+    // SAFETY: the assembly above defines 256 addresses at this symbol.
     let stubs = unsafe { &nk_trap_table };
     // SAFETY: single-threaded early boot; nothing else references the IDT.
     let idt = unsafe { &mut *IDT.0.get() };
     for (vector, gate) in idt.iter_mut().enumerate() {
-        let addr = stubs[vector.min(32)];
+        let addr = stubs[vector];
         *gate = Gate {
             offset_low: addr as u16,
             selector: code_selector,

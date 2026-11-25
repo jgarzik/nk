@@ -21,6 +21,11 @@ pub struct Frame {
 
 /// Exception class (ESR_EL1 bits 31:26) of a `brk` instruction.
 const EC_BRK: u64 = 0x3C;
+/// `brk` immediates, as Windows on arm64 assigns them.
+const BRK_BREAKPOINT: u64 = 0xF000;
+/// `__fastfail`: how MSVC-built code reports fatal corruption (a failed
+/// stack-cookie check, for one). The reason code is in x0.
+const BRK_FAST_FAIL: u64 = 0xF003;
 
 static BREAKPOINTS: AtomicU32 = AtomicU32::new(0);
 
@@ -175,13 +180,17 @@ unsafe extern "C" {
 }
 
 extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
-    if vector & 3 == 0 && frame.esr >> 26 == EC_BRK {
+    let brk = (vector & 3 == 0 && frame.esr >> 26 == EC_BRK).then_some(frame.esr & 0xFFFF);
+    if brk == Some(BRK_BREAKPOINT) {
         // `brk` is a fault: step past the 4-byte instruction.
         BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
         frame.elr += 4;
         return;
     }
-    let kind = ["synchronous exception", "IRQ", "FIQ", "SError"][(vector & 3) as usize];
+    let kind = match brk {
+        Some(BRK_FAST_FAIL) => "driver fast-fail (reason code in x0)",
+        _ => ["synchronous exception", "IRQ", "FIQ", "SError"][(vector & 3) as usize],
+    };
     let x = &frame.x;
     crate::kd::bugcheck(format_args!(
         "{kind} (vector {vector}, esr {:#x}) at pc={:#018x}\n\

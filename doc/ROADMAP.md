@@ -14,7 +14,7 @@ binaries, complete real IRPs and report PASS.
 | 4 | Kernel entry: own page tables, serial, power off | done |
 | 5 | CPU state: descriptor tables, exceptions, processor control region | done |
 | 6 | Memory: frames, mappings, pool | done |
-| 7 | `lib/ntabi` layouts, runtime library, IRQL and locks | |
+| 7 | `lib/ntabi` layouts, runtime library | done |
 | 8 | Export registry and driver loader | |
 | 9 | Object and I/O managers: devices, symbolic links, IRPs | |
 | 10 | `null.sys` proof | |
