@@ -319,7 +319,9 @@ impl File {
         let mut out: *mut FileProto = core::ptr::null_mut();
         // SAFETY: `self.0` is an open file protocol; `name` is NUL terminated.
         let s = unsafe { ((*self.0).open)(self.0, &raw mut out, name.as_ptr(), FILE_MODE_READ, 0) };
-        (s == SUCCESS).then_some(File(out))
+        // Lazily: a `File` built around the null pointer of a failed open
+        // would be closed when dropped.
+        (s == SUCCESS).then(|| File(out))
     }
 
     /// Size in bytes.
