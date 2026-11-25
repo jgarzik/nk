@@ -237,7 +237,7 @@ unsafe extern "C" fn expire(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mu
                     } else {
                         // Before its DPC is queued: the DPC may cancel it.
                         let due = (&raw const (*timer).DueTime).read();
-                        let next = (due + u64::from(period) * 10_000).max(now + 1);
+                        let next = nk_ke::wait::next_period(due, period, now);
                         insert(table, &mut buckets, timer, next);
                     }
                 }
@@ -360,17 +360,12 @@ pub unsafe extern "C" fn KeSetTimerEx(
         // In no table now, so these are this call's to write. An expiry
         // still on its way to signal the timer finds it set anew.
         (&raw mut (*timer).Dpc).write(timer_dpc);
-        (&raw mut (*timer).Period).write(period.max(0) as u32);
+        (&raw mut (*timer).Period).write(nk_ke::wait::period_ms(period));
         misc_flags(timer).fetch_and(!TIMER_EXPIRED, Ordering::Release);
         signal(timer).store(0, Ordering::Release);
 
         let now = time::interrupt_time();
-        // Negative: that long from now. Otherwise a system time.
-        let due = if due_time < 0 {
-            now.saturating_add(due_time.unsigned_abs())
-        } else {
-            (due_time as u64).saturating_sub(time::boot_time())
-        };
+        let due = nk_ke::wait::timer_due(due_time, now, time::boot_time());
         let table = arch::percpu().timers();
         if due > now {
             insert(table, &mut table.buckets.lock(), timer, due);

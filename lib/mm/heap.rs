@@ -402,6 +402,106 @@ mod tests {
         assert!(a.free(p).is_ok());
     }
 
+    /// Header fields, by position.
+    const UNITS: usize = 0;
+    const PREV_UNITS: usize = 1;
+    const REQ: usize = 3;
+
+    /// Overwrite one header field of the block whose payload is at
+    /// `payload`, as an overrun of the block before it would.
+    fn smash(a: &mut Arena<'_>, payload: usize, field: usize, value: u32) {
+        let at = payload - HEADER + 4 * field;
+        a.mem[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn a_block_whose_header_was_overwritten_is_refused_not_freed() {
+        // Three 64-byte blocks of six units each; the middle one's
+        // header is damaged in each way that leaves the `USED` bit set.
+        let corrupt = HeapError::Corrupt;
+        let cases = [
+            // It claims more bytes than it has room for.
+            (REQ, USED | 4000, corrupt),
+            // It is smaller than what it claims to hold.
+            (UNITS, 3, corrupt),
+            // It has no size, or runs off the arena.
+            (UNITS, 0, corrupt),
+            (UNITS, 60_000, corrupt),
+            // It swallows the next block, whose header then lies where
+            // guard bytes should, and whose successor disagrees.
+            (UNITS, 12, HeapError::Overrun { tag: TAG, size: 64 }),
+            // It denies having a predecessor, puts it before the start
+            // of the arena, or puts it where no block begins.
+            (PREV_UNITS, 0, corrupt),
+            (PREV_UNITS, 1000, corrupt),
+            (PREV_UNITS, 2, corrupt),
+        ];
+        for (field, value, walk) in cases {
+            let mut mem = vec![0u8; 1024];
+            let mut a = Arena::new(&mut mem);
+            let blocks: Vec<usize> = (0..3).map(|_| a.alloc(64, TAG).unwrap()).collect();
+            assert_eq!(a.walk(|_, _| {}), Ok(()));
+            smash(&mut a, blocks[1], field, value);
+            let case = format!("field {field} = {value:#x}");
+            assert_eq!(a.info(blocks[1]), Err(HeapError::NotAllocated), "{case}");
+            assert_eq!(a.free(blocks[1]), Err(HeapError::NotAllocated), "{case}");
+            // Nothing was released on the damaged header's word.
+            assert_eq!(
+                a.usage(),
+                Usage {
+                    blocks: 3,
+                    bytes: 192
+                },
+                "{case}"
+            );
+            assert_eq!(a.walk(|_, _| {}), Err(walk), "{case}");
+        }
+    }
+
+    #[test]
+    fn the_first_block_has_no_predecessor() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        let p = a.alloc(64, TAG).unwrap();
+        smash(&mut a, p, PREV_UNITS, 6);
+        assert_eq!(a.free(p), Err(HeapError::NotAllocated));
+        assert_eq!(a.walk(|_, _| {}), Err(HeapError::Corrupt));
+    }
+
+    #[test]
+    fn a_corrupt_arena_refuses_to_allocate() {
+        // A block of no size would be walked for ever; one that runs off
+        // the arena would be read past its end.
+        for units in [0, 60_000] {
+            let mut mem = vec![0u8; 1024];
+            let mut a = Arena::new(&mut mem);
+            a.alloc(64, TAG).unwrap();
+            let q = a.alloc(64, TAG).unwrap();
+            smash(&mut a, q, UNITS, units);
+            // There is room after the damaged block, but no way to it.
+            assert_eq!(a.alloc(8, TAG), None, "units {units}");
+            assert_eq!(a.usage().blocks, 2);
+        }
+    }
+
+    #[test]
+    fn the_walk_notices_an_allocation_that_went_missing() {
+        let mut mem = vec![0u8; 1024];
+        let mut a = Arena::new(&mut mem);
+        a.alloc(64, 1).unwrap();
+        let q = a.alloc(64, 2).unwrap();
+        // The header chain stays consistent; only the `USED` bit goes.
+        smash(&mut a, q, REQ, 64);
+        let mut seen = Vec::new();
+        assert_eq!(
+            a.walk(|tag, size| seen.push((tag, size))),
+            Err(HeapError::Corrupt),
+            "one block fewer than were allocated"
+        );
+        assert_eq!(seen, [(1, 64)]);
+        assert_eq!(a.free(q), Err(HeapError::NotAllocated));
+    }
+
     #[test]
     fn walk_reports_tags() {
         let mut mem = vec![0u8; 1024];

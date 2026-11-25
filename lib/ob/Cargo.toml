@@ -1,0 +1,17 @@
+[package]
+name = "nk-ob"
+description = "The object manager's tables: names and handle slots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+nk-rtl = { path = "../rtl" }

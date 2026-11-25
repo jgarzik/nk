@@ -104,6 +104,38 @@ pub struct Aarch64 {
     pub mair_device: u8,
 }
 
+/// What `MAIR_EL1`, as firmware left it, lacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MairError {
+    /// No attribute for write-back cacheable normal memory.
+    NoNormal,
+    /// No attribute for device memory.
+    NoDevice,
+}
+
+/// `MAIR` attribute encodings.
+const ATTR_NORMAL_WB: u8 = 0xFF;
+const ATTR_DEVICE_NGNRNE: u8 = 0x00;
+const ATTR_DEVICE_NGNRE: u8 = 0x04;
+
+impl Aarch64 {
+    /// Find the attribute indices to use in a `MAIR_EL1` value that is
+    /// someone else's to define: its eight bytes are attributes 0 to 7.
+    /// Normal memory is write-back cacheable; device memory is the
+    /// strictest kind the register offers (nGnRnE, else nGnRE).
+    pub fn from_mair(mair: u64) -> Result<Self, MairError> {
+        let find = |attr: u8| mair.to_le_bytes().iter().position(|&a| a == attr);
+        let normal = find(ATTR_NORMAL_WB).ok_or(MairError::NoNormal)?;
+        let device = find(ATTR_DEVICE_NGNRNE)
+            .or_else(|| find(ATTR_DEVICE_NGNRE))
+            .ok_or(MairError::NoDevice)?;
+        Ok(Self {
+            mair_normal: normal as u8,
+            mair_device: device as u8,
+        })
+    }
+}
+
 impl Arch for Aarch64 {
     fn table(&self, pa: u64) -> u64 {
         pa | 0b11
@@ -401,6 +433,48 @@ mod tests {
         assert_eq!(a.table(0x7000), 0x7003);
         assert!(a.is_leaf(a.leaf(0x20_0000, 1, Prot::RW), 1) && !a.is_leaf(a.table(0x7000), 1));
         assert_eq!(a.addr(a.leaf(0x1_2345_6000, 0, Prot::RO)), 0x1_2345_6000);
+    }
+
+    fn indices(mair: u64) -> Result<(u8, u8), MairError> {
+        Aarch64::from_mair(mair).map(|a| (a.mair_normal, a.mair_device))
+    }
+
+    #[test]
+    fn mair_indices_are_found_wherever_firmware_put_them() {
+        // EDK2's value: device, non-cacheable, write-through, write-back.
+        assert_eq!(indices(0xFFBB_4400), Ok((3, 0)));
+        // The other way round, and in the top bytes.
+        assert_eq!(indices(0xBB44_00FF), Ok((0, 1)));
+        assert_eq!(indices(0xFF00_4444_4444_4444), Ok((7, 6)));
+        // Listed twice: the lower index.
+        assert_eq!(indices(0x00FF_00FF_4444_4444), Ok((4, 5)));
+    }
+
+    #[test]
+    fn the_strictest_device_attribute_is_preferred() {
+        // nGnRE at index 0, nGnRnE at index 2: the latter, though later.
+        assert_eq!(indices(0x4444_4444_FF00_4404), Ok((3, 2)));
+        // Only nGnRE on offer.
+        assert_eq!(indices(0x4444_4444_44FF_4404), Ok((2, 0)));
+    }
+
+    #[test]
+    fn a_mair_without_what_nk_needs_is_refused() {
+        // Device memory but only non-cacheable normal memory.
+        assert_eq!(indices(0x4444_4444_4444_4400), Err(MairError::NoNormal));
+        // Normal memory but no device attribute NK knows.
+        assert_eq!(indices(0xFFFF_FFFF_FFFF_FFFF), Err(MairError::NoDevice));
+        assert_eq!(indices(0x4444_4444_4444_08FF), Err(MairError::NoDevice));
+        // A register never written: all device, no normal memory.
+        assert_eq!(indices(0), Err(MairError::NoNormal));
+    }
+
+    #[test]
+    fn entries_carry_the_indices_found_in_mair() {
+        let a = Aarch64::from_mair(0xFFBB_4400).unwrap();
+        // Attribute index is bits 2-4 of a leaf entry.
+        assert_eq!(a.leaf(0x1000, 0, Prot::RW) >> 2 & 7, 3);
+        assert_eq!(a.leaf(0x1000, 0, Prot::DEVICE) >> 2 & 7, 0);
     }
 
     #[test]

@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-hal"
+version = "0.0.2"
+dependencies = [
+ "nk-acpi",
+]
+
+[[package]]
 name = "nk-ke"
 version = "0.0.2"
 
@@ -31,6 +38,13 @@ version = "0.0.2"
 dependencies = [
  "nk-pdb",
  "nk-se",
+]
+
+[[package]]
+name = "nk-ob"
+version = "0.0.2"
+dependencies = [
+ "nk-rtl",
 ]
 
 [[package]]
@@ -67,9 +81,11 @@ dependencies = [
  "nk-acpi",
  "nk-bootinfo",
  "nk-cm",
+ "nk-hal",
  "nk-ke",
  "nk-mm",
  "nk-ntabi",
+ "nk-ob",
  "nk-oracle",
  "nk-pe",
  "nk-rtl",

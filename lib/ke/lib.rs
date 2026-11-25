@@ -6,6 +6,9 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod sched;
+pub mod wait;
+
 use core::sync::atomic::{AtomicU32, Ordering};
 
 /// A rule broken. Each is a kernel bug; the kernel stops on it.
@@ -643,6 +646,18 @@ pub const fn ticks_in(time: u64) -> u64 {
     time / TIME_INCREMENT
 }
 
+/// `TickCountMultiplier` of the shared data page: the tick length in
+/// milliseconds as a fixed-point number with 24 fraction bits, which
+/// drivers' in-line code multiplies the tick count by.
+pub const TICK_MULTIPLIER: u32 = (TIME_INCREMENT * (1 << 24) / 10_000) as u32;
+
+/// Whether a time counter running at `frequency` ticks per second can be
+/// believed and used. One slower than 1 MHz cannot time a microsecond
+/// stall, and one faster than 100 GHz is a calibration gone wrong.
+pub const fn plausible_frequency(frequency: u64) -> bool {
+    1_000_000 <= frequency && frequency <= 100_000_000_000
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1260,5 +1275,42 @@ mod tests {
         assert_eq!(ticks_in(TIME_INCREMENT - 1), 0);
         assert_eq!(ticks_in(TIME_INCREMENT), 1);
         assert_eq!(ticks_in(10_000_000), 64, "64 ticks a second");
+    }
+
+    #[test]
+    fn the_tick_multiplier_turns_ticks_into_milliseconds() {
+        // What Windows publishes for a 15.625 ms tick.
+        assert_eq!(TICK_MULTIPLIER, 0x0FA0_0000);
+        // As `GetTickCount` and drivers' in-line code use it.
+        let millis = |ticks: u64| (ticks * u64::from(TICK_MULTIPLIER)) >> 24;
+        assert_eq!(millis(0), 0);
+        assert_eq!(millis(1), 15);
+        assert_eq!(millis(2), 31);
+        assert_eq!(millis(64), 1000);
+        // Exact over days: the tick is a whole number of 1/64 ms.
+        let day = 64 * 86_400;
+        assert_eq!(millis(49 * day), 49 * 86_400_000);
+        // And it agrees with the tick length drivers are told.
+        assert_eq!(millis(1 << 20), (TIME_INCREMENT << 20) / 10_000);
+    }
+
+    #[test]
+    fn a_counter_frequency_is_believed_within_bounds() {
+        // Real counters: the ACPI timer is too slow to be the time base,
+        // QEMU's arm64 timer and a PC's TSC are not.
+        assert!(!plausible_frequency(3_579_545 / 4));
+        assert!(plausible_frequency(62_500_000));
+        assert!(plausible_frequency(2_999_999_999));
+        // The bounds themselves, and one either side.
+        assert!(!plausible_frequency(999_999));
+        assert!(plausible_frequency(1_000_000));
+        assert!(plausible_frequency(100_000_000_000));
+        assert!(!plausible_frequency(100_000_000_001));
+        // What a failed calibration returns.
+        assert!(!plausible_frequency(0));
+        assert!(!plausible_frequency(u64::MAX));
+        // A believed frequency can time one microsecond without the
+        // count rounding to nothing.
+        assert!(micros_to_counter(1, 1_000_000) >= 1);
     }
 }

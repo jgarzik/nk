@@ -341,6 +341,18 @@ fn bind_fills_iat() {
 }
 
 #[test]
+fn an_image_with_no_import_directory_binds_and_lists_nothing() {
+    let (mut h, mut image) = mapped(&Builder::new().build());
+    h.dirs[DIR_IMPORT] = DataDir::default();
+    let before = image.clone();
+    // The descriptors are still in the image; without the directory
+    // nothing leads to them, and nobody is asked to resolve anything.
+    bind_imports(&mut image, &h, |_, _| panic!("asked to resolve an import")).unwrap();
+    assert_eq!(image, before);
+    for_each_import(&image, &h, |_, _| panic!("an import was listed")).unwrap();
+}
+
+#[test]
 fn unresolved_import_is_named_and_nothing_is_bound() {
     let b = Builder {
         imports: vec![("ntoskrnl.exe", vec!["IoCreateDevice", "NoSuchRoutine"])],
@@ -444,4 +456,71 @@ fn section_outside_image_is_rejected() {
     let vsize = 0x84 + 20 + 240 + SECTION_HEADER_SIZE + 8;
     file[vsize..][..4].copy_from_slice(&0x10_0000u32.to_le_bytes());
     assert_eq!(Pe::parse(&file).unwrap_err(), PeError::OutOfBounds);
+}
+
+/// The entropy that mixes to `mixed`, before the top bits are dropped:
+/// each step of the mixing is undone in turn.
+fn entropy_for(mixed: u64) -> u64 {
+    // `y = x ^ (x >> s)` gives back `x` by repeating the fold.
+    fn unfold(y: u64, s: u32) -> u64 {
+        (0..64 / s).fold(y, |x, _| y ^ (x >> s))
+    }
+    // The inverse of an odd number modulo 2^64, by Newton's iteration.
+    let inverse = (0..6).fold(COOKIE_MULTIPLIER, |x, _| {
+        x.wrapping_mul(2u64.wrapping_sub(COOKIE_MULTIPLIER.wrapping_mul(x)))
+    });
+    assert_eq!(COOKIE_MULTIPLIER.wrapping_mul(inverse), 1);
+    unfold(unfold(mixed, 27).wrapping_mul(inverse), 30) ^ COOKIE_SEED
+}
+
+#[test]
+fn security_cookies_fit_the_check_routine() {
+    let mut seen = std::collections::HashSet::new();
+    // Counter values as a loader would see them, and the extremes.
+    let counters = (0..2000u64)
+        .map(|n| 0x0000_0123_4567_89AB + n * 977)
+        .chain([0, 1, u64::MAX, COOKIE_SEED, 1 << 63]);
+    for entropy in counters {
+        let cookie = security_cookie(entropy);
+        assert_ne!(cookie, 0, "entropy {entropy:#x}");
+        assert_ne!(cookie, DEFAULT_SECURITY_COOKIE, "entropy {entropy:#x}");
+        assert_eq!(cookie >> 48, 0, "entropy {entropy:#x}");
+        seen.insert(cookie);
+    }
+    // Nearby counter values do not give the same cookie.
+    assert_eq!(seen.len(), 2005);
+}
+
+#[test]
+fn security_cookie_mixing_is_the_documented_one() {
+    // The steps undone: any 48-bit value can be reached, so the helper
+    // below really does steer the mixing.
+    assert_eq!(security_cookie(entropy_for(0x1234)), 0x1234);
+    assert_eq!(
+        security_cookie(entropy_for(0x0000_FFFF_FFFF_FFFF)),
+        0x0000_FFFF_FFFF_FFFF
+    );
+    // The top 16 bits of the mix are dropped.
+    assert_eq!(security_cookie(entropy_for(0xABCD_0000_0000_1234)), 0x1234);
+}
+
+#[test]
+fn a_security_cookie_that_would_be_zero_or_the_default_is_replaced() {
+    for forbidden in [0, DEFAULT_SECURITY_COOKIE] {
+        // With the dropped bits clear, and with them set.
+        for top in [0, 1 << 48, 0xFFFF << 48] {
+            let cookie = security_cookie(entropy_for(forbidden | top));
+            assert_eq!(cookie, FALLBACK_SECURITY_COOKIE);
+        }
+    }
+    // The replacement is itself a cookie an image may have.
+    assert_ne!(FALLBACK_SECURITY_COOKIE, 0);
+    assert_ne!(FALLBACK_SECURITY_COOKIE, DEFAULT_SECURITY_COOKIE);
+    assert_eq!(FALLBACK_SECURITY_COOKIE >> 48, 0);
+    // One off from a forbidden value is fine as it is.
+    assert_eq!(security_cookie(entropy_for(1)), 1);
+    assert_eq!(
+        security_cookie(entropy_for(DEFAULT_SECURITY_COOKIE + 1)),
+        DEFAULT_SECURITY_COOKIE + 1
+    );
 }

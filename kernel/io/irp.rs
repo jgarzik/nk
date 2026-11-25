@@ -13,10 +13,9 @@ use nk_ntabi::status::*;
 /// does: positioned one past the first location, so the caller fills in
 /// the "next" location and `call_driver` steps onto it.
 pub fn alloc(stack_size: i8) -> *mut IRP {
-    let locations = stack_size.max(1) as usize;
     // The IRP and its stack locations, as large as Windows makes them,
     // then a word of NK's own (`requestor_room`).
-    let size = size_of::<IRP>() + locations * size_of::<IO_STACK_LOCATION>();
+    let (locations, size) = irp_size(stack_size);
     let irp = pool::alloc_zeroed(size + size_of::<usize>(), TAG_IRP).cast::<IRP>();
     if irp.is_null() {
         return irp;
@@ -142,9 +141,7 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
             let control = (*location).Control;
             (*irp).PendingReturned = control & SL_PENDING_RETURNED;
             let status = (*irp).IoStatus.Status;
-            let wanted = (nt_success(status) && control & SL_INVOKE_ON_SUCCESS != 0)
-                || (!nt_success(status) && control & SL_INVOKE_ON_ERROR != 0)
-                || ((*irp).Cancel != 0 && control & SL_INVOKE_ON_CANCEL != 0);
+            let wanted = completion_routine_wanted(control, status, (*irp).Cancel != 0);
             let (routine, context) = ((*location).CompletionRoutine, (*location).Context);
             core::ptr::write_bytes(location, 0, 1);
             if let (true, Some(routine)) = (wanted, routine) {
@@ -186,8 +183,7 @@ unsafe fn finish(irp: *mut IRP) {
             let buffer = (*irp).SystemBuffer.cast::<u8>();
             // Results are copied out unless the request failed outright
             // (warnings still return data).
-            let failed = status as u32 >> 30 == 3;
-            if flags & IRP_INPUT_OPERATION != 0 && !failed && !buffer.is_null() {
+            if flags & IRP_INPUT_OPERATION != 0 && !nt_error(status) && !buffer.is_null() {
                 let count = (*irp).IoStatus.Information;
                 // The driver reports how much it wrote. A count larger
                 // than the buffer it was given means it overran it.

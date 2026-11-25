@@ -463,5 +463,29 @@ pub fn security_cookie_rva(image: &[u8], h: &Headers, loaded_base: u64) -> Optio
     (va != 0 && rva + 8 <= u64::from(h.size_of_image)).then_some(rva as u32)
 }
 
+/// The value MSVC leaves in `__security_cookie` for the loader to replace.
+pub const DEFAULT_SECURITY_COOKIE: u64 = 0x2B99_2DDF_A232;
+
+/// What an image gets when the mixing lands on a value it may not have.
+const FALLBACK_SECURITY_COOKIE: u64 = 0x0000_1F2E_3D4C_5B6A;
+const COOKIE_SEED: u64 = 0x9E37_79B9_7F4A_7C15;
+const COOKIE_MULTIPLIER: u64 = 0xBF58_476D_1CE4_E5B9;
+
+/// A stack-protector cookie for one image, mixed from `entropy`: never
+/// zero, never the default, and with the top 16 bits clear, which the
+/// x64 check routine requires.
+pub const fn security_cookie(entropy: u64) -> u64 {
+    let mut x = entropy ^ COOKIE_SEED;
+    x ^= x >> 30;
+    x = x.wrapping_mul(COOKIE_MULTIPLIER);
+    x ^= x >> 27;
+    let cookie = x & 0x0000_FFFF_FFFF_FFFF;
+    if cookie == 0 || cookie == DEFAULT_SECURITY_COOKIE {
+        FALLBACK_SECURITY_COOKIE
+    } else {
+        cookie
+    }
+}
+
 #[cfg(test)]
 mod tests;

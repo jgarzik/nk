@@ -14,13 +14,9 @@ pub mod stack;
 use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, regions};
-use nk_mm::frames::FrameBitmap;
+use nk_mm::frames::{FrameBitmap, Layout, LayoutError};
 
 pub const PAGE_SIZE: usize = 4096;
-/// Frames below 1 MiB are never allocated: legacy firmware and devices
-/// make assumptions about that range that are not worth discovering.
-const LOW_RESERVED_FRAMES: u64 = 256;
-
 static HHDM: AtomicU64 = AtomicU64::new(0);
 static FRAMES: SpinLock<Option<FrameBitmap<'static>>> = SpinLock::new(Rank::Frames, None);
 
@@ -43,33 +39,22 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let map = unsafe {
         core::slice::from_raw_parts(phys_to_virt(info.mmap_phys), info.mmap_len as usize)
     };
-    let usable =
-        || regions(map, info.mmap_desc_size as usize).filter(|r| r.kind == EFI_CONVENTIONAL);
-
-    let nframes = usable()
-        .map(|r| r.end() / PAGE_SIZE as u64)
-        .max()
-        .ok_or("no usable memory")?;
-    let words = FrameBitmap::words_for(nframes);
-    let bitmap_frames = (words * 8).div_ceil(PAGE_SIZE) as u64;
-    // The bitmap lives at the start of the largest usable region.
-    let home = usable()
-        .max_by_key(|r| r.pages)
-        .filter(|r| r.pages > bitmap_frames);
-    let home = home.ok_or("no region large enough for the frame bitmap")?;
+    let usable = || {
+        regions(map, info.mmap_desc_size as usize)
+            .filter(|r| r.kind == EFI_CONVENTIONAL)
+            .map(|r| (r.phys, r.pages))
+    };
+    let layout = Layout::of(usable()).map_err(|e| match e {
+        LayoutError::NoMemory => "no usable memory",
+        LayoutError::NoRoom => "no region large enough for the frame bitmap",
+    })?;
     // SAFETY: `home` is free RAM per the memory map, large enough for
-    // `words` u64s, page aligned, and reserved below so nothing else is
-    // ever handed this storage.
-    let bits =
-        unsafe { core::slice::from_raw_parts_mut(phys_to_virt(home.phys).cast::<u64>(), words) };
-
-    let mut frames = FrameBitmap::new(bits, nframes);
-    for r in usable() {
-        frames.release(r.phys / PAGE_SIZE as u64, r.pages);
-    }
-    frames.reserve(home.phys / PAGE_SIZE as u64, bitmap_frames);
-    frames.reserve(0, LOW_RESERVED_FRAMES);
-    *FRAMES.lock() = Some(frames);
+    // `words` u64s, page aligned, and reserved by `build` so nothing
+    // else is ever handed this storage.
+    let bits = unsafe {
+        core::slice::from_raw_parts_mut(phys_to_virt(layout.home).cast::<u64>(), layout.words)
+    };
+    *FRAMES.lock() = Some(layout.build(bits, usable()));
     Ok(())
 }
 

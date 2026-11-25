@@ -30,6 +30,7 @@ use super::{dpc, irql, thread, time, timer};
 use crate::arch;
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
+use nk_ke::wait::MAXIMUM_WAIT_OBJECTS;
 use nk_ntabi::ke::{
     DISPATCHER_HEADER, EVENT_NOTIFICATION_OBJECT, EVENT_SYNCHRONIZATION_OBJECT, KEVENT, KSEMAPHORE,
     KWAIT_BLOCK, SEMAPHORE_OBJECT, WAIT_BLOCK_INACTIVE,
@@ -105,11 +106,6 @@ pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>)
     unsafe { wait_objects(object.as_slice(), false, timeout, blocks) }
 }
 
-/// The most objects one wait may name, as on Windows.
-pub const MAXIMUM_WAIT_OBJECTS: usize = 64;
-/// How many of a thread's built-in wait blocks are for objects.
-const THREAD_WAIT_OBJECTS: usize = 3;
-
 /// Wait on several objects: until any one is signalled (returning its
 /// index) or, with `all`, until all are at once (returning
 /// `STATUS_SUCCESS`); or until `timeout` passes (`STATUS_TIMEOUT`).
@@ -140,11 +136,7 @@ pub unsafe fn wait_objects(
     let my_timer = thread::timer(me);
     // A time limit is fixed once, as a system time, however often a
     // wait for all has to look again.
-    let deadline = timeout.map(|due| match due {
-        0 => 0,
-        due if due < 0 => (time::system_time() + due.unsigned_abs()) as i64,
-        due => due,
-    });
+    let deadline = timeout.map(|due| nk_ke::wait::deadline(due, time::system_time()));
     // The order in which a wait for all locks its objects.
     let mut by_address = [0usize; MAXIMUM_WAIT_OBJECTS];
     for (slot, index) in by_address.iter_mut().zip(0..objects.len()) {
@@ -372,11 +364,9 @@ pub unsafe extern "C" fn KeReleaseSemaphore(
             let state = object::signal(header);
             let previous = state.load(Ordering::Relaxed);
             let limit = (&raw const (*semaphore).Limit).read();
-            match previous.checked_add(adjustment) {
-                Some(count) if count > previous && count <= limit => {
-                    state.store(count, Ordering::Relaxed);
-                }
-                _ => crate::kd::bugcheck(format_args!(
+            match nk_ke::wait::semaphore_release(previous, adjustment, limit) {
+                Some(count) => state.store(count, Ordering::Relaxed),
+                None => crate::kd::bugcheck(format_args!(
                     "0x0000001E KMODE_EXCEPTION_NOT_HANDLED: STATUS_SEMAPHORE_LIMIT_EXCEEDED \
                      (count {previous}, release {adjustment}, limit {limit})"
                 )),
@@ -437,7 +427,7 @@ pub unsafe extern "C" fn KeWaitForMultipleObjects(
     wait_block_array: *mut KWAIT_BLOCK,
 ) -> i32 {
     let count = count as usize;
-    if count > MAXIMUM_WAIT_OBJECTS || (count > THREAD_WAIT_OBJECTS && wait_block_array.is_null()) {
+    if !nk_ke::wait::count_allowed(count, !wait_block_array.is_null()) {
         crate::kd::bugcheck(format_args!(
             "0x0000000C MAXIMUM_WAIT_OBJECTS_EXCEEDED: a wait on {count} objects"
         ));
@@ -450,7 +440,7 @@ pub unsafe extern "C" fn KeWaitForMultipleObjects(
         }
         let objects = &objects[..count];
         let all = wait_type == u32::from(WAIT_ALL);
-        if all && (1..count).any(|i| objects[..i].contains(&objects[i])) {
+        if all && nk_ke::wait::repeated(objects) {
             // One object twice can never be taken twice at once.
             return nk_ntabi::status::STATUS_INVALID_PARAMETER;
         }
