@@ -51,25 +51,29 @@ no WIM filter, no NTFS. Booting an untouched `boot.wim` comes after.
 
 ## What was measured
 
-67 binaries of the 19041 family (x86-64), 46 of them kernel-mode drivers
-and libraries, were fetched from Microsoft's symbol server and their
-import tables read.
-The data is not yet in the tree; phase 0 makes it a reproducible part of
-the ledger. Counts are distinct names imported from `ntoskrnl.exe` and
-`hal.dll`.
+58 kernel-mode binaries of the pinned build (x86-64) are listed in
+`fixtures/corpus.toml`: Microsoft's drivers and the libraries they import
+from. `tools/corpus.py` fetches them from Microsoft's symbol server and
+writes down what each imports; `ledger/x86_64.json` counts, per binary,
+how much of that NK provides. Counts below are distinct names imported
+from `ntoskrnl.exe` and `hal.dll`.
 
 | Corpus, growing | Names needed |
 | --- | --- |
 | NK 0.0.1 (`null`, `sioctl`) | 14 |
-| `fastfat.sys` alone | 333 |
-| + `ntfs`, `fltmgr`, `ksecdd`, `cng`, `clfs` | 922 |
-| + ACPI, PCI, storport, AHCI, NVMe, disk, partition, volume, mount manager | 1240 |
-| + KMDF (`wdf01000`, `wdfldr`) | 1257 |
-| + named pipes, mailslots, console driver, PS/2, keyboard, serial | 1305 |
-| + USB 3 host, hub, HID | 1328 |
-| + NDIS, TCP/IP, sockets | 1430 |
-| + `win32k`, `win32kbase`, `win32kfull` | 1632 |
-| everything surveyed | 1693 (1690 of the kernel's 3070 named exports) |
+| `fastfat.sys` alone | 326 |
+| + `ntfs`, `fltmgr`, `ksecdd`, `cng`, `clfs` | 919 |
+| + ACPI, PCI, storport, AHCI, NVMe, disk, partition, volume, mount manager | 1237 |
+| + KMDF (`wdf01000`, `wdfldr`) | 1254 |
+| + named pipes, mailslots, console driver, PS/2, keyboard, serial | 1302 |
+| + USB 3 host, hub, HID | 1325 |
+| + NDIS, TCP/IP, sockets | 1427 |
+| + `win32k`, `win32kbase`, `win32kfull` | 1630 |
+| the whole corpus | 1740 (of the kernel's roughly 3070 named exports) |
+
+The user-mode counts further down come from an earlier survey of a later
+servicing build and are not yet reproducible from the tree; phase 6 pins
+them.
 
 What the numbers say:
 
@@ -80,7 +84,7 @@ What the numbers say:
   years and add a second ABI to get wrong.
 - **`hal.dll` is a shell.** In this build all 91 of its exports forward to
   `ntoskrnl.exe`. NK is one image answering to both names.
-- **File systems are the widest single step** (333 names for FAT, 922 with
+- **File systems are the widest single step** (326 names for FAT, 919 with
   NTFS) and the deepest: they bind to the cache and memory managers.
 - **Names are not effort.** The cache manager is 47 names and among the
   hardest work here.
@@ -125,7 +129,7 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 0 | Ground truth | exact Windows build pinned; reference Windows VM that runs the same test drivers; the surveyed corpus fetched by hash and listed in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; ledger shows 14 of ~1700 |
+| 0 | Ground truth | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; ledger shows 14 of 1740 |
 | 1 | **Kernel core** (next) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, APCs, timers, work queues | WDK samples that block, queue work and use timers; asynchronous IRPs; 0.0.1's tests under all CPUs |
 | 2 | Exceptions, objects, registry | SEH on both architectures; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |

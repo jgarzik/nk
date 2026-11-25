@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check oracle gate ci clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle gate ci clean
 
 help:
 	@echo "NK make targets:"
@@ -22,6 +22,7 @@ help:
 	@echo "  fmt-check  fail if the tree is not formatted"
 	@echo "  fixtures   download and verify the driver fixtures (target/fixtures/)"
 	@echo "  ledger     regenerate the compatibility ledger (ledger/)"
+	@echo "  corpus     re-read the import tables of Microsoft's inbox binaries (network)"
 	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
 	@echo "  ci         the subset of the gate that hosted CI runs (no KVM there)"
@@ -97,6 +98,11 @@ ledger: fixtures
 
 ledger-check: fixtures
 	@tools/ledger.py --check
+
+# Downloads the binaries of fixtures/corpus.toml and checks that the
+# committed import lists, which the ledger counts, are what they import.
+corpus:
+	@tools/corpus.py check
 
 # Replays oracle/*.script in the reference Windows VM and compares with
 # the committed transcripts. Needs KVM; the first run downloads the

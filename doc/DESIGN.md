@@ -29,7 +29,7 @@ manager and `winload`. Nothing else is NK's.
 The reason is the golden rule turned on Microsoft's own code: if an
 unmodified driver cannot tell NK from Windows, then Microsoft's inbox
 drivers are simply more drivers. Measurement supports it: the whole
-surveyed set of 46 inbox kernel binaries needs about 1700 of the kernel's
+corpus of 58 inbox kernel binaries needs 1740 of the kernel's roughly
 3070 exports, and stacking Microsoft's KMDF and USB drivers on top of the
 storage and file-system set adds only 40 of those (`doc/ROADMAP.md`).
 Rewriting those layers would take years and create second ABIs (storport,

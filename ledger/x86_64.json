@@ -173,5 +173,908 @@
     }
    ]
   }
- ]
+ ],
+ "corpus": {
+  "note": "Microsoft's kernel-mode binaries of the pinned build (fixtures/corpus.toml): distinct names they import from ntoskrnl.exe and hal.dll, by what NK does about each. Nothing here is loaded yet.",
+  "binaries": 58,
+  "kernel_names": {
+   "total": 1740,
+   "implemented": 9,
+   "partial": 4,
+   "traps": 1,
+   "missing": 1726
+  },
+  "by_binary": [
+   {
+    "file": "acpi.sys",
+    "version": "10.0.19041.1741",
+    "kernel": {
+     "total": 260,
+     "implemented": 6,
+     "partial": 0,
+     "traps": 0,
+     "missing": 254
+    },
+    "by_ordinal": 1,
+    "other_modules": {
+     "ext-ms-win-ntos-ksr-l1-1-3.dll": 6,
+     "wmilib.sys": 2,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "afd.sys",
+    "version": "10.0.19041.1766",
+    "kernel": {
+     "total": 251,
+     "implemented": 6,
+     "partial": 3,
+     "traps": 1,
+     "missing": 241
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "msrpc.sys": 10,
+     "netio.sys": 35,
+     "tdi.sys": 6
+    }
+   },
+   {
+    "file": "basicdisplay.sys",
+    "version": "10.0.19041.1949",
+    "kernel": {
+     "total": 40,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 1,
+     "missing": 38
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-ntos-ksr-l1-1-3.dll": 6,
+     "watchdog.sys": 11
+    }
+   },
+   {
+    "file": "bootvid.dll",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 3,
+     "implemented": 0,
+     "partial": 0,
+     "traps": 0,
+     "missing": 3
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "ci.dll",
+    "version": "10.0.19041.1865",
+    "kernel": {
+     "total": 240,
+     "implemented": 2,
+     "partial": 1,
+     "traps": 1,
+     "missing": 236
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-ci-xbox-l1-1-0.dll": 5,
+     "msrpc.sys": 10
+    }
+   },
+   {
+    "file": "classpnp.sys",
+    "version": "10.0.19041.1865",
+    "kernel": {
+     "total": 171,
+     "implemented": 6,
+     "partial": 3,
+     "traps": 1,
+     "missing": 161
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "clfs.sys",
+    "version": "10.0.19041.2006",
+    "kernel": {
+     "total": 186,
+     "implemented": 7,
+     "partial": 4,
+     "traps": 1,
+     "missing": 174
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "cng.sys",
+    "version": "10.0.19041.2006",
+    "kernel": {
+     "total": 121,
+     "implemented": 4,
+     "partial": 1,
+     "traps": 1,
+     "missing": 115
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "condrv.sys",
+    "version": "10.0.19041.1110",
+    "kernel": {
+     "total": 85,
+     "implemented": 6,
+     "partial": 3,
+     "traps": 1,
+     "missing": 75
+    },
+    "by_ordinal": 2,
+    "other_modules": {}
+   },
+   {
+    "file": "disk.sys",
+    "version": "10.0.19041.1865",
+    "kernel": {
+     "total": 68,
+     "implemented": 5,
+     "partial": 1,
+     "traps": 0,
+     "missing": 62
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "classpnp.sys": 33
+    }
+   },
+   {
+    "file": "dxgkrnl.sys",
+    "version": "10.0.19041.1865",
+    "kernel": {
+     "total": 486,
+     "implemented": 8,
+     "partial": 3,
+     "traps": 1,
+     "missing": 474
+    },
+    "by_ordinal": 1,
+    "other_modules": {
+     "ext-ms-win-ntos-ksr-l1-1-3.dll": 7,
+     "watchdog.sys": 53,
+     "wmilib.sys": 1
+    }
+   },
+   {
+    "file": "fastfat.sys",
+    "version": "10.0.19041.1826",
+    "kernel": {
+     "total": 326,
+     "implemented": 6,
+     "partial": 4,
+     "traps": 1,
+     "missing": 315
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-crypto-xbox-l1-1-0.dll": 5,
+     "ext-ms-win-ntos-clipsp-l1-1-0.dll": 1,
+     "ksecdd.sys": 15,
+     "msrpc.sys": 6
+    }
+   },
+   {
+    "file": "fltmgr.sys",
+    "version": "10.0.19041.1806",
+    "kernel": {
+     "total": 325,
+     "implemented": 8,
+     "partial": 4,
+     "traps": 1,
+     "missing": 312
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "fwpkclnt.sys",
+    "version": "10.0.19041.2006",
+    "kernel": {
+     "total": 78,
+     "implemented": 1,
+     "partial": 1,
+     "traps": 1,
+     "missing": 75
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "msrpc.sys": 15,
+     "ndis.sys": 11,
+     "netio.sys": 38
+    }
+   },
+   {
+    "file": "hidclass.sys",
+    "version": "10.0.19041.868",
+    "kernel": {
+     "total": 107,
+     "implemented": 4,
+     "partial": 1,
+     "traps": 1,
+     "missing": 101
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "hidparse.sys": 5,
+     "sleepstudyhelper.sys": 8,
+     "wmilib.sys": 2,
+     "wpprecorder.sys": 7
+    }
+   },
+   {
+    "file": "hidparse.sys",
+    "version": "10.0.19041.868",
+    "kernel": {
+     "total": 2,
+     "implemented": 0,
+     "partial": 0,
+     "traps": 0,
+     "missing": 2
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "hidusb.sys",
+    "version": "10.0.19041.868",
+    "kernel": {
+     "total": 33,
+     "implemented": 2,
+     "partial": 1,
+     "traps": 0,
+     "missing": 30
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "hidclass.sys": 1,
+     "usbd.sys": 2,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "i8042prt.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 91,
+     "implemented": 4,
+     "partial": 0,
+     "traps": 1,
+     "missing": 86
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wmilib.sys": 2,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "intelpep.sys",
+    "version": "10.0.19041.1266",
+    "kernel": {
+     "total": 78,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 77
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wdfldr.sys": 4
+    }
+   },
+   {
+    "file": "kbdclass.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 66,
+     "implemented": 4,
+     "partial": 0,
+     "traps": 0,
+     "missing": 62
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wmilib.sys": 2,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "kbdhid.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 66,
+     "implemented": 5,
+     "partial": 1,
+     "traps": 1,
+     "missing": 59
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "hidparse.sys": 9,
+     "wmilib.sys": 2,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "kdcom.dll",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 13,
+     "implemented": 0,
+     "partial": 0,
+     "traps": 0,
+     "missing": 13
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "ksecdd.sys",
+    "version": "10.0.19041.1586",
+    "kernel": {
+     "total": 120,
+     "implemented": 4,
+     "partial": 1,
+     "traps": 1,
+     "missing": 114
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "msrpc.sys": 10
+    }
+   },
+   {
+    "file": "mountmgr.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 91,
+     "implemented": 6,
+     "partial": 0,
+     "traps": 0,
+     "missing": 85
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "msfs.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 76,
+     "implemented": 5,
+     "partial": 0,
+     "traps": 1,
+     "missing": 70
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "msisadrv.sys",
+    "version": "10.0.19041.1202",
+    "kernel": {
+     "total": 14,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 13
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wdfldr.sys": 4
+    }
+   },
+   {
+    "file": "msrpc.sys",
+    "version": "10.0.19041.1706",
+    "kernel": {
+     "total": 82,
+     "implemented": 2,
+     "partial": 0,
+     "traps": 1,
+     "missing": 79
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "mup.sys",
+    "version": "10.0.19041.844",
+    "kernel": {
+     "total": 147,
+     "implemented": 6,
+     "partial": 0,
+     "traps": 1,
+     "missing": 140
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "ndis.sys",
+    "version": "10.0.19041.1387",
+    "kernel": {
+     "total": 359,
+     "implemented": 7,
+     "partial": 2,
+     "traps": 1,
+     "missing": 349
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "netio.sys": 14,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "netio.sys",
+    "version": "10.0.19041.1682",
+    "kernel": {
+     "total": 235,
+     "implemented": 4,
+     "partial": 2,
+     "traps": 1,
+     "missing": 228
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "cng.sys": 3,
+     "msrpc.sys": 11,
+     "ndis.sys": 35
+    }
+   },
+   {
+    "file": "npfs.sys",
+    "version": "10.0.19041.1526",
+    "kernel": {
+     "total": 111,
+     "implemented": 5,
+     "partial": 3,
+     "traps": 1,
+     "missing": 102
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "ntfs.sys",
+    "version": "10.0.19041.1949",
+    "kernel": {
+     "total": 625,
+     "implemented": 7,
+     "partial": 4,
+     "traps": 1,
+     "missing": 613
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-crypto-xbox-l1-1-0.dll": 5,
+     "ext-ms-win-fs-clfs-l1-1-0.dll": 36,
+     "ext-ms-win-ntos-clipsp-l1-1-0.dll": 1,
+     "ext-ms-win-ntos-ksr-l1-1-1.dll": 7,
+     "ksecdd.sys": 15,
+     "msrpc.sys": 6
+    }
+   },
+   {
+    "file": "null.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 5,
+     "implemented": 5,
+     "partial": 0,
+     "traps": 0,
+     "missing": 0
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "partmgr.sys",
+    "version": "10.0.19041.1889",
+    "kernel": {
+     "total": 137,
+     "implemented": 8,
+     "partial": 1,
+     "traps": 0,
+     "missing": 128
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wmilib.sys": 2
+    }
+   },
+   {
+    "file": "pci.sys",
+    "version": "10.0.19041.1949",
+    "kernel": {
+     "total": 239,
+     "implemented": 5,
+     "partial": 1,
+     "traps": 1,
+     "missing": 232
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-ntos-ksr-l1-1-3.dll": 6,
+     "pshed.dll": 2,
+     "wpprecorder.sys": 7
+    }
+   },
+   {
+    "file": "pshed.dll",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 41,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 40
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "ramdisk.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 71,
+     "implemented": 6,
+     "partial": 1,
+     "traps": 0,
+     "missing": 64
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "serial.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 68,
+     "implemented": 6,
+     "partial": 0,
+     "traps": 1,
+     "missing": 61
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wmilib.sys": 2
+    }
+   },
+   {
+    "file": "sleepstudyhelper.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 19,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 18
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "storahci.sys",
+    "version": "10.0.19041.1889",
+    "kernel": {
+     "total": 0,
+     "implemented": 0,
+     "partial": 0,
+     "traps": 0,
+     "missing": 0
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "storport.sys": 16
+    }
+   },
+   {
+    "file": "stornvme.sys",
+    "version": "10.0.19041.1566",
+    "kernel": {
+     "total": 0,
+     "implemented": 0,
+     "partial": 0,
+     "traps": 0,
+     "missing": 0
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "storport.sys": 18
+    }
+   },
+   {
+    "file": "storport.sys",
+    "version": "10.0.19041.1949",
+    "kernel": {
+     "total": 269,
+     "implemented": 8,
+     "partial": 3,
+     "traps": 1,
+     "missing": 257
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "tcpip.sys",
+    "version": "10.0.19041.2006",
+    "kernel": {
+     "total": 329,
+     "implemented": 8,
+     "partial": 3,
+     "traps": 1,
+     "missing": 317
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "cng.sys": 15,
+     "fltmgr.sys": 2,
+     "fwpkclnt.sys": 54,
+     "ksecdd.sys": 7,
+     "msrpc.sys": 11,
+     "ndis.sys": 49,
+     "netio.sys": 304
+    }
+   },
+   {
+    "file": "tdi.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 42,
+     "implemented": 1,
+     "partial": 1,
+     "traps": 1,
+     "missing": 39
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ndis.sys": 3
+    }
+   },
+   {
+    "file": "ucx01000.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 54,
+     "implemented": 4,
+     "partial": 2,
+     "traps": 1,
+     "missing": 47
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "sleepstudyhelper.sys": 6,
+     "wdfldr.sys": 5,
+     "wpprecorder.sys": 4
+    }
+   },
+   {
+    "file": "usbd.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 29,
+     "implemented": 2,
+     "partial": 0,
+     "traps": 0,
+     "missing": 27
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "usbhub3.sys",
+    "version": "10.0.19041.1202",
+    "kernel": {
+     "total": 115,
+     "implemented": 2,
+     "partial": 2,
+     "traps": 1,
+     "missing": 110
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ksecdd.sys": 7,
+     "sleepstudyhelper.sys": 9,
+     "usbd.sys": 6,
+     "wdfldr.sys": 4,
+     "wpprecorder.sys": 10
+    }
+   },
+   {
+    "file": "usbxhci.sys",
+    "version": "10.0.19041.1806",
+    "kernel": {
+     "total": 121,
+     "implemented": 3,
+     "partial": 2,
+     "traps": 0,
+     "missing": 116
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "sleepstudyhelper.sys": 7,
+     "wdfldr.sys": 4,
+     "wpprecorder.sys": 11
+    }
+   },
+   {
+    "file": "volmgr.sys",
+    "version": "10.0.19041.1806",
+    "kernel": {
+     "total": 109,
+     "implemented": 8,
+     "partial": 1,
+     "traps": 1,
+     "missing": 99
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "wmilib.sys": 2
+    }
+   },
+   {
+    "file": "watchdog.sys",
+    "version": "10.0.19041.868",
+    "kernel": {
+     "total": 89,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 88
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-ntos-werkernel-l1-1-0.dll": 5
+    }
+   },
+   {
+    "file": "wdf01000.sys",
+    "version": "1.31.19041.1566",
+    "kernel": {
+     "total": 217,
+     "implemented": 8,
+     "partial": 3,
+     "traps": 1,
+     "missing": 205
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "sleepstudyhelper.sys": 12,
+     "wdfldr.sys": 2
+    }
+   },
+   {
+    "file": "wdfldr.sys",
+    "version": "1.31.19041.1151",
+    "kernel": {
+     "total": 38,
+     "implemented": 0,
+     "partial": 0,
+     "traps": 1,
+     "missing": 37
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "wimmount.sys",
+    "version": "10.0.19041.1202",
+    "kernel": {
+     "total": 38,
+     "implemented": 1,
+     "partial": 1,
+     "traps": 1,
+     "missing": 35
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "fltmgr.sys": 40
+    }
+   },
+   {
+    "file": "win32k.sys",
+    "version": "10.0.19041.2006",
+    "kernel": {
+     "total": 37,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 36
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "ext-ms-win-core-win32k-dxgk-l1-1-0.dll": 205,
+     "ext-ms-win-core-win32k-flipmgr-l1-1-0.dll": 21,
+     "ext-ms-win-core-win32k-surfmgr-l1-1-0.dll": 17,
+     "ext-ms-win-core-win32k-tokenmgr-l1-1-0.dll": 8,
+     "watchdog.sys": 5
+    }
+   },
+   {
+    "file": "win32kbase.sys",
+    "version": "10.0.19041.1949",
+    "kernel": {
+     "total": 451,
+     "implemented": 2,
+     "partial": 0,
+     "traps": 1,
+     "missing": 448
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "dxgkrnl.sys": 5,
+     "ext-ms-win-ntos-werkernel-l1-1-1.dll": 1,
+     "ksecdd.sys": 1,
+     "msrpc.sys": 11,
+     "watchdog.sys": 26,
+     "wpprecorder.sys": 7
+    }
+   },
+   {
+    "file": "win32kfull.sys",
+    "version": "10.0.19041.2006",
+    "kernel": {
+     "total": 439,
+     "implemented": 1,
+     "partial": 1,
+     "traps": 1,
+     "missing": 436
+    },
+    "by_ordinal": 0,
+    "other_modules": {
+     "cng.sys": 11,
+     "dxgkrnl.sys": 3,
+     "hidparse.sys": 13,
+     "msrpc.sys": 9,
+     "watchdog.sys": 8,
+     "win32kbase.sys": 1599,
+     "wpprecorder.sys": 7
+    }
+   },
+   {
+    "file": "wmilib.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 7,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 0,
+     "missing": 6
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   },
+   {
+    "file": "wpprecorder.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 36,
+     "implemented": 1,
+     "partial": 0,
+     "traps": 1,
+     "missing": 34
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
+   }
+  ]
+ }
 }
