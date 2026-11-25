@@ -1,6 +1,6 @@
 # Security
 
-NK 0.0.1 is a research milestone, not a system to deploy. Read this before
+NK is a research milestone, not a system to deploy. Read this before
 running it anywhere that matters.
 
 ## What NK does not protect against

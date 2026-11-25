@@ -100,7 +100,7 @@ not imitate the Windows loader block: no driver sees it, so it is not part
 of the contract. Today `nkload` loads the kernel and a fixed list of test
 drivers; reading the hive and its driver list arrives with the registry.
 
-## As built in 0.0.1
+## As built
 
 The rest of this file records what the code does today. On QEMU, x86-64
 and arm64 alike:
@@ -115,8 +115,7 @@ and arm64 alike:
 5. Results go to the serial port as `NK-TEST` lines; the machine powers
    off.
 
-There is no user mode, no scheduler and only the boot CPU runs. The
-proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
+There is no user mode and no scheduler. The proof drivers are Microsoft's inbox `null.sys` and Microsoft's `sioctl`
 sample built with the WDK (see `doc/TESTING.md`).
 
 ### The machine description
@@ -292,7 +291,7 @@ The object namespace is a flat table of device names and symbolic links,
 case-insensitive, with `\DosDevices`, `\??` and `\GLOBAL??` as one
 directory. There are no handles, no directories and no security checks.
 
-### What 0.0.1 leaves out, and how it stays honest
+### What NK leaves out, and how it stays honest
 
 No threads, waits, timers, SEH, PnP or power management. Where a proof
 driver imports something in that territory but never reaches it on the

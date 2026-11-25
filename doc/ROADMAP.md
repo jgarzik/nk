@@ -1,6 +1,6 @@
 # Roadmap
 
-One sequence of phases from today's 0.0.1 to a Windows rescue disk: real
+One sequence of phases from today's NK to a Windows rescue disk: real
 Windows 10 user mode at a `cmd.exe` prompt, on a kernel that is entirely
 NK. Each phase gets its own detailed plan when it starts; this file only
 fixes the order, the reason for the order, and what proves a phase done.
@@ -8,20 +8,22 @@ fixes the order, the reason for the order, and what proves a phase done.
 The one rule that outranks everything here: **an unmodified Windows
 driver binary must not be able to tell NK from Windows.**
 
-## Where NK is: 0.0.1
+## Where NK is
 
 On QEMU, x86-64 and arm64: UEFI boot through NK's own loader, own page
 tables, a pool, a PE loader with import binding, driver/device/file
-objects, synchronous IRPs with completion routines and MDLs. Microsoft's
+objects, synchronous IRPs with completion routines and MDLs; interrupt
+controllers, the IRQL as their priority mask, a clock, and every
+processor running. Microsoft's
 `null.sys` (x86-64) and the WDK-built `sioctl.sys` (both) load, do I/O and
 unload without leaks.
 
-Not there: interrupts, timers, threads, more than one CPU, structured
-exception handling, Plug and Play, any hardware device, user mode. Open
+Not there: device interrupts, timers, threads, structured exception
+handling, Plug and Play, any hardware device, user mode. Open
 gaps carried into the phases below: no arm64 `null.sys` (no usable
 source; stays SKIP), `METHOD_NEITHER` untested (phase 2), never run on a
-physical machine (phase 3). Since 0.0.1 the two drivers' results have
-been compared with a run on real Windows, request by request (`oracle/`).
+physical machine (phase 3). The two drivers' results match a run on real
+Windows, request by request (`oracle/`).
 
 ## Destination
 
@@ -35,7 +37,7 @@ and on QEMU arm64 once arm64 Windows files can be obtained.
 Flat boot is the target because it needs the fewest drivers: no RAM disk,
 no WIM filter, no NTFS. Booting an untouched `boot.wim` comes after.
 
-## Decisions (2026-11-25)
+## Decisions
 
 | Question | Decision |
 | --- | --- |
@@ -49,7 +51,7 @@ no WIM filter, no NTFS. Booting an untouched `boot.wim` comes after.
 | arm64 | First class for all NK code: every commit builds and boots both. Proofs that need a Microsoft arm64 binary nobody can fetch print SKIP until the supply is solved. |
 | Sources for undocumented behaviour | Microsoft's public symbols, reading the fixture binaries, a reference Windows VM, and reading ReactOS and Wine for understanding. No code copied or translated from them; never leaked source. |
 
-## What was measured
+## Measurements
 
 58 kernel-mode binaries of the pinned build (x86-64) are listed in
 `fixtures/corpus.toml`: Microsoft's drivers and the libraries they import
@@ -60,7 +62,7 @@ from `ntoskrnl.exe` and `hal.dll`.
 
 | Corpus, growing | Names needed |
 | --- | --- |
-| NK 0.0.1 (`null`, `sioctl`) | 14 |
+| `null`, `sioctl` | 14 |
 | `fastfat.sys` alone | 326 |
 | + `ntfs`, `fltmgr`, `ksecdd`, `cng`, `clfs` | 919 |
 | + ACPI, PCI, storport, AHCI, NVMe, disk, partition, volume, mount manager | 1237 |
@@ -71,9 +73,8 @@ from `ntoskrnl.exe` and `hal.dll`.
 | + `win32k`, `win32kbase`, `win32kfull` | 1630 |
 | the whole corpus | 1740 (of the kernel's roughly 3070 named exports) |
 
-The user-mode counts further down come from an earlier survey of a later
-servicing build and are not yet reproducible from the tree; phase 6 pins
-them.
+The user-mode counts further down are from a later servicing build and
+are not yet reproducible from the tree; phase 6 pins them.
 
 What the numbers say:
 
@@ -112,7 +113,7 @@ The parts of an NT kernel, and the phase that first builds each:
 | Ex | pools, resources, push locks, work queues, lookaside lists | slab, rwsem, workqueue | 1, 2 |
 | Ob | typed objects, handles, the object namespace | kobject + fd table + a VFS-like tree | 2 |
 | Cm | the registry: hive files, keys, values | (none; sysfs + /etc, as a database) | 2, 7 |
-| Io | I/O packets, device stacks, file objects, mounting | block/char layers, VFS glue | 0.0.1, 2, 4 |
+| Io | I/O packets, device stacks, file objects, mounting | block/char layers, VFS glue | present, 2, 4 |
 | PnP, Po | device tree, driver binding, resources, power | driver core, PM core | 3 |
 | Mm | address spaces, sections, faults, MDLs | `mm/` | 4, 6 |
 | Cc, FsRtl | file cache and file-system helper library | page cache, `fs/` libs | 4 |
@@ -130,7 +131,7 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
 | 0 | Ground truth | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; ledger shows 14 of 1740 |
-| 1 | **Kernel core** (next) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, APCs, timers, work queues | WDK samples that block, queue work and use timers; asynchronous IRPs; 0.0.1's tests under all CPUs |
+| 1 | **Kernel core** (in progress) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, APCs, timers, work queues | WDK samples that block, queue work and use timers; asynchronous IRPs; the existing tests under all CPUs |
 | 2 | Exceptions, objects, registry | SEH on both architectures; the rest of Ex; object manager with handles and directories; registry read from a real hive; API sets, ordinal imports, export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's support libraries load; a named-pipe round trip through `npfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
 | 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
@@ -151,7 +152,7 @@ logon.
 ## Next step: phases 0 and 1
 
 Phase 1, the kernel core, is next because every other phase lists it as a
-prerequisite. It is also 0.0.1's sharpest limit: a driver that returns
+prerequisite. It is also NK's sharpest limit: a driver that returns
 "pending" cannot be waited for, and no hardware driver can run without
 interrupts and DPCs. Inside the phase:
 
@@ -198,8 +199,7 @@ its rate is fixed at 64 Hz; thread priorities are not boosted.
   of what was served.
 - **No prompt until phase 9.** Phases 6 to 8 are judged by test programs
   and redirected output, not by anything a person can type at. The window
-  system pulls in `dxgkrnl.sys` and `watchdog.sys`, which were not
-  surveyed.
+  system pulls in `dxgkrnl.sys` and `watchdog.sys` as well.
 - **Security features NK lacks** (hypervisor and secure-kernel helpers,
   code integrity). A driver that asks gets the documented "not present"
   answer; never a pretended success.

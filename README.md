@@ -15,10 +15,10 @@ Windows rescue disk at a `cmd.exe` prompt. `doc/ROADMAP.md` lays out the
 phases. NK contains and ships no Windows code, and boots on its own
 through UEFI.
 
-## Status: 0.0.1, driver bootstrap
+## Status: driver bootstrap
 
-This first release is a proof that the approach works end to end, on a
-deliberately small surface. Under QEMU, on both architectures, NK:
+NK is a proof that the approach works end to end, on a deliberately
+small surface. Under QEMU, on both architectures, NK:
 
 1. boots from UEFI firmware through its own loader,
 2. takes over the CPU and memory,
@@ -37,9 +37,9 @@ The drivers are Microsoft's, not written for NK:
 | `sioctl.sys` | Microsoft's WDM IOCTL sample, built with Microsoft's WDK | runs | runs |
 
 **What this is not.** Two software drivers are not general driver
-compatibility. 0.0.1 has no threads or scheduler, no interrupts, no
-structured exception handling, no Plug and Play, no user mode, and runs
-only the boot CPU. It has not been run on physical hardware. The two
+compatibility. NK has no threads or scheduler, no device interrupts,
+no structured exception handling, no Plug and Play and no user mode. It
+has not been run on physical hardware. The two
 drivers' request-by-request results match a run on real Windows 10
 (`oracle/`); the rest of what the tests expect comes from Microsoft's
 documentation, sample source and binaries. `doc/ROADMAP.md` says what is
@@ -127,10 +127,10 @@ SHA-256; the tests download them and reject a mismatch.
 - `doc/DESIGN.md`: what NK is, its principles, and the decisions behind
   the code
 - `doc/BOOT.md`: from firmware to the kernel's first instruction
-- `doc/ABI.md`: what was measured about compilers and layouts, and what is
-  still unverified
+- `doc/ABI.md`: what the kernel relies on about compilers and layouts,
+  and what is still unverified
 - `doc/TESTING.md`: unit tests, boot tests, fixtures
-- `doc/ROADMAP.md`: the phases from 0.0.1 to a Windows rescue disk
+- `doc/ROADMAP.md`: the phases from here to a Windows rescue disk
 - `doc/LOCKING.md`: IRQL, the kernel's locks, their order
 - `doc/UNSAFE.md`: rules for `unsafe` code
 
