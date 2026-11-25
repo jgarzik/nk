@@ -73,11 +73,6 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// The physical address behind the direct-map address `va`.
-pub fn virt_to_phys(va: *const u8) -> u64 {
-    va as u64 - HHDM.load(Ordering::Relaxed)
-}
-
 /// Allocate `count` contiguous, zeroed frames. Returns the physical address.
 pub fn alloc_frames(count: usize) -> Option<u64> {
     let pfn = FRAMES.lock().as_mut()?.alloc(count as u64)?;

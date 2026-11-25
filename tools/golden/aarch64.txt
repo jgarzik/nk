@@ -46,6 +46,9 @@ wait.delay ok
 wait.semaphore ok
 wait.ping-pong ok
 wait.race ok
+ob.references ok
+ob.handles ok
+ob.thread ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load skip

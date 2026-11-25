@@ -1,0 +1,7 @@
+# Opening a handle does not take a reference: the object is freed while
+# a handle still names it.
+scenario: x86_64
+fails: scenario
+file: kernel/ob/handle.rs
+occurrence: 1
+remove:         object::reference(body);

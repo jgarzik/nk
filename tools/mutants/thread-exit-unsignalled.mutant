@@ -1,0 +1,6 @@
+# A thread that ends is not signalled: whoever waits for it waits for
+# ever.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/thread.rs
+remove:                 super::object::signal(header).store(1, Ordering::Release);

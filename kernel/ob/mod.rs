@@ -7,6 +7,9 @@
 //! path remainder after a device name yet, so `\Device\Foo\bar` does not
 //! open `\Device\Foo`.
 
+pub mod handle;
+pub mod object;
+
 use crate::ke::{Rank, SpinLock};
 use alloc::vec::Vec;
 use nk_ntabi::io::DEVICE_OBJECT;

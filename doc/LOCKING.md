@@ -68,6 +68,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 20 | `ldr::LOADED` | table of loaded images | DISPATCH |
 | 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
+| 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
@@ -79,8 +80,9 @@ already held has a lower rank; two locks of one rank never nest.
 
 Why this order:
 
-- The three tables at the top hold `Vec`s, which allocate from the pool
-  while the table's lock is held.
+- The tables above the pool hold `Vec`s, which allocate from the pool
+  while the table's lock is held. An object's last reference is never
+  dropped under the handle table's lock: freeing takes the pool's.
 - The pool and the address space each take frames while holding their own
   lock (a new arena; a new page table). They never take each other.
 - An interprocessor call may be made with any of the above held:
@@ -196,8 +198,10 @@ interleaving with up to three wakers is checked on the host.
   the object's, when time ran out) is unlinked by the thread itself,
   under that object's lock, before its wait returns. A waker that meets
   such a leftover block cannot claim its thread and passes over it.
-- **A thread takes no pending timer to its grave.** A wait cancels its
-  timer before it returns; reaping a thread checks.
+- **A thread takes no timer to its grave.** A wait cancels its timer
+  and, if an expiry had already taken the timer out of its table, waits
+  until that expiry has finished with it, before it returns. Reaping a
+  thread checks that its timer is neither pending nor mid-expiry.
 
 ## What drivers get
 

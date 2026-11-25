@@ -4,4 +4,4 @@
 scenario: x86_64
 fails: scenario
 file: kernel/ke/wait.rs
-remove:             timer::KeCancelTimer(my_timer);
+remove:             timer::cancel_and_settle(my_timer);

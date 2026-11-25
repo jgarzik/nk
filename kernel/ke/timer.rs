@@ -268,13 +268,41 @@ unsafe extern "C" fn expire(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mu
     table.checked.store(now_tick, Ordering::Relaxed);
 }
 
-/// Whether `timer` is in a timer table.
+/// Whether `timer` is in a timer table, or has been taken out of one by
+/// an expiry that has not finished with it.
 ///
 /// # Safety
 /// `timer` points to a live `KTIMER`.
 pub unsafe fn pending(timer: *mut KTIMER) -> bool {
     // SAFETY: per the contract.
-    unsafe { misc_flags(timer) }.load(Ordering::Acquire) & TIMER_INSERTED != 0
+    unsafe { misc_flags(timer) }.load(Ordering::Acquire) & (TIMER_INSERTED | TIMER_EXPIRED) != 0
+}
+
+/// Cancel `timer` and do not return while an expiry is still working on
+/// it: afterwards nothing in the kernel refers to the timer, and its
+/// memory may go. For timers NK owns (a thread's wait timer); a driver's
+/// timer has Windows' contract instead.
+///
+/// Expiry takes a due timer out of its table and marks it expired under
+/// the table's lock, then signals it under the timer's own lock, where
+/// it clears the mark, and does not touch it after letting that lock go.
+/// So once the timer is out of every table: a mark means an expiry is on
+/// its way, and taking the timer's lock after the mark is gone waits out
+/// one that is finishing. The expiry runs in a DPC, which thread code at
+/// `DISPATCH_LEVEL` on the same processor cannot have interrupted, so
+/// the one being waited for is on another processor and will finish.
+///
+/// # Safety
+/// `timer` is a live `KTIMER` with no DPC, which nothing else sets.
+pub unsafe fn cancel_and_settle(timer: *mut KTIMER) {
+    // SAFETY: per the contract.
+    unsafe {
+        KeCancelTimer(timer);
+        while misc_flags(timer).load(Ordering::Acquire) & TIMER_EXPIRED != 0 {
+            core::hint::spin_loop();
+        }
+        drop(lock(timer));
+    }
 }
 
 /// [`KeInitializeTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimer).

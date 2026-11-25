@@ -256,3 +256,29 @@ fn wait_objects_match_the_kernel() {
         Some((TIMER_EXPIRED.trailing_zeros() as u8, 1))
     );
 }
+
+#[test]
+fn object_header_matches_the_kernel() {
+    use crate::ob::*;
+    use core::mem::offset_of;
+    let Some(types) = kernel_types() else { return };
+    let header = types.layout("_OBJECT_HEADER").expect("_OBJECT_HEADER");
+    let field = |name| offset(&header, "_OBJECT_HEADER", name);
+    assert_eq!(OBJECT_BODY, field("Body"));
+    assert_eq!(
+        offset_of!(OBJECT_HEADER, PointerCount),
+        field("PointerCount")
+    );
+    assert_eq!(offset_of!(OBJECT_HEADER, HandleCount), field("HandleCount"));
+    assert_eq!(offset_of!(OBJECT_HEADER, Lock), field("Lock"));
+    assert_eq!(offset_of!(OBJECT_HEADER, TypeIndex), field("TypeIndex"));
+    assert_eq!(offset_of!(OBJECT_HEADER, Flags), field("Flags"));
+    assert_eq!(
+        offset_of!(OBJECT_HEADER, ObjectCreateInfo),
+        field("ObjectCreateInfo")
+    );
+    assert_eq!(
+        offset_of!(OBJECT_HEADER, SecurityDescriptor),
+        field("SecurityDescriptor")
+    );
+}

@@ -460,7 +460,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ObfDereferenceObject",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -505,7 +505,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ObReferenceObjectByHandle",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -550,7 +550,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExEventObjectType",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

@@ -11,6 +11,7 @@ mod dpc;
 mod loader;
 mod neg;
 mod null;
+mod ob;
 mod oracle;
 mod sioctl;
 mod smp;
@@ -31,6 +32,7 @@ pub static GROUPS: &[&Group] = &[
     &timer::GROUP,
     &thread::GROUP,
     &wait::GROUP,
+    &ob::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
@@ -76,16 +78,21 @@ pub struct Resources {
     names: usize,
     /// Threads that exist: a test waits for the ones it made to end.
     threads: u32,
+    /// Kernel handles open.
+    handles: usize,
 }
 
 pub fn resources() -> Resources {
     let pool = mm::pool::usage();
+    // The handle table keeps its own storage once it has grown.
+    let (table_blocks, table_bytes) = crate::ob::handle::storage();
     Resources {
-        pool_blocks: pool.blocks,
-        pool_bytes: pool.bytes,
+        pool_blocks: pool.blocks - table_blocks,
+        pool_bytes: pool.bytes - table_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
         names: crate::ob::count(),
         threads: crate::ke::thread::count(),
+        handles: crate::ob::handle::count(),
     }
 }

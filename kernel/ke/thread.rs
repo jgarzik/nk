@@ -38,14 +38,18 @@
 //!   thread instead, which is never busy for long and never wanted
 //!   elsewhere; so no ring of processors can form, each waiting for the
 //!   thread the next is leaving.
-//! - A thread that exits is freed by the thread that runs after it.
+//! - A thread that exits is buried by the thread that runs after it:
+//!   its stack is freed, it is signalled (a thread is an object others
+//!   can wait on), and the reference it held on itself while it ran is
+//!   dropped. The block itself lives until the last reference goes.
 
 use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
 use crate::mm::{self, stack::Stack};
+use crate::ob;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
-use nk_ntabi::ke::{KTIMER, KWAIT_BLOCK};
+use nk_ntabi::ke::{DISPATCHER_HEADER, KTIMER, KWAIT_BLOCK};
 use nk_ntabi::pcr::NATIVE as PCR;
 use nk_ntabi::thread as layout;
 
@@ -76,8 +80,6 @@ pub struct Thread {
     /// The next thread in a waker's list of threads to make ready.
     wake_link: *mut Thread,
 }
-
-const _: () = assert!(size_of::<Thread>() <= mm::PAGE_SIZE);
 
 /// One processor's dispatcher state.
 pub struct Dispatcher {
@@ -162,10 +164,16 @@ fn set_current(thread: *mut Thread) {
 
 /// Allocate a thread block and fill in what every thread has.
 fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread> {
-    let thread = mm::phys_to_virt(mm::alloc_frames(1)?).cast::<Thread>();
-    // SAFETY: a fresh, zeroed page, larger than a `Thread` and aligned
-    // for it. Zero is valid for the Windows block; the rest is written.
+    let thread =
+        ob::object::create(&ob::object::THREAD_TYPE, size_of::<Thread>())?.cast::<Thread>();
+    assert!(
+        thread.is_aligned(),
+        "the pool gave a misaligned thread block"
+    );
+    // SAFETY: a fresh, zeroed object of a thread's size, aligned for
+    // it. Zero is valid for the Windows block; the rest is written.
     unsafe {
+        super::object::init_wait_list(thread.cast());
         (&raw mut (*thread).stack).write(stack);
         (&raw mut (*thread).entry).write(None);
         (&raw mut (*thread).swap_busy).write(AtomicBool::new(false));
@@ -207,12 +215,14 @@ static NEXT_IDEAL: AtomicU32 = AtomicU32::new(0);
 pub const ANYWHERE: u64 = u64::MAX;
 
 /// Create a thread that runs `entry(argument)` at `thread_priority` on
-/// the processors in the mask `affinity`, and make it ready.
-pub fn create(
+/// the processors in the mask `affinity`, and make it ready. With
+/// `keep`, the caller gets a reference of its own.
+fn create_thread(
     entry: Entry,
     argument: usize,
     thread_priority: u8,
     affinity: u64,
+    keep: bool,
 ) -> Result<*mut Thread, &'static str> {
     let allowed = affinity & super::smp::online();
     if allowed == 0 {
@@ -239,9 +249,37 @@ pub fn create(
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
     }
     THREADS.fetch_add(1, Ordering::AcqRel);
-    // SAFETY: the thread is whole and on no queue.
-    unsafe { make_ready(thread) };
+    // SAFETY: the thread is whole and on no queue. The caller's
+    // reference is taken first: the thread may run and end at once.
+    unsafe {
+        if keep {
+            ob::object::reference(thread.cast());
+        }
+        make_ready(thread);
+    }
     Ok(thread)
+}
+
+/// Create a thread and forget it: it frees itself when it ends. The
+/// pointer returned is for identification only.
+pub fn create(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    create_thread(entry, argument, thread_priority, affinity, false)
+}
+
+/// Create a thread and keep a reference to it, to wait for its end. The
+/// caller drops the reference with `ob::object::dereference`.
+pub fn create_referenced(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    create_thread(entry, argument, thread_priority, affinity, true)
 }
 
 /// Whether processor `number` is running its idle thread.
@@ -593,6 +631,7 @@ fn after_switch() {
     // nothing else refers to it and it is on no queue.
     unsafe {
         if field::<u8>(previous, layout::STATE).read() == layout::state::TERMINATED {
+            let header = previous.cast::<DISPATCHER_HEADER>();
             // Its memory is about to be reused: nothing may still point
             // into it. A wait cancels its own timer, so this holds.
             assert!(
@@ -600,8 +639,16 @@ fn after_switch() {
                 "a thread exited with its wait timer pending"
             );
             mm::stack::free((*previous).stack);
-            mm::free_frames(mm::virt_to_phys(previous.cast()), 1);
+            // It has ended: whoever waits for it may go on.
+            let woken = {
+                let _lock = super::object::ObjectLock::take(header);
+                super::object::signal(header).store(1, Ordering::Release);
+                super::object::satisfy(header)
+            };
+            woken.ready();
             THREADS.fetch_sub(1, Ordering::AcqRel);
+            // The reference it held on itself while it could run.
+            ob::object::dereference(previous.cast());
         } else {
             (*previous).swap_busy.store(false, Ordering::Release);
         }

@@ -1,0 +1,6 @@
+# A handle is accepted as whatever type the caller asks for.
+scenario: aarch64
+fails: ob.handles
+file: kernel/ob/handle.rs
+replace:         if ty.is_some_and(|ty| !core::ptr::eq(ty, object::type_of(*body))) {
+with:         if false {

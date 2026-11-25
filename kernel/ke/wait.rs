@@ -14,8 +14,9 @@
 //! 2. Set the timer, then, under the timer's lock, link the timer block,
 //!    or end the wait at once if the time has already come.
 //! 3. Give up the processor, unless a waker got there first.
-//! 4. Awake: cancel the timer, and unlink whichever blocks are still
-//!    linked, each under its object's lock. Only then is the wait over
+//! 4. Awake: cancel the timer, wait out any expiry of it already under
+//!    way, and unlink whichever blocks are still linked, each under its
+//!    object's lock. Only then is the wait over
 //!    and the blocks free for the next one.
 //!
 //! Wakers never wait for the waiter and never touch the object after
@@ -154,7 +155,10 @@ pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>)
             .status()
             .expect("a thread woke from a wait that nothing ended");
         if timeout.is_some() {
-            timer::KeCancelTimer(my_timer);
+            // Not just cancelled: an expiry of this timer may be under
+            // way on another processor, and once this wait returns the
+            // thread, timer and all, may be freed.
+            timer::cancel_and_settle(my_timer);
             withdraw(&raw mut (*my_timer).Header, timer_block);
         }
         if let Some(object) = object {

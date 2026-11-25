@@ -31,6 +31,8 @@ pub enum Rank {
     Images = 20,
     /// The object namespace (`ob`).
     Namespace = 30,
+    /// The kernel handle table (`ob::handle`).
+    Handles = 35,
     /// The executive pool (`mm::pool`).
     Pool = 40,
     /// Kernel address space and page tables (`mm::map`).

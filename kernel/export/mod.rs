@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{io, ke, ldr, mm, rtl};
+use crate::{io, ke, ldr, mm, ob, rtl};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -63,8 +63,25 @@ macro_rules! export {
     };
 }
 
+/// A variable, not a function: the import is bound to its address.
+macro_rules! export_variable {
+    ($state:ident, $name:literal, $variable:path) => {
+        Export {
+            module: NT,
+            name: $name,
+            addr: $variable.address(),
+            state: State::$state,
+        }
+    };
+}
+
 static EXPORTS: &[Export] = &[
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
+    export_variable!(
+        Implemented,
+        "ExEventObjectType",
+        ob::object::ExEventObjectType
+    ),
     export!(Implemented, mm::pool::ExFreePoolWithTag),
     export!(Partial, io::mdl::IoAllocateMdl),
     export!(Implemented, io::device::IoCreateDevice),
@@ -101,6 +118,8 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ldr::MmPageEntireDriver),
     export!(Partial, io::mdl::MmProbeAndLockPages),
     export!(Implemented, io::mdl::MmUnlockPages),
+    export!(Implemented, ob::handle::ObReferenceObjectByHandle),
+    export!(Implemented, ob::object::ObfDereferenceObject),
     export!(Partial, ke::seh::ProbeForRead),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Traps, ke::seh::__C_specific_handler),

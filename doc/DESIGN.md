@@ -220,6 +220,21 @@ After boot the kernel's own work, the tests today, runs in a thread at
 priority 8 and `PASSIVE_LEVEL`, which is what a driver expects of its
 caller.
 
+### Objects, references and handles
+
+What the object manager allocates has Windows' `OBJECT_HEADER` in front
+of it: a pointer count, a handle count, a type. Events and threads are
+such objects so far. An object is freed when its last reference goes. A
+thread holds a reference on itself until it has ended and been buried,
+so a thread nobody else refers to frees itself, and one that is referred
+to stays a valid object, signalled, after it ends.
+
+Kernel handles are entries in one table; a handle holds a reference
+until closed and has Windows' kernel-handle bits set. There are no
+per-process tables and no access checks. A type is named by its address:
+a driver imports a variable holding it (`ExEventObjectType`) and passes
+the value back, so the type structure itself is NK's own.
+
 ### Deferred procedure calls
 
 Each processor has a queue of DPCs. Queueing one puts it on the queue of
@@ -390,7 +405,8 @@ described, since there is no user address space.
 
 The object namespace is a flat table of device names and symbolic links,
 case-insensitive, with `\DosDevices`, `\??` and `\GLOBAL??` as one
-directory. There are no handles, no directories and no security checks.
+directory. Names are not opened by handle; there are no directories and
+no security checks.
 
 ### What NK leaves out, and how it stays honest
 
