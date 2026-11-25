@@ -54,7 +54,7 @@
 use crate::access::GenericMapping;
 use crate::acl::{
     Ace, CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, INHERITED_ACE, NO_PROPAGATE_INHERIT_ACE,
-    OBJECT_INHERIT_ACE, aces, build, object_specific, resolved, with_flags,
+    OBJECT_INHERIT_ACE, aces, applied, build, object_specific, resolved, with_flags,
 };
 use crate::token::{SE_RESTORE_PRIVILEGE, SE_SECURITY_PRIVILEGE, Token};
 use crate::{
@@ -186,19 +186,7 @@ impl Object<'_> {
     /// A supplied or default ACL as it is assigned: every entry that
     /// takes effect on this object resolved.
     fn effective(&self, acl: &[u8]) -> Result<Vec<u8>, AssignError> {
-        if acl_used(acl).is_none() {
-            return Err(AssignError::InvalidAcl);
-        }
-        let entries: Vec<Vec<u8>> = aces(acl)
-            .map(|ace| {
-                if ace.flags & INHERIT_ONLY_ACE != 0 {
-                    ace.bytes.to_vec()
-                } else {
-                    self.resolved(&ace, ace.flags)
-                }
-            })
-            .collect();
-        build(acl[0], &entries).ok_or(AssignError::InvalidAcl)
+        applied(acl, self.mapping, Some((self.owner, self.group))).ok_or(AssignError::InvalidAcl)
     }
 
     /// The ACL this object inherits from its parent's. `None` if no

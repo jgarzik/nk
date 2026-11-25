@@ -18,6 +18,7 @@ extern crate alloc;
 pub mod access;
 pub mod acl;
 pub mod assign;
+pub mod descriptor;
 pub mod privilege;
 pub mod token;
 
@@ -45,6 +46,10 @@ pub const SE_DACL_PRESENT: u16 = 0x0004;
 pub const SE_DACL_DEFAULTED: u16 = 0x0008;
 pub const SE_SACL_PRESENT: u16 = 0x0010;
 pub const SE_SACL_DEFAULTED: u16 = 0x0020;
+pub const SE_DACL_AUTO_INHERITED: u16 = 0x0400;
+pub const SE_SACL_AUTO_INHERITED: u16 = 0x0800;
+pub const SE_DACL_PROTECTED: u16 = 0x1000;
+pub const SE_SACL_PROTECTED: u16 = 0x2000;
 pub const SE_SELF_RELATIVE: u16 = 0x8000;
 
 /// Size of a self-relative descriptor's header.
@@ -274,6 +279,37 @@ impl<'a> Parts<'a> {
     /// security does to the descriptor it has.
     #[must_use]
     pub fn replaced(&self, new: &Parts<'a>, information: u32) -> Parts<'a> {
+        self.merged(
+            new,
+            information,
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED,
+            SE_SACL_PRESENT | SE_SACL_DEFAULTED,
+        )
+    }
+
+    /// The parts `information` names and nothing else, each with every
+    /// control bit that describes it: what querying an object's security
+    /// copies out.
+    #[must_use]
+    pub fn selected(&self, information: u32) -> Parts<'a> {
+        Parts::default().merged(
+            self,
+            information,
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED,
+            SE_SACL_PRESENT | SE_SACL_DEFAULTED | SE_SACL_AUTO_INHERITED | SE_SACL_PROTECTED,
+        )
+    }
+
+    /// This descriptor with the parts `information` names taken from
+    /// `new`, along with their control bits: `dacl_bits` and `sacl_bits`
+    /// for the lists, the "defaulted" bit for owner and group.
+    fn merged(
+        &self,
+        new: &Parts<'a>,
+        information: u32,
+        dacl_bits: u16,
+        sacl_bits: u16,
+    ) -> Parts<'a> {
         let mut merged = *self;
         let mut take = |bit: u32, control: u16| {
             let chosen = information & bit != 0;
@@ -288,16 +324,10 @@ impl<'a> Parts<'a> {
         if take(GROUP_SECURITY_INFORMATION, SE_GROUP_DEFAULTED) {
             merged.group = new.group;
         }
-        if take(
-            DACL_SECURITY_INFORMATION,
-            SE_DACL_PRESENT | SE_DACL_DEFAULTED,
-        ) {
+        if take(DACL_SECURITY_INFORMATION, dacl_bits) {
             merged.dacl = new.dacl;
         }
-        if take(
-            SACL_SECURITY_INFORMATION,
-            SE_SACL_PRESENT | SE_SACL_DEFAULTED,
-        ) {
+        if take(SACL_SECURITY_INFORMATION, sacl_bits) {
             merged.sacl = new.sacl;
         }
         merged

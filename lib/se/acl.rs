@@ -124,6 +124,27 @@ pub fn build(revision: u8, entries: &[Vec<u8>]) -> Option<Vec<u8>> {
     Some(acl)
 }
 
+/// `acl` as an object is given it: every entry that takes effect there
+/// (is not inherit-only) resolved, and no spare room. `None` if the
+/// list is damaged or the result more than a list can hold.
+pub fn applied(
+    acl: &[u8],
+    mapping: &GenericMapping,
+    creator: Option<(&[u8], &[u8])>,
+) -> Option<Vec<u8>> {
+    acl_used(acl)?;
+    let entries: Vec<Vec<u8>> = aces(acl)
+        .map(|ace| {
+            if ace.flags & INHERIT_ONLY_ACE != 0 {
+                ace.bytes.to_vec()
+            } else {
+                resolved(&ace, ace.flags, mapping, creator)
+            }
+        })
+        .collect();
+    build(acl[0], &entries)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
