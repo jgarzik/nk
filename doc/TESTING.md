@@ -11,9 +11,10 @@ Tests build their inputs in code (for example, synthetic PE images) so
 they need no downloaded files. Tests that do use a fetched fixture report
 that they were skipped when it is absent.
 
-`lib/ntabi` also checks its structure layouts against a table built by
-the WDK (`lib/ntabi/probe.rs`). Until that table is published and
-downloaded the test prints a SKIP note on stderr and passes.
+`lib/ntabi` also checks its structure layouts against tables built by
+the WDK (`lib/ntabi/probe.rs`), which `make test` downloads with the other
+fixtures. Without them (offline) the test prints a SKIP note on stderr
+and passes.
 
 ## Boot tests
 
