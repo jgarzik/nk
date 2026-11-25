@@ -13,6 +13,7 @@ bench = false
 
 [dependencies]
 nk-bootinfo = { path = "../lib/bootinfo" }
+nk-ntabi = { path = "../lib/ntabi" }
 
 [lints]
 workspace = true

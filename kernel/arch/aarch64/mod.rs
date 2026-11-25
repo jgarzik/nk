@@ -1,5 +1,11 @@
 //! arm64.
 
+mod cpu;
+mod trap;
+
+pub use cpu::pcr;
+pub use trap::{breakpoint, breakpoints};
+
 use nk_bootinfo::{BootInfo, Serial};
 
 pub const NAME: &str = "aarch64";
@@ -39,4 +45,10 @@ pub fn halt() -> ! {
         // SAFETY: masking interrupts and waiting touches no memory.
         unsafe { core::arch::asm!("msr daifset, #0xf", "wfi", options(nomem, nostack)) }
     }
+}
+
+/// Take over the boot CPU: exception vectors, PCR.
+pub fn cpu_init() {
+    trap::init();
+    cpu::init();
 }

@@ -31,7 +31,31 @@ Consequences:
 How to re-measure: compile a small `#![no_std]` library for each target
 with `rustc --emit asm` and read the argument registers.
 
+## Processor state drivers depend on
+
+WDK headers compile some kernel "calls" into direct register-relative
+loads, so these are ABI even though no import shows them. Offsets are in
+`lib/ntabi/pcr.rs`.
+
+| | x86-64 | arm64 |
+| --- | --- | --- |
+| Processor control region | GS base | x18 (also kept in `TPIDR_EL1`) |
+| Current thread | `gs:[0x188]` | `[x18, #0x988]` |
+| Current IRQL | register CR8 | kernel-private; drivers call an export |
+
+There are no threads yet. The current-thread slot points at a zeroed
+placeholder so the inlined load returns a stable non-null pointer; a
+driver that looks inside the thread object will not find Windows' fields.
+
+Segment selectors on x86-64 match Windows (kernel code 0x10, data 0x18,
+TSS 0x40). That is a debugging convenience, not a driver dependency.
+
+Any exception other than a breakpoint is a fatal bugcheck with a register
+dump. There is no SEH: a driver's `__try` block cannot catch anything.
+
 ## Not yet verified
+
+- The arm64 PCR offsets above.
 
 - Structure layouts against WDK headers: pending the ABI probe in the
   fixtures repository.

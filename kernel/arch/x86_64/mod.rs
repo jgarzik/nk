@@ -1,5 +1,11 @@
 //! x86-64.
 
+mod cpu;
+mod trap;
+
+pub use cpu::pcr;
+pub use trap::{breakpoint, breakpoints};
+
 use nk_bootinfo::{BootInfo, Serial};
 
 pub const NAME: &str = "x86_64";
@@ -49,4 +55,10 @@ pub fn halt() -> ! {
         // SAFETY: disabling interrupts and halting touches no memory.
         unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) }
     }
+}
+
+/// Take over the boot CPU: descriptor tables, exception vectors, PCR.
+pub fn cpu_init() {
+    cpu::init();
+    trap::init(cpu::KERNEL_CODE, cpu::FAULT_IST);
 }

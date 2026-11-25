@@ -27,19 +27,19 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     // else writes; it lives in loader-reserved memory for the whole run.
     let info: &'static BootInfo = unsafe { &*info };
     kd::console_init(info);
+    hal::init(info);
     kprintln!("NK {} ({})", env!("CARGO_PKG_VERSION"), arch::NAME);
     if !info.is_valid() {
         test::fail(
             "boot",
             format_args!("BootInfo magic/version mismatch: loader and kernel differ"),
         );
-        test::complete(info);
+        test::complete();
     }
-    kprintln!(
-        "kernel image {:#x} bytes at phys {:#x}",
-        info.kernel_size,
-        info.kernel_phys
-    );
     test::ok("boot");
-    test::complete(info)
+
+    arch::cpu_init();
+    test::run("cpu.pcr", ke::pcr::self_test);
+    test::run("cpu.breakpoint", ke::trap_self_test);
+    test::complete()
 }

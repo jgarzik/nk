@@ -12,7 +12,6 @@
 
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
-use nk_bootinfo::BootInfo;
 
 static PASS: AtomicU32 = AtomicU32::new(0);
 static FAIL: AtomicU32 = AtomicU32::new(0);
@@ -34,14 +33,21 @@ pub fn skip(name: &str, why: fmt::Arguments<'_>) {
     kprintln!("NK-TEST {name}:SKIP {why}");
 }
 
+/// Run one self-test and report its verdict.
+pub fn run(name: &str, test: fn() -> Result<(), &'static str>) {
+    match test() {
+        Ok(()) => ok(name),
+        Err(why) => fail(name, format_args!("{why}")),
+    }
+}
+
 /// Print the totals and power off. The run is over.
-pub fn complete(info: &BootInfo) -> ! {
+pub fn complete() -> ! {
     kprintln!(
         "NK-TEST-COMPLETE pass={} fail={} skip={}",
         PASS.load(Ordering::Relaxed),
         FAIL.load(Ordering::Relaxed),
         SKIP.load(Ordering::Relaxed)
     );
-    crate::hal::init(info);
     crate::hal::power_off_or_halt()
 }

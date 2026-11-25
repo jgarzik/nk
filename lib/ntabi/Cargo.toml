@@ -1,0 +1,12 @@
+[package]
+name = "nk-ntabi"
+description = "Driver-visible NT structure layouts and constants"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[lints]
+workspace = true

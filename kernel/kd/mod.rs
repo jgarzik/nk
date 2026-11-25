@@ -38,15 +38,20 @@ macro_rules! kprintln {
     };
 }
 
-/// A Rust panic is a kernel bug. Say so on the console in a form the boot
-/// test recognises, then stop.
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    // The panic may have happened while printing: take the console anyway.
+/// Stop the system on an unrecoverable error: print `BUGCHECK: <why>` in
+/// a form the boot test recognises, then power off.
+pub fn bugcheck(why: fmt::Arguments<'_>) -> ! {
+    // The error may have struck while printing: take the console anyway.
     if let Some(uart) = CONSOLE.force_lock().as_ref() {
-        let _ = fmt::Write::write_fmt(&mut Writer(uart), format_args!("\nKERNEL PANIC: {info}\n"));
+        let _ = fmt::Write::write_fmt(&mut Writer(uart), format_args!("\nBUGCHECK: {why}\n"));
     }
     crate::hal::power_off_or_halt()
+}
+
+/// A Rust panic is a kernel bug, reported like any other fatal error.
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    bugcheck(format_args!("KERNEL PANIC: {info}"))
 }
 
 /// Halt after a fatal error when even power-off is unavailable.
