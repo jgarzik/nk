@@ -7,7 +7,10 @@
 //! label) are walked over by their size and never interpreted here.
 //! Layouts: <https://learn.microsoft.com/en-us/windows/win32/secauthz/ace>
 
+use crate::access::{GenericMapping, map_generic};
+use crate::token::{CREATOR_GROUP, CREATOR_OWNER};
 use crate::{ACL_HEADER, acl_used, u16_at, valid_sid};
+use alloc::vec::Vec;
 
 /// ACE types with a mask and a SID and nothing else. `ACCESS_ALLOWED_ACE`
 /// is zero.
@@ -65,6 +68,62 @@ pub fn aces(acl: &[u8]) -> impl Iterator<Item = Ace<'_>> {
     })
 }
 
+/// Whether entries of this type carry object-type GUIDs: the
+/// object-specific allow, deny, audit and alarm entries and their
+/// conditional forms.
+pub const fn object_specific(kind: u8) -> bool {
+    matches!(kind, 5..=8 | 11 | 12 | 15 | 16)
+}
+
+/// `ace` with other flags.
+pub fn with_flags(ace: &Ace<'_>, flags: u8) -> Vec<u8> {
+    let mut bytes = ace.bytes.to_vec();
+    bytes[1] = flags;
+    bytes
+}
+
+/// `ace` as it takes effect on an object, with `flags`: generic rights
+/// mapped, and the creator-owner and creator-group SIDs replaced by the
+/// object's (`creator`: owner, group) when given. Only entries of a
+/// basic type are changed.
+pub fn resolved(
+    ace: &Ace<'_>,
+    flags: u8,
+    mapping: &GenericMapping,
+    creator: Option<(&[u8], &[u8])>,
+) -> Vec<u8> {
+    let Some((mask, sid)) = ace.basic() else {
+        return with_flags(ace, flags);
+    };
+    let sid = match creator {
+        Some((owner, _)) if sid == CREATOR_OWNER => owner,
+        Some((_, group)) if sid == CREATOR_GROUP => group,
+        _ => sid,
+    };
+    let mut bytes = Vec::with_capacity(8 + sid.len());
+    bytes.extend([ace.kind, flags]);
+    bytes.extend((8 + sid.len() as u16).to_le_bytes());
+    bytes.extend(map_generic(mask, mapping).to_le_bytes());
+    bytes.extend(sid);
+    bytes
+}
+
+/// A list of `entries` and nothing more. `None` if they are more than a
+/// list can hold.
+pub fn build(revision: u8, entries: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let size = ACL_HEADER + entries.iter().map(Vec::len).sum::<usize>();
+    let mut acl = Vec::with_capacity(size);
+    acl.extend([revision, 0]);
+    acl.extend(u16::try_from(size).ok()?.to_le_bytes());
+    // Fewer entries than bytes.
+    acl.extend((entries.len() as u16).to_le_bytes());
+    acl.extend([0, 0]);
+    for entry in entries {
+        acl.extend(entry);
+    }
+    Some(acl)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -80,13 +139,75 @@ pub(crate) mod tests {
 
     /// A list of exactly these entries.
     pub(crate) fn list(entries: &[Vec<u8>]) -> Vec<u8> {
-        let size = ACL_HEADER + entries.iter().map(Vec::len).sum::<usize>();
-        let mut acl = vec![2, 0];
-        acl.extend((size as u16).to_le_bytes());
-        acl.extend((entries.len() as u16).to_le_bytes());
-        acl.extend([0, 0]);
-        acl.extend(entries.concat());
-        acl
+        build(2, entries).unwrap()
+    }
+
+    const MAPPING: GenericMapping = GenericMapping {
+        read: 1,
+        write: 2,
+        execute: 4,
+        all: 7,
+    };
+
+    #[test]
+    fn a_list_is_built_from_its_entries() {
+        let entries = [entry(0, 0, 1, &WORLD), entry(1, 2, 3, &WORLD)];
+        let acl = build(4, &entries).unwrap();
+        assert_eq!(acl[..8], [4, 0, 48, 0, 2, 0, 0, 0]);
+        assert_eq!(acl[8..28], entries[0][..]);
+        assert_eq!(acl[28..], entries[1][..]);
+        assert_eq!(acl_used(&acl), Some(48));
+        assert_eq!(build(2, &[]).unwrap(), [2, 0, 8, 0, 0, 0, 0, 0]);
+        // 65 528 bytes of entries is 8 too many.
+        let big = vec![0u8; 8 + 68];
+        assert!(build(2, &vec![big.clone(); 862]).is_some());
+        assert!(build(2, &vec![big; 863]).is_none());
+    }
+
+    #[test]
+    fn an_entry_takes_effect_mapped_and_with_the_creator_named() {
+        use crate::access::{GENERIC_READ, GENERIC_WRITE};
+        let (owner, group) = (
+            &crate::token::ADMINISTRATORS[..],
+            &crate::token::LOCAL_SYSTEM[..],
+        );
+        let acl = list(&[
+            entry(0, 3, GENERIC_READ | 0x100, &WORLD),
+            entry(1, 0, GENERIC_WRITE, &CREATOR_OWNER),
+            entry(0, 0, 0x10, &CREATOR_GROUP),
+            vec![5, 3, 8, 0, 0, 0, 0, 0x80],
+        ]);
+        let seen: Vec<Ace<'_>> = aces(&acl).collect();
+        let creator = Some((owner, group));
+        assert_eq!(
+            resolved(&seen[0], 0x10, &MAPPING, creator),
+            entry(0, 0x10, 0x101, &WORLD)
+        );
+        assert_eq!(
+            resolved(&seen[1], 0, &MAPPING, creator),
+            entry(1, 0, 2, owner)
+        );
+        assert_eq!(
+            resolved(&seen[2], 0, &MAPPING, creator),
+            entry(0, 0, 0x10, group)
+        );
+        // No creator given: the SIDs stay.
+        assert_eq!(
+            resolved(&seen[1], 0, &MAPPING, None),
+            entry(1, 0, 2, &CREATOR_OWNER)
+        );
+        // Not a basic type: only the flags change.
+        assert_eq!(
+            resolved(&seen[3], 9, &MAPPING, creator),
+            [5, 9, 8, 0, 0, 0, 0, 0x80]
+        );
+        assert_eq!(with_flags(&seen[0], 0)[..4], [0, 0, 20, 0]);
+        for kind in 0..=20 {
+            assert_eq!(
+                object_specific(kind),
+                [5, 6, 7, 8, 11, 12, 15, 16].contains(&kind)
+            );
+        }
     }
 
     const WORLD: [u8; 12] = crate::token::WORLD;
