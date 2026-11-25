@@ -1,12 +1,26 @@
-//! Runtime-library logic with no hardware or allocator behind it: UTF-16
-//! counted-string arithmetic and object-name handling.
+//! Runtime-library logic with no hardware behind it: UTF-16
+//! counted-string arithmetic and object-name handling here; in the
+//! modules, formatted output, upper-casing and comparison, the prefix
+//! table, wildcard matching, text forms and length rules, code pages,
+//! and the C string functions. Only the prefix table and the wildcard
+//! matcher allocate.
 //!
 //! The kernel's `Rtl*` exports and its object namespace are thin wrappers
 //! over these functions, so the behaviour is tested on the build host.
 
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
+pub mod codepage;
+pub mod crt;
 pub mod format;
+pub mod prefix;
+pub mod string;
+pub mod upcase;
+pub mod wildcard;
+
+pub use upcase::upcase_char;
 
 /// Largest `Length`, in bytes, `RtlInitUnicodeString` will report: the
 /// 16-bit field must also leave room for the terminator in
@@ -26,6 +40,7 @@ pub fn init_unicode_lengths(chars: usize) -> (u16, u16) {
 /// Covers ASCII and Latin-1. Windows uses a full upcase table; names
 /// outside these ranges compare case-sensitively here, which can only
 /// make NK stricter, never match two names Windows keeps apart.
+/// [`upcase_char`] is the full table.
 pub fn upcase(c: u16) -> u16 {
     match c {
         0x61..=0x7A => c - 0x20,
