@@ -8,12 +8,13 @@
 //! own wait machinery.
 //!
 //! [`pushlock`] is `EX_PUSH_LOCK`, one word. [`resource`] is `ERESOURCE`
-//! and its owner table.
+//! and its owner table. [`slist`] is `SLIST_HEADER`.
 
 #![cfg_attr(not(test), no_std)]
 
 pub mod pushlock;
 pub mod resource;
+pub mod slist;
 
 #[cfg(test)]
 mod model;
