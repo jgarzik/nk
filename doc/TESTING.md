@@ -18,6 +18,15 @@ pinned Windows kernel (`lib/ntabi/pdb.rs`), which `make test` downloads
 with the other fixtures. Without them (offline) the test prints a SKIP note on stderr
 and passes.
 
+Logic that needs no hardware belongs in `lib/`, not in the kernel
+binary, which the host cannot run: the rules of the self-test runner,
+the processor census, the stack-gap check and the oracle's comparison
+all live there for that reason. `make coverage` measures it: it runs
+these tests under `cargo llvm-cov` and fails if any file in `lib/` has
+under 95% of its lines executed. It needs the `cargo-llvm-cov` tool, so
+it is run when a library changes and at the end of a phase rather than
+in the gate.
+
 ## Boot tests
 
 `make check` (x86-64) and `make check-arm` (arm64) boot the real loader

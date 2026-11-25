@@ -208,6 +208,64 @@ impl<'a> Madt<'a> {
     }
 }
 
+/// A processor as firmware names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cpu {
+    /// Local APIC id (x86-64) or MPIDR affinity (arm64).
+    pub hw_id: u64,
+    /// ACPI processor UID.
+    pub uid: u32,
+}
+
+/// Why a processor list from firmware cannot be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CensusError {
+    /// The processor running this code is not in the list.
+    NoBootProcessor,
+    /// The boot processor is listed more than once.
+    BootProcessorTwice,
+    /// Another processor is listed more than once.
+    ProcessorTwice,
+}
+
+/// Number the processors: the boot processor (hardware id `boot`) is 0,
+/// as on Windows, and the rest follow in the order firmware lists them.
+/// Fills `out` and returns how many it holds, and whether firmware listed
+/// more than fit.
+pub fn census(
+    boot: u64,
+    listed: impl Iterator<Item = Cpu>,
+    out: &mut [Cpu],
+) -> Result<(usize, bool), CensusError> {
+    // Slot 0 is kept for the boot processor wherever the list has it.
+    let (mut n, mut boot_seen, mut more) = (1, false, false);
+    for cpu in listed {
+        if cpu.hw_id == boot {
+            if boot_seen {
+                return Err(CensusError::BootProcessorTwice);
+            }
+            if let Some(first) = out.first_mut() {
+                *first = cpu;
+            }
+            boot_seen = true;
+        } else if out
+            .get(1..n)
+            .is_some_and(|rest| rest.iter().any(|c| c.hw_id == cpu.hw_id))
+        {
+            return Err(CensusError::ProcessorTwice);
+        } else if n < out.len() {
+            out[n] = cpu;
+            n += 1;
+        } else {
+            more = true;
+        }
+    }
+    if !boot_seen || out.is_empty() {
+        return Err(CensusError::NoBootProcessor);
+    }
+    Ok((n, more))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +504,66 @@ mod tests {
         let mut t = good;
         t.push(0);
         assert!(madt(&t).is_none());
+    }
+
+    fn cpus(ids: &[u64]) -> impl Iterator<Item = Cpu> + '_ {
+        ids.iter().map(|&hw_id| Cpu {
+            hw_id,
+            uid: hw_id as u32 + 100,
+        })
+    }
+
+    fn ids(out: &[Cpu], n: usize) -> Vec<u64> {
+        out[..n].iter().map(|c| c.hw_id).collect()
+    }
+
+    #[test]
+    fn census_puts_the_boot_processor_first() {
+        let mut out = [Cpu { hw_id: 0, uid: 0 }; 8];
+        let (n, more) = census(2, cpus(&[0, 1, 2, 3]), &mut out).unwrap();
+        assert_eq!((ids(&out, n), more), (vec![2, 0, 1, 3], false));
+        assert_eq!(out[0].uid, 102, "the entry itself, not just its id");
+        // Already first, and alone.
+        let (n, _) = census(0, cpus(&[0, 1]), &mut out).unwrap();
+        assert_eq!(ids(&out, n), [0, 1]);
+        let (n, _) = census(7, cpus(&[7]), &mut out).unwrap();
+        assert_eq!(ids(&out, n), [7]);
+    }
+
+    #[test]
+    fn census_rejects_lists_it_cannot_trust() {
+        let mut out = [Cpu { hw_id: 0, uid: 0 }; 8];
+        assert_eq!(
+            census(9, cpus(&[0, 1]), &mut out),
+            Err(CensusError::NoBootProcessor)
+        );
+        assert_eq!(
+            census(0, cpus(&[]), &mut out),
+            Err(CensusError::NoBootProcessor)
+        );
+        assert_eq!(
+            census(1, cpus(&[0, 1, 1]), &mut out),
+            Err(CensusError::BootProcessorTwice)
+        );
+        assert_eq!(
+            census(0, cpus(&[0, 1, 2, 1]), &mut out),
+            Err(CensusError::ProcessorTwice)
+        );
+        assert_eq!(
+            census(0, cpus(&[0, 1]), &mut []),
+            Err(CensusError::NoBootProcessor)
+        );
+    }
+
+    #[test]
+    fn census_keeps_what_fits_and_says_when_there_was_more() {
+        let mut out = [Cpu { hw_id: 0, uid: 0 }; 3];
+        let (n, more) = census(4, cpus(&[0, 1, 2, 3, 4]), &mut out).unwrap();
+        assert_eq!((ids(&out, n), more), (vec![4, 0, 1], true));
+        let (n, more) = census(0, cpus(&[0, 1, 2]), &mut out).unwrap();
+        assert_eq!((n, more), (3, false));
+        // A duplicate among the ones that did not fit is not noticed, and
+        // does not matter: they are not used.
+        assert!(census(0, cpus(&[0, 1, 2, 3, 3]), &mut out).is_ok());
     }
 }

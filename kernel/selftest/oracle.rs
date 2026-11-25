@@ -16,7 +16,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::{DRIVER_OBJECT, FILE_OBJECT};
-use nk_oracle::{Dump, FILL, Outcome, Step};
+use nk_oracle::{Checker, Dump, FILL, Mismatch, Outcome, Step};
 
 /// What a script has open and loaded while it runs.
 struct Replay<'a> {
@@ -145,8 +145,7 @@ fn replay(info: &BootInfo, script: &str, windows: &str) -> Result<usize, String>
         files: Vec::new(),
         drivers: Vec::new(),
     };
-    let mut expected = nk_oracle::transcript(windows);
-    let mut matched = 0;
+    let mut checker = Checker::new(windows);
     let mut run = || -> Result<(), String> {
         for step in nk_oracle::steps(script) {
             let step = step.map_err(|why| format!("script: {why}"))?;
@@ -154,25 +153,21 @@ fn replay(info: &BootInfo, script: &str, windows: &str) -> Result<usize, String>
                 Ok(result) => format!("{step}: {result}"),
                 Err(why) => format!("{step}: NK could not: {why}"),
             };
-            match expected.next() {
-                Some(want) if want == line => matched += 1,
-                Some(want) => {
-                    return Err(format!(
-                        "line {}: NK `{line}`, Windows `{want}`",
-                        matched + 1
-                    ));
+            checker.line(&line).map_err(|m| match m {
+                Mismatch::Differs { number, windows } => {
+                    format!("line {number}: NK `{line}`, Windows `{windows}`")
                 }
-                None => return Err(format!("NK `{line}`, but the Windows transcript has ended")),
-            }
+                _ => format!("NK `{line}`, but the Windows transcript has ended"),
+            })?;
         }
-        match expected.next() {
-            Some("end") => Ok(()),
-            other => Err(format!("the Windows transcript continues: {other:?}")),
-        }
+        Ok(())
     };
     let verdict = run();
     replay.finish();
-    verdict.map(|()| matched)
+    verdict?;
+    checker
+        .finish()
+        .map_err(|m| format!("the script ended before the Windows transcript: {m:?}"))
 }
 
 /// One script: skipped without its driver, else replayed and compared.

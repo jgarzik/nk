@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle mutants gate ci clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle mutants coverage gate ci clean
 
 help:
 	@echo "NK make targets:"
@@ -25,6 +25,7 @@ help:
 	@echo "  corpus     re-read the import tables of Microsoft's inbox binaries (network)"
 	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
 	@echo "  mutants    break the kernel on purpose; each break must fail a test"
+	@echo "  coverage   unit-test coverage of lib/, with a floor (needs cargo-llvm-cov)"
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
 	@echo "  ci         the subset of the gate that hosted CI runs (no KVM there)"
 	@echo "  clean      remove all build and test output"
@@ -116,6 +117,11 @@ oracle: fixtures
 # so not in the gate.
 mutants: fixtures
 	@tools/mutants.py
+
+# Fails if any file in lib/ has under 95% of its lines run by the host
+# unit tests. Needs cargo-llvm-cov, so it is not in the gate.
+coverage: fixtures
+	@tools/coverage.py
 
 gate:
 	@tools/gate.sh

@@ -69,7 +69,7 @@ pub fn free(stack: Stack) {
 /// Whether `address` is in the unmapped stretch below the stack whose
 /// lowest address is `base`: where an overflowing stack lands.
 pub fn is_overflow(base: u64, address: u64) -> bool {
-    base != 0 && (base - KERNEL_STACK_SIZE..base).contains(&address)
+    nk_bootinfo::below_stack(base, address)
 }
 
 /// A stack has the documented shape, holds data, is unmapped below, and

@@ -42,6 +42,13 @@ name = "nk-rtl"
 version = "0.0.1"
 
 [[package]]
+name = "nk-selftest"
+version = "0.0.1"
+dependencies = [
+ "nk-rtl",
+]
+
+[[package]]
 name = "nkkrnl"
 version = "0.0.1"
 dependencies = [
@@ -53,6 +60,7 @@ dependencies = [
  "nk-oracle",
  "nk-pe",
  "nk-rtl",
+ "nk-selftest",
 ]
 
 [[package]]

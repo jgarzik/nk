@@ -145,13 +145,6 @@ pub fn steps(script: &str) -> impl Iterator<Item = Result<Step<'_>, &'static str
         .filter_map(|line| parse_line(line).transpose())
 }
 
-/// The lines of a recorded transcript, without its `#` header.
-pub fn transcript(text: &str) -> impl Iterator<Item = &str> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-}
-
 /// The step as a transcript repeats it: its fields, single-spaced.
 impl fmt::Display for Step<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -207,6 +200,72 @@ impl fmt::Display for Dump<'_> {
             return f.write_str("-");
         }
         self.0.iter().try_for_each(|b| write!(f, "{b:02x}"))
+    }
+}
+
+/// How NK's transcript departed from the one Windows produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mismatch<'a> {
+    /// Line `number` (from 1) differs; `windows` is what Windows printed.
+    Differs { number: usize, windows: &'a str },
+    /// NK printed a line where the Windows transcript had already ended.
+    WindowsEnded,
+    /// The script finished but the Windows transcript has more: `next`,
+    /// or nothing at all where its closing `end` should be.
+    WindowsContinues { next: Option<&'a str> },
+}
+
+/// Compares NK's transcript with the recorded one, a line at a time.
+pub struct Checker<'a> {
+    /// What is left of the recorded transcript.
+    rest: &'a str,
+    matched: usize,
+}
+
+impl<'a> Checker<'a> {
+    pub fn new(windows: &'a str) -> Self {
+        Self {
+            rest: windows,
+            matched: 0,
+        }
+    }
+
+    /// The next recorded line, skipping the header and blank lines.
+    fn next(&mut self) -> Option<&'a str> {
+        while !self.rest.is_empty() {
+            let (line, rest) = self.rest.split_once('\n').unwrap_or((self.rest, ""));
+            self.rest = rest;
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                return Some(line);
+            }
+        }
+        None
+    }
+
+    /// NK printed `line` for the next step: is it what Windows printed?
+    pub fn line(&mut self, line: &str) -> Result<(), Mismatch<'a>> {
+        match self.next() {
+            // `end` closes the transcript; no step prints it.
+            Some("end") | None => Err(Mismatch::WindowsEnded),
+            Some(windows) if windows == line => {
+                self.matched += 1;
+                Ok(())
+            }
+            Some(windows) => Err(Mismatch::Differs {
+                number: self.matched + 1,
+                windows,
+            }),
+        }
+    }
+
+    /// The script is over: the recorded transcript must be too. Returns
+    /// how many lines matched.
+    pub fn finish(mut self) -> Result<usize, Mismatch<'a>> {
+        match self.next() {
+            Some("end") => Ok(self.matched),
+            next => Err(Mismatch::WindowsContinues { next }),
+        }
     }
 }
 
@@ -314,12 +373,62 @@ mod tests {
         assert_eq!(format!("{}", Dump(&[])), "-");
     }
 
+    const RECORDED: &str = "# Recorded on Windows\n# script sha256 abc\nuse null: ok\n\nread n 4: c0000011 - eeeeeeee\nend\n";
+
     #[test]
-    fn transcript_lines_skip_the_header() {
-        let text = "# Recorded on Windows\n# script sha256 abc\nuse null: ok\n\nend\n";
+    fn a_matching_transcript_passes() {
+        let mut c = Checker::new(RECORDED);
+        assert_eq!(c.line("use null: ok"), Ok(()));
+        assert_eq!(c.line("read n 4: c0000011 - eeeeeeee"), Ok(()));
+        assert_eq!(c.finish(), Ok(2));
+    }
+
+    #[test]
+    fn the_first_differing_line_is_named() {
+        let mut c = Checker::new(RECORDED);
+        c.line("use null: ok").unwrap();
         assert_eq!(
-            transcript(text).collect::<Vec<_>>(),
-            ["use null: ok", "end"]
+            c.line("read n 4: c0000011 - 00000000"),
+            Err(Mismatch::Differs {
+                number: 2,
+                windows: "read n 4: c0000011 - eeeeeeee"
+            })
+        );
+        let mut c = Checker::new(RECORDED);
+        assert!(matches!(
+            c.line("use null: failed"),
+            Err(Mismatch::Differs { number: 1, .. })
+        ));
+    }
+
+    #[test]
+    fn a_transcript_of_the_wrong_length_fails() {
+        // NK does more than Windows did.
+        let mut c = Checker::new(RECORDED);
+        c.line("use null: ok").unwrap();
+        c.line("read n 4: c0000011 - eeeeeeee").unwrap();
+        assert_eq!(c.line("close n: 00000000"), Err(Mismatch::WindowsEnded));
+        // NK does less.
+        let mut c = Checker::new(RECORDED);
+        c.line("use null: ok").unwrap();
+        assert_eq!(
+            c.finish(),
+            Err(Mismatch::WindowsContinues {
+                next: Some("read n 4: c0000011 - eeeeeeee")
+            })
+        );
+        // A recorded transcript cut short of its `end`.
+        let mut c = Checker::new("use null: ok\n");
+        c.line("use null: ok").unwrap();
+        assert_eq!(c.finish(), Err(Mismatch::WindowsContinues { next: None }));
+        assert_eq!(
+            Checker::new("").line("use null: ok"),
+            Err(Mismatch::WindowsEnded)
+        );
+        // A step can never match the closing marker.
+        assert_eq!(
+            Checker::new("end\n").line("end"),
+            Err(Mismatch::WindowsEnded)
         );
     }
 }

@@ -45,6 +45,13 @@ pub const fn stack_top_in(start: u64, len: u64) -> Option<u64> {
     }
 }
 
+/// Whether `address` lies in the unmapped stretch below the kernel stack
+/// whose lowest address is `base`: where an overflowing stack lands.
+/// A `base` of 0 means "no stack recorded" and matches nothing.
+pub const fn below_stack(base: u64, address: u64) -> bool {
+    base >= KERNEL_STACK_SIZE && address < base && address >= base - KERNEL_STACK_SIZE
+}
+
 /// `EFI_MEMORY_TYPE` values the kernel cares about.
 pub const EFI_LOADER_CODE: u32 = 1;
 pub const EFI_RUNTIME_CODE: u32 = 5;
@@ -339,6 +346,20 @@ mod tests {
         assert_eq!(stack_top_in(S, S), Some(2 * S));
         assert_eq!(stack_top_in(S + 0x1000, S), None);
         assert_eq!(stack_top_in(0x1000, 0x1000), None);
+    }
+
+    #[test]
+    fn the_gap_below_a_stack() {
+        const S: u64 = KERNEL_STACK_SIZE;
+        let base = 0xFFFF_F880_0000_8000;
+        assert!(below_stack(base, base - 8));
+        assert!(below_stack(base, base - S));
+        assert!(!below_stack(base, base), "the stack itself");
+        assert!(!below_stack(base, base + 64));
+        assert!(!below_stack(base, base - S - 8), "below the gap");
+        assert!(!below_stack(0, 0x1000), "no stack recorded");
+        assert!(!below_stack(0, u64::MAX));
+        assert!(!below_stack(S / 2, 0), "a base too low to have a gap");
     }
 
     #[test]

@@ -8,20 +8,13 @@ use crate::arch::platform::{self as arch_platform, Controllers};
 use crate::mm;
 use alloc::boxed::Box;
 use core::sync::atomic::{AtomicPtr, Ordering};
-use nk_acpi::PhysMem;
+use nk_acpi::{CensusError, PhysMem};
 use nk_bootinfo::{BootInfo, regions};
 
 /// One processor group, as on Windows: at most 64 logical processors.
 pub const MAX_CPUS: usize = 64;
 
-/// A processor as firmware names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Cpu {
-    /// Local APIC id (x86-64) or MPIDR affinity (arm64).
-    pub hw_id: u64,
-    /// ACPI processor UID.
-    pub uid: u32,
-}
+pub use nk_acpi::Cpu;
 
 pub struct Platform {
     cpus: [Cpu; MAX_CPUS],
@@ -78,28 +71,16 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let table = nk_acpi::find_table(&mem, info.rsdp, b"APIC").ok_or("no ACPI MADT")?;
     let madt = nk_acpi::madt(table).ok_or("the ACPI MADT is malformed")?;
 
-    let boot = arch_platform::boot_cpu_id();
     let mut cpus = [Cpu { hw_id: 0, uid: 0 }; MAX_CPUS];
-    // Slot 0 is kept for the boot processor wherever the table lists it.
-    let (mut n, mut boot_seen) = (1, false);
-    for cpu in madt.entries().filter_map(|e| arch_platform::usable_cpu(&e)) {
-        if cpu.hw_id == boot {
-            if boot_seen {
-                return Err("the MADT lists the boot processor twice");
-            }
-            (cpus[0], boot_seen) = (cpu, true);
-        } else if cpus[1..n].iter().any(|c| c.hw_id == cpu.hw_id) {
-            return Err("the MADT lists a processor twice");
-        } else if n < MAX_CPUS {
-            cpus[n] = cpu;
-            n += 1;
-        } else {
-            kprintln!("hal: more than {MAX_CPUS} processors; the rest stay off");
-            break;
-        }
-    }
-    if !boot_seen {
-        return Err("the MADT does not list the boot processor");
+    let listed = madt.entries().filter_map(|e| arch_platform::usable_cpu(&e));
+    let (n, more) =
+        nk_acpi::census(arch_platform::boot_cpu_id(), listed, &mut cpus).map_err(|e| match e {
+            CensusError::NoBootProcessor => "the MADT does not list the boot processor",
+            CensusError::BootProcessorTwice => "the MADT lists the boot processor twice",
+            CensusError::ProcessorTwice => "the MADT lists a processor twice",
+        })?;
+    if more {
+        kprintln!("hal: more than {MAX_CPUS} processors; the rest stay off");
     }
     let platform = Box::leak(Box::new(Platform {
         cpus,

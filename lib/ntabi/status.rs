@@ -49,5 +49,10 @@ mod tests {
         assert!(!nt_success(STATUS_BUFFER_OVERFLOW), "0x8... is a warning");
         assert!(!nt_success(STATUS_END_OF_FILE));
         assert_eq!(STATUS_END_OF_FILE as u32, 0xC000_0011);
+        // The constants are built at compile time; build one at run time
+        // too, so the conversion is seen to keep every bit.
+        let bits = std::hint::black_box(0xC000_009Au32);
+        assert_eq!(err(bits), STATUS_INSUFFICIENT_RESOURCES);
+        assert_eq!(err(bits) as u32, bits);
     }
 }

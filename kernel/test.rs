@@ -23,7 +23,7 @@ use crate::selftest::resources;
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_rtl::glob_match;
+use nk_selftest::{ClaimError, Claims};
 
 static PASS: AtomicU32 = AtomicU32::new(0);
 static FAIL: AtomicU32 = AtomicU32::new(0);
@@ -40,9 +40,7 @@ pub struct Group {
 
 /// Collects one group's verdicts and holds it to its declared names.
 pub struct Report {
-    names: &'static [&'static str],
-    /// Bit `i` is set once `names[i]` has a verdict.
-    seen: u64,
+    claims: Claims<'static>,
 }
 
 fn count_fail(name: &str, why: fmt::Arguments<'_>) {
@@ -54,16 +52,17 @@ impl Report {
     /// Claim the verdict for `name`. `false` (and a failure on the
     /// console) if the group did not declare it or already reported it.
     fn claim(&mut self, name: &str) -> bool {
-        let Some(i) = self.names.iter().position(|n| *n == name) else {
-            count_fail(name, format_args!("verdict not declared by its group"));
-            return false;
-        };
-        if self.seen & (1 << i) != 0 {
-            count_fail(name, format_args!("reported twice"));
-            return false;
+        match self.claims.claim(name) {
+            Ok(()) => true,
+            Err(ClaimError::Undeclared) => {
+                count_fail(name, format_args!("verdict not declared by its group"));
+                false
+            }
+            Err(ClaimError::Twice) => {
+                count_fail(name, format_args!("reported twice"));
+                false
+            }
         }
-        self.seen |= 1 << i;
-        true
     }
 
     pub fn ok(&mut self, name: &str) {
@@ -105,29 +104,21 @@ impl Report {
 
     /// Skip every verdict not yet reported: what the tests need is absent.
     pub fn skip_rest(&mut self, why: fmt::Arguments<'_>) {
-        for (i, name) in self.names.iter().enumerate() {
-            if self.seen & (1 << i) == 0 {
-                self.skip(name, why);
-            }
+        for name in self.claims.missing() {
+            self.skip(name, why);
         }
     }
 
     /// A declared verdict that was never reported is a failure, not a gap.
     fn finish(mut self) {
-        for (i, name) in self.names.iter().enumerate() {
-            if self.seen & (1 << i) == 0 {
-                self.fail(name, format_args!("no verdict: the group stopped early"));
-            }
+        for name in self.claims.missing() {
+            self.fail(name, format_args!("no verdict: the group stopped early"));
         }
     }
 }
 
 fn selected(group: &Group, pattern: Option<&str>) -> bool {
-    match pattern {
-        None => !group.manual,
-        Some(p) if group.manual => group.names.contains(&p),
-        Some(p) => group.names.iter().any(|n| glob_match(p, n)),
-    }
+    nk_selftest::selected(group.names, group.manual, pattern)
 }
 
 /// Report a failure that ends the boot before the tests can run.
@@ -146,14 +137,9 @@ pub fn run_all(groups: &[&Group], info: &BootInfo) -> ! {
         .sum();
     kprintln!("NK-TEST-PLAN {plan}");
     for group in groups.iter().filter(|g| selected(g, pattern)) {
-        assert!(
-            group.names.len() <= 64,
-            "a group reports at most 64 verdicts"
-        );
         let before = resources();
         let mut report = Report {
-            names: group.names,
-            seen: 0,
+            claims: Claims::new(group.names).expect("a group reports at most 64 verdicts"),
         };
         (group.run)(&mut report, info);
         report.finish();
