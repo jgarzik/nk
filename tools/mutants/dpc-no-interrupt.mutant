@@ -1,0 +1,6 @@
+# Queueing a DPC does not ask for the interrupt that runs the queue: the
+# DPC sits there until something else happens to run it.
+scenario: x86_64
+fails: dpc.run
+file: kernel/ke/dpc.rs
+remove:         arch::self_interrupt(arch::DPC.0);

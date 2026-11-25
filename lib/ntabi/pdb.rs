@@ -106,3 +106,26 @@ fn shared_data_page_matches_the_kernel() {
         (12, 8)
     );
 }
+
+#[test]
+fn dpc_matches_the_kernel() {
+    use crate::ke::KDPC;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let dpc = types.layout("_KDPC").expect("_KDPC");
+    let field = |name| offset(&dpc, "_KDPC", name);
+    assert_eq!(size_of::<KDPC>(), dpc.size as usize);
+    assert_eq!(offset_of!(KDPC, Type), field("Type"));
+    assert_eq!(offset_of!(KDPC, Importance), field("Importance"));
+    assert_eq!(offset_of!(KDPC, Number), field("Number"));
+    assert_eq!(offset_of!(KDPC, DpcListEntry), field("DpcListEntry"));
+    assert_eq!(
+        offset_of!(KDPC, ProcessorHistory),
+        field("ProcessorHistory")
+    );
+    assert_eq!(offset_of!(KDPC, DeferredRoutine), field("DeferredRoutine"));
+    assert_eq!(offset_of!(KDPC, DeferredContext), field("DeferredContext"));
+    assert_eq!(offset_of!(KDPC, SystemArgument1), field("SystemArgument1"));
+    assert_eq!(offset_of!(KDPC, SystemArgument2), field("SystemArgument2"));
+    assert_eq!(offset_of!(KDPC, DpcData), field("DpcData"));
+}

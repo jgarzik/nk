@@ -2,6 +2,7 @@
 //! no driver can see. It lives next to the processor control region and
 //! is reached through `arch::percpu()`.
 
+use super::dpc::Queue;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_ke::Held;
@@ -11,6 +12,8 @@ pub struct PerCpu {
     held: UnsafeCell<Held>,
     /// Clock interrupts this processor has taken.
     ticks: AtomicU64,
+    /// Deferred procedure calls waiting to run here.
+    dpcs: Queue,
 }
 
 // SAFETY: a processor only touches its own `PerCpu`, and only at
@@ -23,12 +26,18 @@ impl PerCpu {
         Self {
             held: UnsafeCell::new(Held::new()),
             ticks: AtomicU64::new(0),
+            dpcs: Queue::new(),
         }
     }
 
     /// Clock interrupts this processor has taken. Any processor may ask.
     pub fn ticks(&self) -> u64 {
         self.ticks.load(Ordering::Relaxed)
+    }
+
+    /// This processor's queue of deferred procedure calls.
+    pub fn dpcs(&self) -> &Queue {
+        &self.dpcs
     }
 
     /// Count a clock interrupt on this processor.

@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 29,
-  "implemented": 23,
+  "total": 32,
+  "implemented": 26,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -238,7 +238,7 @@
    "file": "nkc-dpc.arm64.sys",
    "sha256": "ed931fd7432e9754c471a700cbe20854ccbd45932f33a9ca543c4850b9b6f05d",
    "status": "nk-authored",
-   "loaded_at_boot": false,
+   "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",
@@ -253,12 +253,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeRemoveQueueDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -273,7 +273,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInsertQueueDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -342,7 +342,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -450,7 +450,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeDpc",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

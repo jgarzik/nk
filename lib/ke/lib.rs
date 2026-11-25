@@ -165,6 +165,107 @@ impl TicketLock {
     }
 }
 
+/// A link in a singly linked list: Windows' `SINGLE_LIST_ENTRY`. It lives
+/// inside the structure being queued, which a driver owns.
+#[repr(C)]
+#[derive(Debug)]
+pub struct Link {
+    pub next: *mut Link,
+}
+
+/// A first-in, first-out queue threaded through [`Link`]s embedded in the
+/// queued structures. The queue owns no memory and is only ever touched
+/// under its owner's lock.
+#[derive(Debug)]
+pub struct Fifo {
+    head: *mut Link,
+    tail: *mut Link,
+}
+
+// SAFETY: the queue is a pair of pointers; whoever holds the lock around
+// it may use it from any processor.
+unsafe impl Send for Fifo {}
+
+impl Fifo {
+    pub const fn new() -> Self {
+        Self {
+            head: core::ptr::null_mut(),
+            tail: core::ptr::null_mut(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.head.is_null()
+    }
+
+    /// Add `link` at the back.
+    ///
+    /// # Safety
+    /// `link` points to a writable `Link` that is in no queue and stays
+    /// valid until it is popped or removed.
+    pub unsafe fn push(&mut self, link: *mut Link) {
+        // SAFETY: per the contract; `tail`, when set, is a link still in
+        // the queue and so still valid.
+        unsafe {
+            (&raw mut (*link).next).write(core::ptr::null_mut());
+            if self.tail.is_null() {
+                self.head = link;
+            } else {
+                (&raw mut (*self.tail).next).write(link);
+            }
+        }
+        self.tail = link;
+    }
+
+    /// Take the link at the front; null if the queue is empty.
+    ///
+    /// # Safety
+    /// Every link in the queue is still valid.
+    pub unsafe fn pop(&mut self) -> *mut Link {
+        let link = self.head;
+        if !link.is_null() {
+            // SAFETY: per the contract.
+            self.head = unsafe { (&raw const (*link).next).read() };
+            if self.head.is_null() {
+                self.tail = core::ptr::null_mut();
+            }
+        }
+        link
+    }
+
+    /// Take `link` out, wherever it is. `false` if it is not in the
+    /// queue.
+    ///
+    /// # Safety
+    /// Every link in the queue is still valid.
+    pub unsafe fn remove(&mut self, link: *mut Link) -> bool {
+        let (mut before, mut at) = (core::ptr::null_mut::<Link>(), self.head);
+        while !at.is_null() {
+            // SAFETY: per the contract, `at` and `before` are valid.
+            unsafe {
+                let next = (&raw const (*at).next).read();
+                if at == link {
+                    if before.is_null() {
+                        self.head = next;
+                    } else {
+                        (&raw mut (*before).next).write(next);
+                    }
+                    if self.tail == at {
+                        self.tail = before;
+                    }
+                    return true;
+                }
+                (before, at) = (at, next);
+            }
+        }
+        false
+    }
+}
+
+/// How long one deferred procedure call may run before the system stops
+/// (`DPC_WATCHDOG_VIOLATION`), in clock ticks: 20 s, as on Windows 10.
+pub const DPC_TIME_LIMIT_TICKS: u64 = 1280;
+
 /// The clock tick, in 100 ns units: 15.625 ms, Windows' default, which is
 /// what `KeQueryTimeIncrement` reports.
 pub const TIME_INCREMENT: u64 = 156_250;
@@ -192,6 +293,76 @@ mod tests {
     use super::*;
     use std::cell::UnsafeCell;
     use std::sync::Arc;
+
+    fn links(n: usize) -> Vec<Link> {
+        (0..n)
+            .map(|_| Link {
+                // Stale on purpose: push must not trust it.
+                next: core::ptr::dangling_mut(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fifo_serves_in_order() {
+        let mut nodes = links(3);
+        let p: Vec<*mut Link> = nodes.iter_mut().map(core::ptr::from_mut).collect();
+        let mut q = Fifo::new();
+        // SAFETY: the nodes outlive the queue's use of them.
+        unsafe {
+            assert!(q.is_empty() && q.pop().is_null());
+            for &link in &p {
+                q.push(link);
+            }
+            assert!(!q.is_empty());
+            assert_eq!([q.pop(), q.pop(), q.pop()], [p[0], p[1], p[2]]);
+            assert!(q.is_empty() && q.pop().is_null());
+            // Empty again: usable again.
+            q.push(p[1]);
+            q.push(p[0]);
+            assert_eq!(
+                [q.pop(), q.pop(), q.pop()],
+                [p[1], p[0], core::ptr::null_mut()]
+            );
+        }
+    }
+
+    #[test]
+    fn fifo_removes_from_any_position() {
+        for victim in 0..3 {
+            let mut nodes = links(4);
+            let p: Vec<*mut Link> = nodes.iter_mut().map(core::ptr::from_mut).collect();
+            let mut q = Fifo::new();
+            // SAFETY: as above.
+            unsafe {
+                for &link in &p[..3] {
+                    q.push(link);
+                }
+                assert!(!q.remove(p[3]), "not in the queue");
+                assert!(q.remove(p[victim]));
+                assert!(!q.remove(p[victim]), "already out");
+                // The tail is still right: a push lands at the back.
+                q.push(p[3]);
+                let mut left: Vec<*mut Link> = p[..3].to_vec();
+                left.remove(victim);
+                left.push(p[3]);
+                let got: Vec<*mut Link> = (0..3).map(|_| q.pop()).collect();
+                assert_eq!(got, left);
+                assert!(q.is_empty());
+            }
+        }
+        // The only one.
+        let mut nodes = links(1);
+        let only: *mut Link = &raw mut nodes[0];
+        let mut q = Fifo::new();
+        // SAFETY: as above.
+        unsafe {
+            q.push(only);
+            assert!(q.remove(only) && q.is_empty());
+            q.push(only);
+            assert_eq!(q.pop(), only);
+        }
+    }
 
     #[test]
     fn irql_moves_one_way_per_call() {

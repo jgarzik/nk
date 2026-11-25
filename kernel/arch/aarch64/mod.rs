@@ -12,6 +12,10 @@ pub use gic::{
     init as interrupts_init, interrupt_enable, self_interrupt, stop_others,
 };
 
+/// `(interrupt id, IRQL)` of the interrupt a processor sends itself to
+/// run its deferred procedure calls: DISPATCH_LEVEL.
+pub const DPC: (u32, u8) = (3, 2);
+
 /// `(interrupt id, IRQL)` of the interprocessor interrupt.
 pub const IPI: (u32, u8) = (1, 14);
 

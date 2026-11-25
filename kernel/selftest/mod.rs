@@ -7,6 +7,7 @@
 
 mod base;
 mod clock;
+mod dpc;
 mod loader;
 mod neg;
 mod null;
@@ -23,6 +24,7 @@ pub static GROUPS: &[&Group] = &[
     &base::GROUP,
     &clock::GROUP,
     &smp::GROUP,
+    &dpc::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
@@ -35,6 +37,7 @@ pub static GROUPS: &[&Group] = &[
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
     &smp::STUCK,
+    &dpc::WATCHDOG,
 ];
 
 /// The bytes of the boot module called `name`, if the loader supplied it.

@@ -81,6 +81,7 @@ fn update() {
 
 fn tick(_: u32) {
     arch::percpu().tick();
+    super::dpc::watchdog();
     // Every processor takes the tick; one of them keeps the time.
     if super::pcr::current_processor() == 0 {
         update();

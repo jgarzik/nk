@@ -182,6 +182,23 @@ tick keeps that page current, and its layout is checked against the
 kernel's public symbols. The wall clock starts from the firmware's time,
 read by the loader.
 
+### Deferred procedure calls
+
+Each processor has a queue of DPCs. Queueing one puts it on the queue of
+the processor that queued it and has that processor's interrupt
+controller raise an interrupt at `DISPATCH_LEVEL` (vector 0x2F on
+x86-64, a software-generated interrupt on arm64). The interrupt is
+delivered when the IRQL falls below `DISPATCH_LEVEL`, by whatever means:
+code built with the WDK lowers the IRQL in line on x86-64, so there is no
+call for NK to hook. Its handler runs the queue in order.
+
+The driver owns the `KDPC`. As on Windows, `DpcData` is non-null exactly
+while the DPC is queued; NK stores the queue's address there. One DPC
+that runs for more than 20 seconds stops the system
+(`DPC_WATCHDOG_VIOLATION`); the clock tick checks. DPCs run on the stack
+of whatever they interrupted, and there is no targeting of another
+processor or importance ordering: nothing loaded asks for them.
+
 ### The kernel is a PE image
 
 NK builds the kernel for Rust's stock `x86_64-unknown-uefi` and

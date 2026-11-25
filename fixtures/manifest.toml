@@ -100,7 +100,6 @@ file = "nkc-dpc.x64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-dpc.x64.nkc-dpc.sys"
 sha256 = "261373cb691d48ad82aa5df4afbf543588b5f0ea38c29030d756956f7ef6f3e2"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-dpc.c: deferred procedure calls"
 
 [[fixture]]
@@ -110,7 +109,6 @@ file = "nkc-dpc.arm64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-dpc.arm64.nkc-dpc.sys"
 sha256 = "ed931fd7432e9754c471a700cbe20854ccbd45932f33a9ca543c4850b9b6f05d"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-dpc.c: deferred procedure calls"
 
 [[fixture]]

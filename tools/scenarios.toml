@@ -183,3 +183,17 @@ tier = "gate"
 cmdline = "test=neg.cpu-stuck"
 expect = "bugcheck"
 match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"
+
+[x86_64-neg-dpc-watchdog]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.dpc-watchdog dpc-limit=32"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000133 DPC_WATCHDOG_VIOLATION"
+
+[aarch64-neg-dpc-watchdog]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.dpc-watchdog dpc-limit=32"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000133 DPC_WATCHDOG_VIOLATION"

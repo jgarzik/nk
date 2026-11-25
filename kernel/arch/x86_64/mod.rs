@@ -98,6 +98,10 @@ pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// `(vector, IRQL)` of the interrupt a processor sends itself to run its
+/// deferred procedure calls: DISPATCH_LEVEL.
+pub const DPC: (u32, u8) = (0x2F, 2);
+
 /// `(vector, IRQL)` of the interprocessor interrupt: Windows' IPI_LEVEL.
 pub const IPI: (u32, u8) = (0xE1, 14);
 

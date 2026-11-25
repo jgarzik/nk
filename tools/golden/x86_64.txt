@@ -18,6 +18,10 @@ smp.each ok
 smp.calls ok
 smp.counter ok
 smp.tlb ok
+dpc.run ok
+dpc.order ok
+dpc.remove ok
+dpc.other-cpu ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok
@@ -45,3 +49,4 @@ oracle.null ok
 oracle.sioctl ok
 oracle.nkc-irql ok
 oracle.nkc-time ok
+oracle.nkc-dpc ok

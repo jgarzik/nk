@@ -39,6 +39,8 @@ pub enum Rank {
     Frames = 60,
     /// The interprocessor call in progress (`ke::ipi`).
     Ipi = 200,
+    /// A processor's queue of deferred procedure calls (`ke::dpc`).
+    DpcQueue = 240,
     /// The diagnostic console (`kd`): innermost, so anything can print.
     Console = 250,
 }
@@ -48,7 +50,7 @@ impl Rank {
     const fn level(self) -> u8 {
         match self {
             // Usable from any context, an interrupt included.
-            Rank::Console => irql::HIGH_LEVEL,
+            Rank::Console | Rank::DpcQueue => irql::HIGH_LEVEL,
             _ => irql::DISPATCH_LEVEL,
         }
     }
