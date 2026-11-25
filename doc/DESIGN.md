@@ -585,11 +585,23 @@ as in `ntifs.h`.
 
 Nothing is enforced: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
-replaces the named parts of a device's descriptor
-(`DEVICE_OBJECT.SecurityDescriptor`); other objects have none and answer
-`STATUS_NOT_SUPPORTED`. A new device has no descriptor until one is set,
-where Windows gives a default. `SeCaptureSecurityDescriptor`, forced,
-returns a self-relative pool copy, the caller's to free.
+replaces the named parts of a device's descriptor; for other objects it
+answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
+is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
+forced, returns a self-relative pool copy, the caller's to free.
+
+Where a descriptor lives:
+
+- A device's is in `DEVICE_OBJECT.SecurityDescriptor`, a documented
+  field a driver can read, as on Windows: a pool block the device owns,
+  replaced under the I/O database lock.
+- Any other object can carry one in `OBJECT_HEADER.SecurityDescriptor`
+  (`kernel/ob/security.rs`): a counted pool block of its own, set,
+  referenced and released by kernel routines, freed with the object or
+  when replaced and no reader holds it. Windows shares one block among
+  objects with equal descriptors; NK does not. The field is Windows' fast
+  reference with its count bits zero. Nothing gives an object a
+  descriptor yet: that comes with the types' security procedures.
 
 ## Tokens and access state
 

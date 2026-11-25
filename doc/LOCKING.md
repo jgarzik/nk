@@ -217,6 +217,12 @@ holds two, with one exception: a wait for all of several objects holds
 all their locks at once while it looks and takes, locking in order of
 address and unlocking in reverse.
 
+Every object-manager object has another lock of its own, the `Lock`
+word of its header, which covers the header's security descriptor
+pointer (`ob::security`). It is held at `DISPATCH_LEVEL` for a pointer
+read or swap and a count, takes nothing inside, and is not ranked or
+recorded; a replaced descriptor is freed after it is dropped.
+
 For a timer the lock also serialises setting and cancelling. Expiry
 takes the timer out under the table's lock, lets go, and only then takes
 the timer's own lock to signal it; a timer that was set again in

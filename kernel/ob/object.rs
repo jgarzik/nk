@@ -273,7 +273,7 @@ impl TypeVariable {
     }
 }
 
-fn header(body: *mut u8) -> *mut OBJECT_HEADER {
+pub(super) fn header(body: *mut u8) -> *mut OBJECT_HEADER {
     body.wrapping_sub(OBJECT_BODY).cast()
 }
 
@@ -449,6 +449,7 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
             if let Some(delete) = type_of(body).0.TypeInfo.DeleteProcedure {
                 delete(body.cast());
             }
+            super::security::object_freed(body);
         }
         // SAFETY: still the object's memory; its block is found before
         // it is given back.

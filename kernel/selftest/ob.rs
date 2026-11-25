@@ -15,6 +15,7 @@ pub static GROUP: Group = Group {
         "ob.namespace.links",
         "ob.namespace.name-info",
         "ob.handle-access",
+        "ob.security",
     ],
     run,
     manual: false,
@@ -52,4 +53,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     r.check("ob.namespace.name-info", crate::ob::name_info_test);
     counted(r, "ob.handle-access", "look-ups:", handle::access_test());
+    r.check("ob.security", crate::ob::security::self_test);
 }

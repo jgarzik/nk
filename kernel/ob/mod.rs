@@ -14,6 +14,7 @@
 
 pub mod handle;
 pub mod object;
+pub mod security;
 
 use crate::ke::{Rank, SpinLock};
 use alloc::vec::Vec;
