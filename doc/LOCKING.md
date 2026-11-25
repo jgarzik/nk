@@ -60,7 +60,7 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
-| 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
+| 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
@@ -80,10 +80,16 @@ Why this order:
   under the I/O database lock, so "the last reference went" and "the
   device was deleted" are seen together by whichever comes second. That
   one frees the device, after dropping the lock.
-- A device found by name is given a pointer reference under the
-  namespace lock, which a device loses its names under before it gives
-  up its own; the database lock is taken only after the namespace lock
-  is dropped, to count the open or refuse it.
+- The namespace is one lock: every directory, every entry. An object
+  found by name is given a pointer reference under it, and whoever named
+  an object takes the name away under it before giving up the reference
+  the object was made with; so a name leads to a live object. A look-up
+  returns with the lock dropped and that reference held: whatever is
+  done with the object and the rest of the path (counting an open under
+  the database lock, sending a driver the create request) happens
+  outside it.
+- No object's last reference is dropped under the namespace lock: a
+  removed symbolic link's object is released after it.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
@@ -93,7 +99,9 @@ Why this order:
   memory is read and written outside it.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
-  dropped under the handle table's lock: freeing takes the pool's.
+  dropped under the handle table's lock, nor is its type told of a
+  closed handle there: freeing takes the pool's lock, and a file's close
+  and delete procedures call its driver.
 - The pool and the address space each take frames while holding their own
   lock (a new arena; a new page table). They never take each other.
 - An interprocessor call may be made with any of the above held:
@@ -208,6 +216,12 @@ locks are in the driver's memory and are not ranked or recorded. Nothing
 holds two, with one exception: a wait for all of several objects holds
 all their locks at once while it looks and takes, locking in order of
 address and unlocking in reverse.
+
+Every object-manager object has another lock of its own, the `Lock`
+word of its header, which covers the header's security descriptor
+pointer (`ob::security`). It is held at `DISPATCH_LEVEL` for a pointer
+read or swap and a count, takes nothing inside, and is not ranked or
+recorded; a replaced descriptor is freed after it is dropped.
 
 For a timer the lock also serialises setting and cancelling. Expiry
 takes the timer out under the table's lock, lets go, and only then takes

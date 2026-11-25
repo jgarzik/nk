@@ -10,7 +10,7 @@ use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 
 pub static GROUP: Group = Group {
-    names: &["cm.keys", "cm.values", "cm.delete"],
+    names: &["cm.keys", "cm.values", "cm.delete", "cm.namespace"],
     run,
     manual: false,
 };
@@ -102,7 +102,7 @@ fn keys() -> Result<(), &'static str> {
     let refused = [
         key("\\NkTest", services, false).0, // relative, yet from the top
         key("Registry\\Machine", null, false).0, // no root and not from the top
-        key("\\Device\\Null", null, false).0, // elsewhere in the namespace
+        key("\\Device", null, false).0,     // elsewhere in the namespace
         key("NkTest", 0x1234 as *mut c_void, false).0,
     ];
     if refused != [0xC000_003B, 0xC000_003B, 0xC000_0024, 0xC000_0008] {
@@ -316,8 +316,90 @@ fn delete() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A registry name is a path in the object namespace: it is looked up
+/// there, through symbolic links and from a directory if one is given,
+/// and must lead to the registry's root key, which walks the rest.
+fn namespace() -> Result<(), &'static str> {
+    use crate::io::file::{self, OpenRequest};
+    use crate::ob::{self, handle, object};
+    let wide = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+    let null = core::ptr::null_mut();
+    // The root key is an object called `\Registry`; a path below it
+    // stops there with the rest left over.
+    let (root, rest) = ob::lookup(None, &wide("\\REGISTRY\\Machine\\System"))
+        .map_err(|_| "\\Registry is not in the namespace")?;
+    // SAFETY: the look-up's reference, given up after the type is read.
+    let is_key = unsafe {
+        let is_key = core::ptr::eq(object::type_of(root), &raw const object::KEY_TYPE);
+        object::dereference(root);
+        is_key
+    };
+    if !is_key || rest != wide("\\Machine\\System") {
+        return Err("\\Registry is not a key object that is handed the rest of the path");
+    }
+    // A handle to the namespace's root directory, to start from.
+    let (directory, _) = ob::lookup(None, &wide("\\")).map_err(|_| "no root directory")?;
+    // SAFETY: the look-up's reference, handed to the handle.
+    let directory = unsafe {
+        let opened = handle::open(directory, 0).unwrap_or(0);
+        object::dereference(directory);
+        opened as *mut c_void
+    };
+    let made = ob::insert_link(&wide("\\??\\NkRegistry"), &wide("\\Registry\\Machine"));
+    let result = (|| {
+        if made != 0 {
+            return Err("a symbolic link to a key could not be made");
+        }
+        let (direct, system, _) = key("\\Registry\\Machine\\System", null, false);
+        let (linked, by_link, _) = key("\\DosDevices\\nkregistry\\SYSTEM", null, false);
+        let (below, by_directory, _) = key("Registry\\Machine\\System", directory, false);
+        // A key made by one path is found by the others.
+        let (created, new, disposition) = key("\\??\\NkRegistry\\System\\NkNamespace", null, true);
+        let (found, same, _) = key("NkNamespace", system, false);
+        let deleted = ZwDeleteKey(new);
+        for handle in [system, by_link, by_directory, new, same] {
+            ZwClose(handle);
+        }
+        if (direct, linked, below) != (0, 0, 0) {
+            return Err("a key was not opened through the namespace by every path to it");
+        }
+        if (created, disposition, found, deleted) != (0, 1, 0, 0) {
+            return Err("a key made through a symbolic link is not where the link leads");
+        }
+        let refused = [
+            (key("\\Registry\\Machine\\NkNone", null, false).0, NOT_FOUND),
+            (key("\\NkNoDirectory\\Machine", null, false).0, 0xC000_003A),
+            (key("\\??\\NkNoLink\\System", null, false).0, 0xC000_003A),
+            (key("\\Device", null, false).0, 0xC000_0024),
+            (key("\\", null, false).0, 0xC000_0024),
+            (key("Device", directory, false).0, 0xC000_0024),
+            (key("\\Registry", directory, false).0, 0xC000_003B),
+        ];
+        if refused.iter().any(|(status, expected)| status != expected) {
+            return Err("a name that leads to no key was not refused with its own status");
+        }
+        // A key is no file, by its name or as the root of one.
+        let (machine, opened, _) = key("\\Registry\\Machine", null, false);
+        let by_name = file::open(&OpenRequest::new("\\Registry\\Machine"));
+        let relative = file::open(&OpenRequest {
+            root: Some(opened as u64),
+            ..OpenRequest::new("System")
+        });
+        ZwClose(opened);
+        let mismatch = Err(0xC000_0024u32 as i32);
+        if machine != 0 || by_name != mismatch || relative != mismatch {
+            return Err("a key was opened as a file");
+        }
+        Ok(())
+    })();
+    ob::remove_link(&wide("\\??\\NkRegistry"));
+    ZwClose(directory);
+    result
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
     r.check("cm.delete", delete);
+    r.check("cm.namespace", namespace);
 }

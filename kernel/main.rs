@@ -107,6 +107,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = ex::work::init() {
         test::abort("ex.work", format_args!("{why}"));
     }
+    if let Err(why) = ob::init() {
+        test::abort("ob", format_args!("{why}"));
+    }
     if let Err(why) = cm::init() {
         test::abort("cm", format_args!("{why}"));
     }

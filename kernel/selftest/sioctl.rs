@@ -36,14 +36,9 @@ const TAG: u32 = u32::from_le_bytes(*b"NkTs");
 
 type Check = Result<(), &'static str>;
 
-fn ioctl(
-    file: *mut FILE_OBJECT,
-    code: u32,
-    input: &[u8],
-    output: &mut [u8],
-) -> Result<IoResult, &'static str> {
-    // SAFETY: `file` stays open for the duration of the tests.
-    unsafe { file::device_control(file, code, input, output) }.map_err(|e| match e {
+fn ioctl(file: u64, code: u32, input: &[u8], output: &mut [u8]) -> Result<IoResult, &'static str> {
+    file::device_control(file, code, input, output).map_err(|e| match e {
+        IoError::Handle(_) => "the handle does not name an open file",
         IoError::NotCompleted { .. } => "the driver did not complete the request",
         IoError::StatusMismatch { .. } => "dispatch status differs from completion status",
         IoError::NoMemory => "out of memory",
@@ -68,7 +63,7 @@ fn expect_reply(result: IoResult, output: &[u8]) -> Result<usize, &'static str> 
     Ok(n)
 }
 
-fn buffered(file: *mut FILE_OBJECT) -> Check {
+fn buffered(file: u64) -> Check {
     for len in [100, REPLY.len(), 10, 1] {
         let mut out = [FILL; 100];
         let r = ioctl(file, BUFFERED, b"hello from NK", &mut out[..len])?;
@@ -90,7 +85,7 @@ fn buffered(file: *mut FILE_OBJECT) -> Check {
 /// outBufLength)` in its source). With direct I/O that lands in the
 /// caller's own pages, so bytes after the reply are driver data, not the
 /// caller's fill. What must hold is that nothing outside the buffer moves.
-fn out_direct(file: *mut FILE_OBJECT) -> Check {
+fn out_direct(file: u64) -> Check {
     let pages = pool::alloc(2 * PAGE_SIZE, TAG);
     if pages.is_null() {
         return Err("out of memory");
@@ -122,7 +117,7 @@ fn out_direct(file: *mut FILE_OBJECT) -> Check {
 
 /// Direct input: the driver reads the MDL-described buffer and reports
 /// its length.
-fn in_direct(file: *mut FILE_OBJECT) -> Check {
+fn in_direct(file: u64) -> Check {
     let mut data = *b"This String is from the requestor, sent with METHOD_IN_DIRECT\0\0\0";
     let before = data;
     let r = ioctl(file, IN_DIRECT, b"hello from NK", &mut data)?;
@@ -138,7 +133,7 @@ fn in_direct(file: *mut FILE_OBJECT) -> Check {
     Ok(())
 }
 
-fn bad_requests(file: *mut FILE_OBJECT) -> Check {
+fn bad_requests(file: u64) -> Check {
     let invalid = IoResult {
         status: STATUS_INVALID_PARAMETER,
         information: 0,
@@ -158,8 +153,7 @@ fn bad_requests(file: *mut FILE_OBJECT) -> Check {
         return Err("a failed request wrote to the output buffer");
     }
     // The driver registers no read routine: the kernel's default answers.
-    // SAFETY: `file` stays open for the duration of the tests.
-    match unsafe { file::read(file, &mut out) } {
+    match file::read(file, &mut out) {
         Ok(r) if r.status == STATUS_INVALID_DEVICE_REQUEST => Ok(()),
         _ => Err("a read must give STATUS_INVALID_DEVICE_REQUEST"),
     }
@@ -168,19 +162,15 @@ fn bad_requests(file: *mut FILE_OBJECT) -> Check {
 /// One full life of the driver: load, open, one request, close, unload.
 fn cycle() -> Check {
     service::start("SIoctl").map_err(|_| "load failed")?;
-    let file = file::open(DOS_NAME).map_err(|_| "open failed")?;
+    let file = super::open(DOS_NAME).map_err(|_| "open failed")?;
     let mut out = [FILL; 64];
     let verdict =
         ioctl(file, BUFFERED, b"cycle", &mut out).and_then(|r| expect_reply(r, &out).map(|_| ()));
-    // SAFETY: `file` came from `open` and is closed exactly once.
-    let closed = unsafe { file::close(file) };
+    let closed = file::close(file);
     service::stop("SIoctl")?;
     verdict?;
     match closed {
-        Ok(IoResult {
-            status: STATUS_SUCCESS,
-            ..
-        }) => Ok(()),
+        STATUS_SUCCESS => Ok(()),
         _ => Err("close failed"),
     }
 }
@@ -218,7 +208,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     // link the driver made, under either spelling of the DOS directory.
     let mut opened = alloc::vec::Vec::new();
     for name in [DEVICE, DOS_NAME, DOS_ALIAS] {
-        match file::open(name) {
+        match super::open(name) {
             Ok(file) => opened.push(file),
             Err(status) => kprintln!("sioctl: open {name} failed: {status:#x}"),
         }
@@ -230,8 +220,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         r.check("sioctl.out-direct", || out_direct(file));
         r.check("sioctl.in-direct", || in_direct(file));
         r.check("sioctl.bad-requests", || bad_requests(file));
-        // SAFETY: `file` stays open until the loop below.
-        match unsafe { file::device_control(file, NEITHER, b"x", &mut [0u8; 8]) } {
+        match file::device_control(file, NEITHER, b"x", &mut [0u8; 8]) {
             Err(IoError::UnsupportedMethod) => r.skip(
                 "sioctl.neither",
                 format_args!("METHOD_NEITHER needs user memory and SEH"),
@@ -249,14 +238,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     }
     let mut closed = true;
     for file in opened.drain(..) {
-        // SAFETY: each file came from `open` and is closed exactly once.
-        closed &= matches!(
-            unsafe { file::close(file) },
-            Ok(IoResult {
-                status: STATUS_SUCCESS,
-                ..
-            })
-        );
+        closed &= file::close(file) == STATUS_SUCCESS;
     }
     drop(opened);
     r.check("sioctl.close", || {
@@ -268,7 +250,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     });
 
     match service::stop("SIoctl") {
-        Ok(()) if file::open(DOS_NAME).is_err() && file::open(DEVICE).is_err() => {
+        Ok(()) if super::open(DOS_NAME).is_err() && super::open(DEVICE).is_err() => {
             r.ok("sioctl.unload")
         }
         Ok(()) => r.fail(

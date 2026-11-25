@@ -5,6 +5,11 @@
 //! or saved to a hive file: the registry starts with the keys a driver
 //! expects to find and holds what drivers put in it until the machine
 //! stops. A key handle is a handle to a small object naming the key.
+//!
+//! The registry's root is such an object too, called `\Registry` in the
+//! object namespace. An absolute name is looked up there like any
+//! other; the look-up ends at the root key, and the rest of the path is
+//! the registry's to walk.
 
 #![allow(non_snake_case)]
 
@@ -38,16 +43,38 @@ const INITIAL: &[&str] = &[
     "User",
 ];
 
-/// Make the registry's first keys.
+/// Make the registry's first keys, and name its root `\Registry`.
 pub fn init() -> Result<(), &'static str> {
-    let mut hive = HIVE.lock();
-    let root = hive.root().map_err(|_| "no memory for the registry")?;
-    for path in INITIAL {
-        let path: Vec<u16> = path.encode_utf16().collect();
-        hive.create(root, &path)
-            .map_err(|_| "the registry's first keys could not be made")?;
+    const NO_MEMORY: &str = "no memory for the registry";
+    let root = {
+        let mut hive = HIVE.lock();
+        let root = hive.root().map_err(|_| NO_MEMORY)?;
+        for path in INITIAL {
+            let path: Vec<u16> = path.encode_utf16().collect();
+            hive.create(root, &path)
+                .map_err(|_| "the registry's first keys could not be made")?;
+        }
+        // The key object made below counts as an open of the root.
+        hive.opened(root);
+        root
+    };
+    let path: Vec<u16> = "\\Registry".encode_utf16().collect();
+    let body = object::create_named(
+        &object::KEY_TYPE,
+        size_of::<usize>(),
+        crate::ob::leaf(&path),
+    )
+    .ok_or(NO_MEMORY)?;
+    // SAFETY: a fresh named key object of that size, made to be called
+    // `Registry`; it keeps its name and its reference for ever.
+    let named = unsafe {
+        body.cast::<usize>().write(root.index());
+        crate::ob::insert(&path, body)
+    };
+    match named {
+        STATUS_SUCCESS => Ok(()),
+        _ => Err("the registry's root could not be named"),
     }
-    Ok(())
 }
 
 /// The pool memory the registry holds, as `(blocks, bytes)`: it keeps
@@ -77,69 +104,79 @@ fn key_of(handle: *mut c_void) -> Result<KeyId, NTSTATUS> {
     }
 }
 
-/// Where the name in `attributes` starts (`None`: at the root), and
-/// the path from there. Reads the driver's memory and resolves its
-/// handle, so it is called before the registry's lock is taken.
+/// The key the name in `attributes` starts at, and the path from
+/// there. An absolute name, or one relative to a directory, is looked
+/// up in the object namespace, where it must lead to a key: the
+/// registry's root, with the rest of the path left over. A name
+/// relative to an open key starts at that key.
+///
+/// Reads the driver's memory and resolves its handle, so it is called
+/// before the registry's lock is taken.
 ///
 /// # Safety
 /// `attributes` points to an `OBJECT_ATTRIBUTES` whose name is null or
 /// a counted string.
-unsafe fn named(
-    attributes: *const OBJECT_ATTRIBUTES,
-) -> Result<(Option<KeyId>, Vec<u16>), NTSTATUS> {
+unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(KeyId, Vec<u16>), NTSTATUS> {
     if attributes.is_null() {
         return Err(STATUS_INVALID_PARAMETER);
     }
     // SAFETY: per the contract; the structure is the driver's, read
     // field by field.
-    let (root, mut path) = unsafe {
+    let (root, path) = unsafe {
         (
             (&raw const (*attributes).RootDirectory).read_unaligned(),
             crate::rtl::copy_unicode((&raw const (*attributes).ObjectName).read_unaligned()),
         )
     };
-    if !root.is_null() {
-        // Relative to an open key; such a name does not start at `\`.
-        if path.first() == Some(&u16::from(b'\\')) {
+    let is = |body: *mut u8, ty: &'static object::ObjectType| {
+        // SAFETY: called with objects this function holds a reference to.
+        core::ptr::eq(unsafe { object::type_of(body) }, ty)
+    };
+    let (body, path) = if root.is_null() {
+        crate::ob::lookup(None, &path)?
+    } else {
+        let root = handle::reference(root as u64, None)?;
+        if is(root, &object::DIRECTORY_TYPE) {
+            let found = crate::ob::lookup(Some(root), &path);
+            // SAFETY: the reference taken above.
+            unsafe { object::dereference(root) };
+            found?
+        } else if path.first() == Some(&u16::from(b'\\')) {
+            // Relative to an open object: not from the top.
+            // SAFETY: the reference taken above.
+            unsafe { object::dereference(root) };
             return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
+        } else {
+            (root, path)
         }
-        return Ok((Some(key_of(root)?), path));
-    }
-    if path.first() != Some(&u16::from(b'\\')) {
-        return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
-    }
-    // An absolute name that leads elsewhere in the namespace names no
-    // key.
-    let below = nk_cm::below_root(&path)
-        .ok_or(STATUS_OBJECT_TYPE_MISMATCH)?
-        .len();
-    path.drain(..path.len() - below);
-    Ok((None, path))
-}
-
-/// The key a name from [`named`] starts at.
-fn start_of(hive: &mut Hive, start: Option<KeyId>) -> Result<KeyId, NTSTATUS> {
-    match start {
-        Some(key) => Ok(key),
-        None => hive.root().map_err(status),
+    };
+    // SAFETY: the reference the look-up took, given up here; a key
+    // object's body is the key's number, written once when it was made.
+    unsafe {
+        let key =
+            is(body, &object::KEY_TYPE).then(|| KeyId::from_index(body.cast::<usize>().read()));
+        object::dereference(body);
+        // What leads elsewhere in the namespace names no key.
+        Ok((key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)?, path))
     }
 }
 
-/// A handle to `key`, which the caller has counted as opened
-/// (`Hive::opened`) under the lock it found the key under; the count is
-/// given back if no handle can be made.
-fn open(key: KeyId) -> Result<*mut c_void, NTSTATUS> {
+/// A handle to `key`, granted `access`. The caller has counted the key
+/// as opened (`Hive::opened`) under the lock it found the key under;
+/// the count is given back if no handle can be made.
+fn open(key: KeyId, access: u32) -> Result<*mut c_void, NTSTATUS> {
     let Some(body) = object::create(&object::KEY_TYPE, size_of::<usize>()) else {
         HIVE.lock().closed(key);
         return Err(STATUS_INSUFFICIENT_RESOURCES);
     };
     // SAFETY: a fresh object of that size; the handle takes its own
-    // reference and the creating one is given up.
+    // reference and the creating one is given up, which without a
+    // handle ends the object and gives the key's count back.
     unsafe {
         body.cast::<usize>().write(key.index());
-        let handle = handle::open(body);
+        let handle = handle::open(body, access);
         object::dereference(body);
-        Ok(handle as *mut c_void)
+        handle.map(|handle| handle as *mut c_void)
     }
 }
 
@@ -201,25 +238,25 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
 }
 
 /// [`ZwOpenKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey).
-/// There are no access checks: the desired access is not looked at.
+/// There are no access checks: the handle is granted the access asked
+/// for.
 ///
 /// # Safety
 /// `key_handle` is writable; `attributes` points to an
 /// `OBJECT_ATTRIBUTES`.
 pub unsafe extern "C" fn ZwOpenKey(
     key_handle: *mut *mut c_void,
-    _desired_access: u32,
+    desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     let found = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
-        let start = start_of(&mut hive, start)?;
         let key = hive.open(start, &path).map_err(status)?;
         hive.opened(key);
         Ok(key)
     });
-    match found.and_then(open) {
+    match found.and_then(|key| open(key, desired_access)) {
         Ok(handle) => {
             // SAFETY: per the contract.
             unsafe { key_handle.write_unaligned(handle) };
@@ -239,7 +276,7 @@ pub unsafe extern "C" fn ZwOpenKey(
 /// `OBJECT_ATTRIBUTES`; `disposition` is null or writable.
 pub unsafe extern "C" fn ZwCreateKey(
     key_handle: *mut *mut c_void,
-    _desired_access: u32,
+    desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
     _title_index: u32,
     _class: *const UNICODE_STRING,
@@ -249,12 +286,11 @@ pub unsafe extern "C" fn ZwCreateKey(
     // SAFETY: per the contract.
     let made = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
-        let start = start_of(&mut hive, start)?;
         let (key, new) = hive.create(start, &path).map_err(status)?;
         hive.opened(key);
         Ok((key, new))
     });
-    match made.and_then(|(key, new)| Ok((open(key)?, new))) {
+    match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
         Ok((handle, new)) => {
             // SAFETY: per the contract.
             unsafe {

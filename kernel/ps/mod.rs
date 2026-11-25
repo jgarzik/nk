@@ -35,15 +35,15 @@ fn system_thread(start: usize) {
 
 /// [`PsCreateSystemThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pscreatesystemthread).
 /// The handle is a kernel handle whatever the object attributes say:
-/// there is no other kind. Access, attributes, process and client id
-/// are not looked at.
+/// there is no other kind, and it is granted the access asked for.
+/// Attributes, process and client id are not looked at.
 ///
 /// # Safety
 /// `thread_handle` points to room for a handle; `start_routine` may be
 /// called with `start_context` in a new thread.
 pub unsafe extern "C" fn PsCreateSystemThread(
     thread_handle: *mut *mut c_void,
-    _desired_access: u32,
+    desired_access: u32,
     _object_attributes: *mut c_void,
     _process_handle: *mut c_void,
     _client_id: *mut c_void,
@@ -69,12 +69,19 @@ pub unsafe extern "C" fn PsCreateSystemThread(
         return STATUS_INSUFFICIENT_RESOURCES;
     };
     // SAFETY: per the contract; the reference `create_referenced` gave
-    // is handed to the handle and then given up.
+    // is handed to the handle and then given up. A thread that could
+    // not be given a handle runs all the same.
     unsafe {
-        thread_handle.write_unaligned(handle::open(new.cast()) as *mut c_void);
+        let opened = handle::open(new.cast(), desired_access);
         object::dereference(new.cast());
+        match opened {
+            Ok(handle) => {
+                thread_handle.write_unaligned(handle as *mut c_void);
+                STATUS_SUCCESS
+            }
+            Err(status) => status,
+        }
     }
-    STATUS_SUCCESS
 }
 
 /// [`PsTerminateSystemThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread):

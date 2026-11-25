@@ -247,6 +247,16 @@ fn process_matches_the_kernel() {
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
+    assert_eq!(TOKEN, field("Token"));
+    // The token pointer is a fast reference: one pointer-sized word
+    // whose low four bits are a count.
+    let fast = types.layout("_EX_FAST_REF").expect("_EX_FAST_REF");
+    let count = fast.member("RefCnt").expect("_EX_FAST_REF.RefCnt");
+    assert_eq!((fast.size, count.offset), (8, 0));
+    assert_eq!(
+        count.bits,
+        Some((0, FAST_REF_COUNT_MASK.count_ones() as u8))
+    );
 }
 
 #[test]
@@ -309,6 +319,51 @@ fn object_header_matches_the_kernel() {
     assert_eq!(
         offset_of!(OBJECT_HEADER, SecurityDescriptor),
         field("SecurityDescriptor")
+    );
+    assert_eq!(offset_of!(OBJECT_HEADER, InfoMask), field("InfoMask"));
+}
+
+#[test]
+fn named_objects_match_the_kernel() {
+    use crate::ob::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let info = types
+        .layout("_OBJECT_HEADER_NAME_INFO")
+        .expect("_OBJECT_HEADER_NAME_INFO");
+    let field = |name| offset(&info, "_OBJECT_HEADER_NAME_INFO", name);
+    assert_eq!(size_of::<OBJECT_HEADER_NAME_INFO>(), info.size as usize);
+    assert_eq!(
+        offset_of!(OBJECT_HEADER_NAME_INFO, Directory),
+        field("Directory")
+    );
+    assert_eq!(offset_of!(OBJECT_HEADER_NAME_INFO, Name), field("Name"));
+    assert_eq!(
+        offset_of!(OBJECT_HEADER_NAME_INFO, ReferenceCount),
+        field("ReferenceCount")
+    );
+
+    let directory = types
+        .layout("_OBJECT_DIRECTORY")
+        .expect("_OBJECT_DIRECTORY");
+    assert_eq!(OBJECT_DIRECTORY_SIZE, directory.size as usize);
+
+    let link = types
+        .layout("_OBJECT_SYMBOLIC_LINK")
+        .expect("_OBJECT_SYMBOLIC_LINK");
+    let field = |name| offset(&link, "_OBJECT_SYMBOLIC_LINK", name);
+    assert_eq!(size_of::<OBJECT_SYMBOLIC_LINK>(), link.size as usize);
+    macro_rules! same {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(OBJECT_SYMBOLIC_LINK, $name), field(stringify!($name)));
+        )*};
+    }
+    same!(
+        CreationTime,
+        LinkTarget,
+        DosDeviceDriveIndex,
+        Flags,
+        AccessMask
     );
 }
 
@@ -626,6 +681,110 @@ fn security_structures_match_the_kernel() {
     );
     // One sub-authority is declared; the size is that of such a SID.
     assert_eq!(nk_se::sid_length(1), sid.size as usize);
+}
+
+#[test]
+fn access_state_matches_the_kernel() {
+    use crate::se::{ACCESS_STATE, SECURITY_SUBJECT_CONTEXT};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let subject = types
+        .layout("_SECURITY_SUBJECT_CONTEXT")
+        .expect("_SECURITY_SUBJECT_CONTEXT");
+    let field = |name| offset(&subject, "_SECURITY_SUBJECT_CONTEXT", name);
+    assert_eq!(size_of::<SECURITY_SUBJECT_CONTEXT>(), subject.size as usize);
+    macro_rules! same_subject {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(SECURITY_SUBJECT_CONTEXT, $name), field(stringify!($name)));
+        )*};
+    }
+    same_subject!(
+        ClientToken,
+        ImpersonationLevel,
+        PrimaryToken,
+        ProcessAuditId
+    );
+
+    let state = types.layout("_ACCESS_STATE").expect("_ACCESS_STATE");
+    let field = |name| offset(&state, "_ACCESS_STATE", name);
+    assert_eq!(size_of::<ACCESS_STATE>(), state.size as usize);
+    macro_rules! same_state {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(ACCESS_STATE, $name), field(stringify!($name)));
+        )*};
+    }
+    same_state!(
+        OperationID,
+        SecurityEvaluated,
+        GenerateAudit,
+        GenerateOnClose,
+        PrivilegesAllocated,
+        Flags,
+        RemainingDesiredAccess,
+        PreviouslyGrantedAccess,
+        OriginalDesiredAccess,
+        SubjectSecurityContext,
+        SecurityDescriptor,
+        AuxData,
+        Privileges,
+        AuditPrivileges,
+        ObjectName,
+        ObjectTypeName
+    );
+    // The privileges kept in line: a count, a control word and three
+    // privileges of twelve bytes each.
+    let initial = types
+        .layout("_INITIAL_PRIVILEGE_SET")
+        .expect("_INITIAL_PRIVILEGE_SET");
+    assert_eq!(
+        initial.size as usize,
+        field("AuditPrivileges") - field("Privileges")
+    );
+}
+
+#[test]
+fn create_requests_match_the_kernel() {
+    use crate::io::{IO_SECURITY_CONTEXT, NAMED_PIPE_CREATE_PARAMETERS};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let context = types
+        .layout("_IO_SECURITY_CONTEXT")
+        .expect("_IO_SECURITY_CONTEXT");
+    let field = |name| offset(&context, "_IO_SECURITY_CONTEXT", name);
+    assert_eq!(size_of::<IO_SECURITY_CONTEXT>(), context.size as usize);
+    macro_rules! same_context {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(IO_SECURITY_CONTEXT, $name), field(stringify!($name)));
+        )*};
+    }
+    same_context!(SecurityQos, AccessState, DesiredAccess, FullCreateOptions);
+
+    let pipe = types
+        .layout("_NAMED_PIPE_CREATE_PARAMETERS")
+        .expect("_NAMED_PIPE_CREATE_PARAMETERS");
+    let field = |name| offset(&pipe, "_NAMED_PIPE_CREATE_PARAMETERS", name);
+    assert_eq!(
+        size_of::<NAMED_PIPE_CREATE_PARAMETERS>(),
+        pipe.size as usize
+    );
+    macro_rules! same_pipe {
+        ($($name:ident),*) => {$(
+            assert_eq!(
+                offset_of!(NAMED_PIPE_CREATE_PARAMETERS, $name),
+                field(stringify!($name))
+            );
+        )*};
+    }
+    same_pipe!(
+        NamedPipeType,
+        ReadMode,
+        CompletionMode,
+        MaximumInstances,
+        InboundQuota,
+        OutboundQuota,
+        DefaultTimeout,
+        TimeoutSpecified
+    );
 }
 
 #[test]

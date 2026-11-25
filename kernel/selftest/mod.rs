@@ -17,6 +17,7 @@ mod mutex;
 mod neg;
 mod null;
 mod ob;
+mod open;
 mod oracle;
 mod pend;
 mod review;
@@ -29,8 +30,16 @@ mod timer;
 mod wait;
 mod work;
 
+use crate::io::file::{self, OpenRequest};
 use crate::mm;
 use crate::test::Group;
+use nk_ntabi::status::NTSTATUS;
+
+/// Open `name` the way the oracle's plain `open` step does, for a
+/// handle.
+fn open(name: &str) -> Result<u64, NTSTATUS> {
+    file::open(&OpenRequest::new(name)).map(|(handle, _)| handle)
+}
 
 /// Every test group. `test=` on the command line selects among them.
 pub static GROUPS: &[&Group] = &[
@@ -50,6 +59,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,
+    &open::GROUP,
     &driver_api::GROUP,
     &loader::GROUP,
     &null::GROUP,
@@ -93,6 +103,9 @@ pub struct Resources {
     /// (pool arenas, page tables). Those stores grow on first use; that
     /// is not a leak, and anything else that takes frames is.
     spare_frames: u64,
+    /// Entries in the object namespace: device names, symbolic links,
+    /// driver objects. The directories made at boot are counted too,
+    /// and never change.
     names: usize,
     /// Threads that exist: a test waits for the ones it made to end.
     threads: u32,

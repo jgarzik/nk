@@ -3,7 +3,8 @@
 //! Every thread belongs to it. Its block has `EPROCESS`'s size and
 //! Windows' layout for the fields NK keeps; the rest is zero. It is made
 //! before the first thread and never goes away, so threads point at it
-//! without counting references.
+//! without counting references. It holds the SYSTEM token
+//! (`se::token`), the only token there is.
 
 use crate::ob::object;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
@@ -20,9 +21,14 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(layout::SYSTEM_PROCESS_ID + 4);
 pub fn init(time: u64) -> Result<(), &'static str> {
     let process = object::create(&object::PROCESS_TYPE, layout::EPROCESS_SIZE)
         .ok_or("no memory for the System process")?;
+    let token = crate::se::token::create(nk_se::token::Token::system())
+        .ok_or("no memory for the System process's token")?;
     // SAFETY: a fresh, zeroed object of a process's size, which the pool
     // aligns to 16 bytes; nothing else has it yet.
     unsafe {
+        // An `EX_FAST_REF`. Its count bits stay zero: NK hands out no
+        // references in advance, every one is taken from the object.
+        process.add(layout::TOKEN).cast::<*mut u8>().write(token);
         process.write(layout::PROCESS_OBJECT);
         process
             .add(layout::UNIQUE_PROCESS_ID)
@@ -40,6 +46,21 @@ pub fn init(time: u64) -> Result<(), &'static str> {
 /// The System process object.
 pub fn system() -> *mut u8 {
     SYSTEM.load(Ordering::Acquire)
+}
+
+/// The System process's primary token, with a reference for the caller
+/// to drop (`object::dereference`): what `PsReferencePrimaryToken`
+/// does.
+pub fn reference_primary_token() -> *mut u8 {
+    // SAFETY: the process lives for ever and holds its token for as
+    // long, at an aligned offset inside its block; the field is written
+    // once, before the first thread.
+    unsafe {
+        let field = system().add(layout::TOKEN).cast::<usize>().read();
+        let token = (field & !layout::FAST_REF_COUNT_MASK) as *mut u8;
+        object::reference(token);
+        token
+    }
 }
 
 /// An id for a new thread.

@@ -263,7 +263,10 @@ There is one process, System, with Windows' id for it (4). Its block has
 is zero. Every thread belongs to it, the idle threads included (Windows
 gives those a process of their own), and carries a client id: the
 process id and a thread id from the same sequence of multiples of four.
-The kernel handle table is its handle table.
+The kernel handle table is its handle table. `EPROCESS.Token` holds its
+primary token the way Windows stores it, as a fast reference: a pointer
+whose low four bits count references handed out in advance. NK hands out
+none, so the bits are zero.
 
 ## Waits
 
@@ -356,17 +359,27 @@ driver object, which has no count to hold it by.
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
-pointer count, handle count, type. Events, threads, devices and open
-registry keys are such objects. An object is freed when its last
-reference goes; its type may name a procedure that first releases what it
-owns. A thread references itself until it has ended and been reaped, so
-an unreferenced thread frees itself and a referenced one stays a valid,
-signalled object.
+pointer count, handle count, type. Events, threads, the System process,
+tokens, drivers, devices, open files, open registry keys, directories
+and symbolic links are such objects. An object is freed when its last
+reference goes; its type may name a delete procedure that first releases
+what it owns, and a close procedure that is told of every handle closed
+and how many there were. A thread references itself until it has ended
+and been reaped, so an unreferenced thread frees itself and a referenced
+one stays a valid, signalled object.
 
-Kernel handles are entries in one table, with Windows' kernel-handle
-bits; a handle holds a reference until closed. No per-process tables, no
-access checks. `NtCurrentThread()` (-2) names the caller and
-`NtCurrentProcess()` (-1) its process.
+Kernel handles are entries in one table, the System process's, with
+Windows' kernel-handle bits; a handle holds a reference until closed. No
+per-process tables. Each handle has the access it was granted and its
+attributes (inherit, protect from close). Nothing decides what a subject
+may have: a handle is granted what its opener asked for, generic rights
+turned into what they mean for the object's type. A use of a handle on
+behalf of user mode is refused (`STATUS_ACCESS_DENIED`) access the handle
+lacks; kernel mode is not held to it, as `ObReferenceObjectByHandle`
+documents. A type's generic rights are Windows' for files and registry
+keys; the other types have none recorded, and a generic right asked of
+them grants nothing. `NtCurrentThread()` (-2) names the caller and
+`NtCurrentProcess()` (-1) its process, with every access.
 
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index
@@ -375,9 +388,41 @@ does, by the index combined with a cookie chosen at boot and a byte of
 the header's address (`nk_ob::header`). The fields of a type NK does not
 keep (its counts, its lists) are zero.
 
-The namespace is a flat, case-insensitive table of device names and
-symbolic links, with `\DosDevices`, `\??` and `\GLOBAL??` as one
-directory. No directories, no opening by handle, no security checks.
+### The namespace
+
+A tree of directories holding named objects and symbolic links
+(`nk_ob::tree`, under one lock; `kernel/ob/mod.rs`). The root and the
+directories every Windows system has (`\Device`, `\Driver`,
+`\FileSystem`, `\GLOBAL??`, `\BaseNamedObjects`, `\KernelObjects`) are
+directory objects made at boot; nothing else makes or removes one. `\??`
+is `\GLOBAL??`, there being one session, and `\DosDevices` is a symbolic
+link to `\??`. A named device is an entry in the directory its name puts
+it in, a symbolic link is a symbolic-link object there, a loaded
+driver's object is `\Driver\<service>`, and `\Registry` is the
+registry's root key.
+
+Names compare case-insensitively whatever the caller asks, which is
+Windows' default configuration. A look-up follows symbolic links, at
+most eight, and stops at the first object on the path, handing back the
+object, referenced, and the rest of the path. A directory missing on the
+way is `STATUS_OBJECT_PATH_NOT_FOUND`; a missing last name is
+`STATUS_OBJECT_NAME_NOT_FOUND`.
+
+An entry does not keep its object alive (a symbolic link's excepted,
+which nothing else holds): whoever names an object takes the name away
+before giving up the reference the object was made with.
+
+A named object carries Windows' `OBJECT_HEADER_NAME_INFO` in front of
+its header, as the header's `InfoMask` says: its directory and its name
+there, both emptied when the object loses its name. Name information,
+header, body and the name's characters are one pool block. Directory and
+symbolic-link bodies have Windows' sizes: a link's holds its target and
+creation time; a directory's is zero, the entries being in NK's tree.
+
+What is done with the rest of a path is the business of the type the
+look-up ended at, after the namespace's lock is dropped: a device's
+driver parses it as a file name (see "I/O"). The types' parse steps are
+NK's own code, not `OBJECT_TYPE` procedures. No security checks.
 
 ## The kernel is a PE image
 
@@ -530,28 +575,60 @@ driver's unload routine and frees its image; the key stays.
 
 ## I/O
 
-Driver, device and file objects and IRPs are pool allocations of exactly
-their Windows size, reached by raw pointer. An IRP's allocation ends, past
-its stack locations, with one word of NK's: the room in the requestor's
-buffer. A device object is followed by the driver's extension, then a
-private NK block. A device is an object-manager object; its own
-`ReferenceCount` decides when a deleted device stops being one, the
+Driver, device and file objects are object-manager objects of exactly
+their Windows size, and IRPs pool allocations of theirs; all are reached
+by raw pointer. An IRP's allocation ends, past its stack locations, with
+one word of NK's: the room in the requestor's buffer. A device object is
+followed by the driver's extension, then a private NK block. A device's
+own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes.
 
-`kernel/io/file.rs` plays the I/O system services: resolve a name, build
-a real IRP, call the dispatch routine inside a critical region (as
-Windows does for a synchronous request). Completion follows the Windows
+`kernel/io/file.rs` plays the I/O system services, by handle: `open`
+(`NtCreateFile`, `NtCreateNamedPipeFile`), `read`, `write`,
+`device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
+IRP and calls the dispatch routine inside a critical region (as Windows
+does for a synchronous request). Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
 copy results to the requestor and signal its event. A buffered request's
 results are copied only as far as the requestor asked; a driver that
 reports more stops the system. A driver that returns other than
 `STATUS_PENDING` without completing, or a status different from the one
-it completed with, fails the request's test.
+it completed with, fails the request's test. A request made through a
+handle holds the file object until it has been waited for.
 
-**Open.** Finding a device by name and counting the open are two steps,
-and the device may be deleted between them. The look-up takes a pointer
-reference while the name still leads to the device; the open is then
-counted under the I/O database lock, or refused if the device is deleted.
+**Open.** The name is looked up in the namespace, from the root or from
+a directory a root handle names. The look-up ends at a device, and what
+is left of the path is the device's to parse (Windows' `IopParseDevice`):
+it becomes the new file object's `FileName`, backslash first, in a pool
+block of the I/O manager's. A name relative to an open file goes to that
+file's device as given, with the file as `RelatedFileObject`: referenced
+until the create request has completed, which is as long as Microsoft
+documents the field to be valid, and cleared then. Anything
+but a device at the end of the look-up is `STATUS_OBJECT_TYPE_MISMATCH`.
+
+Finding a device and counting the open are two steps, and the device may
+be deleted between them. The look-up takes a pointer reference while the
+name still leads to the device; the open is then counted under the I/O
+database lock, or refused if the device is deleted.
+
+The create request (`IRP_MJ_CREATE`, or `IRP_MJ_CREATE_NAMED_PIPE` with
+the pipe's `NAMED_PIPE_CREATE_PARAMETERS`) carries what Windows' does:
+`Parameters.Create` with the disposition and create options, the share
+access, no attributes and no extended attributes; an
+`IO_SECURITY_CONTEXT` with the desired access and an `ACCESS_STATE` for
+the System process, generic rights mapped to the file rights in both;
+the requestor's mode in the IRP. What the driver leaves in
+`IoStatus.Information` is the open's result. A create the driver fails
+leaves a file object with no device, about which the driver hears no
+more.
+
+**Cleanup and close.** A file object is an object of the file type, and
+the open returns a handle to it. The type's close procedure sends
+`IRP_MJ_CLEANUP` when the last handle in the system closes; its delete
+procedure sends `IRP_MJ_CLOSE` when the last reference goes, then drops
+the file's count on the device and frees the name. The last reference
+to an open file must go at `PASSIVE_LEVEL` (Windows defers such a
+delete to a worker thread; NK stops the system).
 
 **Pending.** A driver may return `STATUS_PENDING` and complete later from
 a DPC, timer or worker; the requestor waits on an event completion sets.
@@ -590,13 +667,18 @@ Nothing is loaded from or saved to a hive: it starts with
 `\Registry\Machine\System\CurrentControlSet` (`Control\Class`,
 `Services`) and holds what drivers write until power-off. Names compare
 case-insensitively. A key handle is a handle to a small object naming
-the key; a name is absolute from `\Registry` or relative to an open key.
+the key. The root key is such an object too, called `\Registry` in the
+object namespace: an absolute name, or one relative to a directory, is
+looked up there, through symbolic links like any other, and must end at
+that key, which walks the rest of the path in the registry's own tree. A
+name relative to an open key starts at that key. A key is no file:
+opening one through the I/O manager is `STATUS_OBJECT_TYPE_MISMATCH`.
 
 Creating makes only the last key of a path, as on Windows. Values are
 read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
 forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
-access checks, symbolic links or notification. Leak checks leave out the
+access checks, registry symbolic links or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
 ## Security descriptors
@@ -609,11 +691,42 @@ as in `ntifs.h`.
 
 Nothing is enforced: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
-replaces the named parts of a device's descriptor
-(`DEVICE_OBJECT.SecurityDescriptor`); other objects have none and answer
-`STATUS_NOT_SUPPORTED`. A new device has no descriptor until one is set,
-where Windows gives a default. `SeCaptureSecurityDescriptor`, forced,
-returns a self-relative pool copy, the caller's to free.
+replaces the named parts of a device's descriptor; for other objects it
+answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
+is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
+forced, returns a self-relative pool copy, the caller's to free.
+
+Where a descriptor lives:
+
+- A device's is in `DEVICE_OBJECT.SecurityDescriptor`, a documented
+  field a driver can read, as on Windows: a pool block the device owns,
+  replaced under the I/O database lock.
+- Any other object can carry one in `OBJECT_HEADER.SecurityDescriptor`
+  (`kernel/ob/security.rs`): a counted pool block of its own, set,
+  referenced and released by kernel routines, freed with the object or
+  when replaced and no reader holds it. Windows shares one block among
+  objects with equal descriptors; NK does not. The field is Windows' fast
+  reference with its count bits zero. Nothing gives an object a
+  descriptor yet: that comes with the types' security procedures.
+
+## Tokens and access state
+
+A token is an object whose body is NK's own (`nk_se::token::Token`):
+drivers treat `TOKEN` as opaque and ask through routines. There is one,
+the System process's, with the user, groups and privileges of Windows'
+SYSTEM token (the table at `Token::system` says which of those facts
+Microsoft documents). No thread impersonates.
+
+What an open carries about its requestor has Windows' layout, because a
+file system reads it in line (`kernel/se/token.rs`):
+
+- the subject context: no client token, the primary token (referenced
+  until the context is released), the process id for auditing;
+- the access state: the subject, an operation id of its own, the access
+  asked for as both original and remaining, generic rights as given (the
+  type being opened maps them), nothing granted yet, and the traverse
+  flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
+  security descriptor, auxiliary data, privileges and names are empty.
 
 ## Breakpoints and the debugger
 

@@ -1,0 +1,6 @@
+# An object that goes does not give up the security descriptor in its
+# header: the descriptor's block is never freed.
+scenario: aarch64
+fails: ob.security
+file: kernel/ob/object.rs
+remove:             super::security::object_freed(body);
