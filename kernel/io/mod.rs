@@ -12,6 +12,7 @@ pub mod file;
 pub mod irp;
 pub mod mdl;
 pub mod remlock;
+pub mod service;
 pub mod symlink;
 
 /// Pool tags, as Windows spells its own.

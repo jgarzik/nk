@@ -9,9 +9,10 @@
 //! reads cancelled while they wait, and loading and unloading again and
 //! again.
 
-use super::{module, resources};
-use crate::io::driver;
+use super::resources;
 use crate::io::file::{self, IoResult};
+use crate::io::service;
+use crate::ldr;
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::FILE_OBJECT;
@@ -83,8 +84,8 @@ fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
 
 /// Load, open by both names, have a short read refused, optionally do
 /// a whole read, close and unload.
-fn cycle(image: &[u8], whole_read: bool) -> Result<(), &'static str> {
-    let object = driver::load("cancel", image).map_err(|_| "load failed")?;
+fn cycle(whole_read: bool) -> Result<(), &'static str> {
+    service::start("cancel").map_err(|_| "load failed")?;
     let verdict = (|| {
         let by_device = file::open(DEVICE).map_err(|_| "open by device name failed")?;
         let by_link = file::open(DOS_NAME).map_err(|_| "open by link failed");
@@ -128,18 +129,19 @@ fn cycle(image: &[u8], whole_read: bool) -> Result<(), &'static str> {
             _ => Ok(()),
         }
     })();
-    driver::unload(object)?;
+    service::stop("cancel")?;
     verdict
 }
 
-fn run(r: &mut Report, info: &BootInfo) {
-    let Some(image) = module(info, "cancel.sys") else {
+fn run(r: &mut Report, _: &BootInfo) {
+    if ldr::boot_file("cancel.sys").is_none() {
         return r.skip_rest(format_args!("module cancel.sys not provided"));
-    };
+    }
     let before = resources();
-    let result = driver::load("cancel", image)
+    let result = service::create("cancel", "cancel.sys")
+        .and_then(|()| service::start("cancel"))
         .map_err(|_| "load failed")
-        .and_then(|object| {
+        .and_then(|_| {
             let result = file::open(DEVICE)
                 .map_err(|_| "open failed")
                 .and_then(|opened| {
@@ -149,7 +151,7 @@ fn run(r: &mut Report, info: &BootInfo) {
                     let _ = unsafe { file::close(opened) };
                     result
                 });
-            driver::unload(object)?;
+            service::stop("cancel")?;
             result
         });
     match result {
@@ -167,7 +169,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     // A whole read takes up to half a second, so only some cycles do
     // one; `oracle.cancel` does more.
     const CYCLES: usize = 100;
-    let failed = (0..CYCLES).find_map(|i| cycle(image, i % 20 == 0).err().map(|why| (i, why)));
+    let failed = (0..CYCLES).find_map(|i| cycle(i % 20 == 0).err().map(|why| (i, why)));
     let after = resources();
     match failed {
         Some((i, why)) => r.fail("cancel.cycles", format_args!("cycle {i}: {why}")),

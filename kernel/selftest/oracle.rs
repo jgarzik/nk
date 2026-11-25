@@ -6,23 +6,23 @@
 //! produces must be the line Windows produced. `oracle/README.md` defines
 //! the formats.
 
-use super::module;
-use crate::io::driver;
 use crate::io::file::{self, IoResult};
+use crate::io::service;
+use crate::ldr;
 use crate::test::{Group, Report};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{DRIVER_OBJECT, FILE_OBJECT};
+use nk_ntabi::io::FILE_OBJECT;
 use nk_oracle::{Checker, Dump, FILL, Mismatch, Outcome, Step};
 
 /// What a script has open and loaded while it runs.
 struct Replay<'a> {
-    info: &'a BootInfo,
     files: Vec<(&'a str, *mut FILE_OBJECT)>,
-    drivers: Vec<(&'a str, *mut DRIVER_OBJECT)>,
+    /// The services the script started and has not stopped.
+    drivers: Vec<&'a str>,
 }
 
 fn outcome(r: IoResult) -> Outcome {
@@ -42,12 +42,10 @@ impl<'a> Replay<'a> {
     }
 
     fn load(&mut self, service: &'a str, file: &str) -> &'static str {
-        let Some(image) = module(self.info, file) else {
-            return "failed";
-        };
-        match driver::load(service, image) {
-            Ok(object) => {
-                self.drivers.push((service, object));
+        // What `sc create` and `sc start` do on Windows.
+        match service::create(service, file).and_then(|()| service::start(service)) {
+            Ok(_) => {
+                self.drivers.push(service);
                 "ok"
             }
             Err(e) => {
@@ -58,10 +56,11 @@ impl<'a> Replay<'a> {
     }
 
     fn unload(&mut self, service: &str) -> &'static str {
-        let Some(i) = self.drivers.iter().position(|(s, _)| *s == service) else {
+        let Some(i) = self.drivers.iter().position(|s| *s == service) else {
             return "failed";
         };
-        match driver::unload(self.drivers.remove(i).1) {
+        self.drivers.remove(i);
+        match service::stop(service) {
             Ok(()) => "ok",
             Err(why) => {
                 kprintln!("oracle: unload {service}: {why}");
@@ -137,17 +136,16 @@ impl<'a> Replay<'a> {
             // SAFETY: still open, and removed from the table by `drain`.
             let _ = unsafe { file::close(file) };
         }
-        for (_, object) in self.drivers.drain(..).rev() {
-            let _ = driver::unload(object);
+        for service in self.drivers.drain(..).rev() {
+            let _ = service::stop(service);
         }
     }
 }
 
 /// Replay `script`; `Err` names the first line that differs from what
 /// Windows printed. Returns how many lines matched.
-fn replay(info: &BootInfo, name: &str, script: &str, windows: &str) -> Result<usize, String> {
+fn replay(name: &str, script: &str, windows: &str) -> Result<usize, String> {
     let mut replay = Replay {
-        info,
         files: Vec::new(),
         drivers: Vec::new(),
     };
@@ -190,11 +188,11 @@ fn replay(info: &BootInfo, name: &str, script: &str, windows: &str) -> Result<us
 }
 
 /// One script: skipped without its driver, else replayed and compared.
-fn check(r: &mut Report, info: &BootInfo, name: &str, driver: &str, script: &str, windows: &str) {
-    if module(info, driver).is_none() {
+fn check(r: &mut Report, name: &str, driver: &str, script: &str, windows: &str) {
+    if ldr::boot_file(driver).is_none() {
         return r.skip(name, format_args!("module {driver} not provided"));
     }
-    match replay(info, name, script, windows) {
+    match replay(name, script, windows) {
         Ok(lines) => r.ok_with(name, format_args!("{lines} lines as on Windows")),
         Err(why) => r.fail(name, format_args!("{why}")),
     }
@@ -221,10 +219,9 @@ pub static GROUP: Group = Group {
     manual: false,
 };
 
-fn run(r: &mut Report, info: &BootInfo) {
+fn run(r: &mut Report, _: &BootInfo) {
     check(
         r,
-        info,
         "oracle.null",
         "null.sys",
         include_str!("../../oracle/null.script"),
@@ -232,7 +229,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.sioctl",
         "sioctl.sys",
         include_str!("../../oracle/sioctl.script"),
@@ -240,7 +236,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-irql",
         "nkc-irql.sys",
         include_str!("../../oracle/nkc-irql.script"),
@@ -248,7 +243,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-time",
         "nkc-time.sys",
         include_str!("../../oracle/nkc-time.script"),
@@ -256,7 +250,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-dpc",
         "nkc-dpc.sys",
         include_str!("../../oracle/nkc-dpc.script"),
@@ -264,7 +257,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-timer",
         "nkc-timer.sys",
         include_str!("../../oracle/nkc-timer.script"),
@@ -272,7 +264,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-thread",
         "nkc-thread.sys",
         include_str!("../../oracle/nkc-thread.script"),
@@ -280,7 +271,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-wait",
         "nkc-wait.sys",
         include_str!("../../oracle/nkc-wait.script"),
@@ -288,7 +278,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-mutex",
         "nkc-mutex.sys",
         include_str!("../../oracle/nkc-mutex.script"),
@@ -296,7 +285,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-waitn",
         "nkc-waitn.sys",
         include_str!("../../oracle/nkc-waitn.script"),
@@ -304,7 +292,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-work",
         "nkc-work.sys",
         include_str!("../../oracle/nkc-work.script"),
@@ -312,7 +299,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-se",
         "nkc-se.sys",
         include_str!("../../oracle/nkc-se.script"),
@@ -320,7 +306,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-reg",
         "nkc-reg.sys",
         include_str!("../../oracle/nkc-reg.script"),
@@ -328,7 +313,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.cancel",
         "cancel.sys",
         include_str!("../../oracle/cancel.script"),
@@ -345,10 +329,9 @@ pub static EVENT: Group = Group {
     manual: true,
 };
 
-fn event(r: &mut Report, info: &BootInfo) {
+fn event(r: &mut Report, _: &BootInfo) {
     check(
         r,
-        info,
         "oracle.event",
         "event.sys",
         include_str!("../../oracle/event.script"),
@@ -365,10 +348,9 @@ pub static EVENT_DEBUG: Group = Group {
     manual: true,
 };
 
-fn event_debug(r: &mut Report, info: &BootInfo) {
+fn event_debug(r: &mut Report, _: &BootInfo) {
     check(
         r,
-        info,
         "oracle.event-debug",
         "event.sys",
         include_str!("../../oracle/event-debug.script"),

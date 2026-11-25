@@ -1,4 +1,6 @@
 //! Driver objects: load an image, call its entry point, unload it.
+//! `io::service` decides which image and when; nothing else loads a
+//! driver.
 
 use super::{TAG_DRIVER, irp};
 use crate::ke::{Rank, SpinLock, irql};
@@ -48,22 +50,28 @@ fn counted(s: &mut [u16]) -> UNICODE_STRING {
     }
 }
 
-/// Load the driver in `file` and run its entry point. `name` is the
-/// service name: the file name without its extension.
-pub fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> {
+/// The running driver of the service `name`, if it is running.
+pub(super) fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
+    DRIVERS
+        .lock()
+        .iter()
+        .find(|r| {
+            // `\Driver\<name>` and its terminator.
+            let service = &r._driver_name[8..r._driver_name.len() - 1];
+            nk_rtl::names_equal(service, &name.encode_utf16().collect::<Vec<u16>>())
+        })
+        .map(|r| r.object)
+}
+
+/// Load the driver in `file` and run its entry point. `name` is its
+/// service, whose key exists.
+pub(super) fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> {
     irql::expect_passive("loading a driver");
     let image = ldr::load(file).map_err(DriverError::Load)?;
     let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
     let object = pool::alloc_zeroed(size, TAG_DRIVER).cast::<DRIVER_OBJECT>();
     if object.is_null() {
         ldr::unload(&image);
-        return Err(DriverError::NoMemory);
-    }
-    // Its service key, which on Windows exists before a driver is
-    // started; the path to it is what the driver's entry is given.
-    if crate::cm::service_key(name).is_err() {
-        ldr::unload(&image);
-        let _ = pool::free(object.cast());
         return Err(DriverError::NoMemory);
     }
     let mut driver_name = wide("\\Driver\\", name);
@@ -127,7 +135,7 @@ fn free(object: *mut DRIVER_OBJECT, image: &Image) {
 
 /// Unload a driver: call its unload routine, then free its object and
 /// image. Fails, leaving the driver loaded, if it has no unload routine.
-pub fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
+pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
     let index = DRIVERS
         .lock()

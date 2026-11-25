@@ -3,9 +3,10 @@
 //! Expected results are what the Null device does on Windows: a read
 //! reports end of file with no bytes, a write accepts every byte.
 
-use super::{module, resources};
-use crate::io::driver;
+use super::resources;
 use crate::io::file::{self, IoResult};
+use crate::io::service;
+use crate::ldr;
 use crate::ob;
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
@@ -104,15 +105,14 @@ pub static GROUP: Group = Group {
     manual: false,
 };
 
-fn run(r: &mut Report, info: &BootInfo) {
-    let Some(image) = module(info, "null.sys") else {
+fn run(r: &mut Report, _: &BootInfo) {
+    if ldr::boot_file("null.sys").is_none() {
         return r.skip_rest(format_args!("module null.sys not provided"));
-    };
+    }
     let before = resources();
-    let object = match driver::load("Null", image) {
-        Ok(object) => object,
-        Err(e) => return r.fail("null.load", format_args!("{e:?}")),
-    };
+    if let Err(e) = service::create("Null", "null.sys").and_then(|()| service::start("Null")) {
+        return r.fail("null.load", format_args!("{e:?}"));
+    }
     r.ok("null.load");
     r.check("null.device", device_checks);
 
@@ -142,7 +142,7 @@ fn run(r: &mut Report, info: &BootInfo) {
         );
     }
 
-    match driver::unload(object) {
+    match service::stop("Null") {
         Ok(()) if file::open(DEVICE).is_err() => r.ok("null.unload"),
         Ok(()) => r.fail(
             "null.unload",

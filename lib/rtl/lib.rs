@@ -71,6 +71,19 @@ pub fn same_object_name(a: &[u16], b: &[u16]) -> bool {
     }
 }
 
+/// The file an image path names: what follows its last backslash, up to
+/// the terminator if the path carries one (`\\SystemRoot\\System32\\
+/// drivers\\null.sys` names `null.sys`).
+pub fn image_file(path: &[u16]) -> &[u16] {
+    let end = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+    let path = &path[..end];
+    let start = path
+        .iter()
+        .rposition(|&c| c == u16::from(b'\\'))
+        .map_or(0, |i| i + 1);
+    &path[start..]
+}
+
 /// An absolute object name: starts with a backslash and names something.
 pub fn is_valid_object_name(name: &[u16]) -> bool {
     name.len() > 1 && name[0] == u16::from(b'\\') && !name.contains(&0)
@@ -107,6 +120,18 @@ mod tests {
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
+    }
+
+    #[test]
+    fn image_file_is_the_last_component() {
+        assert_eq!(
+            image_file(&w("\\SystemRoot\\System32\\drivers\\null.sys\0")),
+            &w("null.sys")[..]
+        );
+        assert_eq!(image_file(&w("null.sys")), &w("null.sys")[..]);
+        assert_eq!(image_file(&w("System32\\drivers\\")), &w("")[..]);
+        assert_eq!(image_file(&w("a\\b\0\\c")), &w("b")[..]);
+        assert_eq!(image_file(&[]), &w("")[..]);
     }
 
     #[test]

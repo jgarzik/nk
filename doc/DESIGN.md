@@ -82,7 +82,7 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (driver loading), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
 | `lib/` | pure, host-tested crates: PE and PDB readers, page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
@@ -389,10 +389,19 @@ and only then maps it with each section's protection. Also:
   x86-64 check requires). Its entropy is only the cycle counter.
 - **Instruction cache.** On arm64 the image is written through one
   address and run from another, so the loader synchronises the caches.
-- **Service key.** Loading creates `...\Services\<name>` if absent, as
-  the service control manager would; it stays.
 
 A refused image leaves nothing allocated.
+
+## Starting a driver
+
+A driver is started from its service key, as on Windows
+(`kernel/io/service.rs`): `...\Services\<name>\ImagePath` names the
+image, and the last part of that path is looked up among the boot files,
+the contents of `\NK\drivers`, which stand for `System32\drivers` until
+there is a file system. Nothing else loads a driver. The tests make a
+key the way `sc create` does and then start the service; the driver's
+entry point is given the path to that key. Stopping a service runs the
+driver's unload routine and frees its image; the key stays.
 
 ## I/O
 
