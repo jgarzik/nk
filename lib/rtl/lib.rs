@@ -6,7 +6,10 @@
 
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
 pub mod format;
+pub mod prefix;
 pub mod upcase;
 
 pub use upcase::upcase_char;
