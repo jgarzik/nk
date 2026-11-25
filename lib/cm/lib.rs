@@ -8,7 +8,8 @@
 //!
 //! [`regf`] reads a hive file in place; [`import`] copies one into the
 //! tree. [`query`] works through the query tables of
-//! `RtlQueryRegistryValues`.
+//! `RtlQueryRegistryValues`; [`services`] orders the drivers the
+//! service keys name.
 //!
 //! Every allocation asks for exactly what it needs, so that
 //! [`Hive::storage`] can say how much pool the tree holds.
@@ -26,6 +27,7 @@ pub mod query;
 pub mod regf;
 #[cfg(test)]
 mod regf_tests;
+pub mod services;
 #[cfg(test)]
 mod writer;
 
