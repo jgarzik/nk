@@ -1,0 +1,5 @@
+# The trap exit forgets to restore two vector registers.
+scenario: aarch64
+fails: cpu.fp-preserved
+file: kernel/arch/aarch64/trap.rs
+remove:     ldp q16, q17, [sp, #544]

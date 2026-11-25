@@ -168,6 +168,22 @@ Each driver test compares pool usage, frames and namespace entries before
 loading the driver and after unloading it, in addition to the check the
 runner makes around every group.
 
+## Mutants
+
+A test that still passes when the thing it tests is broken proves
+nothing. `tools/mutants/` holds deliberate breaks of the kernel, each a
+one-line change with the test that must catch it: a vector register the
+trap exit forgets to restore, a byte count that differs from Windows by
+one. `make mutants` applies each in turn, rebuilds, boots, requires that
+test to fail, and puts the source back. It is not in the gate (one build
+and boot per mutant); it is run when tests or the code they cover change,
+and at the end of each roadmap phase. `make test` checks that every
+mutant still applies to the source.
+
+A change that adds a mechanism whose failure would be silent (state saved
+and restored, an interrupt acknowledged, a wake-up delivered) adds the
+mutant that removes it.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs `make ci` on every push and pull request:

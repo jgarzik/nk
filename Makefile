@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle gate ci clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle mutants gate ci clean
 
 help:
 	@echo "NK make targets:"
@@ -24,6 +24,7 @@ help:
 	@echo "  ledger     regenerate the compatibility ledger (ledger/)"
 	@echo "  corpus     re-read the import tables of Microsoft's inbox binaries (network)"
 	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
+	@echo "  mutants    break the kernel on purpose; each break must fail a test"
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
 	@echo "  ci         the subset of the gate that hosted CI runs (no KVM there)"
 	@echo "  clean      remove all build and test output"
@@ -109,6 +110,12 @@ corpus:
 # evaluation ISO and installs it. See oracle/README.md.
 oracle: fixtures
 	@tools/oracle.py check
+
+# Applies each deliberate break in tools/mutants/ in turn, rebuilds, and
+# requires the named test to fail. Slow (one build and boot per mutant),
+# so not in the gate.
+mutants: fixtures
+	@tools/mutants.py
 
 gate:
 	@tools/gate.sh
