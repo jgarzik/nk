@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 37,
-  "implemented": 31,
+  "total": 49,
+  "implemented": 43,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -420,7 +420,7 @@
    "file": "event.arm64.sys",
    "sha256": "6ff61898c7f247210b38a39e04cf2a3049d5a48eba79be552b6bc83c8959b803",
    "status": "wdk-built",
-   "loaded_at_boot": false,
+   "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",
@@ -430,12 +430,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoAcquireRemoveLockEx",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoReleaseRemoveLockEx",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -445,7 +445,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoReleaseRemoveLockAndWaitEx",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -455,7 +455,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExAllocatePoolWithQuotaTag",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -480,7 +480,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInitializeRemoveLockEx",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -510,7 +510,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlGetVersion",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -525,7 +525,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmGetSystemRoutineAddress",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

@@ -2,7 +2,8 @@
 
 #![allow(non_snake_case)]
 
-use nk_ntabi::io::UNICODE_STRING;
+use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};
+use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
 
 /// Copy a driver's counted string out of its memory.
 ///
@@ -59,4 +60,39 @@ pub unsafe extern "C" fn RtlInitUnicodeString(
             Buffer: source.cast_mut(),
         });
     }
+}
+
+/// The Windows version NK presents: 10.0, build 19045, the build its
+/// reference machine runs.
+pub const VERSION: (u32, u32, u32) = (10, 0, 19045);
+
+/// [`RtlGetVersion`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlgetversion).
+/// Fills in as much of the structure as its size field says is there.
+///
+/// # Safety
+/// `info` points to an `RTL_OSVERSIONINFOW` or `RTL_OSVERSIONINFOEXW`
+/// whose size field says which.
+pub unsafe extern "C" fn RtlGetVersion(info: *mut RTL_OSVERSIONINFOEXW) -> NTSTATUS {
+    /// `VER_PLATFORM_WIN32_NT`.
+    const PLATFORM_NT: u32 = 2;
+    /// `VER_NT_WORKSTATION`.
+    const WORKSTATION: u8 = 1;
+    // SAFETY: per the contract.
+    unsafe {
+        let size = (&raw const (*info).dwOSVersionInfoSize).read();
+        (&raw mut (*info).dwMajorVersion).write(VERSION.0);
+        (&raw mut (*info).dwMinorVersion).write(VERSION.1);
+        (&raw mut (*info).dwBuildNumber).write(VERSION.2);
+        (&raw mut (*info).dwPlatformId).write(PLATFORM_NT);
+        // No service pack: an empty string.
+        (&raw mut (*info).szCSDVersion).cast::<u16>().write(0);
+        if size as usize == size_of::<RTL_OSVERSIONINFOEXW>() {
+            (&raw mut (*info).wServicePackMajor).write(0);
+            (&raw mut (*info).wServicePackMinor).write(0);
+            (&raw mut (*info).wSuiteMask).write(0);
+            (&raw mut (*info).wProductType).write(WORKSTATION);
+            (&raw mut (*info).wReserved).write(0);
+        }
+    }
+    STATUS_SUCCESS
 }

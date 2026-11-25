@@ -76,6 +76,7 @@ macro_rules! export_variable {
 }
 
 static EXPORTS: &[Export] = &[
+    export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
     export_variable!(
         Implemented,
@@ -88,7 +89,11 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::symlink::IoCreateSymbolicLink),
     export!(Implemented, io::device::IoDeleteDevice),
     export!(Implemented, io::symlink::IoDeleteSymbolicLink),
+    export!(Implemented, io::remlock::IoAcquireRemoveLockEx),
     export!(Implemented, io::mdl::IoFreeMdl),
+    export!(Implemented, io::remlock::IoInitializeRemoveLockEx),
+    export!(Implemented, io::remlock::IoReleaseRemoveLockAndWaitEx),
+    export!(Implemented, io::remlock::IoReleaseRemoveLockEx),
     export!(Implemented, io::irp::IoReleaseCancelSpinLock),
     export!(Implemented, io::irp::IofCompleteRequest),
     export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
@@ -115,6 +120,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KeTryToAcquireSpinLockAtDpcLevel),
     export!(Implemented, ke::kspin::KfLowerIrql),
     export!(Implemented, ke::kspin::KfRaiseIrql),
+    export!(Implemented, MmGetSystemRoutineAddress),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
     export!(Partial, io::mdl::MmProbeAndLockPages),
@@ -122,6 +128,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ob::handle::ObReferenceObjectByHandle),
     export!(Implemented, ob::object::ObfDereferenceObject),
     export!(Partial, ke::seh::ProbeForRead),
+    export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Traps, ke::seh::__C_specific_handler),
 ];
@@ -141,6 +148,31 @@ pub fn resolve(module: &[u8], name: &[u8]) -> Option<u64> {
         .iter()
         .find(|e| e.module.as_bytes().eq_ignore_ascii_case(module) && e.name.as_bytes() == name)
         .map(|e| e.addr as u64)
+}
+
+/// [`MmGetSystemRoutineAddress`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemroutineaddress):
+/// the address of a routine the kernel or the HAL exports, by name, or
+/// null if there is none of that name. It is how a driver asks whether a
+/// routine exists before relying on it.
+///
+/// # Safety
+/// `name` points to a valid counted string.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn MmGetSystemRoutineAddress(
+    name: *const nk_ntabi::io::UNICODE_STRING,
+) -> *mut core::ffi::c_void {
+    // SAFETY: per the contract.
+    let wide = unsafe { rtl::copy_unicode(name) };
+    // Export names are ASCII; a name that is not cannot match one.
+    let mut ascii = [0u8; 128];
+    if wide.len() > ascii.len() || wide.iter().any(|&unit| unit > 0x7F) {
+        return core::ptr::null_mut();
+    }
+    for (byte, &unit) in ascii.iter_mut().zip(&wide) {
+        *byte = unit as u8;
+    }
+    resolve(NT.as_bytes(), &ascii[..wide.len()])
+        .map_or(core::ptr::null_mut(), |addr| addr as *mut core::ffi::c_void)
 }
 
 /// Print the table for the ledger: `NK-EXPORT <module> <name> <state>`.

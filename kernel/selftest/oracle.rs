@@ -139,7 +139,7 @@ impl<'a> Replay<'a> {
 
 /// Replay `script`; `Err` names the first line that differs from what
 /// Windows printed. Returns how many lines matched.
-fn replay(info: &BootInfo, script: &str, windows: &str) -> Result<usize, String> {
+fn replay(info: &BootInfo, name: &str, script: &str, windows: &str) -> Result<usize, String> {
     let mut replay = Replay {
         info,
         files: Vec::new(),
@@ -149,6 +149,19 @@ fn replay(info: &BootInfo, script: &str, windows: &str) -> Result<usize, String>
     let mut run = || -> Result<(), String> {
         for step in nk_oracle::steps(script) {
             let step = step.map_err(|why| format!("script: {why}"))?;
+            if let Some(stop) = checker.stops_at(&format!("{step}")) {
+                // Windows did not survive this step. NK must not
+                // either: the boot's scenario expects the same stop,
+                // and counts it only after this line.
+                kprintln!(
+                    "oracle: Windows stops at `{step}`: bugcheck {:#010x}, {:#010x}",
+                    stop.code,
+                    stop.parameter
+                );
+                kprintln!("NK-NEG-ARMED {name}");
+                let _ = replay.step(step);
+                return Err(format!("NK went on past `{step}`, where Windows stopped"));
+            }
             let line = match replay.step(step) {
                 Ok(result) => format!("{step}: {result}"),
                 Err(why) => format!("{step}: NK could not: {why}"),
@@ -175,7 +188,7 @@ fn check(r: &mut Report, info: &BootInfo, name: &str, driver: &str, script: &str
     if module(info, driver).is_none() {
         return r.skip(name, format_args!("module {driver} not provided"));
     }
-    match replay(info, script, windows) {
+    match replay(info, name, script, windows) {
         Ok(lines) => r.ok_with(name, format_args!("{lines} lines as on Windows")),
         Err(why) => r.fail(name, format_args!("{why}")),
     }
@@ -242,5 +255,25 @@ fn run(r: &mut Report, info: &BootInfo) {
         "nkc-timer.sys",
         include_str!("../../oracle/nkc-timer.script"),
         include_str!("../../oracle/nkc-timer.txt"),
+    );
+}
+
+/// Microsoft's event sample, as on Windows booted with no debugger: its
+/// first act is a breakpoint, which stops the system. Run alone: it
+/// ends the boot.
+pub static EVENT: Group = Group {
+    names: &["oracle.event"],
+    run: event,
+    manual: true,
+};
+
+fn event(r: &mut Report, info: &BootInfo) {
+    check(
+        r,
+        info,
+        "oracle.event",
+        "event.sys",
+        include_str!("../../oracle/event.script"),
+        include_str!("../../oracle/event.txt"),
     );
 }

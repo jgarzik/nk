@@ -215,6 +215,14 @@ pub enum Mismatch<'a> {
     WindowsContinues { next: Option<&'a str> },
 }
 
+/// How Windows stopped at a step: the bugcheck code and its first
+/// parameter, 32 bits of each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stop {
+    pub code: u32,
+    pub parameter: u32,
+}
+
 /// Compares NK's transcript with the recorded one, a line at a time.
 pub struct Checker<'a> {
     /// What is left of the recorded transcript.
@@ -241,6 +249,24 @@ impl<'a> Checker<'a> {
             }
         }
         None
+    }
+
+    /// Whether Windows stopped (bugchecked) at the step about to be
+    /// run, which a transcript line names `step`: if so, the bugcheck
+    /// code and its first parameter. Such a line is the transcript's
+    /// last; nothing is consumed.
+    pub fn stops_at(&self, step: &str) -> Option<Stop> {
+        let mut ahead = Checker {
+            rest: self.rest,
+            matched: self.matched,
+        };
+        let line = ahead.next()?;
+        let outcome = line.strip_prefix(step)?.strip_prefix(": stopped ")?;
+        let (code, parameter) = outcome.split_once(' ')?;
+        Some(Stop {
+            code: u32::from_str_radix(code, 16).ok()?,
+            parameter: u32::from_str_radix(parameter, 16).ok()?,
+        })
     }
 
     /// NK printed `line` for the next step: is it what Windows printed?
@@ -430,5 +456,47 @@ mod tests {
             Checker::new("end\n").line("end"),
             Err(Mismatch::WindowsEnded)
         );
+    }
+
+    #[test]
+    fn a_transcript_may_end_with_windows_stopping() {
+        let windows =
+            "# header\nopen d \\Device\\X: 00000000\nload event: stopped 0000007e 80000003\n";
+        let mut checker = Checker::new(windows);
+        assert_eq!(
+            checker.stops_at("open d \\Device\\X"),
+            None,
+            "that step completed"
+        );
+        assert_eq!(
+            checker.stops_at("load event"),
+            None,
+            "not the next step yet"
+        );
+        checker.line("open d \\Device\\X: 00000000").unwrap();
+        assert_eq!(
+            checker.stops_at("load event"),
+            Some(Stop {
+                code: 0x7E,
+                parameter: 0x8000_0003
+            })
+        );
+        // Looking does not consume: asking twice gives the same answer.
+        assert!(checker.stops_at("load event").is_some());
+        assert_eq!(checker.stops_at("load other"), None, "another step");
+        assert_eq!(checker.stops_at("load"), None, "a step is matched whole");
+        // A transcript that stops has no `end`: finishing it is an error.
+        assert!(matches!(
+            checker.finish(),
+            Err(Mismatch::WindowsContinues { next: Some(_) })
+        ));
+        // Malformed codes are not a stop.
+        for bad in [
+            "load event: stopped",
+            "load event: stopped zz 1",
+            "load event: stopped 7e",
+        ] {
+            assert_eq!(Checker::new(bad).stops_at("load event"), None, "{bad}");
+        }
     }
 }

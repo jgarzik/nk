@@ -235,6 +235,29 @@ pub extern "C" fn ExAllocatePoolWithTag(
     alloc(number_of_bytes.max(1), tag).cast()
 }
 
+/// `POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`, or'ed into the pool type.
+const QUOTA_FAIL_INSTEAD_OF_RAISE: u32 = 8;
+
+/// [`ExAllocatePoolWithQuotaTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithquotatag).
+/// NK charges no quotas: there is one process. On failure Windows raises
+/// an exception unless the caller asked for null instead; NK has no
+/// exceptions to raise yet, and an unhandled one stops Windows too.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePoolWithQuotaTag(
+    pool_type: u32,
+    number_of_bytes: usize,
+    tag: u32,
+) -> *mut core::ffi::c_void {
+    let block = alloc(number_of_bytes.max(1), tag);
+    if block.is_null() && pool_type & QUOTA_FAIL_INSTEAD_OF_RAISE == 0 {
+        crate::kd::bugcheck(format_args!(
+            "0x0000001E KMODE_EXCEPTION_NOT_HANDLED: STATUS_INSUFFICIENT_RESOURCES \
+             (a pool allocation with quota of {number_of_bytes} bytes failed)"
+        ));
+    }
+    block.cast()
+}
+
 /// [`ExFreePoolWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exfreepoolwithtag).
 /// Freeing what was not allocated, or a block written past its end, stops
 /// the system, as on Windows.

@@ -8,10 +8,6 @@ Windows produced; the kernel test fails at the first line where NK's
 differs. That is what "the driver cannot tell NK from Windows" means, one
 request at a time.
 
-If a step stops Windows (a bugcheck), the oracle says so and gives the
-bugcheck code and its four parameters, which Windows hands to the
-hypervisor as it stops.
-
 `make oracle` re-records every transcript on Windows and fails if one no
 longer matches its file. It needs KVM and the reference VM, so it is not
 part of the gate; the gate runs the NK side against the committed files.
@@ -52,6 +48,19 @@ Each step's line repeats the step, then `: `, then the result:
 
 The byte count is `-` when the status is an error (`0xC0000000` and up):
 Windows does not report one for a failed request. The last line is `end`.
+
+A step may stop Windows instead (a bugcheck). Then its line is the
+transcript's last, with no `end` after it:
+
+    load event: stopped 0000007e 80000003
+
+`stopped`, the bugcheck code, and the bugcheck's first parameter, eight
+hex digits each. The runner writes a record of its steps through to disk
+as it goes, in a file that already has its full size, so the record
+survives; the code and parameter come from Windows itself, by way of the
+hypervisor. On NK such a script is run in a boot of its own
+(`tools/scenarios.toml`), which must end in the same bugcheck at the
+same step.
 
 On Windows the requests are made with the native API (`NtCreateFile`,
 `NtDeviceIoControlFile`, ...), so the status is the one the I/O manager

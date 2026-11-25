@@ -110,6 +110,7 @@ tier in parallel:
 | `*-neg-work-bad-irql` | a work routine that returns with the IRQL raised stops the system |
 | `*-neg-breakpoint` | a driver's breakpoint, with no debugger, stops the system as on Windows (`0x7E`) |
 | `*-debugger-breakpoint` | with `debug=on` the same breakpoint is passed over |
+| `*-oracle-event` | Microsoft's event sample, whose first act is a breakpoint, stops NK with the bugcheck it stops Windows with (`oracle/event.txt`), at the same step |
 | `*-known-bad` | a failing test fails the run |
 | `*-wrong-cpus` | a processor the kernel does not find fails a test |
 

@@ -32,6 +32,36 @@ pub struct IO_STATUS_BLOCK {
     pub Information: usize,
 }
 
+/// `IO_REMOVE_LOCK` as free builds of drivers see it: the common block
+/// only. The fields a checked build adds follow it and are not NK's.
+#[repr(C)]
+pub struct IO_REMOVE_LOCK {
+    pub Removed: u8,
+    pub Reserved: [u8; 3],
+    pub IoCount: i32,
+    pub RemoveEvent: KEVENT,
+}
+
+/// `RTL_OSVERSIONINFOEXW`; its first 276 bytes are `RTL_OSVERSIONINFOW`.
+#[repr(C)]
+pub struct RTL_OSVERSIONINFOEXW {
+    pub dwOSVersionInfoSize: u32,
+    pub dwMajorVersion: u32,
+    pub dwMinorVersion: u32,
+    pub dwBuildNumber: u32,
+    pub dwPlatformId: u32,
+    pub szCSDVersion: [u16; 128],
+    pub wServicePackMajor: u16,
+    pub wServicePackMinor: u16,
+    pub wSuiteMask: u16,
+    pub wProductType: u8,
+    pub wReserved: u8,
+}
+
+/// Size of `RTL_OSVERSIONINFOW`: the structure without its last five
+/// fields.
+pub const OSVERSIONINFO_SIZE: u32 = 276;
+
 #[repr(C)]
 pub struct KDEVICE_QUEUE {
     pub Type: i16,
@@ -407,6 +437,15 @@ const _: () = {
     assert!(offset_of!(IO_STATUS_BLOCK, Information) == 0x08);
     assert!(offset_of!(DISPATCHER_HEADER, SignalState) == 0x04);
     assert!(offset_of!(DISPATCHER_HEADER, WaitListHead) == 0x08);
+};
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<IO_REMOVE_LOCK>() == 0x20);
+    assert!(offset_of!(IO_REMOVE_LOCK, IoCount) == 0x04);
+    assert!(offset_of!(IO_REMOVE_LOCK, RemoveEvent) == 0x08);
+    assert!(size_of::<RTL_OSVERSIONINFOEXW>() == 284);
+    assert!(offset_of!(RTL_OSVERSIONINFOEXW, wServicePackMajor) == OSVERSIONINFO_SIZE as usize);
 };
 
 #[cfg(test)]

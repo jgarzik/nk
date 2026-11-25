@@ -108,7 +108,24 @@ public static class Nt {
 }
 "@
 
-function Say([string]$line) { Write-Output "NK-ORACLE $line" }
+# What has been done so far, written through to the disk a line at a
+# time: if a step stops Windows, this is all that is left to say which.
+# The file is there already, at its full size, and is written in place:
+# a file that grows needs its directory entry updated, and that would
+# still be in memory when Windows stopped.
+$steps = New-Object System.IO.FileStream((Join-Path $Dir "nk-save-steps.txt"),
+    [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read,
+    4096, [System.IO.FileOptions]::WriteThrough)
+function Record([string]$line) {
+    $bytes = [System.Text.Encoding]::ASCII.GetBytes($line + "`r`n")
+    $steps.Write($bytes, 0, $bytes.Length)
+    $steps.Flush($true)
+}
+
+function Say([string]$line) {
+    Record "NK-ORACLE $line"
+    Write-Output "NK-ORACLE $line"
+}
 
 function Hex([byte[]]$bytes) {
     if ($bytes.Length -eq 0) { return "-" }
@@ -145,6 +162,7 @@ foreach ($raw in Get-Content (Join-Path $Dir "$Name.script")) {
     $line = $raw.Trim()
     if ($line -eq "" -or $line.StartsWith("#")) { continue }
     $w = $line -split "\s+"
+    Record "NK-BEGIN $line"
     switch ($w[0]) {
         "use" {
             # A driver that is part of Windows: nothing to load.

@@ -8,6 +8,7 @@
 mod base;
 mod clock;
 mod dpc;
+mod driver_api;
 mod loader;
 mod mutex;
 mod neg;
@@ -39,6 +40,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,
+    &driver_api::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
@@ -51,6 +53,7 @@ pub static GROUPS: &[&Group] = &[
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
     &neg::BREAKPOINT,
+    &oracle::EVENT,
     &smp::STUCK,
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,

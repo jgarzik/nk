@@ -354,3 +354,21 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.breakpoint debug=on"
+
+# Microsoft's event sample breaks into the debugger as it starts. With
+# no debugger Windows stops with bugcheck 0x7E (oracle/event.txt); so
+# must NK, at the same step.
+
+[x86_64-oracle-event]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.event"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
+
+[aarch64-oracle-event]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.event"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"

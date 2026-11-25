@@ -1,0 +1,4 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 a9493e57c5e4de15acd19208157ae4370dd280c5bedc3bb8f2304e8db7acbf59
+# driver event.sys sha256 90e510f121b2307610341f9e6c2963e94584bc2c3763a998c8bba7ad1e3f5b79
+load event: stopped 0000007e 80000003

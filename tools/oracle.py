@@ -374,9 +374,8 @@ def run(source):
         if not ok and os.environ.get("KEEP"):
             shutil.copyfile(work / "timeout.png", VM / "run-timeout.png")
         crash = bugcheck(work / "qemu.log")
-        if crash:
-            sys.exit(f"oracle: Windows stopped: bugcheck {crash}")
-        return (out.stdout.decode(errors="replace") if out.returncode == 0 else None), ok, extras
+        text = out.stdout.decode(errors="replace") if out.returncode == 0 else None
+        return text, ok, extras, crash
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -392,6 +391,34 @@ def bugcheck(qemu_log):
         if "crash parameters" in line:
             return line.split("crash parameters", 1)[1].strip(" :")
     return None
+
+
+def step_echo(line):
+    """How a transcript line names the script step `line`: the step
+    itself, except that `load` leaves out the file."""
+    words = line.split()
+    return " ".join(words[:2]) if words[:1] == ["load"] else " ".join(words)
+
+
+def stopped_transcript(record, crash):
+    """The transcript of a replay that ended with Windows stopping:
+    every completed step's line, then the step that was under way with
+    `stopped`, the bugcheck code and its first parameter (32 bits each).
+    `record` is what the runner wrote through to disk as it went; `crash`
+    is `bugcheck()`'s text. None if the record does not say which step."""
+    lines, begun = [], None
+    for raw in record.decode(errors="replace").splitlines():
+        raw = raw.strip()
+        if raw.startswith("NK-BEGIN "):
+            begun = raw[len("NK-BEGIN "):]
+        elif raw.startswith(PREFIX):
+            lines.append(raw[len(PREFIX):])
+            begun = None
+    numbers = [int(word, 16) for word in crash.strip("()").split()]
+    if begun is None or len(numbers) < 2:
+        return None
+    code, parameter = numbers[0] & 0xFFFFFFFF, numbers[1] & 0xFFFFFFFF
+    return lines + [f"{step_echo(begun)}: stopped {code:08x} {parameter:08x}"]
 
 
 def sha256(data):
@@ -451,8 +478,19 @@ def replay(name):
             (job / "nk-run.cmd").write_text(
                 "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass "
                 f'-File "%~dp0runner.ps1" "%~dp0." {name}\r\n')
+            # Room for the runner's record of its steps, written in
+            # place so that it survives Windows stopping.
+            (job / "nk-save-steps.txt").write_bytes(b" " * 65536)
             log(f"{name}: replaying on Windows ({attempt} of 2)")
-            text, ok, _ = run(job)
+            text, ok, extras, crash = run(job)
+        if crash:
+            lines = stopped_transcript(extras.get("nk-save-steps.txt", b""), crash)
+            if lines is None:
+                sys.exit(f"oracle: {name}: Windows stopped (bugcheck {crash}) "
+                         "and left no record of the step")
+            log(f"{name}: Windows stopped: bugcheck {crash}")
+            runs.append(lines)
+            continue
         if text is None or not ok:
             sys.exit(f"oracle: {name}: Windows did not finish the script")
         lines = [l.strip()[len(PREFIX):] for l in text.splitlines() if l.startswith(PREFIX)]
@@ -508,7 +546,9 @@ def main():
         print(screenshot(VM / "build"))
         return 0
     if len(args) == 2 and args[0] == "run":
-        text, ok, extras = run(args[1])
+        text, ok, extras, crash = run(args[1])
+        if crash:
+            print(f"oracle: Windows stopped: bugcheck {crash}")
         if text is None:
             sys.exit("oracle: Windows produced no nk-out.txt" + ("" if ok else " (timed out)"))
         sys.stdout.write(text)

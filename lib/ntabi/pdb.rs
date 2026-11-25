@@ -336,3 +336,21 @@ fn work_items_match_the_kernel() {
     assert_eq!(offset_of!(IO_WORKITEM, Type), field("Type"));
     assert_eq!(offset_of!(IO_WORKITEM, ActivityId), field("ActivityId"));
 }
+
+#[test]
+fn remove_lock_matches_the_kernel() {
+    use crate::io::IO_REMOVE_LOCK;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let lock = types
+        .layout("_IO_REMOVE_LOCK_COMMON_BLOCK")
+        .expect("_IO_REMOVE_LOCK_COMMON_BLOCK");
+    let field = |name| offset(&lock, "_IO_REMOVE_LOCK_COMMON_BLOCK", name);
+    assert_eq!(size_of::<IO_REMOVE_LOCK>(), lock.size as usize);
+    assert_eq!(offset_of!(IO_REMOVE_LOCK, Removed), field("Removed"));
+    assert_eq!(offset_of!(IO_REMOVE_LOCK, IoCount), field("IoCount"));
+    assert_eq!(
+        offset_of!(IO_REMOVE_LOCK, RemoveEvent),
+        field("RemoveEvent")
+    );
+}

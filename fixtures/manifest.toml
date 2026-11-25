@@ -156,7 +156,6 @@ file = "event.x64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/wdm-event.x64.event.sys"
 sha256 = "90e510f121b2307610341f9e6c2963e94584bc2c3763a998c8bba7ad1e3f5b79"
 status = "wdk-built"
-boot = false
 note = "Windows-driver-samples d49bb7d7 general/event/wdm"
 
 [[fixture]]
@@ -166,7 +165,6 @@ file = "event.arm64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/wdm-event.arm64.event.sys"
 sha256 = "6ff61898c7f247210b38a39e04cf2a3049d5a48eba79be552b6bc83c8959b803"
 status = "wdk-built"
-boot = false
 note = "Windows-driver-samples d49bb7d7 general/event/wdm"
 
 # Structure sizes and offsets as Microsoft's compiler and WDK headers

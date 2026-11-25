@@ -68,6 +68,10 @@ io.pend-work ok
 io.pend-inline ok
 io.cancel ok
 io.cancel-race ok
+io.remove-lock ok
+rtl.version ok
+mm.routine-address ok
+ex.pool-quota ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok

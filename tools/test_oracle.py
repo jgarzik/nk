@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ORACLE = ROOT / "oracle"
+SCENARIOS = tomllib.loads((ROOT / "tools" / "scenarios.toml").read_text())
 FIXTURES = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
 
 
@@ -44,9 +45,24 @@ class Oracle(unittest.TestCase):
                 for file_name, digest in recorded.items():
                     self.assertEqual(digest, fixture_sha256(file_name),
                                      f"{file_name} is not the fixture it was recorded with")
-                self.assertEqual(body[-1], "end")
                 steps = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
-                self.assertEqual(len(body), len(steps) + 1, "one line per step, then `end`")
+                stopped = re.fullmatch(r".*: stopped ([0-9a-f]{8}) ([0-9a-f]{8})", body[-1])
+                if stopped:
+                    # Windows did not survive the last step recorded:
+                    # nothing follows it, and a scenario must hold NK
+                    # to the same stop.
+                    self.assertLessEqual(len(body), len(steps))
+                    wanted = [f"0x{int(n, 16):08X}" for n in stopped.groups()]
+                    held = [sc for sc in SCENARIOS.values()
+                            if f"test=oracle.{script.stem}" in sc.get("cmdline", "").split()]
+                    self.assertTrue(held, "no scenario runs this script")
+                    for sc in held:
+                        self.assertEqual(sc.get("expect"), "bugcheck")
+                        for number in wanted:
+                            self.assertIn(number, sc["match"])
+                else:
+                    self.assertEqual(body[-1], "end")
+                    self.assertEqual(len(body), len(steps) + 1, "one line per step, then `end`")
 
     def test_no_transcript_without_a_script(self):
         for transcript in ORACLE.glob("*.txt"):
