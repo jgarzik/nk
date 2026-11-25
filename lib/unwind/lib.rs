@@ -16,6 +16,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod arm64;
 pub mod x64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,5 +95,7 @@ fn last_at_or_below(
     Ok(lo.checked_sub(1))
 }
 
+#[cfg(test)]
+mod arm64_tests;
 #[cfg(test)]
 mod x64_tests;
