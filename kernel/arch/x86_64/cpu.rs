@@ -5,10 +5,12 @@
 //! Drivers do not depend on them, but debuggers and crash dumps read more
 //! naturally when they match.
 
+use crate::hal::platform::MAX_CPUS;
 use crate::ke::percpu::PerCpu;
+use crate::mm;
 use core::cell::UnsafeCell;
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use nk_ntabi::pcr::NATIVE as PCR;
 
 const PCR_SIZE: usize = PCR.size;
@@ -69,6 +71,8 @@ struct Shared(UnsafeCell<CpuArea>);
 // this one before anything else can observe it.
 unsafe impl Sync for Shared {}
 
+/// The boot processor's area. It is needed before memory can be
+/// allocated; every other processor's is allocated.
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
     private: Private {
@@ -89,13 +93,55 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     },
 }));
 
+/// Each processor's area, by processor number; null until it has one.
+static AREAS: [AtomicPtr<CpuArea>; MAX_CPUS] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; MAX_CPUS];
+
+/// Allocate and record the area of processor `number`, which is about to
+/// be started. `false` if memory ran out.
+pub fn prepare(number: usize) -> bool {
+    let pages = size_of::<CpuArea>().div_ceil(mm::PAGE_SIZE);
+    let Some(frames) = mm::alloc_frames(pages) else {
+        return false;
+    };
+    let area = mm::phys_to_virt(frames).cast::<CpuArea>();
+    // SAFETY: fresh, zeroed, page-aligned memory of the right size that
+    // nothing else references. Zero is a valid value for every field but
+    // the two written here.
+    unsafe {
+        (&raw mut (*area).private).write(Private {
+            stack_base: AtomicU64::new(0),
+            generic: PerCpu::new(),
+        });
+        (&raw mut (*area).tss.io_map_base).write_unaligned(size_of::<Tss>() as u16);
+    }
+    AREAS[number].store(area, Ordering::Release);
+    true
+}
+
+/// The generic kernel's state for processor `number`, if it has been
+/// prepared.
+pub fn percpu_of(number: usize) -> Option<&'static PerCpu> {
+    let area = AREAS.get(number)?.load(Ordering::Acquire);
+    // SAFETY: a recorded area lives forever, and `generic` is only ever
+    // accessed through shared references.
+    (!area.is_null()).then(|| unsafe { &(*area).private.generic })
+}
+
 /// Load this CPU's GDT, TSS and PCR, and record that it is processor
-/// `number`. Boot CPU only for now.
+/// `number`. Processor 0 uses the static area; any other must have been
+/// `prepare`d.
 pub fn init(number: u32) {
-    let area = BOOT_CPU.0.get();
-    // SAFETY: single-threaded early boot: this is the only reference to
-    // the boot CPU's area, and the pointers written stay valid forever
-    // because the area is static.
+    let area = if number == 0 {
+        AREAS[0].store(BOOT_CPU.0.get(), Ordering::Release);
+        BOOT_CPU.0.get()
+    } else {
+        AREAS[number as usize].load(Ordering::Acquire)
+    };
+    assert!(!area.is_null(), "processor {number} has no area");
+    // SAFETY: only this processor touches its area during its own
+    // set-up, and the pointers written stay valid for ever: the area is
+    // never freed.
     unsafe {
         let pcr = (&raw mut (*area).pcr).cast::<u8>();
         let tss = &raw mut (*area).tss;

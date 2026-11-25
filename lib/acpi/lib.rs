@@ -243,6 +243,25 @@ pub fn pm_timer_delta(timer: PmTimer, earlier: u32, later: u32) -> u32 {
     later.wrapping_sub(earlier) & mask
 }
 
+/// How an ARM machine's firmware is called for power control (PSCI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Psci {
+    /// By a secure monitor call.
+    Smc,
+    /// By a hypervisor call.
+    Hvc,
+}
+
+/// Whether, and how, PSCI is offered: the ARM boot flags of a FADT.
+pub fn psci(fadt: &[u8]) -> Option<Psci> {
+    let flags = u16::from_le_bytes([*fadt.get(129)?, *fadt.get(130)?]);
+    match flags & 3 {
+        0b01 => Some(Psci::Smc),
+        0b11 => Some(Psci::Hvc),
+        _ => None,
+    }
+}
+
 /// The interrupt of the ARM virtual timer, from a GTDT table.
 pub fn virtual_timer_interrupt(gtdt: &[u8]) -> Option<u32> {
     u32_at(gtdt, 64).filter(|&id| id != 0)
@@ -632,6 +651,25 @@ mod tests {
             "not an I/O port"
         );
         assert_eq!(pm_timer(&fadt_table(0x608, 4, 0)[..100]), None, "truncated");
+    }
+
+    #[test]
+    fn psci_from_the_fadt() {
+        let with = |flags: u16| {
+            let mut body = vec![0u8; 140 - SDT_HEADER];
+            body[129 - SDT_HEADER..131 - SDT_HEADER].copy_from_slice(&flags.to_le_bytes());
+            sdt(b"FACP", &body)
+        };
+        assert_eq!(psci(&with(0b01)), Some(Psci::Smc));
+        assert_eq!(psci(&with(0b11)), Some(Psci::Hvc));
+        assert_eq!(psci(&with(0b00)), None, "not offered");
+        assert_eq!(psci(&with(0b10)), None, "a conduit without PSCI");
+        assert_eq!(psci(&with(0b11)[..130]), None, "truncated");
+        assert_eq!(
+            psci(&fadt_table(0x608, 4, 0)),
+            None,
+            "an x86 FADT is shorter"
+        );
     }
 
     #[test]

@@ -30,8 +30,8 @@ static FREQUENCY: AtomicU64 = AtomicU64::new(0);
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 /// Wall-clock time at the epoch, 100 ns units since 1601.
 static BOOT_TIME: AtomicU64 = AtomicU64::new(0);
-/// Clock interrupts taken.
-static TICKS_TAKEN: AtomicU64 = AtomicU64::new(0);
+/// Counter ticks between clock interrupts.
+static PERIOD: AtomicU64 = AtomicU64::new(0);
 
 /// The counter's ticks per second.
 pub fn frequency() -> u64 {
@@ -80,9 +80,17 @@ fn update() {
 }
 
 fn tick(_: u32) {
-    TICKS_TAKEN.fetch_add(1, Ordering::Relaxed);
-    update();
+    arch::percpu().tick();
+    // Every processor takes the tick; one of them keeps the time.
+    if super::pcr::current_processor() == 0 {
+        update();
+    }
     arch::clock_next();
+}
+
+/// Start the clock interrupt on the processor running this code.
+pub fn start_cpu() {
+    arch::clock_start(PERIOD.load(Ordering::Relaxed));
 }
 
 /// Calibrate the counter, map the shared page and start the clock
@@ -111,7 +119,11 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
 
     let (vector, level) = arch::CLOCK;
     interrupt::register(vector, level, tick);
-    arch::clock_start(micros_to_counter(TIME_INCREMENT / 10, frequency));
+    PERIOD.store(
+        micros_to_counter(TIME_INCREMENT / 10, frequency),
+        Ordering::Relaxed,
+    );
+    start_cpu();
     kprintln!("ke: time counter at {frequency} Hz, clock at 64 Hz");
     Ok(())
 }
@@ -181,10 +193,10 @@ pub fn monotonic_test() -> Result<u64, &'static str> {
 /// shared page within a tick or two of the counter. Returns the
 /// interrupts seen in a quarter of a second.
 pub fn tick_test() -> Result<u64, &'static str> {
-    let taken = TICKS_TAKEN.load(Ordering::Relaxed);
+    let taken = arch::percpu().ticks();
     let page_before = shared(SHARED_INTERRUPT_TIME);
     stall(250_000);
-    let seen = TICKS_TAKEN.load(Ordering::Relaxed) - taken;
+    let seen = arch::percpu().ticks() - taken;
     // 16 expected. Wide bounds: an emulated machine delivers them late.
     if !(8..=24).contains(&seen) {
         return Err("the clock interrupt is not near 64 Hz");

@@ -4,6 +4,7 @@ mod clock;
 mod cpu;
 mod gic;
 pub mod platform;
+mod smp;
 mod trap;
 
 pub use gic::{
@@ -11,7 +12,8 @@ pub use gic::{
     init as interrupts_init, interrupt_enable, self_interrupt,
 };
 
-pub use cpu::{irql, pcr, percpu, set_irql};
+pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql};
+pub use smp::{prepare as smp_prepare, start as cpu_start};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -78,6 +80,15 @@ pub fn switch_stack(
             options(noreturn),
         )
     }
+}
+
+/// Nothing to undo once every processor is running.
+pub fn smp_finish() {}
+
+/// Wait for an interrupt. Interrupts must be enabled.
+pub fn idle() {
+    // SAFETY: `wfi` stops the processor until the next interrupt.
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
 }
 
 /// Record the kernel stack this processor now runs on. Nothing to do

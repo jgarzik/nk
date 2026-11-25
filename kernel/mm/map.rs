@@ -66,8 +66,8 @@ static NEXT_VA: SpinLock<Space> = SpinLock::new(
     },
 );
 
-/// The live kernel page tables, edited through the direct map.
-struct Tables;
+/// Page tables, edited through the direct map.
+pub struct Tables;
 
 impl TableMem for Tables {
     fn alloc_table(&mut self) -> Option<u64> {

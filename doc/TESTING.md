@@ -96,7 +96,8 @@ tier in parallel:
 
 | Scenario | Proves |
 | --- | --- |
-| `x86_64`, `aarch64` | the tests pass |
+| `x86_64`, `aarch64` | the tests pass, on four processors |
+| `*-smp1` | they pass on one |
 | `*-neg-panic`, `*-neg-fault` | a kernel panic or a stray memory access ends the boot in a bugcheck, and the harness sees it |
 | `*-neg-stack-overflow` | running off the kernel stack is reported as a stack overflow |
 | `*-neg-lock-order`, `*-neg-lock-twice`, `*-neg-irql-lower` | breaking a locking or IRQL rule (`doc/LOCKING.md`) stops the system with the right bugcheck |

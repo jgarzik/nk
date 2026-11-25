@@ -125,8 +125,24 @@ sample built with the WDK (see `doc/TESTING.md`).
 the processors firmware lists as usable, and where the interrupt
 controllers are (local and I/O APICs; the GIC distributor and
 redistributors). The boot processor is number 0, as on Windows, and at
-most 64 processors are kept, one Windows processor group. Nothing starts
-the other processors or touches the controllers yet.
+most 64 processors are kept, one Windows processor group.
+
+### Every processor
+
+The boot processor starts the others one at a time and waits for each to
+report in; one that does not is a failed boot, never a smaller machine.
+On x86-64 a processor is woken by INIT and start-up interrupts into a
+real-mode trampoline copied to a free page below 1 MiB, which climbs to
+long mode on the kernel's page tables. On arm64 firmware starts it (PSCI
+`CPU_ON`, by the call the FADT names) in a stub that runs with the MMU
+off, on a table mapping only the stub's own page, and then adopts the
+boot processor's translation settings.
+
+Each processor has its own area, the PCR at its start, allocated before
+it is started (the boot processor's is static: it is needed before memory
+is). Each brings up its own interrupt controller and clock interrupt.
+Processor 0 alone keeps the time. Until there is a scheduler a started
+processor idles, taking interrupts.
 
 ### Interrupts
 
@@ -135,8 +151,8 @@ masked that NK did not ask for: the local APIC on x86-64 (x2APIC mode
 when the processor has it), with the legacy 8259s and every I/O APIC
 input masked; GICv3 on arm64, where a processor finds its redistributor
 by its affinity, not by position. The IRQL is the controller's priority
-mask (`doc/LOCKING.md`). So far the only interrupts are ones a processor
-sends itself, in the tests: there is no clock and no device interrupt.
+mask (`doc/LOCKING.md`). So far the interrupts are the clock and ones a
+processor sends itself; there is no device interrupt.
 
 ### Time
 

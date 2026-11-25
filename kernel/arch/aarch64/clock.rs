@@ -16,13 +16,12 @@ pub const CLOCK: (u32, u8) = (VIRTUAL_TIMER_PPI, CLOCK_LEVEL);
 
 /// Counter ticks between clock interrupts.
 static PERIOD: AtomicU64 = AtomicU64::new(0);
-/// Counter value at which the next one is due.
-static DUE: AtomicU64 = AtomicU64::new(0);
 
 /// The counter's frequency, as the processor reports it.
 pub fn calibrate() -> Result<u64, &'static str> {
     if platform::get()
-        .timer
+        .firmware
+        .virtual_timer
         .is_some_and(|id| id != VIRTUAL_TIMER_PPI)
     {
         return Err("firmware puts the virtual timer on an unexpected interrupt");
@@ -34,7 +33,6 @@ pub fn calibrate() -> Result<u64, &'static str> {
 }
 
 fn arm(due: u64) {
-    DUE.store(due, Ordering::Relaxed);
     // SAFETY: programming this processor's virtual timer: compare value,
     // then enabled and unmasked.
     unsafe {
@@ -61,7 +59,11 @@ pub fn start(period: u64, _frequency: u64) {
 pub fn next() {
     let period = PERIOD.load(Ordering::Relaxed);
     let now = super::counter();
-    let mut due = DUE.load(Ordering::Relaxed) + period;
+    let last: u64;
+    // SAFETY: reading this processor's timer compare value: when the
+    // interrupt being handled was due.
+    unsafe { asm!("mrs {}, cntv_cval_el0", out(reg) last, options(nomem, nostack)) };
+    let mut due = last + period;
     if due <= now {
         due = now + period;
     }

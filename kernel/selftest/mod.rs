@@ -12,6 +12,7 @@ mod neg;
 mod null;
 mod oracle;
 mod sioctl;
+mod smp;
 
 use crate::mm;
 use crate::test::Group;
@@ -21,6 +22,7 @@ use nk_bootinfo::BootInfo;
 pub static GROUPS: &[&Group] = &[
     &base::GROUP,
     &clock::GROUP,
+    &smp::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,

@@ -13,6 +13,7 @@ clock.monotonic ok
 clock.tick ok
 clock.shared-page ok
 clock.host-mark ok
+smp.running ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok

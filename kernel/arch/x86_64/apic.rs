@@ -43,6 +43,11 @@ const REG_LVT_LINT1: u32 = 0x360;
 const REG_LVT_ERROR: u32 = 0x370;
 const LVT_MASKED: u32 = 1 << 16;
 const ICR_SELF: u32 = 1 << 18;
+const REG_ICR_HIGH: u32 = 0x310;
+/// Delivery mode INIT, level asserted.
+const ICR_INIT: u32 = 0x4500;
+/// Delivery mode start-up.
+const ICR_STARTUP: u32 = 0x4600;
 
 const MSR_APIC_BASE: u32 = 0x1B;
 const APIC_BASE_ENABLE: u64 = 1 << 11;
@@ -130,18 +135,30 @@ pub fn init() -> Result<(), &'static str> {
         quiet_io_apic(io.address);
     }
 
-    let has_x2apic = core::arch::x86_64::__cpuid_count(1, 0).ecx & 1 << 21 != 0;
-    let mut base = rdmsr(MSR_APIC_BASE) | APIC_BASE_ENABLE;
-    if has_x2apic {
-        base |= APIC_BASE_X2APIC;
-    }
-    wrmsr(MSR_APIC_BASE, base);
-    X2APIC.store(has_x2apic, Ordering::Relaxed);
     MMIO.store(
         mm::phys_to_virt(platform.controllers.local_apic) as u64,
         Ordering::Relaxed,
     );
+    let has_x2apic = core::arch::x86_64::__cpuid_count(1, 0).ecx & 1 << 21 != 0;
+    X2APIC.store(has_x2apic, Ordering::Relaxed);
+    init_cpu();
+    kprintln!(
+        "hal: local APIC in {} mode",
+        if has_x2apic { "x2APIC" } else { "xAPIC" }
+    );
+    // Drain a byte from the keyboard controller's output, if any, so a
+    // pending legacy interrupt does not sit asserted.
+    let _ = inb(0x60);
+    Ok(())
+}
 
+/// Bring up the local APIC of the processor running this code.
+pub fn init_cpu() {
+    let mut base = rdmsr(MSR_APIC_BASE) | APIC_BASE_ENABLE;
+    if X2APIC.load(Ordering::Relaxed) {
+        base |= APIC_BASE_X2APIC;
+    }
+    wrmsr(MSR_APIC_BASE, base);
     write(REG_LVT_TIMER, LVT_MASKED);
     write(REG_LVT_LINT0, LVT_MASKED);
     write(REG_LVT_LINT1, LVT_MASKED);
@@ -151,14 +168,34 @@ pub fn init() -> Result<(), &'static str> {
     write(REG_SPURIOUS, 1 << 8 | SPURIOUS_VECTOR);
     // Acknowledge anything firmware left in service.
     write(REG_EOI, 0);
-    kprintln!(
-        "hal: local APIC in {} mode",
-        if has_x2apic { "x2APIC" } else { "xAPIC" }
-    );
-    // Drain a byte from the keyboard controller's output, if any, so a
-    // pending legacy interrupt does not sit asserted.
-    let _ = inb(0x60);
-    Ok(())
+}
+
+/// Send an interprocessor interrupt command to the processor with local
+/// APIC id `target`.
+fn command(target: u32, command: u32) {
+    if X2APIC.load(Ordering::Relaxed) {
+        wrmsr(
+            MSR_X2APIC + (REG_ICR_LOW >> 4),
+            u64::from(target) << 32 | u64::from(command),
+        );
+    } else {
+        write(REG_ICR_HIGH, target << 24);
+        write(REG_ICR_LOW, command);
+        // Bit 12: the command is still being sent.
+        while read(REG_ICR_LOW) & 1 << 12 != 0 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+/// Reset the processor `target`: the first step of starting it.
+pub fn send_init(target: u32) {
+    command(target, ICR_INIT);
+}
+
+/// Start the processor `target` in real mode at physical page `page`.
+pub fn send_startup(target: u32, page: u32) {
+    command(target, ICR_STARTUP | page);
 }
 
 /// Nothing to do: a vector's IRQL is its upper four bits, and a local

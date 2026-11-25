@@ -5,10 +5,12 @@
 //! from it directly. Rust's UEFI targets never use x18 either, so setting
 //! it once per CPU is enough: nothing NK compiles will disturb it.
 
+use crate::hal::platform::MAX_CPUS;
 use crate::ke::percpu::PerCpu;
+use crate::mm;
 use core::cell::UnsafeCell;
 use core::mem::offset_of;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 use nk_bootinfo::{KERNEL_STACK_SIZE, stack_top_in};
 use nk_ntabi::pcr::NATIVE as PCR;
 
@@ -45,6 +47,8 @@ struct Shared(UnsafeCell<CpuArea>);
 // this one before anything else can observe it.
 unsafe impl Sync for Shared {}
 
+/// The boot processor's area. It is needed before memory can be
+/// allocated; every other processor's is allocated.
 static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     pcr: [0; PCR_SIZE],
     overflow_top: 0,
@@ -54,12 +58,48 @@ static BOOT_CPU: Shared = Shared(UnsafeCell::new(CpuArea {
     overflow_stack: [0; OVERFLOW_ROOM],
 }));
 
+/// Each processor's area, by processor number; null until it has one.
+static AREAS: [AtomicPtr<CpuArea>; MAX_CPUS] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; MAX_CPUS];
+
+/// Allocate and record the area of processor `number`, which is about to
+/// be started. `false` if memory ran out.
+pub fn prepare(number: usize) -> bool {
+    let pages = size_of::<CpuArea>().div_ceil(mm::PAGE_SIZE);
+    let Some(frames) = mm::alloc_frames(pages) else {
+        return false;
+    };
+    let area = mm::phys_to_virt(frames).cast::<CpuArea>();
+    // SAFETY: fresh, zeroed, page-aligned memory of the right size that
+    // nothing else references. Zero is a valid value for every other
+    // field.
+    unsafe { (&raw mut (*area).generic).write(PerCpu::new()) };
+    AREAS[number].store(area, Ordering::Release);
+    true
+}
+
+/// The generic kernel's state for processor `number`, if it has been
+/// prepared.
+pub fn percpu_of(number: usize) -> Option<&'static PerCpu> {
+    let area = AREAS.get(number)?.load(Ordering::Acquire);
+    // SAFETY: a recorded area lives forever, and `generic` is only ever
+    // accessed through shared references.
+    (!area.is_null()).then(|| unsafe { &(*area).generic })
+}
+
 /// Point x18 at this CPU's PCR and record that it is processor `number`.
-/// Boot CPU only for now.
+/// Processor 0 uses the static area; any other must have been
+/// `prepare`d.
 pub fn init(number: u32) {
-    let area = BOOT_CPU.0.get();
-    // SAFETY: single-threaded early boot: this is the only reference to
-    // the boot CPU's area, which is static, so the pointers stay valid.
+    let area = if number == 0 {
+        AREAS[0].store(BOOT_CPU.0.get(), Ordering::Release);
+        BOOT_CPU.0.get()
+    } else {
+        AREAS[number as usize].load(Ordering::Acquire)
+    };
+    assert!(!area.is_null(), "processor {number} has no area");
+    // SAFETY: only this processor touches its area during its own
+    // set-up, and the area is never freed, so the pointers stay valid.
     // x18 is reserved on this target; writing it cannot clobber compiler
     // state. TPIDR_EL1 holds the same pointer: it survives whatever a
     // lower exception level does to x18, once there is one.

@@ -43,7 +43,8 @@ fn window(timer: PmTimer, ticks: u32) -> (u64, u64) {
 /// Measure the TSC's frequency, and the APIC timer's against it.
 pub fn calibrate() -> Result<u64, &'static str> {
     let timer = platform::get()
-        .timer
+        .firmware
+        .pm_timer
         .ok_or("no ACPI power-management timer to calibrate against")?;
     apic::timer_count_down();
     let (begin, end) = window(timer, WINDOW);

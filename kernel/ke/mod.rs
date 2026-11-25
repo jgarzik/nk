@@ -7,6 +7,7 @@ pub mod kspin;
 pub mod pcr;
 pub mod percpu;
 pub mod seh;
+pub mod smp;
 pub mod spinlock;
 pub mod time;
 

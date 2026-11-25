@@ -76,6 +76,10 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = ke::time::init(info) {
         test::abort("ke.time", format_args!("{why}"));
     }
+    match ke::smp::start_all(info) {
+        Ok(running) => kprintln!("ke: {running} processors running"),
+        Err(why) => test::abort("ke.smp", format_args!("{why}")),
+    }
 
     export::print_all();
     test::run_all(selftest::GROUPS, info)

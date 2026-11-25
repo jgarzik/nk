@@ -10,11 +10,11 @@
 //! The distributor (shared) and a redistributor per processor are memory
 //! mapped; the processor's own interface is system registers.
 
-use crate::hal::platform;
+use crate::hal::platform::{self, MAX_CPUS};
 use crate::ke::interrupt;
 use crate::mm;
 use core::arch::asm;
-use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 /// `(interrupt id, IRQL)` pairs the interrupt self-test uses: software
 /// generated interrupts this processor sends itself.
@@ -46,7 +46,9 @@ const SGI_IPRIORITYR: usize = GICR_FRAME + 0x400;
 
 /// This processor's redistributor, in the direct map. Boot CPU only for
 /// now, so one cell.
-static REDISTRIBUTOR: AtomicU64 = AtomicU64::new(0);
+static REDISTRIBUTORS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
+/// The private interrupts NK has enabled; each processor enables them.
+static ENABLED: AtomicU32 = AtomicU32::new(0);
 /// IRQL of each private interrupt that has been enabled.
 static LEVELS: [AtomicU8; PRIVATE as usize] = [const { AtomicU8::new(0) }; PRIVATE as usize];
 
@@ -70,7 +72,7 @@ fn write32(base: u64, offset: usize, value: u32) {
 /// The affinity fields of this processor's `MPIDR_EL1`, packed as the
 /// redistributor's type register packs them.
 fn affinity() -> u32 {
-    let id = super::platform::boot_cpu_id();
+    let id = super::platform::current_cpu_id();
     ((id >> 32 & 0xFF) << 24 | id & 0xFF_FFFF) as u32
 }
 
@@ -132,9 +134,15 @@ pub fn init() -> Result<(), &'static str> {
         GICD_CTLR_ARE_NS | GICD_CTLR_GROUP1NS,
     );
 
-    let redistributor =
-        find_redistributor().ok_or("no GIC redistributor for the boot processor")?;
-    REDISTRIBUTOR.store(redistributor, Ordering::Relaxed);
+    init_cpu(0)?;
+    kprintln!("hal: GICv3, redistributor for affinity {:#x}", affinity());
+    Ok(())
+}
+
+/// Bring up the redistributor and interface of the processor running
+/// this code, which is processor `number`.
+pub fn init_cpu(number: usize) -> Result<(), &'static str> {
+    let redistributor = find_redistributor().ok_or("no GIC redistributor for a processor")?;
     // Wake the redistributor: clear ProcessorSleep, wait for
     // ChildrenAsleep to clear.
     write32(
@@ -176,17 +184,21 @@ pub fn init() -> Result<(), &'static str> {
         return Err("the GIC implements too few priority levels for 16 IRQLs");
     }
     set_mask(super::cpu::irql());
-    kprintln!("hal: GICv3, redistributor for affinity {:#x}", affinity());
+    // What NK enabled before this processor ran.
+    let enabled = ENABLED.load(Ordering::Relaxed);
+    for vector in (0..PRIVATE).filter(|v| enabled & 1 << v != 0) {
+        enable_on(redistributor, vector);
+    }
+    REDISTRIBUTORS[number].store(redistributor, Ordering::Release);
     Ok(())
 }
 
-/// Enable private interrupt `vector` at IRQL `level`.
-pub fn interrupt_enable(vector: u32, level: u8) {
-    assert!(vector < PRIVATE, "only per-processor interrupts so far");
-    LEVELS[vector as usize].store(level, Ordering::Relaxed);
-    let redistributor = REDISTRIBUTOR.load(Ordering::Relaxed);
+/// Enable private interrupt `vector` in one processor's redistributor,
+/// at the level recorded for it.
+fn enable_on(redistributor: u64, vector: u32) {
+    let level = LEVELS[vector as usize].load(Ordering::Relaxed);
     // One priority byte per interrupt.
-    // SAFETY: a byte register of this processor's redistributor.
+    // SAFETY: a byte register of a redistributor.
     unsafe {
         ((redistributor as usize + SGI_IPRIORITYR + vector as usize) as *mut u8)
             .write_volatile(priority(level));
@@ -194,9 +206,23 @@ pub fn interrupt_enable(vector: u32, level: u8) {
     write32(redistributor, SGI_ISENABLER0, 1 << vector);
 }
 
+/// Enable private interrupt `vector` at IRQL `level`, on every processor
+/// running and every one started later.
+pub fn interrupt_enable(vector: u32, level: u8) {
+    assert!(vector < PRIVATE, "only per-processor interrupts so far");
+    LEVELS[vector as usize].store(level, Ordering::Relaxed);
+    ENABLED.fetch_or(1 << vector, Ordering::Relaxed);
+    for redistributor in &REDISTRIBUTORS {
+        match redistributor.load(Ordering::Acquire) {
+            0 => {}
+            base => enable_on(base, vector),
+        }
+    }
+}
+
 /// Send software-generated interrupt `vector` to this processor.
 pub fn self_interrupt(vector: u32) {
-    let id = super::platform::boot_cpu_id();
+    let id = super::platform::current_cpu_id();
     // Affinity levels 3..1 name the group of sixteen; the low bits list
     // the targets within it by their level-0 number.
     let value = (id >> 32 & 0xFF) << 48

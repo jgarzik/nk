@@ -20,8 +20,8 @@ pub struct Platform {
     cpus: [Cpu; MAX_CPUS],
     ncpus: usize,
     pub controllers: Controllers,
-    /// What firmware says about this architecture's time source.
-    pub timer: arch_platform::Timer,
+    /// What else firmware says that this architecture needs.
+    pub firmware: arch_platform::Firmware,
 }
 
 impl Platform {
@@ -75,12 +75,13 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
 
     let mut cpus = [Cpu { hw_id: 0, uid: 0 }; MAX_CPUS];
     let listed = madt.entries().filter_map(|e| arch_platform::usable_cpu(&e));
-    let (n, more) =
-        nk_acpi::census(arch_platform::boot_cpu_id(), listed, &mut cpus).map_err(|e| match e {
+    let (n, more) = nk_acpi::census(arch_platform::current_cpu_id(), listed, &mut cpus).map_err(
+        |e| match e {
             CensusError::NoBootProcessor => "the MADT does not list the boot processor",
             CensusError::BootProcessorTwice => "the MADT lists the boot processor twice",
             CensusError::ProcessorTwice => "the MADT lists a processor twice",
-        })?;
+        },
+    )?;
     if more {
         kprintln!("hal: more than {MAX_CPUS} processors; the rest stay off");
     }
@@ -88,7 +89,9 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
         cpus,
         ncpus: n,
         controllers: Controllers::from_madt(&madt),
-        timer: arch_platform::timer(|signature| nk_acpi::find_table(&mem, info.rsdp, signature)),
+        firmware: arch_platform::firmware(|signature| {
+            nk_acpi::find_table(&mem, info.rsdp, signature)
+        }),
     }));
     kprintln!("hal: {n} processors; {}", platform.controllers);
     PLATFORM.store(platform, Ordering::Release);
@@ -100,7 +103,7 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
 /// set by the test harness to what it asked QEMU for), with that.
 pub fn self_test(info: &BootInfo) -> Result<usize, &'static str> {
     let cpus = get().cpus();
-    if cpus.first().map(|c| c.hw_id) != Some(arch_platform::boot_cpu_id()) {
+    if cpus.first().map(|c| c.hw_id) != Some(arch_platform::current_cpu_id()) {
         return Err("processor 0 is not the boot processor");
     }
     if (1..cpus.len()).any(|i| cpus[..i].iter().any(|c| c.hw_id == cpus[i].hw_id)) {

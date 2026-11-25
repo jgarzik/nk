@@ -1637,6 +1637,19 @@ pub fn init(code_selector: u16, fault_ist: u8) {
     };
 }
 
+/// Load the IDT `init` built on a processor that is starting up. Every
+/// processor shares the one table.
+pub fn load() {
+    let pointer = super::cpu::TablePointer {
+        limit: (size_of::<[Gate; 256]>() - 1) as u16,
+        base: IDT.0.get() as u64,
+    };
+    // SAFETY: as at the end of `init`.
+    unsafe {
+        core::arch::asm!("lidt [{}]", in(reg) &raw const pointer, options(readonly, nostack))
+    };
+}
+
 /// Execute a breakpoint instruction.
 pub fn breakpoint() {
     // SAFETY: `int3` traps to the handler above, which resumes after it.

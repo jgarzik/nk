@@ -3,11 +3,14 @@
 //! is reached through `arch::percpu()`.
 
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 use nk_ke::Held;
 
 pub struct PerCpu {
     /// The spin locks this processor holds.
     held: UnsafeCell<Held>,
+    /// Clock interrupts this processor has taken.
+    ticks: AtomicU64,
 }
 
 // SAFETY: a processor only touches its own `PerCpu`, and only at
@@ -19,7 +22,18 @@ impl PerCpu {
     pub const fn new() -> Self {
         Self {
             held: UnsafeCell::new(Held::new()),
+            ticks: AtomicU64::new(0),
         }
+    }
+
+    /// Clock interrupts this processor has taken. Any processor may ask.
+    pub fn ticks(&self) -> u64 {
+        self.ticks.load(Ordering::Relaxed)
+    }
+
+    /// Count a clock interrupt on this processor.
+    pub fn tick(&self) {
+        self.ticks.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The locks this processor holds.

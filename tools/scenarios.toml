@@ -29,6 +29,20 @@ tier = "gate"
 golden = "aarch64"
 canonical = true
 
+# One processor: nothing may depend on there being others.
+
+[x86_64-smp1]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+golden = "x86_64"
+
+[aarch64-smp1]
+arch = "aarch64"
+tier = "gate"
+smp = 1
+golden = "aarch64"
+
 # The harness must tell a kernel bug from a pass: a Rust panic and a stray
 # memory access each have to end the boot with a bugcheck.
 

@@ -4,6 +4,7 @@ mod apic;
 mod clock;
 mod cpu;
 pub mod platform;
+mod smp;
 mod trap;
 
 pub use apic::{
@@ -11,7 +12,8 @@ pub use apic::{
     init as interrupts_init, interrupt_enable, self_interrupt,
 };
 
-pub use cpu::{irql, pcr, percpu, set_irql, set_kernel_stack};
+pub use cpu::{irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql, set_kernel_stack};
+pub use smp::{finish as smp_finish, prepare as smp_prepare};
 pub use trap::{breakpoint, breakpoints, fp_trap_test};
 
 use nk_bootinfo::{BootInfo, Serial};
@@ -88,6 +90,18 @@ pub fn switch_stack(
             options(noreturn),
         )
     }
+}
+
+/// Wake processor `number` to run on the stack ending at `stack_top`.
+pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
+    smp::start(number, smp::hardware_id(number), stack_top);
+    Ok(())
+}
+
+/// Wait for an interrupt. Interrupts must be enabled.
+pub fn idle() {
+    // SAFETY: `hlt` stops the processor until the next interrupt.
+    unsafe { core::arch::asm!("hlt", options(nomem, nostack)) };
 }
 
 /// Take over the boot CPU, processor 0: descriptor tables, exception

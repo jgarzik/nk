@@ -91,7 +91,7 @@ pub fn usable_cpu(entry: &MadtEntry) -> Option<Cpu> {
 }
 
 /// Local APIC id of the processor running this code.
-pub fn boot_cpu_id() -> u64 {
+pub fn current_cpu_id() -> u64 {
     // Leaf 0xB reports the full 32-bit x2APIC id; where it is absent (its
     // EBX reads zero) leaf 1 has the 8-bit id.
     let basic = __cpuid_count(0, 0);
@@ -104,11 +104,16 @@ pub fn boot_cpu_id() -> u64 {
     u64::from(__cpuid_count(1, 0).ebx >> 24)
 }
 
-/// The reference the time counter is calibrated against: the ACPI
-/// power-management timer, where the machine has one.
-pub type Timer = Option<nk_acpi::PmTimer>;
+/// What else firmware says that x86-64 needs.
+pub struct Firmware {
+    /// The reference the time counter is calibrated against: the ACPI
+    /// power-management timer, where the machine has one.
+    pub pm_timer: Option<nk_acpi::PmTimer>,
+}
 
-/// Read the time source's description from the ACPI table `find` returns.
-pub fn timer<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Timer {
-    find(b"FACP").and_then(nk_acpi::pm_timer)
+/// Read it from the ACPI tables `find` returns.
+pub fn firmware<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Firmware {
+    Firmware {
+        pm_timer: find(b"FACP").and_then(nk_acpi::pm_timer),
+    }
 }
