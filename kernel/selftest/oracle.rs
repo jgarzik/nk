@@ -188,6 +188,7 @@ pub static GROUP: Group = Group {
         "oracle.nkc-irql",
         "oracle.nkc-time",
         "oracle.nkc-dpc",
+        "oracle.nkc-timer",
     ],
     run,
     manual: false,
@@ -233,5 +234,13 @@ fn run(r: &mut Report, info: &BootInfo) {
         "nkc-dpc.sys",
         include_str!("../../oracle/nkc-dpc.script"),
         include_str!("../../oracle/nkc-dpc.txt"),
+    );
+    check(
+        r,
+        info,
+        "oracle.nkc-timer",
+        "nkc-timer.sys",
+        include_str!("../../oracle/nkc-timer.script"),
+        include_str!("../../oracle/nkc-timer.txt"),
     );
 }

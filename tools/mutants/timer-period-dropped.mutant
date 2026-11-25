@@ -1,0 +1,7 @@
+# A periodic timer is not put back in the table when it fires: it fires
+# once.
+scenario: aarch64
+fails: timer.periodic
+file: kernel/ke/timer.rs
+replace:                     if period == 0 {
+with:                     if period == 0 || period != 0 {

@@ -129,3 +129,52 @@ fn dpc_matches_the_kernel() {
     assert_eq!(offset_of!(KDPC, SystemArgument2), field("SystemArgument2"));
     assert_eq!(offset_of!(KDPC, DpcData), field("DpcData"));
 }
+
+#[test]
+fn timer_matches_the_kernel() {
+    use crate::ke::{DISPATCHER_HEADER, KTIMER, TIMER_INSERTED};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let header = types
+        .layout("_DISPATCHER_HEADER")
+        .expect("_DISPATCHER_HEADER");
+    let field = |name| offset(&header, "_DISPATCHER_HEADER", name);
+    assert_eq!(size_of::<DISPATCHER_HEADER>(), header.size as usize);
+    assert_eq!(offset_of!(DISPATCHER_HEADER, Type), field("Type"));
+    assert_eq!(
+        offset_of!(DISPATCHER_HEADER, TimerControlFlags),
+        field("TimerControlFlags")
+    );
+    assert_eq!(offset_of!(DISPATCHER_HEADER, Hand), field("Hand"));
+    assert_eq!(
+        offset_of!(DISPATCHER_HEADER, TimerMiscFlags),
+        field("TimerMiscFlags")
+    );
+    assert_eq!(
+        offset_of!(DISPATCHER_HEADER, SignalState),
+        field("SignalState")
+    );
+    assert_eq!(
+        offset_of!(DISPATCHER_HEADER, WaitListHead),
+        field("WaitListHead")
+    );
+    let inserted = header.member("Inserted").expect("Inserted");
+    assert_eq!(
+        (inserted.offset as usize, inserted.bits),
+        (
+            offset_of!(DISPATCHER_HEADER, TimerMiscFlags),
+            Some((TIMER_INSERTED.trailing_zeros() as u8, 1))
+        )
+    );
+
+    let timer = types.layout("_KTIMER").expect("_KTIMER");
+    let field = |name| offset(&timer, "_KTIMER", name);
+    assert_eq!(size_of::<KTIMER>(), timer.size as usize);
+    assert_eq!(offset_of!(KTIMER, Header), field("Header"));
+    assert_eq!(offset_of!(KTIMER, DueTime), field("DueTime"));
+    assert_eq!(offset_of!(KTIMER, TimerListEntry), field("TimerListEntry"));
+    assert_eq!(offset_of!(KTIMER, Dpc), field("Dpc"));
+    assert_eq!(offset_of!(KTIMER, Processor), field("Processor"));
+    assert_eq!(offset_of!(KTIMER, TimerType), field("TimerType"));
+    assert_eq!(offset_of!(KTIMER, Period), field("Period"));
+}

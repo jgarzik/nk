@@ -14,6 +14,7 @@ mod null;
 mod oracle;
 mod sioctl;
 mod smp;
+mod timer;
 
 use crate::mm;
 use crate::test::Group;
@@ -25,6 +26,7 @@ pub static GROUPS: &[&Group] = &[
     &clock::GROUP,
     &smp::GROUP,
     &dpc::GROUP,
+    &timer::GROUP,
     &loader::GROUP,
     &null::GROUP,
     &sioctl::GROUP,

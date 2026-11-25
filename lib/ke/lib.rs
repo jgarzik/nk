@@ -262,6 +262,160 @@ impl Fifo {
     }
 }
 
+/// A link in a doubly linked list: Windows' `LIST_ENTRY`, embedded in the
+/// structure being listed. [`TimerBuckets`] ends its lists with null
+/// rather than making them circular.
+#[repr(C)]
+#[derive(Debug)]
+pub struct ListEntry {
+    pub next: *mut ListEntry,
+    pub prev: *mut ListEntry,
+}
+
+/// How many buckets a timer table has, as on Windows.
+pub const TIMER_BUCKETS: usize = 256;
+
+/// The bucket for a timer due at `due` (interrupt time, 100 ns units):
+/// the clock tick it falls in, modulo the table size. Timers whose ticks
+/// are a multiple of the table size apart share a bucket.
+pub const fn timer_hand(due: u64) -> usize {
+    (ticks_in(due) % TIMER_BUCKETS as u64) as usize
+}
+
+/// One processor's pending timers: a bucket per clock tick, each a list
+/// in order of due time, earliest first. The table owns no memory; the
+/// links are inside the timers. Touched only under its owner's lock.
+///
+/// Every method takes `due_of`, which reads a listed timer's due time
+/// given its link, and those that change a bucket return the earliest
+/// due time left in it (`u64::MAX` when empty), which the owner
+/// publishes for the clock tick to read without the lock.
+#[derive(Debug)]
+pub struct TimerBuckets {
+    heads: [*mut ListEntry; TIMER_BUCKETS],
+}
+
+// SAFETY: the table is an array of pointers; whoever holds the lock
+// around it may use it from any processor.
+unsafe impl Send for TimerBuckets {}
+
+impl TimerBuckets {
+    pub const fn new() -> Self {
+        Self {
+            heads: [core::ptr::null_mut(); TIMER_BUCKETS],
+        }
+    }
+
+    /// The earliest due time in bucket `hand`.
+    ///
+    /// # Safety
+    /// Every listed link is valid, and `due_of` may be called on it.
+    unsafe fn earliest(&self, hand: usize, due_of: &impl Fn(*mut ListEntry) -> u64) -> u64 {
+        match self.heads[hand] {
+            head if head.is_null() => u64::MAX,
+            head => due_of(head),
+        }
+    }
+
+    /// List `entry`, whose due time is `due`. Among equal due times the
+    /// earlier arrival stays ahead.
+    ///
+    /// # Safety
+    /// `entry` is a writable link in no list, valid until removed or
+    /// popped; every listed link is valid, and `due_of` may be called on
+    /// any of them.
+    pub unsafe fn insert(
+        &mut self,
+        entry: *mut ListEntry,
+        due: u64,
+        due_of: impl Fn(*mut ListEntry) -> u64,
+    ) -> u64 {
+        let hand = timer_hand(due);
+        let (mut before, mut at) = (core::ptr::null_mut::<ListEntry>(), self.heads[hand]);
+        // SAFETY: per the contract.
+        unsafe {
+            while !at.is_null() && due_of(at) <= due {
+                (before, at) = (at, (&raw const (*at).next).read());
+            }
+            entry.write(ListEntry {
+                next: at,
+                prev: before,
+            });
+            if before.is_null() {
+                self.heads[hand] = entry;
+            } else {
+                (&raw mut (*before).next).write(entry);
+            }
+            if !at.is_null() {
+                (&raw mut (*at).prev).write(entry);
+            }
+            self.earliest(hand, &due_of)
+        }
+    }
+
+    /// Unlist `entry`, which is listed with due time `due`.
+    ///
+    /// # Safety
+    /// As `insert`, except that `entry` is in this table.
+    pub unsafe fn remove(
+        &mut self,
+        entry: *mut ListEntry,
+        due: u64,
+        due_of: impl Fn(*mut ListEntry) -> u64,
+    ) -> u64 {
+        let hand = timer_hand(due);
+        // SAFETY: per the contract.
+        unsafe {
+            let ListEntry { next, prev } = entry.read();
+            if prev.is_null() {
+                self.heads[hand] = next;
+            } else {
+                (&raw mut (*prev).next).write(next);
+            }
+            if !next.is_null() {
+                (&raw mut (*next).prev).write(prev);
+            }
+            self.earliest(hand, &due_of)
+        }
+    }
+
+    /// Unlist and return the first timer of bucket `hand` if it is due at
+    /// `now`, with the earliest due time then left in the bucket. A timer
+    /// is never returned before its time.
+    ///
+    /// # Safety
+    /// As `insert`, without an `entry`.
+    pub unsafe fn pop_due(
+        &mut self,
+        hand: usize,
+        now: u64,
+        due_of: impl Fn(*mut ListEntry) -> u64,
+    ) -> Option<(*mut ListEntry, u64)> {
+        let head = self.heads[hand];
+        // SAFETY: per the contract.
+        unsafe {
+            if head.is_null() || due_of(head) > now {
+                return None;
+            }
+            let next = (&raw const (*head).next).read();
+            self.heads[hand] = next;
+            if !next.is_null() {
+                (&raw mut (*next).prev).write(core::ptr::null_mut());
+            }
+            Some((head, self.earliest(hand, &due_of)))
+        }
+    }
+}
+
+/// The buckets the clock must look at, given that it last looked during
+/// tick `checked` and it is now tick `now`: every tick from `checked` to
+/// `now`, both included (a timer set after the last look may be due
+/// within that same tick), but each bucket once.
+pub fn hands_to_check(checked: u64, now: u64) -> impl Iterator<Item = usize> {
+    let span = now.saturating_sub(checked).min(TIMER_BUCKETS as u64 - 1);
+    (now - span..=now).map(|tick| (tick % TIMER_BUCKETS as u64) as usize)
+}
+
 /// How long one deferred procedure call may run before the system stops
 /// (`DPC_WATCHDOG_VIOLATION`), in clock ticks: 20 s, as on Windows 10.
 pub const DPC_TIME_LIMIT_TICKS: u64 = 1280;
@@ -293,6 +447,135 @@ mod tests {
     use super::*;
     use std::cell::UnsafeCell;
     use std::sync::Arc;
+
+    /// A stand-in for a timer: its due time beside its link.
+    #[repr(C)]
+    struct FakeTimer {
+        link: ListEntry,
+        due: u64,
+    }
+
+    fn due_of(link: *mut ListEntry) -> u64 {
+        // SAFETY: the link is the first field of a live `FakeTimer`.
+        unsafe { (*link.cast::<FakeTimer>()).due }
+    }
+
+    fn timers(dues: &[u64]) -> Vec<FakeTimer> {
+        dues.iter()
+            .map(|&due| FakeTimer {
+                link: ListEntry {
+                    next: core::ptr::dangling_mut(),
+                    prev: core::ptr::dangling_mut(),
+                },
+                due,
+            })
+            .collect()
+    }
+
+    const T: u64 = TIME_INCREMENT;
+    /// One turn of the table.
+    const TURN: u64 = TIMER_BUCKETS as u64 * T;
+
+    #[test]
+    fn timer_hands() {
+        assert_eq!(timer_hand(0), 0);
+        assert_eq!(timer_hand(T - 1), 0);
+        assert_eq!(timer_hand(T), 1);
+        assert_eq!(timer_hand(255 * T), 255);
+        assert_eq!(timer_hand(TURN), 0);
+        assert_eq!(timer_hand(TURN + 3 * T + 5), 3);
+    }
+
+    #[test]
+    fn timers_come_out_in_due_order_and_never_early() {
+        // All in bucket 5: two in the same tick, one a turn later, one
+        // equal to another.
+        let dues = [5 * T + 900, 5 * T + 100, TURN + 5 * T, 5 * T + 100];
+        let mut nodes = timers(&dues);
+        let p: Vec<*mut ListEntry> = nodes.iter_mut().map(|n| &raw mut n.link).collect();
+        let mut table = TimerBuckets::new();
+        // SAFETY: the nodes outlive the table's use of them.
+        unsafe {
+            assert_eq!(table.insert(p[0], dues[0], due_of), 5 * T + 900);
+            assert_eq!(table.insert(p[1], dues[1], due_of), 5 * T + 100);
+            assert_eq!(table.insert(p[2], dues[2], due_of), 5 * T + 100);
+            assert_eq!(table.insert(p[3], dues[3], due_of), 5 * T + 100);
+            // Not yet due, and nothing in other buckets.
+            assert_eq!(table.pop_due(5, 5 * T + 99, due_of), None);
+            assert_eq!(table.pop_due(6, u64::MAX, due_of), None);
+            // Equal due times: first come, first served.
+            assert_eq!(
+                table.pop_due(5, 5 * T + 100, due_of),
+                Some((p[1], 5 * T + 100))
+            );
+            assert_eq!(
+                table.pop_due(5, 5 * T + 100, due_of),
+                Some((p[3], 5 * T + 900))
+            );
+            assert_eq!(table.pop_due(5, 5 * T + 100, due_of), None);
+            assert_eq!(table.pop_due(5, 6 * T, due_of), Some((p[0], TURN + 5 * T)));
+            // The one a turn later shares the bucket but is not due.
+            assert_eq!(table.pop_due(5, 6 * T, due_of), None);
+            assert_eq!(
+                table.pop_due(5, TURN + 5 * T, due_of),
+                Some((p[2], u64::MAX))
+            );
+            assert_eq!(table.pop_due(5, u64::MAX, due_of), None);
+        }
+    }
+
+    #[test]
+    fn timers_can_be_removed_from_any_position() {
+        let dues = [7 * T + 1, 7 * T + 2, 7 * T + 3];
+        for victim in 0..3 {
+            let mut nodes = timers(&dues);
+            let p: Vec<*mut ListEntry> = nodes.iter_mut().map(|n| &raw mut n.link).collect();
+            let mut table = TimerBuckets::new();
+            // SAFETY: as above.
+            unsafe {
+                // Inserted out of order.
+                for i in [2, 0, 1] {
+                    table.insert(p[i], dues[i], due_of);
+                }
+                let left: Vec<usize> = (0..3).filter(|&i| i != victim).collect();
+                assert_eq!(table.remove(p[victim], dues[victim], due_of), dues[left[0]]);
+                assert_eq!(
+                    table.pop_due(7, u64::MAX, due_of),
+                    Some((p[left[0]], dues[left[1]]))
+                );
+                // Removing the last one empties the bucket.
+                assert_eq!(table.remove(p[left[1]], dues[left[1]], due_of), u64::MAX);
+                assert_eq!(table.pop_due(7, u64::MAX, due_of), None);
+                // And the bucket is usable again.
+                assert_eq!(table.insert(p[victim], dues[victim], due_of), dues[victim]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_clock_checks_each_bucket_it_must_and_once() {
+        let hands = |checked, now| hands_to_check(checked, now).collect::<Vec<_>>();
+        // The tick last looked at is looked at again.
+        assert_eq!(hands(10, 10), [10]);
+        assert_eq!(hands(10, 11), [10, 11]);
+        assert_eq!(hands(10, 13), [10, 11, 12, 13]);
+        // Across the end of the table.
+        assert_eq!(hands(254, 257), [254, 255, 0, 1]);
+        // A long gap: every bucket, each once, ending at now's.
+        let all = hands(0, 1000);
+        assert_eq!(all.len(), TIMER_BUCKETS);
+        assert_eq!(all.last(), Some(&(1000 % TIMER_BUCKETS)));
+        let mut sorted = all.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), TIMER_BUCKETS);
+        // Exactly a turn apart is already "every bucket".
+        assert_eq!(hands(0, 255).len(), 256);
+        assert_eq!(hands(0, 256).len(), 256);
+        // The clock never runs backwards, but a stale `checked` must not
+        // underflow.
+        assert_eq!(hands(11, 10), [10]);
+    }
 
     fn links(n: usize) -> Vec<Link> {
         (0..n)

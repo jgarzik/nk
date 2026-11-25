@@ -44,6 +44,16 @@ pub fn interrupt_time() -> u64 {
     counter_to_time(count, frequency())
 }
 
+/// The wall clock now: 100 ns units since 1601, UTC.
+pub fn system_time() -> u64 {
+    boot_time() + interrupt_time()
+}
+
+/// The wall clock when interrupt time was zero.
+pub fn boot_time() -> u64 {
+    BOOT_TIME.load(Ordering::Relaxed)
+}
+
 /// Spin for at least `micros` microseconds.
 pub fn stall(micros: u64) {
     let start = arch::counter();
@@ -82,6 +92,7 @@ fn update() {
 fn tick(_: u32) {
     arch::percpu().tick();
     super::dpc::watchdog();
+    super::timer::tick(interrupt_time());
     // Every processor takes the tick; one of them keeps the time.
     if super::pcr::current_processor() == 0 {
         update();

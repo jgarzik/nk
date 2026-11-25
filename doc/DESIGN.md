@@ -199,6 +199,21 @@ that runs for more than 20 seconds stops the system
 of whatever they interrupted, and there is no targeting of another
 processor or importance ordering: nothing loaded asks for them.
 
+### Timers
+
+Each processor has a table of the timers set on it and not yet due: 256
+buckets, one per clock tick modulo 256, each in order of due time
+(`nk_ke::TimerBuckets`). The clock tick reads each bucket's earliest due
+time without a lock and, when one has come, queues the processor's expiry
+DPC. That takes the due timers out, marks them signalled, puts periodic
+ones back, and queues their DPCs with the system time as arguments.
+
+A timer never fires before its due time, and fires at the first tick
+after it. A due time already past fires inside `KeSetTimer`. The driver
+owns the `KTIMER`; its layout, and the header bits NK uses (`Inserted`,
+the lock bit), are Windows'. Nothing waits on a timer yet: there are no
+threads.
+
 ### The kernel is a PE image
 
 NK builds the kernel for Rust's stock `x86_64-unknown-uefi` and
@@ -323,7 +338,7 @@ directory. There are no handles, no directories and no security checks.
 
 ### What NK leaves out, and how it stays honest
 
-No threads, waits, timers, SEH, PnP or power management. Where a proof
+No threads, waits, SEH, PnP or power management. Where a proof
 driver imports something in that territory but never reaches it on the
 tested path, the export exists and stops the machine with a named
 bugcheck if called. The ledger lists those separately; they never count

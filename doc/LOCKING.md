@@ -72,6 +72,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
+| 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
@@ -87,6 +88,12 @@ Why this order:
   the interprocessor interrupt, so a processor waiting for it still
   answers the call in progress. A routine run by a call takes no lock
   below rank 200: its caller may hold any of them.
+- A timer table's lock owns a pending timer's links, due time,
+  processor and `Inserted` bit. Expiry holds it while it takes a due
+  timer out and puts a periodic one back, then drops it before queueing
+  the timer's DPC. No two tables are held together: a timer moves from
+  one processor's table to another's by leaving the first under its lock
+  and entering the second under its own.
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.
@@ -113,6 +120,14 @@ stricter, never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 bugcheck path uses it, on the console, and never returns.
+
+### Object locks
+
+A `KTIMER` has a lock of its own, bit 7 of its header's type byte, as on
+Windows. It is taken at `DISPATCH_LEVEL` before any ranked lock, and
+serialises setting and cancelling one timer. Expiry does not take it:
+what expiry touches belongs to the table's lock. These locks are in the
+driver's memory and are not ranked or recorded; nothing holds two.
 
 ## What drivers get
 

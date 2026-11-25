@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 32,
-  "implemented": 26,
+  "total": 37,
+  "implemented": 31,
   "partial": 5,
   "traps": 1,
   "missing": 0
@@ -302,7 +302,7 @@
    "file": "nkc-timer.arm64.sys",
    "sha256": "fea08e3df02ddd79140393e8d959e1aaf82e0f4387bbee09d2e9aa42796c6614",
    "status": "nk-authored",
-   "loaded_at_boot": false,
+   "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",
@@ -317,12 +317,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetTimerEx",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -337,7 +337,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeReadStateTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -347,12 +347,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeCancelTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -425,7 +425,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -485,7 +485,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -520,7 +520,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeCancelTimer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

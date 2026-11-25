@@ -1,0 +1,7 @@
+# A timer is taken as due as soon as the clock looks at its bucket,
+# whether or not its time has come: timers fire early.
+scenario: x86_64
+fails: timer.shared-bucket
+file: lib/ke/lib.rs
+replace:             if head.is_null() || due_of(head) > now {
+with:             if head.is_null() {

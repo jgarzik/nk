@@ -12,6 +12,7 @@ pub mod seh;
 pub mod smp;
 pub mod spinlock;
 pub mod time;
+pub mod timer;
 
 pub use spinlock::{Rank, SpinLock};
 

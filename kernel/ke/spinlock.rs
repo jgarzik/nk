@@ -39,6 +39,8 @@ pub enum Rank {
     Frames = 60,
     /// The interprocessor call in progress (`ke::ipi`).
     Ipi = 200,
+    /// A processor's table of pending timers (`ke::timer`).
+    TimerTable = 230,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
     /// The diagnostic console (`kd`): innermost, so anything can print.

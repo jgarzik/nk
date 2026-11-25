@@ -118,7 +118,6 @@ file = "nkc-timer.x64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-timer.x64.nkc-timer.sys"
 sha256 = "8c0b4f9b9314fd35ebee3ee41175537a39c6c6d2b8b555dea814df0964a09f9b"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-timer.c: kernel timers"
 
 [[fixture]]
@@ -128,7 +127,6 @@ file = "nkc-timer.arm64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v3/nkc-timer.arm64.nkc-timer.sys"
 sha256 = "fea08e3df02ddd79140393e8d959e1aaf82e0f4387bbee09d2e9aa42796c6614"
 status = "nk-authored"
-boot = false
 note = "nk-fixtures v3 nkc/nkc-timer.c: kernel timers"
 
 [[fixture]]

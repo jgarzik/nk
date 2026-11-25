@@ -23,6 +23,12 @@ dpc.run ok
 dpc.order ok
 dpc.remove ok
 dpc.other-cpu ok
+timer.never-early ok
+timer.shared-bucket ok
+timer.cancel ok
+timer.periodic ok
+timer.chain ok
+timer.other-cpu ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
 null.load ok
@@ -51,3 +57,4 @@ oracle.sioctl ok
 oracle.nkc-irql ok
 oracle.nkc-time ok
 oracle.nkc-dpc ok
+oracle.nkc-timer ok

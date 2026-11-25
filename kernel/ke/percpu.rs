@@ -3,6 +3,7 @@
 //! is reached through `arch::percpu()`.
 
 use super::dpc::Queue;
+use super::timer::Table;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_ke::Held;
@@ -14,6 +15,8 @@ pub struct PerCpu {
     ticks: AtomicU64,
     /// Deferred procedure calls waiting to run here.
     dpcs: Queue,
+    /// Timers set here and not yet due.
+    timers: Table,
 }
 
 // SAFETY: a processor only touches the non-atomic part of its own
@@ -27,6 +30,7 @@ impl PerCpu {
             held: UnsafeCell::new(Held::new()),
             ticks: AtomicU64::new(0),
             dpcs: Queue::new(),
+            timers: Table::new(),
         }
     }
 
@@ -38,6 +42,11 @@ impl PerCpu {
     /// This processor's queue of deferred procedure calls.
     pub fn dpcs(&self) -> &Queue {
         &self.dpcs
+    }
+
+    /// This processor's table of pending timers.
+    pub fn timers(&self) -> &Table {
+        &self.timers
     }
 
     /// Count a clock interrupt on this processor.
