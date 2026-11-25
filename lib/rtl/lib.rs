@@ -11,6 +11,7 @@ extern crate alloc;
 pub mod format;
 pub mod prefix;
 pub mod upcase;
+pub mod wildcard;
 
 pub use upcase::upcase_char;
 
