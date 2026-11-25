@@ -10,6 +10,8 @@
 #   match     expect = "bugcheck": regular expression the BUGCHECK line
 #             must contain
 #   must_fail expect = "fail": exactly these tests fail
+#   accel     "tcg": emulate the processor even where the host could run
+#             it directly (x86-64 only; arm64 is always emulated)
 #   golden    file in tools/golden/ listing every test and its verdict
 #   canonical true: this run's log and export list are kept as
 #             target/qemu/serial-<arch>.log and exports-<arch>.txt (the
@@ -42,6 +44,81 @@ arch = "aarch64"
 tier = "gate"
 smp = 1
 golden = "aarch64"
+
+# The soak tier (`make soak`): the whole test list again and again, with
+# other numbers of processors and both ways of running x86-64, on a host
+# given more to do than it can do at once.
+
+[x86_64-soak-smp2]
+arch = "x86_64"
+tier = "soak"
+smp = 2
+golden = "x86_64"
+
+[x86_64-soak-smp3]
+arch = "x86_64"
+tier = "soak"
+smp = 3
+golden = "x86_64"
+
+[x86_64-soak-smp8]
+arch = "x86_64"
+tier = "soak"
+smp = 8
+golden = "x86_64"
+
+[x86_64-soak-smp4]
+arch = "x86_64"
+tier = "soak"
+golden = "x86_64"
+
+[x86_64-soak-smp1]
+arch = "x86_64"
+tier = "soak"
+smp = 1
+golden = "x86_64"
+
+[aarch64-soak-smp2]
+arch = "aarch64"
+tier = "soak"
+smp = 2
+golden = "aarch64"
+
+[aarch64-soak-smp3]
+arch = "aarch64"
+tier = "soak"
+smp = 3
+golden = "aarch64"
+
+[aarch64-soak-smp8]
+arch = "aarch64"
+tier = "soak"
+smp = 8
+golden = "aarch64"
+
+[aarch64-soak-smp4]
+arch = "aarch64"
+tier = "soak"
+golden = "aarch64"
+
+[aarch64-soak-smp1]
+arch = "aarch64"
+tier = "soak"
+smp = 1
+golden = "aarch64"
+
+[x86_64-soak-tcg]
+arch = "x86_64"
+tier = "soak"
+accel = "tcg"
+golden = "x86_64"
+
+[x86_64-soak-tcg-smp8]
+arch = "x86_64"
+tier = "soak"
+accel = "tcg"
+smp = 8
+golden = "x86_64"
 
 # The harness must tell a kernel bug from a pass: a Rust panic and a stray
 # memory access each have to end the boot with a bugcheck.

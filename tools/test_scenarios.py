@@ -7,7 +7,10 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
 SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
-KEYS = {"arch", "tier", "smp", "cmdline", "expect", "match", "must_fail", "golden", "canonical"}
+KEYS = {
+    "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "must_fail", "golden",
+    "canonical",
+}
 
 
 def golden_lists():

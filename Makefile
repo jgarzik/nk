@@ -7,7 +7,7 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle mutants coverage gate clean
+.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check corpus oracle soak mutants coverage gate clean
 
 help:
 	@echo "NK make targets:"
@@ -24,6 +24,7 @@ help:
 	@echo "  ledger     regenerate the compatibility ledger (ledger/)"
 	@echo "  corpus     re-read the import tables of Microsoft's inbox binaries (network)"
 	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
+	@echo "  soak       the whole test list, many times, on an overloaded host"
 	@echo "  mutants    break the kernel on purpose; each break must fail a test"
 	@echo "  coverage   unit-test coverage of lib/, with a floor (needs cargo-llvm-cov)"
 	@echo "  gate       everything a commit must pass; prints GATE-OK"
@@ -110,6 +111,12 @@ corpus:
 # evaluation ISO and installs it. See oracle/README.md.
 oracle: fixtures
 	@tools/oracle.py check
+
+# Every scenario of the soak tier, SOAK_REPEAT times each (default 20),
+# with the host deliberately overloaded. Long; run at the end of a phase
+# and when anything about scheduling or locking changes.
+soak: build build-arm fixtures
+	@tools/boot_test.py --tier soak --repeat $(or $(SOAK_REPEAT),20)
 
 # Applies each deliberate break in tools/mutants/ in turn, rebuilds, and
 # requires the named test to fail. Slow (one build and boot per mutant),

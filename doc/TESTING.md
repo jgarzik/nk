@@ -113,6 +113,20 @@ All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
 way to the test is not taken for the one it meant to cause.
 
+### Soak
+
+`make soak` runs the scenarios of the `soak` tier `SOAK_REPEAT` times
+each (20 by default): the whole test list with 1, 2, 3, 4 and 8
+processors on both architectures, and x86-64 both virtualised and
+emulated. It starts twice as many guest processors as the host has, on
+purpose: a host with more to do than it can do at once stalls guest
+processors at arbitrary instants, and that is what shakes out races
+between processors. Such runs found faults the gate passed over many
+times. Only failures and firmware retries are printed; a failed boot's
+directory is kept. It is long, so it is not in the gate: it is run at
+the end of a phase and whenever scheduling, locking or interrupt entry
+changes.
+
 ### When the firmware hangs
 
 Now and then the emulated machine's UEFI firmware hangs before it starts

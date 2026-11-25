@@ -8,6 +8,9 @@ Usage:
   boot_test.py <scenario> --image <esp.img>
                                      boot an existing image (e.g. from `make
                                      dist`) instead of building one
+  boot_test.py --tier <tier> --repeat <n>
+                                     every scenario of the tier n times, on
+                                     an overloaded host (`make soak`)
   boot_test.py <scenario> --bless    rewrite the scenario's golden list from
                                      this run
 
@@ -246,7 +249,7 @@ def kill(proc):
     proc.wait()
 
 
-def run_scenario(name, sc, image=None, interactive=False, bless=False):
+def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=None):
     arch = sc["arch"]
     for f in FIRMWARE[arch]:
         if not Path(f).exists():
@@ -254,7 +257,10 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False):
     if image and not image.exists():
         sys.exit(f"boot_test: {image} not found")
 
-    directory = OUT / name
+    # A scenario repeated in one run gets a directory per repetition.
+    directory = OUT / (name if instance is None else f"{name}.{instance}")
+    if sc.get("accel") == "tcg":
+        os.environ["NO_KVM"] = "1"
     kill_stale(directory)
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
@@ -329,33 +335,50 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False):
             shutil.rmtree(directory, ignore_errors=True)
 
 
-def run_tier(tier, scenarios):
-    """Run every scenario of `tier`, several at a time, each in its own
-    process so that one cannot disturb another."""
+def run_tier(tier, scenarios, repeat=1):
+    """Run every scenario of `tier`, `repeat` times each, several at a
+    time, each in its own process so that one cannot disturb another."""
     names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
     if not names:
         sys.exit(f"boot_test: no scenario in tier {tier!r}")
-    # Each boot runs up to its `smp` guest CPUs flat out.
+    # Each boot runs up to its `smp` guest CPUs flat out. The gate keeps
+    # within the host's processors. A repeated run asks for twice that on
+    # purpose: a host with more to do than it can do at once makes guest
+    # processors stall at arbitrary instants, which is what shakes races
+    # out.
     widest = max(smp_of(scenarios[n]) for n in names)
-    jobs = int(os.environ.get("JOBS", max(1, (os.cpu_count() or 1) // widest)))
+    cpus = os.cpu_count() or 1
+    default_jobs = cpus // widest if repeat == 1 else 2 * cpus // widest
+    jobs = int(os.environ.get("JOBS", max(1, default_jobs)))
+    runs = [(n, i) for i in range(repeat) for n in names]
     children, lock = [], threading.Lock()
 
-    def one(name):
+    def one(run):
+        name, instance = run
+        command = [sys.executable, __file__, name]
+        if repeat > 1:
+            command += ["--instance", str(instance)]
         proc = subprocess.Popen(
-            [sys.executable, __file__, name], stdout=subprocess.PIPE,
+            command, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, preexec_fn=die_with_parent,
         )
         with lock:
             children.append(proc)
         out, _ = proc.communicate()
-        return name, proc.returncode, out
+        return name if repeat == 1 else f"{name}.{instance}", proc.returncode, out
 
     failed = []
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
     try:
-        for name, status, out in pool.map(one, names):
+        for name, status, out in pool.map(one, runs):
             if status == 0:
-                print(out.strip().splitlines()[-1])
+                # A long run says only what went wrong, and what was
+                # retried.
+                if repeat == 1:
+                    print(out.strip().splitlines()[-1])
+                for line in out.splitlines():
+                    if repeat > 1 and "once more" in line:
+                        print(line)
             else:
                 failed.append(name)
                 print(out.rstrip())
@@ -368,9 +391,12 @@ def run_tier(tier, scenarios):
                     proc.terminate()
         pool.shutdown(wait=True, cancel_futures=True)
     if failed:
-        print(f"tier {tier}: FAILED ({', '.join(failed)})")
+        print(f"tier {tier}: FAILED {len(failed)} of {len(runs)} boots ({', '.join(failed)})")
         return 1
-    print(f"tier {tier}: {len(names)} scenarios passed")
+    if repeat == 1:
+        print(f"tier {tier}: {len(names)} scenarios passed")
+    else:
+        print(f"tier {tier}: {len(runs)} boots passed ({len(names)} scenarios, {repeat} times each)")
     return 0
 
 
@@ -388,6 +414,7 @@ def main():
         return value
 
     image, tier = option("--image"), option("--tier")
+    repeat, instance = int(option("--repeat") or 1), option("--instance")
     flags = {a for a in argv if a.startswith("--")}
     args = [a for a in argv if not a.startswith("--")]
     scenarios = load_scenarios()
@@ -400,12 +427,12 @@ def main():
     if tier:
         if args or flags or image:
             sys.exit(__doc__)
-        return run_tier(tier, scenarios)
+        return run_tier(tier, scenarios, repeat)
     if len(args) != 1 or args[0] not in scenarios:
         sys.exit(f"{__doc__}\nscenarios: {', '.join(scenarios)}")
     return run_scenario(
         args[0], scenarios[args[0]], image=Path(image) if image else None,
-        interactive="--run" in flags, bless="--bless" in flags,
+        interactive="--run" in flags, bless="--bless" in flags, instance=instance,
     )
 
 
