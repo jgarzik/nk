@@ -838,6 +838,96 @@ pub fn priority_test() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// [`KeSetPriorityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetprioritythread):
+/// give the calling thread another priority; returns the old one. A
+/// thread that lowers itself below a ready thread gives way at once.
+///
+/// Only the calling thread can be changed: another thread's priority
+/// belongs to whichever queue it is on or is about to join, and NK has
+/// no lock yet that covers a thread wherever it is. Asking for it stops
+/// the system rather than doing half the job.
+///
+/// # Safety
+/// `thread` is a thread object.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeSetPriorityThread(thread: *mut core::ffi::c_void, new: i32) -> i32 {
+    let thread = thread.cast::<Thread>();
+    if !(0..32).contains(&new) {
+        crate::kd::bugcheck(format_args!("KeSetPriorityThread: {new} is not a priority"));
+    }
+    // At DISPATCH_LEVEL the thread stays on this processor and is not
+    // switched away from between the comparison and the change.
+    let old = irql::current();
+    if old < irql::DISPATCH_LEVEL {
+        arch::set_irql(irql::DISPATCH_LEVEL);
+    }
+    if thread != current() {
+        crate::kd::bugcheck(format_args!(
+            "KeSetPriorityThread: changing the priority of a thread other than the caller is not implemented"
+        ));
+    }
+    // SAFETY: the running thread; its priority is its own while it runs.
+    let before = unsafe {
+        let before = priority(thread);
+        field::<u8>(thread, layout::PRIORITY).write(new as u8);
+        (*thread).quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
+        before
+    };
+    if (new as u8) < before {
+        // Something ready may now outrank it: look, as soon as the
+        // IRQL allows.
+        arch::percpu()
+            .dispatcher()
+            .switch_wanted
+            .store(true, Ordering::Release);
+        arch::self_interrupt(arch::DPC.0);
+    }
+    arch::set_irql(old);
+    i32::from(before)
+}
+
+/// A thread that changes its own priority gets the old one back, and
+/// gives way at once when it steps below a ready thread.
+pub fn set_priority_test() -> Result<(), &'static str> {
+    fn body(tag: usize) {
+        note(tag as u64);
+    }
+    let before = count();
+    TRACE.store(0, Ordering::Relaxed);
+    let me = pcr::current_processor() as usize;
+    let this = current().cast::<core::ffi::c_void>();
+    // SAFETY: the calling thread, here and below.
+    let was = unsafe { KeSetPriorityThread(this, 16) };
+    // Created below this thread, neither runs yet.
+    create(body, 1, 12, 1 << me)?;
+    create(body, 2, NORMAL_PRIORITY + 1, 1 << me)?;
+    let waiting = TRACE.load(Ordering::Acquire);
+    // SAFETY: as above.
+    let (from_16, after_first, from_10, after_second) = unsafe {
+        // Below the first but not the second: the first runs, now.
+        let from_16 = KeSetPriorityThread(this, 10);
+        let after_first = TRACE.load(Ordering::Acquire);
+        // Back where it started, below the second too.
+        let from_10 = KeSetPriorityThread(this, i32::from(NORMAL_PRIORITY));
+        (from_16, after_first, from_10, TRACE.load(Ordering::Acquire))
+    };
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if (was, from_16, from_10) != (i32::from(NORMAL_PRIORITY), 16, 10) {
+        return Err("setting a priority did not return the one before");
+    }
+    if waiting != 0 {
+        return Err("a thread ran while a higher-priority thread was running");
+    }
+    if (after_first, after_second) != (0x1, 0x12) {
+        return Err(
+            "a thread that lowered its priority did not give way at once, or gave way to a lower thread",
+        );
+    }
+    Ok(())
+}
+
 /// Move the first ready thread of this processor at priority `from` to
 /// priority `to`. For the tests.
 ///

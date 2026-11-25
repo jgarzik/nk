@@ -32,6 +32,7 @@ timer.other-cpu ok
 thread.lifecycle ok
 thread.turns ok
 thread.priority ok
+thread.set-priority ok
 thread.other-cpu ok
 thread.registers ok
 thread.preempt ok
@@ -60,6 +61,9 @@ se.capture ok
 se.device ok
 cm.keys ok
 cm.values ok
+io.csq ok
+io.csq-cancel ok
+io.wdm-version ok
 mutex.ownership ok
 mutex.exclusion ok
 mutex.fast ok

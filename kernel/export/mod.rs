@@ -205,6 +205,11 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, cm::ZwOpenKey),
     export!(Implemented, cm::ZwQueryValueKey),
     export!(Implemented, cm::ZwSetValueKey),
+    export!(Implemented, io::csq::IoCsqInitialize),
+    export!(Implemented, io::csq::IoCsqInsertIrp),
+    export!(Implemented, io::csq::IoCsqRemoveNextIrp),
+    export!(Implemented, io::csq::IoIsWdmVersionAvailable),
+    export!(Implemented, ke::thread::KeSetPriorityThread),
 ];
 
 /// The address a driver's import of `module!name` binds to.

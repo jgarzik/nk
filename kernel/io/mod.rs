@@ -5,6 +5,7 @@
 //! Windows size and reached through raw pointers only. A request may be
 //! pended and completed later, and cancelled; `doc/DESIGN.md` says how.
 
+pub mod csq;
 pub mod device;
 pub mod driver;
 pub mod file;

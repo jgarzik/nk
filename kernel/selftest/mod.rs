@@ -8,6 +8,7 @@
 mod base;
 mod clock;
 mod cm;
+mod csq;
 mod dpc;
 mod driver_api;
 mod loader;
@@ -41,6 +42,7 @@ pub static GROUPS: &[&Group] = &[
     &ob::GROUP,
     &se::GROUP,
     &cm::GROUP,
+    &csq::GROUP,
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,

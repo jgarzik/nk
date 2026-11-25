@@ -32,6 +32,51 @@ pub struct IO_STATUS_BLOCK {
     pub Information: usize,
 }
 
+/// `IO_CSQ.Type` and `IO_CSQ_IRP_CONTEXT.Type`.
+pub const IO_TYPE_CSQ_IRP_CONTEXT: u32 = 1;
+pub const IO_TYPE_CSQ: u32 = 2;
+
+/// A cancel-safe queue's callbacks, which the driver supplies.
+pub type CSQ_INSERT = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
+pub type CSQ_REMOVE = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
+pub type CSQ_PEEK = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP, PVOID) -> *mut IRP;
+pub type CSQ_ACQUIRE = unsafe extern "C" fn(*mut IO_CSQ, *mut u8);
+pub type CSQ_RELEASE = unsafe extern "C" fn(*mut IO_CSQ, u8);
+pub type CSQ_COMPLETE = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
+
+/// [`IO_CSQ`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_io_csq):
+/// a cancel-safe queue's dispatch table, kept by the driver.
+#[repr(C)]
+pub struct IO_CSQ {
+    pub Type: u32,
+    pub CsqInsertIrp: Option<CSQ_INSERT>,
+    pub CsqRemoveIrp: Option<CSQ_REMOVE>,
+    pub CsqPeekNextIrp: Option<CSQ_PEEK>,
+    pub CsqAcquireLock: Option<CSQ_ACQUIRE>,
+    pub CsqReleaseLock: Option<CSQ_RELEASE>,
+    pub CsqCompleteCanceledIrp: Option<CSQ_COMPLETE>,
+    pub ReservePointer: PVOID,
+}
+
+/// `IO_CSQ_IRP_CONTEXT`: lets a driver name one queued request later.
+#[repr(C)]
+pub struct IO_CSQ_IRP_CONTEXT {
+    pub Type: u32,
+    pub Irp: *mut IRP,
+    pub Csq: *mut IO_CSQ,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<IO_CSQ>() == 0x40);
+    assert!(offset_of!(IO_CSQ, CsqInsertIrp) == 0x08);
+    assert!(offset_of!(IO_CSQ, CsqCompleteCanceledIrp) == 0x30);
+    assert!(offset_of!(IO_CSQ, ReservePointer) == 0x38);
+    assert!(size_of::<IO_CSQ_IRP_CONTEXT>() == 0x18);
+    assert!(offset_of!(IO_CSQ_IRP_CONTEXT, Irp) == 0x08);
+    assert!(offset_of!(IO_CSQ_IRP_CONTEXT, Csq) == 0x10);
+};
+
 /// `IO_REMOVE_LOCK` as free builds of drivers see it: the common block
 /// only. The fields a checked build adds follow it and are not NK's.
 #[repr(C)]

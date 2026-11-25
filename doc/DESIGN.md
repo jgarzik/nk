@@ -202,7 +202,10 @@ priority becomes ready on that processor; or when the thread has run for
 its quantum, two clock ticks as on Windows client systems, and another
 of its priority is waiting. A thread pushed aside by a higher priority
 goes to the front of its queue; one whose quantum is spent, to the back.
-There are no priority boosts.
+There are no priority boosts. A thread may change its own priority
+(`KeSetPriorityThread`) and gives way at once if that puts it below a
+ready thread; changing another thread's stops the system, because no
+lock yet covers a thread wherever it is queued.
 
 Preemption is requested, then done at the end of an interrupt: readying
 a thread, or the clock tick, marks the processor, and the switch happens
@@ -507,6 +510,14 @@ lock, which the routine releases. A driver completing a request takes
 the routine out the same way, so exactly one of the two completes it. An
 IRP completed with its cancel routine still set stops the system when it
 is cancelled (`CANCEL_STATE_IN_COMPLETED_IRP`).
+
+Cancel-safe queues (`IoCsq*`, `kernel/io/csq.rs`) do the cancel
+bookkeeping for a driver that supplies only a queue and a lock. While a
+request is queued its fourth driver-context pointer names the queue (or
+the caller's context block), and its cancel routine is the I/O
+manager's: that routine takes the request off under the queue's lock
+and has the driver complete it. Taking a request off skips any whose
+cancel routine is already gone, because the canceller has it.
 
 A driver that returns something other than `STATUS_PENDING` without
 completing its IRP, or a different status than it completed the IRP

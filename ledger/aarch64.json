@@ -1194,12 +1194,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoCsqInitialize",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoCsqRemoveNextIrp",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1214,7 +1214,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoCsqInsertIrp",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1239,7 +1239,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetPriorityThread",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1359,7 +1359,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoIsWdmVersionAvailable",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",

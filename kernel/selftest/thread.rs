@@ -9,6 +9,7 @@ pub static GROUP: Group = Group {
         "thread.lifecycle",
         "thread.turns",
         "thread.priority",
+        "thread.set-priority",
         "thread.other-cpu",
         "thread.registers",
         "thread.preempt",
@@ -43,6 +44,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     r.check("thread.turns", thread::turns_test);
     r.check("thread.priority", thread::priority_test);
+    r.check("thread.set-priority", thread::set_priority_test);
     counted(
         r,
         "thread.other-cpu",
