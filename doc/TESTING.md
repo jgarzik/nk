@@ -174,8 +174,10 @@ None is committed. An absent fixture makes its tests SKIP.
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
-All but `null.sys` are built with the WDK in
-[nk-fixtures](https://github.com/jgarzik/nk-fixtures). `METHOD_NEITHER`
+All but `null.sys` (from Microsoft's symbol server) are built with the
+WDK in [nk-fixtures](https://github.com/jgarzik/nk-fixtures), a separate
+repository so the test drivers cannot drift toward what NK supports.
+They are identified by hash and never patched or rebuilt to suit NK. `METHOD_NEITHER`
 requests are not sent (`sioctl.neither` is SKIP): the sample probes raw
 buffers as user memory inside `__try`, which needs user address space
 and SEH.

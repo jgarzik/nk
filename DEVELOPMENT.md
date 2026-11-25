@@ -67,3 +67,11 @@ emulation otherwise; `NO_KVM=1` forces emulation.
 - `make run` boots the same image interactively.
 - QEMU's own tracing (`-d int,cpu_reset`) can be added in
   `tools/boot_test.py` when the kernel dies before it can print.
+
+## Releases
+
+Tagged `vX.Y.Z`; the version is in the workspace `Cargo.toml` and the
+kernel prints it at boot. A release is the tagged source plus one boot
+image per architecture from `make dist`, holding only NK's loader and
+kernel: booted, they run the kernel's self-tests and skip the driver
+tests.
