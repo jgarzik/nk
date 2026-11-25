@@ -1,0 +1,5 @@
+# An unloaded image stays in the table of loaded images.
+scenario: x86_64
+fails: ldr.module.driver
+file: kernel/ldr/mod.rs
+remove:     MODULES.lock().remove(image.base);

@@ -392,6 +392,11 @@ and only then maps it with each section's protection. Also:
 
 A refused image leaves nothing allocated.
 
+Every image in memory, the kernel's own first (as `ntoskrnl.exe`), is in
+one fixed-size table by file name, address range and function table
+(`nk_pe::modules`): a fatal trap names the image and offset it happened
+at.
+
 ## Starting a driver
 
 A driver is started from its service key, as on Windows

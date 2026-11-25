@@ -27,8 +27,6 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
-    /// The loaded-image table (`ldr`).
-    Images = 20,
     /// Devices' reference counts and delete-pending marks (`io::device`).
     IoDatabase = 25,
     /// The object namespace (`ob`).
@@ -53,6 +51,8 @@ pub enum Rank {
     TimerTable = 230,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
+    /// The table of loaded images (`ldr`): searched from any context.
+    Modules = 245,
     /// The diagnostic console (`kd`): innermost, so anything can print.
     Console = 250,
 }
@@ -62,7 +62,7 @@ impl Rank {
     const fn level(self) -> u8 {
         match self {
             // Usable from any context, an interrupt included.
-            Rank::Console | Rank::DpcQueue => irql::HIGH_LEVEL,
+            Rank::Console | Rank::Modules | Rank::DpcQueue => irql::HIGH_LEVEL,
             _ => irql::DISPATCH_LEVEL,
         }
     }

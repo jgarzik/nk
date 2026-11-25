@@ -10,20 +10,44 @@ use crate::ke::{Rank, SpinLock};
 use crate::mm::{self, PAGE_SIZE, map};
 use crate::{arch, export};
 use alloc::string::String;
-use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_mm::pt::Prot;
+use nk_pe::modules::{Module, Modules};
 use nk_pe::{Pe, PeError, Symbol};
 
 /// The loader's hand-off block, for the files it read from the boot
 /// volume.
 static BOOT: AtomicPtr<BootInfo> = AtomicPtr::new(core::ptr::null_mut());
 
-/// Remember where the boot files are.
-pub fn init(info: &'static BootInfo) {
+/// The name Windows' own module list gives the kernel image.
+const KERNEL_NAME: &[u8] = b"ntoskrnl.exe";
+
+/// Remember where the boot files are, and enter the kernel's own image
+/// in the table of loaded images.
+pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
     BOOT.store(core::ptr::from_ref(info).cast_mut(), Ordering::Release);
+    // SAFETY: the loader laid the kernel image out in `kernel_size`
+    // bytes at `kernel_phys`, whose first page holds its headers.
+    let headers = unsafe {
+        core::slice::from_raw_parts(
+            mm::phys_to_virt(info.kernel_phys),
+            (info.kernel_size as usize).min(PAGE_SIZE),
+        )
+    };
+    let headers = nk_pe::image_headers(headers).map_err(|_| "the kernel image has no headers")?;
+    let kernel = Module::new(
+        KERNEL_NAME,
+        nk_bootinfo::KERNEL_BASE,
+        info.kernel_size,
+        headers.dir(nk_pe::DIR_EXCEPTION),
+    )
+    .ok_or("the kernel image cannot be described")?;
+    MODULES
+        .lock()
+        .insert(kernel)
+        .map_err(|_| "the kernel image could not be entered")
 }
 
 /// The contents of the boot file called `name` (`sioctl.sys`), if the
@@ -45,7 +69,7 @@ pub fn boot_file(name: &str) -> Option<&'static [u8]> {
 /// `IMAGE_SUBSYSTEM_NATIVE`: what a kernel driver is linked as.
 const SUBSYSTEM_NATIVE: u16 = 1;
 
-/// A driver image in memory.
+/// A driver image in memory, as its loader holds it.
 #[derive(Clone, Copy)]
 pub struct Image {
     pub base: u64,
@@ -65,6 +89,8 @@ pub enum LoadError {
     /// Sections are not page aligned, so cannot be protected separately.
     Unaligned,
     NoMemory,
+    /// Its name is too long to keep, or too many images are loaded.
+    TooMany,
     /// The kernel has no export for an import of the driver.
     Unresolved {
         module: String,
@@ -72,8 +98,13 @@ pub enum LoadError {
     },
 }
 
-/// Images currently loaded, for address-to-image lookups.
-static LOADED: SpinLock<Vec<Image>> = SpinLock::new(Rank::Images, Vec::new());
+/// How many images can be loaded at once.
+const MAX_MODULES: usize = 256;
+
+/// The images in memory, the kernel's own first: which image an address
+/// is in, and where that image's function table is. Held at
+/// `HIGH_LEVEL` and holding no memory, so any context may search it.
+static MODULES: SpinLock<Modules<MAX_MODULES>> = SpinLock::new(Rank::Modules, Modules::new());
 
 fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
@@ -85,8 +116,8 @@ fn security_cookie() -> u64 {
     nk_pe::security_cookie(arch::counter())
 }
 
-/// Load a driver image from the bytes of its file.
-pub fn load(file: &[u8]) -> Result<Image, LoadError> {
+/// Load a driver image from the bytes of its file, called `name`.
+pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
     let pe = Pe::parse(file).map_err(LoadError::Pe)?;
     pe.check_machine(nk_pe::MACHINE_NATIVE)
         .map_err(LoadError::Pe)?;
@@ -159,7 +190,17 @@ pub fn load(file: &[u8]) -> Result<Image, LoadError> {
         return Err(e);
     }
     arch::sync_icache(mem.as_ptr(), mem.len());
-    LOADED.lock().push(image);
+    let entered = Module::new(
+        name.as_bytes(),
+        base,
+        size as u64,
+        h.dir(nk_pe::DIR_EXCEPTION),
+    )
+    .is_some_and(|module| MODULES.lock().insert(module).is_ok());
+    if !entered {
+        release(&image);
+        return Err(LoadError::TooMany);
+    }
     Ok(image)
 }
 
@@ -171,22 +212,40 @@ fn release(image: &Image) {
 
 /// Unmap an image and free its memory. No code in it may run again.
 pub fn unload(image: &Image) {
-    {
-        let mut loaded = LOADED.lock();
-        loaded.retain(|i| i.base != image.base);
-        // An empty table holds no memory, so leak checks see none.
-        loaded.shrink_to_fit();
-    }
+    MODULES.lock().remove(image.base);
     release(image);
 }
 
-/// The loaded image that contains `addr`.
-pub fn image_containing(addr: u64) -> Option<Image> {
-    LOADED
-        .lock()
-        .iter()
-        .copied()
-        .find(|i| (i.base..i.base + i.size as u64).contains(&addr))
+/// The image `address` is in: the kernel's own or a loaded driver's.
+pub fn module_containing(address: u64) -> Option<Module> {
+    MODULES.lock().containing(address)
+}
+
+/// Where `address` is, for the report of a fatal error: prints as
+/// `sioctl.sys+0x1234`, or as `no image`. Takes the table whoever holds
+/// it, so only the path that stops the system may ask.
+pub fn locate_fatal(address: u64) -> Located {
+    Located(
+        MODULES
+            .force_lock()
+            .containing(address)
+            .map(|module| (module, address - module.base)),
+    )
+}
+
+/// An address as an image and an offset into it.
+pub struct Located(Option<(Module, u64)>);
+
+impl core::fmt::Display for Located {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match &self.0 {
+            Some((module, offset)) => {
+                let name = core::str::from_utf8(module.name()).unwrap_or("?");
+                write!(f, "{name}+{offset:#x}")
+            }
+            None => f.write_str("no image"),
+        }
+    }
 }
 
 /// `MmPageEntireDriver`: make a driver's whole image pageable and return
@@ -198,6 +257,6 @@ pub fn image_containing(addr: u64) -> Option<Image> {
 /// # Safety
 /// Callable with any pointer value; it is only compared.
 pub unsafe extern "C" fn MmPageEntireDriver(address_within_section: *mut c_void) -> *mut c_void {
-    image_containing(address_within_section as u64)
-        .map_or(core::ptr::null_mut(), |i| i.base as *mut c_void)
+    module_containing(address_within_section as u64)
+        .map_or(core::ptr::null_mut(), |module| module.base as *mut c_void)
 }

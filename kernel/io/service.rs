@@ -80,7 +80,7 @@ pub fn start(name: &str) -> Result<*mut DRIVER_OBJECT, ServiceError> {
     let Some(image) = ldr::boot_file(&file) else {
         return Err(ServiceError::NoImage(file));
     };
-    driver::load(name, image).map_err(ServiceError::Driver)
+    driver::load(name, &file, image).map_err(ServiceError::Driver)
 }
 
 /// Stop the service `name`: have its driver unload, and free it.

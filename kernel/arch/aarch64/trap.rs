@@ -573,8 +573,9 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
         _ => ["synchronous exception", "IRQ", "FIQ", "SError"][(vector & 3) as usize],
     };
     let x = &frame.x;
+    let image = crate::ldr::locate_fatal(frame.elr);
     crate::kd::bugcheck(format_args!(
-        "{kind} (vector {vector}, esr {:#x}) at pc={:#018x}\n\
+        "{kind} (vector {vector}, esr {:#x}) at pc={:#018x} in {image}\n\
          far={:#018x} sp={:#018x} spsr={:#x} x18={:#018x}\n\
          x0 ={:#018x} x1 ={:#018x} x2 ={:#018x} x3 ={:#018x}\n\
          x4 ={:#018x} x5 ={:#018x} x6 ={:#018x} x7 ={:#018x}\n\

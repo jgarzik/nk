@@ -1547,8 +1547,9 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         FAST_FAIL => "driver fast-fail (reason code in rcx)",
         _ => "exception",
     };
+    let image = crate::ldr::locate_fatal(frame.rip);
     crate::kd::bugcheck(format_args!(
-        "{what} (vector {}, error {:#x}) at rip={:#018x}\n\
+        "{what} (vector {}, error {:#x}) at rip={:#018x} in {image}\n\
          cr2={cr2:#018x} rsp={:#018x} rflags={:#x} cs={:#x}\n\
          rax={:#018x} rbx={:#018x} rcx={:#018x} rdx={:#018x}\n\
          rsi={:#018x} rdi={:#018x} rbp={:#018x} r8 ={:#018x}\n\

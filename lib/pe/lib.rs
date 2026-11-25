@@ -10,6 +10,8 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod modules;
+
 /// `IMAGE_FILE_MACHINE_AMD64`
 pub const MACHINE_AMD64: u16 = 0x8664;
 /// `IMAGE_FILE_MACHINE_ARM64`
@@ -157,6 +159,52 @@ impl Headers {
     }
 }
 
+/// The headers of a PE32+ image, from its first bytes: the file's, or
+/// those of an image already laid out in memory. Returns them with the
+/// offset of the section table and the number of sections.
+fn read_headers(file: &[u8]) -> Result<(Headers, usize, usize), PeError> {
+    if file.get(..2) != Some(b"MZ") {
+        return Err(PeError::BadHeader);
+    }
+    let pe = hdr(u32_at(file, 0x3C))? as usize;
+    if file.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") {
+        return Err(PeError::BadHeader);
+    }
+    let coff = pe + 4;
+    let machine = hdr(u16_at(file, coff))?;
+    let nsections = hdr(u16_at(file, coff + 2))? as usize;
+    let timestamp = hdr(u32_at(file, coff + 4))?;
+    let opt_size = hdr(u16_at(file, coff + 16))? as usize;
+    let opt = coff + 20;
+    if hdr(u16_at(file, opt))? != 0x20B {
+        return Err(PeError::NotPe32Plus);
+    }
+    let ndirs = (hdr(u32_at(file, opt + 108))? as usize).min(16);
+    let mut dirs = [DataDir::default(); 16];
+    for (i, d) in dirs.iter_mut().enumerate().take(ndirs) {
+        d.rva = hdr(u32_at(file, opt + 112 + 8 * i))?;
+        d.size = hdr(u32_at(file, opt + 116 + 8 * i))?;
+    }
+    let headers = Headers {
+        machine,
+        timestamp,
+        image_base: hdr(u64_at(file, opt + 24))?,
+        entry_rva: hdr(u32_at(file, opt + 16))?,
+        size_of_image: hdr(u32_at(file, opt + 56))?,
+        size_of_headers: hdr(u32_at(file, opt + 60))?,
+        section_alignment: hdr(u32_at(file, opt + 32))?,
+        subsystem: hdr(u16_at(file, opt + 68))?,
+        dirs,
+    };
+    Ok((headers, opt + opt_size, nsections))
+}
+
+/// The headers of an image laid out in memory, of which `image` is at
+/// least the first page.
+pub fn image_headers(image: &[u8]) -> Result<Headers, PeError> {
+    read_headers(image).map(|(headers, ..)| headers)
+}
+
 /// A PE32+ file, as read from disk.
 #[derive(Debug, Clone, Copy)]
 pub struct Pe<'a> {
@@ -168,40 +216,7 @@ pub struct Pe<'a> {
 
 impl<'a> Pe<'a> {
     pub fn parse(file: &'a [u8]) -> Result<Self, PeError> {
-        if file.get(..2) != Some(b"MZ") {
-            return Err(PeError::BadHeader);
-        }
-        let pe = hdr(u32_at(file, 0x3C))? as usize;
-        if file.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") {
-            return Err(PeError::BadHeader);
-        }
-        let coff = pe + 4;
-        let machine = hdr(u16_at(file, coff))?;
-        let nsections = hdr(u16_at(file, coff + 2))? as usize;
-        let timestamp = hdr(u32_at(file, coff + 4))?;
-        let opt_size = hdr(u16_at(file, coff + 16))? as usize;
-        let opt = coff + 20;
-        if hdr(u16_at(file, opt))? != 0x20B {
-            return Err(PeError::NotPe32Plus);
-        }
-        let ndirs = (hdr(u32_at(file, opt + 108))? as usize).min(16);
-        let mut dirs = [DataDir::default(); 16];
-        for (i, d) in dirs.iter_mut().enumerate().take(ndirs) {
-            d.rva = hdr(u32_at(file, opt + 112 + 8 * i))?;
-            d.size = hdr(u32_at(file, opt + 116 + 8 * i))?;
-        }
-        let headers = Headers {
-            machine,
-            timestamp,
-            image_base: hdr(u64_at(file, opt + 24))?,
-            entry_rva: hdr(u32_at(file, opt + 16))?,
-            size_of_image: hdr(u32_at(file, opt + 56))?,
-            size_of_headers: hdr(u32_at(file, opt + 60))?,
-            section_alignment: hdr(u32_at(file, opt + 32))?,
-            subsystem: hdr(u16_at(file, opt + 68))?,
-            dirs,
-        };
-        let sections_off = opt + opt_size;
+        let (headers, sections_off, nsections) = read_headers(file)?;
         let table_end = sections_off + nsections * SECTION_HEADER_SIZE;
         if table_end > file.len() || headers.size_of_headers as usize > file.len() {
             return Err(PeError::BadHeader);

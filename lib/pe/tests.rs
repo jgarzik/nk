@@ -199,6 +199,16 @@ fn headers_and_sections() {
     assert_eq!(h.dir(99), DataDir::default());
 }
 
+/// An image in memory answers for its headers from its first page
+/// alone, though the file's sections are not where a file has them.
+#[test]
+fn headers_are_read_from_a_mapped_image() {
+    let (h, image) = mapped(&Builder::new().build());
+    assert_eq!(image_headers(&image[..0x1000]), Ok(h));
+    assert_eq!(image_headers(&image[..0x40]), Err(PeError::BadHeader));
+    assert_eq!(image_headers(b"MZ"), Err(PeError::BadHeader));
+}
+
 #[test]
 fn page_flags_follow_sections() {
     let file = Builder::new().build();

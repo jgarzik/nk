@@ -63,11 +63,16 @@ pub(super) fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
         .map(|r| r.object)
 }
 
-/// Load the driver in `file` and run its entry point. `name` is its
-/// service, whose key exists.
-pub(super) fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> {
+/// Load the driver in `file`, the contents of the image called
+/// `file_name`, and run its entry point. `name` is its service, whose
+/// key exists.
+pub(super) fn load(
+    name: &str,
+    file_name: &str,
+    file: &[u8],
+) -> Result<*mut DRIVER_OBJECT, DriverError> {
     irql::expect_passive("loading a driver");
-    let image = ldr::load(file).map_err(DriverError::Load)?;
+    let image = ldr::load(file_name, file).map_err(DriverError::Load)?;
     let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
     let object = pool::alloc_zeroed(size, TAG_DRIVER).cast::<DRIVER_OBJECT>();
     if object.is_null() {
