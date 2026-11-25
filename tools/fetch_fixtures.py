@@ -7,7 +7,12 @@ cannot be made (offline) is reported and the exit status is 2, so callers
 can tell "wrong bytes" from "no network".
 
 Usage: fetch_fixtures.py [--check]   (--check: verify only, download nothing)
+
+Set NK_REQUIRE_FIXTURES=1 to make a missing fixture an error too. CI does,
+so a run can never pass by skipping every driver test.
 """
+
+import os
 
 import hashlib
 import sys
@@ -65,7 +70,9 @@ def main():
         print(f"{results[fx['file']]:8} {fx['file']}")
     if "bad" in results.values():
         return 1
-    return 2 if "missing" in results.values() else 0
+    if "missing" in results.values():
+        return 1 if os.environ.get("NK_REQUIRE_FIXTURES") else 2
+    return 0
 
 
 if __name__ == "__main__":

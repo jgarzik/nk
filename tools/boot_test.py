@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boot NK under QEMU and judge the result from the serial log.
 
-Usage: boot_test.py <x86_64|aarch64> [--run]
+Usage: boot_test.py <x86_64|aarch64> [--run] [--image <esp.img>]
 
 Default (test) mode boots headless with a timeout and passes only if all of
 these hold:
@@ -11,6 +11,10 @@ these hold:
 
 `--run` boots with the serial console on this terminal instead (Ctrl-A X
 quits) and judges nothing.
+
+`--image` boots an existing EFI system partition image (for example one
+from `make dist`) instead of building one. The image is opened as a
+snapshot and never written.
 
 Everything the run creates lives in target/qemu/. The ESP image and the
 firmware variable copy are removed afterwards; the serial log and the
@@ -56,7 +60,7 @@ def qemu_command(arch, esp, variables, serial):
         "-m", MEM, "-smp", SMP,
         "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
         "-drive", f"if=pflash,format=raw,file={variables}",
-        "-drive", f"if=none,id=esp,format=raw,file={esp}",
+        "-drive", f"if=none,id=esp,format=raw,snapshot=on,file={esp}",
         "-device", "virtio-blk-pci,drive=esp,bootindex=0",
         "-nic", "none", "-display", "none", "-monitor", "none", "-no-reboot",
         "-serial", serial,
@@ -96,22 +100,33 @@ def judge(arch, log_path, timed_out):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    argv = sys.argv[1:]
+    given = None
+    if "--image" in argv:
+        i = argv.index("--image")
+        if i + 1 >= len(argv):
+            sys.exit(__doc__)
+        given = Path(argv[i + 1])
+        del argv[i:i + 2]
+    args = [a for a in argv if not a.startswith("--")]
     if len(args) != 1 or args[0] not in FIRMWARE:
         sys.exit(__doc__)
-    arch, interactive = args[0], "--run" in sys.argv
+    arch, interactive = args[0], "--run" in argv
     for f in FIRMWARE[arch]:
         if not Path(f).exists():
             sys.exit(f"boot_test: firmware {f} not found (see DEVELOPMENT.md)")
+    if given and not given.exists():
+        sys.exit(f"boot_test: {given} not found")
 
     OUT.mkdir(parents=True, exist_ok=True)
-    esp = OUT / f"esp-{arch}.img"
+    esp = given or OUT / f"esp-{arch}.img"
     variables = OUT / f"vars-{arch}.fd"
     log = OUT / f"serial-{arch}.log"
     log.unlink(missing_ok=True)
     proc, timed_out = None, False
     try:
-        mkesp.build(arch, esp)
+        if not given:
+            mkesp.build(arch, esp)
         shutil.copyfile(FIRMWARE[arch][1], variables)
         serial = "mon:stdio" if interactive else f"file:{log}"
         proc = subprocess.Popen(
@@ -130,7 +145,8 @@ def main():
             except ProcessLookupError:
                 pass
             proc.wait()
-        esp.unlink(missing_ok=True)
+        if not given:
+            esp.unlink(missing_ok=True)
         variables.unlink(missing_ok=True)
     return 0 if interactive else judge(arch, log, timed_out)
 

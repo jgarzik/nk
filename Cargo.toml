@@ -9,6 +9,9 @@ default-members = ["lib/pe", "lib/bootinfo", "lib/acpi", "lib/mm", "lib/ntabi", 
 version = "0.0.1"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/jgarzik/nk"
+# NK is released as a source tree and boot images, not as crates.
+publish = false
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

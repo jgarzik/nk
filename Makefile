@@ -4,13 +4,17 @@
 
 CARGO ?= cargo
 
-.PHONY: help build build-arm check check-arm run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check gate clean
+VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+DIST := target/dist
+
+.PHONY: help dist build build-arm check check-arm run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check gate clean
 
 help:
 	@echo "NK make targets:"
 	@echo "  build      loader + kernel for x86-64      (build-arm: arm64)"
 	@echo "  check      boot test under QEMU, x86-64    (check-arm: arm64)"
 	@echo "  run        boot with a serial console      (run-arm: arm64)"
+	@echo "  dist       release boot images for both architectures (target/dist/)"
 	@echo "  test       host unit tests (pure library crates)"
 	@echo "  clippy     lint x86-64 + host, warnings are errors (clippy-arm: arm64)"
 	@echo "  fmt        format the tree"
@@ -45,6 +49,19 @@ run-arm: build-arm fixtures
 	@tools/boot_test.py aarch64 --run
 
 # The layout test compares against the WDK tables among the fixtures.
+# Release artifacts: one bootable EFI system partition image per
+# architecture, holding only NK's loader and kernel. No Windows driver is
+# included, so the images can be redistributed; booted as they are, the
+# kernel runs its own self-tests and reports the driver tests as skipped.
+dist: build build-arm
+	@rm -rf $(DIST) && mkdir -p $(DIST)
+	@tools/mkesp.py x86_64 $(DIST)/nk-$(VERSION)-x86_64.img --no-drivers
+	@tools/mkesp.py aarch64 $(DIST)/nk-$(VERSION)-aarch64.img --no-drivers
+	@tools/boot_test.py x86_64 --image $(DIST)/nk-$(VERSION)-x86_64.img
+	@tools/boot_test.py aarch64 --image $(DIST)/nk-$(VERSION)-aarch64.img
+	@gzip -9 -n $(DIST)/*.img
+	@cd $(DIST) && sha256sum *.img.gz > SHA256SUMS && cat SHA256SUMS
+
 test: fixtures
 	$(CARGO) test
 
