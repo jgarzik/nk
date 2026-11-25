@@ -1,6 +1,6 @@
 //! The loader must refuse images it cannot run, and say why.
 
-use super::{module, resources};
+use super::resources;
 use crate::ldr::{self, LoadError};
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
@@ -12,10 +12,9 @@ fn expect_refusal(
     r: &mut Report,
     name: &str,
     module_name: &str,
-    info: &BootInfo,
     expected: impl FnOnce(&LoadError) -> bool,
 ) {
-    let Some(file) = module(info, module_name) else {
+    let Some(file) = ldr::boot_file(module_name) else {
         return r.skip(name, format_args!("module {module_name} not provided"));
     };
     let before = resources();
@@ -45,13 +44,12 @@ pub static GROUP: Group = Group {
     manual: false,
 };
 
-fn run(r: &mut Report, info: &BootInfo) {
+fn run(r: &mut Report, _: &BootInfo) {
     // A real driver built for the other architecture.
     expect_refusal(
         r,
         "ldr.reject.wrong-machine",
         "wrongarch.sys",
-        info,
         |e| match e {
             LoadError::Pe(PeError::WrongMachine(m)) => {
                 kprintln!("ldr: refused image for machine {m:#06x}");
@@ -66,7 +64,6 @@ fn run(r: &mut Report, info: &BootInfo) {
         r,
         "ldr.reject.unresolved-import",
         "unresolved.sys",
-        info,
         |e| match e {
             LoadError::Unresolved { module, symbol } => {
                 kprintln!("ldr: refused image, unresolved import {module}!{symbol}");

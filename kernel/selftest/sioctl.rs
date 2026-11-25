@@ -9,9 +9,10 @@
 //! `METHOD_NEITHER` is not sent: the driver probes the raw buffers as user
 //! memory inside `__try`, which needs user address space and SEH.
 
-use super::{module, resources};
-use crate::io::driver;
+use super::resources;
 use crate::io::file::{self, IoError, IoResult};
+use crate::io::service;
+use crate::ldr;
 use crate::mm::{PAGE_SIZE, pool};
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
@@ -165,15 +166,15 @@ fn bad_requests(file: *mut FILE_OBJECT) -> Check {
 }
 
 /// One full life of the driver: load, open, one request, close, unload.
-fn cycle(image: &[u8]) -> Check {
-    let object = driver::load("SIoctl", image).map_err(|_| "load failed")?;
+fn cycle() -> Check {
+    service::start("SIoctl").map_err(|_| "load failed")?;
     let file = file::open(DOS_NAME).map_err(|_| "open failed")?;
     let mut out = [FILL; 64];
     let verdict =
         ioctl(file, BUFFERED, b"cycle", &mut out).and_then(|r| expect_reply(r, &out).map(|_| ()));
     // SAFETY: `file` came from `open` and is closed exactly once.
     let closed = unsafe { file::close(file) };
-    driver::unload(object)?;
+    service::stop("SIoctl")?;
     verdict?;
     match closed {
         Ok(IoResult {
@@ -202,15 +203,15 @@ pub static GROUP: Group = Group {
     manual: false,
 };
 
-fn run(r: &mut Report, info: &BootInfo) {
-    let Some(image) = module(info, "sioctl.sys") else {
+fn run(r: &mut Report, _: &BootInfo) {
+    if ldr::boot_file("sioctl.sys").is_none() {
         return r.skip_rest(format_args!("module sioctl.sys not provided"));
-    };
+    }
     let before = resources();
-    let object = match driver::load("SIoctl", image) {
-        Ok(object) => object,
-        Err(e) => return r.fail("sioctl.load", format_args!("{e:?}")),
-    };
+    if let Err(e) = service::create("SIoctl", "sioctl.sys").and_then(|()| service::start("SIoctl"))
+    {
+        return r.fail("sioctl.load", format_args!("{e:?}"));
+    }
     r.ok("sioctl.load");
 
     // The device is reachable by its own name and through the symbolic
@@ -266,7 +267,7 @@ fn run(r: &mut Report, info: &BootInfo) {
         }
     });
 
-    match driver::unload(object) {
+    match service::stop("SIoctl") {
         Ok(()) if file::open(DOS_NAME).is_err() && file::open(DEVICE).is_err() => {
             r.ok("sioctl.unload")
         }
@@ -287,7 +288,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     }
 
     const CYCLES: usize = 100;
-    let failed = (0..CYCLES).find_map(|i| cycle(image).err().map(|why| (i, why)));
+    let failed = (0..CYCLES).find_map(|i| cycle().err().map(|why| (i, why)));
     let after = resources();
     match failed {
         Some((i, why)) => r.fail("sioctl.cycles", format_args!("cycle {i}: {why}")),

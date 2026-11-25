@@ -154,18 +154,35 @@ pub unsafe fn closed(body: *mut u8) {
     HIVE.lock().closed(key);
 }
 
-/// Make sure the service key of a driver being loaded exists
-/// (`...\Services\<name>`), as the service control manager would have
-/// made it on Windows: a driver may keep its settings under it.
-pub fn service_key(name: &str) -> Result<(), &'static str> {
-    let path: Vec<u16> = alloc::format!("Machine\\System\\CurrentControlSet\\Services\\{name}")
-        .encode_utf16()
-        .collect();
+/// Give the key at `path` (from the registry's root; its parent
+/// exists) the `values`, each a name, a type and data, creating the key
+/// if it is not there. For the kernel's own use.
+pub fn write(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> {
+    let path: Vec<u16> = path.encode_utf16().collect();
     let mut hive = HIVE.lock();
-    let root = hive.root().map_err(|_| "no memory for the registry")?;
-    hive.create(root, &path)
-        .map(|_| ())
-        .map_err(|_| "no service key")
+    let root = hive.root().map_err(status)?;
+    let (key, _) = hive.create(root, &path).map_err(status)?;
+    for (name, kind, data) in values {
+        let name: Vec<u16> = name.encode_utf16().collect();
+        hive.set_value(key, &name, *kind, data).map_err(status)?;
+    }
+    Ok(())
+}
+
+/// The type and data of the value `name` of the key at `path` (from
+/// the registry's root). For the kernel's own use.
+pub fn read(path: &str, name: &str) -> Result<(u32, Vec<u8>), NTSTATUS> {
+    let path: Vec<u16> = path.encode_utf16().collect();
+    let name: Vec<u16> = name.encode_utf16().collect();
+    let mut hive = HIVE.lock();
+    let root = hive.root().map_err(status)?;
+    let key = hive.open(root, &path).map_err(status)?;
+    let (_, kind, data) = hive.value(key, &name).map_err(status)?;
+    let mut copy = Vec::new();
+    copy.try_reserve_exact(data.len())
+        .map_err(|_| STATUS_INSUFFICIENT_RESOURCES)?;
+    copy.extend_from_slice(data);
+    Ok((kind, copy))
 }
 
 /// [`ZwDeleteKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletekey):

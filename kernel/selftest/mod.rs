@@ -30,7 +30,6 @@ mod work;
 
 use crate::mm;
 use crate::test::Group;
-use nk_bootinfo::BootInfo;
 
 /// Every test group. `test=` on the command line selects among them.
 pub static GROUPS: &[&Group] = &[
@@ -73,17 +72,6 @@ pub static GROUPS: &[&Group] = &[
     &work::BAD_RETURN,
     &pend::OVERSTATED,
 ];
-
-/// The bytes of the boot module called `name`, if the loader supplied it.
-fn module<'a>(info: &'a BootInfo, name: &str) -> Option<&'a [u8]> {
-    let m = info
-        .modules()
-        .iter()
-        .find(|m| m.name().eq_ignore_ascii_case(name.as_bytes()))?;
-    // SAFETY: the loader read the file into reserved memory that stays
-    // mapped and unmodified for the life of the kernel.
-    Some(unsafe { core::slice::from_raw_parts(mm::phys_to_virt(m.phys), m.size as usize) })
-}
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
 /// around every test group, and before loading a driver and after

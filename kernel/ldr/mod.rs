@@ -12,8 +12,35 @@ use crate::{arch, export};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicPtr, Ordering};
+use nk_bootinfo::BootInfo;
 use nk_mm::pt::Prot;
 use nk_pe::{Pe, PeError, Symbol};
+
+/// The loader's hand-off block, for the files it read from the boot
+/// volume.
+static BOOT: AtomicPtr<BootInfo> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Remember where the boot files are.
+pub fn init(info: &'static BootInfo) {
+    BOOT.store(core::ptr::from_ref(info).cast_mut(), Ordering::Release);
+}
+
+/// The contents of the boot file called `name` (`sioctl.sys`), if the
+/// loader read one of that name from `\NK\drivers`. This is NK's
+/// `System32\drivers` until there is a file system to read.
+pub fn boot_file(name: &str) -> Option<&'static [u8]> {
+    // SAFETY: null, or the hand-off block `init` was given, which lives
+    // for ever and is never written.
+    let info = unsafe { BOOT.load(Ordering::Acquire).as_ref() }?;
+    let m = info
+        .modules()
+        .iter()
+        .find(|m| m.name().eq_ignore_ascii_case(name.as_bytes()))?;
+    // SAFETY: the loader read the file into reserved memory that stays
+    // mapped and unmodified for the life of the kernel.
+    Some(unsafe { core::slice::from_raw_parts(mm::phys_to_virt(m.phys), m.size as usize) })
+}
 
 /// `IMAGE_SUBSYSTEM_NATIVE`: what a kernel driver is linked as.
 const SUBSYSTEM_NATIVE: u16 = 1;
