@@ -349,8 +349,10 @@ The kernel builds for Rust's stock `x86_64-unknown-uefi` and
   every export has the ABI drivers expect (`doc/ABI.md`);
 - one PE loader, `lib/pe`, maps the kernel (in `nkload`) and the drivers
   (in the kernel), so the code that must be right for drivers runs on
-  every boot;
-- PE images carry the unwind tables SEH needs.
+  every boot.
+
+The kernel image itself has no unwind tables (no `.pdata`): SEH through
+NK's own frames needs them built in.
 
 ## Exports
 
