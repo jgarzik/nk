@@ -10,6 +10,14 @@
 //! - A security descriptor points to an owner, a group and two ACLs. An
 //!   absolute one holds pointers; a self-relative one is a single block
 //!   holding offsets, with the parts after a 20-byte header.
+//!
+//! On those layouts stand the rules, one module each: who a subject is
+//! (`token`), whether it may have an access (`access`) or holds a
+//! privilege (`privilege`), what descriptor a new object gets
+//! (`assign`), how an object's descriptor is read and changed
+//! (`descriptor`), and what a token answers about itself
+//! (`information`). Each module states which of its rules Microsoft
+//! documents and which are INFERRED from what Windows does.
 
 #![cfg_attr(not(test), no_std)]
 
@@ -19,6 +27,7 @@ pub mod access;
 pub mod acl;
 pub mod assign;
 pub mod descriptor;
+pub mod information;
 pub mod privilege;
 pub mod token;
 
