@@ -23,11 +23,11 @@ loader (`nkload`) standing in for Microsoft's boot manager and `winload`.
   does not cover testing.
 
 Why: if an unmodified driver cannot tell NK from Windows, Microsoft's
-inbox drivers are just more drivers. The inbox corpus needs a little
-over half of the kernel's exports, and Microsoft's frameworks (KMDF,
-USB) add few of those, because they carry the rest themselves
-(`doc/ROADMAP.md`). Rewriting those layers would cost years and create
-second ABIs (storport, NDIS, KMDF) to get wrong.
+inbox drivers are just more drivers, and Microsoft's frameworks (KMDF,
+USB) ask little of the kernel, because they carry the rest themselves:
+`doc/ROADMAP.md` ("Measurements") has what the corpus imports.
+Rewriting those layers would cost years and create second ABIs
+(storport, NDIS, KMDF) to get wrong.
 
 Destination: Microsoft's Windows PE at a `cmd.exe` prompt on QEMU x86-64,
 QEMU arm64 and a Dell OptiPlex.
@@ -83,10 +83,11 @@ into memory a driver can write.
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
 | `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
-| `kernel/export/` | the export table |
-| `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, trace-provider bookkeeping (`etw`), process-structure rules (`ps`) |
-| `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
+| `kernel/export/` | the export table, and the traps |
+| `kernel/rt.rs` | Rust's allocator on the kernel pool |
+| `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
 Anything that can be written without touching hardware goes in a
@@ -103,17 +104,23 @@ Firmware starts `nkload`, which loads the kernel and drivers and jumps to
    runtime table.
 2. `BootInfo` checked; `arch::mm_init`, `mm::init`: frames, pool, mappings;
    `arch::low_half_init`: on arm64, NK's own low half replaces firmware's.
+   `ldr::init`: the boot files and the table of images, the kernel's own
+   first.
 3. Move from the loader's stack to a guarded kernel stack.
-4. `hal::platform` (MADT), interrupt controller, the idle thread (the
-   context being run), interrupts on: from here only the IRQL holds them
-   back.
-5. Time, IPIs, DPCs, the other processors, work queues, registry.
+4. `hal::platform` (MADT), interrupt controller; the object types and the
+   System process with its tokens, because threads are objects of that
+   process; the idle thread (the context being run); interrupts on: from
+   here only the IRQL holds them back.
+5. Time, IPIs, DPCs, the other processors, work queues, the object
+   namespace, the registry.
 6. A thread at priority 8 and `PASSIVE_LEVEL`, what a driver expects of
-   its caller, prints the export table and runs the test groups, which
-   load the drivers and send them IRPs; the machine powers off. The boot
-   context becomes processor 0's idle loop.
+   its caller, prints the export table, starts the services the hive
+   starts at boot, and runs the test groups, which load drivers and send
+   them IRPs; the machine powers off. The boot context becomes processor
+   0's idle loop.
 
-Any step that fails prints a `FAIL` line and stops. There is no user mode.
+Any step that fails prints a `FAIL` line and stops. No user-mode code
+runs.
 
 ## Address space
 
@@ -1094,8 +1101,8 @@ A driver is started from its service key, as on Windows
 (`kernel/io/service.rs`): `...\Services\<name>\ImagePath` names the
 image, and a key without that value means `System32\drivers\<name>.sys`.
 The last part of the path is looked up among the boot files, the
-contents of `\NK\drivers`, which stand for `System32\drivers` until
-there is a file system. Nothing else starts a driver; a library is
+contents of `\NK\drivers`, which stand for `System32\drivers`: NK
+reads no file system. Nothing else starts a driver; a library is
 loaded when an image imports from it (Exports). The driver's entry
 point is given the path to its key. Stopping a service runs the driver's
 unload routine and frees its image; the key stays.
@@ -1154,6 +1161,23 @@ goes to the driver as zero; a direct method's second buffer keeps its
 length, and null fails the probe. For `METHOD_NEITHER` the driver is handed both addresses as they
 are, and what is there is the driver's to find out. The oracle's
 requests are user mode's, their buffers pages of the user range.
+
+A driver sends requests of its own with
+[`IoAllocateIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateirp),
+`IoCallDriver` (`IofCallDriver`) and `IoFreeIrp`: the IRP is the
+driver's, with no thread and no requestor's buffers of NK's making, and
+its completion routine keeps it or lets NK free it. It finds another
+driver's device by name with
+[`IoGetDeviceObjectPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdeviceobjectpointer):
+NK opens the device for kernel mode and closes the handle again, so the
+device's driver is sent a create and a cleanup at once and a close when
+the caller gives up the file object's reference it is handed.
+
+A driver counts the requests in progress on a device with a
+[remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
+(`kernel/io/remlock.rs`): the lock is the driver's memory in the
+free-build layout, and the `Ex` routines are what the documented macros
+expand to.
 
 A driver asks whose request it has with `IoGetRequestorProcess`: the
 process of the thread in the IRP, which for every request NK sends is
@@ -1501,7 +1525,7 @@ statuses (`nk_se::sid`); a parent's SID is a pool block the caller
 frees.
 
 NK itself enforces none: every open it makes is a kernel-mode open,
-which Windows does not check either, and there is no user mode. A
+which Windows does not check either, and no user-mode code runs. A
 driver that guards its own objects asks
 [`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck)
 and gets Windows' answer (below). Descriptors are
@@ -1541,8 +1565,8 @@ Where a descriptor lives:
   (`kernel/ob/security.rs`): a reference to a copy in the store below,
   set, referenced and released by kernel routines, given up with the
   object or when replaced. The field is Windows' fast reference with
-  its count bits zero. Nothing gives an object a descriptor yet: that
-  comes with the types' security procedures.
+  its count bits zero. No object type gives its objects a descriptor:
+  NK has no types' security procedures.
 - The store (`nk_ob::descriptors`) keeps one counted, self-relative
   copy of each distinct descriptor, as Windows' does: logging the same
   bytes again, from whatever address, returns the same copy with more
@@ -1848,20 +1872,26 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 
 ## What is absent
 
-No APCs, device interrupts, PnP, power management, user processes or
-user mode.
+No APCs, device interrupts, Plug and Play, power management, processes
+other than System, user-mode code, ALPC ports, I/O completion ports,
+priority boosts or registry write-back; the clock ticks at a fixed
+rate; NK enforces no security descriptor on its own opens; the loader
+binds no import from the kernel by ordinal or from an API set. Microsoft
+publishes no arm64 binaries NK may use, so its own drivers run on x86-64
+alone. NK has run on no physical machine.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
-(`kernel/export/trap.rs`): the import binds, so the binary loads, and a
-call stops the system with `BUGCHECK: <name>: NK does not implement
-this routine`. One macro makes every such routine, so none can return.
-The ledger counts them apart from `implemented`. These trap:
+(`kernel/export/trap.rs`, which names them): the import binds, so the
+binary loads, and a call stops the system with `BUGCHECK: <name>: NK
+does not implement this routine`. One macro makes every such routine,
+so none can return. The ledger lists them in the state `traps`, apart
+from `implemented`.
 
-| Names | Imported by | Why |
+| Territory | Imported by | Why |
 | --- | --- | --- |
-| `ZwAlpcCancelMessage`, `ZwAlpcConnectPort`, `ZwAlpcConnectPortEx`, `ZwAlpcCreatePortSection`, `ZwAlpcCreateResourceReserve`, `ZwAlpcCreateSectionView`, `ZwAlpcCreateSecurityContext`, `ZwAlpcDeletePortSection`, `ZwAlpcDeleteSectionView`, `ZwAlpcDeleteSecurityContext`, `ZwAlpcDisconnectPort`, `ZwAlpcQueryInformation`, `ZwAlpcQueryInformationMessage`, `ZwAlpcSendWaitReceivePort`, `ZwAlpcSetInformation` | `msrpc.sys` | NK has no ALPC ports. `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
-| `IoSetIoCompletionEx`, `ZwCreateIoCompletion`, `ZwRemoveIoCompletionEx` | `msrpc.sys` | NK has no I/O completion ports, on which `msrpc.sys` waits for its ALPC messages |
+| ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
+| I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
 
 The `*-neg-trap` scenarios call one through the address its name
 resolves to and require the stop that names it.
