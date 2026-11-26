@@ -595,6 +595,22 @@ pub fn arbiter_test() -> Result<bool, &'static str> {
         let status = unsafe { add(0, 0, 0, 0, &raw mut data, 1) };
         (status, data.IntRemapInfo[0])
     };
+    // What a line-based connection takes from connection data that
+    // names the line: found while the line is placed.
+    let property = nk_pnp::connection::connection_data(&[nk_pnp::connection::Delivery {
+        vector: first.vector,
+        irql: first.level,
+        affinity: first.affinity,
+        source: nk_pnp::connection::Source::Line {
+            gsi,
+            edge: false,
+            low: false,
+        },
+    }]);
+    if crate::io::interrupt::stated_line_in(&property) != Some((first.vector, first.level)) {
+        release(first.vector);
+        return Err("connection data that names a placed line states no line");
+    }
     let result = (|| {
         // Where it is already: nothing to do, and the mark is cleared.
         if ask(stated(first.vector, first.level, 1)) != (STATUS_SUCCESS, 5) {
@@ -633,6 +649,9 @@ pub fn arbiter_test() -> Result<bool, &'static str> {
     release(first.vector);
     if placed(first.vector).is_some() || info(first.vector ^ 1).is_some() {
         return Err("releasing the translation did not free the line");
+    }
+    if crate::io::interrupt::stated_line_in(&property).is_some() {
+        return Err("connection data left from a withdrawn line still states it");
     }
     result
 }

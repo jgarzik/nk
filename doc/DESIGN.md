@@ -367,7 +367,9 @@ vector's chain; the vector's first object unmasks the line, its last
 masks it. Fully specified connections name a translated vector and
 IRQL; line-based ones use the device's first line, or, for a device
 given none as a resource, the first line of the interrupt connection
-data a driver stored on it (which is where Windows looks; shared);
+data a driver stored on it that is placed now (which is where
+Windows looks; shared; a value left from interrupts since withdrawn
+states nothing, and the connection fails with `STATUS_NOT_FOUND`);
 message-based ones
 connect every message of the device and return the table of addresses
 and data, or fall back to the line when the device has no messages and
@@ -1420,7 +1422,10 @@ the same kind with Windows' signature, version and slot order, whose
 FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
 table the root table lists but the root tables, the DSDT and the FACS,
 as a count and pointers, made once. Both give the firmware's own
-tables where Windows gives copies. `HalAcpiMachineStateInit` takes
+tables where Windows gives copies. The public table's
+`HalGetCachedAcpiTable` holds the same routine as `HalAcpiGetTable`, as
+in Windows' HAL (`pshed.dll` would look for the boot error record
+table through it). `HalAcpiMachineStateInit` takes
 the sleep states the firmware has and answers with the interrupt model
 for the firmware's `_PIC` method (the APIC's on x86-64, a version 3
 GIC's on arm64); Windows' HAL registers its sleep routine with the
@@ -3055,7 +3060,16 @@ code).
 - `pshed.dll`, the platform's part of the error path, is loaded as a
   library for what `pci.sys` imports from it. NK does not call its
   `PshedInitialize`, which takes Windows' loader block, nor any other
-  of its routines.
+  of its routines. The first call of `PshedInitialize` reads two
+  things of the block: whether the firmware is UEFI (the first byte of
+  `FirmwareInformation`) and the memory descriptor list, searched for
+  a descriptor of type 0x1C; the second call goes on to the firmware's
+  error tables (the boot error record table through
+  `HalGetCachedAcpiTable`, which NK provides) and the error sources.
+  Until both are made, `PshedGetErrorSourceInfo` waits on an event the
+  first call would have initialised. `pci.sys` calls it only for a PCI
+  Express port with advanced error reporting, which the machines NK's
+  tests run on do not have.
 - `HalBugCheckSystem` (`kernel/hal/fatal.rs`), which `pshed.dll` calls
   for a fatal error, stops the system as Windows does: by the record's
   first section that is an NMI not the hypervisor's

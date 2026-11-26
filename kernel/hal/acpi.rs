@@ -161,6 +161,13 @@ pub fn init() {
         HalAcpiMachineStateInit as *const (),
     );
     HalAcpiDispatchTable.provide(acpi_slot("HalAcpiGetTable"), HalAcpiGetTable as *const ());
+    // Windows' HAL puts the same routine in the public table, for
+    // those that are not the ACPI driver: `pshed.dll` looks for the
+    // boot error record table through it.
+    HalDispatchTable.provide(
+        public_slot("HalGetCachedAcpiTable"),
+        HalAcpiGetTable as *const (),
+    );
     HalAcpiDispatchTable.provide(
         acpi_slot("HalAcpiGetAllTables"),
         HalAcpiGetAllTables as *const (),
@@ -224,6 +231,30 @@ pub fn test() -> Result<(), &'static str> {
     }
     if signature(b"NKNK").is_some() {
         return Err("a table the firmware does not have was found");
+    }
+    // The same through the public table's slot, as `pshed.dll` asks.
+    // SAFETY: the slot at Windows' offset holds the same routine.
+    let cached: GetTable = unsafe {
+        core::mem::transmute(
+            HalDispatchTable
+                .address()
+                .cast::<u8>()
+                .add(0xa8)
+                .cast::<*const ()>()
+                .read(),
+        )
+    };
+    // SAFETY: no ids.
+    let found = unsafe {
+        (
+            cached(u32::from_le_bytes(*b"FACP"), none.0, none.1),
+            get(u32::from_le_bytes(*b"FACP"), none.0, none.1),
+            cached(u32::from_le_bytes(*b"BERT"), none.0, none.1),
+            get(u32::from_le_bytes(*b"BERT"), none.0, none.1),
+        )
+    };
+    if found.0.is_null() || found.0 != found.1 || found.2 != found.3 {
+        return Err("the public table's slot does not find what the ACPI table's does");
     }
     // Every table, as a count and pointers: the FADT and the MADT are
     // among them, the root table and the DSDT are not, and a second
