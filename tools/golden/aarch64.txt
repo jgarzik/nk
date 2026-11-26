@@ -111,6 +111,7 @@ io.open.create-request ok
 io.open.named-pipe ok
 io.fs-control ok
 io.close.cleanup-then-close ok
+io.close.deferred ok
 io.remove-lock ok
 rtl.version ok
 mm.routine-address ok

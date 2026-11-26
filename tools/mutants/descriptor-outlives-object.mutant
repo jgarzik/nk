@@ -3,4 +3,4 @@
 scenario: aarch64
 fails: ob.security
 file: kernel/ob/object.rs
-remove:             super::security::object_freed(body);
+remove:         super::security::object_freed(body);

@@ -629,9 +629,11 @@ more.
 the open returns a handle to it. The type's close procedure sends
 `IRP_MJ_CLEANUP` when the last handle in the system closes; its delete
 procedure sends `IRP_MJ_CLOSE` when the last reference goes, then drops
-the file's count on the device and frees the name. The last reference
-to an open file must go at `PASSIVE_LEVEL` (Windows defers such a
-delete to a worker thread; NK stops the system).
+the file's count on the device and frees the name. A driver is called
+at `PASSIVE_LEVEL`: a file whose last reference goes above it is put on
+a list through its header (`NextToFree`) and deleted by a worker
+thread, as on Windows. Other types' objects are deleted where their last
+reference goes.
 
 **Pending.** A driver may return `STATUS_PENDING` and complete later from
 a DPC, timer or worker; the requestor waits on an event completion sets.

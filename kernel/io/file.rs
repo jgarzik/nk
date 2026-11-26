@@ -552,8 +552,9 @@ pub unsafe extern "C" fn handle_closed(
 /// loses the file's reference and the name its block. A file object
 /// whose create failed has no device, and the driver hears nothing.
 ///
-/// A driver is called at `PASSIVE_LEVEL`: dropping the last reference
-/// to an open file above it stops the system.
+/// A driver is called at `PASSIVE_LEVEL`: when the last reference to
+/// a file goes above it, the object manager leaves this to a worker
+/// thread (`ob::object`), as Windows does.
 ///
 /// # Safety
 /// `object` is a file object nothing refers to any more.

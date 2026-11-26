@@ -1,0 +1,7 @@
+# A file whose last reference goes at DISPATCH_LEVEL is put on the list
+# of objects to delete, but no worker thread is asked to delete them:
+# the driver never hears the close and the file object is never freed.
+scenario: x86_64
+fails: io.close.deferred
+file: kernel/ob/object.rs
+remove:         unsafe { crate::ex::work::ExQueueWorkItem(DEFERRED_WORK.0.get(), CRITICAL_WORK_QUEUE) };
