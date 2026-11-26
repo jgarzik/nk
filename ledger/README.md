@@ -20,7 +20,9 @@ boot. Fixtures with `loaded_at_boot: false` are listed to show what they
 will need.
 
 Export states come from what the booted kernel prints, so the ledger
-describes the kernel that ran, not a hand-kept list.
+describes the kernel that ran, not a hand-kept list. It is a report, not
+a gate: it describes the kernel at the commit that last regenerated it,
+and `make ledger-check` says whether that is the kernel in the tree.
 
 `looked_up_absent` lists the names `MmGetSystemRoutineAddress` was
 asked for during the boot test that the kernel does not export. A

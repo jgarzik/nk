@@ -4,48 +4,48 @@ version = 4
 
 [[package]]
 name = "nk-acpi"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-bootinfo"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-cm"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-rtl",
 ]
 
 [[package]]
 name = "nk-etw"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-ntabi",
 ]
 
 [[package]]
 name = "nk-ex"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-hal"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-acpi",
 ]
 
 [[package]]
 name = "nk-ke"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-mm"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-ntabi"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-ex",
  "nk-pdb",
@@ -54,52 +54,52 @@ dependencies = [
 
 [[package]]
 name = "nk-ob"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-rtl",
 ]
 
 [[package]]
 name = "nk-oracle"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-pdb"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-pe"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-ps"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-rtl"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-se"
-version = "0.0.2"
+version = "0.2.0"
 
 [[package]]
 name = "nk-selftest"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-rtl",
 ]
 
 [[package]]
 name = "nk-unwind"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-pe",
 ]
 
 [[package]]
 name = "nkkrnl"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "nkload"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
@@ -132,14 +132,14 @@ dependencies = [
 
 [[package]]
 name = "pdbinfo"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-pdb",
 ]
 
 [[package]]
 name = "peinfo"
-version = "0.0.2"
+version = "0.2.0"
 dependencies = [
  "nk-pe",
 ]

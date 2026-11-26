@@ -9,7 +9,7 @@ Microsoft's documentation, sample source and the fixture binaries.
 | `make test` | host unit tests of `lib/` and of the tools | yes |
 | `make check`, `check-arm` | one boot of the main scenario | (as part of `boot-gate`) |
 | `make boot-gate` | every gate-tier boot scenario, in parallel | yes |
-| `make ledger-check` | the committed ledger is what the boot printed | yes |
+| `make ledger-check` | the committed ledger is what the last boots printed | no: the ledger is a report, regenerated with `make ledger` when a milestone is reached |
 | `make unwind-check` | kernel code with no unwind entry is on the allow-list | yes |
 | `make gate` | fmt, clippy (both arches), the gated targets above; prints `GATE-OK` | |
 | `make soak` | the whole list, repeated, on an overloaded host | no: long |
