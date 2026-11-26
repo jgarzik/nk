@@ -1,0 +1,6 @@
+# A key that loses its last value goes on reporting the longest value
+# name it ever held: Windows starts the count again from nothing.
+scenario: x86_64
+fails: cm.delete.value
+file: lib/cm/info.rs
+remove:             longest.value_name = 0;

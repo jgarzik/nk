@@ -1,0 +1,7 @@
+# Setting a value no longer raises the longest value name and data the
+# key remembers: every value still reads back, and a driver that sizes
+# its buffer by what the key's full form says gets a buffer too small.
+scenario: x86_64
+fails: cm.query.key
+file: lib/cm/lib.rs
+remove:         self.keys[index].longest.raise(longest);

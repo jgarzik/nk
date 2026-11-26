@@ -3,5 +3,5 @@
 scenario: aarch64
 fails: cm.namespace
 file: kernel/cm/mod.rs
-replace:         Ok((key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)?, path))
-with:         Ok((key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)?, Vec::new()))
+replace:     Ok((unsafe { key_object(body) }?, rest))
+with:     Ok((unsafe { key_object(body) }?, Vec::new()))

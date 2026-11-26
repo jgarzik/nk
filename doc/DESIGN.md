@@ -783,7 +783,10 @@ make that safe.
 - Every call into a driver is `ke::seh::call`: an assembly frame with a
   language handler of NK's own, holding a guard record the caller
   passes. Nothing else lies between NK's Rust and the driver's routine,
-  so no frame without an unwind entry can.
+  so no frame without an unwind entry can. A routine of more than four
+  arguments is called by a function of NK's own that is itself called
+  this way: one Rust frame more, which has an unwind entry and holds
+  nothing.
 - A guard says what the caller owes if the routine does not return.
   `Undo`: a function to call, once, when an unwind passes the frame
   (leave a critical region, lower the IRQL, drop a reference).
@@ -810,6 +813,7 @@ make that safe.
 | an executive timer's callback (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
+| a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
@@ -959,9 +963,12 @@ thread starts those whose keys say `Start` 0 (boot) or 1 (system), in
 Windows' order (`nk_cm::services`): boot start before system start; in
 each, by the place of the service's `Group` in
 `Control\ServiceGroupOrder`, then by the place of its `Tag` in the
-group's list under `Control\GroupOrderList`; services of no listed
-group last; a service after those it names in `DependOnService` and
-`DependOnGroup`. Only keys whose `Type` is a driver's count. Windows'
+group's list under `Control\GroupOrderList` (a tag the list has not, or
+none, after those it has); services of no listed group last; a service
+after those it names in `DependOnService` and `DependOnGroup`. A group
+is the same group in any letter case: Windows' own keys say
+`File system` where its list says `File System`. Only keys whose `Type`
+is a driver's count. Windows'
 loader reads boot-start drivers into memory before the kernel runs and
 the I/O manager starts system-start ones later; on NK both are boot
 files and the order is all that tells them apart.
@@ -1116,12 +1123,94 @@ that key, which walks the rest of the path in the registry's own tree. A
 name relative to an open key starts at that key. A key is no file:
 opening one through the I/O manager is `STATUS_OBJECT_TYPE_MISMATCH`.
 
-Creating makes only the last key of a path, as on Windows. Values are
-read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
-forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
+Subkeys are enumerated in the order of their upper-cased names, values
+in the order they were first set, as on Windows
+([`ZwEnumerateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratekey),
+[`ZwEnumerateValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratevaluekey)).
+A key or value is described in Microsoft's information structures
+(`lib/cm` writes them; the classes are those of
+[`KEY_INFORMATION_CLASS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_information_class)
+and
+[`KEY_VALUE_INFORMATION_CLASS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_value_information_class)).
+A buffer with room for a structure's fixed part and not all of the rest
+gets what fits and `STATUS_BUFFER_OVERFLOW`; one with less gets nothing
+and `STATUS_BUFFER_TOO_SMALL`; both are told the length that holds
+everything. Where a class or a value's data is aligned after a name,
+the bytes between are the caller's, untouched. A value's data start at
+a multiple of eight bytes in the full form, aligned or not, as Windows
+10 x64 places them.
+
+An open key describes itself
+([`ZwQueryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerykey))
+in every form. Its full name starts at `\REGISTRY`, each part in the
+letter case it was created in (`MACHINE`, `SYSTEM`, `HARDWARE` and
+`USER` are Windows' spellings), with symbolic links followed: a key
+opened through `CurrentControlSet` names its control set. What NK has
+none of is reported as Windows reports a key without it: no flags, no
+virtualization, no handle tags, no layer. Every key is trusted
+(`KeyTrustInformation`), because the registry holds only the system's
+own hive.
+
+A key's last write time is when its values or its list of subkeys last
+changed: setting or deleting a value stamps the key, making or deleting
+a key stamps the key above it, and a new key is stamped as it is made.
+A key copied from the hive keeps the file's time until then.
+
+A key remembers the longest subkey name, subkey class, value name and
+value data it has held, which is what it reports as the longest it
+holds: as on Windows, the numbers only grow while the key has subkeys
+(or values) and start again when the last one goes. A key copied from a
+hive file starts from the numbers the file gives it.
+
+Creating makes only the last key of a path, as on Windows, and gives a
+new key its class. A value is read by name in the forms it is
+enumerated in; there are no layered keys, so the form that describes a
+value of one (`KeyValueLayerInformation`) is refused like a form that
+does not exist, `STATUS_INVALID_PARAMETER`. A deleted value leaves its
+place in the order to the next; set again, it is the key's last. A key
+without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
+
+### Query tables
+
+[`RtlQueryRegistryValues`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlqueryregistryvalues)
+and `RtlQueryRegistryValuesEx` read values as a table of entries asks:
+each value goes to the entry's routine or is stored where the entry
+points. What an entry's flags mean is Microsoft's to say, and
+`nk_cm::query` works it out without touching a driver's memory; the
+kernel (`kernel/cm/table.rs`) copies the table, reads the registry, and
+does what the query says. NK's decisions:
+
+- **The table is copied first**: every entry up to the one that ends
+  it, names and default data too (a string default of length zero is
+  measured), and the environment block. A routine that rewrites the
+  table changes nothing for the call in progress.
+- **The key is found once** and counted as open for the length of the
+  call. Each entry reads the registry afresh, holding the lock for the
+  read alone, so a routine may open, change or delete any key, this one
+  included. The query sees what the routine left: a key it deleted ends
+  the query with `STATUS_KEY_DELETED`.
+- **A routine is lent copies** of the value's name and data in a pool
+  block, never the registry's own memory. The data are followed by a
+  terminator, whether or not the value was stored with one. The call
+  that carries no value (`RTL_QUERY_REGISTRY_NOVALUE`) passes null for
+  both.
+- **A stored string** is the value without the terminator it ends
+  with, and a terminator after it: a counted string without a buffer is
+  given one from the pool, which the caller frees; one with a buffer
+  must have room for the terminator (`STATUS_BUFFER_TOO_SMALL`).
+- **`RelativeTo`**: `RTL_REGISTRY_OPTIONAL` changes nothing, a key that
+  is not there fails the call. `RTL_REGISTRY_USER` is
+  `\Registry\User\.Default`: the system is the only user.
+- **The type check** (`RTL_QUERY_REGISTRY_TYPECHECK`) is made where an
+  entry asks for it and demanded of none. Windows demands it of a key
+  in a hive it does not trust, and that is all that tells its two
+  exports apart; NK has no such hive, and the two are one routine.
+- **A routine that raises** an exception is unwound through the query
+  like any call into a driver (Exceptions). All the query holds is one
+  pool block, which the guard of that call gives back.
 
 ## Strings
 
