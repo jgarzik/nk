@@ -411,6 +411,7 @@ pub static GROUP: Group = Group {
         "oracle.nkc-ob",
         "oracle.nkc-etw",
         "oracle.npfs",
+        "oracle.msfs",
     ],
     run,
     manual: false,
@@ -584,6 +585,13 @@ fn run(r: &mut Report, _: &BootInfo) {
         "npfs.sys",
         include_str!("../../oracle/npfs.script"),
         include_str!("../../oracle/npfs.txt"),
+    );
+    check(
+        r,
+        "oracle.msfs",
+        "msfs.sys",
+        include_str!("../../oracle/msfs.script"),
+        include_str!("../../oracle/msfs.txt"),
     );
 }
 

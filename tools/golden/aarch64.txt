@@ -321,3 +321,4 @@ oracle.nkc-cross ok
 oracle.nkc-ob ok
 oracle.nkc-etw ok
 oracle.npfs skip
+oracle.msfs skip

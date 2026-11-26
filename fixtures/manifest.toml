@@ -60,6 +60,15 @@ sha256 = "9e3c3e5e7c33dacc77d347dad2cd37043f47e0dd93dbb6ee7710bd68aee0b30b"
 status = "microsoft-inbox"
 note = "npfs.sys 10.0.19041.1526, the named pipe file system"
 
+[[fixture]]
+name = "msfs"
+arch = "x86_64"
+file = "msfs.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/msfs.sys/95155DF111000/msfs.sys"
+sha256 = "57e77f84241e43388a239775d069497403d9d3ec298a35d81b86db2b0f3b78bb"
+status = "microsoft-inbox"
+note = "msfs.sys 10.0.19041.1, the mailslot file system"
+
 # null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
 # image size of the Windows 10 ARM64 build, which no public index lists.
 # Do not substitute a Windows 11 binary.

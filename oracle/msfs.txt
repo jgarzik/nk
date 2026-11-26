@@ -1,0 +1,69 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 73f99bbadd5ddce7565e9a7ace72b9c857dcad99821174c4e68a1c310005dd63
+use msfs: ok
+mailslot s \Device\Mailslot\nk-oracle-test: 00000000 2
+mailslot s2 \Device\Mailslot\nk-oracle-test: c0000035 -
+mailslot s3 \Device\Mailslot\NK-ORACLE-TEST: c0000035 -
+open nobody \Device\Mailslot\nk-oracle-none access=40100000 share=3: c0000034
+open c \Device\Mailslot\nk-oracle-test access=40100000 share=3: 00000000
+open alone \Device\Mailslot\nk-oracle-test access=40100000: 00000000
+open upper \Device\Mailslot\NK-ORACLE-TEST access=40100000 share=3: 00000000
+fsctl s 000c4003 000000000000000000000000 16: 00000000 0 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+fsctl s 000c0003 000000000000000000000000 16: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+read s 16: c00000b5 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+write c 68656c6c6f: 00000000 5
+write c 776f726c642121: 00000000 7
+write c -: 00000000 0
+fsctl s 000c4003 000000000000000000000000 16: 00000000 5 68656c6c6feeeeeeeeeeeeeeeeeeeeee
+fsctl s 000c4003 000000000000000000000000 2: 80000005 2 6865
+fsctl s 000c4003 000000000000000000000000 0: 80000005 0 -
+fsctl s 000c4003 - 16: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+fsctl c 000c4003 000000000000000000000000 16: c0000022 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+read s 2: c0000023 - eeee
+read s 16: 00000000 5 68656c6c6feeeeeeeeeeeeeeeeeeeeee
+read s 7: 00000000 7 776f726c642121
+read s 16: 00000000 0 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+read s 16: c00000b5 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+fsctl s 000c4003 000000000000000000000000 16: 00000000 0 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+write s 78: c0000022 -
+read c 4: c0000022 - eeeeeeee
+mailslot small \Device\Mailslot\nk-oracle-small access=c0100000 maxmessage=4 quota=8: 00000000 2
+open cs \Device\Mailslot\nk-oracle-small access=c0100000 share=3: 00000000
+write small 7a: c000000d -
+read cs 4: c000000d - eeeeeeee
+write cs 3132333435: c000000d -
+write cs 31323334: 00000000 4
+write cs 35363738: 00000000 4
+write cs 39: 00000000 1
+read small 4: 00000000 4 31323334
+read small 4: 00000000 4 35363738
+read small 4: 00000000 1 39eeeeee
+read small 4: c00000b5 - eeeeeeee
+close cs: 00000000
+close small: 00000000
+mailslot timed \Device\Mailslot\nk-oracle-timed timeout=100: 00000000 2
+read timed 4: c00000b5 - eeeeeeee
+close timed: 00000000
+mailslot ever \Device\Mailslot\nk-oracle-ever timeout=forever: 00000000 2
+fsctl ever 000c4003 000000000000000000000000 4: 00000000 0 eeeeeeee
+close ever: 00000000
+mailslot untimed \Device\Mailslot\nk-oracle-untimed timeout=none: 00000000 2
+fsctl untimed 000c4003 000000000000000000000000 4: 00000000 0 eeeeeeee
+close untimed: 00000000
+mailslot nondir \Device\Mailslot\nk-oracle-nondir options=60: c000000d -
+mailslot async \Device\Mailslot\nk-oracle-async options=0: 00000000 2
+close async: 00000000
+open dev \Device\Mailslot access=80100000 share=3: 00000000
+open root \Device\Mailslot\ access=80100000 share=3 options=20: 00000000
+close root: 00000000
+close dev: 00000000
+close s: 00000000
+write c 79: c00000b6 -
+open late \Device\Mailslot\nk-oracle-test access=40100000 share=3: c0000034
+close c: 00000000
+close alone: 00000000
+close upper: 00000000
+open gone \Device\Mailslot\nk-oracle-test access=40100000 share=3: c0000034
+mailslot again \Device\Mailslot\nk-oracle-test: 00000000 2
+close again: 00000000
+end
