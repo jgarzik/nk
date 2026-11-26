@@ -11,5 +11,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         hal::dispatch::HalPrivateDispatchTable
     ),
     export!(Implemented, hal::pci::HalGetBusDataByOffset),
+    export!(Implemented, hal::dma::HalTranslateBusAddress),
+    export!(Partial, hal::dma::IoGetDmaAdapter),
     export!(Implemented, hal::pci::HalSetBusDataByOffset),
 ];

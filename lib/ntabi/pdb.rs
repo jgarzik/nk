@@ -182,6 +182,93 @@ fn interrupt_object_matches_the_kernel() {
 }
 
 #[test]
+fn dma_structures_match_the_kernel() {
+    use crate::dma::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    // Every field of a structure, by name.
+    macro_rules! same {
+        ($ty:ident, $name:literal: $($field:ident),* $(,)?) => {{
+            let layout = types.layout($name).expect($name);
+            assert_eq!(size_of::<$ty>(), layout.size as usize, $name);
+            $(assert_eq!(
+                offset_of!($ty, $field),
+                offset(&layout, $name, stringify!($field)),
+                concat!($name, ".", stringify!($field))
+            );)*
+        }};
+    }
+    same!(DEVICE_DESCRIPTION, "_DEVICE_DESCRIPTION":
+        Version, Master, ScatterGather, DemandMode, AutoInitialize, Dma32BitAddresses,
+        IgnoreCount, Reserved1, Dma64BitAddresses, BusNumber, DmaChannel, InterfaceType,
+        DmaWidth, DmaSpeed, MaximumLength, DmaPort, DmaAddressWidth, DmaControllerInstance,
+        DmaRequestLine, DeviceAddress);
+    same!(DMA_ADAPTER, "_DMA_ADAPTER": Version, Size, DmaOperations);
+    same!(DMA_OPERATIONS, "_DMA_OPERATIONS":
+        Size, PutDmaAdapter, AllocateCommonBuffer, FreeCommonBuffer, AllocateAdapterChannel,
+        FlushAdapterBuffers, FreeAdapterChannel, FreeMapRegisters, MapTransfer,
+        GetDmaAlignment, ReadDmaCounter, GetScatterGatherList, PutScatterGatherList,
+        CalculateScatterGatherList, BuildScatterGatherList, BuildMdlFromScatterGatherList,
+        GetDmaAdapterInfo, GetDmaTransferInfo, InitializeDmaTransferContext,
+        AllocateCommonBufferEx, AllocateAdapterChannelEx, ConfigureAdapterChannel,
+        CancelAdapterChannel, MapTransferEx, GetScatterGatherListEx,
+        BuildScatterGatherListEx, FlushAdapterBuffersEx, FreeAdapterObject,
+        CancelMappedTransfer, AllocateDomainCommonBuffer, FlushDmaBuffer, JoinDmaDomain,
+        LeaveDmaDomain, GetDmaDomain, AllocateCommonBufferWithBounds,
+        AllocateCommonBufferVector, GetCommonBufferFromVectorByIndex,
+        FreeCommonBufferFromVector, FreeCommonBufferVector);
+    same!(SCATTER_GATHER_LIST, "_SCATTER_GATHER_LIST": NumberOfElements, Reserved, Elements);
+    same!(SCATTER_GATHER_ELEMENT, "_SCATTER_GATHER_ELEMENT": Address, Length, Reserved);
+    // The two info structures are a version and a union; NK declares
+    // the union's largest member in line.
+    let info = types
+        .layout("_DMA_ADAPTER_INFO")
+        .expect("_DMA_ADAPTER_INFO");
+    let v1 = types
+        .layout("_DMA_ADAPTER_INFO_V1")
+        .expect("_DMA_ADAPTER_INFO_V1");
+    let at = offset(&info, "_DMA_ADAPTER_INFO", "V1");
+    assert_eq!(size_of::<DMA_ADAPTER_INFO>(), info.size as usize);
+    for (field, mine) in [
+        (
+            "ReadDmaCounterAvailable",
+            offset_of!(DMA_ADAPTER_INFO, ReadDmaCounterAvailable),
+        ),
+        (
+            "ScatterGatherLimit",
+            offset_of!(DMA_ADAPTER_INFO, ScatterGatherLimit),
+        ),
+        (
+            "DmaAddressWidth",
+            offset_of!(DMA_ADAPTER_INFO, DmaAddressWidth),
+        ),
+        ("Flags", offset_of!(DMA_ADAPTER_INFO, Flags)),
+        (
+            "MinimumTransferUnit",
+            offset_of!(DMA_ADAPTER_INFO, MinimumTransferUnit),
+        ),
+    ] {
+        assert_eq!(
+            mine,
+            at + offset(&v1, "_DMA_ADAPTER_INFO_V1", field),
+            "{field}"
+        );
+    }
+    let transfer = types
+        .layout("_DMA_TRANSFER_INFO")
+        .expect("_DMA_TRANSFER_INFO");
+    let v2 = types
+        .layout("_DMA_TRANSFER_INFO_V2")
+        .expect("_DMA_TRANSFER_INFO_V2");
+    let at = offset(&transfer, "_DMA_TRANSFER_INFO", "V2");
+    assert_eq!(size_of::<DMA_TRANSFER_INFO>(), transfer.size as usize);
+    assert_eq!(
+        offset_of!(DMA_TRANSFER_INFO, LogicalPageCount),
+        at + offset(&v2, "_DMA_TRANSFER_INFO_V2", "LogicalPageCount")
+    );
+}
+
+#[test]
 fn timer_matches_the_kernel() {
     use crate::ke::{DISPATCHER_HEADER, KTIMER, TIMER_INSERTED};
     use core::mem::{offset_of, size_of};

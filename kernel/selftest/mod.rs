@@ -13,6 +13,7 @@ mod clock;
 mod cm;
 mod counted;
 mod csq;
+mod dma;
 mod dpc;
 mod driver_api;
 mod etw;
@@ -145,6 +146,7 @@ pub static GROUPS: &[&[&Group]] = &[
     pci::GROUPS,
     mmio::GROUPS,
     interrupt::GROUPS,
+    dma::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,
