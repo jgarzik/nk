@@ -6,6 +6,10 @@
 //! free. While it is taken the word is the registration's handle, plus
 //! one bit that says the provider's traits have been set.
 //!
+//! A provider is of one of two kinds, which its handle states: a
+//! manifest provider (`EtwRegister`) or a classic one
+//! (`EtwRegisterClassicProvider`, what WPP tracing registers).
+//!
 //! A handle names its slot and carries a number no other registration
 //! ever had, so a handle that was unregistered stays invalid when its
 //! slot is taken again.
@@ -18,8 +22,25 @@ const TRAITS_SET: u64 = 1 << 63;
 /// A handle's low bits: its slot's index, plus one.
 const SLOT_BITS: u32 = 16;
 const SLOT_MASK: u64 = (1 << SLOT_BITS) - 1;
-/// The bits above them, below [`TRAITS_SET`]: which registration it is.
-const SERIAL_MASK: u64 = (TRAITS_SET - 1) >> SLOT_BITS;
+/// Set in the handle of a classic provider.
+const CLASSIC: u64 = 1 << 62;
+/// The bits between: which registration it is.
+const SERIAL_MASK: u64 = (CLASSIC - 1) >> SLOT_BITS;
+
+/// The two kinds of provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Manifest,
+    Classic,
+}
+
+/// What is known of a registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct State {
+    pub kind: Kind,
+    /// Whether its traits have been set.
+    pub traits: bool,
+}
 
 /// Why a provider's traits were not set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,10 +82,14 @@ impl<const N: usize> Registrations<N> {
 
     /// Register a provider: its handle, never zero. `None` if every
     /// slot is taken.
-    pub fn register(&self) -> Option<u64> {
+    pub fn register(&self, kind: Kind) -> Option<u64> {
         let serial = (self.made.fetch_add(1, Ordering::Relaxed) + 1) & SERIAL_MASK;
+        let kind = match kind {
+            Kind::Manifest => 0,
+            Kind::Classic => CLASSIC,
+        };
         self.slots.iter().enumerate().find_map(|(index, slot)| {
-            let handle = serial << SLOT_BITS | (index as u64 + 1);
+            let handle = kind | serial << SLOT_BITS | (index as u64 + 1);
             slot.compare_exchange(0, handle, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
                 .then_some(handle)
@@ -76,10 +101,17 @@ impl<const N: usize> Registrations<N> {
         self.find(handle).is_some()
     }
 
-    /// Whether the provider `handle` names has its traits set; `None`
-    /// if the handle names no registration.
-    pub fn has_traits(&self, handle: u64) -> Option<bool> {
-        self.find(handle).map(|(_, word)| word & TRAITS_SET != 0)
+    /// What is known of the registration `handle` names; `None` if it
+    /// names none.
+    pub fn state(&self, handle: u64) -> Option<State> {
+        self.find(handle).map(|(_, word)| State {
+            kind: if word & CLASSIC != 0 {
+                Kind::Classic
+            } else {
+                Kind::Manifest
+            },
+            traits: word & TRAITS_SET != 0,
+        })
     }
 
     /// End the registration `handle` names. `false` if it names none:
@@ -134,7 +166,7 @@ mod tests {
     #[test]
     fn a_registration_has_a_handle_that_is_not_zero_until_it_is_ended() {
         let table = Registrations::<4>::new();
-        let handle = table.register().unwrap();
+        let handle = table.register(Kind::Manifest).unwrap();
         assert_ne!(handle, 0);
         assert!(table.is_registered(handle));
         assert_eq!(table.count(), 1);
@@ -146,7 +178,7 @@ mod tests {
     #[test]
     fn a_registration_ends_once() {
         let table = Registrations::<4>::new();
-        let handle = table.register().unwrap();
+        let handle = table.register(Kind::Manifest).unwrap();
         assert!(table.unregister(handle));
         assert!(!table.unregister(handle));
     }
@@ -154,7 +186,7 @@ mod tests {
     #[test]
     fn zero_and_handles_never_given_out_name_nothing() {
         let table = Registrations::<4>::new();
-        let handle = table.register().unwrap();
+        let handle = table.register(Kind::Manifest).unwrap();
         for stray in [
             0,
             1,
@@ -179,9 +211,9 @@ mod tests {
     #[test]
     fn a_stale_handle_stays_invalid_when_its_slot_is_taken_again() {
         let table = Registrations::<1>::new();
-        let first = table.register().unwrap();
+        let first = table.register(Kind::Manifest).unwrap();
         assert!(table.unregister(first));
-        let second = table.register().unwrap();
+        let second = table.register(Kind::Manifest).unwrap();
         assert_ne!(first, second);
         assert!(!table.is_registered(first));
         assert!(!table.unregister(first));
@@ -189,13 +221,30 @@ mod tests {
     }
 
     #[test]
+    fn a_handle_says_which_kind_of_provider_it_is() {
+        let table = Registrations::<4>::new();
+        let manifest = table.register(Kind::Manifest).unwrap();
+        let classic = table.register(Kind::Classic).unwrap();
+        assert_eq!(table.state(manifest).unwrap().kind, Kind::Manifest);
+        assert_eq!(table.state(classic).unwrap().kind, Kind::Classic);
+        // The kind is part of the handle: the other kind's twin of a
+        // handle names nothing.
+        assert!(!table.is_registered(manifest | CLASSIC));
+        assert!(!table.is_registered(classic & !CLASSIC));
+        assert!(table.unregister(classic));
+        assert!(table.unregister(manifest));
+    }
+
+    #[test]
     fn a_full_table_refuses_and_a_freed_slot_is_used_again() {
         let table = Registrations::<3>::new();
-        let handles: Vec<u64> = (0..3).map(|_| table.register().unwrap()).collect();
+        let handles: Vec<u64> = (0..3)
+            .map(|_| table.register(Kind::Manifest).unwrap())
+            .collect();
         assert_eq!(handles.iter().collect::<HashSet<_>>().len(), 3);
-        assert_eq!(table.register(), None);
+        assert_eq!(table.register(Kind::Manifest), None);
         assert!(table.unregister(handles[1]));
-        let again = table.register().unwrap();
+        let again = table.register(Kind::Manifest).unwrap();
         assert!(table.is_registered(again));
         assert_eq!(table.count(), 3);
     }
@@ -203,18 +252,18 @@ mod tests {
     #[test]
     fn traits_are_set_once_per_registration() {
         let table = Registrations::<2>::new();
-        let handle = table.register().unwrap();
-        assert_eq!(table.has_traits(handle), Some(false));
+        let handle = table.register(Kind::Manifest).unwrap();
+        assert_eq!(table.state(handle).map(|s| s.traits), Some(false));
         assert_eq!(table.set_traits(handle), Ok(()));
-        assert_eq!(table.has_traits(handle), Some(true));
+        assert_eq!(table.state(handle).map(|s| s.traits), Some(true));
         assert_eq!(table.set_traits(handle), Err(TraitsError::AlreadySet));
         // The registration is the same one, and ends like any other.
         assert!(table.is_registered(handle));
         assert!(table.unregister(handle));
         assert_eq!(table.set_traits(handle), Err(TraitsError::NotRegistered));
-        assert_eq!(table.has_traits(handle), None);
+        assert_eq!(table.state(handle), None);
         // A new registration in the slot starts without traits.
-        let next = table.register().unwrap();
+        let next = table.register(Kind::Manifest).unwrap();
         assert_eq!(table.set_traits(next), Ok(()));
     }
 
@@ -227,7 +276,9 @@ mod tests {
                 std::thread::spawn(move || {
                     let mut seen = Vec::new();
                     for _ in 0..2000 {
-                        let handle = table.register().expect("eight of 64 slots are in use");
+                        let handle = table
+                            .register(Kind::Manifest)
+                            .expect("eight of 64 slots are in use");
                         assert!(table.is_registered(handle));
                         assert_eq!(table.set_traits(handle), Ok(()));
                         assert!(table.unregister(handle));

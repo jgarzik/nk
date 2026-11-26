@@ -7,7 +7,10 @@
 //! Each test calls the exports as a driver does, through their
 //! `extern "C"` signatures, with records and buffers of its own.
 
-use crate::etw::{EtwRegister, EtwSetInformation, EtwUnregister, EtwWriteTransfer};
+use crate::etw::{
+    EtwRegister, EtwRegisterClassicProvider, EtwSetInformation, EtwUnregister, EtwWriteTransfer,
+    WmiQueryTraceInformation, WmiTraceMessage,
+};
 use crate::ex::sysinfo::{
     DbgkWerCaptureLiveKernelDump, MmIsDriverVerifying, NtQuerySystemInformation, PsGetVersion,
     RtlQueryModuleInformation,
@@ -1186,4 +1189,238 @@ fn unregister_twice(r: &mut Report, _: &BootInfo) {
         "neg.etw-unregister-twice",
         format_args!("a provider was unregistered twice, and nothing happened"),
     );
+}
+
+// ---- classic providers and trace sessions ----------------------------------
+
+pub static CLASSIC: Group = Group {
+    names: &[
+        "etw.lookup",
+        "etw.classic",
+        "etw.trace-message",
+        "etw.trace-information",
+    ],
+    run: classic,
+    manual: false,
+};
+
+fn classic(r: &mut Report, _: &BootInfo) {
+    r.check("etw.lookup", looked_up);
+    r.check("etw.classic", classic_provider);
+    r.check("etw.trace-message", trace_message);
+    r.check("etw.trace-information", trace_information);
+}
+
+/// The routines the WPP start-up asks for by name are there, each the
+/// routine a driver that imports the name is bound to.
+fn looked_up() -> Result<(), &'static str> {
+    let routines: [(&str, usize); 6] = [
+        (
+            "EtwRegisterClassicProvider",
+            EtwRegisterClassicProvider as *const () as usize,
+        ),
+        ("EtwUnregister", EtwUnregister as *const () as usize),
+        ("WmiTraceMessage", WmiTraceMessage as *const () as usize),
+        (
+            "WmiQueryTraceInformation",
+            WmiQueryTraceInformation as *const () as usize,
+        ),
+        (
+            "RtlQueryModuleInformation",
+            RtlQueryModuleInformation as *const () as usize,
+        ),
+        ("PsGetVersion", PsGetVersion as *const () as usize),
+    ];
+    for (name, address) in routines {
+        let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+        let string = UNICODE_STRING {
+            Length: (wide.len() * 2) as u16,
+            MaximumLength: (wide.len() * 2) as u16,
+            Buffer: wide.as_ptr().cast_mut(),
+        };
+        // SAFETY: a counted string over the vector above.
+        let found = unsafe { crate::export::MmGetSystemRoutineAddress(&raw const string) };
+        if found.addr() != address {
+            return Err("a routine the tracing start-up looks up is not there");
+        }
+    }
+    Ok(())
+}
+
+/// How often the classic callback was called: never, with no session.
+static CLASSIC_CALLS: AtomicU32 = AtomicU32::new(0);
+
+/// # Safety
+/// Callable with anything.
+unsafe extern "C" fn classic_enable(_: *const GUID, _: u8, _: *mut c_void, _: *mut c_void) {
+    CLASSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// A classic provider needs a callback, registers with one, is not
+/// called, cannot have traits, and ends with `EtwUnregister`.
+fn classic_provider() -> Result<(), &'static str> {
+    let before = crate::etw::registered();
+    let mut handle = u64::from(FILLED);
+    // SAFETY: a GUID and a handle of the test's own.
+    let status = unsafe {
+        EtwRegisterClassicProvider(
+            &raw const PROVIDER,
+            0,
+            None,
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_INVALID_PARAMETER || handle != u64::from(FILLED) {
+        return Err("a classic provider without a callback was not refused, handle untouched");
+    }
+    // SAFETY: as above. The kind is not looked at.
+    let status = unsafe {
+        EtwRegisterClassicProvider(
+            &raw const PROVIDER,
+            0x4E4B,
+            Some(classic_enable),
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_SUCCESS || handle == 0 || handle == u64::from(FILLED) {
+        return Err("a classic provider was not registered");
+    }
+    if crate::etw::registered() != before + 1 {
+        return Err("the registration is not counted");
+    }
+    let traits = etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS);
+    if EtwUnregister(handle) != STATUS_SUCCESS || crate::etw::registered() != before {
+        return Err("EtwUnregister did not end a classic registration");
+    }
+    if traits != STATUS_INVALID_PARAMETER {
+        return Err("a classic provider was given traits");
+    }
+    if CLASSIC_CALLS.load(Ordering::Relaxed) != 0 {
+        return Err("the classic callback was called, and no session exists");
+    }
+    Ok(())
+}
+
+/// A trace message for any session is for one that does not exist.
+fn trace_message() -> Result<(), &'static str> {
+    /// `TRACE_MESSAGE_GUID`: the message carries its GUID.
+    const MESSAGE_GUID: u32 = 2;
+    // The handle's low word is the session's number: more than there
+    // can be, none, one of the reserved, an ordinary one.
+    for logger in [0xFFFF, 0, 2, 5, 0x0000_0005_0003_0002] {
+        if WmiTraceMessage(logger, MESSAGE_GUID, &raw const PROVIDER, 1) != STATUS_INVALID_HANDLE {
+            return Err("a trace message for a session that does not exist was taken");
+        }
+    }
+    Ok(())
+}
+
+/// One query, as wpprecorder.sys makes it: what came back, in status,
+/// value and required length.
+fn trace_query(class: u32, length: u32, context: Option<u64>) -> (NTSTATUS, u32, u32) {
+    // A WNODE_HEADER: the session's handle is its second quadword.
+    let mut header = [0u64; 6];
+    header[1] = context.unwrap_or(0);
+    let buffer = if context.is_some() {
+        header.as_mut_ptr().cast()
+    } else {
+        core::ptr::null_mut()
+    };
+    let (mut value, mut needed) = (FILLED, FILLED);
+    // SAFETY: four bytes for the answer, of which `length` are offered;
+    // a length word; a header or none.
+    let status = unsafe {
+        WmiQueryTraceInformation(
+            class,
+            (&raw mut value).cast(),
+            length.min(4),
+            &raw mut needed,
+            buffer,
+        )
+    };
+    (status, value, needed)
+}
+
+/// A session's handle is taken apart; a provider never enabled has
+/// none; questions about sessions find none.
+fn trace_information() -> Result<(), &'static str> {
+    use nk_etw::logger::{
+        ALL_LOGGER_HANDLES, DISK_IO_NOTIFY_ROUTINES, TRACE_ENABLE_FLAGS, TRACE_ENABLE_LEVEL,
+        TRACE_HANDLE, TRACE_ID,
+    };
+    // What nkc-etw asks, in its order.
+    let answers = [
+        trace_query(TRACE_ENABLE_LEVEL, 4, Some(0)),
+        trace_query(TRACE_ENABLE_LEVEL, 4, None),
+        trace_query(TRACE_ENABLE_LEVEL, 2, Some(0)),
+        trace_query(TRACE_ENABLE_LEVEL, 4, Some(0x0000_0005_0703_0002)),
+        trace_query(TRACE_ENABLE_FLAGS, 4, Some(0x0000_0005_0703_0002)),
+        trace_query(TRACE_ID, 4, Some(0x0000_0005_0703_0002)),
+        trace_query(5, 4, Some(0x0000_0005_0703_0002)),
+        trace_query(0x7F, 4, Some(0x0000_0005_0703_0002)),
+    ];
+    let expected = [
+        (STATUS_INVALID_HANDLE, FILLED, 0),
+        (STATUS_INVALID_PARAMETER_MIX, FILLED, 0),
+        (STATUS_INFO_LENGTH_MISMATCH, FILLED, 0),
+        (STATUS_SUCCESS, 3, 4),
+        (STATUS_SUCCESS, 5, 4),
+        (STATUS_SUCCESS, 2, 4),
+        (STATUS_INVALID_INFO_CLASS, FILLED, 0),
+        (STATUS_INVALID_INFO_CLASS, FILLED, 0),
+    ];
+    if answers != expected {
+        return Err("the answers about a session's handle are not Windows'");
+    }
+    // A session's number becomes a handle: eight bytes, from four.
+    let (mut id, mut handle, mut needed) = (5u32, u64::MAX, FILLED);
+    // SAFETY: eight bytes for the answer, a length word, the number.
+    let status = unsafe {
+        WmiQueryTraceInformation(
+            TRACE_HANDLE,
+            (&raw mut handle).cast(),
+            8,
+            &raw mut needed,
+            (&raw mut id).cast(),
+        )
+    };
+    if (status, handle, needed) != (STATUS_SUCCESS, 5, 8) {
+        return Err("a session's number did not become its handle");
+    }
+    // Every session's handle: none of them, and nothing written. No
+    // length word either, which is allowed.
+    let mut handles = [u64::MAX; 2];
+    // SAFETY: sixteen bytes for the answer; the other pointers are not
+    // needed by this class.
+    let status = unsafe {
+        WmiQueryTraceInformation(
+            ALL_LOGGER_HANDLES,
+            handles.as_mut_ptr().cast(),
+            16,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        )
+    };
+    if status != STATUS_SUCCESS || handles != [u64::MAX; 2] {
+        return Err("the list of all sessions is not empty");
+    }
+    // The kernel's tables of trace routines: not there, their size said.
+    let mut table = 0usize;
+    let mut needed = FILLED;
+    // SAFETY: eight bytes for the answer and a length word.
+    let status = unsafe {
+        WmiQueryTraceInformation(
+            DISK_IO_NOTIFY_ROUTINES,
+            (&raw mut table).cast(),
+            8,
+            &raw mut needed,
+            core::ptr::null_mut(),
+        )
+    };
+    if (status, table, needed) != (STATUS_DEVICE_NOT_READY, 0, 8) {
+        return Err("a table of trace routines was not refused as not ready");
+    }
+    Ok(())
 }

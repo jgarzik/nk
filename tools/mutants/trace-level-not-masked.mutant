@@ -1,0 +1,7 @@
+# The level a provider reads out of a session's handle is one byte of
+# it; without the mask it comes with the session's flags on top.
+scenario: x86_64
+fails: etw.trace-information
+file: lib/etw/logger.rs
+replace:             Some(context) => done(4, Output::U32((context >> 16) as u32 & 0xFF)),
+with:             Some(context) => done(4, Output::U32((context >> 16) as u32)),

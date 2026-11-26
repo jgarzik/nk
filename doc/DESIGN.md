@@ -1026,6 +1026,25 @@ when one is unregistered, the bugcheck Windows has for a registration
 handle that is not one. A full table is `STATUS_NO_MEMORY`, Windows'
 status for a registration it cannot allocate.
 
+**Classic providers and WPP.** The tracing start-up the WDK compiles
+into every driver that traces with WPP looks routines up by name
+(`MmGetSystemRoutineAddress`) and, where `EtwRegisterClassicProvider`
+is absent, registers with WMI the way drivers did before Windows 7. NK
+exports it, so such a driver takes the path it takes on Windows 10: a
+registration in the same table, of the classic kind (it must have a
+callback and cannot have traits), ended with `EtwUnregister`. The
+callback would carry an enabling session's handle and is never called.
+
+`WmiTraceMessage` writes a WPP message to a session: there is none,
+whatever its number, and the answer is Windows' for a session that does
+not exist (`STATUS_INVALID_HANDLE`), given before any argument is read.
+`WmiQueryTraceInformation` is what a provider asks about the session
+that enabled it (`nk_etw::logger`): the classes that take a session's
+handle apart answer as on Windows, where they do not ask whether the
+session exists; the rest find no session; the kernel's tables of trace
+routines are `STATUS_DEVICE_NOT_READY`, Windows' answer before tracing
+has started.
+
 The tests `etw.*` call the exports as a driver does; a test group that
 leaves a provider registered fails like any other leak.
 

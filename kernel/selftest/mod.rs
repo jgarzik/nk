@@ -131,6 +131,7 @@ pub static GROUPS: &[&Group] = &[
     &service::GROUP,
     &driver_api::GROUP,
     &etw::PROVIDERS,
+    &etw::CLASSIC,
     &etw::GROUP,
     &etw::SYSTEM,
     &loader::GROUP,

@@ -1999,10 +1999,10 @@
   "binaries": 58,
   "kernel_names": {
    "total": 1740,
-   "implemented": 122,
+   "implemented": 124,
    "partial": 6,
    "traps": 0,
-   "missing": 1612
+   "missing": 1610
   },
   "by_binary": [
    {
@@ -2191,10 +2191,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 60,
+     "implemented": 61,
      "partial": 4,
      "traps": 0,
-     "missing": 261
+     "missing": 260
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2625,10 +2625,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 269,
-     "implemented": 61,
+     "implemented": 62,
      "partial": 5,
      "traps": 0,
-     "missing": 203
+     "missing": 202
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2770,10 +2770,10 @@
     "version": "1.31.19041.1566",
     "kernel": {
      "total": 217,
-     "implemented": 90,
+     "implemented": 91,
      "partial": 4,
      "traps": 0,
-     "missing": 123
+     "missing": 122
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2887,10 +2887,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 36,
-     "implemented": 29,
+     "implemented": 30,
      "partial": 1,
      "traps": 0,
-     "missing": 6
+     "missing": 5
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2901,7 +2901,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 133,
+   "exported_by_nk": 136,
    "nk_names_it_lacks": [
     "KfLowerIrql"
    ]

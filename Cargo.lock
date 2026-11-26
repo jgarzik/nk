@@ -20,6 +20,9 @@ dependencies = [
 [[package]]
 name = "nk-etw"
 version = "0.0.2"
+dependencies = [
+ "nk-ntabi",
+]
 
 [[package]]
 name = "nk-ex"

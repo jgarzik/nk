@@ -43,6 +43,12 @@ pub struct EVENT_DATA_DESCRIPTOR {
 pub type ETW_ENABLE_CALLBACK =
     unsafe extern "C" fn(*const GUID, u32, u8, u64, u64, *mut c_void, *mut c_void);
 
+/// The enable callback of a classic provider
+/// (`EtwRegisterClassicProvider`): the provider's GUID, a control code,
+/// the enabling session's handle with level and flags, the provider's
+/// context.
+pub type ETW_CLASSIC_CALLBACK = unsafe extern "C" fn(*const GUID, u8, *mut c_void, *mut c_void);
+
 /// `EVENT_INFO_CLASS`: what `EtwSetInformation` sets. The two a
 /// kernel-mode provider may set.
 pub const EVENT_PROVIDER_SET_TRAITS: u32 = 2;

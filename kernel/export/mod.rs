@@ -96,9 +96,12 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
     export!(Implemented, etw::EtwRegister),
+    export!(Implemented, etw::EtwRegisterClassicProvider),
     export!(Implemented, etw::EtwSetInformation),
     export!(Implemented, etw::EtwUnregister),
     export!(Implemented, etw::EtwWriteTransfer),
+    export!(Implemented, etw::WmiQueryTraceInformation),
+    export!(Implemented, etw::WmiTraceMessage),
     export_variable!(
         Implemented,
         "ExEventObjectType",
