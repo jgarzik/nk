@@ -2,6 +2,7 @@
 //! the description of the machine.
 
 pub mod dispatch;
+pub mod pci;
 pub mod platform;
 
 use crate::arch;

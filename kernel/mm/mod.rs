@@ -7,6 +7,8 @@
 //! the loader allocated and firmware's boot-services memory stay
 //! reserved.
 
+pub mod contig;
+pub mod io;
 pub mod map;
 pub mod pool;
 pub mod stack;
@@ -15,10 +17,12 @@ pub mod user;
 use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, FirmwareUse, MemRegion, regions};
-use nk_mm::frames::{FrameBitmap, Layout, LayoutError};
+use nk_mm::frames::{FrameBitmap, Layout, LayoutError, Within};
 
 pub const PAGE_SIZE: usize = 4096;
 static HHDM: AtomicU64 = AtomicU64::new(0);
+/// Where RAM ends, once `init` has run.
+static RAM_TOP: AtomicU64 = AtomicU64::new(0);
 static FRAMES: SpinLock<Option<FrameBitmap<'static>>> = SpinLock::new(Rank::Frames, None);
 
 /// The direct-map address of physical address `pa`.
@@ -64,6 +68,8 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     {
         slot.store(value, Ordering::Relaxed);
     }
+    let ram_top = memory_map().filter(|r| r.is_ram()).map(|r| r.end()).max();
+    RAM_TOP.store(ram_top.unwrap_or(0), Ordering::Relaxed);
     let usable = || {
         memory_map()
             .filter(|r| r.kind == EFI_CONVENTIONAL)
@@ -91,6 +97,40 @@ pub fn alloc_frames(count: usize) -> Option<u64> {
     // frames, and the direct map covers all RAM.
     unsafe { core::ptr::write_bytes(phys_to_virt(pa), 0, count * PAGE_SIZE) };
     Some(pa)
+}
+
+/// Allocate `count` contiguous, zeroed frames where `within` allows.
+/// Returns the physical address.
+pub fn alloc_frames_within(count: usize, within: &Within) -> Option<u64> {
+    let pfn = FRAMES.lock().as_mut()?.alloc_within(count as u64, within)?;
+    let pa = pfn * PAGE_SIZE as u64;
+    // SAFETY: as in `alloc_frames`.
+    unsafe { core::ptr::write_bytes(phys_to_virt(pa), 0, count * PAGE_SIZE) };
+    Some(pa)
+}
+
+/// Whether the `bytes` bytes of physical memory at `pa` are all RAM, of
+/// any kind: memory firmware's map describes that is not device
+/// registers.
+pub fn is_ram(pa: u64, bytes: u64) -> bool {
+    let Some(end) = pa.checked_add(bytes) else {
+        return false;
+    };
+    let mut at = pa;
+    // The range may run across regions that touch.
+    while at < end {
+        match memory_map().find(|r| r.is_ram() && r.contains(at, 1)) {
+            Some(region) => at = region.end(),
+            None => return false,
+        }
+    }
+    true
+}
+
+/// How much physical memory, from address zero, the direct map holds
+/// for certain: up to where RAM ends.
+pub fn direct_map_bytes() -> u64 {
+    RAM_TOP.load(Ordering::Relaxed)
 }
 
 /// Return frames from `alloc_frames`. A double free is a kernel bug.

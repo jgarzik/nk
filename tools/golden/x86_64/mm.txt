@@ -10,3 +10,10 @@ mm.stack ok
 mm.probe-and-lock.read-only ok
 mm.routine-address ok
 mm.driver-paging ok
+mm.io.map ok
+mm.io.refused ok
+mm.io.ahci ok
+mm.contiguous ok
+mm.contiguous.refused ok
+mm.mdl.nonpaged ok
+mm.mdl.pages ok

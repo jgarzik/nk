@@ -15,7 +15,8 @@ use crate::PAGE_SIZE;
 pub struct Prot {
     pub write: bool,
     pub exec: bool,
-    /// Device registers rather than RAM (arm64: device memory attributes).
+    /// Device registers rather than RAM, or RAM to be reached past the
+    /// caches: uncached on x86-64, device memory attributes on arm64.
     pub device: bool,
 }
 
@@ -77,7 +78,14 @@ impl Arch for X86_64 {
         const HUGE: u64 = 1 << 7;
         const GLOBAL: u64 = 1 << 8;
         const NX: u64 = 1 << 63;
+        // Write-through and cache-disable together select entry 3 of the
+        // page attribute table, which is "uncacheable" as the processor
+        // starts and as NK leaves it.
+        const UNCACHED: u64 = 1 << 3 | 1 << 4;
         let mut e = pa | PRESENT | GLOBAL;
+        if prot.device {
+            e |= UNCACHED;
+        }
         if prot.write {
             e |= WRITE;
         }

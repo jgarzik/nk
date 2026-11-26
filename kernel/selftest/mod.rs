@@ -23,6 +23,7 @@ mod hal;
 mod iosupport;
 mod library;
 mod loader;
+mod mmio;
 mod mslib;
 mod mutex;
 mod neg;
@@ -30,6 +31,7 @@ mod null;
 mod ob;
 mod open;
 mod oracle;
+mod pci;
 mod pend;
 mod po;
 mod request;
@@ -43,8 +45,8 @@ mod service;
 mod setoken;
 mod sioctl;
 mod smp;
-mod storage;
 mod stack;
+mod storage;
 mod thread;
 mod timer;
 mod wait;
@@ -138,6 +140,8 @@ impl Drop for UserMemory {
 /// among them. A file lists its own groups.
 pub static GROUPS: &[&[&Group]] = &[
     base::GROUPS,
+    pci::GROUPS,
+    mmio::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,

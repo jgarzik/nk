@@ -104,6 +104,86 @@ impl<'a> FrameBitmap<'a> {
         self.release(pfn, count);
         true
     }
+
+    /// Allocate `count` contiguous frames where `within` allows: the
+    /// lowest such run. Returns the first frame number.
+    pub fn alloc_within(&mut self, count: u64, within: &Within) -> Option<u64> {
+        if count == 0 || count > self.free {
+            return None;
+        }
+        let align = within.align.max(1);
+        // The last frame a run may hold.
+        let top = within.highest.min(self.nframes.checked_sub(1)?);
+        let mut start = within.lowest.checked_next_multiple_of(align)?;
+        while start.checked_add(count - 1)? <= top {
+            let last = start + count - 1;
+            if within.boundary != 0 && start / within.boundary != last / within.boundary {
+                // The run would cross a boundary: begin at it instead.
+                start =
+                    (last / within.boundary * within.boundary).checked_next_multiple_of(align)?;
+                continue;
+            }
+            match (start..=last).find(|&p| self.used(p)) {
+                Some(busy) => start = (busy + 1).checked_next_multiple_of(align)?,
+                None => {
+                    self.reserve(start, count);
+                    return Some(start);
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Where a run of frames may lie in physical memory, in frame numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Within {
+    /// The lowest frame the run may hold.
+    pub lowest: u64,
+    /// The highest frame the run may hold.
+    pub highest: u64,
+    /// The run begins at a multiple of this many frames; 0 and 1 both
+    /// mean any frame.
+    pub align: u64,
+    /// The run does not cross a multiple of this many frames; 0 for no
+    /// such boundary. A run longer than the boundary cannot be had.
+    pub boundary: u64,
+}
+
+impl Within {
+    /// Anywhere.
+    pub const ANYWHERE: Self = Self {
+        lowest: 0,
+        highest: u64::MAX,
+        align: 1,
+        boundary: 0,
+    };
+
+    /// The frames whose every byte lies in the physical addresses
+    /// `lowest..=highest`, with the run not crossing a multiple of
+    /// `boundary` bytes (0 for none) and beginning at a multiple of
+    /// `align` bytes. `None` if no whole frame lies in the range, or a
+    /// boundary or alignment is not a whole number of frames.
+    pub fn bytes(lowest: u64, highest: u64, boundary: u64, align: u64) -> Option<Self> {
+        if !boundary.is_multiple_of(PAGE_SIZE) || !align.is_multiple_of(PAGE_SIZE) {
+            return None;
+        }
+        let first = lowest.div_ceil(PAGE_SIZE);
+        // The frame holding `highest` counts only if `highest` is its
+        // last byte.
+        let end = highest
+            .checked_add(1)
+            .map_or(u64::MAX / PAGE_SIZE + 1, |e| e / PAGE_SIZE);
+        if first >= end {
+            return None;
+        }
+        Some(Self {
+            lowest: first,
+            highest: end - 1,
+            align: align / PAGE_SIZE,
+            boundary: boundary / PAGE_SIZE,
+        })
+    }
 }
 
 /// Frames below 1 MiB are never allocated: legacy firmware and devices
@@ -182,6 +262,152 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn all_free(bits: &mut [u64]) -> FrameBitmap<'_> {
+        let frames = bits.len() as u64 * 64;
+        let mut f = FrameBitmap::new(bits, frames);
+        f.release(0, frames);
+        f
+    }
+
+    #[test]
+    fn a_run_within_a_range_is_the_lowest_that_fits() {
+        let mut bits = [0u64; 4];
+        let mut f = all_free(&mut bits);
+        let range = |lowest, highest| Within {
+            lowest,
+            highest,
+            ..Within::ANYWHERE
+        };
+        assert_eq!(f.alloc_within(4, &range(100, 200)), Some(100));
+        assert_eq!(f.alloc_within(4, &range(100, 200)), Some(104));
+        // The highest frame is one the run may hold, and the last it may.
+        assert_eq!(f.alloc_within(2, &range(199, 200)), Some(199));
+        assert_eq!(f.alloc_within(1, &range(199, 200)), None);
+        assert_eq!(f.alloc_within(3, &range(201, 202)), None);
+        // Past the end of memory there is nothing.
+        assert_eq!(f.alloc_within(1, &range(256, 300)), None);
+        assert_eq!(f.alloc_within(2, &range(255, 300)), None);
+        assert_eq!(f.alloc_within(1, &range(255, 300)), Some(255));
+        // Anywhere: as `alloc`.
+        assert_eq!(f.alloc_within(8, &Within::ANYWHERE), Some(0));
+        assert_eq!(f.alloc_within(0, &Within::ANYWHERE), None);
+        assert_eq!(f.free_frames(), 256 - 4 - 4 - 2 - 1 - 8);
+        assert!(f.dealloc(100, 4));
+        assert_eq!(f.alloc_within(4, &range(90, 200)), Some(90));
+    }
+
+    #[test]
+    fn a_run_within_a_range_skips_frames_in_use() {
+        let mut bits = [0u64; 2];
+        let mut f = all_free(&mut bits);
+        f.reserve(10, 1);
+        f.reserve(13, 1);
+        let from = |lowest| Within {
+            lowest,
+            ..Within::ANYWHERE
+        };
+        assert_eq!(f.alloc_within(3, &from(8)), Some(14));
+        assert_eq!(f.alloc_within(2, &from(8)), Some(8));
+        assert_eq!(f.alloc_within(2, &from(8)), Some(11));
+        // More than is free anywhere.
+        assert_eq!(f.alloc_within(200, &Within::ANYWHERE), None);
+    }
+
+    #[test]
+    fn a_run_begins_at_its_alignment() {
+        let mut bits = [0u64; 2];
+        let mut f = all_free(&mut bits);
+        let aligned = |lowest, align| Within {
+            lowest,
+            align,
+            ..Within::ANYWHERE
+        };
+        assert_eq!(f.alloc_within(1, &aligned(1, 16)), Some(16));
+        // 16 is taken: the next multiple.
+        assert_eq!(f.alloc_within(3, &aligned(1, 16)), Some(32));
+        assert_eq!(f.alloc_within(1, &aligned(33, 4)), Some(36));
+        // An alignment of zero is none.
+        assert_eq!(f.alloc_within(1, &aligned(5, 0)), Some(5));
+        // No aligned run below the top.
+        let top = Within {
+            lowest: 113,
+            highest: 127,
+            align: 16,
+            boundary: 0,
+        };
+        assert_eq!(f.alloc_within(1, &top), None);
+        assert_eq!(f.alloc_within(1, &aligned(u64::MAX, 16)), None);
+    }
+
+    #[test]
+    fn a_run_does_not_cross_its_boundary() {
+        let mut bits = [0u64; 2];
+        let mut f = all_free(&mut bits);
+        let bounded = |lowest, boundary| Within {
+            lowest,
+            boundary,
+            ..Within::ANYWHERE
+        };
+        // 14..18 would cross 16: the run begins at the boundary.
+        assert_eq!(f.alloc_within(4, &bounded(14, 16)), Some(16));
+        // 12..16 ends at the boundary without crossing it.
+        assert_eq!(f.alloc_within(4, &bounded(12, 16)), Some(12));
+        // A run as long as the boundary fits exactly between two.
+        assert_eq!(f.alloc_within(16, &bounded(20, 16)), Some(32));
+        // One longer than the boundary crosses wherever it lies.
+        assert_eq!(f.alloc_within(17, &bounded(0, 16)), None);
+        // Boundary and alignment together.
+        let both = Within {
+            lowest: 49,
+            highest: u64::MAX,
+            align: 2,
+            boundary: 8,
+        };
+        assert_eq!(f.alloc_within(6, &both), Some(50));
+        assert_eq!(f.alloc_within(6, &both), Some(56));
+        assert_eq!(f.alloc_within(8, &both), Some(64));
+    }
+
+    #[test]
+    fn a_range_of_addresses_is_the_frames_wholly_inside_it() {
+        let w = |lowest, highest, boundary, align| Within::bytes(lowest, highest, boundary, align);
+        // Below 4 GiB: frames 0 to 0xFFFFF.
+        assert_eq!(
+            w(0, 0xFFFF_FFFF, 0, PAGE_SIZE),
+            Some(Within {
+                lowest: 0,
+                highest: 0xF_FFFF,
+                align: 1,
+                boundary: 0
+            })
+        );
+        // A highest address inside a frame leaves that frame out; a
+        // lowest address inside one leaves that one out too.
+        assert_eq!(
+            w(0x1001, 0x4FFE, 0x1_0000, 0x2000),
+            Some(Within {
+                lowest: 2,
+                highest: 3,
+                align: 2,
+                boundary: 16
+            })
+        );
+        assert_eq!(
+            w(0x1000, 0x1FFF, 0, 0).map(|w| (w.lowest, w.highest)),
+            Some((1, 1))
+        );
+        assert_eq!(w(0x1000, 0x1FFE, 0, 0), None);
+        assert_eq!(w(0x2000, 0x1000, 0, 0), None);
+        // The top of the address space is a highest address like another.
+        assert_eq!(
+            w(0, u64::MAX, 0, 0).map(|w| w.highest),
+            Some(u64::MAX / PAGE_SIZE)
+        );
+        // Boundaries and alignments are whole frames.
+        assert_eq!(w(0, u64::MAX, 0x1800, 0), None);
+        assert_eq!(w(0, u64::MAX, 0, 0x800), None);
+    }
 
     #[test]
     fn a_run_is_refused_when_the_free_frames_are_not_adjacent() {

@@ -224,6 +224,77 @@ clock and ones a processor sends itself or another: no device interrupts.
 A processor fault is an exception for the faulting code's handlers
 ("Exceptions") or a bugcheck with a register dump.
 
+## Devices
+
+What a device's resources mean underneath: configuration space, device
+memory, interrupts and DMA. Assigning resources and telling drivers of
+them is the Plug and Play manager's; `kernel/hal` and `kernel/mm` are
+what the resources stand on.
+
+### PCI configuration space
+
+`kernel/hal/pci.rs`. A function's registers are reached through memory
+where the ACPI MCFG table describes them (4096 bytes a function) and
+otherwise, on x86-64, through the configuration ports `0xCF8` and
+`0xCFC` (256 bytes, segment 0); arm64 has no ports. The memory of every
+MCFG entry is mapped once at boot as device memory, in 2 MiB blocks: it
+lies above what the direct map covers on the arm64 test machine.
+
+A request is cut into register accesses as wide as its alignment
+allows, never across a 32-bit register (`nk_hal::pci::pieces`), all
+under one lock at `HIGH_LEVEL`, so configuration space may be read and
+written at any IRQL, as Windows allows.
+
+- `hal::pci::read(function, offset, buffer)` and `write` are the
+  kernel's own interface: bytes transferred, 0 for a bus that does not
+  exist. They say nothing of whether a device is there; an empty slot
+  reads as ones.
+- [`HalGetBusDataByOffset`](https://learn.microsoft.com/en-us/previous-versions/windows/hardware/drivers/ff546599(v=vs.85))
+  and `HalSetBusDataByOffset` serve `PCIConfiguration` alone; other bus
+  data reads as absent (0). A function is there if its vendor register
+  answers and, for a function other than 0, function 0 says the device
+  has several. A read of an empty slot returns the bytes of the vendor
+  register it covers, as `PCI_INVALID_VENDORID`: 2 for a read of the
+  header, the documented answer. `BusNumber` carries the bus in its low
+  eight bits and the segment group in the sixteen above: NK's reading
+  for a machine with several segments, the documented one for a machine
+  with one.
+
+### Device memory and physical memory
+
+- **Mapping device memory** (`kernel/mm/io.rs`,
+  [`MmMapIoSpaceEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospaceex)):
+  4 KiB pages in the dynamic region, with the protection asked for.
+  Memory that firmware's map does not call RAM is mapped as device
+  memory whatever caching is named: uncached on x86-64 (the page
+  attribute table's "uncacheable" entry), the device attribute of
+  firmware's `MAIR_EL1` on arm64, the strictest it offers. RAM is
+  mapped cached unless the protection says otherwise. Write combining
+  is mapped as uncached: it makes a run of writes cheaper and changes
+  nothing a driver reads.
+- **Physical addresses.** `MmGetPhysicalAddress` takes no lock, so it
+  is callable at any IRQL: arithmetic for the map of all RAM, else a
+  walk of the page tables, which are never freed and whose entries are
+  read and written as atomics. `MmGetVirtualForPhysical` answers with
+  the address in the map of all RAM, which for pool and contiguous
+  memory is the address the memory was handed out at; for an address
+  that is not RAM it stops the system.
+- **Contiguous memory** (`kernel/mm/contig.rs`) is a pool block of whole
+  pages whose frames are one run inside the caller's range of physical
+  addresses and across no multiple of its boundary
+  (`nk_mm::frames::Within`): counted, checked and freed as pool is. It
+  is zeroed, cached and not executable; a caching type is accepted and
+  changes nothing, a request for executable memory is refused.
+- **MDLs over system memory** (`kernel/io/mdl.rs`).
+  `MmBuildMdlForNonPagedPool` reads the buffer's pages from the page
+  tables and makes the buffer's own address the MDL's system address;
+  mapping such an MDL returns that address and unmapping it does
+  nothing. `MmAllocatePagesForMdlEx` takes frames one by one, or in
+  aligned runs of `SkipBytes`, from the range asked for, all or none;
+  they are mapped nowhere until the driver maps them.
+  `MmProtectMdlSystemAddress` rewrites the entries of the MDL's own
+  mapping.
+
 ## Time
 
 One free-running counter is the source of all time: the TSC on x86-64,
