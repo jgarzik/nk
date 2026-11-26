@@ -40,6 +40,7 @@ version = "0.0.2"
 name = "nk-ntabi"
 version = "0.0.2"
 dependencies = [
+ "nk-ex",
  "nk-pdb",
  "nk-se",
 ]

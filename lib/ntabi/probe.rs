@@ -9,6 +9,10 @@
 //! When a table has not been downloaded the test says so on stderr and
 //! passes; it never counts an absent table as agreement.
 
+use crate::ex::{
+    ERESOURCE, GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST, OWNER_ENTRY, PAGED_LOOKASIDE_LIST,
+    SLIST_ENTRY, SLIST_HEADER,
+};
 use crate::io::*;
 use crate::ob::OBJECT_ATTRIBUTES;
 use crate::pcr;
@@ -216,6 +220,48 @@ fn nk_facts() -> Vec<(&'static str, usize)> {
         sz!(IO_CSQ_IRP_CONTEXT),
         off!(IO_CSQ_IRP_CONTEXT, Irp),
         off!(IO_CSQ_IRP_CONTEXT, Csq),
+        sz!(SLIST_ENTRY),
+        sz!(SLIST_HEADER),
+        off!(SLIST_HEADER, Alignment),
+        off!(SLIST_HEADER, Region),
+        sz!(GENERAL_LOOKASIDE),
+        off!(GENERAL_LOOKASIDE, ListHead),
+        off!(GENERAL_LOOKASIDE, Depth),
+        off!(GENERAL_LOOKASIDE, MaximumDepth),
+        off!(GENERAL_LOOKASIDE, TotalAllocates),
+        off!(GENERAL_LOOKASIDE, AllocateMisses),
+        off!(GENERAL_LOOKASIDE, TotalFrees),
+        off!(GENERAL_LOOKASIDE, FreeMisses),
+        off!(GENERAL_LOOKASIDE, Type),
+        off!(GENERAL_LOOKASIDE, Tag),
+        off!(GENERAL_LOOKASIDE, Size),
+        off!(GENERAL_LOOKASIDE, Allocate),
+        off!(GENERAL_LOOKASIDE, Free),
+        off!(GENERAL_LOOKASIDE, ListEntry),
+        off!(GENERAL_LOOKASIDE, LastTotalAllocates),
+        off!(GENERAL_LOOKASIDE, LastAllocateMisses),
+        off!(GENERAL_LOOKASIDE, Future),
+        sz!(PAGED_LOOKASIDE_LIST),
+        off!(PAGED_LOOKASIDE_LIST, L),
+        sz!(NPAGED_LOOKASIDE_LIST),
+        off!(NPAGED_LOOKASIDE_LIST, L),
+        sz!(OWNER_ENTRY),
+        off!(OWNER_ENTRY, OwnerThread),
+        off!(OWNER_ENTRY, Bits, "TableSize"),
+        sz!(ERESOURCE),
+        off!(ERESOURCE, SystemResourcesList),
+        off!(ERESOURCE, OwnerTable),
+        off!(ERESOURCE, ActiveCount),
+        off!(ERESOURCE, Flag),
+        off!(ERESOURCE, SharedWaiters),
+        off!(ERESOURCE, ExclusiveWaiters),
+        off!(ERESOURCE, OwnerEntry),
+        off!(ERESOURCE, ActiveEntries),
+        off!(ERESOURCE, ContentionCount),
+        off!(ERESOURCE, NumberOfSharedWaiters),
+        off!(ERESOURCE, NumberOfExclusiveWaiters),
+        off!(ERESOURCE, Address),
+        off!(ERESOURCE, SpinLock),
     ]
 }
 
