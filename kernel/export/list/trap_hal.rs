@@ -7,11 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    HalBugCheckSystem,
-    HalConvertDeviceIdtToIrql,
     HalEnumerateEnvironmentVariablesEx,
-    HalGetMemoryCachingRequirements,
-    HalGetMessageRoutingInfo,
-    HalGetProcessorIdByNtNumber,
     HalSetEnvironmentVariableEx,
 );

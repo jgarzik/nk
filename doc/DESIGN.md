@@ -1400,6 +1400,19 @@ destination: by a processor's own identifier (physical mode) on both
 architectures, with messages deliverable where the architecture's
 controller takes them.
 
+Four more undocumented exports answer from the same facts
+(`kernel/hal/query.rs`). `HalGetProcessorIdByNtNumber` gives a
+processor's identifier: its local APIC's on x86-64, its `MPIDR`
+affinity on arm64, where one that does not fit 32 bits stops the system
+(NK has no arm64 Windows kernel to learn how that is named).
+`HalConvertDeviceIdtToIrql` is Windows' rule on x86-64 and the level NK
+gives the interrupt id on arm64. `HalGetMessageRoutingInfo` routes a
+message as it stands, since NK remaps no interrupts: its own address
+and data come back, for one running processor or all of them in
+physical mode, and any other target is refused. NK takes no caching
+requirements from firmware, so `HalGetMemoryCachingRequirements` finds
+none for any range, as Windows does with an empty table.
+
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
 speaking no Windows debugger protocol; `KdComPortInUse` names the I/O
@@ -1994,9 +2007,11 @@ start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
-not bring up yet because their `AddDevice` or start reaches a routine
-NK lacks: at present `ACPI`, so nothing below the HAL's ACPI device is
-enumerated.
+not bring up yet because their `AddDevice` or start stops the system
+over something NK lacks: at present `ACPI`, whose start reads the
+firmware description Windows keeps under `HARDWARE\Description`
+(the "ACPI BIOS" record) and stops without it, so nothing below the
+HAL's ACPI device is enumerated.
 
 ## The registry
 
@@ -2193,6 +2208,22 @@ value written or deleted stamps the key and tells its watchers as
 `ZwSetValueKey` and `ZwDeleteValueKey` do, and deleting a value of a
 key that is not there makes the key. A key given by handle is not
 looked at by the check or the create, which succeed.
+
+### The machine's description
+
+`\Registry\Machine\Hardware\Description\System` is not in any hive
+file: Windows' loader and kernel write it at every boot from what
+firmware says. NK writes, after the registry is built and before any
+driver starts (`kernel/hal/description.rs`, formats in
+`nk_hal::description`), the keys Microsoft's drivers read: the
+`MultifunctionAdapter` key whose `Identifier` is "ACPI BIOS", with the
+root ACPI table's address and the firmware's memory map as an E820 map
+(one range per region of the UEFI map, by kind), without which
+`acpi.sys` stops the system when its device starts; and the one whose
+`Identifier` is "PCI", a bus with nothing more said, as on the
+reference Windows. Drivers find these by `Identifier`. Windows has an
+"ISA" key before them and processor, BIOS and video keys beside them;
+NK writes none of those.
 
 ## Strings
 
@@ -2683,6 +2714,13 @@ code).
   library for what `pci.sys` imports from it. NK does not call its
   `PshedInitialize`, which takes Windows' loader block, nor any other
   of its routines.
+- `HalBugCheckSystem` (`kernel/hal/fatal.rs`), which `pshed.dll` calls
+  for a fatal error, stops the system as Windows does: by the record's
+  first section that is an NMI not the hypervisor's
+  (`0x80 NMI_HARDWARE_FAILURE`) or a machine check
+  (`0x124 WHEA_UNCORRECTABLE_ERROR`: the source's type, the record, the
+  two halves of the bank's status), and with `0x124` and no status for
+  a record with neither.
 
 ## Stopping the system
 
