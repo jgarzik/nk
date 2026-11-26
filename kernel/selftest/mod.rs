@@ -36,6 +36,7 @@ mod pci;
 mod pend;
 mod po;
 mod request;
+mod range;
 mod requestor;
 mod resource;
 mod review;
@@ -157,6 +158,7 @@ pub static GROUPS: &[&[&Group]] = &[
     rtl::GROUPS,
     bitmap::GROUPS,
     counted::GROUPS,
+    range::GROUPS,
     resource::GROUPS,
     se::GROUPS,
     setoken::GROUPS,

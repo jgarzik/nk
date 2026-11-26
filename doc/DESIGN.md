@@ -1109,6 +1109,7 @@ make that safe.
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
 | a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
+| a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 | a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
@@ -1843,6 +1844,21 @@ large memory included, are `nk_rtl::resource`; the exports in
 `kernel/rtl` read and write a driver's descriptor field by field. The
 layouts are `nk_ntabi::resource`, with the views of each union the
 kernel itself uses.
+
+### Range lists
+
+A range list's header and its iterator are the driver's, laid out as
+the Windows 2000 DDK declares them (`nk_ntabi::rtl`); the entries are
+pool blocks of the kernel's, each beginning with the `RTL_RANGE` the
+iterator hands out. Windows keeps overlapping ranges inside private
+*merged* containers. NK keeps one chain in order of start and no
+containers, which walks in the same order and gives every range the
+same flags (`nk_rtl::range` says why), so an iterator's `MergedHead`
+is always null. No routine but an add or a copy allocates, so deleting
+cannot fail for want of memory as it can on Windows. `RtlAddRange`'s
+flag 0x10, which no header declares, stops the system by name. An
+alignment of zero is refused by `RtlFindRange`; Windows divides by it.
+The caller serialises the calls on one list.
 
 ## Security descriptors
 

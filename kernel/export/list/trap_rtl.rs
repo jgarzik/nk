@@ -7,22 +7,10 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    RtlAddRange,
     RtlCheckRegistryKey,
-    RtlCopyRangeList,
     RtlCreateRegistryKey,
-    RtlDeleteOwnersRanges,
-    RtlDeleteRange,
     RtlDeleteRegistryValue,
     RtlFindMessage,
-    RtlFindRange,
-    RtlFreeRangeList,
-    RtlGetFirstRange,
-    RtlGetNextRange,
-    RtlInitializeRangeList,
-    RtlInvertRangeList,
-    RtlInvertRangeListEx,
-    RtlIsRangeAvailable,
     RtlPcToFileName,
     RtlRunOnceExecuteOnce,
     RtlWriteRegistryValue,
