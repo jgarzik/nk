@@ -94,6 +94,33 @@ pub fn map(va: u64, pa: u64, pages: usize, prot: Prot) -> Result<(), MapError> {
     Ok(())
 }
 
+/// Map the device registers in the `bytes` bytes of physical memory at
+/// `pa` (both multiples of a page) at a fresh address, for good, and
+/// return that address. A stretch that begins and ends on 2 MiB
+/// boundaries is mapped in 2 MiB blocks, which [`unmap`] does not take
+/// apart: this is for what the kernel keeps for its whole life.
+pub fn map_device_for_good(pa: u64, bytes: u64) -> Option<u64> {
+    const BLOCK: u64 = 2 << 20;
+    let large = (pa | bytes).is_multiple_of(BLOCK);
+    let align = if large { BLOCK } else { PAGE_SIZE as u64 };
+    let mut space = NEXT_VA.lock();
+    let va = space.take((bytes / PAGE_SIZE as u64) as usize, align)?;
+    let (root, arch_pt) = (arch::pt_root_of(va), arch::pt_arch());
+    pt::map_range(
+        &mut Tables,
+        &arch_pt,
+        root,
+        va,
+        pa,
+        bytes,
+        u8::from(large),
+        Prot::DEVICE,
+    )
+    .ok()?;
+    arch::mapping_sync();
+    Some(va)
+}
+
 /// Remove `pages` mappings starting at `va`. Unmapped pages are skipped.
 pub fn unmap(va: u64, pages: usize) {
     let _guard = NEXT_VA.lock();

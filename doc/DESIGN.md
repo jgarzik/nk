@@ -224,6 +224,42 @@ clock and ones a processor sends itself or another: no device interrupts.
 A processor fault is an exception for the faulting code's handlers
 ("Exceptions") or a bugcheck with a register dump.
 
+## Devices
+
+What a device's resources mean underneath: configuration space, device
+memory, interrupts and DMA. Assigning resources and telling drivers of
+them is the Plug and Play manager's; `kernel/hal` and `kernel/mm` are
+what the resources stand on.
+
+### PCI configuration space
+
+`kernel/hal/pci.rs`. A function's registers are reached through memory
+where the ACPI MCFG table describes them (4096 bytes a function) and
+otherwise, on x86-64, through the configuration ports `0xCF8` and
+`0xCFC` (256 bytes, segment 0); arm64 has no ports. The memory of every
+MCFG entry is mapped once at boot as device memory, in 2 MiB blocks: it
+lies above what the direct map covers on the arm64 test machine.
+
+A request is cut into register accesses as wide as its alignment
+allows, never across a 32-bit register (`nk_hal::pci::pieces`), all
+under one lock at `HIGH_LEVEL`, so configuration space may be read and
+written at any IRQL, as Windows allows.
+
+- `hal::pci::read(function, offset, buffer)` and `write` are the
+  kernel's own interface: bytes transferred, 0 for a bus that does not
+  exist. They say nothing of whether a device is there; an empty slot
+  reads as ones.
+- [`HalGetBusDataByOffset`](https://learn.microsoft.com/en-us/previous-versions/windows/hardware/drivers/ff546599(v=vs.85))
+  and `HalSetBusDataByOffset` serve `PCIConfiguration` alone; other bus
+  data reads as absent (0). A function is there if its vendor register
+  answers and, for a function other than 0, function 0 says the device
+  has several. A read of an empty slot returns the bytes of the vendor
+  register it covers, as `PCI_INVALID_VENDORID`: 2 for a read of the
+  header, the documented answer. `BusNumber` carries the bus in its low
+  eight bits and the segment group in the sixteen above: NK's reading
+  for a machine with several segments, the documented one for a machine
+  with one.
+
 ## Time
 
 One free-running counter is the source of all time: the TSC on x86-64,

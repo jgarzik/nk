@@ -77,6 +77,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 233 | `ps::silo::HOST` | which silo context slots are allocated, and the context the host silo holds in each | DISPATCH |
 | 234 | `se::impersonate::IMPERSONATION` | what every thread impersonates: `ETHREAD.ClientSecurity` and the two flags that go with it | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
+| 238 | `hal::pci::CONFIG` | PCI configuration space: the configuration ports' address register, and the registers of one request as a group | HIGH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 242 | `ke::bugcheck::RECORDS` | the list of bugcheck callback records drivers registered, and each record's links and state | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
@@ -171,6 +172,9 @@ Why this order:
   taken with any of them held and none of them inside it: not the
   pool's (a replaced descriptor is freed after the lock is dropped),
   not a second object's.
+- PCI configuration space is read and written at any IRQL, so its lock
+  is held at `HIGH_LEVEL`, around register accesses and nothing else:
+  the caller's buffer is copied under it, no lock is taken inside it.
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.

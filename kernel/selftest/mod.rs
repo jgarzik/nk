@@ -25,6 +25,7 @@ mod null;
 mod ob;
 mod open;
 mod oracle;
+mod pci;
 mod pend;
 mod requestor;
 mod review;
@@ -128,6 +129,7 @@ impl Drop for UserMemory {
 /// among them. A file lists its own groups.
 pub static GROUPS: &[&[&Group]] = &[
     base::GROUPS,
+    pci::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,
