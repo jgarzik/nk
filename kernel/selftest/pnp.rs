@@ -34,6 +34,7 @@ pub static GROUP: Group = Group {
         "pnp.hal-device",
         "pnp.enumerate",
         "pnp.match",
+        "pnp.properties",
         "pnp.add-device-order",
         "pnp.start-resources",
         "pnp.invalidate-relations",
@@ -738,6 +739,128 @@ fn matched() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// One property of a device, as a driver asks for it: the status, the
+/// length reported, and the bytes.
+fn property_of(device: *mut DEVICE_OBJECT, which: u32, room: usize) -> (NTSTATUS, u32, Vec<u8>) {
+    let mut buffer = alloc::vec![0xEEu8; room];
+    let mut length = 0xEEEE_EEEE;
+    // SAFETY: a live device object, a buffer of `room` bytes and a
+    // length to write.
+    let status = unsafe {
+        pnp::export::IoGetDeviceProperty(
+            device,
+            which,
+            room as u32,
+            buffer.as_mut_ptr(),
+            &raw mut length,
+        )
+    };
+    buffer.truncate((length as usize).min(room));
+    (status, length, buffer)
+}
+
+/// `IoGetDeviceProperty` and `IoOpenDeviceRegistryKey` on the started
+/// child: what the node and the key hold, by the rules of the
+/// routines.
+fn properties(bench: &Bench) -> Result<(), &'static str> {
+    let found = child(1).ok_or("the bus's child has no node")?;
+    let pdo = found.pdo as *mut DEVICE_OBJECT;
+    let multi = |strings: &[&str]| -> Vec<u8> {
+        ids::to_multi_sz(strings)
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    };
+    // DevicePropertyHardwareID (1), with room and without.
+    let hardware = multi(&["NKPNP\\DEV&REV_01", "NKPNP\\DEV"]);
+    if property_of(pdo, 1, 256) != (STATUS_SUCCESS, hardware.len() as u32, hardware.clone()) {
+        return Err("the hardware identifiers are not the property's value");
+    }
+    let (status, length, bytes) = property_of(pdo, 1, 4);
+    if status != STATUS_BUFFER_TOO_SMALL || length != hardware.len() as u32 || bytes != [0xEE; 4] {
+        return Err("a buffer too small was not refused with the length needed, untouched");
+    }
+    // The description is the text behind the INF's token (0); the
+    // enumerator (15) the first part of the instance path; the address
+    // (16) what the bus driver said; the class (5, 6) what was
+    // installed; no removal is expected (19: 1).
+    let expected: [(u32, Vec<u8>); 6] = [
+        (0, ids::sz(DESCRIPTION)),
+        (15, ids::sz("NKPNP")),
+        (16, 1u32.to_le_bytes().to_vec()),
+        (5, ids::sz("NkPnpTest")),
+        (6, ids::sz(CLASS)),
+        (19, 1u32.to_le_bytes().to_vec()),
+    ];
+    for (which, value) in expected {
+        if property_of(pdo, which, 256) != (STATUS_SUCCESS, value.len() as u32, value) {
+            kprintln!("pnp: property {which} is not as expected");
+            return Err("a property does not hold the device's value");
+        }
+    }
+    // The device has a name the I/O manager made (11).
+    let (status, _, name) = property_of(pdo, 11, 256);
+    if status != STATUS_SUCCESS || !ids::from_sz(&name).starts_with("\\Device\\") {
+        return Err("the physical device object's name is not a name in \\Device");
+    }
+    // The bus driver gave no bus information (12), and a friendly name
+    // (9) nobody wrote: not found. Property 23 does not exist, and the
+    // translated boot configuration (4) is not kept.
+    for (which, status) in [
+        (12, STATUS_OBJECT_NAME_NOT_FOUND),
+        (9, STATUS_OBJECT_NAME_NOT_FOUND),
+        (23, STATUS_INVALID_PARAMETER_2),
+        (4, STATUS_INVALID_PARAMETER_2),
+    ] {
+        if property_of(pdo, which, 256) != (status, 0, Vec::new()) {
+            return Err("a property the device lacks was not refused as Windows refuses it");
+        }
+    }
+    // A device that is not a physical device object has no properties.
+    if property_of(bench.function, 1, 256).0 != STATUS_INVALID_DEVICE_REQUEST {
+        return Err("a function device object was taken for a physical one");
+    }
+    // The device key and the driver key open; the device key is the one
+    // the settings were copied into.
+    let key = registry::enum_key(&found.instance);
+    let parameters = format!("{key}\\Device Parameters");
+    let before = cm::open_count(&parameters).ok_or("there is no Device Parameters key")?;
+    for (kind, path) in [(1, parameters.clone()), (2, driver_key_of(&key)?)] {
+        let mut handle = core::ptr::null_mut();
+        // SAFETY: a live device object and a handle to write.
+        let status =
+            unsafe { pnp::export::IoOpenDeviceRegistryKey(pdo, kind, 0x2_0019, &raw mut handle) };
+        if status != STATUS_SUCCESS || handle.is_null() {
+            return Err("a key of the device did not open");
+        }
+        let opened = cm::open_count(&path);
+        crate::ob::handle::close(handle as u64);
+        if opened.is_none_or(|count| count == 0) || cm::open_count(&path) >= opened {
+            return Err("the handle is not one to the device's key");
+        }
+    }
+    if cm::open_count(&parameters) != Some(before) {
+        return Err("a handle to the device key was left open");
+    }
+    let mut handle = core::ptr::null_mut();
+    // SAFETY: as above.
+    let status = unsafe {
+        pnp::export::IoOpenDeviceRegistryKey(bench.function, 1, 0x2_0019, &raw mut handle)
+    };
+    if status != STATUS_INVALID_DEVICE_REQUEST || !handle.is_null() {
+        return Err("a key was opened for a device that is not a physical device object");
+    }
+    Ok(())
+}
+
+/// The driver key the device's key names, from the registry's root.
+fn driver_key_of(key: &str) -> Result<String, &'static str> {
+    let driver = registry::string(key, "Driver").ok_or("the child has no driver key")?;
+    Ok(format!(
+        "Machine\\System\\CurrentControlSet\\Control\\Class\\{driver}"
+    ))
+}
+
 /// `AddDevice` is called lowest first: the class's lower filter, the
 /// function driver, the class's upper filter. A filter with no image
 /// is left out.
@@ -859,6 +982,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     pnp::settle();
     r.check("pnp.enumerate", || enumerate(&bench));
     r.check("pnp.match", matched);
+    r.check("pnp.properties", || properties(&bench));
     match add_device_order() {
         Ok(order) => r.ok_with("pnp.add-device-order", format_args!("order {order}")),
         Err(why) => r.fail("pnp.add-device-order", format_args!("{why}")),

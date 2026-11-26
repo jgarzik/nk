@@ -2,9 +2,16 @@
 
 #![allow(non_snake_case)]
 
-use super::engine;
-use nk_ntabi::io::DEVICE_OBJECT;
-use nk_ntabi::pnp::BUS_RELATIONS;
+use super::node::{self, Node};
+use super::{engine, registry};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use nk_ntabi::io::{DEVICE_OBJECT, UNICODE_STRING};
+use nk_ntabi::ob::OBJECT_ATTRIBUTES;
+use nk_ntabi::pnp::{BUS_RELATIONS, DEVICE_CAPABILITY_REMOVABLE};
+use nk_ntabi::status::*;
+use nk_pnp::ids;
 
 /// [`IoInvalidateDeviceRelations`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinvalidatedevicerelations):
 /// the relations of `device`, a physical device object, have changed.
@@ -25,6 +32,264 @@ pub unsafe extern "C" fn IoInvalidateDeviceRelations(device: *mut DEVICE_OBJECT,
         crate::io::device::check(device, "IoInvalidateDeviceRelations");
         if relation == BUS_RELATIONS {
             engine::enumerate_later(device);
+        }
+    }
+}
+
+/// The node of `device`, which must be a physical device object the
+/// manager knows: Windows refuses any other device
+/// (`STATUS_INVALID_DEVICE_REQUEST`).
+fn node_of(device: *mut DEVICE_OBJECT) -> Result<Node, NTSTATUS> {
+    node::get(device as usize).ok_or(STATUS_INVALID_DEVICE_REQUEST)
+}
+
+/// `DEVICE_REGISTRY_PROPERTY`.
+const DEVICE_DESCRIPTION: u32 = 0;
+const HARDWARE_ID: u32 = 1;
+const COMPATIBLE_IDS: u32 = 2;
+const BOOT_CONFIGURATION: u32 = 3;
+const CLASS_NAME: u32 = 5;
+const CLASS_GUID: u32 = 6;
+const DRIVER_KEY_NAME: u32 = 7;
+const MANUFACTURER: u32 = 8;
+const FRIENDLY_NAME: u32 = 9;
+const LOCATION_INFORMATION: u32 = 10;
+const PHYSICAL_DEVICE_OBJECT_NAME: u32 = 11;
+const BUS_TYPE_GUID: u32 = 12;
+const LEGACY_BUS_TYPE: u32 = 13;
+const BUS_NUMBER: u32 = 14;
+const ENUMERATOR_NAME: u32 = 15;
+const ADDRESS: u32 = 16;
+const UI_NUMBER: u32 = 17;
+const INSTALL_STATE: u32 = 18;
+const REMOVAL_POLICY: u32 = 19;
+const RESOURCE_REQUIREMENTS: u32 = 20;
+const ALLOCATED_RESOURCES: u32 = 21;
+const CONTAINER_ID: u32 = 22;
+
+/// `InstallStateInstalled`, `InstallStateFailedInstall`.
+const INSTALL_STATE_INSTALLED: u32 = 0;
+const INSTALL_STATE_FAILED: u32 = 2;
+/// `RemovalPolicyExpectNoRemoval`, `RemovalPolicyExpectSurpriseRemoval`.
+const EXPECT_NO_REMOVAL: u32 = 1;
+const EXPECT_SURPRISE_REMOVAL: u32 = 3;
+
+fn wide_bytes(text: &str) -> Vec<u8> {
+    ids::sz(text)
+}
+
+/// The value of a property of the device `found`, as the bytes
+/// `IoGetDeviceProperty` hands out. `None`: the device has no such
+/// property.
+fn property(found: &Node, device: *mut DEVICE_OBJECT, which: u32) -> Option<Vec<u8>> {
+    let key = registry::enum_key(&found.instance);
+    // A string of the device's key. Device installation writes a
+    // description and a manufacturer as `@inf,%token%;text`.
+    // INFERRED: that Windows hands out the text behind the `;`; taken
+    // from what its drivers print, not read in its code.
+    let string = |name: &str| {
+        registry::string(&key, name).map(|text| {
+            let plain = match text.split_once(';') {
+                Some((indirect, plain)) if indirect.starts_with('@') => plain,
+                _ => &text,
+            };
+            wide_bytes(plain)
+        })
+    };
+    let raw = |name: &str| crate::cm::read(&key, name).ok().map(|(_, data)| data);
+    let filled = |bytes: &Vec<u8>| (!bytes.is_empty()).then(|| bytes.clone());
+    match which {
+        DEVICE_DESCRIPTION => string("DeviceDesc"),
+        HARDWARE_ID => raw("HardwareID"),
+        COMPATIBLE_IDS => raw("CompatibleIDs"),
+        BOOT_CONFIGURATION => filled(&found.boot),
+        CLASS_NAME => found
+            .class
+            .as_deref()
+            .and_then(|class| registry::string(&registry::class_key(class), "Class"))
+            .map(|name| wide_bytes(&name)),
+        CLASS_GUID => string("ClassGUID"),
+        DRIVER_KEY_NAME => string("Driver"),
+        MANUFACTURER => string("Mfg"),
+        FRIENDLY_NAME => string("FriendlyName"),
+        LOCATION_INFORMATION => string("LocationInformation"),
+        PHYSICAL_DEVICE_OBJECT_NAME => {
+            // SAFETY: a live device object; its name, if it has one, is
+            // a counted string that stays while the object does.
+            let name = unsafe {
+                let info = crate::ob::object::name_info(device.cast());
+                if info.is_null() {
+                    Vec::new()
+                } else {
+                    crate::rtl::copy_unicode(&raw const (*info).Name)
+                }
+            };
+            // A device without a name has an empty one, as on Windows.
+            Some(if name.is_empty() {
+                Vec::new()
+            } else {
+                wide_bytes(&format!("\\Device\\{}", String::from_utf16_lossy(&name)))
+            })
+        }
+        BUS_TYPE_GUID => found.bus.map(|bus| bus.bus_type.to_vec()),
+        LEGACY_BUS_TYPE => found
+            .bus
+            .map(|bus| bus.legacy_bus_type.to_le_bytes().to_vec()),
+        BUS_NUMBER => found.bus.map(|bus| bus.bus_number.to_le_bytes().to_vec()),
+        ENUMERATOR_NAME => found.instance.split('\\').next().map(wide_bytes),
+        ADDRESS => (found.address != u32::MAX).then(|| found.address.to_le_bytes().to_vec()),
+        UI_NUMBER => (found.ui_number != u32::MAX).then(|| found.ui_number.to_le_bytes().to_vec()),
+        INSTALL_STATE => {
+            let installed = found.service.is_some() || found.class.is_some();
+            let state = if installed {
+                INSTALL_STATE_INSTALLED
+            } else {
+                INSTALL_STATE_FAILED
+            };
+            Some(state.to_le_bytes().to_vec())
+        }
+        REMOVAL_POLICY => {
+            let removable = found.capabilities & DEVICE_CAPABILITY_REMOVABLE != 0;
+            let policy = if removable {
+                EXPECT_SURPRISE_REMOVAL
+            } else {
+                EXPECT_NO_REMOVAL
+            };
+            Some(policy.to_le_bytes().to_vec())
+        }
+        RESOURCE_REQUIREMENTS => filled(&found.requirements),
+        ALLOCATED_RESOURCES => filled(&found.raw),
+        CONTAINER_ID => string("ContainerID"),
+        _ => None,
+    }
+}
+
+/// [`IoGetDeviceProperty`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdeviceproperty):
+/// a property of the device whose physical device object is `device`.
+/// `result_length` gets the property's size; a buffer too small for it
+/// gets nothing (`STATUS_BUFFER_TOO_SMALL`).
+///
+/// - `STATUS_INVALID_DEVICE_REQUEST`: `device` is not a physical device
+///   object the manager has a node for.
+/// - `STATUS_INVALID_PARAMETER_2`: no such property, or the translated
+///   boot configuration (`DevicePropertyBootConfigurationTranslated`),
+///   which NK does not keep.
+/// - `STATUS_OBJECT_NAME_NOT_FOUND`: the device has no value for it.
+///
+/// # Safety
+/// `device` is a live device object; `buffer` is writable for
+/// `buffer_length` bytes; `result_length` is writable.
+pub unsafe extern "C" fn IoGetDeviceProperty(
+    device: *mut DEVICE_OBJECT,
+    which: u32,
+    buffer_length: u32,
+    buffer: *mut u8,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        crate::io::device::check(device, "IoGetDeviceProperty");
+        result_length.write_unaligned(0);
+        let found = match node_of(device) {
+            Ok(found) => found,
+            Err(status) => return status,
+        };
+        if which > CONTAINER_ID || which == 4 {
+            return STATUS_INVALID_PARAMETER_2;
+        }
+        let Some(value) = property(&found, device, which) else {
+            return STATUS_OBJECT_NAME_NOT_FOUND;
+        };
+        result_length.write_unaligned(value.len() as u32);
+        if value.len() > buffer_length as usize {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        buffer.copy_from_nonoverlapping(value.as_ptr(), value.len());
+    }
+    STATUS_SUCCESS
+}
+
+/// `PLUGPLAY_REGKEY_DEVICE`, `PLUGPLAY_REGKEY_DRIVER`,
+/// `PLUGPLAY_REGKEY_CURRENT_HWPROFILE`.
+const REGKEY_DEVICE: u32 = 1;
+const REGKEY_DRIVER: u32 = 2;
+const REGKEY_CURRENT_HWPROFILE: u32 = 4;
+
+/// [`IoOpenDeviceRegistryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioopendeviceregistrykey):
+/// a handle to a key of the device whose physical device object is
+/// `device`: its `Device Parameters` key (`PLUGPLAY_REGKEY_DEVICE`),
+/// made if it is not there, or its driver key under its class
+/// (`PLUGPLAY_REGKEY_DRIVER`), which a device that was never installed
+/// does not have (`STATUS_OBJECT_NAME_NOT_FOUND`).
+///
+/// NK has one hardware profile: with
+/// `PLUGPLAY_REGKEY_CURRENT_HWPROFILE` the request stops the system
+/// rather than open a key Windows would not.
+///
+/// # Safety
+/// `device` is a live device object; `handle` is writable.
+pub unsafe extern "C" fn IoOpenDeviceRegistryKey(
+    device: *mut DEVICE_OBJECT,
+    key_type: u32,
+    desired_access: u32,
+    handle: *mut *mut core::ffi::c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        crate::io::device::check(device, "IoOpenDeviceRegistryKey");
+        handle.write_unaligned(core::ptr::null_mut());
+    }
+    let found = match node_of(device) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    let control_set = "\\Registry\\Machine\\System\\CurrentControlSet";
+    let path = match key_type {
+        REGKEY_DEVICE => format!("{control_set}\\Enum\\{}\\Device Parameters", found.instance),
+        REGKEY_DRIVER => {
+            let key = registry::enum_key(&found.instance);
+            match registry::string(&key, "Driver") {
+                Some(driver) => format!("{control_set}\\Control\\Class\\{driver}"),
+                None => return STATUS_OBJECT_NAME_NOT_FOUND,
+            }
+        }
+        _ if key_type & REGKEY_CURRENT_HWPROFILE != 0 => crate::kd::bugcheck(format_args!(
+            "IoOpenDeviceRegistryKey: NK has no hardware profiles (key type {key_type:#x} for {})",
+            found.instance
+        )),
+        _ => return STATUS_INVALID_PARAMETER,
+    };
+    let mut name: Vec<u16> = path.encode_utf16().collect();
+    let name = UNICODE_STRING {
+        Length: (name.len() * 2) as u16,
+        MaximumLength: (name.len() * 2) as u16,
+        Buffer: name.as_mut_ptr(),
+    };
+    /// `OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE`.
+    const ATTRIBUTES: u32 = 0x40 | 0x200;
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: core::ptr::null_mut(),
+        ObjectName: &raw const name,
+        Attributes: ATTRIBUTES,
+        SecurityDescriptor: core::ptr::null_mut(),
+        SecurityQualityOfService: core::ptr::null_mut(),
+    };
+    // SAFETY: the attributes and the name they point to live to the end
+    // of the call; `handle` is the caller's.
+    unsafe {
+        if key_type == REGKEY_DEVICE {
+            crate::cm::ZwCreateKey(
+                handle,
+                desired_access,
+                &raw const attributes,
+                0,
+                core::ptr::null(),
+                0,
+                core::ptr::null_mut(),
+            )
+        } else {
+            crate::cm::ZwOpenKey(handle, desired_access, &raw const attributes)
         }
     }
 }
