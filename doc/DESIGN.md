@@ -676,6 +676,13 @@ NK reads no topology from the processors or the firmware, so
 `KeQueryLogicalProcessorRelationship` states each logical processor as
 a core of its own in a package of its own, and no cache; its records
 come in Windows' order from `nk_ke::topology::relationships`.
+`KeRegisterProcessorChangeCallback` registers the routine with
+`\Callback\ProcessorAdd`, as Windows does, and tells it of the
+processors there are if asked to; no processor is added while NK runs,
+so the object is never notified, and no lock keeps a registration and
+an addition apart. `KeReportCacheIncoherentDevice` records nothing:
+NK flushes buffers for devices wherever the architecture needs it,
+reported or not.
 `KeFlushIoBuffers` does nothing on x86-64 and, on arm64, writes the
 buffer's cache lines back and drops them.
 

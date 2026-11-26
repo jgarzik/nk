@@ -6,10 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    KeExpandKernelStackAndCalloutEx,
-    KeProcessorGroupAffinity,
-    KeRegisterProcessorChangeCallback,
-    KeReportCacheIncoherentDevice,
-    KeStartDynamicProcessor,
-);
+trap_list!(KeExpandKernelStackAndCalloutEx, KeStartDynamicProcessor,);
