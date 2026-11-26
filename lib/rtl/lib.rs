@@ -19,6 +19,7 @@ pub mod crt;
 pub mod dbgfilter;
 pub mod format;
 pub mod legal;
+pub mod once;
 pub mod prefix;
 pub mod range;
 pub mod resource;

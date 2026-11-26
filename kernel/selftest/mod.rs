@@ -8,6 +8,7 @@
 mod absent;
 mod base;
 mod bitmap;
+mod callback;
 mod cancel;
 mod clock;
 mod cm;
@@ -185,6 +186,7 @@ pub static GROUPS: &[&[&Group]] = &[
     work::GROUPS,
     ex::GROUPS,
     exlock::GROUPS,
+    callback::GROUPS,
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,

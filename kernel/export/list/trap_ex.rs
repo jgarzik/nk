@@ -8,10 +8,6 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     ExAllocateTimerInternal2,
-    ExCreateCallback,
-    ExNotifyCallback,
-    ExRegisterCallback,
     ExSubscribeWnfStateChange,
-    ExUnregisterCallback,
     ExUnsubscribeWnfStateChange,
 );
