@@ -1310,7 +1310,11 @@ each, by the place of the service's `Group` in
 `Control\ServiceGroupOrder`, then by the place of its `Tag` in the
 group's list under `Control\GroupOrderList` (a tag the list has not, or
 none, after those it has); services of no listed group last; a service
-after those it names in `DependOnService` and `DependOnGroup`. A group
+after those it names in `DependOnService` and `DependOnGroup`. The
+group `Core` comes before every listed group, in the order of its
+tags, though neither list names it: it is `acpi.sys`'s group, and the
+reference Windows' boot log has `acpi.sys` loaded before every bus
+driver. A group
 is the same group in any letter case: Windows' own keys say
 `File system` where its list says `File System`. Only keys whose `Type`
 is a driver's count. Windows'
