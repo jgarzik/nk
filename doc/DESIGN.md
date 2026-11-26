@@ -370,6 +370,13 @@ and how many there were. A thread references itself until it has ended
 and been reaped, so an unreferenced thread frees itself and a referenced
 one stays a valid, signalled object.
 
+A driver's reference returns the count it made, its release the count it
+left. The tagged forms (`ObfReferenceObjectWithTag`) count on the same
+count: the tag is for
+[reference tracing](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/object-reference-tracing-with-tags),
+which is off, as it is on Windows unless asked for. A reference taken to
+an object that has none stops the system (`REFERENCE_BY_POINTER`).
+
 Kernel handles are entries in one table, the System process's, with
 Windows' kernel-handle bits; a handle holds a reference until closed. No
 per-process tables. Each handle has the access it was granted and its

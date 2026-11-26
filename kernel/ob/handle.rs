@@ -266,6 +266,34 @@ pub unsafe extern "C" fn ObReferenceObjectByHandle(
     }
 }
 
+/// [`ObReferenceObjectByHandleWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandlewithtag):
+/// [`ObReferenceObjectByHandle`], whose reference the tag would name
+/// for object reference tracing (`object::ObfReferenceObjectWithTag`).
+///
+/// # Safety
+/// As [`ObReferenceObjectByHandle`].
+pub unsafe extern "C" fn ObReferenceObjectByHandleWithTag(
+    handle: *mut c_void,
+    desired_access: u32,
+    object_type: *const ObjectType,
+    access_mode: i8,
+    _tag: u32,
+    object: *mut *mut c_void,
+    handle_information: *mut [u32; 2],
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        ObReferenceObjectByHandle(
+            handle,
+            desired_access,
+            object_type,
+            access_mode,
+            object,
+            handle_information,
+        )
+    }
+}
+
 /// [`ObOpenObjectByPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-obopenobjectbypointer):
 /// a handle to an object the caller has a pointer to, granted the
 /// desired access and given the attributes asked for. Every handle is
@@ -347,6 +375,20 @@ pub fn reference_test() -> Result<u32, &'static str> {
         if up != [2, 3] || down != [2, 1] {
             return Err("reference counts did not go 2, 3, 2, 1");
         }
+        // As a driver takes and drops them, with a tag and without:
+        // each returns the count it made, and a tag changes no count.
+        const TAG: u32 = u32::from_le_bytes(*b"NKob");
+        let up = [
+            object::ObfReferenceObject(body.cast()),
+            object::ObfReferenceObjectWithTag(body.cast(), TAG),
+        ];
+        let down = [
+            object::ObfDereferenceObject(body.cast()),
+            object::ObfDereferenceObjectWithTag(body.cast(), TAG),
+        ];
+        if up != [2, 3] || down != [2, 1] {
+            return Err("a driver's references did not count 2, 3, 2, 1");
+        }
         if blocks() != before + 1 {
             return Err("an object was freed while still referenced");
         }
@@ -354,7 +396,62 @@ pub fn reference_test() -> Result<u32, &'static str> {
             return Err("dropping the last reference did not free the object");
         }
     }
-    Ok(6)
+    Ok(10)
+}
+
+static SHARED: core::sync::atomic::AtomicPtr<u8> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+static SHARED_WRONG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Threads on every processor take and drop references to one object
+/// at once, as drivers do; none is lost and none invented. Returns the
+/// references taken.
+pub fn shared_reference_test() -> Result<u32, &'static str> {
+    const ROUNDS: u32 = 5000;
+    fn body(_: usize) {
+        let shared = SHARED.load(Ordering::Acquire);
+        for round in 0..ROUNDS {
+            // SAFETY: the test holds a reference to the object until
+            // every thread has ended.
+            unsafe {
+                let up = if round % 2 == 0 {
+                    object::ObfReferenceObject(shared.cast())
+                } else {
+                    object::ObfReferenceObjectWithTag(shared.cast(), 1)
+                };
+                let down = object::ObfDereferenceObjectWithTag(shared.cast(), 1);
+                // The test's own reference is always there besides.
+                if up < 2 || down < 1 {
+                    SHARED_WRONG.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+    let (pool_before, threads_before) = (blocks(), thread::count());
+    let shared = new_event()?;
+    SHARED.store(shared, Ordering::Release);
+    SHARED_WRONG.store(0, Ordering::Relaxed);
+    let processors = crate::ke::smp::online_count();
+    let threads = processors.max(2) as u32;
+    for n in 0..threads as usize {
+        thread::create(body, 0, thread::NORMAL_PRIORITY, 1 << (n % processors))?;
+    }
+    let deadline = time::interrupt_time() + 100_000_000;
+    while thread::count() != threads_before && time::interrupt_time() < deadline {
+        thread::yield_now();
+    }
+    if thread::count() != threads_before {
+        return Err("the threads did not finish");
+    }
+    // SAFETY: the creating reference, which must be the last.
+    let left = unsafe { object::dereference(shared) };
+    if SHARED_WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a reference returned a count below what was certainly held");
+    }
+    if left != 0 || blocks() != pool_before {
+        return Err("references taken on several processors were lost or invented");
+    }
+    Ok(threads * ROUNDS)
 }
 
 /// A handle names its object until closed, keeps it alive, and is

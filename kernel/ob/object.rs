@@ -575,6 +575,53 @@ pub unsafe extern "C" fn ObfDereferenceObject(object: *mut c_void) -> isize {
     unsafe { dereference(object.cast()) as isize }
 }
 
+/// The count a driver's reference left: an object whose last reference
+/// has gone is being deleted, and a pointer to it is no reference.
+/// Windows stops there too
+/// ([`REFERENCE_BY_POINTER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x18--reference-by-pointer)).
+fn referenced(count: i64) -> isize {
+    if count <= 1 {
+        crate::kd::bugcheck(format_args!(
+            "0x00000018 REFERENCE_BY_POINTER: a reference was taken to an object that had none"
+        ));
+    }
+    count as isize
+}
+
+/// [`ObfReferenceObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obfreferenceobject):
+/// what `ObReferenceObject` compiles to. Returns the count it made.
+///
+/// # Safety
+/// `object` is an object the caller holds a reference to.
+pub unsafe extern "C" fn ObfReferenceObject(object: *mut c_void) -> isize {
+    // SAFETY: per the contract.
+    referenced(unsafe { reference(object.cast()) })
+}
+
+/// [`ObfReferenceObjectWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obfreferenceobjectwithtag).
+/// The tag names the reference for
+/// [object reference tracing](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/object-reference-tracing-with-tags),
+/// which NK does not do, as Windows does not unless it is turned on:
+/// the count is the one count.
+///
+/// # Safety
+/// As [`ObfReferenceObject`].
+pub unsafe extern "C" fn ObfReferenceObjectWithTag(object: *mut c_void, _tag: u32) -> isize {
+    // SAFETY: per the contract.
+    referenced(unsafe { reference(object.cast()) })
+}
+
+/// [`ObfDereferenceObjectWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obfdereferenceobjectwithtag):
+/// as [`ObfDereferenceObject`]; the tag, as in
+/// [`ObfReferenceObjectWithTag`], changes nothing.
+///
+/// # Safety
+/// `object` is an object the caller holds a reference to.
+pub unsafe extern "C" fn ObfDereferenceObjectWithTag(object: *mut c_void, _tag: u32) -> isize {
+    // SAFETY: per the contract.
+    unsafe { dereference(object.cast()) as isize }
+}
+
 // ---- tests --------------------------------------------------------------
 
 /// A type as a driver holding its address sees it, and an object's

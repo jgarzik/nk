@@ -151,7 +151,11 @@ static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, io::mdl::MmUnlockPages),
     export!(Implemented, ob::handle::ObReferenceObjectByHandle),
+    export!(Implemented, ob::handle::ObReferenceObjectByHandleWithTag),
     export!(Implemented, ob::object::ObfDereferenceObject),
+    export!(Implemented, ob::object::ObfDereferenceObjectWithTag),
+    export!(Implemented, ob::object::ObfReferenceObject),
+    export!(Implemented, ob::object::ObfReferenceObjectWithTag),
     export_entry!(
         Implemented,
         "ProbeForRead",

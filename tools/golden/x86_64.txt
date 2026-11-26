@@ -77,6 +77,7 @@ wait.many-blocking ok
 wait.all-race ok
 ob.types ok
 ob.references ok
+ob.references-smp ok
 ob.handles ok
 ob.thread ok
 ps.system ok

@@ -8,6 +8,7 @@ pub static GROUP: Group = Group {
     names: &[
         "ob.types",
         "ob.references",
+        "ob.references-smp",
         "ob.handles",
         "ob.thread",
         "ps.system",
@@ -35,6 +36,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         "ob.references",
         "references taken and dropped:",
         handle::reference_test(),
+    );
+    counted(
+        r,
+        "ob.references-smp",
+        "references taken on several processors:",
+        handle::shared_reference_test(),
     );
     counted(r, "ob.handles", "look-ups:", handle::handle_test());
     counted(r, "ob.thread", "waits:", handle::thread_test());
