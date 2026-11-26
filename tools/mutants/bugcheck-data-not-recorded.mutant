@@ -1,0 +1,6 @@
+# KiBugCheckData is left empty by a stop: a bugcheck callback that
+# reads the code and parameters there sees none.
+scenario: x86_64-neg-bugcheck-callback
+fails: scenario
+file: kernel/kd/mod.rs
+remove:         crate::ke::bugcheck::record(data);

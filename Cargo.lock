@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-etw"
+version = "0.0.2"
+dependencies = [
+ "nk-ntabi",
+]
+
+[[package]]
 name = "nk-ex"
 version = "0.0.2"
 
@@ -93,6 +100,7 @@ dependencies = [
  "nk-acpi",
  "nk-bootinfo",
  "nk-cm",
+ "nk-etw",
  "nk-ex",
  "nk-hal",
  "nk-ke",

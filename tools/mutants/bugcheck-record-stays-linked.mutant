@@ -1,0 +1,6 @@
+# A bugcheck callback record that is taken back stays linked from the
+# record before it: the list leads into memory its driver has freed.
+scenario: x86_64
+fails: ke.bugcheck.order
+file: kernel/ke/bugcheck.rs
+remove:         (&raw mut (*entry.Blink).Flink).write(entry.Flink);

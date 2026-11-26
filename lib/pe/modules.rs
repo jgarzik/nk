@@ -26,6 +26,9 @@ pub struct Module {
     /// How many loaded images import from it: what keeps a library
     /// loaded.
     pub references: u32,
+    /// Its place in the order images were loaded in, given when it is
+    /// entered in a table.
+    order: u64,
 }
 
 impl Module {
@@ -47,6 +50,7 @@ impl Module {
             exports: DataDir::default(),
             library: false,
             references: 0,
+            order: 0,
         })
     }
 
@@ -83,14 +87,19 @@ pub enum InsertError {
 #[derive(Debug)]
 pub struct Modules<const N: usize> {
     slots: [Option<Module>; N],
+    /// How many images were ever entered.
+    entered: u64,
 }
 
 impl<const N: usize> Modules<N> {
     pub const fn new() -> Self {
-        Self { slots: [None; N] }
+        Self {
+            slots: [None; N],
+            entered: 0,
+        }
     }
 
-    pub fn insert(&mut self, module: Module) -> Result<(), InsertError> {
+    pub fn insert(&mut self, mut module: Module) -> Result<(), InsertError> {
         let end = module.base + module.size;
         if self
             .slots
@@ -105,6 +114,8 @@ impl<const N: usize> Modules<N> {
             .iter_mut()
             .find(|s| s.is_none())
             .ok_or(InsertError::Full)?;
+        self.entered += 1;
+        module.order = self.entered;
         *slot = Some(module);
         Ok(())
     }
@@ -143,6 +154,28 @@ impl<const N: usize> Modules<N> {
         let module = self.slots.iter_mut().flatten().find(|m| m.base == base)?;
         module.references = module.references.checked_add_signed(by)?;
         Some(module.references)
+    }
+
+    /// Copy the images into `out`, oldest load first, as far as it has
+    /// room, and return how many there are. Nothing is allocated.
+    pub fn in_load_order(&self, out: &mut [Option<Module>]) -> usize {
+        let mut count = 0;
+        let mut after = 0;
+        // Each pass finds the oldest image not yet copied.
+        while let Some(next) = self
+            .slots
+            .iter()
+            .flatten()
+            .filter(|m| m.order > after)
+            .min_by_key(|m| m.order)
+        {
+            if let Some(slot) = out.get_mut(count) {
+                *slot = Some(*next);
+            }
+            after = next.order;
+            count += 1;
+        }
+        count
     }
 
     /// The image `address` is in.
@@ -187,6 +220,27 @@ mod tests {
         assert!(Module::new(b"empty", 0x1000, 0, dir, 0).is_none());
         assert!(Module::new(b"wraps", u64::MAX, 2, dir, 0).is_none());
         assert!(Module::new(b"last", u64::MAX, 1, dir, 0).is_none());
+    }
+
+    #[test]
+    fn images_are_listed_in_the_order_they_were_loaded() {
+        let mut table = Modules::<4>::new();
+        table.insert(module("kernel", 0x9000, 0x1000)).unwrap();
+        table.insert(module("a.sys", 0x1000, 0x1000)).unwrap();
+        table.insert(module("b.sys", 0x2000, 0x1000)).unwrap();
+        // An unloaded image's slot goes to the next one loaded, which is
+        // still the newest.
+        table.remove(0x1000).unwrap();
+        table.insert(module("c.sys", 0x5000, 0x1000)).unwrap();
+        let mut out = [None; 4];
+        assert_eq!(table.in_load_order(&mut out), 3);
+        let names: Vec<&[u8]> = out.iter().flatten().map(|m| m.name()).collect();
+        assert_eq!(names, [&b"kernel"[..], b"b.sys", b"c.sys"]);
+        // With too little room the count is still all of them.
+        let mut short = [None; 1];
+        assert_eq!(table.in_load_order(&mut short), 3);
+        assert_eq!(short[0].unwrap().name(), b"kernel");
+        assert_eq!(Modules::<4>::new().in_load_order(&mut out), 0);
     }
 
     #[test]

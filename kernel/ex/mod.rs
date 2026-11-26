@@ -5,6 +5,7 @@ pub mod pushlock;
 pub mod resource;
 pub mod slist;
 mod stress;
+pub mod sysinfo;
 pub mod timer;
 pub mod uuid;
 pub mod work;

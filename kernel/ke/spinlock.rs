@@ -29,6 +29,9 @@ pub enum Rank {
     Drivers = 10,
     /// Devices' reference counts and delete-pending marks (`io::device`).
     IoDatabase = 25,
+    /// Devices registered with WMI and the requests owed them
+    /// (`io::wmi`).
+    IoWmi = 27,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).
@@ -58,6 +61,9 @@ pub enum Rank {
     ObjectHeader = 235,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
+    /// The bugcheck callback records drivers registered (`ke::bugcheck`):
+    /// registered and taken back at any IRQL.
+    BugCheckCallbacks = 242,
     /// The table of loaded images (`ldr`): searched from any context.
     Modules = 245,
     /// The diagnostic console (`kd`): innermost, so anything can print.
@@ -69,7 +75,9 @@ impl Rank {
     const fn level(self) -> u8 {
         match self {
             // Usable from any context, an interrupt included.
-            Rank::Console | Rank::Modules | Rank::DpcQueue => irql::HIGH_LEVEL,
+            Rank::Console | Rank::Modules | Rank::BugCheckCallbacks | Rank::DpcQueue => {
+                irql::HIGH_LEVEL
+            }
             _ => irql::DISPATCH_LEVEL,
         }
     }

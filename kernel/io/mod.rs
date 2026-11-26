@@ -14,6 +14,7 @@ pub mod mdl;
 pub mod remlock;
 pub mod service;
 pub mod symlink;
+pub mod wmi;
 
 // Pool tags, as Windows spells its own.
 

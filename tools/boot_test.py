@@ -295,7 +295,8 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         golden = load_golden(sc["golden"]) if "golden" in sc and not bless else None
         problems = judge.judge(
             text, sc.get("expect", "ok"), golden=golden, degraded=bool(missing),
-            match=sc.get("match"), must_fail=sc.get("must_fail", ()),
+            match=sc.get("match"), then=sc.get("then"),
+            must_fail=sc.get("must_fail", ()),
             timed_out=timed_out, marks=marks,
         )
         if sc.get("canonical") and not image:

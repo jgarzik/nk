@@ -1,0 +1,7 @@
+# Unregistering a provider says yes and leaves the registration in
+# place: every unloaded driver's providers stay for good.
+scenario: x86_64
+fails: etw.register
+file: lib/etw/provider.rs
+replace:                 .compare_exchange(word, 0, Ordering::AcqRel, Ordering::Relaxed)
+with:                 .compare_exchange(word, word, Ordering::AcqRel, Ordering::Relaxed)

@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{arch, cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
+use crate::{arch, cm, etw, ex, io, ke, ldr, mm, ob, ps, rtl, se};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -96,6 +96,13 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTagPriority),
+    export!(Implemented, etw::EtwRegister),
+    export!(Implemented, etw::EtwRegisterClassicProvider),
+    export!(Implemented, etw::EtwSetInformation),
+    export!(Implemented, etw::EtwUnregister),
+    export!(Implemented, etw::EtwWriteTransfer),
+    export!(Implemented, etw::WmiQueryTraceInformation),
+    export!(Implemented, etw::WmiTraceMessage),
     export_variable!(
         Implemented,
         "ExEventObjectType",
@@ -109,6 +116,9 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::device::IoDeleteDevice),
     export!(Implemented, io::symlink::IoDeleteSymbolicLink),
     export!(Implemented, io::remlock::IoAcquireRemoveLockEx),
+    export!(Implemented, io::wmi::IoWMIDeviceObjectToProviderId),
+    export!(Partial, io::wmi::IoWMIRegistrationControl),
+    export!(Implemented, io::wmi::IoWMIWriteEvent),
     export!(Implemented, io::irp::IoAllocateIrp),
     export!(Implemented, io::irp::IoFreeIrp),
     export!(Implemented, io::mdl::IoFreeMdl),
@@ -122,6 +132,11 @@ static EXPORTS: &[Export] = &[
     export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeAcquireSpinLockAtDpcLevel),
     export!(Implemented, ke::kspin::KeAcquireSpinLockRaiseToDpc),
+    export!(Implemented, ke::bugcheck::KeBugCheckEx),
+    export!(
+        Implemented,
+        ke::bugcheck::KeDeregisterBugCheckReasonCallback
+    ),
     export!(Implemented, ke::kspin::KeGetCurrentIrql),
     export!(Implemented, ke::kspin::KeInitializeSpinLock),
     export!(Implemented, ke::timer::KeCancelTimer),
@@ -131,6 +146,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KeLowerIrql),
     export!(Implemented, ke::time::KeQueryPerformanceCounter),
     export!(Implemented, ke::time::KeQueryTimeIncrement),
+    export!(Implemented, ke::bugcheck::KeRegisterBugCheckReasonCallback),
     export!(Implemented, ke::kspin::KeReleaseInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeReleaseSpinLock),
     export!(Implemented, ke::kspin::KeReleaseSpinLockFromDpcLevel),
@@ -143,7 +159,9 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KeTryToAcquireSpinLockAtDpcLevel),
     export!(Implemented, ke::kspin::KfLowerIrql),
     export!(Implemented, ke::kspin::KfRaiseIrql),
+    export_variable!(Implemented, "KiBugCheckData", ke::bugcheck::KiBugCheckData),
     export!(Implemented, MmGetSystemRoutineAddress),
+    export!(Implemented, ex::sysinfo::MmIsDriverVerifying),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
     export_entry!(
@@ -160,6 +178,7 @@ static EXPORTS: &[Export] = &[
         arch::seh::nk_entry_ProbeForRead
     ),
     export!(Implemented, rtl::RtlGetVersion),
+    export!(Implemented, ex::sysinfo::RtlQueryModuleInformation),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, ke::seh::__C_specific_handler),
     export!(Implemented, ke::mutex::ExAcquireFastMutex),
@@ -221,10 +240,18 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::wait::KeResetEvent),
     export!(Implemented, ke::wait::KeWaitForMultipleObjects),
     export!(Implemented, ke::wait::KeWaitForSingleObject),
+    export!(Implemented, ex::sysinfo::DbgkWerCaptureLiveKernelDump),
+    export!(Partial, ex::sysinfo::NtQuerySystemInformation),
     export!(Implemented, ps::PsCreateSystemThread),
+    export!(Implemented, ex::sysinfo::PsGetVersion),
     export!(Implemented, ps::PsTerminateSystemThread),
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Implemented, ps::ZwClose),
+    export_entry!(
+        Partial,
+        "ZwQuerySystemInformation",
+        ex::sysinfo::NtQuerySystemInformation
+    ),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export!(Implemented, rtl::name::FsRtlIsNameInExpression),
     export_variable!(

@@ -146,6 +146,11 @@ pub const IRP_MJ_WRITE: u8 = 0x04;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_CLEANUP: u8 = 0x12;
+pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
+/// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
+/// its registration, the older way and the newer.
+pub const IRP_MN_REGINFO: u8 = 0x08;
+pub const IRP_MN_REGINFO_EX: u8 = 0x0B;
 pub const IRP_MJ_MAXIMUM_FUNCTION: usize = 0x1B;
 
 pub const IO_TYPE_DEVICE: i16 = 3;

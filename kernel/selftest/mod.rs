@@ -12,6 +12,7 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+mod etw;
 mod ex;
 pub mod except;
 mod library;
@@ -133,6 +134,11 @@ pub static GROUPS: &[&Group] = &[
     &open::GROUP,
     &service::GROUP,
     &driver_api::GROUP,
+    &etw::PROVIDERS,
+    &etw::CLASSIC,
+    &etw::WMI,
+    &etw::GROUP,
+    &etw::SYSTEM,
     &loader::GROUP,
     &library::GROUP,
     &null::GROUP,
@@ -150,6 +156,9 @@ pub static GROUPS: &[&Group] = &[
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
     &neg::BREAKPOINT,
+    &etw::BUGCHECK_EX,
+    &etw::BUGCHECK_CALLBACK,
+    &etw::UNREGISTER_TWICE,
     &except::THREAD,
     &except::SERVICE,
     &except::DPC,
@@ -197,6 +206,9 @@ pub struct Resources {
     threads: u32,
     /// Kernel handles open.
     handles: usize,
+    /// Trace providers registered: a driver unregisters what it
+    /// registered.
+    providers: usize,
 }
 
 pub fn resources() -> Resources {
@@ -213,5 +225,6 @@ pub fn resources() -> Resources {
         names: crate::ob::count(),
         threads: crate::ke::thread::count(),
         handles: crate::ob::handle::count(),
+        providers: crate::etw::registered(),
     }
 }

@@ -9,6 +9,8 @@
 #   expect    "ok" (default), "bugcheck" or "fail"
 #   match     expect = "bugcheck": regular expression the BUGCHECK line
 #             must contain
+#   then      expect = "bugcheck": regular expression a line printed after
+#             the BUGCHECK line must contain (a bugcheck callback's)
 #   must_fail expect = "fail": exactly these tests fail
 #   accel     "tcg": emulate the processor even where the host could run
 #             it directly (x86-64 only; arm64 is always emulated)
@@ -487,6 +489,58 @@ tier = "gate"
 cmdline = "test=neg.protected-close"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
+
+# A driver's KeBugCheckEx stops the system with its code and parameters.
+# A stop calls the bugcheck callbacks Windows calls on a system that
+# writes no crash dump, and the last of them says what was called.
+
+[x86_64-neg-bugcheck-ex]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-ex"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000000011, parameter 2 0x0000000000000022, parameter 3 0x0000000000000033, parameter 4 0xfffff88000000044\\)"
+
+[aarch64-neg-bugcheck-ex]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-ex"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000000011, parameter 2 0x0000000000000022, parameter 3 0x0000000000000033, parameter 4 0xfffff88000000044\\)"
+
+[x86_64-neg-bugcheck-callback]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-callback"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000001001,"
+then = "^NK-STOP-CALLBACK reserved1=2 order=21 triage=1 finished=3 wrong=0 others=0$"
+
+[aarch64-neg-bugcheck-callback]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-callback"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000001001,"
+then = "^NK-STOP-CALLBACK reserved1=2 order=21 triage=1 finished=3 wrong=0 others=0$"
+
+# A trace provider unregistered twice stops the system: the second
+# handle is no registration.
+
+[x86_64-neg-etw-unregister-twice]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.etw-unregister-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
+
+[aarch64-neg-etw-unregister-twice]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.etw-unregister-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
+
 # An exception no handler takes stops the system with Windows' bugcheck
 # for where it was raised: in a system thread, in a system service made
 # for user mode (the exception's code not widened with its sign), in a

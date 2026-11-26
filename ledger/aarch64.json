@@ -17,7 +17,6 @@
    "IoCreateDeviceSecure",
    "IoValidateDeviceIoControlAccess",
    "NoSuchRoutineInAnyKernel",
-   "NtQuerySystemInformation",
    "SeConvertStringSecurityDescriptorToSecurityDescriptor",
    "kesetevent"
   ]

@@ -82,10 +82,10 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, trace-provider bookkeeping (`etw`) |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -806,6 +806,7 @@ make that safe.
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
 | dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
+| dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
@@ -815,6 +816,7 @@ make that safe.
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
+| bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
 where the exception was raised:
@@ -1322,6 +1324,187 @@ file system reads it in line (`kernel/se/token.rs`):
   type being opened maps them), nothing granted yet, and the traverse
   flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
   security descriptor, auxiliary data, privileges and names are empty.
+
+## Tracing
+
+**NK starts no trace session.** Windows starts sessions at boot from
+the registry's `Control\WMI\Autologger` keys and lets programs start
+more ([Event Tracing](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/event-tracing-for-windows--etw-));
+NK ignores those keys and has no program to ask. So no provider is ever
+enabled, and every answer below is the one Windows gives a provider
+nobody listens to: real per its contract, with nothing recorded. NK
+stands for a machine whose autologgers are all disabled.
+
+**Providers** (`kernel/etw`, bookkeeping in `nk_etw`).
+[`EtwRegister`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwregister)
+makes a registration and hands out its handle. The enable callback is
+never called, since nothing enables. An event written
+(`EtwWriteTransfer`) is dropped with success, the event itself not
+looked at, as Windows drops it. `EtwSetInformation` makes Windows'
+checks in Windows' order (traits are set once, and must be well formed)
+and keeps only the fact that traits are set: their content would go
+into events.
+
+A handle is NK's own: it names a slot of a fixed table and carries a
+number no other registration has had, so one that was unregistered
+stays invalid when the slot is taken again. The table is words changed
+by compare-and-swap, with no lock, because events are written at any
+IRQL. Windows' handle is a pointer it does not check: a stale one there
+reads freed memory. NK answers `STATUS_INVALID_HANDLE` to a write or a
+set through one, and stops with `EVENT_TRACING_FATAL_ERROR` (`0x11D`)
+when one is unregistered, the bugcheck Windows has for a registration
+handle that is not one. A full table is `STATUS_NO_MEMORY`, Windows'
+status for a registration it cannot allocate.
+
+**Classic providers and WPP.** The tracing start-up the WDK compiles
+into every driver that traces with WPP looks routines up by name
+(`MmGetSystemRoutineAddress`) and, where `EtwRegisterClassicProvider`
+is absent, registers with WMI the way drivers did before Windows 7. NK
+exports it, so such a driver takes the path it takes on Windows 10: a
+registration in the same table, of the classic kind (it must have a
+callback and cannot have traits), ended with `EtwUnregister`. The
+callback would carry an enabling session's handle and is never called.
+
+`WmiTraceMessage` writes a WPP message to a session: there is none,
+whatever its number, and the answer is Windows' for a session that does
+not exist (`STATUS_INVALID_HANDLE`), given before any argument is read.
+`WmiQueryTraceInformation` is what a provider asks about the session
+that enabled it (`nk_etw::logger`): the classes that take a session's
+handle apart answer as on Windows, where they do not ask whether the
+session exists; the rest find no session; the kernel's tables of trace
+routines are `STATUS_DEVICE_NOT_READY`, Windows' answer before tracing
+has started.
+
+**WMI** (`kernel/io/wmi.rs`, bookkeeping and the check of a driver's
+answer in `nk_etw::wmi`). There is no consumer of WMI data and never a
+query, so what a driver sees is what Windows shows one that nobody asks
+anything: its registration, and the request that follows it.
+
+- [`IoWMIRegistrationControl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiregistrationcontrol)
+  records the device, references it, gives it a provider id (counted
+  up, never reused) and returns. A system worker then sends the device
+  `IRP_MJ_SYSTEM_CONTROL` with `IRP_MN_REGINFO_EX`, and with
+  `IRP_MN_REGINFO` if the driver fails that; a driver that says how
+  large a buffer it needs is asked again with one that large. The
+  request is built as Windows builds it: a stack location of WMI's own
+  above the driver's, a pool buffer of 0x2000 bytes that is not zeroed,
+  the device as provider id, a completion routine that takes the IRP
+  back. NK has no device stacks, so it goes to the device itself where
+  Windows sends it to the top of the stack.
+- The answer is checked as Windows checks it and then let go: nothing
+  could ever read it. The references a driver takes on physical device
+  objects for WMI when it answers the newer request are given back.
+- `WMIREG_ACTION_UPDATE_GUIDS` sends the request again, marked as an
+  update; `WMIREG_ACTION_BLOCK_IRPS` ends the sending. Deregistering
+  drops what waits for the device, waits for a request that is with the
+  driver, and gives the device back.
+- A registration by callback or as a trace provider
+  (`WMIREG_FLAG_CALLBACK`, `WMIREG_FLAG_TRACE_PROVIDER`) is how WPP
+  registered before `EtwRegisterClassicProvider`. NK does not take it:
+  `STATUS_UNSUCCESSFUL`, Windows' answer while WMI is not running. The
+  export is `Partial` for that.
+- `IoWMIWriteEvent` takes an event and frees its block, the event
+  having nowhere to go. A trace event (`WNODE_FLAG_TRACED_GUID`) names
+  a session, of which there is none.
+
+One rule is NK's own: a driver that keeps asking for a buffer no larger
+than the one it was given is not asked again, where Windows asks for
+ever.
+
+The tests `etw.*` and `wmi.*` call the exports as a driver does, the
+latter with a driver object of their own that records each request as
+it arrives; a test group that leaves a provider registered fails like
+any other leak.
+
+## Questions about the system
+
+`kernel/ex/sysinfo.rs`, with the length rules in `nk_ex::sysinfo`.
+
+`ZwQuerySystemInformation` and `NtQuerySystemInformation` are one
+routine: every caller is in kernel mode. It answers the classes the
+binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
+Lengths, and what is reported as the length needed, are the pinned
+kernel's, class by class.
+
+| Class | Answer |
+| --- | --- |
+| 0, basic | page size, 64 KiB granularity, Windows' user range, the processors running, the memory NK uses as RAM |
+| 11, modules | the images in memory (below) |
+| 35, kernel debugger | enabled and present with `debug=on`; else neither |
+| 165, isolated user mode | sixteen zero bytes: no secure kernel. `msrpc.sys` asks, and pages itself out unless the first bit is set |
+
+**The module list** is the table of images in load order, as Windows
+lists them: `ntoskrnl.exe` first, then `hal.dll`, then the drivers.
+NK has no HAL image; `hal.dll` is a second name of the kernel's and is
+listed with the kernel's range, so a driver that expects Windows' first
+two modules finds them, and an address in the kernel is the kernel's to
+whoever takes the first module that contains it. The kernel and
+`hal.dll` are reported in `\SystemRoot\system32`, every other image in
+`\SystemRoot\System32\drivers`, which the boot files stand for. An
+entry's `Flags` is zero and its `Section` and `MappedBase` are left as
+the caller had them, which is what Windows does with those two.
+`RtlQueryModuleInformation`, which the WDK's auxiliary library calls,
+reports the same list in its two sizes.
+
+`PsGetVersion` gives `RtlGetVersion`'s numbers. `MmIsDriverVerifying`
+is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers
+`STATUS_DEVICE_NOT_READY`, Windows' answer before its live-dump support
+has started.
+
+## Stopping the system
+
+Every fatal error ends in one place (`kd::bugcheck`): the first
+processor to get there stops the others, prints one `BUGCHECK:` line,
+calls the drivers' bugcheck callbacks and powers the machine off. A
+stop with a Windows code prints the code first, then its name.
+
+[`KeBugCheckEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kebugcheckex)
+is that stop with the driver's code and four parameters, which
+`KiBugCheckData` (five words a driver imports) holds from then on. A
+stop of NK's own that carries no parameters leaves those words zero.
+
+**Bugcheck callbacks**
+([`KeRegisterBugCheckReasonCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterbugcheckreasoncallback),
+`kernel/ke/bugcheck.rs`, rules in `nk_ke::bugcheck`). The record is the
+driver's memory, filled in and linked as Windows does it: routine,
+reason, component, the checksum of the three, `State` inserted. One
+list holds them all, newest first, triage-data records behind the rest
+in the order they came. Any reason is accepted.
+
+NK writes no crash dump and has no debugger, and calls what Windows
+calls on such a system, at `HIGH_LEVEL` with the other processors
+stopped, after the report:
+
+| Reason | Called | With |
+| --- | --- | --- |
+| `KbCallbackReserved1` | yes | no data |
+| `KbCallbackTriageDumpData` | yes, after the above | `KBUGCHECK_TRIAGE_DUMP_DATA`: the code and parameters of `KiBugCheckData`, no ranges named |
+| `KbCallbackSecondaryDumpData`, `KbCallbackDumpIo`, `KbCallbackAddPages`, `KbCallbackRemovePages`, any other | never | they belong to the writing of a dump |
+
+Before a routine is called its record is looked at as Windows looks: it
+must lie where a pointer can, be linked from the record before it,
+still be in the inserted state, still add up to its checksum, and be
+registered for the reason being called. A record that fails the first
+two ends the walk; one that fails the others is passed over. Windows
+also asks whether the record's and the routine's pages are mapped; NK
+does not, and a record in unmapped memory is a second error. Afterwards
+the record's state is finished; a triage record whose routine named no
+ranges is incomplete. The ranges are not read: they would go into a
+dump.
+
+A callback may call only what Microsoft documents as safe at that
+point: a kernel routine that takes a lock may find it held by a stopped
+processor. What a callback prints goes out whoever held the console. An
+error inside a callback is a second error on the stopping processor:
+it is noted, nothing more is called, and the machine powers off.
+
+`KeRegisterBugCheckCallback`'s list, which Windows calls last, has no
+importer among the binaries NK runs and is not exported.
+
+The tests `ke.bugcheck.*` check registration; the
+`*-neg-bugcheck-callback` scenarios stop the system with callbacks of
+each kind registered, and the last one called prints which ran, in what
+order, and what they were shown.
 
 ## Breakpoints and the debugger
 
