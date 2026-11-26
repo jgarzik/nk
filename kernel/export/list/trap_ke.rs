@@ -8,7 +8,6 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     KeExpandKernelStackAndCalloutEx,
-    KeIpiGenericCall,
     KeProcessorGroupAffinity,
     KeRegisterProcessorChangeCallback,
     KeReportCacheIncoherentDevice,
