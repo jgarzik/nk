@@ -14,14 +14,16 @@ mod arch;
 mod efi;
 
 use nk_bootinfo::{
-    BootInfo, FirmwareUse, HHDM_BASE, KERNEL_BASE, KERNEL_STACK_SIZE, MAX_MODULES, MODULE_NAME_LEN,
-    Module, Serial, has_ram, ram_top, regions, stack_top_in, windows_time,
+    BootInfo, FirmwareUse, HHDM_BASE, HIVE_MODULE, KERNEL_BASE, KERNEL_STACK_SIZE, MAX_MODULES,
+    MODULE_NAME_LEN, Module, Serial, has_ram, ram_top, regions, stack_top_in, windows_time,
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
 
 const KERNEL_PATH: &str = "\\NK\\nkkrnl.exe";
 const DRIVER_DIR: &str = "\\NK\\drivers";
+/// Optional: the SYSTEM registry hive, handed over as one more module.
+const HIVE_PATH: &str = "\\NK\\SYSTEM";
 /// Optional: one line of `key=value` words for the kernel.
 const CMDLINE_PATH: &str = "\\NK\\cmdline.txt";
 /// Room for one kernel stack at the alignment the kernel requires.
@@ -74,8 +76,29 @@ fn page_prot(pe: &Pe<'_>, rva: u32) -> Option<Prot> {
     })
 }
 
-/// Read every file in the driver directory as a boot module.
+/// Hand the kernel the contents of a file as the boot module `name`.
+fn add_module(info: &mut BootInfo, name: &str, data: &[u8]) -> Result<(), &'static str> {
+    if info.nmodules as usize == MAX_MODULES {
+        return Err("too many boot files");
+    }
+    let mut module = Module::EMPTY;
+    module.phys = data.as_ptr() as u64;
+    module.size = data.len() as u64;
+    module.set_name(name.as_bytes());
+    info.modules[info.nmodules as usize] = module;
+    info.nmodules += 1;
+    println!("nkload: module {name} ({} bytes)", data.len());
+    Ok(())
+}
+
+/// Read every file in the driver directory as a boot module, and the
+/// registry hive if there is one. The hive is not looked into here: the
+/// kernel checks it.
 fn load_modules(root: &efi::File, info: &mut BootInfo) -> Result<(), &'static str> {
+    if let Some(file) = root.open(HIVE_PATH) {
+        let data = file.read_all().ok_or("cannot read \\NK\\SYSTEM")?;
+        add_module(info, HIVE_MODULE, data)?;
+    }
     let Some(dir) = root.open(DRIVER_DIR) else {
         return Ok(()); // no drivers is a valid configuration
     };
@@ -85,20 +108,11 @@ fn load_modules(root: &efi::File, info: &mut BootInfo) -> Result<(), &'static st
             continue;
         }
         let name = core::str::from_utf8(&name[..len]).map_err(|_| "driver name is not ASCII")?;
-        if info.nmodules as usize == MAX_MODULES {
-            return Err("too many boot drivers");
-        }
         let data = dir
             .open(name)
             .and_then(|f| f.read_all())
             .ok_or("cannot read a boot driver")?;
-        let mut module = Module::EMPTY;
-        module.phys = data.as_ptr() as u64;
-        module.size = data.len() as u64;
-        module.set_name(name.as_bytes());
-        info.modules[info.nmodules as usize] = module;
-        info.nmodules += 1;
-        println!("nkload: module {name} ({} bytes)", data.len());
+        add_module(info, name, data)?;
     }
     Ok(())
 }

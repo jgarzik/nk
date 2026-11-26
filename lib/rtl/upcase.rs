@@ -414,16 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn the_latin_1_helper_and_the_table_agree_where_both_map() {
-        for c in 0..=0xFFu16 {
-            let latin = crate::upcase(c);
-            if latin != c {
-                assert_eq!(upcase_char(c), latin, "{c:04X}");
-            }
-        }
-    }
-
-    #[test]
     fn upcased_string_length() {
         assert_eq!(upcase_string_length(0, 0), Some(0));
         assert_eq!(upcase_string_length(10, 10), Some(10), "no terminator");

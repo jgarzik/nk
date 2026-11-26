@@ -1,10 +1,12 @@
 //! The registry, as drivers reach it: `ZwCreateKey`, `ZwOpenKey`,
 //! `ZwQueryValueKey`, `ZwSetValueKey`.
 //!
-//! One tree in memory (`nk_cm`), under one lock. Nothing is loaded from
-//! or saved to a hive file: the registry starts with the keys a driver
-//! expects to find and holds what drivers put in it until the machine
-//! stops. A key handle is a handle to a small object naming the key.
+//! One tree in memory (`nk_cm`), under one lock. It starts with the
+//! keys every system has and, laid over `Machine\System`, the SYSTEM
+//! hive the loader read, if it read one; it holds what drivers put in
+//! it until the machine stops. Nothing is written back to a hive file.
+//! `CurrentControlSet` is a symbolic link to the control set the hive
+//! selects. A key handle is a handle to a small object naming the key.
 //!
 //! The registry's root is such an object too, called `\Registry` in the
 //! object namespace. An absolute name is looked up there like any
@@ -17,7 +19,8 @@ use crate::ke::{Rank, SpinLock};
 use crate::ob::{handle, object};
 use alloc::vec::Vec;
 use core::ffi::c_void;
-use nk_cm::{Error, Fit, Hive, KeyId};
+use nk_cm::regf::{Regf, RegfError};
+use nk_cm::{Error, Fit, Hive, ImportError, KeyId};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
@@ -31,33 +34,112 @@ const OPENED: u32 = 2;
 const FULL: u32 = 1;
 const PARTIAL: u32 = 2;
 
-/// The keys every Windows system has and drivers build on, which no
-/// hive file is there to supply.
-const INITIAL: &[&str] = &[
+/// `REG_DWORD`.
+const REG_DWORD: u32 = 4;
+
+/// The keys every Windows system has before any hive is read.
+const SKELETON: &[&str] = &[
     "Machine",
+    "Machine\\Hardware",
     "Machine\\System",
-    "Machine\\System\\CurrentControlSet",
-    "Machine\\System\\CurrentControlSet\\Control",
-    "Machine\\System\\CurrentControlSet\\Control\\Class",
-    "Machine\\System\\CurrentControlSet\\Services",
+    "Machine\\System\\Select",
     "User",
 ];
 
-/// Make the registry's first keys, and name its root `\Registry`.
+/// `Select`'s values on a system that has always booted its first
+/// control set (what Windows 10 holds after a clean installation): a
+/// hive's own replace them.
+const SELECT: &[(&str, u32)] = &[
+    ("Current", 1),
+    ("Default", 1),
+    ("Failed", 0),
+    ("LastKnownGood", 1),
+];
+
+/// The keys drivers and the kernel build on in the current control
+/// set, which no hive need supply.
+const CONTROL_SET: &[&str] = &["", "\\Control", "\\Control\\Class", "\\Services"];
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+/// Why a hive file was refused, for the boot log.
+fn refusal(error: ImportError) -> &'static str {
+    match error {
+        ImportError::File(RegfError::Dirty) => {
+            "the SYSTEM hive was not written out completely: its log would have to be replayed"
+        }
+        ImportError::File(RegfError::Corrupt) => "the SYSTEM hive's checksum is wrong",
+        ImportError::File(RegfError::NotRegf) => "the SYSTEM hive is not a hive file",
+        ImportError::File(_) => "the SYSTEM hive is malformed",
+        ImportError::Tree(_) => "no memory for the SYSTEM hive",
+    }
+}
+
+/// Build the registry in `hive`: the keys every system has, the SYSTEM
+/// hive `file` laid over `Machine\System` if there is one, and
+/// `CurrentControlSet`, a symbolic link to the control set
+/// `Select\Current` names, as on Windows. Returns the root.
+fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
+    const NO_MEMORY: &str = "no memory for the registry";
+    let root = hive.root().map_err(|_| NO_MEMORY)?;
+    for path in SKELETON {
+        hive.create(root, &wide(path)).map_err(|_| NO_MEMORY)?;
+    }
+    let system = hive
+        .open(root, &wide("Machine\\System"))
+        .map_err(|_| NO_MEMORY)?;
+    let select = hive.open(system, &wide("Select")).map_err(|_| NO_MEMORY)?;
+    for (name, number) in SELECT {
+        hive.set_value(select, &wide(name), REG_DWORD, &number.to_le_bytes())
+            .map_err(|_| NO_MEMORY)?;
+    }
+    if let Some(file) = file {
+        // A hive that is damaged, or needs its log, is not half used.
+        let regf = Regf::parse(file).map_err(|e| refusal(e.into()))?;
+        nk_cm::import(hive, system, &regf).map_err(refusal)?;
+    }
+    let current = match hive.value(select, &wide("Current")) {
+        Ok((_, REG_DWORD, &[a, b, c, d])) => u32::from_le_bytes([a, b, c, d]),
+        _ => return Err("Select\\Current does not name a control set"),
+    };
+    let set = alloc::format!("ControlSet{current:03}");
+    for below in CONTROL_SET {
+        hive.create(system, &wide(&alloc::format!("{set}{below}")))
+            .map_err(|_| NO_MEMORY)?;
+    }
+    let (link, _) = hive
+        .create(system, &wide("CurrentControlSet"))
+        .map_err(|_| NO_MEMORY)?;
+    hive.link_to(
+        link,
+        &wide(&alloc::format!("\\Registry\\Machine\\System\\{set}")),
+    )
+    .map_err(|_| NO_MEMORY)?;
+    Ok(root)
+}
+
+/// Make the registry, from the SYSTEM hive the loader read if it read
+/// one (`doc/BOOT.md`), and name its root `\Registry`. A hive that
+/// cannot be used fails the boot.
 pub fn init() -> Result<(), &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
+    let file = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE);
     let root = {
         let mut hive = HIVE.lock();
-        let root = hive.root().map_err(|_| NO_MEMORY)?;
-        for path in INITIAL {
-            let path: Vec<u16> = path.encode_utf16().collect();
-            hive.create(root, &path)
-                .map_err(|_| "the registry's first keys could not be made")?;
-        }
+        let root = build(&mut hive, file)?;
         // The key object made below counts as an open of the root.
         hive.opened(root);
         root
     };
+    kprintln!(
+        "cm: registry {}",
+        match file {
+            Some(file) => alloc::format!("from the SYSTEM hive ({} bytes)", file.len()),
+            None => "without a hive".into(),
+        }
+    );
     let path: Vec<u16> = "\\Registry".encode_utf16().collect();
     let body = object::create_named(
         &object::KEY_TYPE,
@@ -401,4 +483,44 @@ pub unsafe extern "C" fn ZwQueryValueKey(
         Fit::All => STATUS_SUCCESS,
         _ => STATUS_BUFFER_OVERFLOW,
     }
+}
+
+// ---- tests --------------------------------------------------------------
+
+/// A hive file that needs its log, or whose base block is damaged, or
+/// that is cut short, is refused whole; `file`, the hive the loader
+/// read, is accepted as it is.
+pub fn refused_test(file: &[u8]) -> Result<(), &'static str> {
+    let mut copy = Vec::new();
+    copy.try_reserve_exact(file.len())
+        .map_err(|_| "no memory")?;
+    copy.extend_from_slice(file);
+    let verdict = |file: &[u8]| build(&mut Hive::new(), Some(file)).map(|_| ());
+    if verdict(&copy).is_err() {
+        return Err("the hive the kernel booted with was refused the second time");
+    }
+    // The second sequence number: a write that was begun and not ended.
+    // The base block's checksum covers it.
+    let sum = |copy: &mut [u8]| {
+        let sum = nk_cm::regf::checksum(&copy[..nk_cm::regf::BASE_BLOCK]);
+        copy[0x1FC..0x200].copy_from_slice(&sum.to_le_bytes());
+    };
+    copy[8] ^= 1;
+    sum(&mut copy);
+    if verdict(&copy) != Err(refusal(ImportError::File(RegfError::Dirty))) {
+        return Err("a hive that was not written out completely was not refused as such");
+    }
+    copy[8] ^= 1;
+    sum(&mut copy);
+    // A byte of the base block the checksum covers.
+    copy[0x30] ^= 0x40;
+    if verdict(&copy) != Err(refusal(ImportError::File(RegfError::Corrupt))) {
+        return Err("a hive with a damaged base block was not refused as such");
+    }
+    copy[0x30] ^= 0x40;
+    if verdict(&copy[..copy.len() - 4096]) != Err(refusal(ImportError::File(RegfError::BadLength)))
+    {
+        return Err("a hive cut short was not refused");
+    }
+    Ok(())
 }

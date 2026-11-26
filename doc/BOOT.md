@@ -10,6 +10,7 @@ in `lib/bootinfo/lib.rs`.
 \EFI\BOOT\BOOTX64.EFI     nkload on x86-64 (BOOTAA64.EFI on arm64)
 \NK\nkkrnl.exe            the kernel
 \NK\drivers\*.sys         boot drivers
+\NK\SYSTEM                optional: the SYSTEM registry hive
 \NK\cmdline.txt           optional: the kernel command line
 ```
 
@@ -18,8 +19,12 @@ it is the default path for a volume with no boot entry.
 
 ## What nkload does
 
-1. Reads the kernel and every file in `\NK\drivers` into memory, and
-   the command line if there is one: a single line of `key=value` words
+1. Reads the kernel, every file in `\NK\drivers` and the hive
+   `\NK\SYSTEM` (if there is one) into memory. The hive is handed to
+   the kernel as one more boot file, called `SYSTEM`, unread: the kernel
+   checks it and builds the registry from it (`doc/DESIGN.md`, The
+   registry). Without the file the registry starts from the kernel's
+   built-in keys. Also the command line if there is one: a single line of `key=value` words
    (`doc/TESTING.md` lists them), at most 255 ASCII characters.
 2. Maps the kernel image with `lib/pe` and relocates it to its fixed
    virtual base. The kernel links at a low default base on purpose, so the

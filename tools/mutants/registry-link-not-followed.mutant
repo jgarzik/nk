@@ -1,0 +1,8 @@
+# A registry symbolic link is opened as the key it is, not followed to
+# the key it names: CurrentControlSet is an empty key and nothing a
+# driver looks for under it is found.
+scenario: x86_64
+fails: cm.control-set
+file: lib/cm/lib.rs
+replace:         if !self.keys[key].link {
+with:         if true {

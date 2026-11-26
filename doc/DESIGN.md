@@ -405,7 +405,8 @@ driver's object is `\Driver\<service>`, and `\Registry` is the
 registry's root key.
 
 Names compare case-insensitively whatever the caller asks, which is
-Windows' default configuration. A look-up follows symbolic links, at
+Windows' default configuration, by the same upper-case table as the
+registry's. A look-up follows symbolic links, at
 most eight, and stops at the first object on the path, handing back the
 object, referenced, and the rest of the path. A directory missing on the
 way is `STATUS_OBJECT_PATH_NOT_FOUND`; a missing last name is
@@ -668,10 +669,32 @@ limits are at the top of `kernel/io/mdl.rs`.
 ## The registry
 
 One tree of keys and values in memory (`lib/cm`; exports in `kernel/cm`).
-Nothing is loaded from or saved to a hive: it starts with
-`\Registry\Machine\System\CurrentControlSet` (`Control\Class`,
-`Services`) and holds what drivers write until power-off. Names compare
-case-insensitively. A key handle is a handle to a small object naming
+It is built at boot:
+
+1. the keys every system has: `\Registry\Machine\System` with
+   `Select`, `\Registry\Machine\Hardware`, `\Registry\User`;
+2. the SYSTEM hive the loader read (`doc/BOOT.md`), if it read one,
+   copied over `\Registry\Machine\System`: keys, values, classes,
+   security descriptors, times. A hive that is damaged, or that needs
+   its transaction log, fails the boot: nothing replays a log;
+3. the control set `Select\Current` names (`ControlSet001`), with
+   `Control\Class` and `Services` made if the hive did not bring them,
+   and `CurrentControlSet`, a symbolic link to it.
+
+Without a hive the registry is 1 and 3 alone. It holds what drivers
+write until power-off; nothing is written back to a file.
+
+A symbolic link is what it is on Windows: a key flagged as one, whose
+`SymbolicLinkValue` (`REG_LINK`) is the full path of another key. A
+look-up that reaches a link goes on from that key, so a key made under
+`CurrentControlSet` is made in the control set. A link whose target is
+missing leads nowhere (`STATUS_OBJECT_NAME_NOT_FOUND`). Only the kernel
+makes links; no export opens the link itself.
+
+Names compare without regard to case, upper case against upper case by
+a full table (`nk_rtl::upcase_char`, built from the Unicode character
+database: Windows' own table may differ for a few characters, listed
+there). A key handle is a handle to a small object naming
 the key. The root key is such an object too, called `\Registry` in the
 object namespace: an absolute name, or one relative to a directory, is
 looked up there, through symbolic links like any other, and must end at
@@ -683,7 +706,7 @@ Creating makes only the last key of a path, as on Windows. Values are
 read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
 forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
-access checks, registry symbolic links or notification. Leak checks leave out the
+access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
 ## Security descriptors

@@ -102,7 +102,7 @@ pub fn import(hive: &mut Hive, under: KeyId, regf: &Regf<'_>) -> Result<(), Impo
         if name.is_empty() || name.contains(&u16::from(b'\\')) {
             return Err(RegfError::BadCell.into());
         }
-        let (key, _) = hive.create(parent, &name)?;
+        let key = hive.subkey_or_new(parent, &name)?;
         copy(hive, key, regf, &node, &mut name, &mut data)?;
         if above.len() == MAX_DEPTH {
             return Err(RegfError::TooDeep.into());

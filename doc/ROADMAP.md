@@ -121,7 +121,7 @@ Its scope follows what its proof binaries import:
 
 Gaps phase 1 leaves, each described in `doc/DESIGN.md`: no APCs; the
 clock always ticks, at 64 Hz; no priority boosts; a thread can change
-only its own priority; the registry is in memory only; nothing enforces
+only its own priority; the registry is never written back to a file; nothing enforces
 a security descriptor; no arm64 `null.sys` (no source; stays SKIP);
 never run on a physical machine (phase 3).
 

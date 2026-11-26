@@ -151,6 +151,20 @@ impl Hive {
         self.keys[index].link = link;
         Ok(())
     }
+
+    /// Make `key` a symbolic link to the key `target` names, a full
+    /// path from the root (`\Registry\...`): what creating a key with
+    /// `REG_OPTION_CREATE_LINK` and setting its `SymbolicLinkValue`
+    /// does on Windows. The target need not exist.
+    pub fn link_to(&mut self, key: KeyId, target: &[u16]) -> Result<(), Error> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(target.len() * 2)
+            .map_err(|_| Error::NoMemory)?;
+        bytes.extend(target.iter().flat_map(|unit| unit.to_le_bytes()));
+        self.set_value(key, crate::LINK_VALUE, crate::REG_LINK, &bytes)?;
+        self.set_link(key, true)
+    }
 }
 
 /// Size of a `KEY_BASIC_INFORMATION` before the name: last write time,

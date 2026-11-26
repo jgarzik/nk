@@ -6,13 +6,14 @@ Layout, mirroring where Windows keeps its boot files:
     \\EFI\\BOOT\\BOOT{X64,AA64}.EFI   nkload (the path firmware boots by default)
     \\NK\\nkkrnl.exe                  the kernel
     \\NK\\drivers\\<name>.sys         boot drivers, from the fixture cache
+    \\NK\\SYSTEM                      the SYSTEM registry hive, from the fixture cache
     \\NK\\cmdline.txt                 the kernel command line, if any
 
 The image is a bare FAT filesystem made with mtools: no root, no loop device.
 
 Usage: mkesp.py <x86_64|aarch64> <output.img> [--no-drivers]
 
-`--no-drivers` leaves the fixture drivers out. Such an image contains only
+`--no-drivers` leaves the fixture drivers and the hive out. Such an image contains only
 NK's own code and can be redistributed; the kernel boots and reports the
 driver tests as skipped.
 """
@@ -62,6 +63,15 @@ def boot_drivers(arch):
     return drivers, missing
 
 
+def hive():
+    """(path, missing file name or None) of the registry hive fixture: the
+    one fixture of kind "hive", the same for every architecture."""
+    manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
+    [fx] = [fx for fx in manifest if fx.get("kind") == "hive"]
+    path = FIXTURES / fx["file"]
+    return (path, None) if path.exists() else (None, fx["file"])
+
+
 def build(arch, image, drivers=True, cmdline=""):
     """Write the ESP image for `arch` to `image`. Returns the names of the
     driver fixtures that should be on it but are not downloaded (or a
@@ -86,6 +96,12 @@ def build(arch, image, drivers=True, cmdline=""):
     found, missing = boot_drivers(arch) if drivers else ([], ["(no drivers)"])
     for name, path in found:
         mtools("mcopy", "-i", image, path, f"::/NK/drivers/{name}")
+    if drivers:
+        path, absent = hive()
+        if path:
+            mtools("mcopy", "-i", image, path, "::/NK/SYSTEM")
+        else:
+            missing.append(absent)
     if cmdline:
         text = image.with_suffix(".cmdline")
         text.write_text(cmdline + "\n")

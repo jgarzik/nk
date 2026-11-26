@@ -133,6 +133,16 @@ fn names_outside_ascii_are_found() {
             "{name}"
         );
     }
+    // In another letter case, within Latin-1 and beyond it.
+    for (name, number) in [("CAF\u{c9}", 3u32), ("\u{391}\u{392}\u{393}", 4)] {
+        assert_eq!(
+            value(&hive, root, names, name),
+            (REG_DWORD, number.to_le_bytes().to_vec()),
+            "{name}"
+        );
+        hive.open(root, &wide(&format!("{names}\\{name}")))
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
     for subkey in ["two words", "caf\u{e9}", "\u{65e5}\u{672c}\u{8a9e}"] {
         hive.open(root, &wide(&format!("{names}\\{subkey}")))
             .unwrap_or_else(|e| panic!("{subkey}: {e:?}"));
