@@ -23,7 +23,6 @@ trap_list!(
     IoGetPagingIoPriority,
     IoGetRequestorProcessId,
     IoGetStackLimits,
-    IoInvalidateDeviceRelations,
     IoInvalidateDeviceState,
     IoIs32bitProcess,
     IoIsActivityTracingEnabled,
