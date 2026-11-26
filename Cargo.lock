@@ -92,6 +92,7 @@ dependencies = [
  "nk-acpi",
  "nk-bootinfo",
  "nk-cm",
+ "nk-ex",
  "nk-hal",
  "nk-ke",
  "nk-mm",

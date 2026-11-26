@@ -11,6 +11,8 @@
 //! and its owner table. [`slist`] is `SLIST_HEADER`.
 //! [`lookaside`] is what initialising a lookaside list writes.
 //! [`uuid`] makes the time-based UUIDs of `ExUuidCreate`.
+//! [`sysinfo`] is the length rules of `ZwQuerySystemInformation` and the
+//! list of loaded modules it and `RtlQueryModuleInformation` report.
 //!
 //! The `ExAllocateTimer` family has no logic of its own to put here: an
 //! executive timer is a kernel timer with a callback, and the rules for
@@ -22,6 +24,7 @@ pub mod lookaside;
 pub mod pushlock;
 pub mod resource;
 pub mod slist;
+pub mod sysinfo;
 pub mod uuid;
 
 #[cfg(test)]

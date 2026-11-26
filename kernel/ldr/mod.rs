@@ -652,6 +652,16 @@ fn drop_importer(base: u64) {
     unload_image(&library.image);
 }
 
+/// Every image in memory, the kernel's own first and the rest in the
+/// order they were loaded.
+pub fn modules() -> Vec<Module> {
+    // Room for all of them before the lock, under which nothing is
+    // allocated.
+    let mut list = alloc::vec![None; MAX_MODULES];
+    let count = MODULES.lock().in_load_order(&mut list);
+    list.into_iter().take(count).flatten().collect()
+}
+
 /// The loaded image whose file name is `name`.
 pub fn module_named(name: &str) -> Option<Module> {
     MODULES.lock().named(name.as_bytes())

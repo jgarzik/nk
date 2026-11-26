@@ -149,6 +149,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KfRaiseIrql),
     export_variable!(Implemented, "KiBugCheckData", ke::bugcheck::KiBugCheckData),
     export!(Implemented, MmGetSystemRoutineAddress),
+    export!(Implemented, ex::sysinfo::MmIsDriverVerifying),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
     export_entry!(
@@ -165,6 +166,7 @@ static EXPORTS: &[Export] = &[
         arch::seh::nk_entry_ProbeForRead
     ),
     export!(Implemented, rtl::RtlGetVersion),
+    export!(Implemented, ex::sysinfo::RtlQueryModuleInformation),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, ke::seh::__C_specific_handler),
     export!(Implemented, ke::mutex::ExAcquireFastMutex),
@@ -192,10 +194,18 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::wait::KeResetEvent),
     export!(Implemented, ke::wait::KeWaitForMultipleObjects),
     export!(Implemented, ke::wait::KeWaitForSingleObject),
+    export!(Implemented, ex::sysinfo::DbgkWerCaptureLiveKernelDump),
+    export!(Partial, ex::sysinfo::NtQuerySystemInformation),
     export!(Implemented, ps::PsCreateSystemThread),
+    export!(Implemented, ex::sysinfo::PsGetVersion),
     export!(Implemented, ps::PsTerminateSystemThread),
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Implemented, ps::ZwClose),
+    export_entry!(
+        Partial,
+        "ZwQuerySystemInformation",
+        ex::sysinfo::NtQuerySystemInformation
+    ),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export!(Implemented, rtl::print::RtlFreeUnicodeString),
     export_entry!(

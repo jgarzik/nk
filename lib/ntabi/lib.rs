@@ -25,6 +25,7 @@ pub mod process;
 pub mod se;
 pub mod seh;
 pub mod status;
+pub mod sysinfo;
 pub mod thread;
 
 #[cfg(test)]

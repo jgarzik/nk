@@ -141,6 +141,16 @@ rtl.printf ok
 rtl.strings ok
 ke.bugcheck.register ok
 ke.bugcheck.order ok
+ex.sysinfo.basic ok
+ex.sysinfo.debugger ok
+ex.sysinfo.isolated-user-mode ok
+ex.sysinfo.class ok
+ex.sysinfo.modules ok
+ex.sysinfo.modules.short ok
+ex.sysinfo.driver ok
+rtl.module-information ok
+ps.version ok
+dbgk.live-dump ok
 ldr.module.kernel ok
 ldr.module.driver ok
 ldr.reject.wrong-machine ok

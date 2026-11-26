@@ -995,6 +995,41 @@ file system reads it in line (`kernel/se/token.rs`):
   flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
   security descriptor, auxiliary data, privileges and names are empty.
 
+## Questions about the system
+
+`kernel/ex/sysinfo.rs`, with the length rules in `nk_ex::sysinfo`.
+
+`ZwQuerySystemInformation` and `NtQuerySystemInformation` are one
+routine: every caller is in kernel mode. It answers the classes the
+binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
+Lengths, and what is reported as the length needed, are the pinned
+kernel's, class by class.
+
+| Class | Answer |
+| --- | --- |
+| 0, basic | page size, 64 KiB granularity, Windows' user range, the processors running, the memory NK uses as RAM |
+| 11, modules | the images in memory (below) |
+| 35, kernel debugger | enabled and present with `debug=on`; else neither |
+| 165, isolated user mode | sixteen zero bytes: no secure kernel. `msrpc.sys` asks, and pages itself out unless the first bit is set |
+
+**The module list** is the table of images in load order, as Windows
+lists them: `ntoskrnl.exe` first, then `hal.dll`, then the drivers.
+NK has no HAL image; `hal.dll` is a second name of the kernel's and is
+listed with the kernel's range, so a driver that expects Windows' first
+two modules finds them, and an address in the kernel is the kernel's to
+whoever takes the first module that contains it. The kernel and
+`hal.dll` are reported in `\SystemRoot\system32`, every other image in
+`\SystemRoot\System32\drivers`, which the boot files stand for. An
+entry's `Flags` is zero and its `Section` and `MappedBase` are left as
+the caller had them, which is what Windows does with those two.
+`RtlQueryModuleInformation`, which the WDK's auxiliary library calls,
+reports the same list in its two sizes.
+
+`PsGetVersion` gives `RtlGetVersion`'s numbers. `MmIsDriverVerifying`
+is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers
+`STATUS_DEVICE_NOT_READY`, Windows' answer before its live-dump support
+has started.
+
 ## Stopping the system
 
 Every fatal error ends in one place (`kd::bugcheck`): the first
