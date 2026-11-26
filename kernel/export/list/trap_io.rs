@@ -18,7 +18,6 @@ trap_list!(
     IoReserveDependency,
     IoResolveDependency,
     IoSetDependency,
-    IoSetDeviceInterfacePropertyData,
     IoTestDependency,
     IoWMIExecuteMethod,
     IoWMIQueryAllData,
