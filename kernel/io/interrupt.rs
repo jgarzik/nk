@@ -293,8 +293,18 @@ unsafe fn stated_line(device: *mut DEVICE_OBJECT) -> Option<(u32, KIRQL)> {
     if status != STATUS_SUCCESS {
         return None;
     }
-    let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    let entries = data[HEADER..length.min(data.len() as u32) as usize]
+    stated_line_in(&data[..length.min(data.len() as u32) as usize])
+}
+
+/// The first line an interrupt connection data value names that is
+/// placed now: its vector and IRQL. A value left from before the
+/// device's interrupts were withdrawn names a vector no line has any
+/// more, and states nothing.
+pub fn stated_line_in(data: &[u8]) -> Option<(u32, KIRQL)> {
+    const HEADER: usize = 8;
+    let count = u32::from_le_bytes(*data.first_chunk::<4>()?) as usize;
+    let entries = data
+        .get(HEADER..)?
         .as_chunks::<{ size_of::<INTERRUPT_VECTOR_DATA>() }>()
         .0
         .iter()
@@ -307,7 +317,9 @@ unsafe fn stated_line(device: *mut DEVICE_OBJECT) -> Option<(u32, KIRQL)> {
                 .cast::<INTERRUPT_VECTOR_DATA>()
                 .read_unaligned()
         };
-        if entry.Type == INTERRUPT_CONNECTION_CONTROLLER_INPUT {
+        let placed = routing::info(entry.Vector)
+            .is_some_and(|info| info.line.is_some() && info.level == entry.Irql);
+        if entry.Type == INTERRUPT_CONNECTION_CONTROLLER_INPUT && placed {
             return Some((entry.Vector, entry.Irql));
         }
     }
