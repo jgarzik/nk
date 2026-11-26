@@ -34,9 +34,9 @@ fn table(mem: &impl PhysMem, addr: u64) -> Option<&[u8]> {
     mem.bytes(addr, len)
 }
 
-/// Find the table with signature `sig` (for example `b"SPCR"`), starting
-/// from the RSDP. Uses the XSDT when present, else the RSDT.
-pub fn find_table<'a>(mem: &'a impl PhysMem, rsdp: u64, sig: &[u8; 4]) -> Option<&'a [u8]> {
+/// The root table the RSDP at `rsdp` names, and the width of its
+/// entries: the XSDT when there is one, else the RSDT.
+fn root(mem: &impl PhysMem, rsdp: u64) -> Option<(&[u8], usize)> {
     let r = mem.bytes(rsdp, 36)?;
     if &r[..8] != b"RSD PTR " {
         return None;
@@ -47,15 +47,74 @@ pub fn find_table<'a>(mem: &'a impl PhysMem, rsdp: u64, sig: &[u8; 4]) -> Option
     } else {
         (u64::from(u32_at(r, 16)?), 4)
     };
-    let root = table(mem, root)?;
-    root[SDT_HEADER..].chunks_exact(width).find_map(|e| {
-        let addr = if width == 8 {
-            u64_at(e, 0)?
-        } else {
-            u64::from(u32_at(e, 0)?)
-        };
-        table(mem, addr).filter(|t| &t[..4] == sig)
+    Some((table(mem, root)?, width))
+}
+
+/// The tables the root table lists, in its order.
+fn listed(mem: &impl PhysMem, rsdp: u64) -> impl Iterator<Item = &[u8]> {
+    root(mem, rsdp).into_iter().flat_map(move |(root, width)| {
+        root[SDT_HEADER..].chunks_exact(width).filter_map(move |e| {
+            let addr = if width == 8 {
+                u64_at(e, 0)?
+            } else {
+                u64::from(u32_at(e, 0)?)
+            };
+            table(mem, addr)
+        })
     })
+}
+
+/// Find the table with signature `sig` (for example `b"SPCR"`), starting
+/// from the RSDP. Uses the XSDT when present, else the RSDT.
+pub fn find_table<'a>(mem: &'a impl PhysMem, rsdp: u64, sig: &[u8; 4]) -> Option<&'a [u8]> {
+    listed(mem, rsdp).find(|t| &t[..4] == sig)
+}
+
+/// Offsets in the FADT: the DSDT's 32-bit address, the table's
+/// revision, and the DSDT's 64-bit address, which revision 3 added.
+const FADT_DSDT: usize = 40;
+const SDT_REVISION: usize = 8;
+const FADT_X_DSDT: usize = 140;
+
+/// The table an operating system's ACPI driver asks its HAL for by
+/// signature, as Windows' HAL answers:
+///
+/// - `RSDT` or `XSDT`: the root table, whichever of the two the firmware
+///   has (the XSDT when there is one), under either name;
+/// - `DSDT`: the table the FADT points to, which no root table lists:
+///   by its 64-bit address from revision 3 of the FADT when that is not
+///   zero, else by the 32-bit one;
+/// - any other: the first listed table of that signature whose OEM id
+///   and OEM table id are the ones given, where they are given.
+pub fn lookup<'a>(
+    mem: &'a impl PhysMem,
+    rsdp: u64,
+    sig: &[u8; 4],
+    oem_id: Option<&[u8; 6]>,
+    oem_table_id: Option<&[u8; 8]>,
+) -> Option<&'a [u8]> {
+    match sig {
+        b"RSDT" | b"XSDT" => root(mem, rsdp).map(|(root, _)| root),
+        b"DSDT" => {
+            let fadt = find_table(mem, rsdp, b"FACP")?;
+            let wide = if fadt[SDT_REVISION] >= 3 {
+                u64_at(fadt, FADT_X_DSDT).unwrap_or(0)
+            } else {
+                0
+            };
+            let at = if wide != 0 {
+                wide
+            } else {
+                u64::from(u32_at(fadt, FADT_DSDT)?)
+            };
+            table(mem, at).filter(|t| &t[..4] == b"DSDT")
+        }
+        _ => listed(mem, rsdp).find(|t| {
+            &t[..4] == sig
+                && oem_id.is_none_or(|id| &t[10..16] == id)
+                && oem_table_id.is_none_or(|id| &t[16..24] == id)
+        }),
+    }
 }
 
 /// The console UART described by an SPCR table.
@@ -553,6 +612,68 @@ mod tests {
                 })
             );
             assert!(find_table(&fw, 0x1000, b"MCFG").is_none());
+        }
+    }
+
+    #[test]
+    fn a_table_is_looked_up_as_the_hal_answers_the_acpi_driver() {
+        for xsdt in [true, false] {
+            let oem = |id: &[u8; 6], table: &[u8; 8]| {
+                let mut t = sdt(b"SSDT", &[0; 4]);
+                t[10..16].copy_from_slice(id);
+                t[16..24].copy_from_slice(table);
+                t
+            };
+            // A revision 1 FADT has only the 32-bit address of the DSDT.
+            let mut body = vec![0u8; 112];
+            body[FADT_DSDT - SDT_HEADER..][..4].copy_from_slice(&0x1800u32.to_le_bytes());
+            let mut fadt = sdt(b"FACP", &body);
+            fadt[SDT_REVISION] = 1;
+            let mut fw = firmware(
+                xsdt,
+                &[
+                    fadt,
+                    oem(b"NKNKNK", b"FIRST   "),
+                    oem(b"NKNKNK", b"SECOND  "),
+                ],
+            );
+            let dsdt = sdt(b"DSDT", &[7; 12]);
+            fw.0[0x800..][..dsdt.len()].copy_from_slice(&dsdt);
+
+            let find = |sig, id, table| lookup(&fw, 0x1000, sig, id, table);
+            let name: &[u8] = if xsdt { b"XSDT" } else { b"RSDT" };
+            assert_eq!(&find(b"RSDT", None, None).unwrap()[..4], name);
+            assert_eq!(&find(b"XSDT", None, None).unwrap()[..4], name);
+            assert_eq!(find(b"DSDT", None, None).unwrap(), &dsdt[..]);
+            assert_eq!(&find(b"SSDT", None, None).unwrap()[16..24], b"FIRST   ");
+            assert_eq!(
+                &find(b"SSDT", Some(b"NKNKNK"), Some(b"SECOND  ")).unwrap()[16..24],
+                b"SECOND  "
+            );
+            assert!(find(b"SSDT", Some(b"OTHER "), None).is_none());
+            assert!(find(b"SSDT", None, Some(b"THIRD   ")).is_none());
+            assert!(find(b"MCFG", None, None).is_none());
+        }
+    }
+
+    /// From revision 3 the FADT's 64-bit address of the DSDT is used,
+    /// unless it is zero.
+    #[test]
+    fn the_dsdt_is_found_by_the_fadt_s_wide_address_when_it_has_one() {
+        let dsdt = sdt(b"DSDT", &[9; 4]);
+        for (wide, narrow, found) in [
+            (0x1900u64, 0x1800u32, true),
+            (0, 0x1900, true),
+            (0, 0, false),
+        ] {
+            let mut body = vec![0u8; 240];
+            body[FADT_DSDT - SDT_HEADER..][..4].copy_from_slice(&narrow.to_le_bytes());
+            body[FADT_X_DSDT - SDT_HEADER..][..8].copy_from_slice(&wide.to_le_bytes());
+            let mut fadt = sdt(b"FACP", &body);
+            fadt[SDT_REVISION] = 5;
+            let mut fw = firmware(true, &[fadt]);
+            fw.0[0x900..][..dsdt.len()].copy_from_slice(&dsdt);
+            assert_eq!(lookup(&fw, 0x1000, b"DSDT", None, None).is_some(), found);
         }
     }
 

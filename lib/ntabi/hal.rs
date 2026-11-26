@@ -125,6 +125,24 @@ macro_rules! hal_private_dispatch_slots {
     };
 }
 
+/// The slots of the table the HAL gives `acpi.sys` in exchange for the
+/// driver's own (`HalInitPowerManagement`): a `PM_DISPATCH_TABLE`,
+/// signature and version and then routines. It is in no header; the
+/// names are those of the routines the pinned kernel's table holds.
+#[macro_export]
+macro_rules! hal_acpi_dispatch_slots {
+    ($with:ident) => {
+        $with! {
+            HalAcpiTimerInit, HalAcpiMachineStateInit, HalAcpiQueryFlags,
+            HalInterruptIsPicStateIntact, HalInterruptRestoreAllControllerState,
+            HalPciInterfaceReadConfig, HalPciInterfaceWriteConfig, HalInterruptGetApicVersion,
+            HalSetMaxLegacyPciBusNumber, HalInterruptIsGsiValid, HalAcpiGetTable,
+            HalAcpiGetRsdp, HalAcpiGetFacsMapping, HalAcpiGetAllTables,
+            HalAcpiPmRegisterAvailable,
+        }
+    };
+}
+
 macro_rules! names {
     ($($name:ident),* $(,)?) => {
         &[$(stringify!($name)),*]
@@ -135,6 +153,12 @@ macro_rules! names {
 pub const HAL_DISPATCH_SLOTS: &[&str] = hal_dispatch_slots!(names);
 /// The slot names of `HalPrivateDispatchTable`.
 pub const HAL_PRIVATE_DISPATCH_SLOTS: &[&str] = hal_private_dispatch_slots!(names);
+
+/// The slot names of the HAL's ACPI table.
+pub const HAL_ACPI_DISPATCH_SLOTS: &[&str] = hal_acpi_dispatch_slots!(names);
+/// What the HAL's ACPI table starts with: the signature `HAL ` in its
+/// low half, the version, 4, in its high half.
+pub const HAL_ACPI_DISPATCH_HEADER: u64 = 0x0000_0004_4841_4C20;
 
 /// The offset of the slot called `name` in a table with `slots`.
 pub const fn slot_offset(slots: &[&str], name: &str) -> Option<usize> {
@@ -169,6 +193,11 @@ const _: () = assert!(FIRST_SLOT + HAL_PRIVATE_DISPATCH_SLOTS.len() * 8 == 1200)
 const _: () = assert!(matches!(
     slot_offset(HAL_DISPATCH_SLOTS, "HalInitPowerManagement"),
     Some(0x68)
+));
+const _: () = assert!(FIRST_SLOT + HAL_ACPI_DISPATCH_SLOTS.len() * 8 == 0x80);
+const _: () = assert!(matches!(
+    slot_offset(HAL_ACPI_DISPATCH_SLOTS, "HalAcpiGetTable"),
+    Some(0x58)
 ));
 const _: () = assert!(matches!(
     slot_offset(HAL_DISPATCH_SLOTS, "HalGetCachedAcpiTable"),

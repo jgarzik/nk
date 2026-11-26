@@ -2,11 +2,13 @@
 //! `HalPrivateDispatchTable`: exported variables through which
 //! Microsoft's bus drivers call the HAL, and into which they store
 //! routines of their own for the HAL and each other to call. The slots
-//! are listed in `nk_ntabi::hal`.
+//! are listed in `nk_ntabi::hal`. A third table, the HAL's ACPI table,
+//! is not exported: `acpi.sys` is given its address in exchange for the
+//! driver's own (`hal::acpi`).
 //!
 //! A slot NK has no routine for holds a trap that stops the system
-//! naming the table and the slot, as an unimplemented export does
-//! (`export::trap`): never null, which a driver would take for "this
+//! naming the table and the slot and saying what it was called with,
+//! as an unimplemented export does (`export::trap`): never null, which a driver would take for "this
 //! HAL has no such service" or jump through.
 //!
 //! The tables are memory drivers write, so NK reads a slot as an atomic
@@ -16,8 +18,8 @@
 
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use nk_ntabi::hal::{
-    FIRST_SLOT, HAL_DISPATCH_SLOTS, HAL_DISPATCH_VERSION, HAL_PRIVATE_DISPATCH_SLOTS,
-    HAL_PRIVATE_DISPATCH_VERSION, slot_offset,
+    FIRST_SLOT, HAL_ACPI_DISPATCH_HEADER, HAL_ACPI_DISPATCH_SLOTS, HAL_DISPATCH_SLOTS,
+    HAL_DISPATCH_VERSION, HAL_PRIVATE_DISPATCH_SLOTS, HAL_PRIVATE_DISPATCH_VERSION, slot_offset,
 };
 
 /// A version number, padded to a pointer, and then `N` routines.
@@ -66,23 +68,35 @@ pub const fn private_slot(name: &str) -> usize {
     }
 }
 
+/// The offset of the slot `name` of the HAL's ACPI table.
+pub const fn acpi_slot(name: &str) -> usize {
+    match slot_offset(HAL_ACPI_DISPATCH_SLOTS, name) {
+        Some(offset) => offset,
+        None => panic!("no such slot in the HAL's ACPI table"),
+    }
+}
+
 /// Define a table whose every slot holds a trap naming it.
 macro_rules! table {
     ($table:ident, $traps:ident, $slots:expr, $version:expr; $($slot:ident),* $(,)?) => {
         mod $traps {
             $(
-                pub extern "C" fn $slot() -> ! {
-                    crate::kd::bugcheck(format_args!(concat!(
-                        stringify!($table),
-                        ".",
-                        stringify!($slot),
-                        ": NK does not implement this routine"
-                    )))
+                pub extern "C" fn $slot(a: usize, b: usize, c: usize, d: usize) -> ! {
+                    crate::kd::bugcheck(format_args!(
+                        concat!(
+                            stringify!($table),
+                            ".",
+                            stringify!($slot),
+                            ": NK does not implement this routine \
+                             (called with {:#x}, {:#x}, {:#x}, {:#x})"
+                        ),
+                        a, b, c, d
+                    ))
                 }
             )*
         }
 
-        #[doc = concat!("`", stringify!($table), "`, as drivers import it.")]
+        #[doc = concat!("`", stringify!($table), "`, as drivers see it.")]
         pub static $table: Table<{ $slots.len() }> = Table {
             version: AtomicU64::new($version as u64),
             slots: [$(AtomicPtr::new($traps::$slot as *mut ())),*],
@@ -108,7 +122,20 @@ macro_rules! private {
     };
 }
 
+macro_rules! acpi {
+    ($($slot:ident),* $(,)?) => {
+        table!(
+            HalAcpiDispatchTable,
+            acpi_traps,
+            HAL_ACPI_DISPATCH_SLOTS,
+            HAL_ACPI_DISPATCH_HEADER;
+            $($slot),*
+        );
+    };
+}
+
 nk_ntabi::hal_dispatch_slots!(public);
+nk_ntabi::hal_acpi_dispatch_slots!(acpi);
 nk_ntabi::hal_private_dispatch_slots!(private);
 
 /// For the self-tests: the tables are what the imports bind to, laid

@@ -1140,6 +1140,7 @@ make that safe.
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| boot driver's reinitialisation routine | base of the system thread: the queue's reference to the driver object is not given back |
 | a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
 | a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
 | a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
@@ -1233,6 +1234,17 @@ header, and its slots are checked against the pinned kernel's symbols.
 A slot NK has no routine for holds a trap that stops the system naming
 the table and the slot. NK reads a slot atomically each time it uses
 one, since a driver may have replaced it.
+
+What the slots hold so far, each as the pinned kernel's HAL behaves:
+`HalInitPowerManagement` (`kernel/hal/acpi.rs`) takes `acpi.sys`'s
+table of routines and gives it the HAL's ACPI table, a third table of
+the same kind with Windows' signature, version and slot order, whose
+`HalAcpiGetTable` finds a firmware table by signature (`RSDT` and
+`XSDT` both name the root table there is; `DSDT` is found through the
+FADT; `nk_acpi::lookup`). It returns the firmware's own table where
+Windows returns a copy. `HalQuerySystemInformation`
+(`kernel/hal/sysinfo.rs`) answers the information classes drivers
+reach and stops the system naming any other.
 
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
@@ -1365,6 +1377,13 @@ is a driver's count. Windows'
 loader reads boot-start drivers into memory before the kernel runs and
 the I/O manager starts system-start ones later; on NK both are boot
 files and the order is all that tells them apart.
+
+When they have all started, the routines boot drivers registered with
+`IoRegisterBootDriverReinitialization` are called in the order
+registered, each with the number of times that driver has now been
+reinitialised; one may register again from within itself. Afterwards
+the queue is closed, and a routine registered later is never called, as
+on Windows.
 
 - A service whose image is not among the boot files is passed over,
   with a line in the log: a test image holds only the drivers it was

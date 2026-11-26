@@ -35,7 +35,6 @@ trap_list!(
     IoQueryFullDriverPath,
     IoReadPartitionTableEx,
     IoRecordIoAttribution,
-    IoRegisterBootDriverReinitialization,
     IoRegisterDeviceInterface,
     IoRegisterPlugPlayNotification,
     IoRegisterPriorityCallback,

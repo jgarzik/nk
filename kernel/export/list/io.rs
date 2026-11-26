@@ -62,4 +62,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::startio::IoSetStartIoAttributes),
     export!(Implemented, io::startio::IoStartNextPacket),
     export!(Implemented, io::startio::IoStartPacket),
+    export!(
+        Implemented,
+        io::driver::IoRegisterBootDriverReinitialization
+    ),
 ];
