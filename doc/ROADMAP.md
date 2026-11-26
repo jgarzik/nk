@@ -2,8 +2,9 @@
 
 The phases from NK to a Windows rescue disk: Microsoft's Windows
 10 user mode at a `cmd.exe` prompt on a kernel that is entirely NK. This
-file fixes the order, its reason, and what proves a phase done; each
-phase gets a detailed plan when it starts. What NK is and its principles:
+file fixes the order, its reason, and what proves each phase; a phase
+gets a detailed plan when it starts, and leaves this file when it is
+proven. What NK is and its principles:
 `doc/DESIGN.md`. What runs: `README.md`.
 
 ## Destination
@@ -56,37 +57,31 @@ provides. What the counts say:
 
 ## Shape of the kernel
 
-The parts of an NT kernel, and the phase that first builds each:
+The parts of an NT kernel still to build, and the phase that builds
+each. What NK has of each part is in `doc/DESIGN.md`.
 
-| NT part | Job | Linux analogue | Phase |
+| NT part | To build | Linux analogue | Phase |
 | --- | --- | --- | --- |
-| HAL | interrupt controllers, clocks, CPU start, DMA, bus access | `arch/`, irqchip, clocksource | 1, 3 |
-| Ke | threads, scheduler, waits, DPCs, APCs, timers, IRQL | `kernel/sched`, softirq, timers | 1, 4 |
-| SEH | unwinding and `__try`/`__except` in drivers | (none; C++-style unwind tables) | 2 |
-| Ex | pools, resources, push locks, work queues, lookaside lists | slab, rwsem, workqueue | 1, 2 |
-| Ob | typed objects, handles, the object namespace | kobject + fd table + a VFS-like tree | 2 |
-| Cm | the registry: hive files, keys, values | (none; sysfs + /etc, as a database) | 2, 7 |
-| Io | I/O packets, device stacks, file objects, mounting | block/char layers, VFS glue | 1, 2, 4 |
+| HAL | device interrupts, DMA, bus access, the tables `acpi.sys` and `pci.sys` call it through | `arch/`, irqchip | 3 |
 | PnP, Po | device tree, driver binding, resources, power | driver core, PM core | 3 |
-| Mm | address spaces, sections, faults, MDLs | `mm/` | 4, 6 |
-| Cc, FsRtl | file cache and file-system helper library | page cache, `fs/` libs | 2, 4 |
-| ETW, WMI | trace-provider and management registration | tracepoints | 2 |
-| Ps, Se | processes, threads' user side, tokens, access checks | task, cred, LSM hooks | 2, 6 |
+| Io | device stacks; mounting | block/char layers, VFS glue | 3, 4 |
+| Ke | APCs | signals, task work | 4 |
+| Mm | sections, faults, paging I/O; user address spaces | `mm/` | 4, 6 |
+| Cc, FsRtl | file cache and the file-system helper library | page cache, `fs/` libs | 4 |
+| Ps, Se | user processes and their tokens | task, cred, LSM hooks | 6 |
 | System calls | the system-call table, user entry and exit, user APCs and exceptions | syscall entry, signals | 6 |
+| Cm | a registry that is written back | (none; sysfs + /etc, as a database) | 7 |
 | ALPC | message ports between system processes | AF_UNIX / binder | 7 |
 | Session space, callbacks | what `win32k` needs from the kernel | (none) | 9 |
 
 ## Phases
 
-In order. 1 and 2 are the trunk. After them, 3 and 5 (hardware) and 4, 6,
-7, 8 (toward user mode) depend only on the trunk and on their own
-predecessors, so work can alternate; 9 and 10 need both lines.
+In order. 3 and 5 (hardware) and 4, 6, 7, 8 (toward user mode) depend
+only on what NK has and on their own predecessors, so work can
+alternate; 9 and 10 need both lines.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 0 | Ground truth (done) | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; the ledger carries the denominator |
-| 1 | Kernel core (done) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, timers, work queues, cancellable requests; a registry in memory and security descriptors, as far as Microsoft's samples ask | Microsoft's `event` and `cancel` samples and the conformance drivers answer as on Windows; the tests pass on 1 to 8 CPUs, repeated under load |
-| 2 | **Exceptions, objects, registry** (in progress) | SEH on both architectures; the Ex families its binaries import, with resources and timers; object manager with types, directories and handles; a System process, its token and access checks; registry read from a hive, drivers started from its service keys; export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's `wmilib`, `wpprecorder` and `msrpc` libraries load; a named-pipe round trip through `npfs.sys`, and a mailslot one through `msfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts; imports by ordinal and from API sets | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
 | 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting; APCs | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
 | 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond phase 3 | KMDF echo sample; `usbxhci` + hub + HID keyboard on the OptiPlex; `serial.sys` |
