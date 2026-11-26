@@ -1,7 +1,9 @@
 //! Hardware error sources (WHEA) as pure functions, so the host can
 //! test them: the descriptor the kernel builds for a device driver that
 //! registers as a source, the sizes that follow from it, and the table
-//! of sources with the states one passes through.
+//! of sources with the states one passes through, the routines
+//! configured for each kind of source, and the error record made of a
+//! report.
 //!
 //! The numbers are those of the pinned Windows kernel's code
 //! (`WheaAddErrorSourceDeviceDriver`, `WheapInitializeErrorSource`,
@@ -14,11 +16,16 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_ntabi::ex::GUID;
-use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_2};
+use nk_ntabi::status::{
+    NTSTATUS, STATUS_DEVICE_DOES_NOT_EXIST, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_2,
+    STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
+};
 use nk_ntabi::whea::{
-    WHEA_DEVICE_DRIVER_DESCRIPTOR, WHEA_ERR_SRC_STATE_REMOVE_PENDING, WHEA_ERR_SRC_STATE_REMOVED,
-    WHEA_ERR_SRC_STATE_STARTED, WHEA_ERR_SRC_STATE_STOPPED, WHEA_ERR_SRC_TYPE_DEVICE_DRIVER,
-    WHEA_ERROR_SOURCE_CONFIGURATION_DD, WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER,
+    WHEA_DEVICE_DRIVER_DESCRIPTOR, WHEA_ERR_SEV_FATAL, WHEA_ERR_SEV_INFORMATIONAL,
+    WHEA_ERR_SRC_STATE_REMOVE_PENDING, WHEA_ERR_SRC_STATE_REMOVED, WHEA_ERR_SRC_STATE_STARTED,
+    WHEA_ERR_SRC_STATE_STOPPED, WHEA_ERR_SRC_TYPE_DEVICE_DRIVER, WHEA_ERROR_RECORD_HEADER,
+    WHEA_ERROR_RECORD_SECTION_DESCRIPTOR, WHEA_ERROR_SOURCE_CONFIGURATION_DD,
+    WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER,
     WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1, WHEA_ERROR_SOURCE_DESCRIPTOR,
     WHEA_ERROR_SOURCE_DESCRIPTOR_INFO, WHEA_ERROR_SOURCE_DESCRIPTOR_VERSION_11,
 };
@@ -308,6 +315,298 @@ impl Table {
     }
 }
 
+/// `WHEA_RECORD_CREATOR_GUID`: the creator `WheaInitializeRecordHeader`
+/// writes, Microsoft's.
+pub const RECORD_CREATOR: GUID = GUID {
+    Data1: 0xCF07_C4BD,
+    Data2: 0xB789,
+    Data3: 0x4E18,
+    Data4: [0xB3, 0xC4, 0x1F, 0x73, 0x2C, 0xB5, 0x71, 0x31],
+};
+
+/// `DEVICE_DRIVER_NOTIFY_TYPE_GUID`: how the error of a device driver
+/// source was notified.
+pub const DEVICE_DRIVER_NOTIFY_TYPE: GUID = GUID {
+    Data1: 0x0033_F803,
+    Data2: 0x2E70,
+    Data3: 0x4E88,
+    Data4: [0x99, 0x2C, 0x6F, 0x26, 0xDA, 0xF3, 0xDB, 0x7A],
+};
+
+/// A `WHEA_TIMESTAMP` for `system_time` (100 ns units since 1601, UTC):
+/// seconds, minutes, hours, a byte of flags (zero: not precise), day,
+/// month, year in the century, century, a byte each from the lowest.
+pub fn timestamp(system_time: u64) -> u64 {
+    let seconds = system_time / 10_000_000;
+    let (days, of_day) = (seconds / 86_400, seconds % 86_400);
+    // Days since 1601-01-01 to a civil date: count from 1600-03-01, in
+    // 400-year eras, with the year starting in March.
+    let z = days + 306;
+    let era = z / 146_097;
+    let doe = z % 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = 1600 + era * 400 + yoe + u64::from(month <= 2);
+    u64::from_le_bytes([
+        (of_day % 60) as u8,
+        (of_day / 60 % 60) as u8,
+        (of_day / 3_600) as u8,
+        0,
+        day as u8,
+        month as u8,
+        (year % 100) as u8,
+        (year / 100) as u8,
+    ])
+}
+
+/// The header `WheaInitializeRecordHeader` writes: a record of no
+/// section yet, informational, made now by Microsoft's creator, with
+/// the next record id.
+pub fn record_header(system_time: u64, record_id: u64) -> WHEA_ERROR_RECORD_HEADER {
+    WHEA_ERROR_RECORD_HEADER {
+        Signature: u32::from_le_bytes(*b"CPER"),
+        Revision: 0x210,
+        SignatureEnd: 0xFFFF_FFFF,
+        SectionCount: 0,
+        Severity: WHEA_ERR_SEV_INFORMATIONAL,
+        ValidBits: VALID_TIMESTAMP,
+        Length: 0,
+        Timestamp: timestamp(system_time),
+        PlatformId: NO_PARTITION,
+        PartitionId: NO_PARTITION,
+        CreatorId: RECORD_CREATOR,
+        NotifyType: NO_PARTITION,
+        RecordId: record_id,
+        Flags: 0,
+        PersistenceInfo: 0,
+        Reserved: [0; 12],
+    }
+}
+
+/// `WHEA_ERROR_RECORD_HEADER_VALIDBITS`.
+const VALID_PLATFORM_ID: u32 = 1;
+const VALID_TIMESTAMP: u32 = 2;
+const VALID_PARTITION_ID: u32 = 4;
+/// `WHEA_ERROR_RECORD_HEADER_FLAGS`: the record is a device driver's.
+const FLAG_DEVICE_DRIVER: u32 = 8;
+/// A section descriptor's `ValidBits`: the FRU text is there. Its
+/// `Flags`: the section is the primary one.
+const SECTION_FRU_TEXT: u8 = 2;
+const SECTION_PRIMARY: u32 = 1;
+
+/// The bytes of a report's bookkeeping in its packet before any
+/// section, and of each section's own.
+const REPORT_OVERHEAD: u32 = 0x64;
+const SECTION_OVERHEAD: u32 = 0x48;
+/// The most log data a report carries.
+pub const MAX_LOG_DATA: u32 = 0x24;
+
+/// Whether a device driver source may report one section of
+/// `data_length` bytes with `log_length` bytes of log data, by the
+/// limits its descriptor holds: Windows' checks, each of which fails
+/// with `STATUS_INSUFFICIENT_RESOURCES`. A source registered with no
+/// buffers has no section to report in.
+pub fn device_driver_report_fits(
+    driver: &WHEA_DEVICE_DRIVER_DESCRIPTOR,
+    max_raw_data_length: u32,
+    data_length: u32,
+    log_length: u32,
+) -> bool {
+    let after_section = REPORT_OVERHEAD
+        .checked_add(data_length)
+        .and_then(|used| used.checked_add(SECTION_OVERHEAD));
+    driver.MaxSectionsPerRecord != 0
+        && data_length <= driver.MaxSectionDataLength
+        && REPORT_OVERHEAD.saturating_add(data_length) <= max_raw_data_length
+        && after_section
+            .and_then(|used| used.checked_add(log_length))
+            .is_some_and(|used| used <= max_raw_data_length)
+}
+
+/// One report of a device driver source.
+pub struct Report<'a> {
+    /// The source's descriptor, as registered.
+    pub driver: &'a WHEA_DEVICE_DRIVER_DESCRIPTOR,
+    pub severity: u32,
+    pub section_type: GUID,
+    /// The device's name, without a terminator; cut to 19 characters.
+    pub device_name: &'a [u8],
+    pub data: &'a [u8],
+    pub system_time: u64,
+    pub record_id: u64,
+}
+
+/// The error record of a device driver's report: a header, one section
+/// descriptor, the driver's data. None when there is no memory for it.
+///
+/// The header is `WheaInitializeRecordHeader`'s, with what Windows'
+/// device driver source adds: the source's GUID as the platform, its
+/// creator and partition, the device driver notify type and flag. The
+/// section is the driver's, marked primary, its text the device name.
+/// Windows' record also carries sections of its own (the error packet,
+/// what the platform driver adds); NK's does not.
+pub fn device_driver_record(report: &Report<'_>) -> Option<Vec<u8>> {
+    let header_length = size_of::<WHEA_ERROR_RECORD_HEADER>();
+    let descriptor_length = size_of::<WHEA_ERROR_RECORD_SECTION_DESCRIPTOR>();
+    let offset = header_length + descriptor_length;
+    let length = offset.checked_add(report.data.len())?;
+    let mut header = record_header(report.system_time, report.record_id);
+    header.SectionCount = 1;
+    header.Severity = report.severity;
+    header.ValidBits |= VALID_PLATFORM_ID | VALID_PARTITION_ID;
+    header.Length = u32::try_from(length).ok()?;
+    header.PlatformId = report.driver.SourceGuid;
+    header.PartitionId = report.driver.PartitionId;
+    header.CreatorId = report.driver.CreatorId;
+    header.NotifyType = DEVICE_DRIVER_NOTIFY_TYPE;
+    header.Flags = FLAG_DEVICE_DRIVER;
+    let mut text = [0u8; 20];
+    for (to, from) in text.iter_mut().take(19).zip(report.device_name) {
+        *to = *from;
+    }
+    let section = WHEA_ERROR_RECORD_SECTION_DESCRIPTOR {
+        SectionOffset: offset as u32,
+        SectionLength: report.data.len() as u32,
+        Revision: 0x300,
+        ValidBits: SECTION_FRU_TEXT,
+        Reserved: 0,
+        Flags: SECTION_PRIMARY,
+        SectionType: report.section_type,
+        FRUId: NO_PARTITION,
+        SectionSeverity: report.severity,
+        FRUText: text,
+    };
+    let mut record = Vec::new();
+    record.try_reserve_exact(length).ok()?;
+    // SAFETY: both are plain data of the sizes named, with no padding:
+    // they are packed.
+    unsafe {
+        record.extend_from_slice(core::slice::from_raw_parts(
+            (&raw const header).cast::<u8>(),
+            header_length,
+        ));
+        record.extend_from_slice(core::slice::from_raw_parts(
+            (&raw const section).cast::<u8>(),
+            descriptor_length,
+        ));
+    }
+    record.extend_from_slice(report.data);
+    Some(record)
+}
+
+/// What `WheaReportHwError` does with a packet before it makes a
+/// record.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Packet {
+    /// Return this status.
+    Status(NTSTATUS),
+    /// Stop the system: `WHEA_INTERNAL_ERROR` (0x122), parameter 1 the
+    /// number 9, "no such source".
+    NoSourceStop,
+    /// Make the record: the source is known. The severity is the
+    /// packet's, without the two marks.
+    Record { severity: u32 },
+}
+
+/// The two high bits of a packet's severity are marks the device
+/// driver routines set, never both: a device driver's report, and a
+/// fatal one.
+const MARK_DEVICE_DRIVER: u32 = 1 << 31;
+const MARK_FATAL_DEVICE_DRIVER: u32 = 1 << 30;
+/// A packet's `Flags`: the error is of a previous session.
+const PACKET_PREVIOUS_ERROR: u32 = 1;
+
+/// Decide a packet by its severity and flags and whether its source is
+/// a started one.
+///
+/// | Packet | Outcome |
+/// | --- | --- |
+/// | both marks set | `STATUS_INVALID_PARAMETER` |
+/// | informational, not a device driver's | `STATUS_SUCCESS`, nothing done |
+/// | no such source, recoverable or fatal, of this session | the system stops, `WHEA_INTERNAL_ERROR` |
+/// | no such source otherwise | `STATUS_DEVICE_DOES_NOT_EXIST` |
+pub fn packet(severity: u32, flags: u32, source_found: bool) -> Packet {
+    let marks = MARK_DEVICE_DRIVER | MARK_FATAL_DEVICE_DRIVER;
+    if severity & marks == marks {
+        return Packet::Status(STATUS_INVALID_PARAMETER);
+    }
+    let device_driver = severity & MARK_DEVICE_DRIVER != 0;
+    let severity = severity & !marks;
+    if severity == WHEA_ERR_SEV_INFORMATIONAL && !device_driver {
+        return Packet::Status(STATUS_SUCCESS);
+    }
+    if source_found {
+        Packet::Record { severity }
+    } else if severity <= WHEA_ERR_SEV_FATAL && flags & PACKET_PREVIOUS_ERROR == 0 {
+        Packet::NoSourceStop
+    } else {
+        Packet::Status(STATUS_DEVICE_DOES_NOT_EXIST)
+    }
+}
+
+/// The routines of one kind of source, 0 for one not given: what
+/// `WheaConfigureErrorSource` records of a configuration, as far as NK
+/// calls them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Routines {
+    pub correct: usize,
+    pub initialize: usize,
+    pub uninitialize: usize,
+}
+
+/// The configuration of every kind of source.
+pub struct Configurations([Option<Routines>; KINDS]);
+
+/// How many kinds of source can be configured: up to the device
+/// driver's.
+const KINDS: usize = WHEA_ERR_SRC_TYPE_DEVICE_DRIVER as usize + 1;
+
+impl Configurations {
+    pub const fn new() -> Self {
+        Self([None; KINDS])
+    }
+
+    /// Record the routines of sources of `kind`:
+    /// `STATUS_INVALID_PARAMETER` for a kind past the table,
+    /// `STATUS_UNSUCCESSFUL` for one configured already.
+    pub fn configure(&mut self, kind: u32, routines: Routines) -> NTSTATUS {
+        match self.0.get_mut(kind as usize) {
+            None => STATUS_INVALID_PARAMETER,
+            Some(Some(_)) => STATUS_UNSUCCESSFUL,
+            Some(slot) => {
+                *slot = Some(routines);
+                STATUS_SUCCESS
+            }
+        }
+    }
+
+    /// Forget the routines of sources of `kind`. As Windows' routine
+    /// does, this answers `STATUS_UNSUCCESSFUL` whether or not the kind
+    /// was configured, and `STATUS_INVALID_PARAMETER` past the table.
+    pub fn unconfigure(&mut self, kind: u32) -> NTSTATUS {
+        match self.0.get_mut(kind as usize) {
+            None => STATUS_INVALID_PARAMETER,
+            Some(slot) => {
+                *slot = None;
+                STATUS_UNSUCCESSFUL
+            }
+        }
+    }
+
+    /// The routines of sources of `kind`: none given where the kind is
+    /// not configured.
+    pub fn routines(&self, kind: u32) -> Routines {
+        self.0
+            .get(kind as usize)
+            .copied()
+            .flatten()
+            .unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,5 +792,176 @@ mod tests {
         // A removed source takes no calls even with none in progress.
         table.set_state(id, WHEA_ERR_SRC_STATE_REMOVED);
         assert!(!table.enter(id));
+    }
+
+    fn driver() -> WHEA_DEVICE_DRIVER_DESCRIPTOR {
+        let v2 = v2_of_v1(&v1(), 0x464).unwrap();
+        let (d, _) = device_driver_descriptor(&v2, 1, core::ptr::null_mut()).unwrap();
+        // SAFETY: the member the builder filled in.
+        unsafe { d.Info.DeviceDriverDescriptor }
+    }
+
+    #[test]
+    fn timestamps_are_calendar_fields() {
+        let at = |unix: u64| timestamp((unix + 11_644_473_600) * 10_000_000);
+        assert_eq!(timestamp(0).to_le_bytes(), [0, 0, 0, 0, 1, 1, 1, 16]);
+        assert_eq!(at(0).to_le_bytes(), [0, 0, 0, 0, 1, 1, 70, 19]);
+        // 2024-02-29 23:59:59, and the second after.
+        assert_eq!(
+            at(1_709_251_199).to_le_bytes(),
+            [59, 59, 23, 0, 29, 2, 24, 20]
+        );
+        assert_eq!(at(1_709_251_200).to_le_bytes(), [0, 0, 0, 0, 1, 3, 24, 20]);
+        // 2000-12-31 12:30:45: the last day of a leap century year.
+        assert_eq!(
+            at(978_265_845).to_le_bytes(),
+            [45, 30, 12, 0, 31, 12, 0, 20]
+        );
+        // 2100-03-01: 2100 is not a leap year.
+        assert_eq!(at(4_107_542_400).to_le_bytes(), [0, 0, 0, 0, 1, 3, 0, 21]);
+    }
+
+    #[test]
+    fn a_fresh_header_is_an_empty_informational_record() {
+        let h = record_header(0, 0x55);
+        assert_eq!({ h.Signature }, 0x5245_5043);
+        assert_eq!({ h.Revision }, 0x210);
+        assert_eq!({ h.SignatureEnd }, u32::MAX);
+        assert_eq!({ h.SectionCount }, 0);
+        assert_eq!({ h.Severity }, 3);
+        assert_eq!({ h.ValidBits }, 2);
+        assert_eq!({ h.CreatorId }, RECORD_CREATOR);
+        assert_eq!({ h.RecordId }, 0x55);
+        assert_eq!({ h.Timestamp }, timestamp(0));
+    }
+
+    #[test]
+    fn a_report_must_fit_the_source() {
+        let d = driver();
+        let raw = 3 * 0x464;
+        assert!(device_driver_report_fits(&d, raw, 0x464, 0x24));
+        assert!(device_driver_report_fits(&d, raw, 0, 0));
+        // More than a section holds.
+        assert!(!device_driver_report_fits(&d, raw, 0x465, 0));
+        // More than the record holds, with and without the log data.
+        assert!(!device_driver_report_fits(&d, 0x64 + 0x10 - 1, 0x10, 0));
+        assert!(device_driver_report_fits(&d, 0x64 + 0x48 + 0x10, 0x10, 0));
+        assert!(!device_driver_report_fits(&d, 0x64 + 0x48 + 0x10, 0x10, 1));
+        assert!(!device_driver_report_fits(&d, u32::MAX, u32::MAX, 0x24));
+        // A source registered without buffers has no section.
+        let mut none = d;
+        none.MaxSectionsPerRecord = 0;
+        assert!(!device_driver_report_fits(&none, raw, 1, 0));
+    }
+
+    #[test]
+    fn a_device_drivers_record() {
+        let d = driver();
+        let data = [0xA5u8; 0x30];
+        let section_type = GUID {
+            Data1: 9,
+            Data2: 8,
+            Data3: 7,
+            Data4: [6; 8],
+        };
+        let record = device_driver_record(&Report {
+            driver: &d,
+            severity: 1,
+            section_type,
+            device_name: b"a device name of more than nineteen",
+            data: &data,
+            system_time: 0,
+            record_id: 77,
+        })
+        .unwrap();
+        assert_eq!(record.len(), 0x80 + 0x48 + 0x30);
+        // SAFETY: the record begins with a header and a descriptor.
+        let (h, s) = unsafe {
+            (
+                record
+                    .as_ptr()
+                    .cast::<WHEA_ERROR_RECORD_HEADER>()
+                    .read_unaligned(),
+                record
+                    .as_ptr()
+                    .add(0x80)
+                    .cast::<WHEA_ERROR_RECORD_SECTION_DESCRIPTOR>()
+                    .read_unaligned(),
+            )
+        };
+        assert_eq!({ h.Signature }, 0x5245_5043);
+        assert_eq!({ h.SectionCount }, 1);
+        assert_eq!({ h.Severity }, 1);
+        assert_eq!({ h.ValidBits }, 7);
+        assert_eq!({ h.Length }, 0xF8);
+        assert_eq!({ h.PlatformId }, { d.SourceGuid });
+        assert_eq!({ h.CreatorId }, DEFAULT_CREATOR);
+        assert_eq!({ h.PartitionId }, NO_PARTITION);
+        assert_eq!({ h.NotifyType }, DEVICE_DRIVER_NOTIFY_TYPE);
+        assert_eq!({ h.RecordId }, 77);
+        assert_eq!({ h.Flags }, 8);
+        assert_eq!({ s.SectionOffset }, 0xC8);
+        assert_eq!({ s.SectionLength }, 0x30);
+        assert_eq!({ s.Revision }, 0x300);
+        assert_eq!({ s.ValidBits }, 2);
+        assert_eq!({ s.Flags }, 1);
+        assert_eq!({ s.SectionType }, section_type);
+        assert_eq!({ s.SectionSeverity }, 1);
+        assert_eq!(&s.FRUText, b"a device name of mo\0");
+        assert_eq!(&record[0xC8..], &data);
+    }
+
+    #[test]
+    fn packets_are_judged_by_severity_and_source() {
+        let dd = 1 << 31;
+        let fatal_dd = 1 << 30;
+        assert_eq!(
+            packet(dd | fatal_dd | 1, 0, true),
+            Packet::Status(STATUS_INVALID_PARAMETER)
+        );
+        // Informational: dropped, unless a device driver's.
+        assert_eq!(packet(3, 0, true), Packet::Status(STATUS_SUCCESS));
+        assert_eq!(packet(3, 0, false), Packet::Status(STATUS_SUCCESS));
+        assert_eq!(packet(dd | 3, 0, true), Packet::Record { severity: 3 });
+        assert_eq!(packet(dd | 1, 0, true), Packet::Record { severity: 1 });
+        assert_eq!(
+            packet(fatal_dd | 1, 0, true),
+            Packet::Record { severity: 1 }
+        );
+        assert_eq!(packet(2, 0, true), Packet::Record { severity: 2 });
+        // No such source.
+        assert_eq!(packet(0, 0, false), Packet::NoSourceStop);
+        assert_eq!(packet(1, 0, false), Packet::NoSourceStop);
+        assert_eq!(
+            packet(1, 1, false),
+            Packet::Status(STATUS_DEVICE_DOES_NOT_EXIST)
+        );
+        assert_eq!(
+            packet(2, 0, false),
+            Packet::Status(STATUS_DEVICE_DOES_NOT_EXIST)
+        );
+    }
+
+    #[test]
+    fn a_kind_is_configured_once() {
+        let mut c = Configurations::new();
+        let routines = Routines {
+            correct: 1,
+            initialize: 2,
+            uninitialize: 3,
+        };
+        assert_eq!(c.routines(4), Routines::default());
+        assert_eq!(c.configure(4, routines), STATUS_SUCCESS);
+        assert_eq!(c.routines(4), routines);
+        assert_eq!(c.configure(4, Routines::default()), STATUS_UNSUCCESSFUL);
+        assert_eq!(c.routines(4), routines);
+        assert_eq!(c.configure(17, routines), STATUS_INVALID_PARAMETER);
+        assert_eq!(c.routines(17), Routines::default());
+        // Windows' routine reports failure even when it forgets one.
+        assert_eq!(c.unconfigure(4), STATUS_UNSUCCESSFUL);
+        assert_eq!(c.routines(4), Routines::default());
+        assert_eq!(c.unconfigure(4), STATUS_UNSUCCESSFUL);
+        assert_eq!(c.unconfigure(17), STATUS_INVALID_PARAMETER);
+        assert_eq!(c.configure(16, routines), STATUS_SUCCESS);
     }
 }

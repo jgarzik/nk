@@ -1,5 +1,6 @@
 //! Diagnostics: the serial console and the panic path.
 
+pub mod debugger;
 pub mod variables;
 
 use crate::arch::{self, Uart};

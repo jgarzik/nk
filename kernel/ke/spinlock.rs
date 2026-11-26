@@ -41,6 +41,9 @@ pub enum Rank {
     DeviceInterrupts = 29,
     /// The object namespace (`ob`).
     Namespace = 30,
+    /// The routines registered with the kernel debugger for power
+    /// transitions (`kd::debugger`).
+    KdPower = 31,
     /// The registry (`cm`).
     Registry = 33,
     /// The kernel handle table (`ob::handle`).

@@ -4,9 +4,11 @@
 use crate::ex::{absent, vsl};
 use crate::rtl::print;
 use crate::test::{Group, Report};
+use core::sync::atomic::{AtomicU32, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::status::{
-    STATUS_DEVICE_NOT_CONNECTED, STATUS_INVALID_PARAMETER, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
+    STATUS_DEBUGGER_INACTIVE, STATUS_DEVICE_NOT_CONNECTED, STATUS_INVALID_PARAMETER,
+    STATUS_NOT_FOUND, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
 };
 
 pub static GROUP: Group = Group {
@@ -18,6 +20,7 @@ pub static GROUP: Group = Group {
         "io.no-paging-file",
         "rtl.debug-filter",
         "cpu.stack-probe",
+        "kd.no-debugger",
     ],
     run,
     manual: false,
@@ -160,6 +163,58 @@ fn debug_filter() -> Result<(), &'static str> {
     Ok(())
 }
 
+extern "C" fn power_handler() {
+    POWER_HANDLER_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+static POWER_HANDLER_CALLS: AtomicU32 = AtomicU32::new(0);
+
+fn no_debugger() -> Result<(), &'static str> {
+    use crate::kd::debugger;
+    use crate::ke::irql;
+    // The debugger's lock is a real one.
+    let before = irql::current();
+    let mut old = 0xFFu8;
+    // SAFETY: a local for the IRQL; released with what was given.
+    unsafe {
+        debugger::KdAcquireDebuggerLock(&raw mut old);
+        let held_at = irql::current();
+        debugger::KdReleaseDebuggerLock(old);
+        if old != before || held_at != irql::DISPATCH_LEVEL || irql::current() != before {
+            return Err("the debugger's lock was not held at DISPATCH_LEVEL and given back");
+        }
+    }
+    if debugger::KdDisableDebugger() != STATUS_DEBUGGER_INACTIVE
+        || debugger::KdEnableDebugger() != STATUS_DEBUGGER_INACTIVE
+    {
+        return Err("a debugger that is not there was turned off or on");
+    }
+    // A power handler registers; with no debugger nothing calls it.
+    let mut handle = core::ptr::null_mut();
+    // SAFETY: a local for the handle.
+    let status = unsafe {
+        debugger::KdRegisterPowerHandler(
+            power_handler as *mut core::ffi::c_void,
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_SUCCESS || handle.is_null() {
+        return Err("a power handler was not registered");
+    }
+    if debugger::KdPowerTransitionEx(5, 0) != STATUS_SUCCESS
+        || POWER_HANDLER_CALLS.load(Ordering::Relaxed) != 0
+    {
+        return Err("a power transition did not succeed without calling handlers");
+    }
+    if debugger::KdDeregisterPowerHandler(handle) != STATUS_SUCCESS
+        || debugger::KdDeregisterPowerHandler(handle) != STATUS_NOT_FOUND
+    {
+        return Err("a power handler was not deregistered once");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ex.verifier-off", verifier_off);
     r.check("ex.headless-off", headless_off);
@@ -168,6 +223,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("io.no-paging-file", no_paging_file);
     r.check("rtl.debug-filter", debug_filter);
     r.check("cpu.stack-probe", crate::arch::chkstk_test);
+    r.check("kd.no-debugger", no_debugger);
 }
 
 /// This file's test groups, in the order they run.
