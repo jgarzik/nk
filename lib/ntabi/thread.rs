@@ -12,6 +12,15 @@
 
 /// Size of `ETHREAD`, which begins with the `KTHREAD`.
 pub const ETHREAD_SIZE: usize = 0x898;
+/// `ETHREAD.DeviceToVerify`: the device a file system asked to have
+/// verified (`IoSetHardErrorOrVerifyDevice`).
+pub const DEVICE_TO_VERIFY: usize = 0x4C8;
+/// `ETHREAD.IoBoostCount`: how many times the thread's I/O priority is
+/// boosted now.
+pub const IO_BOOST_COUNT: usize = 0x550;
+/// `ETHREAD.ActivityId`: a pointer to the activity id the thread works
+/// under, or null (`IoPropagateActivityIdToThread`).
+pub const ACTIVITY_ID: usize = 0x5A0;
 /// Size of `KTHREAD`.
 pub const KTHREAD_SIZE: usize = 0x430;
 

@@ -12,7 +12,7 @@
 use alloc::vec::Vec;
 
 /// A device registered with WMI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Provider {
     device: usize,
     id: u32,
@@ -22,6 +22,8 @@ struct Provider {
     busy: bool,
     /// It is being deregistered, and has no provider id any more.
     leaving: bool,
+    /// The data blocks its last good registration named.
+    guids: Vec<[u8; 16]>,
 }
 
 /// A registration request to send.
@@ -100,6 +102,7 @@ impl Registry {
             blocked: false,
             busy: false,
             leaving: false,
+            guids: Vec::new(),
         });
         let start = self.queue(Work {
             device,
@@ -154,6 +157,22 @@ impl Registry {
         None
     }
 
+    /// `device` answered a registration request with these data
+    /// blocks: they are the ones it registers now.
+    pub fn set_guids(&mut self, device: usize, guids: Vec<[u8; 16]>) {
+        if let Some(provider) = self.find(device).filter(|p| !p.leaving) {
+            provider.guids = guids;
+        }
+    }
+
+    /// Whether a registered device's registration names the data block
+    /// `guid`.
+    pub fn registers(&self, guid: &[u8; 16]) -> bool {
+        self.providers
+            .iter()
+            .any(|p| !p.leaving && p.guids.contains(guid))
+    }
+
     /// The request to `device` has come back.
     pub fn work_done(&mut self, device: usize) {
         if let Some(provider) = self.find(device) {
@@ -184,6 +203,8 @@ impl Registry {
 /// `WMIREG_FLAG_INSTANCE_PDO`: a data block's instances are named after
 /// a physical device object, which the entry points to.
 pub const WMIREG_FLAG_INSTANCE_PDO: u32 = 0x20;
+/// `WMIREG_FLAG_REMOVE_GUID`: the entry takes the data block away.
+pub const WMIREG_FLAG_REMOVE_GUID: u32 = 0x0001_0000;
 
 /// Sizes and offsets of `WMIREGINFOW` and of the `WMIREGGUIDW` entries
 /// that follow it.
@@ -224,6 +245,32 @@ fn string_fits(bytes: &[u8], offset: usize) -> bool {
 /// the older request it has not, and the list is empty.
 pub fn registration_pdos(reply: &[u8], extended: bool) -> Option<Vec<u64>> {
     let mut pdos = Vec::new();
+    for entry in guid_entries(reply)? {
+        if extended && u32_at(entry, ENTRY_FLAGS)? & WMIREG_FLAG_INSTANCE_PDO != 0 {
+            let pdo = entry.get(ENTRY_PDO..ENTRY_PDO + 8)?;
+            pdos.push(u64::from_le_bytes(pdo.try_into().ok()?));
+        }
+    }
+    Some(pdos)
+}
+
+/// The data blocks a driver's answer to a registration request
+/// registers: the GUID of each entry that does not take its block
+/// away. `None` for an answer that breaks Windows' rules
+/// ([`registration_pdos`]).
+pub fn registration_guids(reply: &[u8]) -> Option<Vec<[u8; 16]>> {
+    let mut guids = Vec::new();
+    for entry in guid_entries(reply)? {
+        if u32_at(entry, ENTRY_FLAGS)? & WMIREG_FLAG_REMOVE_GUID == 0 {
+            guids.push(entry.get(..16)?.try_into().ok()?);
+        }
+    }
+    Some(guids)
+}
+
+/// The GUID entries of every `WMIREGINFOW` of a good answer, in order.
+fn guid_entries(reply: &[u8]) -> Option<Vec<&[u8]>> {
+    let mut entries = Vec::new();
     let mut at = 0usize;
     loop {
         let info = reply.get(at..)?;
@@ -241,13 +288,10 @@ pub fn registration_pdos(reply: &[u8], extended: bool) -> Option<Vec<u64>> {
         }
         for index in 0..guids {
             let entry = HEADER + index * ENTRY;
-            if extended && u32_at(info, entry + ENTRY_FLAGS)? & WMIREG_FLAG_INSTANCE_PDO != 0 {
-                let pdo = info.get(entry + ENTRY_PDO..entry + ENTRY_PDO + 8)?;
-                pdos.push(u64::from_le_bytes(pdo.try_into().ok()?));
-            }
+            entries.push(info.get(entry..entry + ENTRY)?);
         }
         if next == 0 {
-            return Some(pdos);
+            return Some(entries);
         }
         // A chain goes forward only, so it ends.
         at = at.checked_add(next)?;
@@ -428,6 +472,35 @@ mod tests {
         let mut mof = bytes.clone();
         mof[12..16].copy_from_slice(&0x19u32.to_le_bytes());
         assert_eq!(registration_pdos(&mof, true), None);
+    }
+
+    #[test]
+    fn a_registration_names_its_data_blocks() {
+        let mut reply = info(0x78, 0, 3);
+        for (index, flags) in [(0usize, 0u32), (1, WMIREG_FLAG_REMOVE_GUID), (2, 0x20)] {
+            let entry = HEADER + index * ENTRY;
+            reply[entry..entry + 16].copy_from_slice(&[index as u8 + 1; 16]);
+            reply[entry + ENTRY_FLAGS..][..4].copy_from_slice(&flags.to_le_bytes());
+        }
+        assert_eq!(registration_guids(&reply), Some(vec![[1; 16], [3; 16]]));
+        assert_eq!(registration_guids(&reply[..0x77]), None);
+        assert_eq!(registration_guids(&info(0x18, 0, 0)), Some(vec![]));
+
+        let mut registry = Registry::new();
+        registry.register(A);
+        assert!(!registry.registers(&[1; 16]));
+        registry.set_guids(A, vec![[1; 16], [3; 16]]);
+        registry.set_guids(B, vec![[9; 16]]);
+        assert!(registry.registers(&[1; 16]) && registry.registers(&[3; 16]));
+        assert!(!registry.registers(&[2; 16]) && !registry.registers(&[9; 16]));
+        // A new answer replaces the old one's blocks.
+        registry.set_guids(A, vec![[2; 16]]);
+        assert!(registry.registers(&[2; 16]) && !registry.registers(&[1; 16]));
+        // With the device, its blocks go.
+        registry.next_work();
+        registry.work_done(A);
+        assert_eq!(registry.deregister(A), Deregistered::Removed);
+        assert!(!registry.registers(&[2; 16]));
     }
 
     #[test]

@@ -14,6 +14,8 @@ pub mod file;
 pub mod fsrtl;
 pub mod interrupt;
 pub mod irp;
+pub mod irpext;
+pub mod irpinfo;
 pub mod mdl;
 pub mod priority;
 pub mod remlock;

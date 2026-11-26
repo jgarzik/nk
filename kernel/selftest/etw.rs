@@ -1492,6 +1492,7 @@ pub static WMI: Group = Group {
         "wmi.pdo",
         "wmi.deregister-waits",
         "wmi.event",
+        "wmi.open-block",
     ],
     run: wmi,
     manual: false,
@@ -1507,6 +1508,26 @@ fn wmi(r: &mut Report, _: &BootInfo) {
         with_wmi_device(wmi_deregister_waits)
     });
     r.check("wmi.event", wmi_event);
+    r.check("wmi.open-block", wmi_open_block);
+}
+
+/// A data block no device registers is not found, and nothing is
+/// handed out for it.
+fn wmi_open_block() -> Result<(), &'static str> {
+    let guid = GUID {
+        Data1: 0x4E4B_0001,
+        Data2: 0x4E4B,
+        Data3: 0x4E4B,
+        Data4: *b"NoBlock!",
+    };
+    let mut object = core::ptr::without_provenance_mut::<c_void>(0x5A5A);
+    // WMIGUID_QUERY | WMIGUID_EXECUTE, as acpi.sys asks.
+    // SAFETY: locals that outlive the call.
+    let status = unsafe { crate::io::wmi::IoWMIOpenBlock(&raw const guid, 0x11, &raw mut object) };
+    if status != STATUS_WMI_GUID_NOT_FOUND || object.addr() != 0x5A5A {
+        return Err("a WMI data block nobody registered was opened, or not reported as unknown");
+    }
+    Ok(())
 }
 
 /// One registration request, as the test driver saw it arrive.

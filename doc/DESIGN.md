@@ -1717,6 +1717,36 @@ splits a request folds the parts' statuses into the master's with
 `IoSetMasterIrpStatus`, by the pinned kernel's rule
 (`nk_ntabi::io::master_irp_status`).
 
+**IRP extensions** (`kernel/io/irpext.rs`). What Windows keeps about a
+request beside the IRP is NK's too, by the pinned kernel's rules and in
+its layout (`IOP_IRP_EXTENSION`): an activity id
+([`IoSetActivityIdIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetactivityidirp),
+`IoGetActivityIdIrp`) and four bytes of a driver's own
+(`IoSetGenericIrpExtension`), in a pool block the IRP points to and its
+allocation flags mark. A generic extension alone is kept in the
+pointer's own place, and moves to a block when an activity id joins
+it. `IoPropagateIrpExtension` copies both to another IRP, `IoReuseIrp`
+keeps the block and the activity id and drops the rest, and the block
+is freed with the IRP. The I/O manager itself gives a request no
+activity id: Windows does while I/O tracing is on
+(`IoIsActivityTracingEnabled`), which it never is here. A thread works
+under an IRP's activity id through the pointer in its `ETHREAD`
+(`IoPropagateActivityIdToThread`, `IoClearActivityIdThread`). The kinds
+of extension only Windows' own components make (a file system's
+tracked offset, a disk I/O attribution handle, an adapter's crypto
+parameters) are in no IRP: asked for, they are not found, and I/O
+recorded against an attribution handle names no handle
+(`STATUS_INVALID_HANDLE`).
+
+What a driver asks about a request is read from the IRP as the pinned
+kernel reads it (`kernel/io/irpinfo.rs`): the I/O priority from the
+flags (`IoGetIoPriorityHint`, `IoGetPagingIoPriority`), the requestor's
+process id, the bounds of the stack the caller is on
+(`IoGetStackLimits`: the thread's, or the processor's DPC stack).
+`IoIs32bitProcess` says no: NK runs no 32-bit code.
+`IoSetHardErrorOrVerifyDevice` notes its device on the requestor's
+thread, where Windows keeps it.
+
 A driver keeps what it needs per driver object in extensions it
 allocates and finds again by an address of its choosing
 ([`IoAllocateDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatedriverobjectextension),
@@ -2741,9 +2771,18 @@ anything: its registration, and the request that follows it.
   the device as provider id, a completion routine that takes the IRP
   back. NK has no device stacks, so it goes to the device itself where
   Windows sends it to the top of the stack.
-- The answer is checked as Windows checks it and then let go: nothing
-  could ever read it. The references a driver takes on physical device
-  objects for WMI when it answers the newer request are given back.
+- The answer is checked as Windows checks it, and of it the names of
+  the data blocks are kept; the references a driver takes on physical
+  device objects for WMI when it answers the newer request are given
+  back.
+- [`IoWMIOpenBlock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiopenblock)
+  for a block no registered device names answers
+  `STATUS_WMI_GUID_NOT_FOUND`, as Windows answers an open for query of
+  such a block (`acpi.sys` asks for one). A block that is registered
+  cannot be queried: that open, and an open for events, stop the
+  system by name, and the export is `Partial`. `IoWMIQueryAllData` and
+  `IoWMIExecuteMethod` take the object an open gives, of which NK gives
+  none; they stay traps.
 - `WMIREG_ACTION_UPDATE_GUIDS` sends the request again, marked as an
   update; `WMIREG_ACTION_BLOCK_IRPS` ends the sending. Deregistering
   drops what waits for the device, waits for a request that is with the

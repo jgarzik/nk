@@ -23,6 +23,9 @@ pub static GROUP: Group = Group {
         "work.caller-memory",
         "io.error-log",
         "io.priority-callback",
+        "io.irp-extension",
+        "io.activity-id.thread",
+        "io.request-facts",
     ],
     run,
     manual: false,
@@ -371,6 +374,8 @@ fn run(report: &mut Report, _: &BootInfo) {
     numbered("io.driver-extension", driver_extension());
     numbered("work.caller-memory", caller_memory_work_item());
     numbered("io.error-log", error_log());
+    numbered("io.irp-extension", crate::io::irpext::extension_test());
+    numbered("io.request-facts", crate::io::irpinfo::test());
     report.check("io.priority-callback", || {
         let object = stack::make_driver(refuse)?;
         // SAFETY: a driver object of the test's own.
@@ -379,4 +384,8 @@ fn run(report: &mut Report, _: &BootInfo) {
         unsafe { stack::free_driver(object) };
         result
     });
+    report.check(
+        "io.activity-id.thread",
+        crate::io::irpext::thread_activity_test,
+    );
 }
