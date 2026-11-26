@@ -1,8 +1,8 @@
 //! Tests of the registry, through the routines drivers call.
 
 use crate::cm::{
-    ZwCreateKey, ZwDeleteKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey, ZwQueryValueKey,
-    ZwSetValueKey,
+    ZwCreateKey, ZwDeleteKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey, ZwQueryKey,
+    ZwQueryValueKey, ZwSetValueKey,
 };
 use crate::ps::ZwClose;
 use crate::test::{Group, Report};
@@ -19,6 +19,7 @@ pub static GROUP: Group = Group {
         "cm.delete",
         "cm.enumerate.keys",
         "cm.enumerate.values",
+        "cm.query.key",
         "cm.namespace",
         "cm.control-set",
         "cm.hive.values",
@@ -728,6 +729,104 @@ fn enumerate_values(key: *mut c_void) -> Result<(), &'static str> {
     Ok(())
 }
 
+fn query_key_info(key: *mut c_void, class: u32, room: usize) -> Answer {
+    // SAFETY: the buffer is `ROOM` bytes and the room no more.
+    answer(room, |out, room, length| unsafe {
+        ZwQueryKey(key, class, out, room, length)
+    })
+}
+
+/// A key's full name as `KEY_NAME_INFORMATION` has it.
+fn name_form(path: &str) -> Vec<u8> {
+    let path = utf16(path);
+    joined(&[&fields(&[path.len() as u32]), &path])
+}
+
+/// An open key is described in every form, each with Windows' status
+/// and length for a buffer of any size.
+fn query_key(key: *mut c_void) -> Result<(), &'static str> {
+    let gap = [UNTOUCHED; 2];
+    let name = utf16("NkcTest");
+    // (class, fixed part, bytes of time at the start, the structure)
+    let forms: [(u32, usize, usize, Vec<u8>); 10] = [
+        (0, KEY_BASIC, 8, joined(&[&TIME, &fields(&[0, 14]), &name])),
+        // The class starts at the next multiple of four after the name.
+        (
+            1,
+            KEY_NODE,
+            8,
+            joined(&[&TIME, &fields(&[0, 40, 6, 14]), &name, &gap, &utf16("Cls")]),
+        ),
+        // Three subkeys, the longest name Gamma9, the longest class BC;
+        // five values, the longest name Number, the longest data Multi's.
+        (
+            2,
+            KEY_FULL,
+            8,
+            joined(&[
+                &TIME,
+                &fields(&[0, 44, 6, 3, 12, 4, 5, 12, 12]),
+                &utf16("Cls"),
+            ]),
+        ),
+        // The link CurrentControlSet is followed; each part is spelled
+        // as it was created.
+        (
+            3,
+            4,
+            0,
+            name_form("\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Services\\NkcTest"),
+        ),
+        // The counts again, and the length of the name without the name.
+        (
+            4,
+            36,
+            8,
+            joined(&[&TIME, &fields(&[0, 3, 12, 5, 12, 12, 14])]),
+        ),
+        // Flags, virtualization, handle tags: none. Trusted. No layer.
+        (5, 12, 0, fields(&[0, 0, 0])),
+        (6, 4, 0, fields(&[0])),
+        (7, 4, 0, fields(&[0])),
+        (8, 4, 0, fields(&[1])),
+        (9, 4, 0, fields(&[0])),
+    ];
+    for (class, fixed, skip, whole) in forms {
+        if !at_every_room(&whole, fixed, skip, |room| query_key_info(key, class, room)) {
+            crate::kd::print(format_args!("cm.query.key: class {class}\n"));
+            return Err("an open key was not described as Windows describes it");
+        }
+    }
+    if !query_key_info(key, 10, ROOM).refused(INVALID_PARAMETER) {
+        return Err("a form there is none of was answered");
+    }
+    // The registry's own root, and a key of the hive or the skeleton
+    // opened in other letter case than it was made in.
+    let (_, root, _) = self::key("\\Registry", core::ptr::null_mut(), false);
+    let (_, system, _) = self::key("\\registry\\machine\\system", core::ptr::null_mut(), false);
+    let named = [
+        query_key_info(root, 3, ROOM).is(ROOM, &name_form("\\REGISTRY"), 4, 0),
+        query_key_info(system, 3, ROOM).is(ROOM, &name_form("\\REGISTRY\\MACHINE\\SYSTEM"), 4, 0),
+        ZwClose(root) == 0,
+        ZwClose(system) == 0,
+    ];
+    if named != [true; 4] {
+        return Err("a key Windows has from the start is not named as Windows names it");
+    }
+    let (_, gone) = child(key, "Gone", None);
+    let refused = [
+        query_key_info(0x1234 as *mut c_void, 0, ROOM).refused(0xC000_0008),
+        ZwDeleteKey(gone) == 0,
+        query_key_info(gone, 3, ROOM).refused(0xC000_017C),
+        query_key_info(gone, 8, ROOM).refused(0xC000_017C),
+        ZwClose(gone) == 0,
+    ];
+    if refused != [true; 5] {
+        return Err("a key was described through no handle, or after it was deleted");
+    }
+    Ok(())
+}
+
 /// A registry name is a path in the object namespace: it is looked up
 /// there, through symbolic links and from a directory if one is given,
 /// and must lead to the registry's root key, which walks the rest.
@@ -987,6 +1086,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.delete", delete);
     r.check("cm.enumerate.keys", || with_key(enumerate_keys));
     r.check("cm.enumerate.values", || with_key(enumerate_values));
+    r.check("cm.query.key", || with_key(query_key));
     r.check("cm.namespace", namespace);
     r.check("cm.control-set", control_set);
     let Some(hive) = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE) else {

@@ -1,5 +1,5 @@
 //! The registry, as drivers reach it: `ZwCreateKey`, `ZwOpenKey`,
-//! `ZwDeleteKey`, `ZwEnumerateKey`, `ZwEnumerateValueKey`,
+//! `ZwDeleteKey`, `ZwEnumerateKey`, `ZwEnumerateValueKey`, `ZwQueryKey`,
 //! `ZwQueryValueKey`, `ZwSetValueKey`.
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
@@ -37,6 +37,14 @@ const OPENED: u32 = 2;
 const KEY_BASIC: u32 = 0;
 const KEY_NODE: u32 = 1;
 const KEY_FULL: u32 = 2;
+const KEY_NAME: u32 = 3;
+const KEY_CACHED: u32 = 4;
+const KEY_FLAGS: u32 = 5;
+const KEY_TRUST: u32 = 8;
+const KEY_LAYER: u32 = 9;
+/// `KEY_TRUST_INFORMATION.TrustedKey`: the key is in a hive the system
+/// trusts.
+const TRUSTED_KEY: u32 = 1;
 /// `KEY_VALUE_INFORMATION_CLASS`: the forms a value is described in.
 const VALUE_BASIC: u32 = 0;
 const FULL: u32 = 1;
@@ -47,13 +55,15 @@ const VALUE_PARTIAL_ALIGN64: u32 = 4;
 /// `REG_DWORD`.
 const REG_DWORD: u32 = 4;
 
-/// The keys every Windows system has before any hive is read.
+/// The keys every Windows system has before any hive is read, spelled
+/// as Windows spells them: a key's full name (`KeyNameInformation`)
+/// shows the letter case each was made in.
 const SKELETON: &[&str] = &[
-    "Machine",
-    "Machine\\Hardware",
-    "Machine\\System",
-    "Machine\\System\\Select",
-    "User",
+    "MACHINE",
+    "MACHINE\\HARDWARE",
+    "MACHINE\\SYSTEM",
+    "MACHINE\\SYSTEM\\Select",
+    "USER",
 ];
 
 /// `Select`'s values on a system that has always booted its first
@@ -610,6 +620,56 @@ pub unsafe extern "C" fn ZwEnumerateKey(
             .ok_or(STATUS_NO_MORE_ENTRIES)?;
         let info = hive.info(subkey).map_err(status)?;
         Ok(key_information(class, &info, out))
+    };
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
+}
+
+/// [`ZwQueryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerykey):
+/// describe an open key, in every form of `KEY_INFORMATION_CLASS`.
+///
+/// The name form gives the key's full name from `\REGISTRY`, each part
+/// in the letter case it was created in and with any symbolic link
+/// followed: the key the handle is open to, not the path it was opened
+/// by. The cached form is the counts of the full form and the length
+/// of the key's name, without the name.
+///
+/// The forms that describe what NK has none of answer as Windows does
+/// for a key without it: no flags (there are no 32-bit programs to
+/// redirect and no keys that must stay), no virtualization, no handle
+/// tags, no layer. Every key is trusted: the registry holds the
+/// system's own hive and nothing a user loaded.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+pub unsafe extern "C" fn ZwQueryKey(
+    key_handle: *mut c_void,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    if class > KEY_LAYER {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let key = match key_of(key_handle) {
+        Ok(key) => key,
+        Err(status) => return status,
+    };
+    let format = |out: &mut [u8]| {
+        let hive = HIVE.lock();
+        let info = hive.info(key).map_err(status)?;
+        Ok(match class {
+            KEY_BASIC | KEY_NODE | KEY_FULL => key_information(class, &info, out),
+            KEY_NAME => nk_cm::key_name_information(&hive.path(key).map_err(status)?, out),
+            KEY_CACHED => nk_cm::key_cached_information(&info, out),
+            // `KEY_FLAGS_INFORMATION`: three words.
+            KEY_FLAGS => nk_cm::fixed_information(&[0, 0, 0], out),
+            KEY_TRUST => nk_cm::fixed_information(&[TRUSTED_KEY], out),
+            // Virtualization, handle tags, layer: one word each.
+            _ => nk_cm::fixed_information(&[0], out),
+        })
     };
     // SAFETY: per the contract.
     unsafe { inform(information, length, result_length, format) }

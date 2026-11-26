@@ -222,6 +222,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, cm::ZwEnumerateKey),
     export!(Implemented, cm::ZwEnumerateValueKey),
     export!(Implemented, cm::ZwOpenKey),
+    export!(Implemented, cm::ZwQueryKey),
     export!(Implemented, cm::ZwQueryValueKey),
     export!(Implemented, cm::ZwSetValueKey),
     export!(Implemented, io::csq::IoCsqInitialize),

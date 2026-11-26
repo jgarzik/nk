@@ -957,6 +957,17 @@ the bytes between are the caller's, untouched. A value's data start at
 a multiple of eight bytes in the full form, aligned or not, as Windows
 10 x64 places them.
 
+An open key describes itself
+([`ZwQueryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerykey))
+in every form. Its full name starts at `\REGISTRY`, each part in the
+letter case it was created in (`MACHINE`, `SYSTEM`, `HARDWARE` and
+`USER` are Windows' spellings), with symbolic links followed: a key
+opened through `CurrentControlSet` names its control set. What NK has
+none of is reported as Windows reports a key without it: no flags, no
+virtualization, no handle tags, no layer. Every key is trusted
+(`KeyTrustInformation`), because the registry holds only the system's
+own hive.
+
 A key remembers the longest subkey name, subkey class, value name and
 value data it has held, which is what it reports as the longest it
 holds: as on Windows, the numbers only grow while the key has subkeys
