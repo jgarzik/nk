@@ -2793,8 +2793,8 @@ anything: its registration, and the request that follows it.
   request is built as Windows builds it: a stack location of WMI's own
   above the driver's, a pool buffer of 0x2000 bytes that is not zeroed,
   the device as provider id, a completion routine that takes the IRP
-  back. NK has no device stacks, so it goes to the device itself where
-  Windows sends it to the top of the stack.
+  back. It goes to the top of the stack the device is in, as on
+  Windows.
 - The answer is checked as Windows checks it, and of it the names of
   the data blocks are kept; the references a driver takes on physical
   device objects for WMI when it answers the newer request are given

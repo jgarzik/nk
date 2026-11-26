@@ -171,8 +171,9 @@ unsafe extern "C" fn completed(
 /// The IRP is built as Windows builds it: a stack location of WMI's own
 /// above the driver's, the buffer as the system buffer, the status
 /// preset to `STATUS_NOT_SUPPORTED`, a completion routine that takes
-/// the IRP back. NK has no device stacks yet, so the request goes to
-/// the device itself, where Windows sends it to the top of its stack.
+/// the IRP back. The request goes to the top of the stack the device
+/// is in, sized for that stack, and still names the device that
+/// registered as its provider: a filter above passes it down.
 ///
 /// # Safety
 /// `device` is a live device object; `buffer` is `size` bytes of pool.
@@ -185,8 +186,11 @@ unsafe fn send(
 ) -> (NTSTATUS, usize) {
     // SAFETY: per the contract.
     unsafe {
-        let request = irp::alloc((*device).StackSize.saturating_add(1));
+        // Held while the request is with the stack.
+        let top = device::IoGetAttachedDeviceReference(device);
+        let request = irp::alloc((*top).StackSize.saturating_add(1));
         if request.is_null() {
+            ob::object::dereference(top.cast());
             return (STATUS_INSUFFICIENT_RESOURCES, 0);
         }
         // An all-zero event is a valid value; it is initialised just
@@ -214,7 +218,7 @@ unsafe fn send(
         (*location).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
         // Nothing is owed if the routine does not return: beneath it is
         // the worker, where an exception is unhandled.
-        let returned = irp::call_driver(device, request, &Guard::Nothing);
+        let returned = irp::call_driver(top, request, &Guard::Nothing);
         if returned != STATUS_PENDING && wait::KeReadStateEvent(&raw mut done) == 0 {
             // The driver neither completed the request nor said it
             // would. It may still hold the IRP: leave it be.
@@ -227,6 +231,7 @@ unsafe fn send(
         wait::wait(Some((&raw mut done).cast()), None);
         let result = ((*request).IoStatus.Status, (*request).IoStatus.Information);
         irp::free(request);
+        ob::object::dereference(top.cast());
         result
     }
 }

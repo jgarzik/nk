@@ -1493,6 +1493,7 @@ pub static WMI: Group = Group {
         "wmi.deregister-waits",
         "wmi.event",
         "wmi.open-block",
+        "wmi.stack",
     ],
     run: wmi,
     manual: false,
@@ -1509,7 +1510,63 @@ fn wmi(r: &mut Report, _: &BootInfo) {
     });
     r.check("wmi.event", wmi_event);
     r.check("wmi.open-block", wmi_open_block);
+    r.check("wmi.stack", || with_wmi_device(wmi_stack));
 }
+
+/// The registration request of a device with another attached above
+/// it goes to the one above, the top of the stack, and names the
+/// device that registered.
+fn wmi_stack(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    use crate::io::device::{
+        IoAttachDeviceToDeviceStack, IoCreateDevice, IoDeleteDevice, IoDetachDevice,
+    };
+    let mut upper = core::ptr::null_mut();
+    // SAFETY: the test's own driver object and devices; the upper one
+    // is detached and deleted before the lower one goes.
+    unsafe {
+        let driver = (*device).DriverObject;
+        if IoCreateDevice(driver, 0, core::ptr::null(), 0x22, 0, 0, &raw mut upper)
+            != STATUS_SUCCESS
+        {
+            return Err("could not create a second device object");
+        }
+        (*device).Flags &= !nk_ntabi::io::DO_DEVICE_INITIALIZING;
+        (*upper).Flags &= !nk_ntabi::io::DO_DEVICE_INITIALIZING;
+        let below = IoAttachDeviceToDeviceStack(upper, device);
+        let verdict = (|| {
+            if below != device {
+                return Err("a device could not be attached above another");
+            }
+            DISPATCHED_TO.store(core::ptr::null_mut(), Ordering::Release);
+            if wmi_control(device, 1) != STATUS_SUCCESS {
+                return Err("a device was not registered");
+            }
+            let seen = requests(1);
+            // Sent to the device above, with the device below as its
+            // provider id.
+            let expected = Seen {
+                for_device: false,
+                ..first(IRP_MN_REGINFO_EX)
+            };
+            if seen != [expected] || DISPATCHED_TO.load(Ordering::Acquire) != upper {
+                return Err("the registration request did not go to the top of the stack");
+            }
+            if wmi_control(device, 2) != STATUS_SUCCESS {
+                return Err("a registered device was not deregistered");
+            }
+            Ok(())
+        })();
+        if !below.is_null() {
+            IoDetachDevice(device);
+        }
+        IoDeleteDevice(upper);
+        verdict
+    }
+}
+
+/// The device the last registration request was dispatched to.
+static DISPATCHED_TO: core::sync::atomic::AtomicPtr<DEVICE_OBJECT> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
 /// A data block no device registers is not found, and nothing is
 /// handed out for it.
@@ -1628,6 +1685,7 @@ unsafe extern "C" fn system_control(device: *mut DEVICE_OBJECT, irp: *mut IRP) -
         let location = (*irp).CurrentStackLocation;
         let [provider, data_path, buffer_size, buffer] = (*location).Parameters;
         let minor = (*location).MinorFunction;
+        DISPATCHED_TO.store(device, Ordering::Release);
         let seen = Seen {
             minor,
             irql: crate::ke::irql::current(),
