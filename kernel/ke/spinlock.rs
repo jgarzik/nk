@@ -35,6 +35,8 @@ pub enum Rank {
     IoWmi = 27,
     /// The sources of hardware errors (`whea`).
     Whea = 28,
+    /// The errata manager's database (`ex::em`).
+    Errata = 29,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).

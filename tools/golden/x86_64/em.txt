@@ -1,1 +1,2 @@
-em.empty-database ok
+em.providers ok
+em.no-rules ok
