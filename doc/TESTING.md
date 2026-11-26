@@ -112,6 +112,8 @@ gate tier has, for each architecture:
 - `*-oracle-event*`, `*-debugger-breakpoint`: Microsoft's event sample,
   whose first act is a breakpoint, stops NK with Windows' bugcheck at
   the same step, and with `debug=on` runs as on Windows with a debugger;
+- `*-oracle-nkc-seh-fatal-*`: each request of the conformance driver
+  `nkc-seh-fatal` stops NK with the bugcheck it stopped Windows with;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
 All but the first are tests of the tests. An expected bugcheck counts

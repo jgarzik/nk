@@ -357,6 +357,24 @@ status = "nk-authored"
 note = "nk-fixtures v6 nkc/nkc-seh.c: structured exception handling"
 
 [[fixture]]
+name = "nkc-seh-fatal"
+arch = "x86_64"
+file = "nkc-seh-fatal.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh-fatal.x64.nkc-seh-fatal.sys"
+sha256 = "4c3784101ecf3d5aa0c9a9ea108279c100ba2a74e70c68d5862a46614592e537"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh-fatal.c: exceptions nothing handles, each a bugcheck"
+
+[[fixture]]
+name = "nkc-seh-fatal"
+arch = "aarch64"
+file = "nkc-seh-fatal.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh-fatal.arm64.nkc-seh-fatal.sys"
+sha256 = "802516f940c0fb46a6291fc78e45e3de3ffd572f6bca92cb9832f65688b3b0fe"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh-fatal.c: exceptions nothing handles, each a bugcheck"
+
+[[fixture]]
 name = "cancel"
 arch = "x86_64"
 file = "cancel.x64.sys"

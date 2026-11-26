@@ -1,0 +1,7 @@
+# The bugcheck for an exception in a system thread carries the
+# exception's code as it is, where Windows widens it with its sign.
+scenario: x86_64-oracle-nkc-seh-fatal-thread
+fails: scenario
+file: kernel/ke/seh.rs
+replace:         Unhandled::SystemThread => (0x7E, "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED", extended),
+with:         Unhandled::SystemThread => (0x7E, "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED", u64::from(code)),

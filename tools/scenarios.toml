@@ -582,3 +582,78 @@ tier = "gate"
 cmdline = "test=neg.seh-fault-at-dispatch"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"
+
+# The conformance driver nkc-seh-fatal: each request stops Windows
+# (oracle/nkc-seh-fatal-*.txt) with the bugcheck for where its exception
+# was raised, or for the fault that is no exception. NK must stop the
+# same way at the same step; arm64 is held to the x86-64 recording.
+
+[x86_64-oracle-nkc-seh-fatal-dispatch]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B11 \\(parameter 1 0x00000000e04e4b11\\)"
+
+[aarch64-oracle-nkc-seh-fatal-dispatch]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B11 \\(parameter 1 0x00000000e04e4b11\\)"
+
+[x86_64-oracle-nkc-seh-fatal-work]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-work"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B12 \\(parameter 1 0xffffffffe04e4b12\\)"
+
+[aarch64-oracle-nkc-seh-fatal-work]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-work"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B12 \\(parameter 1 0xffffffffe04e4b12\\)"
+
+[x86_64-oracle-nkc-seh-fatal-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B13 \\(parameter 1 0xffffffffe04e4b13\\)"
+
+[aarch64-oracle-nkc-seh-fatal-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B13 \\(parameter 1 0xffffffffe04e4b13\\)"
+
+[x86_64-oracle-nkc-seh-fatal-kernel-read]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-kernel-read"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x4E4B0000 \\(parameter 1 0xfffff7804e4b0000, parameter 2 0x0\\)"
+
+[aarch64-oracle-nkc-seh-fatal-kernel-read]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-kernel-read"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x4E4B0000 \\(parameter 1 0xfffff7804e4b0000, parameter 2 0x0\\)"
+
+[x86_64-oracle-nkc-seh-fatal-thread]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B15 \\(parameter 1 0xffffffffe04e4b15\\)"
+
+[aarch64-oracle-nkc-seh-fatal-thread]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B15 \\(parameter 1 0xffffffffe04e4b15\\)"

@@ -1358,6 +1358,105 @@
    ]
   },
   {
+   "name": "nkc-seh-fatal",
+   "file": "nkc-seh-fatal.x64.sys",
+   "sha256": "4c3784101ecf3d5aa0c9a9ea108279c100ba2a74e70c68d5862a46614592e537",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInsertQueueDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
    "name": "cancel",
    "file": "cancel.x64.sys",
    "sha256": "63aec27a5b75c6f6a9f1146846edbe8f0dccdeb31e204274209105c5995c7334",

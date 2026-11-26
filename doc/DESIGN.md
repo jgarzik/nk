@@ -655,7 +655,9 @@ and around instructions that fault, and check what ran, in which order,
 with what record, and what state came back. `oracle.nkc-seh` holds NK
 to what a conformance driver's own `__try` blocks saw on Windows
 (nested and collided unwinds, `__leave`, `goto` and `return` out of a
-`__try`, the raising routines, the probes, faults).
+`__try`, the raising routines, the probes, faults), and the
+`*-oracle-nkc-seh-fatal-*` scenarios to the bugcheck Windows stopped
+with in each place an exception went unhandled.
 
 ## Exports
 

@@ -1,0 +1,12 @@
+# NK conformance driver nkc-seh-fatal, control code 0022240c:
+# a read of an unmapped kernel address inside a __try whose
+# filter accepts everything. Nothing handles it; see the top of
+# nk-fixtures nkc/nkc-seh-fatal.c. The request stops the system. If it
+# completes instead, its status says what went wrong.
+
+load nkc-seh-fatal nkc-seh-fatal.sys
+open d \Device\NkcSehFatal
+ioctl d 00222000 - 16
+ioctl d 0022240c - 16
+close d
+unload nkc-seh-fatal

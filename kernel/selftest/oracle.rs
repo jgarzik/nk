@@ -503,6 +503,36 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
 }
 
+/// The conformance driver `nkc-seh-fatal`: each script makes one request
+/// that Windows answers with a bugcheck, for an exception nothing
+/// handles or a fault that is none. Each is run alone: it ends the
+/// boot, and the boot's scenario names the bugcheck.
+macro_rules! fatal {
+    ($group:ident, $run:ident, $name:literal) => {
+        pub static $group: Group = Group {
+            names: &[concat!("oracle.nkc-seh-fatal-", $name)],
+            run: $run,
+            manual: true,
+        };
+
+        fn $run(r: &mut Report, _: &BootInfo) {
+            check(
+                r,
+                concat!("oracle.nkc-seh-fatal-", $name),
+                "nkc-seh-fatal.sys",
+                include_str!(concat!("../../oracle/nkc-seh-fatal-", $name, ".script")),
+                include_str!(concat!("../../oracle/nkc-seh-fatal-", $name, ".txt")),
+            );
+        }
+    };
+}
+
+fatal!(FATAL_DISPATCH, fatal_dispatch, "dispatch");
+fatal!(FATAL_WORK, fatal_work, "work");
+fatal!(FATAL_DPC, fatal_dpc, "dpc");
+fatal!(FATAL_KERNEL_READ, fatal_kernel_read, "kernel-read");
+fatal!(FATAL_THREAD, fatal_thread, "thread");
+
 /// Microsoft's event sample, as on Windows booted with no debugger: its
 /// first act is a breakpoint, which stops the system. Run alone: it
 /// ends the boot.
