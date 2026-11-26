@@ -1,0 +1,7 @@
+# A library is loaded and bound to, but its DllInitialize is never
+# called: whatever it sets up for its importers is not there.
+scenario: x86_64
+fails: oracle.nkc-lib
+file: kernel/ldr/mod.rs
+replace:     if let Some(initialize) = own_export(&module, b"DllInitialize") {
+with:     if let Some(initialize) = own_export(&module, b"DllInitialize").filter(|_| false) {

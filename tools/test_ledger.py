@@ -73,6 +73,42 @@ class MicrosoftKernel(unittest.TestCase):
         self.assertEqual(kernel["nk_names_it_lacks"], ["NkOnly", "ProbeForRead"])
 
 
+class Libraries(unittest.TestCase):
+    LISTING = """\
+machine x86_64
+import ntoskrnl.exe KeSetEvent
+export 1 DllInitialize rva=0x1000
+export 7 - rva=0x1010
+export 8 NkcLibAdd rva=0x1020
+export 9 Forwarded forward=NTOSKRNL.KeSetEvent
+"""
+
+    def test_an_image_exports_names_and_ordinals(self):
+        self.assertEqual(ledger.exports_of(self.LISTING),
+                         {"#1", "DllInitialize", "#7", "#8", "NkcLibAdd", "#9", "Forwarded"})
+        self.assertEqual(ledger.exports_of("machine x86_64\n"), set())
+
+    def test_an_import_is_the_kernels_or_a_librarys_or_missing(self):
+        libraries = {"nkc-lib.sys": ledger.exports_of(self.LISTING), "plain.sys": set()}
+
+        def state(module, name):
+            return ledger.import_state(module, name, EXPORTS, libraries)
+
+        self.assertEqual(state("ntoskrnl.exe", "ProbeForRead"), "partial")
+        self.assertEqual(state("HAL.dll", "KeStallExecutionProcessor"), "implemented")
+        self.assertEqual(state("ntoskrnl.exe", "NkcLibAdd"), "missing")
+        # From a fixture that exports it: by name, by ordinal.
+        self.assertEqual(state("NKC-LIB.sys", "NkcLibAdd"), "library")
+        self.assertEqual(state("nkc-lib.sys", "#7"), "library")
+        self.assertEqual(state("nkc-lib.sys", "NkcLibAbsent"), "missing")
+        self.assertEqual(state("nkc-lib.sys", "#2"), "missing")
+        # A kernel name is not a library's; a module that is no fixture
+        # exports nothing.
+        self.assertEqual(state("nkc-lib.sys", "KeSetEvent"), "missing")
+        self.assertEqual(state("plain.sys", "X"), "missing")
+        self.assertEqual(state("wdfldr.sys", "WdfVersionBind"), "missing")
+
+
 class LookedUp(unittest.TestCase):
     def test_names_the_kernel_reported_absent_once_each_and_sorted(self):
         lines = [

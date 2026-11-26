@@ -3,17 +3,34 @@
 //!
 //! The PE work is `lib/pe`, the same code nkload maps the kernel with.
 //! This module supplies memory and the import resolver.
+//!
+//! An import from `ntoskrnl.exe` or `hal.dll` is bound to the kernel's
+//! export table. An import from any other module is bound to that
+//! module's export directory: the module is an export driver, a library,
+//! loaded when the first image that imports from it is loaded and
+//! unloaded when the last one goes
+//! ([Creating Export Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/creating-export-drivers)).
+//! Loading and unloading are one at a time, under a mutex a thread can
+//! sleep on: a load calls a library's `DllInitialize`, and loads another
+//! image from inside itself.
 
 #![allow(non_snake_case)]
 
-use crate::ke::{Rank, SpinLock};
+use crate::ke::{Rank, SpinLock, mutex, wait};
 use crate::mm::{self, PAGE_SIZE, map};
 use crate::{arch, export};
 use alloc::string::String;
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
+use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_mm::pt::Prot;
+use nk_ntabi::io::UNICODE_STRING;
+use nk_ntabi::ke::KMUTANT;
+use nk_ntabi::status::*;
+use nk_pe::exports::{Export, Exports, forward_target};
 use nk_pe::modules::{Module, Modules};
 use nk_pe::{Pe, PeError, Symbol};
 
@@ -76,6 +93,8 @@ pub unsafe fn view<'a>(module: &Module) -> &'a [u8] {
 /// in the table of loaded images.
 pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
     BOOT.store(core::ptr::from_ref(info).cast_mut(), Ordering::Release);
+    // SAFETY: static storage for a mutex nothing has yet.
+    unsafe { mutex::KeInitializeMutex(LOADER.mutex.get().cast(), 0) };
     let zero = mm::alloc_frames(1).ok_or("no memory for the frame of zeros")?;
     ZERO_FRAME.store(zero, Ordering::Relaxed);
     // SAFETY: the loader laid the kernel image out in `kernel_size`
@@ -126,14 +145,75 @@ pub fn boot_file(name: &str) -> Option<&'static [u8]> {
 const SUBSYSTEM_NATIVE: u16 = 1;
 
 /// A driver image in memory, as its loader holds it.
-#[derive(Clone, Copy)]
 pub struct Image {
     pub base: u64,
     pub size: usize,
     pub entry: u64,
     phys: u64,
     pages: usize,
+    /// The libraries it imports from, by base address: it counts as one
+    /// importer of each until it is unloaded.
+    libraries: Vec<u64>,
 }
+
+/// A library: an image loaded because another imports from it.
+struct Library {
+    image: Image,
+    /// Its `DllUnload`, if it exports one.
+    unload: Option<u64>,
+}
+
+/// What a library exports for the loader to call
+/// ([Creating Export Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/creating-export-drivers)).
+type DllInitialize = unsafe extern "C" fn(*mut UNICODE_STRING) -> NTSTATUS;
+type DllUnload = unsafe extern "C" fn() -> NTSTATUS;
+
+/// What serialises loading and unloading, and the libraries, which
+/// belong to whoever holds it.
+struct Loader {
+    mutex: UnsafeCell<MaybeUninit<KMUTANT>>,
+    libraries: UnsafeCell<Vec<Library>>,
+}
+
+// SAFETY: the mutex is reached through the kernel's mutex routines,
+// which lock for themselves; the list only by the thread that holds the
+// mutex (`with_libraries`).
+unsafe impl Sync for Loader {}
+
+static LOADER: Loader = Loader {
+    mutex: UnsafeCell::new(MaybeUninit::uninit()),
+    libraries: UnsafeCell::new(Vec::new()),
+};
+
+/// Run `f` as the one load or unload in progress. The mutex is taken
+/// again by the same thread without waiting: a library is loaded from
+/// inside the load of the image that imports from it.
+fn serialised<R>(f: impl FnOnce() -> R) -> R {
+    let mutex = LOADER.mutex.get();
+    // SAFETY: the loader's mutex, initialised by `init`; released by the
+    // thread that took it.
+    unsafe {
+        wait::wait(Some(mutex.cast()), None);
+        let result = f();
+        mutex::KeReleaseMutex(mutex.cast(), 0);
+        result
+    }
+}
+
+/// Run `f` on the list of libraries. For the thread that holds the
+/// loader's mutex (`serialised`); `f` neither loads nor unloads, so no
+/// two calls are ever in progress at once.
+fn with_libraries<R>(f: impl FnOnce(&mut Vec<Library>) -> R) -> R {
+    // SAFETY: per the contract above, this is the only reference.
+    f(unsafe { &mut *LOADER.libraries.get() })
+}
+
+/// How deep libraries may import from libraries. Images that import
+/// from each other in a circle are refused at this depth.
+const MAX_NESTING: usize = 8;
+
+/// How many forwarders in a row lead from an import to an address.
+const MAX_FORWARDS: usize = 8;
 
 #[derive(Debug)]
 #[expect(dead_code, reason = "fields are read through Debug in test reports")]
@@ -147,11 +227,54 @@ pub enum LoadError {
     NoMemory,
     /// Its name is too long to keep, or too many images are loaded.
     TooMany,
-    /// The kernel has no export for an import of the driver.
+    /// The module the image imports from has no such export: the
+    /// kernel's table, or a library's export directory.
     Unresolved {
         module: String,
         symbol: String,
     },
+    /// An image of this file name is loaded already.
+    AlreadyLoaded,
+    /// The image imports from a library that is not among the boot
+    /// files.
+    NoLibrary {
+        module: String,
+    },
+    /// The library's `DllInitialize` refused.
+    LibraryFailed {
+        module: String,
+        status: NTSTATUS,
+    },
+    /// The image imports from one that runs as a driver. Not handled.
+    NotALibrary {
+        module: String,
+    },
+    /// Libraries import from libraries deeper than [`MAX_NESTING`], or
+    /// in a circle.
+    TooDeep {
+        module: String,
+    },
+}
+
+impl LoadError {
+    /// What Windows' `ZwLoadDriver` reports for it. Observed on the
+    /// reference Windows (`doc/DESIGN.md`, Exports): a library that
+    /// lacks a name its importer asks for, and a library that is
+    /// nowhere. The rest follow the status codes' own meanings.
+    pub fn status(&self) -> NTSTATUS {
+        match self {
+            Self::Pe(_) | Self::NotNative(_) | Self::Unaligned => STATUS_INVALID_IMAGE_FORMAT,
+            Self::NoMemory | Self::TooMany | Self::TooDeep { .. } => STATUS_INSUFFICIENT_RESOURCES,
+            Self::Unresolved { symbol, .. } if symbol.starts_with('#') => {
+                STATUS_DRIVER_ORDINAL_NOT_FOUND
+            }
+            Self::Unresolved { .. } => STATUS_DRIVER_ENTRYPOINT_NOT_FOUND,
+            Self::AlreadyLoaded => STATUS_IMAGE_ALREADY_LOADED,
+            Self::NoLibrary { .. } => STATUS_OBJECT_NAME_NOT_FOUND,
+            Self::LibraryFailed { status, .. } => *status,
+            Self::NotALibrary { .. } => STATUS_NOT_SUPPORTED,
+        }
+    }
 }
 
 /// How many images can be loaded at once.
@@ -172,8 +295,176 @@ fn security_cookie() -> u64 {
     nk_pe::security_cookie(arch::counter())
 }
 
-/// Load a driver image from the bytes of its file, called `name`.
+/// The address of the export `symbol` of the loaded image `module`,
+/// following forwarders: to the kernel (`NTOSKRNL.Name`), or to another
+/// library, of which the importer then holds a reference too (`held`).
+/// A forwarder does not load its target. `None` if there is no such
+/// export or the chain leads nowhere.
+fn export_address(
+    module: &Module,
+    symbol: Symbol<'_>,
+    held: &mut Vec<u64>,
+    hops: usize,
+) -> Option<u64> {
+    // SAFETY: the image is loaded, and stays loaded while the loader's
+    // mutex is held, which it is by every caller.
+    let image = unsafe { view(module) };
+    let exports = Exports::parse(image, module.exports).ok()??;
+    let export = match symbol {
+        Symbol::Name(name) => exports.by_name(name),
+        Symbol::Ordinal(ordinal) => exports.by_ordinal(u32::from(ordinal)),
+    };
+    match export.ok()?? {
+        Export::Rva(rva) => Some(module.base + u64::from(rva)),
+        Export::Forward(forward) => {
+            if hops == MAX_FORWARDS {
+                return None;
+            }
+            let (stem, target) = forward_target(forward)?;
+            let symbol = match target.strip_prefix(b"#") {
+                Some(digits) => Symbol::Ordinal(core::str::from_utf8(digits).ok()?.parse().ok()?),
+                None => Symbol::Name(target),
+            };
+            if [&b"ntoskrnl"[..], b"hal"]
+                .iter()
+                .any(|kernel| kernel.eq_ignore_ascii_case(stem))
+            {
+                return match symbol {
+                    Symbol::Name(name) => export::resolve(KERNEL_NAME, name),
+                    Symbol::Ordinal(_) => None,
+                };
+            }
+            let next = MODULES.lock().with_stem(stem).filter(|m| m.library)?;
+            hold(next.base, held).ok()?;
+            export_address(&next, symbol, held, hops + 1)
+        }
+    }
+}
+
+/// Count the image being loaded as an importer of the library at
+/// `base`, once however many of its imports lead there.
+fn hold(base: u64, held: &mut Vec<u64>) -> Result<(), LoadError> {
+    if held.contains(&base) {
+        return Ok(());
+    }
+    held.try_reserve_exact(1).map_err(|_| LoadError::NoMemory)?;
+    MODULES.lock().count_importer(base, 1);
+    held.push(base);
+    Ok(())
+}
+
+/// The library called `name`, with the image being loaded counted as
+/// one of its importers: the loaded one, or else the boot file of that
+/// name, loaded and initialised now.
+fn library(name: &[u8], depth: usize, held: &mut Vec<u64>) -> Result<Module, LoadError> {
+    let found = MODULES.lock().named(name);
+    let module = match found {
+        Some(module) if module.library => module,
+        Some(_) => {
+            return Err(LoadError::NotALibrary {
+                module: lossy(name),
+            });
+        }
+        None if depth == MAX_NESTING => {
+            return Err(LoadError::TooDeep {
+                module: lossy(name),
+            });
+        }
+        None => {
+            let file = core::str::from_utf8(name)
+                .ok()
+                .and_then(|name| Some((name, boot_file(name)?)));
+            let Some((name, file)) = file else {
+                return Err(LoadError::NoLibrary {
+                    module: lossy(name),
+                });
+            };
+            load_library(name, file, depth + 1).inspect_err(|error| refused(name, error))?
+        }
+    };
+    hold(module.base, held)?;
+    Ok(module)
+}
+
+/// The address of `name` among the exports of the library `module`
+/// itself: a routine the loader calls.
+fn own_export(module: &Module, name: &[u8]) -> Option<u64> {
+    // SAFETY: as in `export_address`.
+    let image = unsafe { view(module) };
+    match Exports::parse(image, module.exports).ok()??.by_name(name) {
+        Ok(Some(Export::Rva(rva))) => Some(module.base + u64::from(rva)),
+        _ => None,
+    }
+}
+
+/// Load the library in `file`, called `name`: as any image is loaded,
+/// and then its `DllInitialize` is called, at `PASSIVE_LEVEL`, with the
+/// path of the key a service of its name would have (the key need not
+/// exist: the library is given the name, as on Windows). Its entry
+/// point is not called. A library whose `DllInitialize` fails is
+/// unloaded again.
+fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadError> {
+    let image = load_image(name, file, true, depth)?;
+    let Some(module) = MODULES.lock().named(name.as_bytes()) else {
+        unreachable!("an image just loaded is in the table of images");
+    };
+    if let Some(initialize) = own_export(&module, b"DllInitialize") {
+        let mut path: Vec<u16> = "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\"
+            .encode_utf16()
+            .chain(String::from_utf8_lossy(module.stem()).encode_utf16())
+            .chain([0])
+            .collect();
+        let bytes = (path.len() - 1) * 2;
+        let mut registry = UNICODE_STRING {
+            Length: bytes as u16,
+            MaximumLength: (bytes + 2) as u16,
+            Buffer: path.as_mut_ptr(),
+        };
+        // SAFETY: the export of that name of an image just mapped,
+        // relocated and bound, which has the signature every library's
+        // `DllInitialize` has; the string outlives the call.
+        let status = unsafe {
+            let initialize: DllInitialize = core::mem::transmute(initialize as usize);
+            initialize(&raw mut registry)
+        };
+        if !nt_success(status) {
+            unload_image(&image);
+            return Err(LoadError::LibraryFailed {
+                module: name.into(),
+                status,
+            });
+        }
+    }
+    let unload = own_export(&module, b"DllUnload");
+    with_libraries(|libraries| {
+        libraries.reserve_exact(1);
+        libraries.push(Library { image, unload });
+    });
+    Ok(module)
+}
+
+/// Say in the log why an image was not loaded, with Windows' status.
+fn refused(name: &str, error: &LoadError) {
+    kprintln!(
+        "ldr: {name} not loaded, status {:#010x}: {error:?}",
+        error.status()
+    );
+}
+
+/// Load a driver image from the bytes of its file, called `name`. A
+/// refusal is logged, naming the module and symbol where an import is
+/// the reason.
 pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
+    serialised(|| load_image(name, file, false, 0)).inspect_err(|error| refused(name, error))
+}
+
+/// Load an image, as a driver or as a `library`, `depth` libraries deep
+/// in the imports of the image whose load began it. For the holder of
+/// the loader's mutex.
+fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Image, LoadError> {
+    if MODULES.lock().named(name.as_bytes()).is_some() {
+        return Err(LoadError::AlreadyLoaded);
+    }
     let pe = Pe::parse(file).map_err(LoadError::Pe)?;
     pe.check_machine(nk_pe::MACHINE_NATIVE)
         .map_err(LoadError::Pe)?;
@@ -191,12 +482,13 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
         mm::free_frames(phys, pages);
         return Err(LoadError::NoMemory);
     };
-    let image = Image {
+    let mut image = Image {
         base,
         size,
         entry: base + u64::from(h.entry_rva),
         phys,
         pages,
+        libraries: Vec::new(),
     };
 
     // Build the image through the direct map, which is always writable;
@@ -204,26 +496,46 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
     // SAFETY: the frames were just allocated for this image and nothing
     // else references them until they are mapped below.
     let mem = unsafe { core::slice::from_raw_parts_mut(mm::phys_to_virt(phys), pages * PAGE_SIZE) };
+    let held = &mut image.libraries;
     let built = (|| {
         pe.map_into(mem).map_err(LoadError::Pe)?;
         nk_pe::relocate(mem, &h, base).map_err(LoadError::Pe)?;
-        let resolver = |module: &[u8], sym: Symbol<'_>| match sym {
-            Symbol::Name(name) => export::resolve(module, name),
-            Symbol::Ordinal(_) => None,
+        // Why a module could not be imported from at all; an import the
+        // module simply lacks is named from the image's own tables.
+        let mut unusable = None;
+        let resolver = |module: &[u8], sym: Symbol<'_>| {
+            if export::is_kernel(module) {
+                return match sym {
+                    Symbol::Name(name) => export::resolve(module, name),
+                    Symbol::Ordinal(_) => None,
+                };
+            }
+            match self::library(module, depth, held) {
+                Ok(library) => export_address(&library, sym, held, 0),
+                Err(error) => {
+                    unusable.get_or_insert(error);
+                    None
+                }
+            }
         };
-        nk_pe::bind_imports(mem, &h, resolver).map_err(|e| match e {
-            PeError::Unresolved {
-                dll_rva,
-                name_rva,
-                ordinal,
-            } => LoadError::Unresolved {
+        let bound = nk_pe::bind_imports(mem, &h, resolver);
+        bound.map_err(|e| match (e, unusable) {
+            (PeError::Unresolved { .. }, Some(unusable)) => unusable,
+            (
+                PeError::Unresolved {
+                    dll_rva,
+                    name_rva,
+                    ordinal,
+                },
+                None,
+            ) => LoadError::Unresolved {
                 module: nk_pe::cstr_at(mem, dll_rva).map(lossy).unwrap_or_default(),
                 symbol: match nk_pe::cstr_at(mem, name_rva) {
                     Ok(name) if name_rva != 0 => lossy(name),
                     _ => alloc::format!("#{ordinal}"),
                 },
             },
-            other => LoadError::Pe(other),
+            (other, _) => LoadError::Pe(other),
         })?;
         if let Some(rva) = nk_pe::security_cookie_rva(mem, &h, base) {
             mem[rva as usize..rva as usize + 8].copy_from_slice(&security_cookie().to_le_bytes());
@@ -257,7 +569,11 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
         h.dir(nk_pe::DIR_EXCEPTION),
         view,
     )
-    .is_some_and(|module| MODULES.lock().insert(module).is_ok());
+    .is_some_and(|mut module| {
+        module.exports = h.dir(nk_pe::DIR_EXPORT);
+        module.library = library;
+        MODULES.lock().insert(module).is_ok()
+    });
     if !entered {
         unmap_view(view, pages);
         release(&image);
@@ -266,14 +582,26 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
     Ok(image)
 }
 
+/// Give back an image's memory and addresses, and its place among the
+/// importers of the libraries it had bound to.
 fn release(image: &Image) {
     map::unmap(image.base, image.pages);
     map::free_va(image.base, image.pages);
     mm::free_frames(image.phys, image.pages);
+    for &library in &image.libraries {
+        drop_importer(library);
+    }
 }
 
 /// Unmap an image and free its memory. No code in it may run again.
+/// The libraries it imported from lose an importer; one that has none
+/// left is unloaded after it.
 pub fn unload(image: &Image) {
+    serialised(|| unload_image(image));
+}
+
+/// As [`unload`], for the holder of the loader's mutex.
+fn unload_image(image: &Image) {
     let module = MODULES.lock().remove(image.base);
     // The image's addresses go back first, so that the next image of
     // this size is given them again and its view the view's.
@@ -281,6 +609,46 @@ pub fn unload(image: &Image) {
     if let Some(module) = module {
         unmap_view(module.view, image.pages);
     }
+}
+
+/// The library at `base` has one importer fewer. With none left its
+/// `DllUnload` is called, at `PASSIVE_LEVEL`, and it is unloaded. As
+/// [Microsoft documents](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/creating-export-drivers),
+/// a library that exports no `DllUnload` stays loaded; so does one
+/// whose `DllUnload` fails.
+fn drop_importer(base: u64) {
+    if MODULES.lock().count_importer(base, -1) != Some(0) {
+        return;
+    }
+    let found = with_libraries(|libraries| {
+        let at = libraries.iter().position(|l| l.image.base == base)?;
+        Some((at, libraries[at].unload?))
+    });
+    let Some((at, routine)) = found else {
+        return;
+    };
+    // SAFETY: the export called `DllUnload` of a loaded library, which
+    // has the signature every library's `DllUnload` has.
+    let status = unsafe {
+        let routine: DllUnload = core::mem::transmute(routine as usize);
+        routine()
+    };
+    if !nt_success(status) {
+        kprintln!("ldr: a library's DllUnload failed, status {status:#010x}: it stays loaded");
+        return;
+    }
+    let library = with_libraries(|libraries| {
+        let library = libraries.remove(at);
+        // An empty list holds no memory, so leak checks see none.
+        libraries.shrink_to_fit();
+        library
+    });
+    unload_image(&library.image);
+}
+
+/// The loaded image whose file name is `name`.
+pub fn module_named(name: &str) -> Option<Module> {
+    MODULES.lock().named(name.as_bytes())
 }
 
 /// The image `address` is in: the kernel's own or a loaded driver's.
@@ -326,4 +694,68 @@ impl core::fmt::Display for Located {
 pub unsafe extern "C" fn MmPageEntireDriver(address_within_section: *mut c_void) -> *mut c_void {
     module_containing(address_within_section as u64)
         .map_or(core::ptr::null_mut(), |module| module.base as *mut c_void)
+}
+
+// ---- tests --------------------------------------------------------------
+
+/// A place among a library's importers, held by a test as a second
+/// importer would hold it: taken with the library loaded if it was not,
+/// given up when dropped.
+pub struct TestImporter(Vec<u64>);
+
+impl TestImporter {
+    /// Import from the library called `name`, as an image whose import
+    /// table names it would.
+    pub fn of(name: &str) -> Result<Self, LoadError> {
+        serialised(|| {
+            let mut held = Vec::new();
+            library(name.as_bytes(), 0, &mut held).map(|_| Self(held))
+        })
+    }
+}
+
+impl Drop for TestImporter {
+    fn drop(&mut self) {
+        serialised(|| {
+            for &library in &self.0 {
+                drop_importer(library);
+            }
+        });
+    }
+}
+
+/// What an import of `symbol` from an image is bound to, for a test's
+/// own image: one that exists only as `image`, the bytes of its export
+/// directory `exports`, standing in the table of images as the library
+/// `name` at `base` for as long as this takes.
+///
+/// # Safety
+/// `base` is the start of `image.len()` bytes of address space that are
+/// nothing else's.
+pub unsafe fn bind_for_test(
+    name: &str,
+    base: u64,
+    image: &[u8],
+    exports: nk_pe::DataDir,
+    symbols: &[Symbol<'_>],
+) -> Option<Vec<Option<u64>>> {
+    let mut module = Module::new(
+        name.as_bytes(),
+        base,
+        image.len() as u64,
+        nk_pe::DataDir::default(),
+        image.as_ptr() as u64,
+    )?;
+    module.exports = exports;
+    module.library = true;
+    serialised(|| {
+        MODULES.lock().insert(module).ok()?;
+        let mut held = Vec::new();
+        let bound = symbols
+            .iter()
+            .map(|&symbol| export_address(&module, symbol, &mut held, 0))
+            .collect();
+        MODULES.lock().remove(base);
+        Some(bound)
+    })
 }

@@ -4,11 +4,12 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 108,
+  "total": 113,
   "implemented": 102,
   "partial": 5,
   "traps": 1,
-  "missing": 0
+  "missing": 0,
+  "library": 5
  },
  "looked_up_absent": {
   "note": "names MmGetSystemRoutineAddress was asked for during the boot test, by the fixtures and by the kernel's own test of the routine, that the kernel does not export; in no import table",
@@ -1563,6 +1564,112 @@
      "module": "ntoskrnl.exe",
      "name": "RtlFreeUnicodeString",
      "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-lib",
+   "file": "nkc-lib.x64.sys",
+   "sha256": "3701eb7dd37708ce6bbcc9ca332a9b8463c254262898395d6973200363956b5f",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": []
+  },
+  {
+   "name": "nkc-libuser",
+   "file": "nkc-libuser.x64.sys",
+   "sha256": "81b450c7ed4f6f8e6ee7247721a0e798c522d3e4bb949720130df6e422f9f36b",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "NkcLibValue",
+     "state": "library"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "NkcLibCounts",
+     "state": "library"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "NkcLibSetValue",
+     "state": "library"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "#7",
+     "state": "library"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "NkcLibAdd",
+     "state": "library"
+    }
+   ]
+  },
+  {
+   "name": "nkc-libbad",
+   "file": "nkc-libbad.x64.sys",
+   "sha256": "d94c2a5209e96e441ad8baba00e3b2dbb64940519bc6de2454da0fd393cce64b",
+   "status": "nk-authored",
+   "loaded_at_boot": false,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "NkcLibAdd",
+     "state": "library"
+    },
+    {
+     "module": "nkc-lib.sys",
+     "name": "NkcLibAbsent",
+     "state": "missing"
     }
    ]
   }

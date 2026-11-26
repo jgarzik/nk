@@ -40,10 +40,11 @@ def boot_drivers(arch):
     the kernel uses on this arch. A fixture that is not downloaded is left
     out and named in the second list; the kernel skips its tests.
 
-    Besides the drivers it loads, the kernel is given two real binaries it
+    Besides the drivers it loads, the kernel is given real binaries it
     must refuse:
       wrongarch.sys   the WDM sample built for the other architecture
       unresolved.sys  the KMDF sample, whose framework imports NK lacks
+      nkc-libbad.sys  imports a name the library nkc-lib.sys does not export
     """
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     drivers, missing = [], []
@@ -60,6 +61,8 @@ def boot_drivers(arch):
             drivers.append(("wrongarch.sys", path))
         elif fx["arch"] == arch and fx["name"] == "kmdf-echo":
             drivers.append(("unresolved.sys", path))
+        elif fx["arch"] == arch and fx["name"] == "nkc-libbad":
+            drivers.append(("nkc-libbad.sys", path))
     return drivers, missing
 
 

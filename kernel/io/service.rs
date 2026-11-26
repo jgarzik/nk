@@ -15,6 +15,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use nk_ntabi::io::DRIVER_OBJECT;
+use nk_ntabi::status::*;
 
 /// Where service keys live, from the registry's root.
 const SERVICES: &str = "Machine\\System\\CurrentControlSet\\Services";
@@ -30,7 +31,6 @@ const DEMAND_START: u32 = 3;
 const ERROR_NORMAL: u32 = 1;
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "fields are read through Debug in test reports")]
 pub enum ServiceError {
     /// The service has no key, or its `ImagePath` names no file.
     NoKey,
@@ -40,6 +40,21 @@ pub enum ServiceError {
     Running,
     NoMemory,
     Driver(DriverError),
+}
+
+impl ServiceError {
+    /// The status Windows' `ZwLoadDriver` gives for it. Observed on the
+    /// reference Windows (`doc/DESIGN.md`, Exports): a driver that is
+    /// running already, and what `LoadError::status` names. A service
+    /// without a key or without its file is not found.
+    pub fn status(&self) -> NTSTATUS {
+        match self {
+            Self::NoKey | Self::NoImage(_) => STATUS_OBJECT_NAME_NOT_FOUND,
+            Self::Running => STATUS_IMAGE_ALREADY_LOADED,
+            Self::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            Self::Driver(error) => error.status(),
+        }
+    }
 }
 
 fn key(name: &str) -> String {

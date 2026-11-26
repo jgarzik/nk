@@ -1,0 +1,17 @@
+# The importer of an export driver loaded, unloaded and loaded again.
+#
+# The library goes when its last importer goes and is loaded afresh the
+# next time, so the count of its DllInitialize calls that the importer
+# logs (the eighth value) is 1 both times.
+
+install nkc-lib.sys
+load nkc-libuser nkc-libuser.sys
+open d \Device\NkcLibUser
+ioctl d 00222000 - 64
+close d
+unload nkc-libuser
+load nkc-libuser nkc-libuser.sys
+open d \Device\NkcLibUser
+ioctl d 00222000 - 64
+close d
+unload nkc-libuser

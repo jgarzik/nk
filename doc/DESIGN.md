@@ -539,8 +539,56 @@ A driver can also ask for a routine by name while it runs
 null. No import table shows such a name, so each one not found is
 printed in the boot log and the ledger lists them (`looked_up_absent`).
 
-Not handled: imports by ordinal, kernel-mode API-set names (`ext-ms-*`),
-drivers that export to other drivers.
+### Drivers that export to drivers
+
+An import from any other module is from an export driver, a library
+([Creating Export Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/creating-export-drivers)).
+The loader binds it through that image's export directory
+(`nk_pe::exports`), by name or by ordinal. An export that is a forwarder
+(`MODULE.Name`, `MODULE.#ordinal`) is followed, to the kernel's table
+or to another loaded library, at most eight in a row; a forwarder does
+not load its target.
+
+- **Where a library comes from.** An image of that file name that is
+  loaded as a library; else the boot file of that name, loaded now. The
+  boot files stand for both places Windows looks, beside the importer
+  and then `System32\drivers`.
+- **Loading one.** Like any image; then its export `DllInitialize` is
+  called at `PASSIVE_LEVEL` with
+  `\Registry\Machine\System\CurrentControlSet\Services\<name>`, a
+  key that need not exist. Its entry point is not called. A failing
+  `DllInitialize` unloads it and fails the importer's load.
+- **Lifetime.** Each loaded importer counts once, in the library's
+  record in the table of images. When the last goes, the library's
+  `DllUnload` is called and the library unloaded, after its importer;
+  the next importer loads it afresh. As Microsoft documents, a library
+  without `DllUnload`, or whose `DllUnload` fails, stays loaded.
+- **A refused importer leaves nothing.** Its libraries lose it as an
+  importer again, and one loaded for it alone is unloaded.
+
+What a refused load is called is what Windows' `NtLoadDriver` returns
+on the reference system; the transcripts (`oracle/nkc-lib*.txt`) show
+only that the load failed:
+
+| Refusal | Status |
+| --- | --- |
+| the library lacks a name the importer asks for | `STATUS_DRIVER_ENTRYPOINT_NOT_FOUND` |
+| the library is nowhere | `STATUS_OBJECT_NAME_NOT_FOUND` |
+| the driver is loaded already | `STATUS_IMAGE_ALREADY_LOADED` |
+| a library started as a service | its entry point's own status (`nkc-lib`: `STATUS_NOT_SUPPORTED`) |
+
+A missing ordinal is `STATUS_DRIVER_ORDINAL_NOT_FOUND`, by the name of
+the status alone.
+
+Not handled:
+
+- imports by ordinal from the kernel itself: NK's table has no
+  ordinals;
+- kernel-mode API-set names (`ext-ms-*`);
+- importing from an image that runs as a driver (started from its
+  service key) rather than as a library: refused;
+- images that import from each other in a circle: refused, at eight
+  libraries deep.
 
 ## ABI structures
 
@@ -567,9 +615,15 @@ and only then maps it with each section's protection. Also:
 A refused image leaves nothing allocated.
 
 Every image in memory, the kernel's own first (as `ntoskrnl.exe`), is in
-one fixed-size table by file name, address range, function table and
-view (`nk_pe::modules`): a fatal trap names the image and offset it
-happened at, and a stack walk finds each frame's function there.
+one fixed-size table by file name, address range, function table, view
+and export directory (`nk_pe::modules`): a fatal trap names the image
+and offset it happened at, a stack walk finds each frame's function
+there, and an import from a library is bound through it. An image of a
+file name that is loaded is not loaded again.
+
+One image is loaded or unloaded at a time, under a mutex
+(`doc/LOCKING.md`): loading calls a library's `DllInitialize`, which may
+wait, and loads a library from inside the load of its importer.
 
 ## Starting a driver
 
@@ -578,7 +632,8 @@ A driver is started from its service key, as on Windows
 image, and a key without that value means `System32\drivers\<name>.sys`.
 The last part of the path is looked up among the boot files, the
 contents of `\NK\drivers`, which stand for `System32\drivers` until
-there is a file system. Nothing else loads a driver. The driver's entry
+there is a file system. Nothing else starts a driver; a library is
+loaded when an image imports from it (Exports). The driver's entry
 point is given the path to its key. Stopping a service runs the driver's
 unload routine and frees its image; the key stays.
 

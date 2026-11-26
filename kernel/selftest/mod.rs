@@ -12,6 +12,7 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+mod library;
 mod loader;
 mod mutex;
 mod neg;
@@ -64,6 +65,7 @@ pub static GROUPS: &[&Group] = &[
     &service::GROUP,
     &driver_api::GROUP,
     &loader::GROUP,
+    &library::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
     &cancel::GROUP,

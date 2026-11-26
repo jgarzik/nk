@@ -1,0 +1,17 @@
+# NK conformance drivers nkc-lib and nkc-libuser (an export driver).
+#
+# nkc-lib.sys is a library: it is put where the loader looks for what a
+# driver imports from, and loaded when nkc-libuser.sys, which imports
+# from it by name, by ordinal and a variable, is loaded. One request has
+# the importer log what it got, 32 bits each, ending with 0x4E4B4321;
+# what each value means is written beside it in nk-fixtures
+# nkc/nkc-libuser.c. The second request gets the same list: the
+# importer leaves the library as it found it.
+
+install nkc-lib.sys
+load nkc-libuser nkc-libuser.sys
+open d \Device\NkcLibUser
+ioctl d 00222000 - 64
+ioctl d 00222000 - 64
+close d
+unload nkc-libuser

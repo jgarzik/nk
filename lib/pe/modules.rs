@@ -18,6 +18,14 @@ pub struct Module {
     /// Where the kernel reads the image's bytes: an address at which all
     /// `size` bytes are mapped and none can be written.
     pub view: u64,
+    /// The image's export directory, empty if it exports nothing.
+    pub exports: DataDir,
+    /// Loaded because another image imports from it (an export driver),
+    /// not started as a driver.
+    pub library: bool,
+    /// How many loaded images import from it: what keeps a library
+    /// loaded.
+    pub references: u32,
 }
 
 impl Module {
@@ -36,7 +44,20 @@ impl Module {
             size,
             pdata,
             view,
+            exports: DataDir::default(),
+            library: false,
+            references: 0,
         })
+    }
+
+    /// The image's file name without its extension: what a forwarded
+    /// export names a module by (`NTOSKRNL.Name`).
+    pub fn stem(&self) -> &[u8] {
+        let name = self.name();
+        match name.iter().rposition(|&b| b == b'.') {
+            Some(dot) => &name[..dot],
+            None => name,
+        }
     }
 
     /// The image's file name.
@@ -96,6 +117,34 @@ impl<const N: usize> Modules<N> {
             .take()
     }
 
+    /// The image whose file name is `name`, whatever the letter case.
+    pub fn named(&self, name: &[u8]) -> Option<Module> {
+        self.slots
+            .iter()
+            .flatten()
+            .copied()
+            .find(|m| m.name().eq_ignore_ascii_case(name))
+    }
+
+    /// The image whose file name without its extension is `stem`,
+    /// whatever the letter case.
+    pub fn with_stem(&self, stem: &[u8]) -> Option<Module> {
+        self.slots
+            .iter()
+            .flatten()
+            .copied()
+            .find(|m| m.stem().eq_ignore_ascii_case(stem))
+    }
+
+    /// Count one more importer of the image loaded at `base`, or one
+    /// fewer (`by` is 1 or -1). Returns how many it has now; `None` if
+    /// no image is loaded there or the count would leave its range.
+    pub fn count_importer(&mut self, base: u64, by: i32) -> Option<u32> {
+        let module = self.slots.iter_mut().flatten().find(|m| m.base == base)?;
+        module.references = module.references.checked_add_signed(by)?;
+        Some(module.references)
+    }
+
     /// The image `address` is in.
     pub fn containing(&self, address: u64) -> Option<Module> {
         self.slots
@@ -149,6 +198,52 @@ mod tests {
         assert_eq!(table.containing(0x2000).unwrap().name(), b"b.sys");
         assert_eq!(table.containing(0x3000), None);
         assert_eq!(table.containing(0xFFF), None);
+    }
+
+    #[test]
+    fn an_image_is_found_by_its_file_name_and_by_its_stem() {
+        let mut table = Modules::<4>::new();
+        table
+            .insert(module("ntoskrnl.exe", 0x1000, 0x1000))
+            .unwrap();
+        table.insert(module("nkc-lib.sys", 0x2000, 0x1000)).unwrap();
+        table.insert(module("a.b.sys", 0x3000, 0x1000)).unwrap();
+        table.insert(module("bare", 0x4000, 0x1000)).unwrap();
+        assert_eq!(table.named(b"NKC-LIB.SYS").unwrap().base, 0x2000);
+        assert_eq!(table.named(b"nkc-lib"), None);
+        assert_eq!(table.named(b"nkc-lib.sy"), None);
+        assert_eq!(table.with_stem(b"NTOSKRNL").unwrap().base, 0x1000);
+        assert_eq!(table.with_stem(b"nkc-lib").unwrap().base, 0x2000);
+        // Only the last dot ends the stem.
+        assert_eq!(table.with_stem(b"a.b").unwrap().base, 0x3000);
+        assert_eq!(table.with_stem(b"a"), None);
+        assert_eq!(table.with_stem(b"bare").unwrap().base, 0x4000);
+        assert_eq!(table.with_stem(b"nkc-lib.sys"), None);
+    }
+
+    #[test]
+    fn importers_are_counted_per_image() {
+        let mut table = Modules::<4>::new();
+        let mut library = module("nkc-lib.sys", 0x2000, 0x1000);
+        library.library = true;
+        library.exports = DataDir {
+            rva: 0x800,
+            size: 0x60,
+        };
+        table.insert(library).unwrap();
+        table.insert(module("user.sys", 0x4000, 0x1000)).unwrap();
+        assert_eq!(table.count_importer(0x2000, 1), Some(1));
+        assert_eq!(table.count_importer(0x2000, 1), Some(2));
+        assert_eq!(table.count_importer(0x2000, -1), Some(1));
+        let found = table.named(b"nkc-lib.sys").unwrap();
+        assert_eq!((found.references, found.library), (1, true));
+        assert_eq!(found.exports.rva, 0x800);
+        assert_eq!(table.named(b"user.sys").unwrap().references, 0);
+        assert_eq!(table.count_importer(0x2000, -1), Some(0));
+        // Never below none; only a base address names an image.
+        assert_eq!(table.count_importer(0x2000, -1), None);
+        assert_eq!(table.count_importer(0x2800, 1), None);
+        assert_eq!(table.containing(0x2000).unwrap().references, 0);
     }
 
     #[test]

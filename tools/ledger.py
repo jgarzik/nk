@@ -30,6 +30,8 @@ PEINFO = ROOT / "target" / "debug" / "peinfo"
 REFERENCE = "Windows 10 22H2, NT 10.0.19045.2006"
 # States the kernel may report, best first. "missing" is ours: no export.
 STATES = ["implemented", "partial", "traps", "missing"]
+# An import from another fixture, an export driver, that exports it.
+LIBRARY = "library"
 
 
 def kernel_exports(arch):
@@ -60,9 +62,38 @@ def kernel_lookups(arch):
     return looked_up_absent(path.read_text().splitlines()) if path.exists() else []
 
 
+def peinfo(path):
+    return subprocess.run([PEINFO, path], check=True, capture_output=True, text=True).stdout
+
+
 def imports_of(path):
-    out = subprocess.run([PEINFO, path], check=True, capture_output=True, text=True).stdout
-    return [line.split()[1:] for line in out.splitlines() if line.startswith("import ")]
+    return [line.split()[1:] for line in peinfo(path).splitlines() if line.startswith("import ")]
+
+
+def exports_of(listing):
+    """What an image exports, from peinfo's `export <ordinal> <name> ...`
+    lines: every name, and every ordinal as `#<ordinal>`, which is how an
+    import by ordinal is written."""
+    exported = set()
+    for line in listing.splitlines():
+        words = line.split()
+        if words[:1] == ["export"]:
+            exported.add(f"#{words[1]}")
+            if words[2] != "-":
+                exported.add(words[2])
+    return exported
+
+
+def import_state(module, name, exports, libraries):
+    """What NK does about an import of `module!name`: the state of the
+    kernel's export of that name; or, for a module that is a fixture
+    itself (`libraries`: {file name: what it exports}), "library" if it
+    exports the name. Anything else is "missing"."""
+    module = module.lower()
+    if module in KERNEL_MODULES:
+        # hal.dll only forwards to the kernel: one name space.
+        return exports.get((module, name), exports.get((KERNEL_MODULES[0], name), "missing"))
+    return LIBRARY if name in libraries.get(module, ()) else "missing"
 
 
 KERNEL_MODULES = ("ntoskrnl.exe", "hal.dll")
@@ -164,14 +195,15 @@ def corpus(exports, lists):
 
 def build(arch, fixtures):
     exports, booted = kernel_exports(arch)
+    # A fixture is on the boot volume as <name>.sys, which is what an
+    # importer's table calls it.
+    libraries = {fx["name"].lower() + ".sys": exports_of(peinfo(CACHE / fx["file"]))
+                 for fx in fixtures}
     entries, needed = [], {}
     for fx in fixtures:
         imports = []
         for module, name in imports_of(CACHE / fx["file"]):
-            # hal.dll only forwards to the kernel: one name space.
-            state = exports.get((module.lower(), name),
-                                exports.get((KERNEL_MODULES[0], name), "missing")
-                                if module.lower() in KERNEL_MODULES else "missing")
+            state = import_state(module, name, exports, libraries)
             imports.append({"module": module, "name": name, "state": state})
             if fx.get("boot", True):
                 needed[(module.lower(), name)] = state
@@ -187,7 +219,7 @@ def build(arch, fixtures):
         "summary": {
             "note": "distinct imports of the fixtures loaded at boot",
             "total": len(needed),
-            **{s: sum(1 for v in needed.values() if v == s) for s in STATES},
+            **{s: sum(1 for v in needed.values() if v == s) for s in STATES + [LIBRARY]},
         },
         "looked_up_absent": {
             "note": "names MmGetSystemRoutineAddress was asked for during the boot test, by "

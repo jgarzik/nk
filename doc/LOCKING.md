@@ -72,7 +72,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
-| 245 | `ldr::MODULES` | which image an address is in | HIGH |
+| 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
 Why this order:
@@ -157,6 +157,26 @@ never looser.
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 path that stops the system uses it, on the console and on the table of
 loaded images, and never returns.
+
+### The loader's mutex
+
+Loading and unloading an image are serialised by a kernel mutex
+(`KMUTANT`), `ldr::LOADER`, not by a spin lock: a load calls a library's
+`DllInitialize` and an unload its `DllUnload`, either of which may
+wait, and a library is loaded from inside the load of the image that
+imports from it, by the same thread (a mutex may be taken again by its
+owner).
+
+- It is taken at `PASSIVE_LEVEL` with no spin lock held, since taking
+  it may sleep; whoever holds it may take any ranked lock.
+- It covers the list of libraries and the order of events: an image is
+  entered in the table of images, bound to its libraries and counted as
+  their importer, or none of it, without another load or unload in
+  between. The counts themselves are in the table of images, under its
+  own lock.
+- A library's `DllInitialize` and `DllUnload` run with it held, as on
+  Windows, where the system's load lock is held around them. A driver's
+  entry point and unload routine run without it.
 
 ### Per-processor state
 

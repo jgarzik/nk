@@ -1,0 +1,9 @@
+# A driver that imports a name its library does not export.
+#
+# nkc-libbad.sys asks nkc-lib.sys for NkcLibAbsent. It must not load,
+# so its device is never there.
+
+install nkc-lib.sys
+load nkc-libbad nkc-libbad.sys
+open d \Device\NkcLibBad
+unload nkc-libbad

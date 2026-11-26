@@ -230,6 +230,14 @@ pub fn resolve(module: &[u8], name: &[u8]) -> Option<u64> {
         .map(|e| e.addr as u64)
 }
 
+/// Whether `module` is a name the kernel's own exports go by: an
+/// import from any other module is from a driver that exports.
+pub fn is_kernel(module: &[u8]) -> bool {
+    [NT, "hal.dll"]
+        .iter()
+        .any(|name| name.as_bytes().eq_ignore_ascii_case(module))
+}
+
 /// [`MmGetSystemRoutineAddress`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemroutineaddress):
 /// the address of a routine the kernel or the HAL exports, by name, or
 /// null if there is none of that name. It is how a driver asks whether a

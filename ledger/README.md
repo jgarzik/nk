@@ -11,6 +11,9 @@ the state the kernel reports for it:
 - `traps`: bound so the driver loads, but stops the machine with a named
   bugcheck if ever called. Never counts as implemented.
 - `missing`: no such export. A driver that imports it is rejected.
+- `library`: the import is from another fixture, an export driver, which
+  exports it: the loader binds it to that image. Only an import from a
+  module that is itself a fixture can have this state.
 
 `summary` counts the distinct imports of the fixtures the kernel loads at
 boot. Fixtures with `loaded_at_boot: false` are listed to show what they
