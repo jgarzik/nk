@@ -113,6 +113,11 @@ ex.pool.variants ok
 ex.lookaside.fields ok
 ex.lookaside.cache ok
 ex.lookaside.routines ok
+ex.resource.recursion ok
+ex.resource.hand-over ok
+ex.resource.starve ok
+ex.resource.table ok
+ex.resource.contention ok
 io.pend-dpc ok
 io.pend-timer ok
 io.pend-work ok

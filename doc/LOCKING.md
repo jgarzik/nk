@@ -336,6 +336,15 @@ APCs and does not check that it did. The waiters are in NK's own
 queues (rank 215), not chained through the word as Windows chains
 them.
 
+A resource (`ERESOURCE`, `kernel/ex/resource.rs`) keeps its state in
+the driver's structure under the structure's own `SpinLock`, a
+`KSPIN_LOCK` like any the driver has: held at `DISPATCH_LEVEL`, not
+ranked or recorded. NK takes none of its ranked locks inside it: the
+owner table is allocated and freed with it dropped, and waiters are
+woken after it. An acquire that may wait is for below `DISPATCH_LEVEL`;
+the queries and an acquire that does not wait work at `DISPATCH_LEVEL`
+too. The critical region is the caller's to enter, as for a push lock.
+
 NK's own rules above are not applied to drivers. A driver that moves the
 IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
@@ -365,3 +374,9 @@ so does NK, with the same bugcheck code.
   together, and threads taking the lock every way at once keep a
   writer alone. Mutants: a releaser that wakes nobody, one that wakes
   a single reader.
+- `lib/ex`: the resource's rules, and every interleaving of its
+  hand-over; `ex.resource.*`: recursion both ways, a waiter of each
+  kind let in as owner, the starving and yielding acquisitions, an
+  owner table that grows, and contention. Mutants: a waiter let in
+  but not woken, one woken but not recorded, a table grown without
+  its owners.

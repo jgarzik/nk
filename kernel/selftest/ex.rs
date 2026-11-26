@@ -1,7 +1,7 @@
 //! Tests of the executive's locks, lists and timers, called the way a
 //! driver calls them: through the exports, on memory of the caller's.
 
-use crate::ex::{lookaside, pushlock, slist};
+use crate::ex::{lookaside, pushlock, resource, slist};
 use crate::test::{Group, Report};
 use core::fmt::Display;
 use nk_bootinfo::BootInfo;
@@ -19,6 +19,11 @@ pub static GROUP: Group = Group {
         "ex.lookaside.fields",
         "ex.lookaside.cache",
         "ex.lookaside.routines",
+        "ex.resource.recursion",
+        "ex.resource.hand-over",
+        "ex.resource.starve",
+        "ex.resource.table",
+        "ex.resource.contention",
     ],
     run,
     manual: false,
@@ -80,5 +85,25 @@ fn run(r: &mut Report, _: &BootInfo) {
         "ex.lookaside.routines",
         "calls of the list's own routines:",
         lookaside::routines_test(),
+    );
+    counted(
+        r,
+        "ex.resource.recursion",
+        "acquisitions:",
+        resource::recursion_test(),
+    );
+    r.check("ex.resource.hand-over", resource::hand_over_test);
+    r.check("ex.resource.starve", resource::starve_test);
+    counted(
+        r,
+        "ex.resource.table",
+        "owner table entries:",
+        resource::table_test(),
+    );
+    counted(
+        r,
+        "ex.resource.contention",
+        "writes:",
+        resource::contention_test(),
     );
 }

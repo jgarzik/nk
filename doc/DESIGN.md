@@ -431,6 +431,40 @@ hands the blocks still kept to `Free`.
   NK has no scan, and `ListEntry`, by which Windows finds the lists,
   links the list to itself.
 
+### Resources
+
+An
+[`ERESOURCE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/introduction-to-eresource-routines)
+is a reader/writer lock that records its owners, so that an owner may
+acquire it again. The acquire rules are the ones Microsoft documents
+for each routine. NK's decisions:
+
+- **State is in Windows' fields:** `Flag`, `OwnerEntry`,
+  `ActiveEntries`, `ContentionCount`, the two waiter counts, all
+  changed under `ERESOURCE.SpinLock`. Owners beyond the first are in
+  `OwnerTable`, a pool block the kernel allocates when it is first
+  needed, doubles when it is full and frees in
+  `ExDeleteResourceLite`.
+- **Ownership is handed over.** A release that frees the resource
+  records the waiters it lets in as owners before it wakes them; a
+  woken thread does not compete again. The order is not documented and
+  NK's is: after an exclusive owner, every thread waiting for shared
+  access, or failing any the oldest exclusive waiter; after the last
+  shared owner, the oldest exclusive waiter.
+- **Waiters are on their own stacks.** `ExclusiveWaiters` and
+  `SharedWaiters` point to the oldest waiter of each kind, a block
+  that begins with the event its thread sleeps on. Windows allocates
+  one event and one semaphore per resource there.
+- `SystemResourcesList`, by which Windows links every resource for
+  its debugger, links the resource to itself.
+- No priority is raised for an owner that keeps others waiting, and a
+  thread that waits for a resource it can never get waits for ever
+  without the diagnostics Windows prints.
+- Releasing or converting a resource the thread does not own stops the
+  system (`RESOURCE_NOT_OWNED`).
+- `ExEnterCriticalRegionAndAcquireResource...` are not exported: what
+  they return is not documented.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:

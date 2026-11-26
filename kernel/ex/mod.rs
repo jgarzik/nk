@@ -2,6 +2,7 @@
 
 pub mod lookaside;
 pub mod pushlock;
+pub mod resource;
 pub mod slist;
 mod stress;
 pub mod work;

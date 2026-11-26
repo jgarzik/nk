@@ -1,0 +1,8 @@
+# A resource's owner table grows without the owners it held being
+# copied over: they are owners no more.
+scenario: x86_64
+# The first forgotten owner to release stops the system
+# (RESOURCE_NOT_OWNED), in the test that shares the resource widely.
+fails: scenario
+file: kernel/ex/resource.rs
+remove:                     core::ptr::copy_nonoverlapping(old.add(1), fresh.add(1), seen as usize - 1);

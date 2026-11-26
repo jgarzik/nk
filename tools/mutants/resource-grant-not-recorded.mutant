@@ -1,0 +1,7 @@
+# The thread waiting for exclusive access is woken when the resource
+# comes free, but not recorded as its owner: it returns from the acquire
+# owning nothing.
+scenario: aarch64
+fails: ex.resource.starve
+file: kernel/ex/resource.rs
+remove:                 state.grant_exclusive((*waiter).thread);
