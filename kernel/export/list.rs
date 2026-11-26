@@ -8,7 +8,9 @@ mod arch;
 mod cm;
 mod etw;
 mod ex;
+mod hal;
 mod io;
+mod kd;
 mod ke;
 mod ldr;
 mod mm;
@@ -38,7 +40,9 @@ pub(super) static ALL: &[&[Export]] = &[
     cm::EXPORTS,
     etw::EXPORTS,
     ex::EXPORTS,
+    hal::EXPORTS,
     io::EXPORTS,
+    kd::EXPORTS,
     ke::EXPORTS,
     ldr::EXPORTS,
     mm::EXPORTS,

@@ -1017,6 +1017,28 @@ A driver can also ask for a routine by name while it runs
 null. No import table shows such a name, so each one not found is
 printed in the boot log and the ledger lists them (`looked_up_absent`).
 
+### Exported variables
+
+Some imports are variables: the driver reads, and sometimes writes,
+through the address its import is bound to. No trap can stand in for
+one, so a variable is exported only when it is real.
+
+`HalDispatchTable` and `HalPrivateDispatchTable` (`kernel/hal/dispatch.rs`,
+slots listed in `nk_ntabi::hal`) are the tables Microsoft's bus drivers
+call the HAL through and store their own routines into. They have
+Windows' versions, sizes and slot order; the private table is in no
+header, and its slots are checked against the pinned kernel's symbols.
+A slot NK has no routine for holds a trap that stops the system naming
+the table and the slot. NK reads a slot atomically each time it uses
+one, since a driver may have replaced it.
+
+The start-up state drivers read (`kernel/kd/variables.rs`):
+`KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
+speaking no Windows debugger protocol; `KdComPortInUse` names the I/O
+port of NK's own console, as Windows names its debugger's, so that
+`acpi.sys` and `serial.sys` leave the port alone; `InitSafeBootMode` is
+0; `Mm64BitPhysicalAddress` is true.
+
 ### Drivers that export to drivers
 
 An import from any other module is from an export driver, a library

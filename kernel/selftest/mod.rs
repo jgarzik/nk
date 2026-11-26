@@ -16,6 +16,7 @@ mod etw;
 mod ex;
 pub mod except;
 mod fsd;
+mod hal;
 mod library;
 mod loader;
 mod mslib;
@@ -141,6 +142,7 @@ pub static GROUPS: &[&[&Group]] = &[
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,
+    hal::GROUPS,
     csq::GROUPS,
     review::GROUPS,
     mutex::GROUPS,

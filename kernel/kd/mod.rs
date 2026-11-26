@@ -1,5 +1,7 @@
 //! Diagnostics: the serial console and the panic path.
 
+pub mod variables;
+
 use crate::arch::{self, Uart};
 use crate::ke::{Rank, SpinLock};
 use core::fmt;
@@ -10,6 +12,7 @@ static CONSOLE: SpinLock<Option<Uart>> = SpinLock::new(Rank::Console, None);
 
 pub fn console_init(info: &BootInfo) {
     *CONSOLE.lock() = Uart::new(info);
+    variables::init(info);
     DEBUGGER.store(info.option("debug") == Some("on"), Ordering::Relaxed);
 }
 

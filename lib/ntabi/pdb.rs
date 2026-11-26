@@ -1236,3 +1236,24 @@ fn fcb_header_matches_the_kernel() {
     assert_eq!(bits("Version"), (4, 4));
     assert_eq!(with_fcb_header_version(0, 0xF), 0xF0);
 }
+
+#[test]
+fn hal_private_dispatch_table_matches_the_kernel() {
+    use crate::hal::{FIRST_SLOT, HAL_PRIVATE_DISPATCH_SLOTS};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("HAL_PRIVATE_DISPATCH")
+        .expect("HAL_PRIVATE_DISPATCH");
+    assert_eq!(
+        FIRST_SLOT + HAL_PRIVATE_DISPATCH_SLOTS.len() * 8,
+        table.size as usize
+    );
+    assert_eq!(offset(&table, "HAL_PRIVATE_DISPATCH", "Version"), 0);
+    for (i, name) in HAL_PRIVATE_DISPATCH_SLOTS.iter().enumerate() {
+        assert_eq!(
+            offset(&table, "HAL_PRIVATE_DISPATCH", name),
+            FIRST_SLOT + i * 8,
+            "{name}"
+        );
+    }
+}
