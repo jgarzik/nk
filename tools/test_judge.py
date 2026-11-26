@@ -214,6 +214,17 @@ class ExpectBugcheck(unittest.TestCase):
     def test_timeout(self):
         self.assertTrue(any("timeout" in p for p in self.problems(ARMED, timed_out=9)))
 
+    def test_a_line_wanted_after_the_bugcheck(self):
+        then = r"NK-STOP-CALLBACK ran"
+        self.assertTrue(any("no line after the bugcheck" in p
+                            for p in self.problems(ARMED, then=then)))
+        self.assertEqual(self.problems(ARMED + "NK-STOP-CALLBACK ran\n", then=then), [])
+        # Before the bugcheck it is not what a callback printed.
+        early = edit(ARMED, "NK-NEG-ARMED neg.panic\n",
+                     "NK-NEG-ARMED neg.panic\nNK-STOP-CALLBACK ran\n")
+        self.assertTrue(any("no line after the bugcheck" in p
+                            for p in self.problems(early, then=then)))
+
     def test_a_failed_test_before_the_bugcheck(self):
         text = "NK-TEST neg.fault:FAIL no kernel address space\n" + ARMED
         self.assertTrue(any("neg.fault:FAIL" in p for p in self.problems(text)))

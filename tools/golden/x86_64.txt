@@ -139,6 +139,8 @@ mm.routine-address ok
 ex.pool-quota ok
 rtl.printf ok
 rtl.strings ok
+ke.bugcheck.register ok
+ke.bugcheck.order ok
 ldr.module.kernel ok
 ldr.module.driver ok
 ldr.reject.wrong-machine ok

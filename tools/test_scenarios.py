@@ -8,8 +8,8 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parent
 SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
-    "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "must_fail", "golden",
-    "canonical",
+    "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
+    "golden", "canonical",
 }
 
 
@@ -41,6 +41,9 @@ class Scenarios(unittest.TestCase):
                 self.assertEqual("must_fail" in sc, expect == "fail")
                 if "match" in sc:
                     re.compile(sc["match"])
+                if "then" in sc:
+                    self.assertEqual(expect, "bugcheck")
+                    re.compile(sc["then"])
                 if "golden" in sc:
                     self.assertTrue((TOOLS / "golden" / f"{sc['golden']}.txt").exists())
                 self.assertLess(len(sc.get("cmdline", "")), 256)

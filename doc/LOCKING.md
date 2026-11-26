@@ -72,6 +72,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
+| 242 | `ke::bugcheck::RECORDS` | the list of bugcheck callback records drivers registered, and each record's links and state | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
@@ -130,6 +131,10 @@ Why this order:
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.
+- A bugcheck callback record is registered and taken back at any IRQL,
+  so the list's lock is held at `HIGH_LEVEL`; it covers a few pointer
+  writes and nothing is taken inside it. The stop itself walks the list
+  without the lock: no other processor runs.
 - The table of loaded images is searched from any context, a fault
   handler included, so it is held at `HIGH_LEVEL` and holds no memory:
   nothing but the console is taken inside it.
@@ -155,8 +160,9 @@ thread can sleep on. Spin locks stand in for those; they are stricter,
 never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
-path that stops the system uses it, on the console and on the table of
-loaded images, and never returns.
+path that stops the system uses it, on the console, the table of
+loaded images and the list of bugcheck callback records, and never
+returns.
 
 ### The loader's mutex
 

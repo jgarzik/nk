@@ -635,6 +635,7 @@ make that safe.
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
 | a system service made for user mode (the oracle's requests) | base: a system service |
+| bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
 where the exception was raised:
@@ -993,6 +994,61 @@ file system reads it in line (`kernel/se/token.rs`):
   type being opened maps them), nothing granted yet, and the traverse
   flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
   security descriptor, auxiliary data, privileges and names are empty.
+
+## Stopping the system
+
+Every fatal error ends in one place (`kd::bugcheck`): the first
+processor to get there stops the others, prints one `BUGCHECK:` line,
+calls the drivers' bugcheck callbacks and powers the machine off. A
+stop with a Windows code prints the code first, then its name.
+
+[`KeBugCheckEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kebugcheckex)
+is that stop with the driver's code and four parameters, which
+`KiBugCheckData` (five words a driver imports) holds from then on. A
+stop of NK's own that carries no parameters leaves those words zero.
+
+**Bugcheck callbacks**
+([`KeRegisterBugCheckReasonCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterbugcheckreasoncallback),
+`kernel/ke/bugcheck.rs`, rules in `nk_ke::bugcheck`). The record is the
+driver's memory, filled in and linked as Windows does it: routine,
+reason, component, the checksum of the three, `State` inserted. One
+list holds them all, newest first, triage-data records behind the rest
+in the order they came. Any reason is accepted.
+
+NK writes no crash dump and has no debugger, and calls what Windows
+calls on such a system, at `HIGH_LEVEL` with the other processors
+stopped, after the report:
+
+| Reason | Called | With |
+| --- | --- | --- |
+| `KbCallbackReserved1` | yes | no data |
+| `KbCallbackTriageDumpData` | yes, after the above | `KBUGCHECK_TRIAGE_DUMP_DATA`: the code and parameters of `KiBugCheckData`, no ranges named |
+| `KbCallbackSecondaryDumpData`, `KbCallbackDumpIo`, `KbCallbackAddPages`, `KbCallbackRemovePages`, any other | never | they belong to the writing of a dump |
+
+Before a routine is called its record is looked at as Windows looks: it
+must lie where a pointer can, be linked from the record before it,
+still be in the inserted state, still add up to its checksum, and be
+registered for the reason being called. A record that fails the first
+two ends the walk; one that fails the others is passed over. Windows
+also asks whether the record's and the routine's pages are mapped; NK
+does not, and a record in unmapped memory is a second error. Afterwards
+the record's state is finished; a triage record whose routine named no
+ranges is incomplete. The ranges are not read: they would go into a
+dump.
+
+A callback may call only what Microsoft documents as safe at that
+point: a kernel routine that takes a lock may find it held by a stopped
+processor. What a callback prints goes out whoever held the console. An
+error inside a callback is a second error on the stopping processor:
+it is noted, nothing more is called, and the machine powers off.
+
+`KeRegisterBugCheckCallback`'s list, which Windows calls last, has no
+importer among the binaries NK runs and is not exported.
+
+The tests `ke.bugcheck.*` check registration; the
+`*-neg-bugcheck-callback` scenarios stop the system with callbacks of
+each kind registered, and the last one called prints which ran, in what
+order, and what they were shown.
 
 ## Breakpoints and the debugger
 

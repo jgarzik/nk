@@ -236,3 +236,59 @@ pub const SHARED_INTERRUPT_TIME: usize = 0x008;
 pub const SHARED_SYSTEM_TIME: usize = 0x014;
 /// `TickCount`: clock ticks since boot.
 pub const SHARED_TICK_COUNT: usize = 0x320;
+
+/// `KBUGCHECK_CALLBACK_REASON`: why a bugcheck callback is called. Only
+/// the values NK acts on are named.
+pub const KB_CALLBACK_RESERVED1: u32 = 1;
+pub const KB_CALLBACK_TRIAGE_DUMP_DATA: u32 = 7;
+
+/// `KBUGCHECK_BUFFER_DUMP_STATE`: a callback record's `State`.
+pub const BUFFER_EMPTY: u8 = 0;
+pub const BUFFER_INSERTED: u8 = 1;
+pub const BUFFER_FINISHED: u8 = 3;
+pub const BUFFER_INCOMPLETE: u8 = 4;
+
+/// `KBUGCHECK_REASON_CALLBACK_ROUTINE`: reason, record, data, length.
+pub type KBUGCHECK_REASON_CALLBACK_ROUTINE =
+    unsafe extern "C" fn(u32, *mut KBUGCHECK_REASON_CALLBACK_RECORD, *mut c_void, u32);
+
+/// [`KBUGCHECK_REASON_CALLBACK_RECORD`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterbugcheckreasoncallback):
+/// the driver's memory, which `KeInitializeCallbackRecord` (in-line
+/// code) marks empty and the kernel links into its list.
+#[repr(C)]
+pub struct KBUGCHECK_REASON_CALLBACK_RECORD {
+    pub Entry: LIST_ENTRY,
+    pub CallbackRoutine: Option<KBUGCHECK_REASON_CALLBACK_ROUTINE>,
+    pub Component: *mut u8,
+    pub Checksum: usize,
+    pub Reason: u32,
+    pub State: u8,
+}
+
+/// `KBUGCHECK_TRIAGE_DUMP_DATA`: what a `KbCallbackTriageDumpData`
+/// callback is shown, and where it leaves its array of memory ranges.
+#[repr(C)]
+pub struct KBUGCHECK_TRIAGE_DUMP_DATA {
+    pub DataArray: *mut c_void,
+    pub Flags: u32,
+    pub MaxVirtMemSize: u32,
+    pub BugCheckCode: u32,
+    pub BugCheckParameter1: usize,
+    pub BugCheckParameter2: usize,
+    pub BugCheckParameter3: usize,
+    pub BugCheckParameter4: usize,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KBUGCHECK_REASON_CALLBACK_RECORD>() == 0x30);
+    assert!(offset_of!(KBUGCHECK_REASON_CALLBACK_RECORD, CallbackRoutine) == 0x10);
+    assert!(offset_of!(KBUGCHECK_REASON_CALLBACK_RECORD, Component) == 0x18);
+    assert!(offset_of!(KBUGCHECK_REASON_CALLBACK_RECORD, Checksum) == 0x20);
+    assert!(offset_of!(KBUGCHECK_REASON_CALLBACK_RECORD, Reason) == 0x28);
+    assert!(offset_of!(KBUGCHECK_REASON_CALLBACK_RECORD, State) == 0x2C);
+    assert!(size_of::<KBUGCHECK_TRIAGE_DUMP_DATA>() == 0x38);
+    assert!(offset_of!(KBUGCHECK_TRIAGE_DUMP_DATA, MaxVirtMemSize) == 0x0C);
+    assert!(offset_of!(KBUGCHECK_TRIAGE_DUMP_DATA, BugCheckCode) == 0x10);
+    assert!(offset_of!(KBUGCHECK_TRIAGE_DUMP_DATA, BugCheckParameter1) == 0x18);
+};

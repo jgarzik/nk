@@ -12,6 +12,7 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+mod etw;
 pub mod except;
 mod library;
 mod loader;
@@ -129,6 +130,7 @@ pub static GROUPS: &[&Group] = &[
     &open::GROUP,
     &service::GROUP,
     &driver_api::GROUP,
+    &etw::GROUP,
     &loader::GROUP,
     &library::GROUP,
     &null::GROUP,
@@ -146,6 +148,8 @@ pub static GROUPS: &[&Group] = &[
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
     &neg::BREAKPOINT,
+    &etw::BUGCHECK_EX,
+    &etw::BUGCHECK_CALLBACK,
     &except::THREAD,
     &except::SERVICE,
     &except::DPC,

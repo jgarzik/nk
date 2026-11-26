@@ -120,6 +120,11 @@ static EXPORTS: &[Export] = &[
     export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeAcquireSpinLockAtDpcLevel),
     export!(Implemented, ke::kspin::KeAcquireSpinLockRaiseToDpc),
+    export!(Implemented, ke::bugcheck::KeBugCheckEx),
+    export!(
+        Implemented,
+        ke::bugcheck::KeDeregisterBugCheckReasonCallback
+    ),
     export!(Implemented, ke::kspin::KeGetCurrentIrql),
     export!(Implemented, ke::kspin::KeInitializeSpinLock),
     export!(Implemented, ke::timer::KeCancelTimer),
@@ -129,6 +134,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KeLowerIrql),
     export!(Implemented, ke::time::KeQueryPerformanceCounter),
     export!(Implemented, ke::time::KeQueryTimeIncrement),
+    export!(Implemented, ke::bugcheck::KeRegisterBugCheckReasonCallback),
     export!(Implemented, ke::kspin::KeReleaseInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeReleaseSpinLock),
     export!(Implemented, ke::kspin::KeReleaseSpinLockFromDpcLevel),
@@ -141,6 +147,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::kspin::KeTryToAcquireSpinLockAtDpcLevel),
     export!(Implemented, ke::kspin::KfLowerIrql),
     export!(Implemented, ke::kspin::KfRaiseIrql),
+    export_variable!(Implemented, "KiBugCheckData", ke::bugcheck::KiBugCheckData),
     export!(Implemented, MmGetSystemRoutineAddress),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),

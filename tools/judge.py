@@ -153,7 +153,7 @@ def _golden_problems(log, golden, degraded):
     return problems
 
 
-def _bugcheck_problems(log, match, timed_out):
+def _bugcheck_problems(log, match, then, timed_out):
     """Problems of a boot that should have ended in an armed bugcheck."""
     problems = [f"malformed test line: {l}" for l in log.malformed]
     problems += log.verify
@@ -172,11 +172,13 @@ def _bugcheck_problems(log, match, timed_out):
         problems.append(f"bugcheck before the test was armed: {bugchecks[0][1]}")
     elif not re.search(match, bugchecks[0][1]):
         problems.append(f"bugcheck does not match /{match}/: {bugchecks[0][1]}")
+    elif then and not any(re.search(then, l) for l in log.lines[bugchecks[0][0] + 1:]):
+        problems.append(f"no line after the bugcheck matches /{then}/")
     return problems
 
 
 def judge(text, expect="ok", *, golden=None, degraded=False, match=None,
-          must_fail=(), timed_out=0, marks=None):
+          then=None, must_fail=(), timed_out=0, marks=None):
     """Return the list of problems; an empty list means the boot passed.
 
     text       the serial log
@@ -184,13 +186,15 @@ def judge(text, expect="ok", *, golden=None, degraded=False, match=None,
     golden     {name: "ok"|"skip"} to compare against, or None
     degraded   driver fixtures are missing: ok may become skip
     match      regular expression the bugcheck line must contain
+    then       regular expression a line after the bugcheck line must
+               contain: what a bugcheck callback printed
     must_fail  for expect="fail": exactly these tests must fail
     timed_out  the timeout in seconds if QEMU had to be killed, else 0
     marks      host times at which the kernel's clock marks arrived
     """
     log = Log(text)
     if expect == "bugcheck":
-        return _bugcheck_problems(log, match or "", timed_out)
+        return _bugcheck_problems(log, match or "", then, timed_out)
 
     problems = _run_problems(log, timed_out) + _clock_problems(log, marks)
     # A run that never finished has said why above; listing every test it

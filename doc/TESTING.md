@@ -107,8 +107,10 @@ gate tier has, for each architecture:
   processors; and `*-smp1`: on one;
 - `*-neg-*`: boots that break a rule on purpose (a panic, a stack
   overflow, a lock taken out of order, a wait at `DISPATCH_LEVEL`, a
-  driver breakpoint with no debugger, an exception nothing handles,
-  ...) and must end in the named bugcheck;
+  driver breakpoint with no debugger, an exception nothing handles, a
+  driver's `KeBugCheckEx`, ...) and must end in the named bugcheck;
+  `*-neg-bugcheck-callback` also requires the line a bugcheck callback
+  prints after it (the scenario's `then`);
 - `*-oracle-event*`, `*-debugger-breakpoint`: Microsoft's event sample,
   whose first act is a breakpoint, stops NK with Windows' bugcheck at
   the same step, and with `debug=on` runs as on Windows with a debugger;

@@ -3,7 +3,7 @@
 use crate::arch::{self, Uart};
 use crate::ke::{Rank, SpinLock};
 use core::fmt;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use nk_bootinfo::BootInfo;
 
 static CONSOLE: SpinLock<Option<Uart>> = SpinLock::new(Rank::Console, None);
@@ -66,7 +66,20 @@ impl fmt::Write for Writer<'_> {
 }
 
 pub fn print(args: fmt::Arguments<'_>) {
+    // What the stopping processor prints, a driver's bugcheck callback
+    // included, goes out whoever held the console.
+    if stopping_here() {
+        return print_forced(args);
+    }
     if let Some(uart) = CONSOLE.lock().as_ref() {
+        let _ = fmt::Write::write_fmt(&mut Writer(uart), args);
+    }
+}
+
+/// Print on the way to stopping the system: the error may have struck
+/// while printing, so the console is taken anyway.
+fn print_forced(args: fmt::Arguments<'_>) {
+    if let Some(uart) = CONSOLE.force_lock().as_ref() {
         let _ = fmt::Write::write_fmt(&mut Writer(uart), args);
     }
 }
@@ -78,29 +91,64 @@ macro_rules! kprintln {
     };
 }
 
-/// Set by the first processor to stop the system.
-static STOPPING: AtomicBool = AtomicBool::new(false);
+/// The processor that is stopping the system, as its number plus one;
+/// zero while nothing is.
+static STOPPER: AtomicU32 = AtomicU32::new(0);
+
+/// Whether this processor is the one stopping the system.
+fn stopping_here() -> bool {
+    let stopper = STOPPER.load(Ordering::SeqCst);
+    stopper != 0 && stopper == crate::ke::pcr::current_processor() + 1
+}
 
 /// Stop the system on an unrecoverable error: print `BUGCHECK: <why>` in
 /// a form the boot test recognises, then power off.
 pub fn bugcheck(why: fmt::Arguments<'_>) -> ! {
-    // One processor reports; any other that gets here just stops.
-    if STOPPING.swap(true, Ordering::SeqCst) {
-        arch::halt();
+    stop(None, why)
+}
+
+/// Stop the system with a Windows bugcheck code and its four
+/// parameters, which `KiBugCheckData` then holds for the drivers'
+/// bugcheck callbacks.
+pub fn bugcheck_with(data: [usize; 5], why: fmt::Arguments<'_>) -> ! {
+    stop(Some(data), why)
+}
+
+/// Stop the other processors, report, call the drivers' bugcheck
+/// callbacks (`ke::bugcheck`), power off. The report comes first, as
+/// Windows' screen does: a callback that goes wrong cannot lose it.
+fn stop(data: Option<[usize; 5]>, why: fmt::Arguments<'_>) -> ! {
+    // From here this processor is where it is, and nothing interrupts.
+    arch::set_irql(crate::ke::irql::HIGH_LEVEL);
+    let here = crate::ke::pcr::current_processor() + 1;
+    match STOPPER.compare_exchange(0, here, Ordering::SeqCst, Ordering::SeqCst) {
+        Ok(_) => {}
+        // A second error on the processor that is stopping the system,
+        // in a bugcheck callback for one: the first is reported already,
+        // and nothing more is called.
+        Err(stopper) if stopper == here => {
+            print_forced(format_args!("\na second error while stopping: {why}\n"));
+            crate::hal::power_off_or_halt()
+        }
+        // One processor reports; any other that gets here just stops.
+        Err(_) => arch::halt(),
     }
     if crate::ke::smp::online_count() > 1 {
         arch::stop_others();
     }
-    // The error may have struck while printing: take the console anyway.
-    if let Some(uart) = CONSOLE.force_lock().as_ref() {
-        let _ = fmt::Write::write_fmt(&mut Writer(uart), format_args!("\nBUGCHECK: {why}\n"));
+    if let Some(data) = data {
+        crate::ke::bugcheck::record(data);
     }
+    print_forced(format_args!("\nBUGCHECK: {why}\n"));
+    // SAFETY: this processor alone runs, at HIGH_LEVEL, and gets here
+    // once.
+    unsafe { crate::ke::bugcheck::run_callbacks() };
     crate::hal::power_off_or_halt()
 }
 
 /// Whether the system is being stopped.
 pub fn stopping() -> bool {
-    STOPPING.load(Ordering::SeqCst)
+    STOPPER.load(Ordering::SeqCst) != 0
 }
 
 /// Report that a driver broke a rule Windows itself does not enforce.
