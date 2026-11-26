@@ -1515,8 +1515,18 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   character database and leaves alone some units that maps (the micro
   sign, dotless i, long s, final sigma, Georgian). The string
   comparisons, the object namespace and the registry all use it.
-- **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
-  fold `A` to `Z` only and do not use that table.
+- **The C runtime's comparisons** (`_stricmp`, `_strnicmp`, `_wcsicmp`,
+  `_wcsnicmp`) fold `A` to `Z` only and do not use that table; `_strupr`
+  and `isspace` are the C locale's too. `RtlCompareString` does use it,
+  through the ANSI page: a byte's upper case is the byte of its unit's.
+- **The C runtime has no invalid-parameter handler.** A bounded copy
+  (`strncpy_s`) given a bad argument empties its destination and returns
+  the error number. `rand` has one seed for the whole system.
+- **Length rules read from Windows.** When a routine stores a length
+  before it knows the text fits, when it writes a terminator, and what
+  it makes of a string too long to count are stated in
+  `nk_rtl::counted`, `nk_rtl::codepage` and `nk_rtl::convert`, with what
+  is still NK's inference marked there.
 
 ### File names
 

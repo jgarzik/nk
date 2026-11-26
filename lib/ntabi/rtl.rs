@@ -25,6 +25,20 @@ pub struct GUID {
     pub Data4: [u8; 8],
 }
 
+/// [`TIME_FIELDS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_time_fields).
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TIME_FIELDS {
+    pub Year: i16,
+    pub Month: i16,
+    pub Day: i16,
+    pub Hour: i16,
+    pub Minute: i16,
+    pub Second: i16,
+    pub Milliseconds: i16,
+    pub Weekday: i16,
+}
+
 /// [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap):
 /// the header of a bitmap. The buffer is the caller's, a whole number
 /// of `ULONG`s.
@@ -70,6 +84,8 @@ pub struct UNICODE_PREFIX_TABLE {
 }
 
 const _: () = {
+    assert!(size_of::<TIME_FIELDS>() == 0x10);
+    assert!(offset_of!(TIME_FIELDS, Weekday) == 0xE);
     assert!(size_of::<RTL_BITMAP>() == 0x10);
     assert!(offset_of!(RTL_BITMAP, Buffer) == 8);
     assert!(size_of::<RTL_SPLAY_LINKS>() == 0x18);

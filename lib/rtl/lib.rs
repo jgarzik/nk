@@ -13,6 +13,8 @@
 
 pub mod bitmap;
 pub mod codepage;
+pub mod convert;
+pub mod counted;
 pub mod crt;
 pub mod format;
 pub mod legal;

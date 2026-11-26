@@ -10,6 +10,7 @@ mod bitmap;
 mod cancel;
 mod clock;
 mod cm;
+mod counted;
 mod csq;
 mod dpc;
 mod driver_api;
@@ -140,6 +141,7 @@ pub static GROUPS: &[&[&Group]] = &[
     ob::GROUPS,
     rtl::GROUPS,
     bitmap::GROUPS,
+    counted::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,
