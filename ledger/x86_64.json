@@ -4,9 +4,9 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 307,
-  "implemented": 272,
-  "partial": 12,
+  "total": 310,
+  "implemented": 274,
+  "partial": 13,
   "traps": 18,
   "missing": 0,
   "library": 5
@@ -4656,6 +4656,295 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-ps",
+   "file": "nkc-ps.x64.sys",
+   "sha256": "3b91b47073f908706a0533e13d49b58e4de20d46b5f09e0ce37cff2fb00a5ab0",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetVersion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeResetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetPriorityThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeQueryActiveProcessorCountEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetVersion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetCurrentProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentThreadId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetThreadProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetJobSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAttachSiloToCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDetachSiloFromCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsIsHostSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentServerSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAllocSiloContextSlot",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsFreeSiloContextSlot",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferenceSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsInsertPermanentSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetPermanentSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsRegisterSiloMonitor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsStartSiloMonitor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetSiloMonitorContextSlot",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsUnregisterSiloMonitor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetInformationThread",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeStackAttachProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeUnstackDetachProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwCreateEvent",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwWaitForSingleObject",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetProcessSessionId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetThreadSessionId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsChargeProcessPagedPoolQuota",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsReturnProcessPagedPoolQuota",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlertThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExEventObjectType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsInitialSystemProcess",
      "state": "implemented"
     }
    ]

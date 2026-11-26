@@ -630,3 +630,21 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ex.arm64.
 sha256 = "61518426beebcb1b5443a8fbc690525079d5dfaaf28527d1e7c5d95dc341b502"
 status = "nk-authored"
 note = "nk-fixtures v9 nkc/nkc-ex.c: push locks, sequenced lists, lookaside lists, ERESOURCE, executive timers, UUIDs, pool"
+
+[[fixture]]
+name = "nkc-ps"
+arch = "x86_64"
+file = "nkc-ps.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ps.x64.nkc-ps.sys"
+sha256 = "3b91b47073f908706a0533e13d49b58e4de20d46b5f09e0ce37cff2fb00a5ab0"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ps.c: the System process and its threads, waits and alerts by handle, silos"
+
+[[fixture]]
+name = "nkc-ps"
+arch = "aarch64"
+file = "nkc-ps.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ps.arm64.nkc-ps.sys"
+sha256 = "8c26ad9fbb65cac0b31d93b7c7ed07d1520e85bb60f38f1797d5956c438fc0c4"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ps.c: the System process and its threads, waits and alerts by handle, silos"

@@ -332,3 +332,4 @@ oracle.nkc-etw ok
 oracle.npfs ok
 oracle.msfs ok
 oracle.nkc-ex ok
+oracle.nkc-ps ok
