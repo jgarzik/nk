@@ -9,7 +9,7 @@
 //! | --- | --- |
 //! | `*` | zero or more characters |
 //! | `?` | one character |
-//! | `<` (`DOS_STAR`) | zero or more characters, but never the name's last period |
+//! | `<` (`DOS_STAR`) | zero or more characters, the name's last period only as its last |
 //! | `>` (`DOS_QM`) | one character; at a period or at the end of the name, nothing |
 //! | `"` (`DOS_DOT`) | a period; at the end of the name, nothing |
 //!
@@ -17,20 +17,30 @@
 //! empty there is no match, so `*` does not match the empty name; two
 //! empty strings match.
 //!
+//! # As Windows matches
+//!
+//! Windows offers each character of the name to the expression, which
+//! goes on from every place it has reached for as long as a wildcard
+//! there may match nothing. Two things follow that the wording above
+//! does not say, and Windows 10 answers accordingly (the conformance
+//! driver `nkc-rtl` asks it):
+//!
+//! - `<` takes the name's last period too, but then it is done: `a<c`
+//!   matches `a.c`, `<` does not match `a.b`;
+//! - an expression that runs out while a character is on offer has
+//!   taken that character: `>` matches `.`, although at a period `>`
+//!   matches nothing, and `a<` matches `a.`.
+//!
 //! # INFERRED
 //!
-//! The table above is the documentation's wording made exact. Where the
-//! wording leaves a choice, this is NK's reading, to be checked against
-//! Windows:
+//! NK's reading where Windows was not asked:
 //!
-//! - `>` never consumes a period: at one it only steps aside;
-//! - `"` in the middle of a name matches a period and nothing else;
-//! - `<` consumes any character after the last period, and every
-//!   character of a name without one;
 //! - without regard to case only the name is upper-cased, by the
 //!   system's table or the caller's; an expression with a lower-case
 //!   letter then matches nothing that letter stands against;
-//! - the name's last period is found before its units are upper-cased.
+//! - the name's last period is found before its units are upper-cased;
+//!   whether a unit is a period for `>` and `"` is asked of the
+//!   upper-cased unit.
 
 use crate::Text;
 
@@ -61,6 +71,40 @@ impl Reached {
     }
 }
 
+/// Offer one character of the name, `c`, or its end (`None`), to every
+/// place the expression has reached. `reached.get(i)` says the first
+/// `i` expression characters have matched the name so far.
+fn offer(
+    expression: &(impl Text + ?Sized),
+    reached: &mut Reached,
+    c: Option<u16>,
+    last_period: bool,
+) {
+    let end = expression.length();
+    // `taken`: the expression character before this place took `c`.
+    // `passed`: it matched nothing, and `c` is on offer here too.
+    let (mut taken, mut passed) = (false, false);
+    for i in 0..end {
+        let (stays, takes, passes) = if reached.get(i) || passed {
+            match (expression.unit(i), c) {
+                (STAR, _) => (true, true, true),
+                // The last period is the last character it takes.
+                (DOS_STAR, _) => (!last_period, true, true),
+                (DOS_QM, None | Some(PERIOD)) | (DOS_DOT, None) => (false, false, true),
+                (_, None) => (false, false, false),
+                (QUESTION | DOS_QM, Some(_)) | (DOS_DOT, Some(PERIOD)) => (false, true, false),
+                (literal, Some(c)) => (false, literal == c, false),
+            }
+        } else {
+            (false, false, false)
+        };
+        reached.set(i, stays || taken);
+        (taken, passed) = (takes, passes);
+    }
+    // An expression that runs out with `c` on offer has taken it.
+    reached.set(end, taken || passed);
+}
+
 /// Whether `name` matches `expression`. Each unit of the name is
 /// compared as `fold` gives it: the identity for a match that regards
 /// case, an upper-case table for one that does not, and then the
@@ -85,46 +129,16 @@ pub fn is_name_in_expression(
         return Some(end == 0 && length == 0);
     }
     let last_period = (0..length).rev().find(|&at| name.unit(at) == PERIOD);
-    // `reached.get(i)`: the first `i` expression characters can match
-    // the name read so far.
     let mut reached = Reached([0; MAX_EXPRESSION / 64 + 1]);
     reached.set(0, true);
-    for at in 0..=length {
-        let c = (at < length).then(|| fold(name.unit(at)));
-        // What an expression character may match without consuming.
-        for i in 0..end {
-            let nothing = match expression.unit(i) {
-                STAR | DOS_STAR => true,
-                DOS_QM => c.is_none() || c == Some(PERIOD),
-                DOS_DOT => c.is_none(),
-                _ => false,
-            };
-            if reached.get(i) && nothing {
-                reached.set(i + 1, true);
-            }
-        }
-        let Some(c) = c else { break };
-        // Consume `c`. Downwards, so that each state is read before it
-        // is written.
-        for i in (0..=end).rev() {
-            let stays = i < end
-                && reached.get(i)
-                && match expression.unit(i) {
-                    STAR => true,
-                    DOS_STAR => Some(at) != last_period,
-                    _ => false,
-                };
-            let steps = i > 0
-                && reached.get(i - 1)
-                && match expression.unit(i - 1) {
-                    STAR | DOS_STAR => false,
-                    QUESTION => true,
-                    DOS_QM => c != PERIOD,
-                    DOS_DOT => c == PERIOD,
-                    literal => literal == c,
-                };
-            reached.set(i, stays || steps);
-        }
+    for at in 0..length {
+        let c = fold(name.unit(at));
+        offer(expression, &mut reached, Some(c), Some(at) == last_period);
+    }
+    // The end of the name: what is left of the expression must match
+    // nothing.
+    if !reached.get(end) {
+        offer(expression, &mut reached, None, false);
     }
     Some(reached.get(end))
 }
@@ -197,13 +211,19 @@ mod tests {
             ("<\"", "foo.txt", false),
             ("<\"*", "foo.txt", true),
             ("<.", "a.", true),
-            ("a<", "a.", false),
+            ("a<", "a.", true),
+            ("a<c", "a.c", true),
+            ("a<", "a.b", false),
             // After the last period it is a `*` again.
             (".<", ".abc", true),
             ("<.<", "a.b", true),
             // `>`: one character, or nothing at a period or the end.
             (">", "a", true),
-            (">", ".", false),
+            // The expression runs out on the period, and so takes it.
+            (">", ".", true),
+            ("a>", "a.", true),
+            (">", "..", false),
+            (">a", ".", false),
             (">>>", "ab", true),
             (">>>", "abcd", false),
             ("a>.txt", "a.txt", true),
@@ -245,23 +265,35 @@ mod tests {
     }
 
     /// The same rules by trying every way to match: exponential.
+    /// Whether `expression` matches the name from `at` on.
     fn slow(expression: &[u16], name: &[u16], at: usize) -> bool {
         let Some((&e, rest)) = expression.split_first() else {
             return at == name.len();
         };
-        let c = name.get(at).copied();
+        let Some(&c) = name.get(at) else {
+            // The name has ended: only what may match nothing is left.
+            return matches!(e, STAR | DOS_STAR | DOS_QM | DOS_DOT) && slow(rest, name, at);
+        };
         let last_period = name.iter().rposition(|&c| c == PERIOD);
-        match e {
-            STAR => slow(rest, name, at) || (c.is_some() && slow(expression, name, at + 1)),
-            DOS_STAR => {
+        // The rest of the expression, offered `c` as well: if there is
+        // no rest, `c` is taken.
+        let passed = || {
+            if rest.is_empty() {
+                at + 1 == name.len()
+            } else {
                 slow(rest, name, at)
-                    || (c.is_some() && Some(at) != last_period && slow(expression, name, at + 1))
             }
-            DOS_QM if c.is_none() || c == Some(PERIOD) => slow(rest, name, at),
-            DOS_DOT if c.is_none() => slow(rest, name, at),
-            DOS_DOT => c == Some(PERIOD) && slow(rest, name, at + 1),
-            QUESTION | DOS_QM => c.is_some() && slow(rest, name, at + 1),
-            literal => c == Some(literal) && slow(rest, name, at + 1),
+        };
+        let taken = || slow(rest, name, at + 1);
+        match e {
+            STAR => slow(expression, name, at + 1) || taken() || passed(),
+            DOS_STAR => {
+                (Some(at) != last_period && slow(expression, name, at + 1)) || taken() || passed()
+            }
+            DOS_QM if c == PERIOD => passed(),
+            QUESTION | DOS_QM => taken(),
+            DOS_DOT if c == PERIOD => taken(),
+            literal => c == literal && taken(),
         }
     }
 
@@ -330,8 +362,8 @@ mod tests {
     }
 
     /// Every line of the conformance driver `nkc-rtl`'s table: the
-    /// expression, the name, whether case is disregarded, and what its
-    /// source predicts of Windows.
+    /// expression, the name, whether case is disregarded, and what
+    /// Windows 10 answers.
     #[test]
     fn the_conformance_drivers_expressions() {
         for (expression, name, ignore_case, expected) in [
@@ -388,7 +420,7 @@ mod tests {
             ("<.txt", "file.txt.bak", false, false),
             ("<.b", "a.b.c", false, false),
             ("a<", "a.b", false, false),
-            ("a<c", "a.c", false, false),
+            ("a<c", "a.c", false, true),
             ("a<c", "abc", false, true),
             ("<\"*", "file", false, true),
             ("<\"*", "file.txt", false, true),
@@ -403,7 +435,7 @@ mod tests {
             ("a>.c", "a.c", false, true),
             (">>>.txt", "ab.txt", false, true),
             (">>>.txt", "abcd.txt", false, false),
-            (">", ".", false, false),
+            (">", ".", false, true),
             (">>>>>>>>\">>>", "abc.de", false, true),
             (">>>>>>>>\">>>", "abc", false, true),
             (">>>>>>>>\">>>", "abcdefghi.x", false, false),
@@ -442,10 +474,11 @@ mod tests {
         assert_eq!(through("X?X", "abc", |_| 0x58), Some(true));
         assert_eq!(through("abc", "abc", |_| 0x58), Some(false));
         // The name's last period is where it was before the table.
-        // `<` cannot take the second unit, though it reads as `X`.
-        assert_eq!(through("<X", "a.b", |_| 0x58), Some(false));
-        assert_eq!(through("<XX", "a.b", |_| 0x58), Some(true));
-        assert_eq!(through("<X", "abc", |_| 0x58), Some(true));
+        // `<` takes nothing after the second unit, though it reads as
+        // `X`.
+        assert_eq!(through("<X", "a.bc", |_| 0x58), Some(false));
+        assert_eq!(through("<XX", "a.bc", |_| 0x58), Some(true));
+        assert_eq!(through("<X", "abbc", |_| 0x58), Some(true));
     }
 
     #[test]

@@ -1268,7 +1268,10 @@ exported from `kernel/rtl` with the strings they work on. The matcher
 name, a bit per expression character in a fixed four kilobytes of the
 caller's stack: its time is bounded by the product of the two lengths
 whatever the pattern, it allocates nothing, and so it never raises,
-where Windows raises `STATUS_NO_MEMORY`. The name is upper-cased by the
+where Windows raises `STATUS_NO_MEMORY`. What matches is what Windows
+matches, the two cases included that the documented wording of the DOS
+wildcards does not cover (stated in `nk_rtl::wildcard`). The name is
+upper-cased by the
 caller's table when one is passed, read from the caller's memory a unit
 at a time. The table of legal characters is built from each file
 system's naming rules (`nk_rtl::legal`): Microsoft publishes the flags

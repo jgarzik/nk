@@ -1148,6 +1148,11 @@ fn wildcards() -> Result<(), &'static str> {
         ("<.txt", "a.b.txt", 0, 1),
         ("<.b", "a.b.c", 0, 0),
         ("<\"*", "file", 0, 1),
+        // `<` takes the last period as its last character; `>` at a
+        // period matches nothing, and the expression, run out, has the
+        // period all the same.
+        ("a<c", "a.c", 0, 1),
+        (">", ".", 0, 1),
         ("a>", "a", 0, 1),
         ("a>c", "ac", 0, 0),
         (">>>>>>>>\">>>", "abc.de", 0, 1),
