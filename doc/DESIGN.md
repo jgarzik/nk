@@ -1488,7 +1488,11 @@ and the masks kept within what "generic all" maps to; the
 creator-owner and creator-group SIDs are replaced by the new owner and
 group only in entries inherited from the parent. Every creator is a kernel-mode creator, which may
 name any owner for a new object; changing an owner asks the caller's
-token, as on Windows.
+token, as on Windows. A changed descriptor always has an owner and a
+group: naming one and supplying none is refused
+(`STATUS_INVALID_OWNER`, `STATUS_INVALID_PRIMARY_GROUP`), where naming
+the DACL and supplying none leaves the object a null DACL, which
+allows everyone everything: Windows' rules, a caller's to know.
 
 Where a descriptor lives:
 

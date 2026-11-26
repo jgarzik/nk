@@ -58,6 +58,7 @@ pub const SE_DACL_PRESENT: u16 = 0x0004;
 pub const SE_DACL_DEFAULTED: u16 = 0x0008;
 pub const SE_SACL_PRESENT: u16 = 0x0010;
 pub const SE_SACL_DEFAULTED: u16 = 0x0020;
+pub const SE_DACL_AUTO_INHERIT_REQ: u16 = 0x0100;
 pub const SE_DACL_AUTO_INHERITED: u16 = 0x0400;
 pub const SE_SACL_AUTO_INHERITED: u16 = 0x0800;
 pub const SE_DACL_PROTECTED: u16 = 0x1000;

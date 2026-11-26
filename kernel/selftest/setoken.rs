@@ -1159,6 +1159,7 @@ fn descriptor_info() -> Result<(), &'static str> {
     const DACL: u32 = 4;
     const TOO_SMALL: i32 = 0xC000_0023u32 as i32;
     const INVALID_OWNER: i32 = 0xC000_005Au32 as i32;
+    const INVALID_PRIMARY_GROUP: i32 = 0xC000_005Bu32 as i32;
     const NO_SECURITY: i32 = 0xC000_00D7u32 as i32;
     let mut supplied = Absolute::new(Some(&SYSTEM), Some(&ADMINS), Dacl::List(&SUPPLIED));
     let (status, mut object) = assign(None, Some(&mut supplied));
@@ -1258,12 +1259,22 @@ fn descriptor_info() -> Result<(), &'static str> {
         {
             return Err("an owner the token may be was not set");
         }
-        // A group named and not given: the object is left without one.
-        if set(&mut object, GROUP, &mut write) != (0, true)
+        // A group named and not given: refused, the object as it was.
+        if set(&mut object, GROUP, &mut write) != (INVALID_PRIMARY_GROUP, false)
             // SAFETY: the object's descriptor.
-            || unsafe { dump(object) }.is_none_or(|now| !now.2.is_empty())
+            || unsafe { dump(object) }.is_none_or(|now| now.2 != ADMINS.bytes())
         {
-            return Err("a group named and not given did not take the group away");
+            return Err("a group named and not given was not refused as Windows does");
+        }
+        // A list named and not given: the object has a null list,
+        // marked present, and its owner and group still.
+        if set(&mut object, DACL, &mut admins) != (0, true)
+            // SAFETY: the object's descriptor.
+            || unsafe { dump(object) }.is_none_or(|now| {
+                now.0 != 0x8004 || now.1 != ADMINS.bytes() || now.2 != ADMINS.bytes() || now.3.is_some()
+            })
+        {
+            return Err("a list named and not given did not leave a null list");
         }
         if set(&mut none, DACL, &mut write) != (NO_SECURITY, false) {
             return Err("an object with no descriptor had one set");
