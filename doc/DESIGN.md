@@ -1326,12 +1326,29 @@ It is built at boot:
    copied over `\Registry\Machine\System`: keys, values, classes,
    security descriptors, times. A hive that is damaged, or that needs
    its transaction log, fails the boot: nothing replays a log;
-3. the control set `Select\Current` names (`ControlSet001`), with
+3. the registry overlay the loader read, if it read one, laid over
+   `\Registry\Machine\System` in turn: a key that is not there is
+   made, with the keys above it, and a value takes the place of the
+   hive's value of the same name;
+4. the control set `Select\Current` names (`ControlSet001`), with
    `Control\Class` and `Services` made if the hive did not bring them,
    and `CurrentControlSet`, a symbolic link to it.
 
-Without a hive the registry is 1 and 3 alone. It holds what drivers
-write until power-off; nothing is written back to a file.
+Without a hive and an overlay the registry is 1 and 4 alone. It holds
+what drivers write until power-off; nothing is written back to a file.
+
+The overlay is NK's own: Windows has nothing like it. The hive is
+written by Windows from a text manifest in nk-fixtures, so a change to
+it takes a release of the fixtures; `fixtures/registry-overlay.txt`
+holds, in that manifest's format, the keys and values work in progress
+needs before the release. `tools/mkesp.py` puts the file in a boot image
+that has the fixtures, as `\NK\OVERLAY`; `lib/cm/manifest.rs` reads it.
+Nothing has read the registry when it is applied, so to every reader
+its content is the hive's. A line that cannot be read fails the boot
+and is named in the log: the file is NK's, and half of it is not used.
+Its content belongs in the Windows-written hive: a release of the
+fixtures takes it into the hive's manifest, and the file keeps its
+header comment alone.
 
 A symbolic link is what it is on Windows: a key flagged as one, whose
 `SymbolicLinkValue` (`REG_LINK`) is the full path of another key. A

@@ -1,8 +1,12 @@
 //! The manifest reader: every type and data form, what is refused and
-//! at which line, and laying a manifest over a tree.
+//! at which line, and laying a manifest over a tree; then NK's own
+//! overlay file, `fixtures/registry-overlay.txt`, alone and over the
+//! Windows-written hive.
 
 use crate::manifest::{ManifestError, Op, apply, parse};
-use crate::{Error, Hive, KeyId};
+use crate::regf::Regf;
+use crate::{Error, Hive, KeyId, import};
+use std::path::PathBuf;
 
 fn w(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
@@ -454,4 +458,64 @@ fn a_deleted_key_takes_nothing() {
     hive.delete(gone).unwrap();
     let ops = parse(b"key A").unwrap();
     assert_eq!(apply(&mut hive, gone, &ops, 0), Err(Error::Deleted));
+}
+
+// ---- NK's overlay file ---------------------------------------------------
+
+fn repository() -> PathBuf {
+    [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect()
+}
+
+fn overlay() -> Vec<Op> {
+    let text = std::fs::read(repository().join("fixtures/registry-overlay.txt")).unwrap();
+    parse(&text).unwrap_or_else(|e| panic!("fixtures/registry-overlay.txt: {e}"))
+}
+
+#[test]
+fn the_overlay_file_is_well_formed() {
+    let ops = overlay();
+    let (mut hive, system) = tree();
+    apply(&mut hive, system, &ops, 0).unwrap();
+    assert_eq!(
+        read(
+            &hive,
+            system,
+            "ControlSet001\\Control\\NkTest\\Overlay",
+            "Marker"
+        ),
+        (1, utf16("laid over the hive\0"))
+    );
+}
+
+/// Over the Windows-written hive, the overlay's value wins and the
+/// hive's other values stay. Without the fixture the test says so on
+/// stderr and passes.
+#[test]
+fn the_overlay_wins_over_the_hive() {
+    let Ok(file) = std::fs::read(repository().join("target/fixtures/system.hiv")) else {
+        eprintln!("SKIP: no Windows-written hive (target/fixtures/system.hiv)");
+        return;
+    };
+    let (mut hive, system) = tree();
+    import(&mut hive, system, &Regf::parse(&file).unwrap()).unwrap();
+    let types = "ControlSet001\\Control\\NkTest\\Types";
+    assert_eq!(read(&hive, system, types, "String"), (1, utf16("nk\0")));
+    let before = hive
+        .info(hive.open(system, &w(types)).unwrap())
+        .unwrap()
+        .values;
+    apply(&mut hive, system, &overlay(), 0).unwrap();
+    assert_eq!(
+        read(&hive, system, types, "String"),
+        (1, utf16("overlaid\0"))
+    );
+    assert_eq!(
+        read(&hive, system, types, "Dword"),
+        (4, vec![0x78, 0x56, 0x34, 0x12])
+    );
+    let after = hive
+        .info(hive.open(system, &w(types)).unwrap())
+        .unwrap()
+        .values;
+    assert_eq!(before, after, "replaced, not added");
 }

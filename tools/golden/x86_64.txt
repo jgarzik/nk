@@ -160,6 +160,7 @@ cm.control-set ok
 cm.hive.values ok
 cm.hive.names ok
 cm.hive.refused ok
+cm.overlay ok
 io.csq ok
 io.csq-cancel ok
 io.csq-race ok

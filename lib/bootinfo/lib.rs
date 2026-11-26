@@ -22,6 +22,9 @@ pub const MAX_MODULES: usize = 64;
 pub const MODULE_NAME_LEN: usize = 32;
 /// The name of the module that is the SYSTEM registry hive.
 pub const HIVE_MODULE: &str = "SYSTEM";
+/// The name of the module that is the registry overlay: keys and
+/// values as text, to lay over the hive.
+pub const OVERLAY_MODULE: &str = "OVERLAY";
 /// Room for the kernel command line, including its NUL padding.
 pub const CMDLINE_LEN: usize = 256;
 
@@ -200,8 +203,8 @@ pub struct BootInfo {
     /// NUL padded. Empty when the boot volume has no command-line file.
     pub cmdline: [u8; CMDLINE_LEN],
     /// The files the loader read for the kernel: every boot driver, by
-    /// its file name, and the registry hive, if there is one, as
-    /// [`HIVE_MODULE`].
+    /// its file name, and the registry hive and the registry overlay,
+    /// where there is one, as [`HIVE_MODULE`] and [`OVERLAY_MODULE`].
     pub modules: [Module; MAX_MODULES],
 }
 

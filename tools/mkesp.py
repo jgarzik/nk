@@ -7,13 +7,15 @@ Layout, mirroring where Windows keeps its boot files:
     \\NK\\nkkrnl.exe                  the kernel
     \\NK\\drivers\\<name>.sys         boot drivers, from the fixture cache
     \\NK\\SYSTEM                      the SYSTEM registry hive, from the fixture cache
+    \\NK\\OVERLAY                     keys and values to lay over the hive
+                                    (fixtures/registry-overlay.txt)
     \\NK\\cmdline.txt                 the kernel command line, if any
 
 The image is a bare FAT filesystem made with mtools: no root, no loop device.
 
 Usage: mkesp.py <x86_64|aarch64> <output.img> [--no-drivers]
 
-`--no-drivers` leaves the fixture drivers and the hive out. Such an image contains only
+`--no-drivers` leaves the fixture drivers, the hive and its overlay out. Such an image contains only
 NK's own code and can be redistributed; the kernel boots and reports the
 driver tests as skipped.
 """
@@ -26,6 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "target" / "fixtures"
+OVERLAY = ROOT / "fixtures" / "registry-overlay.txt"
 SIZE_MB = 64
 BOOT_NAME = {"x86_64": "BOOTX64.EFI", "aarch64": "BOOTAA64.EFI"}
 
@@ -105,6 +108,7 @@ def build(arch, image, drivers=True, cmdline=""):
             mtools("mcopy", "-i", image, path, "::/NK/SYSTEM")
         else:
             missing.append(absent)
+        mtools("mcopy", "-i", image, OVERLAY, "::/NK/OVERLAY")
     if cmdline:
         text = image.with_suffix(".cmdline")
         text.write_text(cmdline + "\n")
