@@ -129,3 +129,32 @@ pub fn check_frame(establisher: u64, low: u64, high: u64, target_frame: Option<u
         FrameCheck::Ok
     }
 }
+
+/// The first address of the kernel's half of the address space.
+pub const KERNEL_HALF: u64 = 0x8000_0000_0000_0000;
+
+/// What becomes of a memory fault taken in kernel mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryFault {
+    /// An access violation, delivered to the faulting code's handlers.
+    Exception,
+    /// Bugcheck `IRQL_NOT_LESS_OR_EQUAL` (`DRIVER_IRQL_NOT_LESS_OR_EQUAL`
+    /// in a driver): memory may not fault at `DISPATCH_LEVEL` or above.
+    RaisedIrql,
+    /// Bugcheck `PAGE_FAULT_IN_NONPAGED_AREA`: a kernel address that is
+    /// not mapped is no exception, whatever `__try` surrounds the access.
+    KernelAddress,
+}
+
+/// Decide a fault on `address`, taken at an IRQL that is (`raised`) or is
+/// not at `DISPATCH_LEVEL` or above. Only an address in the user half,
+/// touched where a fault is allowed, raises an exception.
+pub fn memory_fault(address: u64, raised: bool) -> MemoryFault {
+    if raised {
+        MemoryFault::RaisedIrql
+    } else if address >= KERNEL_HALF {
+        MemoryFault::KernelAddress
+    } else {
+        MemoryFault::Exception
+    }
+}

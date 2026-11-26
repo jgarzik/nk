@@ -3,6 +3,7 @@
 #![allow(non_snake_case)]
 
 use super::TAG_IRP;
+use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
 use crate::{kd, ke};
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -62,12 +63,13 @@ pub unsafe fn next_location(irp: *mut IRP) -> *mut IO_STACK_LOCATION {
 }
 
 /// Send `irp` to the driver that owns `device`: what `IofCallDriver` does.
-/// Returns the dispatch routine's status.
+/// Returns the dispatch routine's status. `guard` is what the caller
+/// owes if an exception unwinds the dispatch routine.
 ///
 /// # Safety
 /// `device` must be a live device object and `irp` a live IRP whose next
 /// stack location has been set up.
-pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP, guard: &Guard) -> NTSTATUS {
     // SAFETY: per the contract. The dispatch table always holds a routine:
     // `driver::load` fills every slot with the invalid-request handler.
     unsafe {
@@ -83,7 +85,10 @@ pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS
         let driver = (*device).DriverObject;
         let major = usize::from((*location).MajorFunction);
         match (*driver).MajorFunction.get(major).copied().flatten() {
-            Some(dispatch) => dispatch(device, irp),
+            Some(dispatch) => {
+                seh::call(dispatch as usize, [device.addr(), irp.addr(), 0, 0], guard) as u32
+                    as NTSTATUS
+            }
             None => kd::bugcheck(format_args!(
                 "IoCallDriver: no dispatch routine for major function {major:#x}"
             )),
@@ -151,7 +156,14 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
                 } else {
                     (*(*irp).CurrentStackLocation).DeviceObject
                 };
-                if routine(device, irp, context) == STATUS_MORE_PROCESSING_REQUIRED {
+                // Nothing is held across the routine: an unwind
+                // through it leaves the IRP as the routine left it.
+                let status = seh::call(
+                    routine as usize,
+                    [device.addr(), irp.addr(), context.addr(), 0],
+                    &Guard::Nothing,
+                );
+                if status as u32 as NTSTATUS == STATUS_MORE_PROCESSING_REQUIRED {
                     return; // the routine took the IRP back
                 }
             } else if (*irp).PendingReturned != 0 && (*irp).CurrentLocation <= (*irp).StackCount {
@@ -203,7 +215,16 @@ unsafe fn finish(irp: *mut IRP) {
                         "a driver completed a buffered request with Information={count:#x}, more than the {room:#x} bytes its requestor has room for"
                     ));
                 }
-                core::ptr::copy_nonoverlapping(buffer, (*irp).UserBuffer.cast::<u8>(), count);
+                let requestor = (*irp).UserBuffer.cast::<u8>();
+                if (*irp).RequestorMode == KERNEL_MODE {
+                    core::ptr::copy_nonoverlapping(buffer, requestor, count);
+                } else if crate::mm::user::copy(requestor, buffer, count).is_err() {
+                    // User mode's buffer was probed when the request was
+                    // made and may be gone by now: the request fails
+                    // with the fault, as the exception Windows catches
+                    // here becomes its status.
+                    (*irp).IoStatus.Status = STATUS_ACCESS_VIOLATION;
+                }
             }
             if flags & IRP_DEALLOCATE_BUFFER != 0
                 && !buffer.is_null()
@@ -316,8 +337,14 @@ pub unsafe extern "C" fn IoCancelIrp(irp: *mut IRP) -> u8 {
             ));
         }
         (*irp).CancelIrql = old;
-        let routine: DRIVER_CANCEL = core::mem::transmute(routine);
-        routine((*(*irp).CurrentStackLocation).DeviceObject, irp);
+        // The cancel lock and the IRQL it raised are the routine's to
+        // give back; nothing else is held across it.
+        let device = (*(*irp).CurrentStackLocation).DeviceObject;
+        seh::call(
+            routine.addr(),
+            [device.addr(), irp.addr(), 0, 0],
+            &Guard::Nothing,
+        );
         1
     }
 }

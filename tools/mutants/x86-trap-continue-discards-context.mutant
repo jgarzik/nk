@@ -1,0 +1,6 @@
+# A handler that repairs the faulting code's context and says to
+# continue is ignored: the code is resumed as it faulted.
+scenario: x86_64
+fails: seh.fault.continue
+file: kernel/arch/x86_64/trap.rs
+remove:     resume_as(frame, &context);

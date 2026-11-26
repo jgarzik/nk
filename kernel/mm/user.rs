@@ -109,6 +109,57 @@ pub fn frame_of(va: u64) -> Option<u64> {
     map::translate(va).map(|pa| pa & !(PAGE_SIZE as u64 - 1))
 }
 
+/// Whether the `len` bytes at `address` lie in the user range: all that
+/// Windows' `ProbeForRead` asks. An empty range always does.
+pub fn in_range(address: usize, len: usize) -> bool {
+    len == 0
+        || address
+            .checked_add(len)
+            .is_some_and(|end| end as u64 <= USER_PROBE_ADDRESS)
+}
+
+/// Read and write back one byte of every page of the `len` bytes at
+/// `address`, a range in the user half: what Windows' `ProbeForWrite`
+/// does after its range check. `Err` is the first fault.
+pub fn probe_pages(address: usize, len: usize) -> Result<(), Fault> {
+    if len == 0 {
+        return Ok(());
+    }
+    let end = address + len;
+    let mut at = address;
+    while at < end {
+        let byte = core::ptr::with_exposed_provenance_mut::<u8>(at);
+        // SAFETY: a byte of the requestor's range, copied onto itself;
+        // a fault is the result.
+        unsafe { copy(byte, byte, 1) }?;
+        at = (at & !(PAGE_SIZE - 1)) + PAGE_SIZE;
+    }
+    Ok(())
+}
+
+/// Where a copy met memory that is not there, and what it was doing:
+/// `ke::seh::ACCESS_READ` or `ACCESS_WRITE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fault {
+    pub address: u64,
+    pub access: u64,
+}
+
+/// Copy `len` bytes from `from` to `to`, where either may be a
+/// requestor's memory: unmapped, or not writable. Every access NK makes
+/// to such memory is this one. A fault is the `Err`, not an exception;
+/// bytes before it may have been copied.
+///
+/// # Safety
+/// Whatever of the two ranges is mapped may be read and written by the
+/// caller: the ranges are checked to be the requestor's, or are the
+/// kernel's own.
+pub unsafe fn copy(to: *mut u8, from: *const u8, len: usize) -> Result<(), Fault> {
+    // SAFETY: per the contract.
+    unsafe { crate::arch::seh::fault_copy(to, from, len) }
+        .map_err(|(address, access)| Fault { address, access })
+}
+
 // ---- tests --------------------------------------------------------------
 
 use crate::ke::{ipi, smp};
@@ -250,4 +301,47 @@ pub fn other_cpu_test() -> Result<usize, &'static str> {
         return Err("another processor did not read what was written to a user page");
     }
     Ok(target)
+}
+
+/// A copy to or from memory that is not there fails, saying where and
+/// how, without disturbing the system; between mapped pages it copies.
+pub fn copy_test() -> Result<(), &'static str> {
+    use crate::ke::seh::{ACCESS_READ, ACCESS_WRITE};
+    let page = PAGE_SIZE as u64;
+    map_pages(HIGH, 1).map_err(|_| "cannot map a user page")?;
+    let mapped = HIGH as *mut u8;
+    let source = [0x5Au8; 32];
+    let mut sink = [0u8; 32];
+    // SAFETY: the page was just mapped and is this test's; the buffers
+    // are local; the unmapped page is the point.
+    let results = unsafe {
+        [
+            copy(mapped, source.as_ptr(), 32),
+            copy(sink.as_mut_ptr(), mapped.add(16), 16),
+            // The last sixteen bytes of the page, then into the void.
+            copy(sink.as_mut_ptr(), mapped.add(PAGE_SIZE - 16), 32),
+            copy(mapped.add(PAGE_SIZE - 8), source.as_ptr(), 16),
+            copy(sink.as_mut_ptr(), core::ptr::null(), 1),
+        ]
+    };
+    // SAFETY: still mapped.
+    let landed = unsafe { mapped.add(PAGE_SIZE - 8).cast::<u64>().read_volatile() };
+    unmap_pages(HIGH, 1);
+    let fault = |address, access| Err(Fault { address, access });
+    if results[0].is_err() || results[1].is_err() {
+        return Err("a copy between mapped pages failed");
+    }
+    if results[2] != fault(HIGH + page, ACCESS_READ) {
+        return Err("a read that ran off a mapped page did not fail at the next page, as a read");
+    }
+    if results[3] != fault(HIGH + page, ACCESS_WRITE) {
+        return Err("a write that ran off a mapped page did not fail at the next page, as a write");
+    }
+    if landed != 0x5A5A_5A5A_5A5A_5A5A {
+        return Err("the bytes before a fault were not copied");
+    }
+    if results[4] != fault(0, ACCESS_READ) {
+        return Err("a read of address zero did not fail there");
+    }
+    Ok(())
 }

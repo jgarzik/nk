@@ -3,6 +3,7 @@
 //! driver.
 
 use super::irp;
+use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{Rank, SpinLock, irql};
 use crate::ldr::{self, Image, LoadError};
 use crate::ob;
@@ -118,7 +119,14 @@ pub(super) fn load(
         (*object).DriverInit = Some(entry);
         // Every request type starts out rejected, as on Windows.
         (*object).MajorFunction = [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
-        entry(object, &raw mut registry)
+        // Reached only from starting a service, which no driver does:
+        // an exception the entry point lets out is unhandled in a
+        // system thread, as on Windows, where one runs it.
+        seh::call(
+            entry as usize,
+            [object.addr(), (&raw mut registry).addr(), 0, 0],
+            &Guard::Base(Unhandled::SystemThread),
+        ) as u32 as NTSTATUS
     };
     if !nt_success(status) {
         // Windows does not call the unload routine of a driver whose entry
@@ -175,7 +183,11 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         let routine = (*object)
             .DriverUnload
             .ok_or("driver has no unload routine")?;
-        routine(object);
+        seh::call(
+            routine as usize,
+            [object.addr(), 0, 0, 0],
+            &Guard::Base(Unhandled::SystemThread),
+        );
         !(*object).DeviceObject.is_null()
     };
     let record = {

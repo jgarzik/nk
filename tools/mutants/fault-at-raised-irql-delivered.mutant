@@ -1,0 +1,7 @@
+# A memory fault at DISPATCH_LEVEL becomes an exception, where Windows
+# stops the system: handlers would run for a fault that may not happen.
+scenario: aarch64-neg-seh-fault-at-dispatch
+fails: scenario
+file: lib/unwind/dispatch.rs
+replace:     if raised {
+with:     if false {

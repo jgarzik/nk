@@ -6,3 +6,4 @@ lib compiler_builtins	prebuilt by Rust without unwind tables
 sym nk_vectors	exception entry: the interrupted pc is in ELR_EL1 alone, where no unwind code reaches
 sym nk_stack_overflow	reports a stack overflow from a stack entered at return address zero
 sym nk_ap_stub	starts a processor with the MMU off, before it is on the kernel's page tables
+sym nk_seh_no_unwind	a test's function that must have none (neg.seh-no-entry)

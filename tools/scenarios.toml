@@ -121,7 +121,9 @@ smp = 8
 golden = "x86_64"
 
 # The harness must tell a kernel bug from a pass: a Rust panic and a stray
-# memory access each have to end the boot with a bugcheck.
+# memory access each have to end the boot with a bugcheck. A stray access
+# to kernel memory is Windows' page-fault bugcheck; one to the user half
+# is an access violation nothing handles.
 
 [x86_64-neg-panic]
 arch = "x86_64"
@@ -142,14 +144,14 @@ arch = "x86_64"
 tier = "gate"
 cmdline = "test=neg.fault"
 expect = "bugcheck"
-match = "BUGCHECK: page fault"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
 [aarch64-neg-fault]
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.fault"
 expect = "bugcheck"
-match = "BUGCHECK: synchronous exception"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
 # The low half of the address space is NK's own on both architectures:
 # a null pointer faults, and so does ordinary memory at its physical
@@ -163,7 +165,7 @@ tier = "gate"
 smp = 1
 cmdline = "test=neg.low-memory"
 expect = "bugcheck"
-match = "BUGCHECK: page fault"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 [aarch64-neg-low-memory]
 arch = "aarch64"
@@ -171,21 +173,21 @@ tier = "gate"
 smp = 1
 cmdline = "test=neg.low-memory"
 expect = "bugcheck"
-match = "BUGCHECK: synchronous exception"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 [x86_64-neg-null]
 arch = "x86_64"
 tier = "gate"
 cmdline = "test=neg.null"
 expect = "bugcheck"
-match = "BUGCHECK: page fault"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 [aarch64-neg-null]
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.null"
 expect = "bugcheck"
-match = "BUGCHECK: synchronous exception"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 # Running off the kernel stack must be named as that.
 
@@ -485,3 +487,98 @@ tier = "gate"
 cmdline = "test=neg.protected-close"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
+# An exception no handler takes stops the system with Windows' bugcheck
+# for where it was raised: in a system thread, in a system service made
+# for user mode (the exception's code not widened with its sign), in a
+# DPC routine, whose exception is not offered to the code the DPC
+# interrupted.
+
+[x86_64-neg-seh-thread]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
+
+[x86_64-neg-seh-service]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-service"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
+
+[x86_64-neg-seh-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
+
+[aarch64-neg-seh-thread]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
+
+[aarch64-neg-seh-service]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-service"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
+
+[aarch64-neg-seh-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
+
+# A function with no unwind entry between a raise and a willing handler
+# stops the system, named: never a guess at its frame.
+
+[x86_64-neg-seh-no-entry]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-no-entry"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"
+
+[aarch64-neg-seh-no-entry]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-no-entry"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"
+
+# A memory fault that is no exception on Windows is none here, whatever
+# `__try` surrounds it: on a kernel address, and at DISPATCH_LEVEL.
+
+[x86_64-neg-seh-kernel-fault]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-kernel-fault"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x[0-9A-F]{8} \\(parameter 1 0xfffff88[0-9a-f]{9}, parameter 2 0x0\\)"
+
+[x86_64-neg-seh-fault-at-dispatch]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-fault-at-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"
+
+[aarch64-neg-seh-kernel-fault]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-kernel-fault"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x[0-9A-F]{8} \\(parameter 1 0xfffff88[0-9a-f]{9}, parameter 2 0x0\\)"
+
+[aarch64-neg-seh-fault-at-dispatch]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-fault-at-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"

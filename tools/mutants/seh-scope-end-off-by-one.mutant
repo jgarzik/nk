@@ -1,0 +1,7 @@
+# A guarded range is taken to reach one address further than its scope
+# record says: a `__try` answers for a call it does not guard.
+scenario: x86_64
+fails: seh.edge
+file: lib/unwind/scope.rs
+replace:         if pc < r.begin || pc >= r.end {
+with:         if pc < r.begin || pc > r.end {

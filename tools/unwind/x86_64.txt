@@ -3,3 +3,4 @@
 lib core	prebuilt by Rust without unwind tables
 lib alloc	prebuilt by Rust without unwind tables
 lib compiler_builtins	prebuilt by Rust without unwind tables
+sym nk_seh_no_unwind	a test's function that must have none (neg.seh-no-entry)

@@ -85,7 +85,7 @@ into memory a driver can write.
 | `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables and unwinding (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -131,7 +131,8 @@ low half is 47 bits wide on x86-64 and 48 on arm64). There is one
 address space, the System process's, so the range is every thread's.
 `mm::user` maps fresh zeroed frames there and unmaps them, with page
 tables made on demand and every processor's translation dropped on
-unmap; it has no exports. A range that touches a firmware runtime
+unmap; it has no exports. It is where a user-mode requestor's buffers
+are (see "I/O"). A range that touches a firmware runtime
 region is refused, since those share the low half.
 
 The pages are kernel-only: writable, not executable, not marked
@@ -207,7 +208,8 @@ affinity, not position. The IRQL is the controller's priority mask;
 levels and vectors are in `doc/LOCKING.md`. The only interrupts are the
 clock and ones a processor sends itself or another: no device interrupts.
 
-Any exception other than a breakpoint is a bugcheck with a register dump.
+A processor fault is an exception for the faulting code's handlers
+("Exceptions") or a bugcheck with a register dump.
 
 ## Time
 
@@ -466,10 +468,10 @@ exception handling. The Makefile builds the loader and kernel with
 
 Not covered:
 
-- arm64 exception entry up to the frame's last store, and the final
-  `eret`: the interrupted `pc` is in `ELR_EL1` alone there, where no
-  unwind code reaches. The vector table and the overflow stub have no
-  entries.
+- arm64 exception entry up to the frame's last store, and the last two
+  instructions of the way out: the interrupted `pc` is in `ELR_EL1`
+  alone there, where no unwind code reaches. The vector table and the
+  overflow stub have no entries.
 - Code that starts a processor before it is on the kernel's page tables
   (the x86-64 trampoline, arm64's `nk_ap_stub`).
 - The prebuilt `core`, `alloc` and `compiler_builtins`: Rust ships them
@@ -522,6 +524,135 @@ of a section the image cannot write shows that page and every other
 page shows zeros. Nothing can change a byte of it and no offset into it
 faults, so the unwinder can be handed the whole image as one slice
 while the image's own data keeps changing.
+
+## Exceptions
+
+Structured exception handling as Windows defines it
+([x64](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64),
+[arm64](https://learn.microsoft.com/en-us/cpp/build/arm64-exception-handling),
+[in drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/handling-exceptions)):
+`kernel/ke/seh.rs`, over the frame-by-frame unwinder and the decisions
+of `nk_unwind` (`scope`, `dispatch`), with a few assembly routines per
+architecture (`kernel/arch/*/seh.rs`).
+
+**Raising.** A routine that raises is entered through assembly that
+records its caller's `CONTEXT` as it will be when the call has
+returned. The exception is raised there: its address is the return
+address in the driver, and no frame of NK's lies between the driver and
+its exception. Such an exception cannot be continued.
+
+**Processor faults.** The trap handler builds the faulting code's full
+`CONTEXT` and raises the fault there, as an exception that may be
+continued: a handler that changes the context and says "continue" has
+the code go on with every register, the stack pointer and the program
+counter as changed.
+
+| Fault | Exception | Parameters |
+| --- | --- | --- |
+| memory fault on an address in the user half, below `DISPATCH_LEVEL` | `STATUS_ACCESS_VIOLATION` | 0 read, 1 write, 8 execute; the address |
+| x86-64 general protection fault | `STATUS_ACCESS_VIOLATION` | 0; -1 |
+| x86-64 divide error; arm64 `brk #0xF004`, which compiled code executes for a zero divisor | `STATUS_INTEGER_DIVIDE_BY_ZERO` | |
+| x86-64 overflow trap | `STATUS_INTEGER_OVERFLOW` | |
+| undefined instruction | `STATUS_ILLEGAL_INSTRUCTION` | |
+| breakpoint (`int3`, `brk #0xF000`), no debugger | `STATUS_BREAKPOINT`, at the instruction | 0 |
+
+Not exceptions, whatever `__try` surrounds them, as on Windows: a
+memory fault on a kernel address (`0x50 PAGE_FAULT_IN_NONPAGED_AREA`),
+one at `DISPATCH_LEVEL` or above (`0xA IRQL_NOT_LESS_OR_EQUAL`, `0xD1`
+in a driver), a fast-fail, a stack overflow. The decision is
+`nk_unwind::dispatch::memory_fault`.
+
+A call through a pointer that leads nowhere faults at its target, in no
+image: that frame is undone as a leaf's, and the search goes on in the
+caller.
+
+NK's own accesses to memory that may not be there (a requestor's
+buffer) are all one assembly routine, `mm::user::copy`. A fault in its
+access is not an exception: the trap handler resumes the routine at its
+way out, and it returns the address and the kind of access as an error.
+Nothing is unwound.
+
+**Probes.** `ProbeForRead`, `ProbeForWrite` and `MmProbeAndLockPages`
+raise in their caller. A probe looks at alignment first
+(`STATUS_DATATYPE_MISALIGNMENT`) and at nothing for a range of no
+bytes. A range outside user space is refused as Windows 10 refuses it:
+by a read probe with the access violation of a memory fault (two
+parameters), by a write probe with the one `ExRaiseAccessViolation`
+raises (none). A write probe then reads and writes back a byte of each
+page, through the copy above; a read probe touches nothing.
+`MmProbeAndLockPages` raises `STATUS_ACCESS_VIOLATION` for a page that
+is not mapped, and for user mode a page outside the user range.
+
+**Finding a handler.** The dispatcher walks the stack from that context
+and calls the language handler of each function that names one,
+innermost first, with the `EXCEPTION_RECORD`, the `CONTEXT` and a
+`DISPATCHER_CONTEXT` filled in as Windows fills it: a driver's own
+handler (the stack-cookie check) reads the function entry, the image
+base and the handler data from it. `__C_specific_handler` asks the
+filters of the scopes around the frame's program counter. An exception
+raised inside a handler is searched for in turn; handlers between it
+and the frame the first search had reached are told so
+(`EXCEPTION_NESTED_CALL`).
+
+**Unwinding.** A filter that accepts unwinds: the same frames are
+walked again and their handlers called a second time, which runs the
+`__finally` blocks, innermost first; then the accepting function goes
+on at its `__except` block with the registers a call preserves as it
+had them and the exception's code where a call's result would be.
+`_local_unwind` is the same walk without an exception. An unwind that
+begins inside a `__finally` block run by another takes that one over
+where it stood (a collided unwind), so no block runs twice.
+
+**NK's own frames.** They are walked like a driver's, by their unwind
+tables, and an unwind discards them: no destructor runs. Three rules
+make that safe.
+
+- Every call into a driver is `ke::seh::call`: an assembly frame with a
+  language handler of NK's own, holding a guard record the caller
+  passes. Nothing else lies between NK's Rust and the driver's routine,
+  so no frame without an unwind entry can.
+- A guard says what the caller owes if the routine does not return.
+  `Undo`: a function to call, once, when an unwind passes the frame
+  (leave a critical region, lower the IRQL, drop a reference).
+  `Nothing`: nothing is owed. `Base`: no driver's frame can lie beneath
+  this call, so no handler can; an exception that reaches it is
+  unhandled, the system stops there, and nothing is ever unwound
+  through it.
+- Between a call into a driver and the driver's frame beneath (if any),
+  an NK frame keeps nothing that only a destructor would give back: no
+  lock guard, and no IRQL, critical region or reference that is not in
+  a guard. What belongs to the request being abandoned (its IRP, the
+  block its results go to, its hold on the file object) is left as it
+  is, on purpose: the driver that raised may still hold the IRP.
+  Windows has no handlers on these paths either.
+
+| Call into a driver | Guard |
+| --- | --- |
+| dispatch routine | undo: leave the critical region the request is sent in |
+| completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
+| I/O work item's routine | undo: the device's reference |
+| work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
+| DPC routine, a timer's included | base: kernel mode |
+| a system service made for user mode (the oracle's requests) | base: a system service |
+
+**Nothing handles it.** The system stops with Windows' bugcheck for
+where the exception was raised:
+
+| Where | Bugcheck | First parameter |
+| --- | --- | --- |
+| a system service made for user mode | `0x3B SYSTEM_SERVICE_EXCEPTION` | the exception's code |
+| a system thread: a worker, a driver's thread, `DriverEntry` | `0x7E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED` | the code, sign-extended |
+| a DPC routine; a stack that cannot be searched | `0x1E KMODE_EXCEPTION_NOT_HANDLED` | the code, sign-extended |
+
+The search does not go on from a DPC routine into whatever the DPC
+interrupted. It stops, naming the place, at a function that is waiting
+for a call to return and has no unwind entry, and at a frame that is
+not on the stack: never a guess.
+
+The tests `seh.*` stack assembly routines shaped like a driver's
+compiled C (`kernel/arch/*/seh_test.rs`) around NK frames of each kind
+and around instructions that fault, and check what ran, in which order,
+with what record, and what state came back.
 
 ## Exports
 
@@ -673,7 +804,19 @@ object's pointer count when its memory goes.
 (`NtCreateFile`, `NtCreateNamedPipeFile`), `read`, `write`,
 `device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
 IRP and calls the dispatch routine inside a critical region (as Windows
-does for a synchronous request). Completion follows the Windows
+does for a synchronous request).
+
+**The requestor.** A request is made on behalf of kernel mode, whose
+buffers are trusted, or of user mode (`user_control`,
+`user_transfer`), whose buffers are an address and a length taken at
+their word no further than Windows takes them. For the buffered and
+direct methods the I/O manager probes them, copies the input through
+`mm::user::copy` and locks a direct buffer's pages; a buffer it cannot
+use fails the request with `STATUS_ACCESS_VIOLATION` before any driver
+sees it, and a null one is no buffer: its length goes to the driver as
+zero. For `METHOD_NEITHER` the driver is handed both addresses as they
+are, and what is there is the driver's to find out. The oracle's
+requests are user mode's, their buffers pages of the user range. Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
 copy results to the requestor and signal its event. A buffered request's
 results are copied only as far as the requestor asked; a driver that
@@ -723,8 +866,10 @@ a DPC, timer or worker; the requestor waits on an event completion sets.
 The requestor owns the IRP and frees it after seeing completion, so
 cancelling is safe until then. Windows finishes a request in the
 requesting thread by APC; NK finishes it wherever it was completed, at
-`DISPATCH_LEVEL` or below, indistinguishable while there is no user
-memory to copy to.
+`DISPATCH_LEVEL` or below. There is one address space, so a user-mode
+requestor's buffer is there to copy to from any thread; the copy is the
+one that may fail, and a buffer gone by then fails the request with the
+access violation.
 
 **Cancel.** `IoCancelIrp` marks the IRP, takes its cancel routine in one
 atomic step, and calls it holding the cancel spin lock, which the routine
@@ -743,10 +888,10 @@ which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
 canceller has it.
 
-**Direct I/O** uses real MDLs: the buffer is described by its physical
-pages, and a system address is a fresh mapping of them, so the driver
-works through its own view. Only kernel buffers can be described; other
-limits are at the top of `kernel/io/mdl.rs`.
+**Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
+user range, is described by its physical pages, and a system address is
+a fresh mapping of them, so the driver works through its own view.
+Limits are at the top of `kernel/io/mdl.rs`.
 
 ## The registry
 
@@ -841,19 +986,15 @@ file system reads it in line (`kernel/se/token.rs`):
 ## Breakpoints and the debugger
 
 A driver's breakpoint (`DbgBreakPoint`, in-line code) gets one of
-Windows' two answers. By default, as with no debugger: an unhandled
-exception, bugcheck `0x7E` with `0x80000003`. With `debug=on` on the
-command line, as with a debugger that says "go" every time: noted on the
-console and passed over. NK has no debugger protocol; the reference
+Windows' two answers. By default, as with no debugger: an exception,
+`0x80000003`, which stops the system unless a handler takes it (bugcheck
+`0x7E` in a system thread). With `debug=on` on the command line, as with
+a debugger that says "go" every time: noted on the console and passed
+over, before any handler is asked. NK has no debugger protocol; the reference
 Windows machine gets a real debugger, played by `tools/kd.py`.
 
 ## What is absent
 
-No SEH, APCs, device interrupts, PnP, power management, user processes
-or user mode. Where a fixture imports something in that territory but never
+No APCs, device interrupts, PnP, power management, user processes or
+user mode. Where a fixture imports something in that territory but never
 reaches it on the tested path, the export is `Traps`.
-
-SEH is the sharpest edge (`kernel/ke/seh.rs`). `ProbeForRead` performs
-Windows' checks, but where Windows raises NK bugchecks, as does
-`MmProbeAndLockPages` on an inaccessible buffer. A driver's `__try`
-protects nothing.

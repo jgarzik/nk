@@ -5,9 +5,18 @@
 //! same script runs against the same driver binary on NK, and each line NK
 //! produces must be the line Windows produced. `oracle/README.md` defines
 //! the formats.
+//!
+//! On Windows the requests are system services made by a user-mode
+//! program. Here each is made as one ([`system_service`]): an exception
+//! that nothing handles while it is served stops the system as it does
+//! there. And each is made on behalf of user mode, with its buffers in
+//! the user range ([`UserMemory`]) or, for `ioctlat`, wherever the
+//! script says.
 
-use crate::io::file::{self, IoResult, Kind, OpenRequest};
+use super::{USER_INPUT, USER_OUTPUT, UserMemory};
+use crate::io::file::{self, Buffer, IoResult, Kind, OpenRequest};
 use crate::io::service::{self, ServiceError};
+use crate::ke::seh::system_service;
 use crate::ldr;
 use crate::test::{Group, Report};
 use alloc::format;
@@ -15,8 +24,11 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{FILE_OPEN, KERNEL_MODE, NAMED_PIPE_CREATE_PARAMETERS};
-use nk_oracle::{Checker, Dump, FILL, Mismatch, Outcome, Step};
+use nk_ntabi::io::{
+    FILE_OPEN, IRP_MJ_DEVICE_CONTROL, IRP_MJ_FILE_SYSTEM_CONTROL, IRP_MJ_READ, IRP_MJ_WRITE,
+    NAMED_PIPE_CREATE_PARAMETERS, USER_MODE,
+};
+use nk_oracle::{Checker, Dump, FILL, Input, Mismatch, Outcome, Output, Step};
 
 /// What a script has open and loaded while it runs.
 struct Replay<'a> {
@@ -113,15 +125,12 @@ impl<'a> Replay<'a> {
             Step::Use { service } => self.use_service(service).into(),
             Step::Unload { service } => self.unload(service).into(),
             Step::Install { file } => Self::install(file).into(),
-            Step::IoctlAt { .. } => {
-                return Err("not yet supported on NK".into());
-            }
             Step::Open { handle, path, args } => {
                 let root = match args.root {
                     Some(root) => Some(self.file(root)?),
                     None => None,
                 };
-                let opened = file::open(&OpenRequest {
+                let request = OpenRequest {
                     name: path,
                     root,
                     desired_access: args.access,
@@ -129,8 +138,9 @@ impl<'a> Replay<'a> {
                     create_options: args.options,
                     disposition: FILE_OPEN,
                     kind: Kind::File,
-                    requestor_mode: KERNEL_MODE,
-                });
+                    requestor_mode: USER_MODE,
+                };
+                let opened = system_service(|| file::open(&request));
                 match opened {
                     Ok((file, _)) => {
                         self.files.push((handle, file));
@@ -140,7 +150,7 @@ impl<'a> Replay<'a> {
                 }
             }
             Step::Pipe { handle, path, args } => {
-                let opened = file::open(&OpenRequest {
+                let request = OpenRequest {
                     name: path,
                     root: None,
                     desired_access: args.access,
@@ -158,8 +168,9 @@ impl<'a> Replay<'a> {
                         DefaultTimeout: -10_000 * i64::from(args.timeout),
                         TimeoutSpecified: 1,
                     }),
-                    requestor_mode: KERNEL_MODE,
-                });
+                    requestor_mode: USER_MODE,
+                };
+                let opened = system_service(|| file::open(&request));
                 let (status, information) = match opened {
                     Ok((file, information)) => {
                         self.files.push((handle, file));
@@ -178,43 +189,95 @@ impl<'a> Replay<'a> {
             Step::Close { handle } => {
                 let file = self.file(handle)?;
                 self.files.retain(|(h, _)| *h != handle);
-                format!("{:08x}", file::close(file) as u32)
+                format!("{:08x}", system_service(|| file::close(file)) as u32)
             }
             Step::Ioctl {
                 handle,
                 code,
                 input,
                 output_len,
-            } => {
-                let input: Vec<u8> = input.bytes().collect();
-                let mut output = vec![FILL; output_len];
-                let r = file::device_control(self.file(handle)?, code, &input, &mut output)
-                    .map_err(|e| format!("{e:?}"))?;
-                format!("{} {}", outcome(r), Dump(&output))
-            }
+            } => self.control(
+                handle,
+                IRP_MJ_DEVICE_CONTROL,
+                code,
+                Input::Bytes(input),
+                Output::Len(output_len),
+            )?,
+            Step::IoctlAt {
+                handle,
+                code,
+                input,
+                output,
+            } => self.control(handle, IRP_MJ_DEVICE_CONTROL, code, input, output)?,
             Step::Fsctl {
                 handle,
                 code,
                 input,
                 output_len,
-            } => {
-                let input: Vec<u8> = input.bytes().collect();
-                let mut output = vec![FILL; output_len];
-                let r = file::fs_control(self.file(handle)?, code, &input, &mut output)
-                    .map_err(|e| format!("{e:?}"))?;
-                format!("{} {}", outcome(r), Dump(&output))
-            }
+            } => self.control(
+                handle,
+                IRP_MJ_FILE_SYSTEM_CONTROL,
+                code,
+                Input::Bytes(input),
+                Output::Len(output_len),
+            )?,
             Step::Read { handle, len } => {
-                let mut buffer = vec![FILL; len];
-                let r =
-                    file::read(self.file(handle)?, &mut buffer).map_err(|e| format!("{e:?}"))?;
-                format!("{} {}", outcome(r), Dump(&buffer))
+                let file = self.file(handle)?;
+                let buffer = UserMemory::new(USER_OUTPUT, &vec![FILL; len])?;
+                let r = system_service(|| file::user_transfer(file, IRP_MJ_READ, buffer.buffer()))
+                    .map_err(|e| format!("{e:?}"))?;
+                format!("{} {}", outcome(r), Dump(&buffer.contents()))
             }
             Step::Write { handle, data } => {
+                let file = self.file(handle)?;
                 let data: Vec<u8> = data.bytes().collect();
-                let r = file::write(self.file(handle)?, &data).map_err(|e| format!("{e:?}"))?;
+                let buffer = UserMemory::new(USER_INPUT, &data)?;
+                let r = system_service(|| file::user_transfer(file, IRP_MJ_WRITE, buffer.buffer()))
+                    .map_err(|e| format!("{e:?}"))?;
                 format!("{}", outcome(r))
             }
+        })
+    }
+
+    /// A control request. A buffer the script gives as bytes or as a
+    /// length is the replayer's own, in the user range; one it gives as
+    /// an address is that address, whatever is or is not there. The
+    /// text shows the replayer's output buffer, or `-` for one that is
+    /// not its to show.
+    fn control(
+        &self,
+        handle: &str,
+        major: u8,
+        code: u32,
+        input: Input<'_>,
+        output: Output<'_>,
+    ) -> Result<String, String> {
+        let file = self.file(handle)?;
+        let at = |at: nk_oracle::At<'_>| Buffer {
+            address: at.address as usize,
+            len: at.len,
+        };
+        let (input, own_input) = match input {
+            Input::Bytes(bytes) => {
+                let bytes: Vec<u8> = bytes.bytes().collect();
+                let memory = UserMemory::new(USER_INPUT, &bytes)?;
+                (memory.buffer(), Some(memory))
+            }
+            Input::At(address) => (at(address), None),
+        };
+        let (output, own_output) = match output {
+            Output::Len(len) => {
+                let memory = UserMemory::new(USER_OUTPUT, &vec![FILL; len])?;
+                (memory.buffer(), Some(memory))
+            }
+            Output::At(address) => (at(address), None),
+        };
+        let r = system_service(|| file::user_control(file, major, code, input, output))
+            .map_err(|e| format!("{e:?}"))?;
+        drop(own_input);
+        Ok(match own_output {
+            Some(memory) => format!("{} {}", outcome(r), Dump(&memory.contents())),
+            None => format!("{} -", outcome(r)),
         })
     }
 

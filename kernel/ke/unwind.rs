@@ -94,7 +94,7 @@ impl fmt::Display for WalkError {
 }
 
 /// The stacks code on this processor can be running on right now.
-fn stacks() -> [Option<Stack>; 2] {
+pub(super) fn stacks() -> [Option<Stack>; 2] {
     // The DPC stack is the processor's, and a thread below
     // DISPATCH_LEVEL can change processors; but it is not on any DPC
     // stack either.
@@ -103,7 +103,7 @@ fn stacks() -> [Option<Stack>; 2] {
 }
 
 /// Read the stack slot at `address`, if it is one.
-fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
+pub(super) fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
     let on = |stack: &Stack| {
         address
             .checked_add(8)
@@ -121,13 +121,17 @@ fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
 /// innermost first. Returns the number of frames once the walk reaches
 /// the end of the stack.
 ///
-/// `start` is a capture, and the frames it describes must still be
-/// live: call this from the function that captured, or from one it
-/// calls.
-pub fn walk(start: &Regs, mut visit: impl FnMut(&Frame)) -> Result<usize, WalkError> {
+/// `start` is a capture, or the registers of code an interrupt stopped
+/// (`interrupted`); the frames it describes must still be live: call
+/// this from the function that captured, or from one it calls.
+pub fn walk(
+    start: &Regs,
+    interrupted: bool,
+    mut visit: impl FnMut(&Frame),
+) -> Result<usize, WalkError> {
     let stacks = stacks();
     let mut read = |address| read_slot(&stacks, address);
-    let (mut regs, mut interrupted) = (*start, false);
+    let (mut regs, mut interrupted) = (*start, interrupted);
     for count in 0..MAX_FRAMES {
         let (pc, sp) = (unwind::pc(&regs), unwind::sp(&regs));
         if pc == 0 {

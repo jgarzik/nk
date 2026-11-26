@@ -1,0 +1,8 @@
+# The way out of an exception puts the stack pointer back where the
+# frame began instead of where the frame says: a handler's change to it
+# is lost.
+scenario: aarch64
+fails: seh.fault.continue
+file: kernel/arch/aarch64/trap.rs
+replace:     ldr x29, [sp, #768]
+with:     add x29, sp, #816
