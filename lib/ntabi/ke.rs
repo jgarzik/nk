@@ -39,6 +39,10 @@ pub struct SINGLE_LIST_ENTRY {
     pub Next: *mut SINGLE_LIST_ENTRY,
 }
 
+/// `KIPI_BROADCAST_WORKER`: what `KeIpiGenericCall` runs on every
+/// processor.
+pub type KIPI_BROADCAST_WORKER = unsafe extern "C" fn(usize) -> usize;
+
 /// `KDEFERRED_ROUTINE`: what a DPC runs.
 pub type KDEFERRED_ROUTINE = unsafe extern "C" fn(*mut KDPC, *mut c_void, *mut c_void, *mut c_void);
 

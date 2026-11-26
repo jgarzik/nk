@@ -207,7 +207,10 @@ processor starts in becomes its idle thread.
 of them; one call is in progress at a time. A processor silent for five
 seconds is stuck with interrupts off, and the system stops. x86-64 uses
 this to drop a translation everywhere on unmap; arm64's invalidation
-broadcasts by itself.
+broadcasts by itself. `KeIpiGenericCall` is one such call whose routine
+holds each processor until all have been interrupted and only then runs
+the driver's function, on all at once: drivers use it to do something
+while nothing else in the system runs.
 
 The processor that stops the system stops the others first: by NMI on
 x86-64, by the most urgent software-generated interrupt on arm64 (which a
