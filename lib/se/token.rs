@@ -312,6 +312,13 @@ impl Token {
             })
     }
 
+    /// Whether this token may name `sid` the owner of an object: one
+    /// it may own with, or any at all with `SeRestorePrivilege`
+    /// enabled.
+    pub fn valid_owner(&self, sid: &[u8]) -> bool {
+        self.may_own(sid) || self.privilege_enabled(SE_RESTORE_PRIVILEGE)
+    }
+
     /// The integrity level: the last number of the label's SID
     /// (0x4000 for system). Zero, "untrusted", for a token with no label.
     pub fn integrity_level(&self) -> u32 {

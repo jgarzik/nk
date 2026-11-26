@@ -25,8 +25,10 @@
 //!   are not replaced. A new ACL is stored exactly as long as its
 //!   entries.
 //!
-//! Not done: whether the caller may set what it names (the caller's
-//! access check and the owner's validity are the kernel's to ask).
+//! Not here: whether the caller may set what it names. The kernel asks
+//! the caller's token whether a new owner is valid
+//! (`Token::valid_owner`); the access check is the object's owner's to
+//! make.
 //!
 //! [Query]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequerysecuritydescriptorinfo
 //! [Set]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sesetsecuritydescriptorinfo

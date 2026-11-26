@@ -977,6 +977,18 @@ answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
 is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
 forced, returns a self-relative pool copy, the caller's to free.
 
+A driver that keeps descriptors for its own objects (a file system)
+gets them from
+[`SeAssignSecurity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seassignsecurity)
+(the rules: `lib/se/assign.rs`), reads parts of one with
+`SeQuerySecurityDescriptorInfo` and changes one with
+`SeSetSecurityDescriptorInfo` (`lib/se/descriptor.rs`). Each descriptor
+handed out is one self-relative pool block, the driver's to keep and
+free; a changed descriptor is a new block and the old one is the
+driver's to free. Every creator is a kernel-mode creator, which may
+name any owner for a new object; changing an owner asks the caller's
+token, as on Windows.
+
 Where a descriptor lives:
 
 - A device's is in `DEVICE_OBJECT.SecurityDescriptor`, a documented

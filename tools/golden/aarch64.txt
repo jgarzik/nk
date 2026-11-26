@@ -98,6 +98,8 @@ se.access-check ok
 se.access-check.privileges ok
 se.privileges ok
 se.privileges.append ok
+se.assign ok
+se.descriptor-info ok
 cm.keys ok
 cm.values ok
 cm.delete ok

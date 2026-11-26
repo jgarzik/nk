@@ -7,6 +7,7 @@ use crate::mm::pool;
 use crate::ob::object;
 use crate::ps::process;
 use crate::se::access::*;
+use crate::se::descriptor::*;
 use crate::se::token::*;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
@@ -26,6 +27,8 @@ pub static GROUP: Group = Group {
         "se.access-check.privileges",
         "se.privileges",
         "se.privileges.append",
+        "se.assign",
+        "se.descriptor-info",
     ],
     run,
     manual: false,
@@ -969,6 +972,294 @@ fn append_privileges() -> Result<(), &'static str> {
     }
 }
 
+// ---- the descriptor of an object ------------------------------------------
+
+/// A descriptor a routine handed out, taken apart: control bits, owner,
+/// group, and the access list's entries (type, flags, mask, SID), or
+/// `None` for no list.
+type Dump = (u16, Vec<u8>, Vec<u8>, Option<Vec<(u8, u8, u32, Vec<u8>)>>);
+
+/// # Safety
+/// `descriptor` is a self-relative descriptor in a pool block.
+unsafe fn dump(descriptor: *mut c_void) -> Option<Dump> {
+    // SAFETY: per the contract; its length is what its parts say.
+    let block = unsafe {
+        let length = crate::se::RtlLengthSecurityDescriptor(descriptor) as usize;
+        core::slice::from_raw_parts(descriptor.cast::<u8>(), length)
+    };
+    let parts = nk_se::parse_relative(block)?;
+    let entries = parts.dacl.map(|dacl| {
+        nk_se::acl::aces(dacl)
+            .filter_map(|ace| {
+                let (mask, sid) = ace.basic()?;
+                Some((ace.kind, ace.flags, mask, sid.to_vec()))
+            })
+            .collect()
+    });
+    Some((
+        parts.control,
+        parts.owner.unwrap_or_default().to_vec(),
+        parts.group.unwrap_or_default().to_vec(),
+        entries,
+    ))
+}
+
+static USERS: Sid = sid(5, &[32, 545]);
+static CREATOR_OWNER: Sid = sid(3, &[0]);
+const OI: u8 = 0x01;
+const CI: u8 = 0x02;
+const NP: u8 = 0x04;
+const GENERIC_EXECUTE: u32 = 0x2000_0000;
+const GENERIC_WRITE: u32 = 0x4000_0000;
+
+/// A parent's list: an entry for each way of being inherited.
+static PARENT: [Ace; 7] = [
+    (ALLOW, OI, 1, &WORLD),
+    (ALLOW, CI, 2, &ADMINS),
+    (ALLOW, OI | CI | INHERIT_ONLY, GENERIC_EXECUTE, &SYSTEM),
+    (ALLOW, CI | NP, 8, &AUTHENTICATED),
+    (ALLOW, OI | CI, GENERIC_ALL, &CREATOR_OWNER),
+    (ALLOW, 0, 0x10, &USERS),
+    (DENY, OI, 0x20, &ANONYMOUS),
+];
+/// A list the creator supplies.
+static SUPPLIED: [Ace; 2] = [
+    (ALLOW, 0, GENERIC_READ, &WORLD),
+    (ALLOW, 0, GENERIC_ALL, &CREATOR_OWNER),
+];
+static WRITE: [Ace; 1] = [(ALLOW, 0, GENERIC_WRITE, &WORLD)];
+/// The list the System token gives a new object by default, mapped
+/// for a file.
+static FROM_TOKEN: [Ace; 2] = [
+    (ALLOW, 0, FILE_ALL, &SYSTEM),
+    (ALLOW, 0, 0x12_00A9, &ADMINS),
+];
+/// `SUPPLIED` as assigned to an object the system owns.
+static FROM_SUPPLIED: [Ace; 2] = [(ALLOW, 0, FILE_READ, &WORLD), (ALLOW, 0, FILE_ALL, &SYSTEM)];
+/// What an object that is not a directory inherits from `PARENT`,
+/// owned by administrators.
+static FROM_PARENT: [Ace; 4] = [
+    (ALLOW, 0, 1, &WORLD),
+    (ALLOW, 0, 0x12_00A0, &SYSTEM),
+    (ALLOW, 0, FILE_ALL, &ADMINS),
+    (DENY, 0, 0x20, &ANONYMOUS),
+];
+
+/// `SeAssignSecurity` as the System process's subject: the status and
+/// the new descriptor, or null.
+fn assign(parent: Option<&mut Absolute>, explicit: Option<&mut Absolute>) -> (i32, *mut c_void) {
+    let mut subject: SECURITY_SUBJECT_CONTEXT = dirty();
+    let subject = &raw mut subject;
+    let mut new = core::ptr::dangling_mut::<c_void>();
+    let pointer = |sd: Option<&mut Absolute>| sd.map_or(core::ptr::null_mut(), Absolute::pointer);
+    // SAFETY: the descriptors and the subject outlive the call.
+    let status = unsafe {
+        SeCaptureSubjectContext(subject);
+        let status = SeAssignSecurity(
+            pointer(parent),
+            pointer(explicit),
+            &raw mut new,
+            0,
+            subject,
+            &FILE_GENERIC_MAPPING,
+            1,
+        );
+        SeReleaseSubjectContext(subject);
+        status
+    };
+    (status, new)
+}
+
+/// The descriptor a new object gets: from the token alone, from what
+/// its creator supplies, from its parent.
+fn assign_security() -> Result<(), &'static str> {
+    type Entries = &'static [(u8, u8, u32, &'static Sid)];
+    let same = |dump: Option<Dump>, owner: &Sid, group: &Sid, entries: Option<Entries>| {
+        let expected = entries.map(|entries| {
+            entries
+                .iter()
+                .map(|&(kind, flags, mask, sid)| (kind, flags, mask, sid.bytes().to_vec()))
+                .collect::<Vec<_>>()
+        });
+        dump.is_some_and(|(control, its_owner, its_group, its_entries)| {
+            control == 0x8004
+                && its_owner == owner.bytes()
+                && its_group == group.bytes()
+                && its_entries == expected
+        })
+    };
+    let mut parent = Absolute::new(Some(&USERS), Some(&USERS), Dacl::List(&PARENT));
+    let mut supplied = Absolute::new(Some(&SYSTEM), Some(&ADMINS), Dacl::List(&SUPPLIED));
+    let mut stranger = Absolute::new(Some(&ANONYMOUS), Some(&ANONYMOUS), Dacl::Absent);
+    let mut null = Absolute::new(None, None, Dacl::Null);
+    let cases: [(Option<&mut Absolute>, Option<&mut Absolute>); 5] = [
+        (None, None),
+        (None, Some(&mut supplied)),
+        (Some(&mut parent), None),
+        (None, Some(&mut stranger)),
+        (None, Some(&mut null)),
+    ];
+    // What each must come to: owner, group, entries.
+    let expected: [(&Sid, &Sid, Option<Entries>); 5] = [
+        // All from the token: its default owner, group and list.
+        (&ADMINS, &SYSTEM, Some(&FROM_TOKEN)),
+        // Supplied: generic rights mapped, the creator-owner entry now
+        // the owner's.
+        (&SYSTEM, &ADMINS, Some(&FROM_SUPPLIED)),
+        // Inherited by an object that is not a directory.
+        (&ADMINS, &SYSTEM, Some(&FROM_PARENT)),
+        // An owner the token could not be, from a kernel-mode creator.
+        (&ANONYMOUS, &ANONYMOUS, Some(&FROM_TOKEN)),
+        // A list that is present and null.
+        (&ADMINS, &SYSTEM, None),
+    ];
+    let mut wrong = 0;
+    for (i, ((parent, explicit), (owner, group, entries))) in
+        cases.into_iter().zip(expected).enumerate()
+    {
+        let (status, mut new) = assign(parent, explicit);
+        // SAFETY: a descriptor the routine made, freed here.
+        let right = status == 0
+            && !new.is_null()
+            && unsafe {
+                let right = same(dump(new), owner, group, entries);
+                let freed = SeDeassignSecurity(&raw mut new);
+                right && freed == 0 && new.is_null()
+            };
+        if !right {
+            crate::kd::print(format_args!("se.assign: case {i}: status {status:#x}\n"));
+            wrong += 1;
+        }
+    }
+    if wrong != 0 {
+        return Err("a new object's descriptor is not the one Windows assigns");
+    }
+    Ok(())
+}
+
+/// Reading parts of an object's descriptor into a caller's buffer, and
+/// changing them.
+fn descriptor_info() -> Result<(), &'static str> {
+    const OWNER: u32 = 1;
+    const GROUP: u32 = 2;
+    const DACL: u32 = 4;
+    const TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+    const INVALID_OWNER: i32 = 0xC000_005Au32 as i32;
+    const NO_SECURITY: i32 = 0xC000_00D7u32 as i32;
+    let mut supplied = Absolute::new(Some(&SYSTEM), Some(&ADMINS), Dacl::List(&SUPPLIED));
+    let (status, mut object) = assign(None, Some(&mut supplied));
+    if status != 0 || object.is_null() {
+        return Err("no descriptor to work on");
+    }
+    // The header a query wrote: control bits and the four offsets.
+    let query = |object: &mut *mut c_void, information: u32, room: u32| {
+        let mut out = [0xA5u8; 128];
+        let mut length = room;
+        // SAFETY: the buffer is longer than any `room` used.
+        let status = unsafe {
+            SeQuerySecurityDescriptorInfo(
+                &raw const information,
+                out.as_mut_ptr(),
+                &raw mut length,
+                object,
+            )
+        };
+        let word = |at: usize| u32::from_le_bytes([out[at], out[at + 1], out[at + 2], out[at + 3]]);
+        (
+            status,
+            length,
+            word(0) >> 16,
+            [word(4), word(8), word(12), word(16)],
+        )
+    };
+    let set = |object: &mut *mut c_void, information: u32, modification: &mut Absolute| {
+        let old = *object;
+        // SAFETY: the object's descriptor and a local modification.
+        let status = unsafe {
+            SeSetSecurityDescriptorInfo(
+                core::ptr::null_mut(),
+                &raw const information,
+                modification.pointer(),
+                object,
+                1,
+                &FILE_GENERIC_MAPPING,
+            )
+        };
+        let changed = *object != old;
+        if changed {
+            // The one the object had is the caller's to free.
+            // SAFETY: a pool block from this module.
+            unsafe { crate::mm::pool::ExFreePoolWithTag(old, 0) };
+        }
+        (status, changed)
+    };
+    let verdict = (|| {
+        // Owner alone: 20 bytes of header and a 12-byte SID.
+        if query(&mut object, OWNER, 0) != (TOO_SMALL, 32, 0xA5A5, [0xA5A5_A5A5; 4]) {
+            return Err("a buffer too short was written, or not told the length needed");
+        }
+        if query(&mut object, OWNER, 128) != (0, 32, 0x8000, [20, 0, 0, 0]) {
+            return Err("the owner alone is not what a query for the owner gives");
+        }
+        // The list alone: 8 bytes and two entries of 20.
+        if query(&mut object, DACL, 128) != (0, 68, 0x8004, [0, 0, 0, 20]) {
+            return Err("the access list alone is not what a query for it gives");
+        }
+        if query(&mut object, 0, 128) != (0, 20, 0x8000, [0; 4]) {
+            return Err("a query for nothing does not give an empty descriptor");
+        }
+        let mut none = core::ptr::null_mut();
+        if query(&mut none, OWNER | DACL, 128) != (0, 20, 0x8000, [0; 4]) {
+            return Err("an object with no descriptor does not give an empty one");
+        }
+        // A new list: its generic right mapped; owner and group stay.
+        let mut write = Absolute::new(None, None, Dacl::List(&WRITE));
+        if set(&mut object, DACL, &mut write) != (0, true) {
+            return Err("a new access list was not set");
+        }
+        // SAFETY: the object's descriptor.
+        let now = unsafe { dump(object) }.ok_or("the new descriptor is not sound")?;
+        if now.1 != SYSTEM.bytes()
+            || now.2 != ADMINS.bytes()
+            || now.3 != Some(alloc::vec![(ALLOW, 0, 0x12_0116, WORLD.bytes().to_vec())])
+        {
+            return Err("a new access list did not leave the rest, or was not mapped");
+        }
+        // Owners: none given, one the token may be, one it may not.
+        let mut admins = Absolute::new(Some(&ADMINS), None, Dacl::Absent);
+        let mut anonymous = Absolute::new(Some(&ANONYMOUS), None, Dacl::Absent);
+        if set(&mut object, OWNER, &mut write) != (INVALID_OWNER, false)
+            || set(&mut object, OWNER, &mut anonymous) != (INVALID_OWNER, false)
+        {
+            return Err("an owner that is not valid was set, or not refused as Windows does");
+        }
+        if set(&mut object, OWNER, &mut admins) != (0, true)
+            // SAFETY: the object's descriptor.
+            || unsafe { dump(object) }.is_none_or(|now| now.1 != ADMINS.bytes())
+        {
+            return Err("an owner the token may be was not set");
+        }
+        // A group named and not given: the object is left without one.
+        if set(&mut object, GROUP, &mut write) != (0, true)
+            // SAFETY: the object's descriptor.
+            || unsafe { dump(object) }.is_none_or(|now| !now.2.is_empty())
+        {
+            return Err("a group named and not given did not take the group away");
+        }
+        if set(&mut none, DACL, &mut write) != (NO_SECURITY, false) {
+            return Err("an object with no descriptor had one set");
+        }
+        Ok(())
+    })();
+    // SAFETY: the object's descriptor, freed once.
+    let freed = unsafe { SeDeassignSecurity(&raw mut object) };
+    verdict?;
+    if freed != 0 || !object.is_null() {
+        return Err("the descriptor was not given back");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -976,4 +1267,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.access-check.privileges", access_check_privileges);
     r.check("se.privileges", privileges);
     r.check("se.privileges.append", append_privileges);
+    r.check("se.assign", assign_security);
+    r.check("se.descriptor-info", descriptor_info);
 }
