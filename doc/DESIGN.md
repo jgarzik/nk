@@ -2163,6 +2163,22 @@ does what the query says. NK's decisions:
   like any call into a driver (Exceptions). All the query holds is one
   pool block, which the guard of that call gives back.
 
+### The machine's description
+
+`\Registry\Machine\Hardware\Description\System` is not in any hive
+file: Windows' loader and kernel write it at every boot from what
+firmware says. NK writes, after the registry is built and before any
+driver starts (`kernel/hal/description.rs`, formats in
+`nk_hal::description`), the keys Microsoft's drivers read: the
+`MultifunctionAdapter` key whose `Identifier` is "ACPI BIOS", with the
+root ACPI table's address and the firmware's memory map as an E820 map
+(one range per region of the UEFI map, by kind), without which
+`acpi.sys` stops the system when its device starts; and the one whose
+`Identifier` is "PCI", a bus with nothing more said, as on the
+reference Windows. Drivers find these by `Identifier`. Windows has an
+"ISA" key before them and processor, BIOS and video keys beside them;
+NK writes none of those.
+
 ## Strings
 
 The rules are `lib/rtl`; the exports in `kernel/rtl` read and write a

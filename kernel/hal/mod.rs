@@ -3,6 +3,7 @@
 
 pub mod acpi;
 pub mod bus;
+pub mod description;
 pub mod dispatch;
 pub mod dma;
 pub mod interrupt;

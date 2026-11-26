@@ -50,6 +50,21 @@ fn root(mem: &impl PhysMem, rsdp: u64) -> Option<(&[u8], usize)> {
     Some((table(mem, root)?, width))
 }
 
+/// The physical address of the root table: the XSDT's when there is
+/// one, else the RSDT's. `None` without a usable RSDP.
+pub fn root_address(mem: &impl PhysMem, rsdp: u64) -> Option<u64> {
+    let r = mem.bytes(rsdp, 36)?;
+    if &r[..8] != b"RSD PTR " {
+        return None;
+    }
+    let xsdt = if r[15] >= 2 { u64_at(r, 24)? } else { 0 };
+    Some(if xsdt != 0 {
+        xsdt
+    } else {
+        u64::from(u32_at(r, 16)?)
+    })
+}
+
 /// The tables the root table lists, in its order.
 fn listed(mem: &impl PhysMem, rsdp: u64) -> impl Iterator<Item = &[u8]> {
     root(mem, rsdp).into_iter().flat_map(move |(root, width)| {
@@ -640,6 +655,7 @@ mod tests {
             let dsdt = sdt(b"DSDT", &[7; 12]);
             fw.0[0x800..][..dsdt.len()].copy_from_slice(&dsdt);
 
+            assert_eq!(root_address(&fw, 0x1000), Some(0x1100));
             let find = |sig, id, table| lookup(&fw, 0x1000, sig, id, table);
             let name: &[u8] = if xsdt { b"XSDT" } else { b"RSDT" };
             assert_eq!(&find(b"RSDT", None, None).unwrap()[..4], name);
