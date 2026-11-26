@@ -1,0 +1,9 @@
+# A thread that took on the anonymous token hands out, when its token
+# is opened, the one anonymous token every thread shares instead of a
+# copy.
+scenario: aarch64
+fails: se.anonymous
+file: kernel/se/impersonate.rs
+occurrence: 2
+replace:                 copy_on_open: true,
+with:                 copy_on_open: false,

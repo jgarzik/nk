@@ -1451,10 +1451,17 @@ Where a descriptor lives:
 ## Tokens and access state
 
 A token is an object whose body is NK's own (`nk_se::token::Token`):
-drivers treat `TOKEN` as opaque and ask through routines. There is one,
-the System process's, with the user, groups and privileges of Windows'
-SYSTEM token (the table at `Token::system` says which of those facts
-Microsoft documents), and the copies made of it.
+drivers treat `TOKEN` as opaque and ask through routines. There is one
+logon, the system's: the System process's token has the user, groups
+and privileges of Windows' SYSTEM token (the table at `Token::system`
+says which of those facts Microsoft documents), and every other token
+is a copy of it, but one. That one is the anonymous logon's
+(`Token::anonymous`, S-1-5-7), made at boot as Windows makes it, which
+a thread takes on to act as nobody (`ZwImpersonateAnonymousToken`):
+it is in no group, not even everyone, and holds no privilege. Its
+integrity level is "untrusted", by which Windows would also deny it
+write access to objects that carry no label; NK applies no mandatory
+policy.
 
 A thread may impersonate: act with another token than its process's.
 It keeps that token where Windows does, since Microsoft's drivers are

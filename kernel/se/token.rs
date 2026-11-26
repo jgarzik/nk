@@ -71,6 +71,23 @@ pub unsafe fn of<'a>(body: *mut u8) -> &'a Token {
     unsafe { &*body.cast::<Token>() }
 }
 
+/// The anonymous logon's token (`Token::anonymous`): made once at
+/// boot, as on Windows, and kept for ever.
+static ANONYMOUS: core::sync::atomic::AtomicPtr<u8> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+/// Make the anonymous logon's token. Called once, before any driver.
+pub fn init() -> Result<(), &'static str> {
+    let token = create(Token::anonymous()).ok_or("no memory for the anonymous token")?;
+    ANONYMOUS.store(token, Ordering::Release);
+    Ok(())
+}
+
+/// The anonymous logon's token: an object that is never freed.
+pub fn anonymous() -> *mut u8 {
+    ANONYMOUS.load(Ordering::Acquire)
+}
+
 /// The two tokens of a subject context: the client's (null when the
 /// thread impersonated nobody) and the primary.
 ///

@@ -46,6 +46,7 @@ pub fn init(time: u64) -> Result<(), &'static str> {
         .ok_or("no memory for the System process")?;
     let token = crate::se::token::create(nk_se::token::Token::system())
         .ok_or("no memory for the System process's token")?;
+    crate::se::token::init()?;
     // SAFETY: a fresh, zeroed object of a process's size, which the pool
     // aligns to 16 bytes; nothing else has it yet.
     unsafe {

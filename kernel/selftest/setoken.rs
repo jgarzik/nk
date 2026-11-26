@@ -37,6 +37,7 @@ pub static GROUP: Group = Group {
         "se.token-handles",
         "se.impersonation",
         "se.client-security",
+        "se.anonymous",
     ],
     run,
     manual: false,
@@ -1986,6 +1987,79 @@ fn client_security() -> Result<(), &'static str> {
     on_a_thread(client_security_on_thread)
 }
 
+// ---- the anonymous logon --------------------------------------------------
+
+static FOR_ANONYMOUS: [Ace; 1] = [(ALLOW, 0, 1, &ANONYMOUS)];
+static UNTRUSTED_LABEL: Sid = sid(16, &[0]);
+
+/// A thread takes on the anonymous token and is nobody: as `nkc-se`
+/// does, with the answers of the pinned kernel's code.
+fn anonymous_on_thread() -> Result<(), &'static str> {
+    let nobody = anonymous();
+    if ZwImpersonateAnonymousToken(CURRENT_THREAD) != 0 {
+        return Err("the anonymous token was not taken on");
+    }
+    // At the impersonation level, copied on open.
+    let worn = wearing();
+    // The token itself: a primary token whose user is S-1-5-7.
+    // SAFETY: the anonymous token lives for ever; each block is read
+    // within its length and freed once.
+    let itself = unsafe {
+        let user = block_of(nobody, 1, 2);
+        let groups = block_of(nobody, 2, 3);
+        let right = SeTokenType(nobody.cast()) == 1
+            && query(nobody, 9).0 == INVALID_INFO_CLASS
+            && query(nobody, 25).1 as u32 == 0
+            && user
+                .as_ref()
+                .is_some_and(|(_, user)| sid_at(user[0]) == ANONYMOUS.bytes())
+            && groups.as_ref().is_some_and(|(_, groups)| {
+                groups[0] as u32 == 1
+                    && groups[2] as u32 == 0x60
+                    && sid_at(groups[1]) == UNTRUSTED_LABEL.bytes()
+            });
+        for (block, _) in user.into_iter().chain(groups) {
+            free(block);
+        }
+        right
+    };
+    // As anonymous a list for the system gives nothing, one for
+    // anonymous does; and nobody holds no privilege.
+    let (as_system, as_anonymous) = (check_now(&ALLOW_R, 1), check_now(&FOR_ANONYMOUS, 1));
+    let privileged = SeSinglePrivilegeCheck(luid(23), 1);
+    // The thread's token, opened: a copy, an impersonation token.
+    let (status, opened) = open_thread_token();
+    let user = ask(opened, 1, 64);
+    let copied = status == 0
+        && token_of(opened) != nobody.cast()
+        && brief(opened) == (2, 2)
+        && (user.0, user.1) == (0, 28)
+        && user.2[2] == 0x0500_0000_0000_0101
+        && user.2[3] as u32 == 7;
+    crate::ps::ZwClose(opened);
+    let put_off = wear(core::ptr::null_mut(), 8);
+    if worn != (nobody.cast(), 1, 0, 2) {
+        return Err("the thread does not wear the anonymous token at the impersonation level");
+    }
+    if !itself {
+        return Err("the anonymous token is not a primary token of S-1-5-7, untrusted");
+    }
+    if as_system != (DENIED, 0) || as_anonymous != (0, 1) || privileged != 0 {
+        return Err("a check made while anonymous was not made as anonymous");
+    }
+    if !copied {
+        return Err("the anonymous thread's token, opened, is not a copy of it");
+    }
+    if put_off != 0 || !wearing().0.is_null() || check_now(&ALLOW_R, 1) != (0, 1) {
+        return Err("the thread is not the system again");
+    }
+    Ok(())
+}
+
+fn anonymous_logon() -> Result<(), &'static str> {
+    on_a_thread(anonymous_on_thread)
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -1999,4 +2073,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.token-handles", token_handles);
     r.check("se.impersonation", impersonation);
     r.check("se.client-security", client_security);
+    r.check("se.anonymous", anonymous_logon);
 }

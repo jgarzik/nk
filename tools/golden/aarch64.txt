@@ -134,6 +134,7 @@ se.token-query ok
 se.token-handles ok
 se.impersonation ok
 se.client-security ok
+se.anonymous ok
 cm.keys ok
 cm.values ok
 cm.delete ok

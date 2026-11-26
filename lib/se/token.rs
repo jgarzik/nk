@@ -15,6 +15,8 @@ pub type Luid = u64;
 
 /// `SYSTEM_LUID`: the logon session of the system itself.
 pub const SYSTEM_LUID: Luid = 0x3E7;
+/// `ANONYMOUS_LOGON_LUID`: the logon session of the anonymous logon.
+pub const ANONYMOUS_LOGON_LUID: Luid = 0x3E6;
 
 /// Group attributes (`SE_GROUP_*`).
 pub const SE_GROUP_MANDATORY: u32 = 0x1;
@@ -101,10 +103,14 @@ pub const CREATOR_GROUP: [u8; 12] = known(3, &[1]);
 pub const OWNER_RIGHTS: [u8; 12] = known(3, &[4]);
 /// S-1-5-11.
 pub const AUTHENTICATED_USERS: [u8; 12] = known(5, &[11]);
+/// S-1-5-7, the anonymous logon.
+pub const ANONYMOUS_LOGON: [u8; 12] = known(5, &[7]);
 /// S-1-5-18.
 pub const LOCAL_SYSTEM: [u8; 12] = known(5, &[18]);
 /// S-1-5-32-544.
 pub const ADMINISTRATORS: [u8; 16] = known(5, &[32, 544]);
+/// S-1-16-0, the untrusted integrity level.
+pub const UNTRUSTED_LABEL: [u8; 12] = known(16, &[0]);
 /// S-1-16-16384, the system integrity level.
 pub const SYSTEM_LABEL: [u8; 12] = known(16, &[0x4000]);
 
@@ -272,6 +278,53 @@ impl Token {
             impersonation_level: SECURITY_ANONYMOUS,
             token_id: 0,
             authentication_id: SYSTEM_LUID,
+            modified_id: 0,
+            expiration_time: SYSTEM_TOKEN_EXPIRATION,
+            session_id: 0,
+            dynamic_charged: 0,
+            dynamic_available: 0,
+        }
+    }
+
+    /// The token of the anonymous logon, which a thread takes on to act
+    /// as nobody in particular (`NtImpersonateAnonymousToken`). The
+    /// pinned kernel builds two at boot; this is the one it uses unless
+    /// the registry says that everyone includes anonymous
+    /// (`EveryoneIncludesAnonymous`), which NK's does not. As that
+    /// kernel builds it:
+    ///
+    /// - user S-1-5-7, no group but the untrusted mandatory label
+    ///   (S-1-16-0), no privilege;
+    /// - new objects are owned by the user, with S-1-5-7 as their
+    ///   group, and get a list that allows everyone and the anonymous
+    ///   logon `0xF01FF` each, in 56 bytes of which 8 are spare;
+    /// - a primary token, logon session `ANONYMOUS_LOGON_LUID`, session
+    ///   0, expiring when the System token does.
+    pub fn anonymous() -> Token {
+        let mut dacl = [0u8; ACL_HEADER + 20 + 20 + 8];
+        dacl[0] = ACL_REVISION;
+        dacl[2] = dacl.len() as u8;
+        let added = add_access_allowed(&mut dacl, 2, 0x000F_01FF, &WORLD)
+            .and_then(|()| add_access_allowed(&mut dacl, 2, 0x000F_01FF, &ANONYMOUS_LOGON));
+        debug_assert_eq!(added, Ok(()));
+        Token {
+            user: SidAndAttributes {
+                sid: ANONYMOUS_LOGON.to_vec(),
+                attributes: 0,
+            },
+            groups: [SidAndAttributes {
+                sid: UNTRUSTED_LABEL.to_vec(),
+                attributes: SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED,
+            }]
+            .into(),
+            privileges: Vec::new(),
+            owner: ANONYMOUS_LOGON.to_vec(),
+            primary_group: ANONYMOUS_LOGON.to_vec(),
+            default_dacl: Some(dacl.to_vec()),
+            token_type: TokenType::Primary,
+            impersonation_level: SECURITY_ANONYMOUS,
+            token_id: 0,
+            authentication_id: ANONYMOUS_LOGON_LUID,
             modified_id: 0,
             expiration_time: SYSTEM_TOKEN_EXPIRATION,
             session_id: 0,
@@ -518,6 +571,27 @@ mod tests {
         token.groups[0].attributes = SE_GROUP_OWNER;
         let copy = token.duplicate(TokenType::Primary, 0, true);
         assert_eq!(copy.groups[0].sid, ADMINISTRATORS);
+    }
+
+    #[test]
+    fn the_anonymous_token_is_nobody() {
+        let token = Token::anonymous();
+        assert_eq!(token.user.sid, ANONYMOUS_LOGON);
+        assert_eq!(valid_sid(&ANONYMOUS_LOGON), Some(12));
+        assert_eq!(token.token_type, TokenType::Primary);
+        assert_eq!(token.authentication_id, 0x3E6);
+        assert!(token.privileges.is_empty());
+        // Nobody's groups: not even everyone.
+        assert!(token.has_sid(&ANONYMOUS_LOGON, false));
+        assert!(!token.has_sid(&WORLD, false));
+        assert!(!token.has_sid(&AUTHENTICATED_USERS, false));
+        assert_eq!(token.integrity_level(), 0, "untrusted");
+        assert_eq!(token.groups[0].sid, UNTRUSTED_LABEL);
+        assert!(token.may_own(&ANONYMOUS_LOGON) && !token.may_own(&WORLD));
+        // The default list: two entries in 56 bytes, 48 of them used.
+        let dacl = token.default_dacl.unwrap();
+        assert_eq!(dacl[..8], [2, 0, 56, 0, 2, 0, 0, 0]);
+        assert_eq!(acl_used(&dacl), Some(48));
     }
 
     #[test]

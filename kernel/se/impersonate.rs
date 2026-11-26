@@ -329,6 +329,39 @@ pub unsafe extern "C" fn SeImpersonateClientEx(
     STATUS_SUCCESS
 }
 
+/// `ZwImpersonateAnonymousToken` (`NtImpersonateAnonymousToken`): make
+/// the thread a handle names impersonate the anonymous logon
+/// (`token::anonymous`), at `SecurityImpersonation`, so that opening
+/// its token copies it: so the pinned kernel. Windows refuses a
+/// process whose own token is restricted; the System process's is not.
+pub extern "C" fn ZwImpersonateAnonymousToken(thread_handle: *mut c_void) -> NTSTATUS {
+    let found = handle::reference_for(
+        thread_handle as u64,
+        Some(&raw const object::THREAD_TYPE),
+        0,
+        Mode::Kernel,
+    );
+    let thread = match found {
+        Ok((thread, _)) => thread,
+        Err(status) => return status,
+    };
+    // SAFETY: the thread is referenced until the last line; the
+    // anonymous token lives for ever.
+    unsafe {
+        set(
+            thread.cast(),
+            Some(Impersonation {
+                token: token::anonymous(),
+                level: SECURITY_IMPERSONATION,
+                effective_only: false,
+                copy_on_open: true,
+            }),
+        );
+        object::dereference(thread);
+    }
+    STATUS_SUCCESS
+}
+
 /// `ThreadImpersonationToken` of `ZwSetInformationThread`: make
 /// `thread` impersonate with the token a handle names, or nobody for a
 /// null handle. The token must be an impersonation token

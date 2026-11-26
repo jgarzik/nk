@@ -387,6 +387,7 @@ static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
     export!(Implemented, se::zwtoken::ZwDuplicateToken),
+    export!(Implemented, se::impersonate::ZwImpersonateAnonymousToken),
     export!(Implemented, se::zwtoken::ZwOpenProcessTokenEx),
     export!(Implemented, se::impersonate::ZwOpenThreadTokenEx),
     export!(Implemented, se::zwtoken::ZwQueryInformationToken),
