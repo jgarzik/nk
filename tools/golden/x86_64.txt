@@ -144,6 +144,7 @@ se.audit ok
 cm.keys ok
 cm.values ok
 cm.delete ok
+cm.delete.closed-in-call ok
 cm.delete.value ok
 cm.enumerate.keys ok
 cm.enumerate.values ok

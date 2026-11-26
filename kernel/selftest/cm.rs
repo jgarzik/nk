@@ -5,6 +5,7 @@ use crate::cm::{
     RtlQueryRegistryValues, RtlQueryRegistryValuesEx, ZwCreateKey, ZwDeleteKey, ZwDeleteValueKey,
     ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey, ZwQueryKey, ZwQueryValueKey, ZwSetValueKey,
 };
+use crate::ke::thread;
 use crate::ps::ZwClose;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
@@ -20,6 +21,7 @@ pub static GROUP: Group = Group {
         "cm.keys",
         "cm.values",
         "cm.delete",
+        "cm.delete.closed-in-call",
         "cm.delete.value",
         "cm.enumerate.keys",
         "cm.enumerate.values",
@@ -340,6 +342,125 @@ fn delete() -> Result<(), &'static str> {
         return Err("a deleted key's name could not be used again for a new, empty key");
     }
     Ok(())
+}
+
+/// What the second thread of `closed_in_call` is told: the handle to
+/// set a value through and the number of the round (`u32::MAX` to
+/// end); and what it answers: the round it has done and the status.
+static RACE_HANDLE: AtomicUsize = AtomicUsize::new(0);
+static RACE_ROUND: AtomicU32 = AtomicU32::new(0);
+static RACE_DONE: AtomicU32 = AtomicU32::new(0);
+static RACE_STATUS: AtomicU32 = AtomicU32::new(0);
+/// The value's data: long, so that copying it gives the other thread
+/// time between the handle's look-up and the key's change.
+static RACE_DATA: [u8; 1 << 20] = [0; 1 << 20];
+
+/// Set a value through each round's handle.
+fn set_stray(_: usize) {
+    let alone = crate::ke::smp::online_count() == 1;
+    let mut done = 0;
+    loop {
+        let round = RACE_ROUND.load(Ordering::Acquire);
+        if round == u32::MAX {
+            return;
+        }
+        if round == done {
+            if alone {
+                thread::yield_now();
+            }
+            core::hint::spin_loop();
+            continue;
+        }
+        let handle = RACE_HANDLE.load(Ordering::Acquire) as *mut c_void;
+        RACE_STATUS.store(set(handle, "stray", 3, &RACE_DATA), Ordering::Release);
+        done = round;
+        RACE_DONE.store(round, Ordering::Release);
+    }
+}
+
+/// A call that has a key handle acts on the key the handle named when
+/// the call was made, or fails, whatever becomes of the handle
+/// meanwhile. One thread sets a value through a handle; this one
+/// deletes the key through it, closes it and makes another key, which
+/// may be given the deleted key's place in the registry. The value is
+/// in the first key or nowhere: never in the second.
+fn closed_in_call() -> Result<(), &'static str> {
+    const ROUNDS: u32 = 256;
+    const KEY_DELETED: u32 = 0xC000_017C;
+    const INVALID_HANDLE: u32 = 0xC000_0008;
+    let null = core::ptr::null_mut();
+    const SECOND_FROM_ROOT: &str = "Machine\\System\\CurrentControlSet\\Services\\NkRaceSecond";
+    let first = alloc::format!("{SERVICES}\\NkRaceFirst");
+    let second = alloc::format!("{SERVICES}\\NkRaceSecond");
+    let threads = thread::count();
+    RACE_ROUND.store(0, Ordering::Release);
+    RACE_DONE.store(0, Ordering::Release);
+    thread::create(set_stray, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    let wait = |ready: &dyn Fn() -> bool| {
+        let deadline = crate::ke::time::interrupt_time() + 100_000_000;
+        while !ready() && crate::ke::time::interrupt_time() < deadline {
+            thread::yield_now();
+        }
+        ready()
+    };
+    let mut verdict = Ok(());
+    // How the calls ended: done before the key went, refused for a
+    // deleted key, refused for a closed handle.
+    let mut ended = [0u32; 3];
+    for round in 1..=ROUNDS {
+        let (created, handle, _) = key(&first, null, true);
+        if created != 0 {
+            verdict = Err("a key could not be created");
+            break;
+        }
+        RACE_HANDLE.store(handle as usize, Ordering::Release);
+        RACE_ROUND.store(round, Ordering::Release);
+        // A little later each round, from at once to about the time
+        // the data take to copy: the deletion meets the call at every
+        // point of it.
+        crate::ke::time::stall(u64::from(round % 64) * 2);
+        let deleted = ZwDeleteKey(handle);
+        ZwClose(handle);
+        // The second key is made without a handle: the next handle
+        // opened would have the closed one's number, and the other
+        // thread, if it has not looked its handle up yet, would be
+        // right to find the second key by it.
+        let made = crate::cm::write(SECOND_FROM_ROOT, &[]);
+        let answered = wait(&|| RACE_DONE.load(Ordering::Acquire) == round);
+        let (opened, other, _) = key(&second, null, false);
+        let stray = query(other, "stray", 2, 28).0 != NOT_FOUND;
+        let removed = ZwDeleteKey(other);
+        ZwClose(other);
+        let status = RACE_STATUS.load(Ordering::Acquire);
+        if deleted != 0 || made.is_err() || opened != 0 || removed != 0 || !answered {
+            verdict = Err("a key could not be deleted and another made while a value was set");
+            break;
+        }
+        if stray {
+            verdict = Err("a value set through a handle closed during the call is in another key");
+            break;
+        }
+        match status {
+            0 => ended[0] += 1,
+            KEY_DELETED => ended[1] += 1,
+            INVALID_HANDLE => ended[2] += 1,
+            _ => {
+                verdict = Err("setting a value through a handle being closed failed otherwise");
+                break;
+            }
+        }
+    }
+    RACE_ROUND.store(u32::MAX, Ordering::Release);
+    if !wait(&|| thread::count() == threads) {
+        return Err("the second thread did not end");
+    }
+    kprintln!(
+        "cm: values set before the key was deleted: {}; refused for a deleted key: {}; for a closed handle: {}",
+        ended[0],
+        ended[1],
+        ended[2]
+    );
+    verdict
 }
 
 fn delete_named(key: *mut c_void, name: &str) -> u32 {
@@ -2128,6 +2249,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
     r.check("cm.delete", delete);
+    r.check("cm.delete.closed-in-call", closed_in_call);
     r.check("cm.delete.value", || with_key(delete_value));
     r.check("cm.enumerate.keys", || with_key(enumerate_keys));
     r.check("cm.enumerate.values", || with_key(enumerate_values));

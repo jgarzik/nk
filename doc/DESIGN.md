@@ -1403,7 +1403,11 @@ are no layered keys, so the form that describes a value of one
 (`KeyValueLayerInformation`) is refused the same way. A deleted value leaves its
 place in the order to the next; set again, it is the key's last. A key
 without subkeys can be
-deleted: gone by name at once, open handles good only for closing. No
+deleted: gone by name at once, open handles good only for closing. A
+call that was given a handle keeps the key's object until it returns,
+so a handle closed under it, and a key deleted and another made
+meanwhile, leave the call with the key it was asked about
+(`STATUS_KEY_DELETED`) and not with whichever key has its place. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
