@@ -13,6 +13,7 @@ pub static GROUP: Group = Group {
         "hal.system-information",
         "hal.interrupt-targets",
         "hal.description",
+        "hal.queries",
         "kd.variables",
     ],
     run,
@@ -25,6 +26,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("hal.system-information", crate::hal::sysinfo::test);
     r.check("hal.interrupt-targets", crate::hal::target::test);
     r.check("hal.description", crate::hal::description::test);
+    r.check("hal.queries", crate::hal::query::test);
     r.check("kd.variables", || variables::variables_test(info));
 }
 

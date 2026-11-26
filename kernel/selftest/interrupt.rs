@@ -255,6 +255,9 @@ fn translate(line: Line) -> Result<(u32, u8), &'static str> {
         if info.line != Some(line) || info.level != first.level {
             return Err("the vector is not known as the line's");
         }
+        if crate::hal::query::HalConvertDeviceIdtToIrql(first.vector) != first.level {
+            return Err("HalConvertDeviceIdtToIrql is not the IRQL of the vector's translation");
+        }
         if routing::message(first.vector).is_some() {
             return Err("a line has a message");
         }

@@ -1379,6 +1379,19 @@ destination: by a processor's own identifier (physical mode) on both
 architectures, with messages deliverable where the architecture's
 controller takes them.
 
+Four more undocumented exports answer from the same facts
+(`kernel/hal/query.rs`). `HalGetProcessorIdByNtNumber` gives a
+processor's identifier: its local APIC's on x86-64, its `MPIDR`
+affinity on arm64, where one that does not fit 32 bits stops the system
+(NK has no arm64 Windows kernel to learn how that is named).
+`HalConvertDeviceIdtToIrql` is Windows' rule on x86-64 and the level NK
+gives the interrupt id on arm64. `HalGetMessageRoutingInfo` routes a
+message as it stands, since NK remaps no interrupts: its own address
+and data come back, for one running processor or all of them in
+physical mode, and any other target is refused. NK takes no caching
+requirements from firmware, so `HalGetMemoryCachingRequirements` finds
+none for any range, as Windows does with an empty table.
+
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
 speaking no Windows debugger protocol; `KdComPortInUse` names the I/O

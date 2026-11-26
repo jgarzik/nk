@@ -138,6 +138,12 @@ impl InterruptVectors {
     pub fn is_device(vector: u32) -> bool {
         is_line(vector)
     }
+
+    /// The IRQL of a device's interrupt on `vector`: the level its
+    /// interrupt id has.
+    pub fn device_irql(vector: u32) -> u8 {
+        spi_level(vector)
+    }
 }
 
 /// A source of real interrupts for the self-tests: the console UART's
