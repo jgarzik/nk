@@ -2034,8 +2034,23 @@ away a registration its drivers left behind).
 
 **Registered and never acted on.** Coalescing callbacks
 (`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
-platform's low-power idle state) and a device's flags for that state
-(`PoDirectedDripsSetDeviceFlags`).
+platform's low-power idle state), a device's flags for that state
+(`PoDirectedDripsSetDeviceFlags`, and the two internal requests of
+`ZwPowerInformation` through which `storport.sys` sets and clears
+them) and the reasons a sleep state is unavailable
+(`ZwPowerInformation`, `SystemPowerLoggingEntry`: `acpi.sys` logs one
+for each sleep state the firmware lacks; one entry a reason, a second
+refused, `nk_po::logging`).
+
+**Power information** (`ZwPowerInformation`, `kernel/po/mod.rs`). The
+platform is not always on, always connected (`PlatformInformation`),
+so the question whether a device would keep it out of the low-power
+idle state is not supported (`QueryPotentialDripsConstraint`, asked by
+`pci.sys` as it starts a device), and the notice that the firmware's
+tables can be read (`FirmwareTableInformationRegistered`, from
+`acpi.sys`) changes nothing: Windows reads from them again whether the
+platform has that state. Any other level stops the system, naming
+itself.
 
 **Shutting down.** A driver's request for a shutdown that ends with
 the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button

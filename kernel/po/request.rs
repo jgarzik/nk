@@ -350,6 +350,10 @@ pub extern "C" fn PoQueryWatchdogTime(_pdo: *mut DEVICE_OBJECT, _seconds: *mut u
     0
 }
 
+/// The flags of a device the pinned kernel accepts for the platform's
+/// low-power idle state.
+const DRIPS_DEFINED: u32 = 0x3F;
+
 /// `PoDirectedDripsSetDeviceFlags` (exported, not documented): how a device is to be treated when
 /// the platform is put into its low-power idle state. The flags are
 /// recorded and never acted on: NK has no such state. Refused with
@@ -362,13 +366,11 @@ pub unsafe extern "C" fn PoDirectedDripsSetDeviceFlags(
     device: *mut DEVICE_OBJECT,
     flags: u32,
 ) -> NTSTATUS {
-    /// The flags the pinned kernel accepts.
-    const DEFINED: u32 = 0x3F;
     // SAFETY: per the contract.
     unsafe {
         if device.is_null()
             || (*(*device).DeviceObjectExtension).DeviceNode.is_null()
-            || flags & !DEFINED != 0
+            || flags & !DRIPS_DEFINED != 0
         {
             return STATUS_INVALID_PARAMETER;
         }
@@ -378,6 +380,34 @@ pub unsafe extern "C" fn PoDirectedDripsSetDeviceFlags(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         (*block).drips_flags |= flags;
+    }
+    STATUS_SUCCESS
+}
+
+/// What the pinned kernel's `PoDirectedDripsClearDeviceFlags` does,
+/// which drivers reach through `ZwPowerInformation`: take `flags` back
+/// from those recorded for `device`. Refused as
+/// [`PoDirectedDripsSetDeviceFlags`] refuses.
+///
+/// # Safety
+/// `device` is null or a live device object.
+pub unsafe fn drips_clear_device_flags(device: *mut DEVICE_OBJECT, flags: u32) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        if device.is_null()
+            || (*(*device).DeviceObjectExtension).DeviceNode.is_null()
+            || flags & !DRIPS_DEFINED != 0
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let _power = POWER.lock();
+        // A device with no block has no flags to take back.
+        let block = (*(*device).DeviceObjectExtension)
+            .Dope
+            .cast::<super::Dope>();
+        if !block.is_null() {
+            (*block).drips_flags &= !flags;
+        }
     }
     STATUS_SUCCESS
 }
