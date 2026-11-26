@@ -1,0 +1,17 @@
+[package]
+name = "nk-disk"
+description = "A disk as its requestor sees it: the data disk's pattern, what a disk answers its control codes with, and which transfers it takes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+nk-ntabi = { path = "../ntabi" }
+
+[lints]
+workspace = true

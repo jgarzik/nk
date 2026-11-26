@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-disk"
+version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
+
+[[package]]
 name = "nk-etw"
 version = "0.2.0"
 dependencies = [
