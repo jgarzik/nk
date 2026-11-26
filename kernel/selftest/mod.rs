@@ -17,6 +17,7 @@ mod ex;
 pub mod except;
 mod library;
 mod loader;
+mod mslib;
 mod mutex;
 mod neg;
 mod null;
@@ -142,6 +143,7 @@ pub static GROUPS: &[&Group] = &[
     &loader::GROUP,
     &library::GROUP,
     &null::GROUP,
+    &mslib::GROUP,
     &sioctl::GROUP,
     &cancel::GROUP,
     &oracle::GROUP,

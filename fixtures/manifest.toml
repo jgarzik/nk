@@ -24,6 +24,15 @@ sha256 = "876185b0fc0e802ff7954d84d6255fd61eeff217ace56e61510e1fa1f56cdef1"
 status = "microsoft-inbox"
 note = "null.sys 10.0.19041.1; the same binary ships in Windows 10 2004 through 22H2"
 
+[[fixture]]
+name = "wpprecorder"
+arch = "x86_64"
+file = "wpprecorder.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wpprecorder.sys/15060D0011000/wpprecorder.sys"
+sha256 = "7b4e4c2c0f70836e5117d04f819cd928b73b1aa7f3051b0079e298ba902dca21"
+status = "microsoft-inbox"
+note = "WppRecorder.sys 10.0.19041.1, the WPP trace recorder: an export driver"
+
 # null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
 # image size of the Windows 10 ARM64 build, which no public index lists.
 # Do not substitute a Windows 11 binary.

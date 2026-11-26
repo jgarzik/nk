@@ -238,6 +238,7 @@ null.close skip
 io.open.missing-name skip
 null.unload skip
 null.no-leak skip
+ms.wpprecorder skip
 sioctl.load ok
 sioctl.open ok
 sioctl.buffered ok

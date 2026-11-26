@@ -423,9 +423,18 @@ pub unsafe extern "C" fn MmGetSystemRoutineAddress(
                 .map(|c| c.ok().filter(|c| c.is_ascii_graphic()).unwrap_or('?'))
                 .collect();
             kprintln!("NK-LOOKUP {name} absent");
+            ABSENT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             core::ptr::null_mut()
         }
     }
+}
+
+/// Names asked for by `MmGetSystemRoutineAddress` and not found.
+static ABSENT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// How many look-ups by name have found nothing, so far.
+pub fn absent_lookups() -> usize {
+    ABSENT.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 /// Print the table for the ledger: `NK-EXPORT <module> <name> <state>`.
