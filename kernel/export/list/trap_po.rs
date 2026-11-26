@@ -7,7 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    PoCallDriver,
     PoCreateThermalRequest,
     PoDeleteThermalRequest,
     PoDirectedDripsSetDeviceFlags,
@@ -43,7 +42,6 @@ trap_list!(
     PoSetThermalActiveCooling,
     PoSetThermalPassiveCooling,
     PoShutdownBugCheck,
-    PoStartNextPowerIrp,
     PoUnregisterCoalescingCallback,
     PoUnregisterPowerSettingCallback,
 );
