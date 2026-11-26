@@ -506,3 +506,21 @@ sha256 = "cdd23c4fa5e025f91bef406ecb1cb8692e83391b590dc3e0b282156c540542a6"
 status = "nk-authored"
 boot = false
 note = "nk-fixtures v6 nkc/nkc-libbad.c: imports a name nkc-lib.sys lacks"
+
+[[fixture]]
+name = "nkc-rtl"
+arch = "x86_64"
+file = "nkc-rtl.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.x64.nkc-rtl.sys"
+sha256 = "5c80d7181c541582fc7ee651b94756499516fbc87c103c0afe16b8d70aad9b97"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"
+
+[[fixture]]
+name = "nkc-rtl"
+arch = "aarch64"
+file = "nkc-rtl.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.arm64.nkc-rtl.sys"
+sha256 = "0b2faf232c39383d1f677b9aeefabb7f52d766734d379add0898b9b2a1af15b5"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"
