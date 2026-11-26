@@ -755,7 +755,7 @@ fn sid_text() -> Result<(), &'static str> {
     {
         return Err("a SID's text is wrong");
     }
-    if text(&wide_authority, "S-1-0x010000000005-18") != (0, true) {
+    if text(&wide_authority, "S-1-0x10000000005-18") != (0, true) {
         return Err("an authority beyond 32 bits is not printed in hexadecimal");
     }
     if text(&revised, "") != (0xC000_0078, true) {
