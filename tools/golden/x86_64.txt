@@ -102,6 +102,10 @@ work.runs ok
 work.many ok
 work.io ok
 work.delete-race ok
+ex.pushlock.words ok
+ex.pushlock.hand-over ok
+ex.pushlock.readers ok
+ex.pushlock.contention ok
 io.pend-dpc ok
 io.pend-timer ok
 io.pend-work ok

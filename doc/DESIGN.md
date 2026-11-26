@@ -356,6 +356,39 @@ An I/O work item is kernel-allocated at Windows' size and tied to a
 device, referenced from queueing until the routine returns, or to a
 driver object, which has no count to hold it by.
 
+## The executive's locks, lists and timers
+
+Each is state in the driver's memory, laid out as Windows lays it out,
+with the rules for changing it in `lib/ex` (tested on the host, the
+locks in every interleaving of a few threads) and the kernel's part,
+atomic steps on the driver's memory and sleeping, in `kernel/ex`.
+How they sit with the IRQL and NK's own locks: `doc/LOCKING.md`.
+
+### Push locks
+
+A push lock is one word: `Locked`, `Waiting`, `Waking`, and from bit 4
+the number of shared holders, where the pinned kernel's symbols put
+them. Semantics are the ones Microsoft documents for
+[`FltAcquirePushLockExclusive`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/fltkernel/nf-fltkernel-fltacquirepushlockexclusive)
+and its siblings. NK's decisions:
+
+- **Waiters are not in the word.** Windows chains wait blocks through
+  the word once a thread waits, and moves the share count into the
+  chain. NK keeps the count in the word always and the waiters in
+  queues of its own, found by the lock's address. So the word of a
+  contended lock reads `Locked`, `Waiting` and a count where Windows
+  has an address, and `MultipleShared` is never set. Nothing but the
+  kernel's routines reads the word.
+- **A waiter is woken to try again,** not handed the lock, as on
+  Windows; an arrival may get there first. When the lock comes free
+  the oldest waiter is woken alone if it wants exclusive access, and
+  every waiter if it wants shared.
+- **Nobody joins shared holders past a waiter,** so readers cannot
+  starve a writer.
+- The flags argument is ignored: every driver of the corpus passes
+  zero.
+- Releasing a lock the word says is not held stops the system.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
