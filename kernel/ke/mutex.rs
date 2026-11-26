@@ -313,6 +313,43 @@ pub unsafe extern "C" fn ExReleaseFastMutex(mutex: *mut FAST_MUTEX) {
     }
 }
 
+/// [`KeInitializeGuardedMutex`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeguardedmutex).
+/// A guarded mutex is a fast mutex in this Windows, structure and all:
+/// free, unowned, with an event for its waiters.
+///
+/// # Safety
+/// `mutex` points to writable storage for a `KGUARDED_MUTEX`.
+pub unsafe extern "C" fn KeInitializeGuardedMutex(mutex: *mut FAST_MUTEX) {
+    // SAFETY: per the contract.
+    unsafe {
+        (&raw mut (*mutex).Count).write(1);
+        (&raw mut (*mutex).Owner).write(core::ptr::null_mut());
+        (&raw mut (*mutex).Contention).write(0);
+        wait::KeInitializeEvent(&raw mut (*mutex).Event, 1, 0);
+        (&raw mut (*mutex).OldIrql).write(0);
+    }
+}
+
+/// [`KeAcquireGuardedMutex`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keacquireguardedmutex):
+/// what `ExAcquireFastMutex` does, as in the Windows NK follows: take
+/// the mutex and raise the IRQL to `APC_LEVEL`.
+///
+/// # Safety
+/// As `ExAcquireFastMutex`.
+pub unsafe extern "C" fn KeAcquireGuardedMutex(mutex: *mut FAST_MUTEX) {
+    // SAFETY: per the contract.
+    unsafe { ExAcquireFastMutex(mutex) }
+}
+
+/// [`KeReleaseGuardedMutex`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereleaseguardedmutex).
+///
+/// # Safety
+/// As `ExReleaseFastMutex`.
+pub unsafe extern "C" fn KeReleaseGuardedMutex(mutex: *mut FAST_MUTEX) {
+    // SAFETY: per the contract.
+    unsafe { ExReleaseFastMutex(mutex) }
+}
+
 // ---- tests --------------------------------------------------------------
 
 use crate::test::Slot;

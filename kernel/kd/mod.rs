@@ -15,6 +15,18 @@ pub fn console_init(info: &BootInfo) {
     *CONSOLE.lock() = Uart::new(info);
     variables::init(info);
     DEBUGGER.store(info.option("debug") == Some("on"), Ordering::Relaxed);
+    TRACE_REGISTRY.store(info.option("trace") == Some("registry"), Ordering::Relaxed);
+}
+
+/// The command line asked (`trace=registry`) for a line in the log for
+/// every key a driver opens and every value it reads, with the status:
+/// what a driver looks for in the registry is otherwise invisible, and
+/// much of bringing one up is giving it the keys Windows has.
+static TRACE_REGISTRY: AtomicBool = AtomicBool::new(false);
+
+/// Whether registry lookups are logged.
+pub fn trace_registry() -> bool {
+    TRACE_REGISTRY.load(Ordering::Relaxed)
 }
 
 /// A kernel debugger is attached and tells the kernel to go on at every

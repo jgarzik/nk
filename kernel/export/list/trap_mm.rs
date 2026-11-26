@@ -6,10 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    MmAddVerifierThunks,
-    MmIsAddressValid,
-    MmIsVerifierEnabled,
-    MmLockPagableDataSection,
-    MmUnlockPagableImageSection,
-);
+trap_list!(MmLockPagableDataSection, MmUnlockPagableImageSection,);

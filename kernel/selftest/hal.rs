@@ -7,13 +7,20 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["hal.dispatch-tables", "kd.variables"],
+    names: &[
+        "hal.dispatch-tables",
+        "hal.acpi-tables",
+        "hal.system-information",
+        "kd.variables",
+    ],
     run,
     manual: false,
 };
 
 fn run(r: &mut Report, info: &BootInfo) {
     r.check("hal.dispatch-tables", dispatch::layout_test);
+    r.check("hal.acpi-tables", crate::hal::acpi::test);
+    r.check("hal.system-information", crate::hal::sysinfo::test);
     r.check("kd.variables", || variables::variables_test(info));
 }
 

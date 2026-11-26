@@ -237,6 +237,48 @@ pub unsafe extern "C" fn KeInitializeDpc(
     }
 }
 
+/// [`KeInitializeThreadedDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializethreadeddpc):
+/// a DPC that Windows may run in a thread at `PASSIVE_LEVEL` and, with
+/// threaded DPCs turned off, runs as an ordinary one. NK always runs it
+/// as an ordinary DPC, at `DISPATCH_LEVEL`, which a threaded DPC's
+/// routine must be written for.
+///
+/// # Safety
+/// `dpc` points to writable storage for a `KDPC`.
+pub unsafe extern "C" fn KeInitializeThreadedDpc(
+    dpc: *mut KDPC,
+    deferred_routine: Option<KDEFERRED_ROUTINE>,
+    deferred_context: *mut c_void,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        KeInitializeDpc(dpc, deferred_routine, deferred_context);
+        (&raw mut (*dpc).Type).write(nk_ntabi::ke::THREADED_DPC_OBJECT);
+    }
+}
+
+/// [`KeSetImportanceDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetimportancedpc):
+/// record how soon the DPC is to run once queued.
+///
+/// Partial: the importance is kept in the `KDPC`, where Windows keeps
+/// it, and not acted on. NK runs a processor's DPCs in the order they
+/// were queued, and runs them as soon as the IRQL allows whatever their
+/// importance, which is as soon as Windows runs any.
+///
+/// # Safety
+/// `dpc` points to a `KDPC` set up by `KeInitializeDpc`.
+pub unsafe extern "C" fn KeSetImportanceDpc(dpc: *mut KDPC, importance: u32) {
+    // SAFETY: per the contract.
+    unsafe { (&raw mut (*dpc).Importance).write(importance as u8) };
+}
+
+/// [`KeFlushQueuedDpcs`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keflushqueueddpcs):
+/// return once every DPC queued on any processor before the call has
+/// run. For below `DISPATCH_LEVEL`.
+pub extern "C" fn KeFlushQueuedDpcs() {
+    flush();
+}
+
 /// [`KeInsertQueueDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinsertqueuedpc):
 /// queue a DPC on this processor. `FALSE` if it is already queued.
 ///

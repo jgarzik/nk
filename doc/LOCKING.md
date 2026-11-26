@@ -60,6 +60,7 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
+| 10 | `io::driver::BOOT_REINITIALIZE` | the routines boot drivers registered for reinitialisation, and whether they have been run; never held with `DRIVERS` | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
@@ -493,10 +494,12 @@ Drivers use Windows' routines, not `ke::SpinLock`
 when free; NK touches it only with single atomic operations through the
 driver's pointer and keeps no state of its own about it. The acquire
 routines raise the IRQL to `DISPATCH_LEVEL` and return the old level; the
-`AtDpcLevel` ones leave it alone. A queued spin lock fills in the
-driver's handle as Windows does but does not queue its waiters, so the
-arrival order Windows guarantees is absent; the ledger marks that export
-partial.
+`AtDpcLevel` ones leave it alone. A queued spin lock is a queue as on
+Windows: the lock's word names the handle of the last to come, each
+handle the one behind it, and a release hands the lock to the next in
+line, so waiters get it in the order they came. A lock taken that way
+is never taken with the plain routines, as Windows requires. A guarded
+mutex is a fast mutex under another name, as in the Windows NK follows.
 
 An interrupt object's spin lock (`KINTERRUPT.ActualLock`: the object's
 own word or the driver's) is a `KSPIN_LOCK` held at the object's

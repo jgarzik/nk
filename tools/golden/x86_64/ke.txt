@@ -2,3 +2,6 @@ ke.irql-and-locks ok
 ke.interrupts ok
 ke.bugcheck.register ok
 ke.bugcheck.order ok
+ke.queued-lock ok
+ke.processors ok
+ke.small-routines ok

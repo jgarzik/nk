@@ -152,6 +152,7 @@ pub fn start_boot_services() -> Result<(), &'static str> {
             }
         }
     }
+    driver::reinitialize_boot_drivers();
     Ok(())
 }
 

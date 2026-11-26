@@ -13,6 +13,7 @@
 pub mod bugcheck;
 pub mod kdpower;
 pub mod sched;
+pub mod topology;
 pub mod wait;
 
 use core::sync::atomic::{AtomicU32, Ordering};

@@ -469,6 +469,16 @@ pub unsafe extern "C" fn KeResetEvent(event: *mut KEVENT) -> i32 {
     }
 }
 
+/// [`KeClearEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keclearevent):
+/// make the event not signalled.
+///
+/// # Safety
+/// `event` is a live, initialised `KEVENT`.
+pub unsafe extern "C" fn KeClearEvent(event: *mut KEVENT) {
+    // SAFETY: per the contract.
+    unsafe { KeResetEvent(event) };
+}
+
 /// [`KeReadStateEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereadstateevent).
 ///
 /// # Safety

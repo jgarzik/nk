@@ -17,3 +17,4 @@ mm.contiguous ok
 mm.contiguous.refused ok
 mm.mdl.nonpaged ok
 mm.mdl.pages ok
+mm.answers ok

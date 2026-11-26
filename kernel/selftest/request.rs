@@ -28,6 +28,7 @@ pub static GROUP: Group = Group {
         "io.request.synchronous-call",
         "io.request.cancel-built",
         "io.request.master-status",
+        "io.request.power",
         "io.mdl.partial",
         "ob.reference-by-pointer",
     ],
@@ -252,9 +253,11 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
         {
             return Err("a request with no transfer was given a buffer or parameters");
         }
+        // As whoever sends a Plug and Play request sets it; the bus
+        // driver does not know this one and completes it as it came.
         (*request).IoStatus.Status = STATUS_NOT_SUPPORTED;
         let (status, count, _) = sender.send(top.0, request)?;
-        if status != STATUS_SUCCESS || count != 0 {
+        if status != STATUS_NOT_SUPPORTED || count != 0 {
             return Err("a request with no transfer did not come back");
         }
     }
@@ -563,6 +566,65 @@ fn master_status() -> Result<u32, &'static str> {
     Ok(steps.len() as u32)
 }
 
+/// A completion routine that keeps the request for its sender.
+///
+/// # Safety
+/// Called as a completion routine.
+unsafe extern "C" fn keep(_: *mut DEVICE_OBJECT, _: *mut IRP, _: *mut c_void) -> NTSTATUS {
+    STATUS_MORE_PROCESSING_REQUIRED
+}
+
+/// `PoCallDriver` sends a power request down the stack as
+/// `IoCallDriver` sends any other, with its parameters where the
+/// header puts them; `PoStartNextPowerIrp` changes nothing. Returns
+/// the facts checked.
+fn power() -> Result<u32, &'static str> {
+    use nk_ntabi::pnp::*;
+    let stack = Stack::build()?;
+    let top = Top::of(&stack);
+    let parameters = power_parameters(
+        0,
+        POWER_STATE_TYPE_DEVICE,
+        POWER_DEVICE_D0,
+        POWER_ACTION_NONE,
+    );
+    // SAFETY: the test's own IRP, sent to a stack of the test's and
+    // kept by its completion routine.
+    unsafe {
+        let request = irp::IoAllocateIrp((*top.0).StackSize, 0);
+        if request.is_null() {
+            return Err("no memory for an IRP");
+        }
+        (*request).IoStatus.Status = STATUS_NOT_SUPPORTED;
+        let location = irp::next_location(request);
+        (*location).MajorFunction = IRP_MJ_POWER;
+        (*location).MinorFunction = IRP_MN_SET_POWER;
+        (*location).Parameters = parameters;
+        (*location).CompletionRoutine = Some(keep);
+        (*location).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
+        stack::clear_log();
+        let status = irp::PoCallDriver(top.0, request);
+        let before = core::slice::from_raw_parts(request.cast::<u8>(), size_of::<IRP>()).to_vec();
+        irp::PoStartNextPowerIrp(request);
+        let after = core::slice::from_raw_parts(request.cast::<u8>(), size_of::<IRP>());
+        let unchanged = before == after;
+        let completed = (*request).IoStatus.Status;
+        irp::IoFreeIrp(request);
+        if status != STATUS_SUCCESS || completed != STATUS_SUCCESS {
+            return Err("a power request did not go down the stack and come back");
+        }
+        if !unchanged {
+            return Err("PoStartNextPowerIrp changed the request");
+        }
+    }
+    if stack::arrived_at_the_bottom() != Some(IRP_MJ_POWER)
+        || stack::arrived_with() != (IRP_MN_SET_POWER, parameters)
+    {
+        return Err("a power request did not arrive with its minor function and parameters");
+    }
+    Ok(5)
+}
+
 /// `IoBuildPartialMdl`: a part of a locked buffer, mapped on its own,
 /// is the same memory; a part of a mapped buffer shares its mapping.
 /// Returns the facts checked.
@@ -697,6 +759,7 @@ fn run(report: &mut Report, _: &BootInfo) {
     numbered("io.request.synchronous-call", synchronous_call());
     numbered("io.request.cancel-built", cancel_built());
     numbered("io.request.master-status", master_status());
+    numbered("io.request.power", power());
     numbered("io.mdl.partial", partial_mdl_test());
     numbered("ob.reference-by-pointer", reference_by_pointer());
 }

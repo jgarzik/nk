@@ -13,6 +13,7 @@ mod clock;
 mod cm;
 mod counted;
 mod csq;
+mod dma;
 mod dpc;
 mod driver_api;
 mod em;
@@ -24,6 +25,7 @@ mod fsd;
 mod hal;
 mod interrupt;
 mod iosupport;
+mod keutil;
 mod library;
 mod loader;
 mod mmio;
@@ -54,6 +56,7 @@ mod startio;
 mod storage;
 mod thread;
 mod timer;
+mod timer2;
 mod wait;
 mod whea;
 mod without;
@@ -150,10 +153,13 @@ pub static GROUPS: &[&[&Group]] = &[
     pci::GROUPS,
     mmio::GROUPS,
     interrupt::GROUPS,
+    dma::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,
     timer::GROUPS,
+    timer2::GROUPS,
+    keutil::GROUPS,
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,

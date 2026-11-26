@@ -166,7 +166,10 @@ pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP, guard: &Gua
 }
 
 /// The dispatch routine every driver starts with for every request type:
-/// fail the request as invalid for the device.
+/// fail the request as invalid for the device. Plug and Play and power
+/// requests are no exception: the pinned kernel fills a new driver
+/// object's whole table with one routine, which completes the request
+/// with this status whatever its major function.
 ///
 /// # Safety
 /// `irp` must be a live IRP being dispatched.
@@ -483,6 +486,24 @@ pub unsafe extern "C" fn IofCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP
     // SAFETY: per the contract.
     unsafe { call_driver(device, irp, &Guard::Nothing) }
 }
+
+/// [`PoCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pocalldriver):
+/// send a power request to the next driver. Since Windows Vista a power
+/// request is sent as any other; the pinned kernel's `PoCallDriver` is
+/// a call of `IofCallDriver` and nothing more.
+///
+/// # Safety
+/// As [`IofCallDriver`].
+pub unsafe extern "C" fn PoCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { IofCallDriver(device, irp) }
+}
+
+/// [`PoStartNextPowerIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-postartnextpowerirp):
+/// nothing, since Windows Vista: the power manager no longer holds the
+/// next power request back until a driver calls this. The pinned
+/// kernel's returns at once.
+pub extern "C" fn PoStartNextPowerIrp(_irp: *mut IRP) {}
 
 /// The cancel spin lock: one lock for the whole system, which a driver's
 /// cancel routine is entered holding and must release. It is a driver's
