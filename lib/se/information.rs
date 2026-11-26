@@ -276,7 +276,7 @@ mod tests {
         assert_eq!((group.len(), u64_at(&group, 0)), (8 + 12, BASE + 8));
         assert_eq!(group[8..], LOCAL_SYSTEM);
         let dacl = block(&token, TOKEN_DEFAULT_DACL);
-        assert_eq!((dacl.len(), u64_at(&dacl, 0)), (8 + 52, BASE + 8));
+        assert_eq!((dacl.len(), u64_at(&dacl, 0)), (8 + 60, BASE + 8));
         assert_eq!(dacl[8..], token.default_dacl.clone().unwrap()[..]);
         token.default_dacl = None;
         assert_eq!(block(&token, TOKEN_DEFAULT_DACL), [0; 8]);

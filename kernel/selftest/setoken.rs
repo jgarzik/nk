@@ -1045,8 +1045,11 @@ static FROM_TOKEN: [Ace; 2] = [
     (ALLOW, 0, FILE_ALL, &SYSTEM),
     (ALLOW, 0, 0x12_00A9, &ADMINS),
 ];
-/// `SUPPLIED` as assigned to an object the system owns.
-static FROM_SUPPLIED: [Ace; 2] = [(ALLOW, 0, FILE_READ, &WORLD), (ALLOW, 0, FILE_ALL, &SYSTEM)];
+/// `SUPPLIED` as assigned: mapped, the creator-owner SID kept.
+static FROM_SUPPLIED: [Ace; 2] = [
+    (ALLOW, 0, FILE_READ, &WORLD),
+    (ALLOW, 0, FILE_ALL, &CREATOR_OWNER),
+];
 /// What an object that is not a directory inherits from `PARENT`,
 /// owned by administrators.
 static FROM_PARENT: [Ace; 4] = [
@@ -1114,8 +1117,8 @@ fn assign_security() -> Result<(), &'static str> {
     let expected: [(&Sid, &Sid, Option<Entries>); 5] = [
         // All from the token: its default owner, group and list.
         (&ADMINS, &SYSTEM, Some(&FROM_TOKEN)),
-        // Supplied: generic rights mapped, the creator-owner entry now
-        // the owner's.
+        // Supplied: generic rights mapped, the creator-owner entry
+        // still for the creator owner.
         (&SYSTEM, &ADMINS, Some(&FROM_SUPPLIED)),
         // Inherited by an object that is not a directory.
         (&ADMINS, &SYSTEM, Some(&FROM_PARENT)),
@@ -1156,6 +1159,7 @@ fn descriptor_info() -> Result<(), &'static str> {
     const DACL: u32 = 4;
     const TOO_SMALL: i32 = 0xC000_0023u32 as i32;
     const INVALID_OWNER: i32 = 0xC000_005Au32 as i32;
+    const INVALID_PRIMARY_GROUP: i32 = 0xC000_005Bu32 as i32;
     const NO_SECURITY: i32 = 0xC000_00D7u32 as i32;
     let mut supplied = Absolute::new(Some(&SYSTEM), Some(&ADMINS), Dacl::List(&SUPPLIED));
     let (status, mut object) = assign(None, Some(&mut supplied));
@@ -1216,6 +1220,11 @@ fn descriptor_info() -> Result<(), &'static str> {
         if query(&mut object, DACL, 128) != (0, 68, 0x8004, [0, 0, 0, 20]) {
             return Err("the access list alone is not what a query for it gives");
         }
+        // Owner, group and list together, in that order: SIDs of 12
+        // and 16 bytes, then the list.
+        if query(&mut object, OWNER | GROUP | DACL, 128) != (0, 96, 0x8004, [20, 32, 0, 48]) {
+            return Err("a query does not lay out owner, group and list as Windows does");
+        }
         if query(&mut object, 0, 128) != (0, 20, 0x8000, [0; 4]) {
             return Err("a query for nothing does not give an empty descriptor");
         }
@@ -1250,12 +1259,22 @@ fn descriptor_info() -> Result<(), &'static str> {
         {
             return Err("an owner the token may be was not set");
         }
-        // A group named and not given: the object is left without one.
-        if set(&mut object, GROUP, &mut write) != (0, true)
+        // A group named and not given: refused, the object as it was.
+        if set(&mut object, GROUP, &mut write) != (INVALID_PRIMARY_GROUP, false)
             // SAFETY: the object's descriptor.
-            || unsafe { dump(object) }.is_none_or(|now| !now.2.is_empty())
+            || unsafe { dump(object) }.is_none_or(|now| now.2 != ADMINS.bytes())
         {
-            return Err("a group named and not given did not take the group away");
+            return Err("a group named and not given was not refused as Windows does");
+        }
+        // A list named and not given: the object has a null list,
+        // marked present, and its owner and group still.
+        if set(&mut object, DACL, &mut admins) != (0, true)
+            // SAFETY: the object's descriptor.
+            || unsafe { dump(object) }.is_none_or(|now| {
+                now.0 != 0x8004 || now.1 != ADMINS.bytes() || now.2 != ADMINS.bytes() || now.3.is_some()
+            })
+        {
+            return Err("a list named and not given did not leave a null list");
         }
         if set(&mut none, DACL, &mut write) != (NO_SECURITY, false) {
             return Err("an object with no descriptor had one set");
@@ -1382,8 +1401,8 @@ fn token_query() -> Result<(), &'static str> {
                 }
             }
             let (block, list) = block_of(token, 6, 2).ok_or("no default list")?;
-            // An ACL header: revision 2, 52 bytes, two entries.
-            let right = list[0] == block as u64 + 8 && list[1] == 0x0002_0034_0002;
+            // An ACL header: revision 2, 60 bytes, two entries.
+            let right = list[0] == block as u64 + 8 && list[1] == 0x0002_003C_0002;
             free(block);
             if !right {
                 return Err("the token's default list is not the System token's");

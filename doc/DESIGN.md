@@ -1480,10 +1480,19 @@ gets them from
 `SeQuerySecurityDescriptorInfo` and changes one with
 `SeSetSecurityDescriptorInfo` (`lib/se/descriptor.rs`). Each descriptor
 handed out is one self-relative pool block, the driver's to keep and
-free; a changed descriptor is a new block and the old one is the
-driver's to free. Every creator is a kernel-mode creator, which may
+free, laid out lists first, then owner and group; what a query copies
+out is laid out owner, group, DACL, SACL, as Windows' is; a changed descriptor is a new block and the old one is the
+driver's to free. A list the creator supplies, or the token's default,
+is assigned whole, as long as it says it is, its generic rights mapped
+and the masks kept within what "generic all" maps to; the
+creator-owner and creator-group SIDs are replaced by the new owner and
+group only in entries inherited from the parent. Every creator is a kernel-mode creator, which may
 name any owner for a new object; changing an owner asks the caller's
-token, as on Windows.
+token, as on Windows. A changed descriptor always has an owner and a
+group: naming one and supplying none is refused
+(`STATUS_INVALID_OWNER`, `STATUS_INVALID_PRIMARY_GROUP`), where naming
+the DACL and supplying none leaves the object a null DACL, which
+allows everyone everything: Windows' rules, a caller's to know.
 
 Where a descriptor lives:
 
@@ -1554,7 +1563,9 @@ asks it the same questions into a buffer of its own
 (`ZwQueryInformationToken`) and copies it (`ZwDuplicateToken`). A copy
 is a new token object: the same user, groups, privileges and defaults,
 of the type asked, at the impersonation level its quality of service
-names or else the source's own, with ids of its own. An effective-only
+names or else the source's own, with ids of its own. Every token's
+statistics report Windows' least charge for its dynamic part, 0x1000
+bytes, and none of it available, as Windows' do. An effective-only
 copy leaves out the privileges and groups not in effect
 (`Token::duplicate`).
 

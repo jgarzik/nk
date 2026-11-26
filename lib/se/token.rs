@@ -71,6 +71,11 @@ pub const SE_DELEGATE_SESSION_USER_IMPERSONATE_PRIVILEGE: Luid = 36;
 /// System token with these time fields.
 pub const SYSTEM_TOKEN_EXPIRATION: i64 = 0x0620_7526_B64C_EB90;
 
+/// What a token is charged for its dynamic part, the default DACL and
+/// the primary group: their size and no less than this, by the pinned
+/// kernel's code. No token made here needs more.
+pub const DYNAMIC_CHARGE: u32 = 0x1000;
+
 /// `SECURITY_IMPERSONATION_LEVEL`.
 pub const SECURITY_ANONYMOUS: u32 = 0;
 pub const SECURITY_IDENTIFICATION: u32 = 1;
@@ -170,8 +175,9 @@ pub struct Token {
     pub expiration_time: i64,
     pub session_id: u32,
     /// `TOKEN_STATISTICS.DynamicCharged` and `DynamicAvailable`: the
-    /// bytes set aside for the default DACL and primary group, and how
-    /// many are free.
+    /// bytes set aside for the default DACL and primary group
+    /// ([`DYNAMIC_CHARGE`]), and how many are free, which Windows
+    /// reports as none.
     pub dynamic_charged: u32,
     pub dynamic_available: u32,
 }
@@ -192,7 +198,7 @@ impl Token {
     /// | System mandatory label S-1-16-16384 with `SE_GROUP_INTEGRITY` and `SE_GROUP_INTEGRITY_ENABLED` | INFERRED |
     /// | The order of the groups: Administrators, Everyone, Authenticated Users, label | INFERRED |
     /// | Default owner Administrators, primary group S-1-5-18 | INFERRED |
-    /// | Default DACL: SYSTEM `GENERIC_ALL`, then Administrators `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL`; revision 2, no spare room | INFERRED |
+    /// | Default DACL: SYSTEM `GENERIC_ALL`, then Administrators `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL`; revision 2, 60 bytes of which 8 are spare | INFERRED |
     /// | The 24 privileges [LocalSystem account] lists, with the enabled state it gives each | CONFIRMED for the LocalSystem logon; INFERRED to be the same in the System process's own token |
     /// | `SeSystemProfilePrivilege`, `SeIncreaseWorkingSetPrivilege`, `SeTimeZonePrivilege`, `SeCreateSymbolicLinkPrivilege`, `SeDelegateSessionUserImpersonatePrivilege` held and enabled; `SeTrustedCredManAccessPrivilege`, `SeRelabelPrivilege` held and disabled | INFERRED |
     /// | Every enabled privilege is also enabled by default; the privileges are ordered by number | INFERRED |
@@ -200,7 +206,7 @@ impl Token {
     /// | Session 0 | CONFIRMED: [SeQueryInformationToken] ("the console session ... is zero") |
     /// | Primary token; impersonation level stored as `SecurityAnonymous` | INFERRED |
     /// | Expires on 1 January 3000 ([`SYSTEM_TOKEN_EXPIRATION`]) | read from the pinned kernel's code |
-    /// | `DynamicCharged`, `DynamicAvailable` | unknown: zero until recorded |
+    /// | `DynamicCharged` 0x1000 ([`DYNAMIC_CHARGE`]), `DynamicAvailable` 0 | INFERRED |
     ///
     /// [LocalSystem account]: https://learn.microsoft.com/en-us/windows/win32/services/localsystem-account
     /// [well-known LUIDs]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryauthenticationidtoken
@@ -246,7 +252,9 @@ impl Token {
             attributes,
         };
         // GENERIC_ALL; GENERIC_READ | GENERIC_EXECUTE | READ_CONTROL.
-        let mut dacl = [0u8; ACL_HEADER + 20 + 24];
+        // Windows sizes the list with four bytes more than each entry
+        // takes, as it does the anonymous token's.
+        let mut dacl = [0u8; ACL_HEADER + 20 + 24 + 8];
         dacl[0] = ACL_REVISION;
         dacl[2] = dacl.len() as u8;
         let added = add_access_allowed(&mut dacl, 2, 0x1000_0000, &LOCAL_SYSTEM)
@@ -281,7 +289,7 @@ impl Token {
             modified_id: 0,
             expiration_time: SYSTEM_TOKEN_EXPIRATION,
             session_id: 0,
-            dynamic_charged: 0,
+            dynamic_charged: DYNAMIC_CHARGE,
             dynamic_available: 0,
         }
     }
@@ -328,7 +336,7 @@ impl Token {
             modified_id: 0,
             expiration_time: SYSTEM_TOKEN_EXPIRATION,
             session_id: 0,
-            dynamic_charged: 0,
+            dynamic_charged: DYNAMIC_CHARGE,
             dynamic_available: 0,
         }
     }
@@ -500,7 +508,14 @@ mod tests {
         assert_eq!((token.authentication_id, token.session_id), (0x3E7, 0));
         assert_eq!(token.expiration_time, SYSTEM_TOKEN_EXPIRATION);
         assert_eq!((token.token_id, token.modified_id), (0, 0));
-        assert_eq!((token.dynamic_charged, token.dynamic_available), (0, 0));
+        assert_eq!(
+            (token.dynamic_charged, token.dynamic_available),
+            (0x1000, 0)
+        );
+        // A copy is charged what its source is.
+        let copy = token.duplicate(TokenType::Impersonation, SECURITY_IDENTIFICATION, false);
+        assert_eq!((copy.dynamic_charged, copy.dynamic_available), (0x1000, 0));
+        assert_eq!(Token::anonymous().dynamic_charged, 0x1000);
         assert_eq!(token.integrity_level(), 0x4000);
     }
 
@@ -628,13 +643,15 @@ mod tests {
     fn the_system_token_has_a_default_dacl() {
         let token = Token::system();
         let dacl = token.default_dacl.unwrap();
-        assert_eq!(dacl.len(), 52);
-        assert_eq!(dacl[..8], [2, 0, 52, 0, 2, 0, 0, 0]);
+        // Two entries in 60 bytes, 52 of them used.
+        assert_eq!(dacl.len(), 60);
+        assert_eq!(dacl[..8], [2, 0, 60, 0, 2, 0, 0, 0]);
         assert_eq!(acl_used(&dacl), Some(52));
         assert_eq!(dacl[8..16], [0, 0, 20, 0, 0, 0, 0, 0x10]);
         assert_eq!(dacl[16..28], LOCAL_SYSTEM);
         assert_eq!(dacl[28..36], [0, 0, 24, 0, 0, 0, 0x02, 0xA0]);
-        assert_eq!(dacl[36..], ADMINISTRATORS);
+        assert_eq!(dacl[36..52], ADMINISTRATORS);
+        assert_eq!(dacl[52..], [0; 8]);
     }
 
     #[test]

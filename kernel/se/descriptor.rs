@@ -254,6 +254,7 @@ pub unsafe extern "C" fn SeSetSecurityDescriptorInfo(
             Err(SetError::NoSecurityOnObject) => STATUS_NO_SECURITY_ON_OBJECT,
             Err(SetError::BadDescriptorFormat) => STATUS_BAD_DESCRIPTOR_FORMAT,
             Err(SetError::InvalidOwner) => STATUS_INVALID_OWNER,
+            Err(SetError::InvalidPrimaryGroup) => STATUS_INVALID_PRIMARY_GROUP,
             Err(SetError::InvalidAcl) => STATUS_INVALID_ACL,
         }
     }
