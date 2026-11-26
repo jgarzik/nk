@@ -5,8 +5,8 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 108,
-  "implemented": 103,
-  "partial": 5,
+  "implemented": 104,
+  "partial": 4,
   "traps": 0,
   "missing": 0
  },
@@ -60,7 +60,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ProbeForRead",
-     "state": "partial"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -1561,8 +1561,8 @@
   "binaries": 58,
   "kernel_names": {
    "total": 1740,
-   "implemented": 99,
-   "partial": 5,
+   "implemented": 100,
+   "partial": 4,
    "traps": 0,
    "missing": 1636
   },
@@ -1664,8 +1664,8 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 186,
-     "implemented": 39,
-     "partial": 4,
+     "implemented": 40,
+     "partial": 3,
      "traps": 0,
      "missing": 143
     },
@@ -1735,8 +1735,8 @@
     "version": "10.0.19041.1826",
     "kernel": {
      "total": 326,
-     "implemented": 43,
-     "partial": 4,
+     "implemented": 44,
+     "partial": 3,
      "traps": 0,
      "missing": 279
     },
@@ -1753,8 +1753,8 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 50,
-     "partial": 5,
+     "implemented": 51,
+     "partial": 4,
      "traps": 0,
      "missing": 270
     },
@@ -2036,8 +2036,8 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 62,
-     "partial": 5,
+     "implemented": 63,
+     "partial": 4,
      "traps": 0,
      "missing": 558
     },
@@ -2266,8 +2266,8 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 32,
-     "partial": 2,
+     "implemented": 33,
+     "partial": 1,
      "traps": 0,
      "missing": 81
     },
@@ -2361,8 +2361,8 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 38,
-     "implemented": 16,
-     "partial": 1,
+     "implemented": 17,
+     "partial": 0,
      "traps": 0,
      "missing": 21
     },
@@ -2415,8 +2415,8 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 439,
-     "implemented": 50,
-     "partial": 1,
+     "implemented": 51,
+     "partial": 0,
      "traps": 0,
      "missing": 388
     },

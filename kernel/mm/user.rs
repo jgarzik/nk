@@ -109,6 +109,34 @@ pub fn frame_of(va: u64) -> Option<u64> {
     map::translate(va).map(|pa| pa & !(PAGE_SIZE as u64 - 1))
 }
 
+/// Whether the `len` bytes at `address` lie in the user range: all that
+/// Windows' `ProbeForRead` asks. An empty range always does.
+pub fn in_range(address: usize, len: usize) -> bool {
+    len == 0
+        || address
+            .checked_add(len)
+            .is_some_and(|end| end as u64 <= USER_PROBE_ADDRESS)
+}
+
+/// Read and write back one byte of every page of the `len` bytes at
+/// `address`, a range in the user half: what Windows' `ProbeForWrite`
+/// does after its range check. `Err` is the first fault.
+pub fn probe_pages(address: usize, len: usize) -> Result<(), Fault> {
+    if len == 0 {
+        return Ok(());
+    }
+    let end = address + len;
+    let mut at = address;
+    while at < end {
+        let byte = core::ptr::with_exposed_provenance_mut::<u8>(at);
+        // SAFETY: a byte of the requestor's range, copied onto itself;
+        // a fault is the result.
+        unsafe { copy(byte, byte, 1) }?;
+        at = (at & !(PAGE_SIZE - 1)) + PAGE_SIZE;
+    }
+    Ok(())
+}
+
 /// Where a copy met memory that is not there, and what it was doing:
 /// `ke::seh::ACCESS_READ` or `ACCESS_WRITE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

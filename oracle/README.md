@@ -49,8 +49,8 @@ running is left running. Windows cannot stop some drivers once they run
 (a file system, for one): those stay. On NK a service with no key in the
 registry is given one that names `<service>.sys` among the boot files.
 
-NK's replayer does not carry out `install` or `ioctlat`: its line for
-such a step says so, and the comparison fails there.
+NK's replayer does not carry out `install`: its line for such a step
+says so, and the comparison fails there.
 
 ### Options
 
@@ -142,4 +142,7 @@ same step.
 On Windows the requests are made with the native API (`NtCreateFile`,
 `NtCreateNamedPipeFile`, `NtDeviceIoControlFile`, `NtFsControlFile`,
 ...), so the status is the one the I/O manager
-returned, not a Win32 error code translated from it.
+returned, not a Win32 error code translated from it. The runner is a
+user-mode program. On NK each request is likewise a system service made
+on behalf of user mode, and the replayer's buffers are pages of the
+user range.

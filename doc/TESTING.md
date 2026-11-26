@@ -159,7 +159,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | read gives end-of-file, write accepts all bytes; unloads without leaks |
-| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; repeated load/exercise/unload cycles leak nothing |
+| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered, direct and `METHOD_NEITHER` control requests return the sample's data; bad requests fail with its status codes, and buffers that are not there with an access violation its `__try` catches; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
 | `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
@@ -169,10 +169,7 @@ None is committed. An absent fixture makes its tests SKIP.
 All but `null.sys` (from Microsoft's symbol server) are built with the
 WDK in [nk-fixtures](https://github.com/jgarzik/nk-fixtures), a separate
 repository so the test drivers cannot drift toward what NK supports.
-They are identified by hash and never patched or rebuilt to suit NK. `METHOD_NEITHER`
-requests are not sent (`sioctl.neither` is SKIP): the sample probes raw
-buffers as user memory inside `__try`, which needs user address space
-and SEH.
+They are identified by hash and never patched or rebuilt to suit NK.
 
 ## The Windows oracle
 

@@ -131,7 +131,8 @@ low half is 47 bits wide on x86-64 and 48 on arm64). There is one
 address space, the System process's, so the range is every thread's.
 `mm::user` maps fresh zeroed frames there and unmaps them, with page
 tables made on demand and every processor's translation dropped on
-unmap; it has no exports. A range that touches a firmware runtime
+unmap; it has no exports. It is where a user-mode requestor's buffers
+are (see "I/O"). A range that touches a firmware runtime
 region is refused, since those share the low half.
 
 The pages are kernel-only: writable, not executable, not marked
@@ -567,6 +568,17 @@ access is not an exception: the trap handler resumes the routine at its
 way out, and it returns the address and the kind of access as an error.
 Nothing is unwound.
 
+**Probes.** `ProbeForRead`, `ProbeForWrite` and `MmProbeAndLockPages`
+raise in their caller. A probe looks at alignment first
+(`STATUS_DATATYPE_MISALIGNMENT`) and at nothing for a range of no
+bytes. A range outside user space is refused as Windows 10 refuses it:
+by a read probe with the access violation of a memory fault (two
+parameters), by a write probe with the one `ExRaiseAccessViolation`
+raises (none). A write probe then reads and writes back a byte of each
+page, through the copy above; a read probe touches nothing.
+`MmProbeAndLockPages` raises `STATUS_ACCESS_VIOLATION` for a page that
+is not mapped, and for user mode a page outside the user range.
+
 **Finding a handler.** The dispatcher walks the stack from that context
 and calls the language handler of each function that names one,
 innermost first, with the `EXCEPTION_RECORD`, the `CONTEXT` and a
@@ -706,7 +718,19 @@ object's pointer count when its memory goes.
 (`NtCreateFile`, `NtCreateNamedPipeFile`), `read`, `write`,
 `device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
 IRP and calls the dispatch routine inside a critical region (as Windows
-does for a synchronous request). Completion follows the Windows
+does for a synchronous request).
+
+**The requestor.** A request is made on behalf of kernel mode, whose
+buffers are trusted, or of user mode (`user_control`,
+`user_transfer`), whose buffers are an address and a length taken at
+their word no further than Windows takes them. For the buffered and
+direct methods the I/O manager probes them, copies the input through
+`mm::user::copy` and locks a direct buffer's pages; a buffer it cannot
+use fails the request with `STATUS_ACCESS_VIOLATION` before any driver
+sees it, and a null one is no buffer: its length goes to the driver as
+zero. For `METHOD_NEITHER` the driver is handed both addresses as they
+are, and what is there is the driver's to find out. The oracle's
+requests are user mode's, their buffers pages of the user range. Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
 copy results to the requestor and signal its event. A buffered request's
 results are copied only as far as the requestor asked; a driver that
@@ -754,8 +778,10 @@ a DPC, timer or worker; the requestor waits on an event completion sets.
 The requestor owns the IRP and frees it after seeing completion, so
 cancelling is safe until then. Windows finishes a request in the
 requesting thread by APC; NK finishes it wherever it was completed, at
-`DISPATCH_LEVEL` or below, indistinguishable while there is no user
-memory to copy to.
+`DISPATCH_LEVEL` or below. There is one address space, so a user-mode
+requestor's buffer is there to copy to from any thread; the copy is the
+one that may fail, and a buffer gone by then fails the request with the
+access violation.
 
 **Cancel.** `IoCancelIrp` marks the IRP, takes its cancel routine in one
 atomic step, and calls it holding the cancel spin lock, which the routine
@@ -774,10 +800,10 @@ which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
 canceller has it.
 
-**Direct I/O** uses real MDLs: the buffer is described by its physical
-pages, and a system address is a fresh mapping of them, so the driver
-works through its own view. Only kernel buffers can be described; other
-limits are at the top of `kernel/io/mdl.rs`.
+**Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
+user range, is described by its physical pages, and a system address is
+a fresh mapping of them, so the driver works through its own view.
+Limits are at the top of `kernel/io/mdl.rs`.
 
 ## The registry
 
@@ -862,6 +888,3 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 No APCs, device interrupts, PnP, power management, user processes or
 user mode. Where a fixture imports something in that territory but never
 reaches it on the tested path, the export is `Traps`.
-
-`ProbeForRead` performs Windows' checks, but where Windows raises NK
-bugchecks, as does `MmProbeAndLockPages` on an inaccessible buffer.

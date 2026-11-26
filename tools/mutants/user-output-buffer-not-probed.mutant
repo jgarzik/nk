@@ -1,0 +1,7 @@
+# The I/O manager does not probe a user-mode requestor's output buffer
+# for a buffered request: a buffer in the kernel's half is written when
+# the request completes.
+scenario: x86_64
+fails: sioctl.user-buffers
+file: kernel/io/file.rs
+remove:                     probe_write(output)?;

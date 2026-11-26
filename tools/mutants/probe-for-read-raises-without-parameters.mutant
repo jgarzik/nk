@@ -1,0 +1,8 @@
+# `ProbeForRead` refuses a range outside user space the way
+# `ProbeForWrite` does, with no parameters, where Windows 10 gives the
+# two of a memory fault.
+scenario: x86_64
+fails: seh.probe
+file: kernel/ke/seh.rs
+replace:                 &[ACCESS_READ, USER_PROBE_ADDRESS as u64],
+with:                 &[],

@@ -63,6 +63,7 @@ seh.fault.write ok
 seh.fault.execute ok
 seh.fault.others ok
 seh.fault.continue ok
+seh.probe ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok
@@ -151,7 +152,8 @@ sioctl.buffered ok
 sioctl.out-direct ok
 sioctl.in-direct ok
 sioctl.bad-requests ok
-sioctl.neither skip
+sioctl.neither ok
+sioctl.user-buffers ok
 sioctl.close ok
 sioctl.unload ok
 sioctl.no-leak ok

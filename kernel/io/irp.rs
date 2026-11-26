@@ -215,7 +215,16 @@ unsafe fn finish(irp: *mut IRP) {
                         "a driver completed a buffered request with Information={count:#x}, more than the {room:#x} bytes its requestor has room for"
                     ));
                 }
-                core::ptr::copy_nonoverlapping(buffer, (*irp).UserBuffer.cast::<u8>(), count);
+                let requestor = (*irp).UserBuffer.cast::<u8>();
+                if (*irp).RequestorMode == KERNEL_MODE {
+                    core::ptr::copy_nonoverlapping(buffer, requestor, count);
+                } else if crate::mm::user::copy(requestor, buffer, count).is_err() {
+                    // User mode's buffer was probed when the request was
+                    // made and may be gone by now: the request fails
+                    // with the fault, as the exception Windows catches
+                    // here becomes its status.
+                    (*irp).IoStatus.Status = STATUS_ACCESS_VIOLATION;
+                }
             }
             if flags & IRP_DEALLOCATE_BUFFER != 0
                 && !buffer.is_null()

@@ -42,6 +42,7 @@ pub static GROUP: Group = Group {
         "seh.fault.execute",
         "seh.fault.others",
         "seh.fault.continue",
+        "seh.probe",
     ],
     run,
     manual: false,
@@ -500,6 +501,116 @@ fn continue_test() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// One call of `ProbeForRead` or `ProbeForWrite`, and what must come of
+/// it: the exception's code, or zero if the probe is to return, and the
+/// record's parameter count.
+struct Probe {
+    write: bool,
+    address: u64,
+    length: usize,
+    alignment: u32,
+    code: u32,
+    parameters: u32,
+}
+
+/// A kernel address, an address in the never-mapped lowest 64 KiB, the
+/// same misaligned, the first address past user space, and a mapped
+/// user page.
+const KERNEL: u64 = 0xFFFF_F800_0000_1000;
+const LOW: u64 = UNMAPPED as u64;
+const ODD: u64 = LOW + 1;
+const LIMIT: u64 = crate::mm::user::USER_PROBE_ADDRESS;
+const MAPPED: u64 = 0x4E4D_0000_0000;
+
+const MISALIGNED: u32 = seh::STATUS_DATATYPE_MISALIGNMENT;
+const VIOLATION: u32 = seh::STATUS_ACCESS_VIOLATION;
+
+const fn probe(
+    write: bool,
+    address: u64,
+    length: usize,
+    alignment: u32,
+    code: u32,
+    parameters: u32,
+) -> Probe {
+    Probe {
+        write,
+        address,
+        length,
+        alignment,
+        code,
+        parameters,
+    }
+}
+
+/// What Windows 10 does, as the conformance driver `nkc-seh` recorded
+/// it there. A read probe refuses an address outside user space with a
+/// memory fault's access violation (two parameters); a write probe,
+/// with the one `ExRaiseAccessViolation` raises (none). Alignment is
+/// looked at first, nothing at all for no bytes, and only a write probe
+/// touches the range.
+const PROBES: &[Probe] = &[
+    probe(false, KERNEL, 4, 1, VIOLATION, 2),
+    probe(false, ODD, 4, 4, MISALIGNED, 0),
+    probe(false, KERNEL + 1, 4, 4, MISALIGNED, 0),
+    probe(false, KERNEL, 0, 1, 0, 0),
+    probe(false, ODD, 0, 4, 0, 0),
+    probe(false, LOW, 16, 4, 0, 0),
+    probe(false, LIMIT - 16, 16, 1, 0, 0),
+    probe(false, LIMIT - 16, 17, 1, VIOLATION, 2),
+    probe(false, LIMIT, 1, 1, VIOLATION, 2),
+    probe(true, KERNEL, 4, 1, VIOLATION, 0),
+    probe(true, ODD, 4, 4, MISALIGNED, 0),
+    probe(true, KERNEL, 0, 1, 0, 0),
+    probe(true, LIMIT - 16, 17, 1, VIOLATION, 0),
+    probe(true, LOW, 4, 4, VIOLATION, 2),
+    probe(true, MAPPED + 0xFF0, 0x1000, 1, 0, 0),
+    // The second page of the range is the one that is not there.
+    probe(true, MAPPED + 0x1FF0, 0x20, 1, VIOLATION, 2),
+];
+
+/// Make the probe `PROBES[index]`, the way a driver calls it.
+extern "C" fn probe_body(index: usize) {
+    let p = &PROBES[index];
+    let address = core::ptr::without_provenance_mut(p.address as usize);
+    // SAFETY: the routines take any arguments.
+    unsafe {
+        if p.write {
+            arch::seh::nk_entry_ProbeForWrite(address, p.length, p.alignment);
+        } else {
+            arch::seh::nk_entry_ProbeForRead(address, p.length, p.alignment);
+        }
+    }
+}
+
+/// `ProbeForRead` and `ProbeForWrite` return or raise as on Windows.
+/// Returns how many probes were made.
+fn probe_test() -> Result<usize, &'static str> {
+    crate::mm::user::map_pages(MAPPED, 2).map_err(|_| "cannot map user pages")?;
+    let mut verdict = Ok(PROBES.len());
+    for (index, p) in PROBES.iter().enumerate() {
+        arm([ACCEPT, DECLINE]);
+        // SAFETY: the body takes an index into the table.
+        let code = unsafe { nk_seh_try(probe_body, index, 8) } as u32;
+        // A fault's exception may be continued; a raised one may not.
+        let flags = u32::from(p.parameters == 0);
+        let raised = p.code == 0
+            || (happened(&[FILTER | flags])
+                && SEEN_PARAMETERS.load(Ordering::Relaxed) == p.parameters);
+        if code != p.code || !raised {
+            kprintln!(
+                "seh.probe: probe {index} at {:#x}: code {code:#x}, {} parameters",
+                p.address,
+                SEEN_PARAMETERS.load(Ordering::Relaxed)
+            );
+            verdict = Err("a probe did not return or raise as on Windows");
+            break;
+        }
+    }
+    crate::mm::user::unmap_pages(MAPPED, 2);
+    verdict
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("seh.raise", raise_test);
     r.check("seh.decline", decline_test);
@@ -523,6 +634,10 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("seh.fault.others", format_args!("{why}")),
     }
     r.check("seh.fault.continue", continue_test);
+    match probe_test() {
+        Ok(cases) => r.ok_with("seh.probe", format_args!("{cases} probes")),
+        Err(why) => r.fail("seh.probe", format_args!("{why}")),
+    }
 }
 
 // ---- exceptions nothing handles: each ends the boot ---------------------

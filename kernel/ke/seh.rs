@@ -21,17 +21,19 @@
 #![allow(non_snake_case)]
 
 use super::unwind::{self, WalkError};
-use crate::arch::seh::{self as cpu, Context, DispatcherContext, Handler};
+pub use crate::arch::seh::Context;
+use crate::arch::seh::{self as cpu, DispatcherContext, Handler};
 use crate::arch::unwind as frames;
 use crate::{kd, ldr};
 use core::ffi::c_void;
 use core::fmt;
 use nk_ntabi::seh::{EXCEPTION_MAXIMUM_PARAMETERS, EXCEPTION_POINTERS, EXCEPTION_RECORD};
+pub use nk_unwind::dispatch::EXCEPTION_NONCONTINUABLE;
 use nk_unwind::dispatch::{
     EXCEPTION_COLLIDED_UNWIND, EXCEPTION_COLLIDED_UNWIND_DISPOSITION, EXCEPTION_CONTINUE_EXECUTION,
     EXCEPTION_CONTINUE_SEARCH, EXCEPTION_NESTED_CALL, EXCEPTION_NESTED_EXCEPTION,
-    EXCEPTION_NONCONTINUABLE, EXCEPTION_TARGET_UNWIND, EXCEPTION_UNWIND, FilterResult, MemoryFault,
-    Next, STATUS_UNWIND, after_filter, after_search_handler, after_unwind_handler, unwind_flags,
+    EXCEPTION_TARGET_UNWIND, EXCEPTION_UNWIND, FilterResult, MemoryFault, Next, STATUS_UNWIND,
+    after_filter, after_search_handler, after_unwind_handler, unwind_flags,
 };
 use nk_unwind::scope::{self, Action, Phase};
 
@@ -911,28 +913,91 @@ unsafe extern "C" fn nk_raise_datatype_misalignment(
 /// `MmUserProbeAddress`: the first address beyond user space.
 const USER_PROBE_ADDRESS: usize = crate::mm::user::USER_PROBE_ADDRESS as usize;
 
-/// `ProbeForRead`: check that a buffer lies in user space and is aligned.
-///
-/// The checks are the Windows ones. A buffer that passes returns
-/// normally; one that fails must raise, which NK turns into a bugcheck.
+/// The checks `ProbeForRead` and `ProbeForWrite` share. A range of no
+/// bytes passes whatever it is. Alignment is looked at first, and a
+/// misaligned address raises `STATUS_DATATYPE_MISALIGNMENT`. Returns
+/// whether the range lies in user space.
 ///
 /// # Safety
-/// Callable with any arguments; the address is only compared.
-pub unsafe extern "C" fn ProbeForRead(address: *const c_void, length: usize, alignment: u32) {
-    let address = address as usize;
+/// `context` is the caller's, from `nk_with_caller_context`.
+unsafe fn probe(address: usize, length: usize, alignment: u32, context: *mut Context) -> bool {
     if length == 0 {
-        return;
+        return true;
     }
-    let refuse = |status: u32| -> ! {
-        kd::bugcheck(format_args!(
-            "ProbeForRead: Windows would raise exception {status:#x} for address {address:#x}"
-        ))
-    };
     if alignment > 1 && address & (alignment as usize - 1) != 0 {
-        refuse(STATUS_DATATYPE_MISALIGNMENT);
+        // SAFETY: per the contract.
+        unsafe {
+            raise(
+                context,
+                STATUS_DATATYPE_MISALIGNMENT,
+                EXCEPTION_NONCONTINUABLE,
+                &[],
+            )
+        }
     }
-    match address.checked_add(length) {
-        Some(end) if end <= USER_PROBE_ADDRESS => {}
-        _ => refuse(STATUS_ACCESS_VIOLATION),
+    crate::mm::user::in_range(address, length)
+}
+
+/// What [`ProbeForRead`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-probeforread)
+/// is entered as. The range is not touched. One outside user space is
+/// refused the way Windows 10 refuses it, which is not by raising a
+/// status but by touching `MmUserProbeAddress`: a memory fault, so an
+/// access violation with two parameters that may be continued.
+///
+/// # Safety
+/// Called through `nk_with_caller_context`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn nk_probe_for_read(
+    address: usize,
+    length: usize,
+    alignment: u32,
+    context: *mut Context,
+) {
+    // SAFETY: per the contract, the caller's context.
+    unsafe {
+        if !probe(address, length, alignment, context) {
+            raise(
+                context,
+                STATUS_ACCESS_VIOLATION,
+                0,
+                &[ACCESS_READ, USER_PROBE_ADDRESS as u64],
+            );
+        }
+    }
+}
+
+/// What [`ProbeForWrite`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-probeforwrite)
+/// is entered as. A range outside user space raises
+/// `STATUS_ACCESS_VIOLATION` as `ExRaiseAccessViolation` does, without
+/// parameters. One inside has a byte of each page read and written
+/// back, and a fault there is the access violation of that fault.
+///
+/// # Safety
+/// Called through `nk_with_caller_context`.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn nk_probe_for_write(
+    address: usize,
+    length: usize,
+    alignment: u32,
+    context: *mut Context,
+) {
+    // SAFETY: per the contract, the caller's context.
+    unsafe {
+        if !probe(address, length, alignment, context) {
+            raise(
+                context,
+                STATUS_ACCESS_VIOLATION,
+                EXCEPTION_NONCONTINUABLE,
+                &[],
+            );
+        }
+        if let Err(fault) = crate::mm::user::probe_pages(address, length) {
+            raise(
+                context,
+                STATUS_ACCESS_VIOLATION,
+                0,
+                &[fault.access, fault.address],
+            );
+        }
     }
 }

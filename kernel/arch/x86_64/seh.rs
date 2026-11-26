@@ -131,6 +131,9 @@ nk_with_caller_context:
     nk_caller_context nk_entry_ExRaiseStatus, nk_raise_status
     nk_caller_context nk_entry_ExRaiseAccessViolation, nk_raise_access_violation
     nk_caller_context nk_entry_ExRaiseDatatypeMisalignment, nk_raise_datatype_misalignment
+    nk_caller_context nk_entry_ProbeForRead, nk_probe_for_read
+    nk_caller_context nk_entry_ProbeForWrite, nk_probe_for_write
+    nk_caller_context nk_entry_MmProbeAndLockPages, nk_probe_and_lock_pages
 
     .globl nk_guarded_call
 // rcx: a routine. rdx, r8, r9 and the fifth argument: its arguments.
@@ -304,6 +307,9 @@ unsafe extern "C" {
     pub fn nk_entry_ExRaiseStatus(status: i32);
     pub fn nk_entry_ExRaiseAccessViolation();
     pub fn nk_entry_ExRaiseDatatypeMisalignment();
+    pub fn nk_entry_ProbeForRead(address: *const c_void, length: usize, alignment: u32);
+    pub fn nk_entry_ProbeForWrite(address: *mut c_void, length: usize, alignment: u32);
+    pub fn nk_entry_MmProbeAndLockPages(mdl: *mut c_void, access_mode: i8, operation: u32);
 }
 
 /// Call `routine` with `args` through the guarded frame.

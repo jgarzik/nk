@@ -5,8 +5,8 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 108,
-  "implemented": 103,
-  "partial": 5,
+  "implemented": 104,
+  "partial": 4,
   "traps": 0,
   "missing": 0
  },
@@ -81,7 +81,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ProbeForRead",
-     "state": "partial"
+     "state": "implemented"
     }
    ]
   },

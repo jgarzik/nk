@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
+use crate::{arch, cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -140,11 +140,19 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, MmGetSystemRoutineAddress),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
-    export!(Partial, io::mdl::MmProbeAndLockPages),
+    export_entry!(
+        Partial,
+        "MmProbeAndLockPages",
+        arch::seh::nk_entry_MmProbeAndLockPages
+    ),
     export!(Implemented, io::mdl::MmUnlockPages),
     export!(Implemented, ob::handle::ObReferenceObjectByHandle),
     export!(Implemented, ob::object::ObfDereferenceObject),
-    export!(Partial, ke::seh::ProbeForRead),
+    export_entry!(
+        Implemented,
+        "ProbeForRead",
+        arch::seh::nk_entry_ProbeForRead
+    ),
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, ke::seh::__C_specific_handler),
