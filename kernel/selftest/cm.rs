@@ -25,6 +25,7 @@ pub static GROUP: Group = Group {
         "cm.enumerate.values",
         "cm.query.key",
         "cm.query.value",
+        "cm.times",
         "cm.table.direct",
         "cm.table.routine",
         "cm.table.roots",
@@ -939,6 +940,76 @@ fn query_value(key: *mut c_void) -> Result<(), &'static str> {
         if !query_value_info(key, name, class, ROOM).refused(status) {
             return Err("a value that is not there, or a form there is none of, was answered");
         }
+    }
+    Ok(())
+}
+
+/// When a key says it was last written: the time its basic form
+/// starts with.
+fn last_write(key: *mut c_void) -> u64 {
+    let answer = query_key_info(key, 0, ROOM);
+    answer.bytes[..8]
+        .iter()
+        .rev()
+        .fold(0, |time, &byte| time << 8 | u64::from(byte))
+}
+
+/// A key's last write time is when its values or its list of subkeys
+/// last changed: making it, setting or deleting a value, making or
+/// deleting a subkey. Reading and opening change nothing.
+fn times() -> Result<(), &'static str> {
+    let null = core::ptr::null_mut();
+    let clock = crate::ke::time::system_time;
+    // Whether `change` was made, and stamped `key` with a time between
+    // the one before it and the one after.
+    let stamps = |key: *mut c_void, change: &dyn Fn() -> bool| {
+        let before = clock();
+        let made = change();
+        (before..=clock()).contains(&last_write(key)) && made
+    };
+    let (_, services, _) = self::key(SERVICES, null, false);
+    let path = alloc::format!("{SERVICES}\\NkTimes");
+    let before = clock();
+    let (status, made) = child(null, &path, None);
+    let made_at = (last_write(made), last_write(services));
+    let new = before..=clock();
+    let result = (|| {
+        if status != 0 || !new.contains(&made_at.0) || made_at.1 != made_at.0 {
+            return Err("a new key and the key it was made under are not stamped with the time");
+        }
+        if !stamps(made, &|| set(made, "V", 4, &[1, 0, 0, 0]) == 0) {
+            return Err("setting a value did not stamp its key");
+        }
+        // Reading a value, describing the key and opening it again.
+        let written = last_write(made);
+        let (_, again) = child(null, &path, None);
+        let read = [
+            query(made, "V", 2, 28).0,
+            enumerate_value(made, 0, 0, ROOM).status,
+            ZwClose(again) as u32,
+        ];
+        if read != [0; 3] || last_write(made) != written || last_write(services) != made_at.1 {
+            return Err("reading or opening a key changed when it was last written");
+        }
+        if !stamps(made, &|| delete_named(made, "V") == 0) {
+            return Err("deleting a value did not stamp its key");
+        }
+        if !stamps(made, &|| {
+            let (status, sub) = child(made, "Sub", None);
+            ZwClose(sub);
+            status == 0
+        }) || !stamps(made, &|| remove(made, "Sub"))
+        {
+            return Err("making or deleting a subkey did not stamp the key above it");
+        }
+        Ok(())
+    })();
+    let gone = stamps(services, &|| ZwDeleteKey(made) == 0);
+    ZwClose(made);
+    ZwClose(services);
+    result?;
+    if !gone {
+        return Err("deleting a key did not stamp the key above it");
     }
     Ok(())
 }
@@ -2045,6 +2116,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.enumerate.values", || with_key(enumerate_values));
     r.check("cm.query.key", || with_key(query_key));
     r.check("cm.query.value", || with_key(query_value));
+    r.check("cm.times", times);
     let both = |test: fn(*mut c_void, Export) -> Result<(), &'static str>| {
         EXPORTS
             .into_iter()

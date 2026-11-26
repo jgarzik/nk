@@ -975,6 +975,11 @@ virtualization, no handle tags, no layer. Every key is trusted
 (`KeyTrustInformation`), because the registry holds only the system's
 own hive.
 
+A key's last write time is when its values or its list of subkeys last
+changed: setting or deleting a value stamps the key, making or deleting
+a key stamps the key above it, and a new key is stamped as it is made.
+A key copied from the hive keeps the file's time until then.
+
 A key remembers the longest subkey name, subkey class, value name and
 value data it has held, which is what it reports as the longest it
 holds: as on Windows, the numbers only grow while the key has subkeys

@@ -159,6 +159,11 @@ impl Hive {
         Ok(())
     }
 
+    /// The key `key` is a subkey of; the root, for the root.
+    pub fn parent(&self, key: KeyId) -> Result<KeyId, Error> {
+        Ok(KeyId(self.keys[self.live(key)?].parent))
+    }
+
     /// Say when `key` was last written, as a `FILETIME`.
     pub fn set_last_write(&mut self, key: KeyId, time: u64) -> Result<(), Error> {
         let index = self.live(key)?;
@@ -528,6 +533,7 @@ mod tests {
         assert_eq!(hive.set_class(long, &[1]), Err(Error::Deleted));
         assert_eq!(hive.set_security(long, &[1]), Err(Error::Deleted));
         assert_eq!(hive.set_last_write(long, 1), Err(Error::Deleted));
+        assert_eq!(hive.parent(long), Err(Error::Deleted));
         assert_eq!(hive.set_link(long, true), Err(Error::Deleted));
         assert_eq!(hive.security(long), Err(Error::Deleted));
         assert_eq!(hive.is_link(long), Err(Error::Deleted));
@@ -589,6 +595,7 @@ mod tests {
         let (mut hive, key) = hive();
         let root = hive.root().unwrap();
         assert_eq!(hive.path(root), Ok(w("\\REGISTRY")));
+        assert_eq!((hive.parent(key), hive.parent(root)), (Ok(root), Ok(root)));
         assert_eq!(hive.path(key), Ok(w("\\REGISTRY\\K")));
         let (sub, _) = hive.create(key, &w("Sub Key")).unwrap();
         let path = hive.path(sub).unwrap();

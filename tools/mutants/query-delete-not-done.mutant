@@ -4,5 +4,4 @@
 scenario: x86_64
 fails: cm.table.direct
 file: kernel/cm/table.rs
-replace:                     .and_then(|key| hive.delete_value(key, name))
-with:                     .map(|_| ())
+remove:                         hive.delete_value(key, name)?;

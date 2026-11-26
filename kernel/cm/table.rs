@@ -12,7 +12,7 @@
 //! guard of that call gives back (`doc/DESIGN.md`, "Exceptions"), and
 //! the frames of this file hold nothing else across it.
 
-use super::{HIVE, absolute, key_of, status};
+use super::{HIVE, absolute, key_of, now, status};
 use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
 use alloc::vec::Vec;
@@ -457,9 +457,13 @@ unsafe fn act(
             }
             Action::StoreBuffer { entry, kind, data } => store_buffer(target(entry), kind, data),
             Action::Delete { subkey, name } => {
+                let now = now();
                 let mut hive = HIVE.lock();
                 hive.open(key, subkey.unwrap_or(&[]))
-                    .and_then(|key| hive.delete_value(key, name))
+                    .and_then(|key| {
+                        hive.delete_value(key, name)?;
+                        hive.set_last_write(key, now)
+                    })
                     .map_err(status)
             }
         }

@@ -89,6 +89,21 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
 }
 
+/// The time a change to the registry is stamped with: now. A key's
+/// last write time is when its values or its list of subkeys last
+/// changed; a key copied from a hive file keeps the file's.
+fn now() -> u64 {
+    crate::ke::time::system_time()
+}
+
+/// Stamp `key`, just made, and the key it was made under, whose list
+/// of subkeys changed with it.
+fn stamp_new(hive: &mut Hive, key: KeyId, time: u64) -> Result<(), Error> {
+    hive.set_last_write(key, time)?;
+    let parent = hive.parent(key)?;
+    hive.set_last_write(parent, time)
+}
+
 /// Why a hive file was refused, for the boot log.
 fn refusal(error: ImportError) -> &'static str {
     match error {
@@ -108,9 +123,18 @@ fn refusal(error: ImportError) -> &'static str {
 /// `Select\Current` names, as on Windows. Returns the root.
 fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
+    let now = now();
+    // Make a key if it is not there, stamped as made now.
+    let make = |hive: &mut Hive, from: KeyId, path: &str| {
+        let (key, new) = hive.create(from, &wide(path))?;
+        if new {
+            stamp_new(hive, key, now)?;
+        }
+        Ok::<KeyId, Error>(key)
+    };
     let root = hive.root().map_err(|_| NO_MEMORY)?;
     for path in SKELETON {
-        hive.create(root, &wide(path)).map_err(|_| NO_MEMORY)?;
+        make(hive, root, path).map_err(|_| NO_MEMORY)?;
     }
     let system = hive
         .open(root, &wide("Machine\\System"))
@@ -131,12 +155,9 @@ fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
     };
     let set = alloc::format!("ControlSet{current:03}");
     for below in CONTROL_SET {
-        hive.create(system, &wide(&alloc::format!("{set}{below}")))
-            .map_err(|_| NO_MEMORY)?;
+        make(hive, system, &alloc::format!("{set}{below}")).map_err(|_| NO_MEMORY)?;
     }
-    let (link, _) = hive
-        .create(system, &wide("CurrentControlSet"))
-        .map_err(|_| NO_MEMORY)?;
+    let link = make(hive, system, "CurrentControlSet").map_err(|_| NO_MEMORY)?;
     hive.link_to(
         link,
         &wide(&alloc::format!("\\Registry\\Machine\\System\\{set}")),
@@ -323,12 +344,17 @@ pub unsafe extern "C" fn closed(body: *mut c_void) {
 /// if it is not there. For the kernel's own use.
 pub fn write(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> {
     let path: Vec<u16> = path.encode_utf16().collect();
+    let now = now();
     let mut hive = HIVE.lock();
     let root = hive.root().map_err(status)?;
-    let (key, _) = hive.create(root, &path).map_err(status)?;
+    let (key, new) = hive.create(root, &path).map_err(status)?;
+    if new {
+        stamp_new(&mut hive, key, now).map_err(status)?;
+    }
     for (name, kind, data) in values {
         let name: Vec<u16> = name.encode_utf16().collect();
         hive.set_value(key, &name, *kind, data).map_err(status)?;
+        hive.set_last_write(key, now).map_err(status)?;
     }
     Ok(())
 }
@@ -407,7 +433,14 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
         Ok(key) => key,
         Err(status) => return status,
     };
-    match HIVE.lock().delete(key) {
+    let now = now();
+    let mut hive = HIVE.lock();
+    // The key it was a subkey of has changed with it.
+    let deleted = hive.parent(key).and_then(|parent| {
+        hive.delete(key)?;
+        hive.set_last_write(parent, now)
+    });
+    match deleted {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
@@ -485,13 +518,17 @@ pub unsafe extern "C" fn ZwCreateKey(
     };
     // SAFETY: per the contract.
     let made = unsafe { named(attributes) }.and_then(|(start, path)| {
+        let now = now();
         let mut hive = HIVE.lock();
         let (key, new) = hive.create(start, &path).map_err(status)?;
-        if new && let Err(error) = hive.set_class(key, &class) {
-            // Without its class it is not the key that was asked for:
-            // nothing has seen it yet, and it has no subkeys.
-            let _ = hive.delete(key);
-            return Err(status(error));
+        if new {
+            let classed = hive.set_class(key, &class);
+            if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
+                // Without its class it is not the key that was asked
+                // for: nothing has seen it yet, and it has no subkeys.
+                let _ = hive.delete(key);
+                return Err(status(error));
+            }
         }
         hive.opened(key);
         Ok((key, new))
@@ -536,7 +573,10 @@ pub unsafe extern "C" fn ZwSetValueKey(
         };
         (crate::rtl::copy_unicode(value_name), data)
     };
-    match HIVE.lock().set_value(key, &name, kind, &data) {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let set = hive.set_value(key, &name, kind, &data);
+    match set.and_then(|()| hive.set_last_write(key, now)) {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
@@ -560,7 +600,10 @@ pub unsafe extern "C" fn ZwDeleteValueKey(
     // SAFETY: per the contract. The name is the driver's memory: the
     // registry is given a copy.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
-    match HIVE.lock().delete_value(key, &name) {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let deleted = hive.delete_value(key, &name);
+    match deleted.and_then(|()| hive.set_last_write(key, now)) {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
