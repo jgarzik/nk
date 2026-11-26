@@ -22,8 +22,8 @@
 //!   new part; "protected" and "auto-inherited" are left as they were
 //!   (they are `SeSetSecurityDescriptorInfoEx`'s to change). Generic
 //!   rights in the new ACLs' effective entries are mapped; creator SIDs
-//!   are not replaced. A new ACL is stored exactly as long as its
-//!   entries.
+//!   are not replaced. A new ACL is stored whole, as long as it says it
+//!   is (`acl::applied`).
 //!
 //! Not here: whether the caller may set what it names. The kernel asks
 //! the caller's token whether a new owner is valid
@@ -90,7 +90,7 @@ pub fn set_security(
     // The new lists as this object holds them, if they are asked for.
     let mapped = |acl: Option<&[u8]>, bit: u32| {
         acl.filter(|_| information & bit != 0)
-            .map(|acl| applied(acl, mapping, None).ok_or(SetError::InvalidAcl))
+            .map(|acl| applied(acl, mapping).ok_or(SetError::InvalidAcl))
             .transpose()
     };
     let dacl = mapped(new.dacl, DACL_SECURITY_INFORMATION)?;
@@ -382,7 +382,7 @@ mod tests {
             entry(0, 0, GENERIC_READ, &CREATOR_OWNER),
             entry(0, INHERIT_ONLY_ACE, GENERIC_READ, &WORLD),
         ]);
-        // Spare room, which is not stored.
+        // Spare room, which is stored too.
         generic.extend([0; 8]);
         generic[2] += 8;
         let new = Parts {
@@ -391,10 +391,12 @@ mod tests {
             dacl: Some(&generic),
             ..Parts::default()
         };
-        let stored = list(&[
+        let mut stored = list(&[
             entry(0, 0, MAPPING.read, &CREATOR_OWNER),
             entry(0, INHERIT_ONLY_ACE, GENERIC_READ, &WORLD),
         ]);
+        stored.extend([0; 8]);
+        stored[2] += 8;
         let changed = set_security(Some(&object), &new, DACL | SACL, &MAPPING).unwrap();
         let got = parse_relative(&changed).unwrap();
         assert_eq!((got.dacl, got.sacl), (Some(&stored[..]), Some(&stored[..])));

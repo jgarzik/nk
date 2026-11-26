@@ -124,25 +124,45 @@ pub fn build(revision: u8, entries: &[Vec<u8>]) -> Option<Vec<u8>> {
     Some(acl)
 }
 
-/// `acl` as an object is given it: every entry that takes effect there
-/// (is not inherit-only) resolved, and no spare room. `None` if the
-/// list is damaged or the result more than a list can hold.
-pub fn applied(
-    acl: &[u8],
-    mapping: &GenericMapping,
-    creator: Option<(&[u8], &[u8])>,
-) -> Option<Vec<u8>> {
+/// `acl` as an object is given it when it is supplied for the object
+/// or is a token's default, as the pinned kernel's `RtlpApplyAclToObject`
+/// leaves a copy of it: the whole list, spare room included, with the
+/// mask of every entry that takes effect there (is not inherit-only)
+/// mapped and then kept within what "generic all" maps to; an audit or
+/// alarm entry may also name `ACCESS_SYSTEM_SECURITY`. No SID is
+/// changed: the creator-owner and creator-group SIDs are replaced only
+/// in entries inherited from a parent. The entries so treated are those
+/// that start with a mask: allow, deny, audit and alarm, their
+/// object-specific forms, the compound entry, and the conditional
+/// allow, deny, audit and alarm.
+/// `None` if the list is damaged.
+pub fn applied(acl: &[u8], mapping: &GenericMapping) -> Option<Vec<u8>> {
+    /// `ACCESS_SYSTEM_SECURITY`.
+    const SYSTEM_SECURITY: u32 = 0x0100_0000;
+    /// The four generic rights.
+    const GENERIC: u32 = 0xF000_0000;
     acl_used(acl)?;
-    let entries: Vec<Vec<u8>> = aces(acl)
-        .map(|ace| {
-            if ace.flags & INHERIT_ONLY_ACE != 0 {
-                ace.bytes.to_vec()
-            } else {
-                resolved(&ace, ace.flags, mapping, creator)
-            }
-        })
-        .collect();
-    build(acl[0], &entries)
+    let mut copy = acl.to_vec();
+    let mut at = ACL_HEADER;
+    for ace in aces(acl) {
+        let mask_at = at + 4;
+        at += ace.bytes.len();
+        let masked = matches!(ace.kind, 0..=10 | 13 | 14);
+        if !masked || ace.flags & INHERIT_ONLY_ACE != 0 || ace.bytes.len() < 8 {
+            continue;
+        }
+        let grants = matches!(ace.kind, 0 | 1 | 4 | 5 | 6 | 9 | 10);
+        let within = mapping.all | if grants { 0 } else { SYSTEM_SECURITY };
+        let mask = u32::from_le_bytes([
+            copy[mask_at],
+            copy[mask_at + 1],
+            copy[mask_at + 2],
+            copy[mask_at + 3],
+        ]);
+        let mapped = map_generic(mask, mapping) & !GENERIC & within;
+        copy[mask_at..mask_at + 4].copy_from_slice(&mapped.to_le_bytes());
+    }
+    Some(copy)
 }
 
 #[cfg(test)]
@@ -232,6 +252,65 @@ pub(crate) mod tests {
     }
 
     const WORLD: [u8; 12] = crate::token::WORLD;
+
+    #[test]
+    fn a_list_is_applied_whole_with_its_effective_masks_mapped() {
+        use crate::access::{GENERIC_ALL, GENERIC_READ, GENERIC_WRITE};
+        const ASS: u32 = 0x0100_0000;
+        let mut acl = list(&[
+            // Mapped, and kept within "generic all" (7).
+            entry(0, 0, GENERIC_READ | GENERIC_WRITE | 0x100, &WORLD),
+            // The creator-owner SID stays.
+            entry(1, 2, GENERIC_ALL | ASS, &CREATOR_OWNER),
+            // Inherit-only: untouched.
+            entry(0, INHERIT_ONLY_ACE | 1, GENERIC_READ, &WORLD),
+            // Audit entries, plain and conditional: may name
+            // ACCESS_SYSTEM_SECURITY.
+            entry(2, 0x40, GENERIC_READ | ASS | 0x100, &WORLD),
+            entry(13, 0x40, ASS | 2, &WORLD),
+            // Object-specific allow and conditional allow: as allow.
+            entry(5, 0, GENERIC_WRITE | ASS, &WORLD),
+            entry(9, 0, GENERIC_ALL | 0x200, &WORLD),
+            // Conditional object-specific allow, a mandatory label and
+            // a type there is not: untouched.
+            entry(11, 0, GENERIC_READ, &WORLD),
+            entry(0x11, 0, GENERIC_READ, &WORLD),
+            entry(0x30, 0, GENERIC_READ, &WORLD),
+            // Too short for a mask.
+            vec![0, 0, 4, 0],
+        ]);
+        // Spare room, with something in it.
+        acl.extend([0xAB; 8]);
+        acl[2] += 8;
+        let mut want = list(&[
+            entry(0, 0, 3, &WORLD),
+            entry(1, 2, 7, &CREATOR_OWNER),
+            entry(0, INHERIT_ONLY_ACE | 1, GENERIC_READ, &WORLD),
+            entry(2, 0x40, ASS | 1, &WORLD),
+            entry(13, 0x40, ASS | 2, &WORLD),
+            entry(5, 0, 2, &WORLD),
+            entry(9, 0, 7, &WORLD),
+            entry(11, 0, GENERIC_READ, &WORLD),
+            entry(0x11, 0, GENERIC_READ, &WORLD),
+            entry(0x30, 0, GENERIC_READ, &WORLD),
+            vec![0, 0, 4, 0],
+        ]);
+        want.extend([0xAB; 8]);
+        want[2] += 8;
+        assert_eq!(applied(&acl, &MAPPING), Some(want));
+        // A generic right the mapping gives back is not kept.
+        let odd = GenericMapping {
+            read: GENERIC_READ | 1,
+            ..MAPPING
+        };
+        assert_eq!(
+            applied(&list(&[entry(0, 0, GENERIC_READ, &WORLD)]), &odd),
+            Some(list(&[entry(0, 0, 1, &WORLD)]))
+        );
+        // Damaged: an entry it has no room for.
+        acl[4] += 1;
+        assert_eq!(applied(&acl, &MAPPING), None);
+    }
 
     #[test]
     fn entries_come_in_the_order_stored() {

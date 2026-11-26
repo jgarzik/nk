@@ -1481,7 +1481,11 @@ gets them from
 `SeSetSecurityDescriptorInfo` (`lib/se/descriptor.rs`). Each descriptor
 handed out is one self-relative pool block, the driver's to keep and
 free; a changed descriptor is a new block and the old one is the
-driver's to free. Every creator is a kernel-mode creator, which may
+driver's to free. A list the creator supplies, or the token's default,
+is assigned whole, as long as it says it is, its generic rights mapped
+and the masks kept within what "generic all" maps to; the
+creator-owner and creator-group SIDs are replaced by the new owner and
+group only in entries inherited from the parent. Every creator is a kernel-mode creator, which may
 name any owner for a new object; changing an owner asks the caller's
 token, as on Windows.
 

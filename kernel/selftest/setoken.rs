@@ -1045,8 +1045,11 @@ static FROM_TOKEN: [Ace; 2] = [
     (ALLOW, 0, FILE_ALL, &SYSTEM),
     (ALLOW, 0, 0x12_00A9, &ADMINS),
 ];
-/// `SUPPLIED` as assigned to an object the system owns.
-static FROM_SUPPLIED: [Ace; 2] = [(ALLOW, 0, FILE_READ, &WORLD), (ALLOW, 0, FILE_ALL, &SYSTEM)];
+/// `SUPPLIED` as assigned: mapped, the creator-owner SID kept.
+static FROM_SUPPLIED: [Ace; 2] = [
+    (ALLOW, 0, FILE_READ, &WORLD),
+    (ALLOW, 0, FILE_ALL, &CREATOR_OWNER),
+];
 /// What an object that is not a directory inherits from `PARENT`,
 /// owned by administrators.
 static FROM_PARENT: [Ace; 4] = [
@@ -1114,8 +1117,8 @@ fn assign_security() -> Result<(), &'static str> {
     let expected: [(&Sid, &Sid, Option<Entries>); 5] = [
         // All from the token: its default owner, group and list.
         (&ADMINS, &SYSTEM, Some(&FROM_TOKEN)),
-        // Supplied: generic rights mapped, the creator-owner entry now
-        // the owner's.
+        // Supplied: generic rights mapped, the creator-owner entry
+        // still for the creator owner.
         (&SYSTEM, &ADMINS, Some(&FROM_SUPPLIED)),
         // Inherited by an object that is not a directory.
         (&ADMINS, &SYSTEM, Some(&FROM_PARENT)),
