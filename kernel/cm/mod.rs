@@ -19,9 +19,13 @@
 
 #![allow(non_snake_case)]
 
+mod helper;
 pub mod notify;
 mod table;
 
+pub use helper::{
+    RtlCheckRegistryKey, RtlCreateRegistryKey, RtlDeleteRegistryValue, RtlWriteRegistryValue,
+};
 pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
 use crate::ke::{Rank, SpinLock};
@@ -705,6 +709,73 @@ unsafe fn class_of(class: *const UNICODE_STRING) -> Option<Vec<u8>> {
     }
 }
 
+/// Open the key `path` below `start`, making it, with `class`, if it
+/// is not there: the key, counted as open (`Hive::opened`), and
+/// whether it is new. Whoever watches the key it was made under is
+/// told.
+fn create_below(start: &Held, path: &[u16], class: &[u8]) -> Result<(KeyId, bool), NTSTATUS> {
+    let now = now();
+    // `start` is the caller's to let go of, after the lock.
+    let mut hive = HIVE.lock();
+    let (key, new) = hive.create(start.key(), path).map_err(status)?;
+    if new {
+        let classed = hive.set_class(key, class);
+        if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
+            // Without its class it is not the key that was asked
+            // for: nothing has seen it yet, and it has no subkeys.
+            let _ = hive.delete(key);
+            return Err(status(error));
+        }
+    }
+    hive.opened(key);
+    let met = new.then(|| new_key_seen(&hive, key));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    Ok((key, new))
+}
+
+/// Set the value `name` of `key`, stamp the key, and tell whoever
+/// watches it.
+fn set_value(key: KeyId, name: &[u16], kind: u32, data: &[u8]) -> NTSTATUS {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let set = hive.set_value(key, name, kind, data);
+    let set = set.and_then(|()| hive.set_last_write(key, now));
+    let met = set
+        .is_ok()
+        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    match set {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
+    }
+}
+
+/// Take the value `name` away from `key`, stamp the key, and tell
+/// whoever watches it.
+fn delete_value_of(key: KeyId, name: &[u16]) -> NTSTATUS {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let deleted = hive.delete_value(key, name);
+    let deleted = deleted.and_then(|()| hive.set_last_write(key, now));
+    let met = deleted
+        .is_ok()
+        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    match deleted {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
+    }
+}
+
 /// [`ZwCreateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatekey):
 /// open a key, making it if it is not there. A new key is given the
 /// class; one that exists keeps its own. Every key lives in memory, so
@@ -729,28 +800,8 @@ pub unsafe extern "C" fn ZwCreateKey(
         return STATUS_INSUFFICIENT_RESOURCES;
     };
     // SAFETY: per the contract.
-    let made = unsafe { named(attributes) }.and_then(|(start, path)| {
-        let now = now();
-        // `start` outlives the lock: a parameter goes after the locals.
-        let mut hive = HIVE.lock();
-        let (key, new) = hive.create(start.key(), &path).map_err(status)?;
-        if new {
-            let classed = hive.set_class(key, &class);
-            if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
-                // Without its class it is not the key that was asked
-                // for: nothing has seen it yet, and it has no subkeys.
-                let _ = hive.delete(key);
-                return Err(status(error));
-            }
-        }
-        hive.opened(key);
-        let met = new.then(|| new_key_seen(&hive, key));
-        drop(hive);
-        if let Some(met) = met {
-            met.tell();
-        }
-        Ok((key, new))
-    });
+    let made =
+        unsafe { named(attributes) }.and_then(|(start, path)| create_below(&start, &path, &class));
     match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
         Ok((handle, new)) => {
             // SAFETY: per the contract.
@@ -793,21 +844,7 @@ pub unsafe extern "C" fn ZwSetValueKey(
         };
         (crate::rtl::copy_unicode(value_name), data)
     };
-    let now = now();
-    let mut hive = HIVE.lock();
-    let set = hive.set_value(key, &name, kind, &data);
-    let set = set.and_then(|()| hive.set_last_write(key, now));
-    let met = set
-        .is_ok()
-        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
-    drop(hive);
-    if let Some(met) = met {
-        met.tell();
-    }
-    match set {
-        Ok(()) => STATUS_SUCCESS,
-        Err(error) => status(error),
-    }
+    set_value(key, &name, kind, &data)
 }
 
 /// [`ZwDeleteValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletevaluekey):
@@ -830,21 +867,7 @@ pub unsafe extern "C" fn ZwDeleteValueKey(
     // SAFETY: per the contract. The name is the driver's memory: the
     // registry is given a copy.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
-    let now = now();
-    let mut hive = HIVE.lock();
-    let deleted = hive.delete_value(key, &name);
-    let deleted = deleted.and_then(|()| hive.set_last_write(key, now));
-    let met = deleted
-        .is_ok()
-        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
-    drop(hive);
-    if let Some(met) = met {
-        met.tell();
-    }
-    match deleted {
-        Ok(()) => STATUS_SUCCESS,
-        Err(error) => status(error),
-    }
+    delete_value_of(key, &name)
 }
 
 /// Answer a query for an information structure. `format` writes the

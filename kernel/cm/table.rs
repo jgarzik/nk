@@ -12,7 +12,7 @@
 //! guard of that call gives back (`doc/DESIGN.md`, "Exceptions"), and
 //! the frames of this file hold nothing else across it.
 
-use super::{HIVE, absolute, key_of, now, status};
+use super::{HIVE, Held, absolute, key_of, now, status};
 use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
 use alloc::vec::Vec;
@@ -537,34 +537,69 @@ unsafe fn work(run: *mut Run, context: *mut c_void) -> NTSTATUS {
     }
 }
 
+/// Whether `relative_to` says the path is a key handle
+/// (`RTL_REGISTRY_HANDLE`).
+pub(super) fn by_handle(relative_to: u32) -> bool {
+    relative_to & RTL_REGISTRY_HANDLE != 0
+}
+
+/// The key `relative_to` and `path` start at and the path from there,
+/// for every routine that takes the pair (the query tables,
+/// `RtlWriteRegistryValue` and its kin): the key the handle names, or
+/// the key a path from the namespace's root starts at, which is the
+/// path itself after what `relative_to` stands for.
+///
+/// # Safety
+/// `path` is a key handle if `relative_to` says so, and else null or a
+/// terminated string.
+pub(super) unsafe fn relative(
+    relative_to: u32,
+    path: *const u16,
+) -> Result<(Held, Vec<u16>), NTSTATUS> {
+    // A key that is called optional is opened like any other.
+    let relative_to = relative_to & !RTL_REGISTRY_OPTIONAL;
+    if by_handle(relative_to) {
+        return Ok((key_of(path.cast_mut().cast())?, Vec::new()));
+    }
+    let prefix = match relative_to {
+        RTL_REGISTRY_ABSOLUTE => "",
+        RTL_REGISTRY_SERVICES => SERVICES,
+        RTL_REGISTRY_CONTROL => CONTROL,
+        RTL_REGISTRY_WINDOWS_NT => WINDOWS_NT,
+        RTL_REGISTRY_DEVICEMAP => DEVICEMAP,
+        RTL_REGISTRY_USER => USER,
+        _ => return Err(STATUS_INVALID_PARAMETER),
+    };
+    let mut full: Vec<u16> = prefix.encode_utf16().collect();
+    if !path.is_null() {
+        // SAFETY: per the contract.
+        let path = unsafe { units(path, wide_len(path)) };
+        full.extend(path.ok_or(STATUS_INSUFFICIENT_RESOURCES)?);
+    }
+    absolute(&full)
+}
+
+/// A copy of the terminated string at `text`; empty for null. `None`
+/// without memory.
+///
+/// # Safety
+/// `text` is null or points to 16-bit units that end with a zero.
+pub(super) unsafe fn terminated(text: *const u16) -> Option<Vec<u16>> {
+    if text.is_null() {
+        return Some(Vec::new());
+    }
+    // SAFETY: per the contract.
+    unsafe { units(text, wide_len(text)) }
+}
+
 /// The key a query is about, counted as open (`Hive::opened`).
 ///
 /// # Safety
 /// `path` is a key handle if `relative_to` says so, and else null or a
 /// terminated string.
 unsafe fn top_key(relative_to: u32, path: *const u16) -> Result<KeyId, NTSTATUS> {
-    // A key that is called optional is opened like any other.
-    let relative_to = relative_to & !RTL_REGISTRY_OPTIONAL;
-    let (start, rest) = if relative_to & RTL_REGISTRY_HANDLE != 0 {
-        (key_of(path.cast_mut().cast())?, Vec::new())
-    } else {
-        let prefix = match relative_to {
-            RTL_REGISTRY_ABSOLUTE => "",
-            RTL_REGISTRY_SERVICES => SERVICES,
-            RTL_REGISTRY_CONTROL => CONTROL,
-            RTL_REGISTRY_WINDOWS_NT => WINDOWS_NT,
-            RTL_REGISTRY_DEVICEMAP => DEVICEMAP,
-            RTL_REGISTRY_USER => USER,
-            _ => return Err(STATUS_INVALID_PARAMETER),
-        };
-        let mut full: Vec<u16> = prefix.encode_utf16().collect();
-        if !path.is_null() {
-            // SAFETY: per the contract.
-            let path = unsafe { units(path, wide_len(path)) };
-            full.extend(path.ok_or(STATUS_INSUFFICIENT_RESOURCES)?);
-        }
-        absolute(&full)?
-    };
+    // SAFETY: per the contract.
+    let (start, rest) = unsafe { relative(relative_to, path) }?;
     // The key the path starts at is held until the key it leads to has
     // been counted, and let go of after the lock.
     let mut hive = HIVE.lock();

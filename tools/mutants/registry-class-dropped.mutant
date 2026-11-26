@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: cm.enumerate.keys
 file: kernel/cm/mod.rs
-replace:             let classed = hive.set_class(key, &class);
-with:             let classed = Ok(());
+replace:         let classed = hive.set_class(key, class);
+with:         let classed = Ok(());
