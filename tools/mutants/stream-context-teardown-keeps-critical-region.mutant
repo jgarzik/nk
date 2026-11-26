@@ -1,0 +1,7 @@
+# The teardown lets the header's push lock go and stays in its critical
+# region: each FreeCallback runs with the thread's APCs disabled, and
+# the file system's thread is left one region deep for good.
+scenario: x86_64
+fails: fsrtl.teardown-stream-contexts
+file: kernel/io/fsrtl.rs
+remove:             mutex::KeLeaveCriticalRegion();

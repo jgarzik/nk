@@ -712,6 +712,21 @@ pub unsafe extern "C" fn MmPageEntireDriver(address_within_section: *mut c_void)
         .map_or(core::ptr::null_mut(), |module| module.base as *mut c_void)
 }
 
+/// [`MmResetDriverPaging`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmresetdriverpaging):
+/// undo `MmPageEntireDriver` for the image the address is in: its
+/// sections are again pageable or not as the image was built, and what
+/// is not pageable is resident when this returns. It returns nothing.
+///
+/// NK never pages kernel memory out, and `MmPageEntireDriver` changed
+/// nothing, so every section of every image is resident already: what
+/// the routine promises holds without anything being done. Windows
+/// looks the address up and does nothing either for one that is in no
+/// driver; so no address has anything to be looked up for.
+///
+/// # Safety
+/// Callable with any pointer value; it is not used.
+pub unsafe extern "C" fn MmResetDriverPaging(_address_within_section: *mut c_void) {}
+
 // ---- tests --------------------------------------------------------------
 
 /// A place among a library's importers, held by a test as a second

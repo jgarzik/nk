@@ -127,6 +127,11 @@ impl ObjectType {
         self
     }
 
+    /// Where the type keeps what the generic rights stand for.
+    pub const fn generic_mapping(&'static self) -> *const GENERIC_MAPPING {
+        &raw const self.0.TypeInfo.GenericMapping
+    }
+
     /// What the type does when a handle to one of its objects closes.
     pub fn close_procedure(&self) -> Option<OB_CLOSE_METHOD> {
         self.0.TypeInfo.CloseProcedure
@@ -246,6 +251,16 @@ pub static FILE_TYPE: ObjectType = ObjectType::new(
 )
 .closing(crate::io::file::handle_closed)
 .rights(nk_ntabi::io::FILE_GENERIC_MAPPING);
+
+/// [`IoGetFileObjectGenericMapping`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetfileobjectgenericmapping):
+/// what the generic rights stand for in a file. The answer points into
+/// the file type itself, at the mapping an open's desired access is
+/// mapped with, so a file system that checks access against it and the
+/// I/O manager cannot disagree. It is never written.
+#[allow(non_snake_case)]
+pub extern "C" fn IoGetFileObjectGenericMapping() -> *const GENERIC_MAPPING {
+    FILE_TYPE.generic_mapping()
+}
 
 /// Silo contexts (`ps::silo`): what a driver keeps per silo. Windows
 /// has one type for contexts made from paged pool and one for the

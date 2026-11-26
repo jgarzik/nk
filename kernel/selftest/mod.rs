@@ -15,6 +15,7 @@ mod driver_api;
 mod etw;
 mod ex;
 pub mod except;
+mod fsd;
 mod library;
 mod loader;
 mod mslib;
@@ -156,6 +157,9 @@ pub static GROUPS: &[&Group] = &[
     &etw::SYSTEM,
     &loader::GROUP,
     &library::GROUP,
+    &fsd::REQUESTOR,
+    &fsd::STREAM_CONTEXTS,
+    &fsd::DRIVER_PAGING,
     &null::GROUP,
     &mslib::GROUP,
     &sioctl::GROUP,
@@ -199,6 +203,8 @@ pub static GROUPS: &[&Group] = &[
     &pend::OVERSTATED,
     &requestor::CREATE_NOT_COMPLETED,
     &neg::PROTECTED_CLOSE,
+    &neg::TRAP,
+    &fsd::BROKEN_LIST,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

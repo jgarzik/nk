@@ -342,6 +342,19 @@ pub const IRP_INPUT_OPERATION: u32 = 0x0000_0040;
 pub const IRP_CREATE_OPERATION: u32 = 0x0000_0080;
 pub const IRP_CLOSE_OPERATION: u32 = 0x0000_0400;
 pub const IRP_DEFER_IO_COMPLETION: u32 = 0x0000_0800;
+/// The bit `IoGetRequestorProcess` of the pinned kernel tests first:
+/// set, the first word of `Overlay` holds the process the request was
+/// issued for (`IssuingProcess`), with flags in its low three bits. The
+/// I/O manager sets it for a request a user-mode driver's host makes;
+/// NK never does.
+pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
+
+/// `IRP.ApcEnvironment`: the thread was in its own process when the
+/// request was made (`OriginalApcEnvironment`).
+pub const ORIGINAL_APC_ENVIRONMENT: i8 = 0;
+/// `IRP.ApcEnvironment`: the thread was attached to another process
+/// (`AttachedApcEnvironment`).
+pub const ATTACHED_APC_ENVIRONMENT: i8 = 1;
 
 /// `KPROCESSOR_MODE`
 pub const KERNEL_MODE: i8 = 0;
@@ -367,7 +380,9 @@ pub struct IRP {
     pub AllocationFlags: u8,
     pub UserIosb: *mut IO_STATUS_BLOCK,
     pub UserEvent: *mut KEVENT,
-    /// `Overlay`: APC routine and context, or an allocation size.
+    /// `Overlay`: APC routine and context, or an allocation size. The
+    /// first word is `IssuingProcess` instead in a request marked
+    /// [`IRP_ISSUING_PROCESS_IN_OVERLAY`].
     pub Overlay: [u64; 2],
     pub CancelRoutine: PVOID,
     pub UserBuffer: PVOID,
@@ -634,7 +649,9 @@ const _: () = {
     assert!(offset_of!(IRP, StackCount) == 0x42);
     assert!(offset_of!(IRP, CurrentLocation) == 0x43);
     assert!(offset_of!(IRP, Cancel) == 0x44);
+    assert!(offset_of!(IRP, ApcEnvironment) == 0x46);
     assert!(offset_of!(IRP, UserIosb) == 0x48);
+    assert!(offset_of!(IRP, Overlay) == 0x58);
     assert!(offset_of!(IRP, UserEvent) == 0x50);
     assert!(offset_of!(IRP, CancelRoutine) == 0x68);
     assert!(offset_of!(IRP, UserBuffer) == 0x70);

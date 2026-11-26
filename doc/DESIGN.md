@@ -946,6 +946,7 @@ make that safe.
 | an executive timer's callback (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
+| a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
@@ -1080,6 +1081,13 @@ One image is loaded or unloaded at a time, under a mutex
 (`doc/LOCKING.md`): loading calls a library's `DllInitialize`, which may
 wait, and loads a library from inside the load of its importer.
 
+**Paging a driver.** `MmPageEntireDriver` and `MmResetDriverPaging`,
+which a driver calls to let its whole image be paged out while it is
+idle and to take that back, change nothing: NK never pages kernel
+memory out, so an image is resident from load to unload, which is
+within what both promise. The first still answers the base of the image
+an address is in, or null.
+
 ## Starting a driver
 
 A driver is started from its service key, as on Windows
@@ -1146,6 +1154,13 @@ goes to the driver as zero; a direct method's second buffer keeps its
 length, and null fails the probe. For `METHOD_NEITHER` the driver is handed both addresses as they
 are, and what is there is the driver's to find out. The oracle's
 requests are user mode's, their buffers pages of the user range.
+
+A driver asks whose request it has with `IoGetRequestorProcess`: the
+process of the thread in the IRP, which for every request NK sends is
+the System process, and none for an IRP a driver allocated and gave no
+thread. `IoGetFileObjectGenericMapping` hands a file system the file
+type's own generic mapping, the one an open's desired access is mapped
+with.
 
 A request for user mode is also held to what its handle was granted,
 before any driver sees it (`STATUS_ACCESS_DENIED`): `FILE_READ_DATA` to
@@ -1232,6 +1247,27 @@ caller's context block) and its cancel routine is the I/O manager's,
 which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
 canceller has it.
+
+**Stream contexts** (`kernel/io/fsrtl.rs`). A file system puts an
+`FSRTL_ADVANCED_FCB_HEADER` at the front of each stream's control block
+and initialises it with code compiled into the driver; `npfs.sys` and
+`msfs.sys` make it version 3, advanced, supporting filter contexts.
+When it frees the block it calls
+[`FsRtlTeardownPerStreamContexts`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlteardownperstreamcontexts),
+and NK does what the pinned kernel does: under the header's own lock
+(its push lock inside a critical region, or the file system's fast
+mutex in a version 0 header) it unlinks the first context, lets the
+lock go, calls the context's `FreeCallback`, and takes the lock again,
+until the list is empty. A list found empty is not locked. A list whose
+links do not lead back stops the system (`0x139`). NK differs in one
+thing no correct file system can see: a header whose flags say it is
+not advanced or supports no filter contexts is not read further, where
+Windows reads the list regardless. Nothing in NK attaches a context:
+no binary NK loads imports the routines that do
+(`FsRtlInsertPerStreamContext`), so they are not exported. The test
+`fsrtl.teardown-stream-contexts` attaches them by hand to headers set
+up as the two drivers' code sets them up; the
+`*-neg-stream-context-list` scenarios break a list.
 
 **Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
 user range, is described by its physical pages, and a system address is
@@ -1813,5 +1849,19 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 ## What is absent
 
 No APCs, device interrupts, PnP, power management, user processes or
-user mode. Where a fixture imports something in that territory but never
-reaches it on the tested path, the export is `Traps`.
+user mode.
+
+**Traps.** Where a binary imports a routine in territory NK lacks and
+does not reach it on the paths NK runs, the export is `Traps`
+(`kernel/export/trap.rs`): the import binds, so the binary loads, and a
+call stops the system with `BUGCHECK: <name>: NK does not implement
+this routine`. One macro makes every such routine, so none can return.
+The ledger counts them apart from `implemented`. These trap:
+
+| Names | Imported by | Why |
+| --- | --- | --- |
+| `ZwAlpcCancelMessage`, `ZwAlpcConnectPort`, `ZwAlpcConnectPortEx`, `ZwAlpcCreatePortSection`, `ZwAlpcCreateResourceReserve`, `ZwAlpcCreateSectionView`, `ZwAlpcCreateSecurityContext`, `ZwAlpcDeletePortSection`, `ZwAlpcDeleteSectionView`, `ZwAlpcDeleteSecurityContext`, `ZwAlpcDisconnectPort`, `ZwAlpcQueryInformation`, `ZwAlpcQueryInformationMessage`, `ZwAlpcSendWaitReceivePort`, `ZwAlpcSetInformation` | `msrpc.sys` | NK has no ALPC ports. `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
+| `IoSetIoCompletionEx`, `ZwCreateIoCompletion`, `ZwRemoveIoCompletionEx` | `msrpc.sys` | NK has no I/O completion ports, on which `msrpc.sys` waits for its ALPC messages |
+
+The `*-neg-trap` scenarios call one through the address its name
+resolves to and require the stop that names it.

@@ -507,6 +507,40 @@ cmdline = "test=neg.protected-close"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
 
+# A routine exported as a trap (kernel/export/trap.rs) stops the system
+# naming itself when called through the address an import of it binds to.
+
+[x86_64-neg-trap]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.trap"
+expect = "bugcheck"
+match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
+
+[aarch64-neg-trap]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.trap"
+expect = "bugcheck"
+match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
+
+# FsRtlTeardownPerStreamContexts stops the system at a list of contexts
+# whose links do not lead back, as Windows' fast fail does.
+
+[x86_64-neg-stream-context-list]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.stream-context-list"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"
+
+[aarch64-neg-stream-context-list]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.stream-context-list"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"
+
 # A driver's KeBugCheckEx stops the system with its code and parameters.
 # A stop calls the bugcheck callbacks Windows calls on a system that
 # writes no crash dump, and the last of them says what was called.

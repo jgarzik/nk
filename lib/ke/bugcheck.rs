@@ -155,6 +155,82 @@ mod tests {
         assert_eq!(name(0xDEAD_BEEF), None);
     }
 
+    /// Every code that has a name, with Microsoft's name for it (the
+    /// bug check code reference).
+    const NAMED: [(u32, &str); 27] = [
+        (0x09, "IRQL_NOT_GREATER_OR_EQUAL"),
+        (0x0A, "IRQL_NOT_LESS_OR_EQUAL"),
+        (0x0C, "MAXIMUM_WAIT_OBJECTS_EXCEEDED"),
+        (0x0F, "SPIN_LOCK_ALREADY_OWNED"),
+        (0x10, "SPIN_LOCK_NOT_OWNED"),
+        (0x18, "REFERENCE_BY_POINTER"),
+        (0x19, "BAD_POOL_HEADER"),
+        (0x1E, "KMODE_EXCEPTION_NOT_HANDLED"),
+        (0x3B, "SYSTEM_SERVICE_EXCEPTION"),
+        (0x44, "MULTIPLE_IRP_COMPLETE_REQUESTS"),
+        (0x48, "CANCEL_STATE_IN_COMPLETED_IRP"),
+        (0x50, "PAGE_FAULT_IN_NONPAGED_AREA"),
+        (0x7E, "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED"),
+        (0x7F, "UNEXPECTED_KERNEL_MODE_TRAP"),
+        (0x8E, "KERNEL_MODE_EXCEPTION_NOT_HANDLED"),
+        (0x93, "INVALID_KERNEL_HANDLE"),
+        (0xB8, "ATTEMPTED_SWITCH_FROM_DPC"),
+        (0xC2, "BAD_POOL_CALLER"),
+        (0xC4, "DRIVER_VERIFIER_DETECTED_VIOLATION"),
+        (0xD1, "DRIVER_IRQL_NOT_LESS_OR_EQUAL"),
+        (0xE1, "WORKER_THREAD_RETURNED_AT_BAD_IRQL"),
+        (0xE2, "MANUALLY_INITIATED_CRASH"),
+        (0xE4, "WORKER_INVALID"),
+        (0x11D, "EVENT_TRACING_FATAL_ERROR"),
+        (0x133, "DPC_WATCHDOG_VIOLATION"),
+        (0x139, "KERNEL_SECURITY_CHECK_FAILURE"),
+        (0x189, "BAD_OBJECT_HEADER"),
+    ];
+
+    #[test]
+    fn each_named_code_has_microsofts_name_and_no_other_code_has_one() {
+        for (code, wanted) in NAMED {
+            assert_eq!(name(code), Some(wanted), "{code:#x}");
+        }
+        // Everything Windows numbers so far is below this.
+        for code in 0..0x1000 {
+            let listed = NAMED.iter().any(|&(named, _)| named == code);
+            assert_eq!(name(code).is_some(), listed, "{code:#x}");
+        }
+        // The codes drivers make up for themselves, and the ones with
+        // the high bits Windows adds to a code while it reports it.
+        for code in [0x1000_007E, 0x4000_0080, 0xC000_0005, u32::MAX] {
+            assert_eq!(name(code), None, "{code:#x}");
+        }
+    }
+
+    #[test]
+    fn every_named_stop_reads_code_then_name_then_the_parameters() {
+        for (code, wanted) in NAMED {
+            let stop = Stop {
+                code,
+                parameters: [code as usize, 2, 3, 4],
+            };
+            assert_eq!(
+                stop.to_string(),
+                format!(
+                    "{code:#010X} {wanted}: KeBugCheckEx (parameter 1 {code:#018x}, \
+                     parameter 2 0x0000000000000002, parameter 3 0x0000000000000003, \
+                     parameter 4 0x0000000000000004)"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_codes_share_a_name() {
+        for (index, (_, first)) in NAMED.iter().enumerate() {
+            for (_, second) in &NAMED[index + 1..] {
+                assert_ne!(first, second);
+            }
+        }
+    }
+
     #[test]
     fn the_checksum_is_the_sum_and_wraps() {
         assert_eq!(checksum(0x1000, 2, 0x30), 0x1032);
