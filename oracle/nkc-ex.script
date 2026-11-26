@@ -1,0 +1,13 @@
+# NK conformance driver nkc-ex (the executive).
+#
+# One request runs the driver's checks of push locks, sequenced lists,
+# lookaside lists, executive resources, executive timers, ExUuidCreate
+# and the pool routines, and returns the values it logged, 32 bits each,
+# ending with 0x4E4B4321. What each value means is written beside it in
+# nk-fixtures nkc/nkc-ex.c.
+
+load nkc-ex nkc-ex.sys
+open d \Device\NkcEx
+ioctl d 00222000 - 16384
+close d
+unload nkc-ex

@@ -612,3 +612,21 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.arm64
 sha256 = "0b2faf232c39383d1f677b9aeefabb7f52d766734d379add0898b9b2a1af15b5"
 status = "nk-authored"
 note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"
+
+[[fixture]]
+name = "nkc-ex"
+arch = "x86_64"
+file = "nkc-ex.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ex.x64.nkc-ex.sys"
+sha256 = "0d87db80b86d7ddfb3fb1bb1a7a726f56fff3f2108f1fad48fe370d37ab33144"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ex.c: push locks, sequenced lists, lookaside lists, ERESOURCE, executive timers, UUIDs, pool"
+
+[[fixture]]
+name = "nkc-ex"
+arch = "aarch64"
+file = "nkc-ex.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ex.arm64.nkc-ex.sys"
+sha256 = "61518426beebcb1b5443a8fbc690525079d5dfaaf28527d1e7c5d95dc341b502"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ex.c: push locks, sequenced lists, lookaside lists, ERESOURCE, executive timers, UUIDs, pool"
