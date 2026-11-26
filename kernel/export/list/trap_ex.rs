@@ -15,6 +15,7 @@ trap_list!(
     ExAcquireSpinLockSharedAtDpcLevel,
     ExAllocateCacheAwareRundownProtection,
     ExAllocatePool,
+    ExAllocateTimerInternal2,
     ExCreateCallback,
     ExFreeCacheAwareRundownProtection,
     ExInitializeRundownProtection,

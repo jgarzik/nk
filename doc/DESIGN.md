@@ -1003,6 +1003,15 @@ through the boot log, the ledger, so the ledger cannot drift from what
 the kernel exports. An import with no entry rejects the driver and names
 the symbol.
 
+Two more spellings reach the same table (`kernel/export/mod.rs`). An
+import from the kernel by number is bound through a short list of the
+numbers Microsoft's binaries use, each with the name Microsoft's public
+symbols give the routine: NK's table has names, not Microsoft's
+numbering. An import from an API set whose routines are the kernel's
+(`ext-ms-win-ntos-ksr-*`, any version) is an import from the kernel:
+Windows finds the hosting module in its API-set schema; NK lists the
+sets it hosts.
+
 A driver can also ask for a routine by name while it runs
 (`MmGetSystemRoutineAddress`) and do without it when the answer is
 null. No import table shows such a name, so each one not found is
@@ -1054,9 +1063,8 @@ the status alone.
 
 Not handled:
 
-- imports by ordinal from the kernel itself: NK's table has no
-  ordinals;
-- kernel-mode API-set names (`ext-ms-*`);
+- kernel-mode API-set names (`ext-ms-*`) other than those NK hosts
+  (Exports);
 - importing from an image that runs as a driver (started from its
   service key) rather than as a library: refused;
 - images that import from each other in a circle: refused, at eight
@@ -1917,8 +1925,7 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 No APCs, device interrupts, Plug and Play, power management, processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
-rate; NK enforces no security descriptor on its own opens; the loader
-binds no import from the kernel by ordinal or from an API set. Microsoft
+rate; NK enforces no security descriptor on its own opens. Microsoft
 publishes no arm64 binaries NK may use, so its own drivers run on x86-64
 alone. NK has run on no physical machine.
 

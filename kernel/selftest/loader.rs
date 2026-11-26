@@ -47,6 +47,7 @@ pub static GROUP: Group = Group {
         "ldr.reject.wrong-machine",
         "ldr.reject.unresolved-import",
         "ldr.module.kernel",
+        "ldr.import.kernel-names",
         "ldr.module.driver",
         "io.driver.unload-reentered",
     ],
@@ -162,8 +163,40 @@ fn unload_reentered() -> Result<(), &'static str> {
     service::stop("SIoctl")
 }
 
+/// The names an import from the kernel may go by, and the one routine
+/// imported by number.
+fn kernel_names() -> Result<(), &'static str> {
+    use crate::export::{resolve, resolve_ordinal};
+    let routine = resolve(b"ntoskrnl.exe", b"KeSetEvent");
+    if routine.is_none() || resolve(b"HAL.dll", b"KeSetEvent") != routine {
+        return Err("the kernel and the HAL are not one table");
+    }
+    let persisted = resolve(b"ntoskrnl.exe", b"KsrQueryMetadata");
+    if persisted.is_none()
+        || resolve(b"ext-ms-win-ntos-ksr-l1-1-3.dll", b"KsrQueryMetadata") != persisted
+        || resolve(b"EXT-MS-WIN-NTOS-KSR-L1-1-1.DLL", b"KsrQueryMetadata") != persisted
+    {
+        return Err("an import from the API set NK hosts was not bound to the kernel's routine");
+    }
+    if resolve(b"ext-ms-win-ntos-other-l1-1-0.dll", b"KeSetEvent").is_some()
+        || resolve(b"nosuch.sys", b"KeSetEvent").is_some()
+    {
+        return Err("a module that is not the kernel resolved to the kernel's table");
+    }
+    let by_number = resolve_ordinal(b"ntoskrnl.exe", 4);
+    if by_number.is_none() || by_number != resolve(b"ntoskrnl.exe", b"ExAllocateTimerInternal2") {
+        return Err("the routine imported by number was not bound to its export");
+    }
+    if resolve_ordinal(b"ntoskrnl.exe", 5).is_some() || resolve_ordinal(b"nosuch.sys", 4).is_some()
+    {
+        return Err("a number NK does not know, or another module's, was bound");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ldr.module.kernel", kernel_module);
+    r.check("ldr.import.kernel-names", kernel_names);
     if ldr::boot_file("sioctl.sys").is_some() && ldr::boot_file("cancel.sys").is_some() {
         r.check("io.driver.unload-reentered", unload_reentered);
     } else {
