@@ -2171,7 +2171,10 @@ translator interface. Translation: memory, ports and bus numbers are
 what they are; an interrupt gets its vector from the hardware layer
 (`hal::interrupt::translate`, a line by its number, messages by their
 count) and is recorded for `IoConnectInterruptEx`
-(`io::interrupt::assign`); the interrupts of the HAL's own child are
+(`io::interrupt::assign`), and how each is delivered (a line's number
+and signalling, a message's address and data) is put in the device's
+interrupt connection data, the property `pci.sys` reads to program a
+device's messages; the interrupts of the HAL's own child are
 vectors already and stay as stated, as the reference Windows records
 them. The start carries the raw and the translated list; `Control`
 gets `AllocConfig` and `FilteredConfigVector`, and the service's `Enum`

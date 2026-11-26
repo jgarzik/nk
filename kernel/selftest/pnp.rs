@@ -1237,6 +1237,20 @@ fn start_resources() -> Result<(u32, u32), &'static str> {
     if found.vectors != [vector] {
         return Err("the node does not hold the vector");
     }
+    // The device's interrupt connection data says how the line is
+    // delivered: one controller input, the line's number, the vector.
+    let property = registry::property_key(
+        &found.instance,
+        &nk_pnp::connection::CONNECTION_DATA_CATEGORY,
+        nk_pnp::connection::CONNECTION_DATA_NUMBER,
+    );
+    let Ok((_, data)) = cm::read(&property, "") else {
+        return Err("the device has no interrupt connection data");
+    };
+    let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    if data.len() != 96 || word(0) != 1 || word(8) != 0 || word(12) != vector || word(64) != line {
+        return Err("the connection data is not one controller input, the line and its vector");
+    }
     Ok((line, vector))
 }
 
@@ -1375,6 +1389,14 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
         if !found.raw.is_empty() || !found.vectors.is_empty() {
             return Err("the failed device still holds resources");
+        }
+        let property = registry::property_key(
+            &found.instance,
+            &nk_pnp::connection::CONNECTION_DATA_CATEGORY,
+            nk_pnp::connection::CONNECTION_DATA_NUMBER,
+        );
+        if cm::exists(&property) {
+            return Err("the failed device still has interrupt connection data");
         }
         // Its interface, left enabled, is disabled with it.
         let link: Vec<u16> = format!("\\??\\{}#{CLASS}", found.instance.replace('\\', "#"))
