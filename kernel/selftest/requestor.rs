@@ -1,13 +1,14 @@
 //! Tests of what the I/O manager does for a requestor before a driver
 //! sees the request and after the driver is done with it: the access a
-//! user-mode request needs of its handle.
+//! user-mode request needs of its handle, and the memory it may name as
+//! its buffers.
 //!
 //! The driver is here, in Rust, as in `pend`: what is under test is the
 //! I/O manager's side.
 
 use crate::io::file::{self, IoError, OpenRequest};
 use crate::io::{device, irp};
-use crate::mm::pool;
+use crate::mm::{self, pool, user};
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -16,7 +17,7 @@ use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["io.user.access"],
+    names: &["io.user.access", "io.user.firmware-buffer"],
     run,
     manual: false,
 };
@@ -210,9 +211,58 @@ fn access() -> Result<u32, &'static str> {
     Ok(made)
 }
 
-fn run(r: &mut Report, _: &BootInfo) {
-    match with_driver(access) {
-        Ok(n) => r.ok_with("io.user.access", format_args!("requests: {n}")),
-        Err(why) => r.fail("io.user.access", format_args!("{why}")),
+/// The low half of the address space holds firmware's runtime memory
+/// besides the user range, mapped and writable. It is not user mode's
+/// to name: a request whose buffer touches it is refused with the
+/// access violation of a buffer that is not there, by every probe, and
+/// no driver sees it. Returns the requests made.
+fn firmware_buffer() -> Result<u32, &'static str> {
+    let region = mm::firmware_regions()
+        .map(|(region, _)| region)
+        .find(|r| r.phys > user::LOWEST_USER_ADDRESS && r.end() <= user::USER_PROBE_ADDRESS)
+        .ok_or("firmware has no runtime region in the user range")?;
+    let firmware = file::Buffer {
+        address: region.phys as usize,
+        len: 16,
+    };
+    let handle = open_for(0x1F_01FF, false)?;
+    let none = file::Buffer::NONE;
+    let control = |method| ctl_code(0x22, 0x801, method, 0);
+    let device = IRP_MJ_DEVICE_CONTROL;
+    let requests = [
+        file::user_transfer(handle, IRP_MJ_READ, firmware),
+        file::user_transfer(handle, IRP_MJ_WRITE, firmware),
+        file::user_control(handle, device, control(METHOD_BUFFERED), firmware, none),
+        file::user_control(handle, device, control(METHOD_BUFFERED), none, firmware),
+        file::user_control(handle, device, control(METHOD_IN_DIRECT), none, firmware),
+        file::user_control(handle, device, control(METHOD_OUT_DIRECT), none, firmware),
+    ];
+    file::close(handle);
+    let served = SERVED.swap(0, Ordering::AcqRel);
+    if requests
+        .iter()
+        .any(|r| r.map(|r| r.status) != Ok(STATUS_ACCESS_VIOLATION))
+    {
+        return Err("a user-mode request was let name firmware's memory as its buffer");
     }
+    if served != 0 {
+        return Err("the driver was sent a request whose buffer is firmware's memory");
+    }
+    // The last byte of a range is firmware's, or the first.
+    if user::in_range(region.phys as usize - 1, 2) || user::in_range(region.end() as usize - 1, 2) {
+        return Err("a range that runs into or out of firmware's memory passed as user memory");
+    }
+    if user::frame_of(region.phys).is_some() {
+        return Err("a page of firmware's memory was found as a user page");
+    }
+    Ok(requests.len() as u32)
+}
+
+fn run(r: &mut Report, _: &BootInfo) {
+    let mut counted = |name, result: Result<u32, &'static str>| match result {
+        Ok(n) => r.ok_with(name, format_args!("requests: {n}")),
+        Err(why) => r.fail(name, format_args!("{why}")),
+    };
+    counted("io.user.access", with_driver(access));
+    counted("io.user.firmware-buffer", with_driver(firmware_buffer));
 }

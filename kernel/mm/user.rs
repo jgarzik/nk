@@ -9,8 +9,10 @@
 //! NK enables neither).
 //!
 //! The low half also holds firmware's runtime regions at their physical
-//! addresses; a range that touches one is refused. So is the lowest
-//! 64 KiB, as on Windows: a null pointer with a small offset faults.
+//! addresses, mapped and writable. They are not part of the user range:
+//! a range that touches one is refused, to be mapped and by every probe
+//! of a requestor's buffer. So is the lowest 64 KiB to be mapped, as on
+//! Windows: a null pointer with a small offset faults.
 
 use super::{PAGE_SIZE, alloc_frames, free_frames, map};
 use nk_mm::pt::{MapError, Prot};
@@ -62,10 +64,16 @@ fn range_end(va: u64, pages: usize) -> Option<u64> {
     ok.then_some(end)
 }
 
+/// Whether any of the `len` bytes at `address`, a range that does not
+/// wrap, are memory firmware's runtime services use.
+fn firmware(address: u64, len: u64) -> bool {
+    super::firmware_regions().any(|(region, _)| region.overlaps(address, len))
+}
+
 /// Whether the `pages` pages at `va` may hold user pages.
 fn check(va: u64, pages: usize) -> Result<(), UserError> {
     let end = range_end(va, pages).ok_or(UserError::BadRange)?;
-    if super::firmware_regions().any(|(region, _)| region.overlaps(va, end - va)) {
+    if firmware(va, end - va) {
         return Err(UserError::Firmware);
     }
     Ok(())
@@ -118,21 +126,28 @@ fn release(va: u64, pages: usize) {
 }
 
 /// The frame behind the page that holds `va`, an address in the user
-/// range, if one is mapped there.
+/// range, if one is mapped there. A page of firmware's is not a user
+/// page.
 pub fn frame_of(va: u64) -> Option<u64> {
-    if !(LOWEST_USER_ADDRESS..USER_PROBE_ADDRESS).contains(&va) {
+    let page = va & !(PAGE_SIZE as u64 - 1);
+    if !(LOWEST_USER_ADDRESS..USER_PROBE_ADDRESS).contains(&va) || firmware(page, PAGE_SIZE as u64)
+    {
         return None;
     }
     map::translate(va).map(|pa| pa & !(PAGE_SIZE as u64 - 1))
 }
 
-/// Whether the `len` bytes at `address` lie in the user range: all that
-/// Windows' `ProbeForRead` asks. An empty range always does.
+/// Whether the `len` bytes at `address` lie in the user range: what
+/// Windows' `ProbeForRead` asks, and that none of them is firmware's,
+/// which Windows has no need to ask. An empty range always does.
 pub fn in_range(address: usize, len: usize) -> bool {
-    len == 0
-        || address
-            .checked_add(len)
-            .is_some_and(|end| end as u64 <= USER_PROBE_ADDRESS)
+    if len == 0 {
+        return true;
+    }
+    let user = address
+        .checked_add(len)
+        .is_some_and(|end| end as u64 <= USER_PROBE_ADDRESS);
+    user && !firmware(address as u64, len as u64)
 }
 
 /// Read and write back one byte of every page of the `len` bytes at
@@ -269,7 +284,7 @@ pub fn refuse_test() -> Result<(), &'static str> {
             return Err("a range over firmware's memory was not refused");
         }
     }
-    if frame_of(region.phys) != Some(region.phys) {
+    if map::translate(region.phys) != Some(region.phys) {
         return Err("firmware's memory is no longer mapped at its own address");
     }
 
