@@ -76,7 +76,7 @@ The kernel command line is `\NK\cmdline.txt` on the boot volume:
 | `cpus=<n>` | `hal.cpus` fails unless the kernel finds `n` processors; the harness sets it to what it asked QEMU for |
 | `dpc-limit=<ticks>` | how long one DPC may run, instead of Windows' 20 seconds |
 | `debug=on` | behave as with a debugger attached that continues at every breakpoint |
-| `without=<file>` | boot as if the driver file `<file>` had not been provided: its service is passed over and a device that needs it is left without its driver |
+| `without=<file>[,<file>...]` | boot as if the driver files named had not been provided: their services are passed over, and a device that needs one is left without its driver (a filter is left out of the stack) |
 | `trace=registry` | log every key a driver opens and every value it reads, with the status: what a driver looks for in the registry, for bringing one up |
 
 ### What passing means

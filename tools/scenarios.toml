@@ -827,7 +827,7 @@ match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(paramet
 [x86_64-storage]
 arch = "x86_64"
 tier = "gate"
-cmdline = "test=stor.load"
+cmdline = "test=stor.load without=partmgr.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
@@ -838,7 +838,7 @@ disk_expect = "written"
 [x86_64-storage-direct]
 arch = "x86_64"
 tier = "gate"
-cmdline = "test=stor.direct without=pci.sys"
+cmdline = "test=stor.direct without=pci.sys,partmgr.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
@@ -850,7 +850,7 @@ disk_expect = "written"
 arch = "x86_64"
 tier = "gate"
 smp = 1
-cmdline = "test=stor.direct without=pci.sys"
+cmdline = "test=stor.direct without=pci.sys,partmgr.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
