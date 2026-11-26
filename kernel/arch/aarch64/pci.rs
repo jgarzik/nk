@@ -17,3 +17,7 @@ impl PciPorts {
         match self {}
     }
 }
+
+/// The I/O ports firmware's AML code must not touch: this machine has
+/// no I/O ports.
+pub const AML_FORBIDDEN_PORTS: &[(u32, u32, u32, bool)] = &[];

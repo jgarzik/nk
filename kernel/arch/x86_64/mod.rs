@@ -22,7 +22,7 @@ pub use ioapic::{
     InterruptVectors, TestSource as InterruptTestSource, acpi_device_interrupts, hal_hardware_id,
     interrupt_message, isa_line, level_line_polarity, line_enable, line_route,
 };
-pub use pci::{PCI_PORTS, PciPorts};
+pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts};
 
 pub use apic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,

@@ -1395,7 +1395,13 @@ the same kind with Windows' signature, version and slot order, whose
 FADT; `nk_acpi::lookup`). It returns the firmware's own table where
 Windows returns a copy. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
-reach and stops the system naming any other.
+reach and stops the system naming any other. One is the list of I/O
+ports the ACPI driver must keep firmware's AML code away from: on
+x86-64 the PC's interrupt controllers, timers, clock and DMA
+controllers, as Windows' HAL lists them, and the PCI configuration
+ports, which carry a routine of the HAL's: AML's accesses to those are
+not made on the ports but carried out by the HAL through its own
+configuration access. arm64 has no I/O ports and an empty list.
 
 `HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
 rather than a slot, tells `pci.sys` how interrupts name their
