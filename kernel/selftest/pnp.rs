@@ -1053,6 +1053,41 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
         {
             return Err("the interface is not recorded under DeviceClasses as Windows records it");
         }
+        // A property of the interface is kept with its record; one for
+        // a link nobody registered is refused.
+        let property = DEVPROPKEY {
+            fmtid: class,
+            pid: 3,
+        };
+        let set = |name: *const UNICODE_STRING| {
+            // SAFETY: a counted string, a key and four bytes to read.
+            unsafe {
+                pnp::interface::IoSetDeviceInterfacePropertyData(
+                    name,
+                    &raw const property,
+                    0,
+                    0,
+                    7,
+                    4,
+                    7u32.to_le_bytes().as_ptr(),
+                )
+            }
+        };
+        if set(&raw const name) != STATUS_SUCCESS
+            || cm::read(&format!("{key}\\#\\Properties\\{CLASS}\\0003"), "")
+                != Ok((0xFFFF_0007, 7u32.to_le_bytes().to_vec()))
+        {
+            return Err("the interface's property was not kept with its record");
+        }
+        let mut stranger: Vec<u16> = "\\??\\NkNoSuchInterface".encode_utf16().collect();
+        let stranger = UNICODE_STRING {
+            Length: (stranger.len() * 2) as u16,
+            MaximumLength: (stranger.len() * 2) as u16,
+            Buffer: stranger.as_mut_ptr(),
+        };
+        if set(&raw const stranger) != STATUS_OBJECT_NAME_NOT_FOUND {
+            return Err("a property was set for an interface nobody registered");
+        }
         let mut handle = core::ptr::null_mut();
         // SAFETY: a driver object and a callback of the test's, a GUID
         // and a handle to write.
