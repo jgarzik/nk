@@ -211,13 +211,12 @@ tier has, for each architecture:
   `storahci`'s device gone from it and no resources or interrupt
   vector held, and take its device away when the controller leaves the
   bus; done twice, the second round must leave the kernel holding
-  exactly what the first left (`selftest::resources`). Each round
-  ends with the controller's key and driver key deleted, so that every
-  round and the start that follows is the controller's first: it is
-  installed from the driver database and then asked for its
-  requirements with `MSISupported` in its key, which is when the bus,
-  like `pci.sys`, offers a message. The controller then comes back for
-  the tests that follow;
+  exactly what the first left (`selftest::resources`, read once the
+  kernel has stopped changing: what was taken down frees what it held
+  a moment later). The controller then comes back for the tests that
+  follow, enumerated for the third time, its key from the first still
+  there: the bus, like `pci.sys`, reads `MSISupported` from it when it
+  is asked for the requirements, and offers a message;
   `stor.direct.controller` the controller started by
   `storahci` with its ports, the memory its sixth address register
   names and one interrupt: one message, as on the reference machine
@@ -262,7 +261,9 @@ tier has, for each architecture:
 
   The two paths never both have the controller. The direct path
   exists only in this group, which runs only when named
-  (`test=stor.direct`), and the group looks at the device tree first:
+  (`test=stor.direct`), and its scenarios boot `without=pci.sys`, so
+  that the machine's own bus driver is not there to enumerate the
+  controller. The group looks at the device tree first all the same:
   if a device with the controller's PCI device identifier is already
   there, because `pci.sys` enumerated it, every test of the group is
   skipped saying so, and no second device is made for the function.

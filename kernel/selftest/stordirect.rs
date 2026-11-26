@@ -86,6 +86,25 @@ fn vectors_given() -> usize {
         .count()
 }
 
+/// What the kernel holds once it has stopped changing: a stack that
+/// was taken down leaves work items and threads that free what they
+/// hold a moment later. The same twice, 20 ms apart, within 4 s.
+fn at_rest() -> super::Resources {
+    let mut held = super::resources();
+    for _ in 0..200 {
+        for _ in 0..20 {
+            crate::ke::thread::yield_now();
+            crate::ke::time::stall(1_000);
+        }
+        let now = super::resources();
+        if now == held {
+            break;
+        }
+        held = now;
+    }
+    held
+}
+
 /// A start of the controller that fails is undone: the bus's device
 /// refuses the start request Storport passes down first, so
 /// `storahci`'s start fails with the device's stack built and its
@@ -121,17 +140,8 @@ fn failed_start(bus: &Bus) -> Result<String, &'static str> {
         if !bus.child().is_null() || node::by_instance(&found.instance).is_some() {
             return Err("a controller that left the bus still has a device");
         }
-        // The round's installation goes too: its key and its driver
-        // key. Every round, and the start that follows, is then the
-        // controller's first: installed from the driver database, and
-        // asked for its requirements with its key written.
-        let key = registry::enum_key(&found.instance);
-        if let Some(driver) = registry::string(&key, "Driver") {
-            let _ = crate::cm::delete_tree(&registry::class_key(&driver));
-        }
-        let _ = crate::cm::delete_tree(&key);
         instance = found.instance;
-        *round = Some(super::resources());
+        *round = Some(at_rest());
     }
     if held[0] != held[1] {
         kprintln!("stor.direct: after one failed start {:?}", held[0]);
