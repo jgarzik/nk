@@ -5,6 +5,8 @@ mod clock;
 mod cpu;
 mod gic;
 pub mod platform;
+pub mod seh;
+pub mod seh_test;
 mod smp;
 mod switch;
 mod trap;

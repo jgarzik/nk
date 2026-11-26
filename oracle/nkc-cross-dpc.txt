@@ -1,0 +1,8 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 3411081f5b17de2bec30764ed5845741e0a3db34df6213c9fdcce0d9289e7698
+# driver nkc-cross-b.sys sha256 5c97ba9d4498233704d0d61c3691a07810bd454e05e27921c2bd6d75595a2a9e
+# driver nkc-cross.sys sha256 79f9950b58a77f86442d01ec9bf5c0ebd27d843b98f2f4879ac8800c9c8ce66f
+load nkc-cross-b: ok
+load nkc-cross: ok
+open d \Device\NkcCross: 00000000
+ioctl d 00222440 - 0: stopped 0000001e e04e4b41

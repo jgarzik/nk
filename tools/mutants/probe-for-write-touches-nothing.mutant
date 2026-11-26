@@ -1,0 +1,7 @@
+# `ProbeForWrite` checks the range and touches none of it: an unmapped
+# buffer passes.
+scenario: aarch64
+fails: seh.probe
+file: kernel/mm/user.rs
+replace:         unsafe { copy(byte, byte, 1) }?;
+with:         let _ = byte;

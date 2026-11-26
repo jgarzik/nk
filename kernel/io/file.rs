@@ -24,7 +24,8 @@
 //! completed or not.
 
 use super::{TAG_FILE_NAME, TAG_IO_BUFFER, device, irp, mdl};
-use crate::mm::pool;
+use crate::ke::seh::Guard;
+use crate::mm::{pool, user};
 use crate::ob::{handle, object};
 use crate::{ke, ob, se};
 use alloc::boxed::Box;
@@ -57,8 +58,11 @@ pub enum IoError {
         dispatch_status: NTSTATUS,
         completed: NTSTATUS,
     },
-    /// The control code asks for a buffer method not implemented yet.
+    /// The device asks for a buffer method not implemented yet.
     UnsupportedMethod,
+    /// The I/O manager cannot use a buffer of the request: no driver
+    /// saw it, and it fails with this status.
+    Refused(NTSTATUS),
 }
 
 /// `LOCK_OPERATION` values for `MmProbeAndLockPages`.
@@ -175,8 +179,21 @@ impl Pending {
     }
 }
 
+/// What [`start`] owes if the dispatch routine is unwound: the critical
+/// region it called the routine in.
+///
+/// # Safety
+/// The thread is in that critical region.
+unsafe fn leave_critical_region(_: *mut c_void) {
+    ke::mutex::KeLeaveCriticalRegion();
+}
+
 /// Fill in the common requestor fields and send the IRP on behalf of
 /// `mode`.
+///
+/// If an exception unwinds the dispatch routine, the request is still
+/// its driver's: the IRP, and the block of results and event the IRP
+/// points to, are left where they are.
 ///
 /// # Safety
 /// `irp` must be a fresh IRP whose next stack location is set up for
@@ -207,8 +224,12 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         // APCs off, in a critical region; a driver can ask, and
         // nkc-mutex does (oracle/nkc-mutex.txt).
         let device_object = (*file).DeviceObject;
+        let guard = Guard::Undo {
+            undo: leave_critical_region,
+            context: core::ptr::null_mut(),
+        };
         let dispatch_status =
-            ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp));
+            ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp, &guard));
         Pending {
             irp,
             waiting,
@@ -583,6 +604,53 @@ pub unsafe extern "C" fn deleted(object: *mut c_void) {
     }
 }
 
+/// [`IoGetDeviceObjectPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdeviceobjectpointer):
+/// open the named device for kernel mode and hand the caller the file
+/// object, with a reference, and the device the file's requests go to.
+/// The handle of the open is closed again, so the device's driver is
+/// sent a create and a cleanup now, and a close when the caller gives
+/// the file object's reference up.
+///
+/// # Safety
+/// `name` is a counted string and the two last arguments are writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoGetDeviceObjectPointer(
+    name: *const UNICODE_STRING,
+    desired_access: u32,
+    file_object: *mut *mut FILE_OBJECT,
+    device_object: *mut *mut DEVICE_OBJECT,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    let name = alloc::string::String::from_utf16_lossy(&unsafe { crate::rtl::copy_unicode(name) });
+    let request = OpenRequest {
+        name: &name,
+        root: None,
+        desired_access,
+        share_access: 0,
+        create_options: FILE_NON_DIRECTORY_FILE,
+        disposition: FILE_OPEN,
+        kind: Kind::File,
+        requestor_mode: KERNEL_MODE,
+    };
+    let handle = match open(&request) {
+        Ok((handle, _)) => handle,
+        Err(status) => return status,
+    };
+    let Ok(file) = file_of(handle) else {
+        crate::kd::bugcheck(format_args!(
+            "IoGetDeviceObjectPointer: a handle just opened names no file"
+        ))
+    };
+    close(handle);
+    // SAFETY: per the contract; the reference just taken keeps the file
+    // object, whose device is set for as long as it is open.
+    unsafe {
+        file_object.write(file);
+        device_object.write((*file).DeviceObject);
+    }
+    STATUS_SUCCESS
+}
+
 /// The open file `handle` names, with a reference for a request to
 /// hold.
 fn file_of(handle: u64) -> Result<*mut FILE_OBJECT, IoError> {
@@ -591,22 +659,126 @@ fn file_of(handle: u64) -> Result<*mut FILE_OBJECT, IoError> {
         .map_err(IoError::Handle)
 }
 
-/// Build a request for the open file `handle` names and send it. The
-/// request holds the file object until it has been waited for.
+/// A requestor's buffer, as a system service is given it: an address
+/// and a length. Kernel mode's is trusted. User mode's is whatever the
+/// requestor chose to say, and is used only through checks and
+/// `mm::user::copy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Buffer {
+    pub address: usize,
+    pub len: usize,
+}
+
+impl Buffer {
+    /// No buffer: a null pointer and no length.
+    pub const NONE: Self = Self { address: 0, len: 0 };
+
+    /// The kernel's own memory. An empty slice is no buffer.
+    fn of(bytes: &[u8]) -> Self {
+        if bytes.is_empty() {
+            Self::NONE
+        } else {
+            Self {
+                address: bytes.as_ptr().addr(),
+                len: bytes.len(),
+            }
+        }
+    }
+
+    fn ptr(self) -> *mut u8 {
+        core::ptr::with_exposed_provenance_mut(self.address)
+    }
+
+    /// What Windows makes of a user-mode requestor's buffer that the
+    /// I/O manager copies: a null pointer is no buffer, whatever length
+    /// came with it.
+    fn if_present(self) -> Self {
+        if self.address == 0 { Self::NONE } else { self }
+    }
+}
+
+/// Refuse a user-mode request whose buffer the I/O manager cannot use:
+/// the status of the exception Windows' own probe raises and catches.
+const REFUSED: IoError = IoError::Refused(STATUS_ACCESS_VIOLATION);
+
+/// Probe a user-mode requestor's buffer for reading: it lies in the
+/// user range. Nothing is touched (`ProbeForRead`).
+fn probe_read(buffer: Buffer) -> Result<(), IoError> {
+    if user::in_range(buffer.address, buffer.len) {
+        Ok(())
+    } else {
+        Err(REFUSED)
+    }
+}
+
+/// Probe a user-mode requestor's buffer for writing: it lies in the
+/// user range and every page of it can be written (`ProbeForWrite`).
+fn probe_write(buffer: Buffer) -> Result<(), IoError> {
+    probe_read(buffer)?;
+    user::probe_pages(buffer.address, buffer.len).map_err(|_| REFUSED)
+}
+
+/// Copy a requestor's bytes into a system buffer: plainly from kernel
+/// memory, through the copy that may fail from user memory.
 ///
 /// # Safety
-/// `build` returns a fresh IRP set up for the file's device; whatever
-/// buffers it names stay valid until the returned request has been
-/// waited for.
+/// `system` has room for the buffer; a kernel-mode buffer is valid.
+unsafe fn copy_in(system: *mut u8, buffer: Buffer, mode: i8) -> Result<(), IoError> {
+    // SAFETY: per the contract; a user buffer has been probed.
+    unsafe {
+        if mode == KERNEL_MODE {
+            core::ptr::copy_nonoverlapping(buffer.ptr(), system, buffer.len);
+            Ok(())
+        } else {
+            user::copy(system, buffer.ptr(), buffer.len).map_err(|_| REFUSED)
+        }
+    }
+}
+
+/// Free a request that was not sent: its IRP, its system buffer and
+/// its MDLs.
+///
+/// # Safety
+/// `irp` is a fresh IRP no driver has seen.
+unsafe fn discard(irp: *mut IRP) {
+    // SAFETY: per the contract.
+    unsafe {
+        let system = (*irp).SystemBuffer;
+        if !system.is_null() {
+            let _ = pool::free(system.cast());
+        }
+        mdl::release_chain(irp);
+        irp::free(irp);
+    }
+}
+
+/// Build a request for the open file `handle` names and send it on
+/// behalf of `mode`. The request holds the file object until it has
+/// been waited for. A request `build` gives up on is freed.
+///
+/// # Safety
+/// `build` sets up the fresh IRP it is given for the file's device;
+/// whatever buffers it names stay valid until the returned request has
+/// been waited for.
 unsafe fn send(
     handle: u64,
-    build: impl FnOnce(*mut FILE_OBJECT) -> Result<*mut IRP, IoError>,
+    major: u8,
+    parameters: impl FnOnce(*mut FILE_OBJECT) -> [u64; 4],
+    mode: i8,
+    build: impl FnOnce(*mut FILE_OBJECT, *mut IRP) -> Result<(), IoError>,
 ) -> Result<Pending, IoError> {
     let file = file_of(handle)?;
-    match build(file) {
+    // SAFETY: `file` is an open file, referenced.
+    let built = unsafe { request(file, major, parameters(file)) }.and_then(|irp| {
+        build(file, irp).map(|()| irp).inspect_err(|_| {
+            // SAFETY: the request was not sent.
+            unsafe { discard(irp) }
+        })
+    });
+    match built {
         Ok(irp) => {
             // SAFETY: per the contract.
-            let mut pending = unsafe { start(file, irp, KERNEL_MODE) };
+            let mut pending = unsafe { start(file, irp, mode) };
             pending.held = file;
             Ok(pending)
         }
@@ -618,53 +790,64 @@ unsafe fn send(
     }
 }
 
+/// What a request the I/O manager refused before any driver saw it
+/// comes back as: its status, as a system service returns it.
+fn refused(result: Result<IoResult, IoError>) -> Result<IoResult, IoError> {
+    match result {
+        Err(IoError::Refused(status)) => Ok(IoResult {
+            status,
+            information: 0,
+        }),
+        other => other,
+    }
+}
+
 /// Read or write. `buffer` is filled by a read and sent by a write.
 ///
 /// # Safety
-/// `buffer` must be valid for `len` bytes (writable for a read) until
-/// the returned request has been waited for.
-unsafe fn transfer(
-    handle: u64,
-    major: u8,
-    buffer: *mut u8,
-    len: usize,
-) -> Result<Pending, IoError> {
-    // SAFETY: per the contract; `file` is an open file, referenced.
-    let build = |file: *mut FILE_OBJECT| unsafe {
-        let irp = request(
-            file,
-            major,
-            rw_parameters(len as u32, (*file).CurrentByteOffset),
-        )?;
+/// A kernel-mode `buffer` must be valid for its length (writable for a
+/// read) until the returned request has been waited for.
+unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<Pending, IoError> {
+    let len = buffer.len;
+    // SAFETY: `file` is an open file, referenced.
+    let parameters =
+        |file: *mut FILE_OBJECT| unsafe { rw_parameters(len as u32, (*file).CurrentByteOffset) };
+    // SAFETY: per the contract; `irp` is fresh.
+    let build = |file: *mut FILE_OBJECT, irp: *mut IRP| unsafe {
+        if mode != KERNEL_MODE {
+            if major == IRP_MJ_READ {
+                probe_write(buffer)?;
+            } else {
+                probe_read(buffer)?;
+            }
+        }
         let flags = (*(*file).DeviceObject).Flags;
         if flags & DO_BUFFERED_IO != 0 {
             if len != 0 {
                 let system = pool::alloc(len, TAG_IO_BUFFER);
                 if system.is_null() {
-                    irp::free(irp);
                     return Err(IoError::NoMemory);
                 }
                 (*irp).SystemBuffer = system.cast();
                 (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
                 if major == IRP_MJ_READ {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
-                    (*irp).UserBuffer = buffer.cast();
+                    (*irp).UserBuffer = buffer.ptr().cast();
                     irp::requestor_room(irp).write(len);
                 } else {
-                    core::ptr::copy_nonoverlapping(buffer, system, len);
+                    copy_in(system, buffer, mode)?;
                 }
             }
         } else if flags & DO_DIRECT_IO != 0 {
-            irp::free(irp);
             return Err(IoError::UnsupportedMethod);
         } else {
             // Neither: the driver gets the caller's buffer as it is.
-            (*irp).UserBuffer = buffer.cast();
+            (*irp).UserBuffer = buffer.ptr().cast();
         }
-        Ok(irp)
+        Ok(())
     };
     // SAFETY: per the contract.
-    unsafe { send(handle, build) }
+    unsafe { send(handle, major, parameters, mode, build) }
 }
 
 /// Read up to `buffer.len()` bytes.
@@ -682,22 +865,23 @@ pub fn read(handle: u64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
 pub unsafe fn read_start(handle: u64, buffer: &mut [u8]) -> Result<Pending, IoError> {
     // SAFETY: `buffer` is a valid writable slice; the rest per the
     // contract.
-    unsafe { transfer(handle, IRP_MJ_READ, buffer.as_mut_ptr(), buffer.len()) }
+    unsafe { transfer(handle, IRP_MJ_READ, Buffer::of(buffer), KERNEL_MODE) }
 }
 
 /// Write `buffer`.
 pub fn write(handle: u64, buffer: &[u8]) -> Result<IoResult, IoError> {
     // SAFETY: a write only reads the buffer, which is borrowed until
     // the request has been waited for, here.
-    let pending = unsafe {
-        transfer(
-            handle,
-            IRP_MJ_WRITE,
-            buffer.as_ptr().cast_mut(),
-            buffer.len(),
-        )
-    };
-    pending?.wait()
+    unsafe { transfer(handle, IRP_MJ_WRITE, Buffer::of(buffer), KERNEL_MODE) }?.wait()
+}
+
+/// Read or write (`major`) on behalf of user mode, as `NtReadFile` and
+/// `NtWriteFile` do: `buffer` is wherever the requestor says. One the
+/// I/O manager cannot use fails the request with the access violation.
+pub fn user_transfer(handle: u64, major: u8, buffer: Buffer) -> Result<IoResult, IoError> {
+    // SAFETY: a user-mode buffer is only used through checks.
+    let pending = unsafe { transfer(handle, major, buffer, USER_MODE) };
+    refused(pending.and_then(Pending::wait))
 }
 
 /// Send a device control request (`IRP_MJ_DEVICE_CONTROL`) and wait for
@@ -724,8 +908,18 @@ pub unsafe fn device_control_start(
     input: &[u8],
     output: &mut [u8],
 ) -> Result<Pending, IoError> {
+    let (input, output) = (Buffer::of(input), Buffer::of(output));
     // SAFETY: per the contract; the slices are valid for their lengths.
-    unsafe { control(handle, IRP_MJ_DEVICE_CONTROL, code, input, output) }
+    unsafe {
+        control(
+            handle,
+            IRP_MJ_DEVICE_CONTROL,
+            code,
+            input,
+            output,
+            KERNEL_MODE,
+        )
+    }
 }
 
 /// Send a file-system control request (`IRP_MJ_FILE_SYSTEM_CONTROL`,
@@ -737,9 +931,39 @@ pub fn fs_control(
     input: &[u8],
     output: &mut [u8],
 ) -> Result<IoResult, IoError> {
+    let (input, output) = (Buffer::of(input), Buffer::of(output));
     // SAFETY: the slices are borrowed until the request has been waited
     // for, here.
-    unsafe { control(handle, IRP_MJ_FILE_SYSTEM_CONTROL, code, input, output) }?.wait()
+    unsafe {
+        control(
+            handle,
+            IRP_MJ_FILE_SYSTEM_CONTROL,
+            code,
+            input,
+            output,
+            KERNEL_MODE,
+        )
+    }?
+    .wait()
+}
+
+/// Send a control request (`major`: device or file-system control) on
+/// behalf of user mode, as `NtDeviceIoControlFile` and
+/// `NtFsControlFile` do, and wait for it. The buffers are wherever the
+/// requestor says. For the buffered and direct methods the I/O manager
+/// probes and copies them, and one it cannot use fails the request with
+/// the access violation; for `METHOD_NEITHER` the driver is handed the
+/// addresses as they are.
+pub fn user_control(
+    handle: u64,
+    major: u8,
+    code: u32,
+    input: Buffer,
+    output: Buffer,
+) -> Result<IoResult, IoError> {
+    // SAFETY: user-mode buffers are only used through checks.
+    let pending = unsafe { control(handle, major, code, input, output, USER_MODE) };
+    refused(pending.and_then(Pending::wait))
 }
 
 /// Send a control request of either kind. Their parameters have one
@@ -747,40 +971,65 @@ pub fn fs_control(
 /// from a requestor is zero (`IRP_MN_USER_FS_REQUEST`).
 ///
 /// # Safety
-/// `output` must stay valid and unused until the returned request has
-/// been waited for.
+/// Kernel-mode buffers must be valid, and `output` unused, until the
+/// returned request has been waited for.
 unsafe fn control(
     handle: u64,
     major: u8,
     code: u32,
-    input: &[u8],
-    output: &mut [u8],
+    input: Buffer,
+    output: Buffer,
+    mode: i8,
 ) -> Result<Pending, IoError> {
-    // SAFETY: per the contract; the slices are valid for their lengths
-    // and `file` is an open file, referenced.
-    let build = |file: *mut FILE_OBJECT| unsafe {
-        let parameters = ioctl_parameters(output.len() as u32, input.len() as u32, code, 0);
-        let irp = request(file, major, parameters)?;
-        match code & 3 {
+    let method = code & 3;
+    let user = mode != KERNEL_MODE;
+    // A user-mode buffer the I/O manager itself copies, in or out, has
+    // no length if it is null: the input of the buffered and direct
+    // methods, the output of the buffered one. A direct method's second
+    // buffer keeps its length, and a null one fails its probe.
+    let (input, output) = match method {
+        METHOD_BUFFERED if user => (input.if_present(), output.if_present()),
+        METHOD_IN_DIRECT | METHOD_OUT_DIRECT if user => (input.if_present(), output),
+        _ => (input, output),
+    };
+    let parameters = |_| {
+        let type3 = if method == METHOD_NEITHER {
+            input.address as u64
+        } else {
+            0
+        };
+        ioctl_parameters(output.len as u32, input.len as u32, code, type3)
+    };
+    // SAFETY: per the contract; `irp` is fresh.
+    let build = |_, irp: *mut IRP| unsafe {
+        // The buffered part of a request: a system buffer of `len`
+        // bytes holding the input.
+        let buffered = |len: usize| -> Result<(), IoError> {
+            if len == 0 {
+                return Ok(());
+            }
+            let system = pool::alloc(len, TAG_IO_BUFFER);
+            if system.is_null() {
+                return Err(IoError::NoMemory);
+            }
+            (*irp).SystemBuffer = system.cast();
+            (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
+            copy_in(system, input, mode)
+        };
+        match method {
             METHOD_BUFFERED => {
                 // One system buffer serves both directions: input is
                 // copied in, and the driver's output is copied back out
                 // of it on completion.
-                let len = input.len().max(output.len());
-                if len != 0 {
-                    let system = pool::alloc(len, TAG_IO_BUFFER);
-                    if system.is_null() {
-                        irp::free(irp);
-                        return Err(IoError::NoMemory);
-                    }
-                    core::ptr::copy_nonoverlapping(input.as_ptr(), system, input.len());
-                    (*irp).SystemBuffer = system.cast();
-                    (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
-                    if !output.is_empty() {
-                        (*irp).Flags |= IRP_INPUT_OPERATION;
-                        (*irp).UserBuffer = output.as_mut_ptr().cast();
-                        irp::requestor_room(irp).write(output.len());
-                    }
+                if user {
+                    probe_read(input)?;
+                    probe_write(output)?;
+                }
+                buffered(input.len.max(output.len))?;
+                if output.len != 0 {
+                    (*irp).Flags |= IRP_INPUT_OPERATION;
+                    (*irp).UserBuffer = output.ptr().cast();
+                    irp::requestor_room(irp).write(output.len);
                 }
             }
             METHOD_IN_DIRECT | METHOD_OUT_DIRECT => {
@@ -788,48 +1037,38 @@ unsafe fn control(
                 // described by an MDL and its pages locked. For
                 // METHOD_IN_DIRECT the driver reads from it, for
                 // METHOD_OUT_DIRECT it writes to it.
-                if !input.is_empty() {
-                    let system = pool::alloc(input.len(), TAG_IO_BUFFER);
-                    if system.is_null() {
-                        irp::free(irp);
-                        return Err(IoError::NoMemory);
-                    }
-                    core::ptr::copy_nonoverlapping(input.as_ptr(), system, input.len());
-                    (*irp).SystemBuffer = system.cast();
-                    (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
-                }
-                if !output.is_empty() {
-                    let mdl = mdl::IoAllocateMdl(
-                        output.as_mut_ptr().cast(),
-                        output.len() as u32,
-                        0,
-                        0,
-                        irp,
-                    );
-                    if mdl.is_null() {
-                        if !(*irp).SystemBuffer.is_null() {
-                            let _ = pool::free((*irp).SystemBuffer.cast());
-                        }
-                        irp::free(irp);
-                        return Err(IoError::NoMemory);
-                    }
-                    let operation = if code & 3 == METHOD_IN_DIRECT {
-                        IO_READ_ACCESS
+                let operation = if method == METHOD_IN_DIRECT {
+                    IO_READ_ACCESS
+                } else {
+                    IO_WRITE_ACCESS
+                };
+                if user {
+                    probe_read(input)?;
+                    if operation == IO_READ_ACCESS {
+                        probe_read(output)?;
                     } else {
-                        IO_WRITE_ACCESS
-                    };
-                    mdl::MmProbeAndLockPages(mdl, KERNEL_MODE, operation);
+                        probe_write(output)?;
+                    }
+                }
+                buffered(input.len)?;
+                if output.len != 0 {
+                    let described =
+                        mdl::IoAllocateMdl(output.ptr().cast(), output.len as u32, 0, 0, irp);
+                    if described.is_null() {
+                        return Err(IoError::NoMemory);
+                    }
+                    mdl::probe_and_lock(described, mode, operation).map_err(IoError::Refused)?;
                 }
             }
             _ => {
-                // METHOD_NEITHER hands the driver raw caller addresses,
-                // which it must probe as user memory. There is none.
-                irp::free(irp);
-                return Err(IoError::UnsupportedMethod);
+                // METHOD_NEITHER hands the driver the requestor's
+                // addresses as they are; whether they can be used is
+                // the driver's to find out.
+                (*irp).UserBuffer = output.ptr().cast();
             }
         }
-        Ok(irp)
+        Ok(())
     };
     // SAFETY: per the contract.
-    unsafe { send(handle, build) }
+    unsafe { send(handle, major, parameters, mode, build) }
 }

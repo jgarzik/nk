@@ -4,10 +4,10 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 113,
-  "implemented": 102,
-  "partial": 5,
-  "traps": 1,
+  "total": 123,
+  "implemented": 114,
+  "partial": 4,
+  "traps": 0,
   "missing": 0,
   "library": 5
  },
@@ -33,7 +33,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "__C_specific_handler",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -93,7 +93,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ProbeForRead",
-     "state": "partial"
+     "state": "implemented"
     }
    ]
   },
@@ -1240,6 +1240,327 @@
     {
      "module": "HAL.dll",
      "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-seh",
+   "file": "nkc-seh.arm64.sys",
+   "sha256": "cd7d3e7d3291f31003acca9caaf4c7ee1f4b37ae572d9cd4591528c627470ad3",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ProbeForWrite",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmUserProbeAddress",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseAccessViolation",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleaseFastMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseDatatypeMisalignment",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ProbeForRead",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquireFastMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_local_unwind",
+     "state": "implemented"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-seh-fatal",
+   "file": "nkc-seh-fatal.arm64.sys",
+   "sha256": "802516f940c0fb46a6291fc78e45e3de3ffd572f6bca92cb9832f65688b3b0fe",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInsertQueueDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-cross",
+   "file": "nkc-cross.arm64.sys",
+   "sha256": "232eed9f5a538f0d1462255e14126af50f4e4cf4b66f01633e72eff409f6263e",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDeviceObjectPointer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInsertQueueDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAreApcsDisabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KfLowerIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KfRaiseIrql",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-cross-b",
+   "file": "nkc-cross-b.arm64.sys",
+   "sha256": "fc2a0664c4441975149635049f8727f086587689949a7c28bac7e9856b1f85b2",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
      "state": "implemented"
     }
    ]

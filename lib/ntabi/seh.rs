@@ -191,6 +191,9 @@ pub mod arm64 {
     pub const CONTEXT_INTEGER: u32 = CONTEXT_ARM64 | 0x2;
     pub const CONTEXT_FLOATING_POINT: u32 = CONTEXT_ARM64 | 0x4;
     pub const CONTEXT_FULL: u32 = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT;
+    /// The context's `Pc` is a return address: the frame was left by a
+    /// call, and the instruction it was executing is the one before.
+    pub const CONTEXT_UNWOUND_TO_CALL: u32 = 0x2000_0000;
 
     /// `ARM64_NT_NEON128`: one vector register.
     #[repr(C)]

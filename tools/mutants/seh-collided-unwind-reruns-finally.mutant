@@ -1,0 +1,7 @@
+# A `__finally` block's place in its scope table is not recorded before
+# the block runs: an unwind that begins inside the block takes the
+# first one over and runs the block again.
+scenario: aarch64
+fails: oracle.nkc-seh
+file: kernel/ke/seh.rs
+remove:                     (&raw mut (*dispatcher).ScopeIndex).write(index);

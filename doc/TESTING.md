@@ -107,11 +107,15 @@ gate tier has, for each architecture:
   processors; and `*-smp1`: on one;
 - `*-neg-*`: boots that break a rule on purpose (a panic, a stack
   overflow, a lock taken out of order, a wait at `DISPATCH_LEVEL`, a
-  driver breakpoint with no debugger, ...) and must end in the named
-  bugcheck;
+  driver breakpoint with no debugger, an exception nothing handles,
+  ...) and must end in the named bugcheck;
 - `*-oracle-event*`, `*-debugger-breakpoint`: Microsoft's event sample,
   whose first act is a breakpoint, stops NK with Windows' bugcheck at
   the same step, and with `debug=on` runs as on Windows with a debugger;
+- `*-oracle-nkc-seh-fatal-*`: each request of the conformance driver
+  `nkc-seh-fatal` stops NK with the bugcheck it stopped Windows with;
+- `*-oracle-nkc-cross-dpc`: likewise the conformance driver `nkc-cross`,
+  whose DPC routine raises over a thread inside a `__try`;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
 All but the first are tests of the tests. An expected bugcheck counts
@@ -159,7 +163,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | started at boot from its key in the hive; read gives end-of-file, write accepts all bytes; unloads without leaks |
-| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; repeated load/exercise/unload cycles leak nothing |
+| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered, direct and `METHOD_NEITHER` control requests return the sample's data; bad requests fail with its status codes, and buffers that are not there with an access violation its `__try` catches; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
 | `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
@@ -173,10 +177,7 @@ All but `null.sys` (from Microsoft's symbol server) are made in
 [nk-fixtures](https://github.com/jgarzik/nk-fixtures), the drivers built
 with the WDK and the hive saved by Windows' registry: a separate
 repository so the test drivers cannot drift toward what NK supports.
-They are identified by hash and never patched or rebuilt to suit NK. `METHOD_NEITHER`
-requests are not sent (`sioctl.neither` is SKIP): the sample probes raw
-buffers as user memory inside `__try`, which needs user address space
-and SEH.
+They are identified by hash and never patched or rebuilt to suit NK.
 
 ## The Windows oracle
 

@@ -1,13 +1,19 @@
 //! Exceptions and interrupts: entry stubs, the IDT, and the handler.
 //!
 //! Every vector funnels into one handler with a full register frame. A
-//! breakpoint is counted and resumed (the boot self-test uses it to prove
-//! the path works). Anything else is a fatal bugcheck with a register dump:
-//! there is no SEH yet, so no driver or kernel code can handle a fault.
+//! fault that Windows turns into an exception (an access violation on a
+//! user address, a divide error, an illegal instruction, a breakpoint
+//! with no debugger, a general protection fault) is handed to the
+//! exception dispatcher with the interrupted code's `CONTEXT`, and the
+//! code is resumed with whatever a handler made of it. The rest are
+//! fatal: a bugcheck with a register dump.
 
+use super::seh::{self, Context};
+use super::unwind::Regs;
 use core::arch::global_asm;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use nk_ntabi::seh::x64::{CONTEXT_FULL, CONTEXT_SEGMENTS};
 
 /// Registers saved by the entry stub, lowest address first.
 ///
@@ -50,9 +56,13 @@ pub struct Frame {
     pub ss: u64,
 }
 
-const BREAKPOINT: u64 = 3;
+const DIVIDE_ERROR: u64 = 0;
 const NMI: u64 = 2;
+const BREAKPOINT: u64 = 3;
+const OVERFLOW: u64 = 4;
+const INVALID_OPCODE: u64 = 6;
 const DOUBLE_FAULT: u64 = 8;
+const GENERAL_PROTECTION: u64 = 13;
 const PAGE_FAULT: u64 = 14;
 /// `int 0x29`: `__fastfail`, how MSVC-built code reports fatal corruption
 /// (a failed stack-cookie check, for one). The reason code is in rcx.
@@ -327,20 +337,105 @@ pub fn fp_trap_test() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The flags a handler's context may change: the arithmetic ones, trap
+/// and direction. The rest stay the interrupted code's.
+const EDITABLE_FLAGS: u64 = 0xDD5;
+/// RFLAGS: interrupts enabled.
+const FLAG_IF: u64 = 0x200;
+/// Page-fault error code: the access was a write; an instruction fetch.
+const PF_WRITE: u64 = 2;
+const PF_FETCH: u64 = 0x10;
+
+/// The interrupted code as a `CONTEXT`. XMM6-XMM15 are read from the
+/// processor: nothing between the interrupted code and here has touched
+/// them (`doc/ABI.md`).
+fn context_of(frame: &Frame) -> Context {
+    let mut c = seh::empty_context();
+    c.ContextFlags = CONTEXT_FULL | CONTEXT_SEGMENTS;
+    c.MxCsr = frame.mxcsr as u32;
+    c.FltSave.MxCsr = frame.mxcsr as u32;
+    (c.SegCs, c.SegSs) = (frame.cs as u16, frame.ss as u16);
+    (c.SegDs, c.SegEs) = (c.SegSs, c.SegSs);
+    c.EFlags = frame.rflags as u32;
+    let live = super::unwind::capture();
+    let regs = Regs {
+        gpr: [
+            frame.rax, frame.rcx, frame.rdx, frame.rbx, frame.rsp, frame.rbp, frame.rsi, frame.rdi,
+            frame.r8, frame.r9, frame.r10, frame.r11, frame.r12, frame.r13, frame.r14, frame.r15,
+        ],
+        rip: frame.rip,
+        xmm: live.xmm,
+    };
+    seh::set_regs(&mut c, &regs, false);
+    for (x, [low, high]) in c.FltSave.XmmRegisters.iter_mut().zip(frame.xmm) {
+        (x.Low, x.High) = (low, high as i64);
+    }
+    c
+}
+
+/// Make the interrupted code resume as `c` says: every register, the
+/// program counter, the stack pointer and the flags a handler may set.
+fn resume_as(frame: &mut Frame, c: &Context) {
+    [
+        frame.rax, frame.rcx, frame.rdx, frame.rbx, frame.rsp, frame.rbp, frame.rsi, frame.rdi,
+        frame.r8, frame.r9, frame.r10, frame.r11, frame.r12, frame.r13, frame.r14, frame.r15,
+    ] = [
+        c.Rax, c.Rcx, c.Rdx, c.Rbx, c.Rsp, c.Rbp, c.Rsi, c.Rdi, c.R8, c.R9, c.R10, c.R11, c.R12,
+        c.R13, c.R14, c.R15,
+    ];
+    frame.rip = c.Rip;
+    frame.rflags = frame.rflags & !EDITABLE_FLAGS | u64::from(c.EFlags) & EDITABLE_FLAGS;
+    frame.mxcsr = u64::from(c.MxCsr);
+    for (slot, x) in frame.xmm.iter_mut().zip(&c.FltSave.XmmRegisters) {
+        *slot = [x.Low, x.High as u64];
+    }
+    seh::load_nonvolatile_vectors(c);
+}
+
+/// Hand the fault to the exception dispatcher as `code`. Returns if a
+/// handler has the code continue; a handler that takes the exception
+/// unwinds, and this frame is gone with the rest.
+fn deliver(frame: &mut Frame, code: u32, parameters: &[u64]) {
+    let mut context = context_of(frame);
+    // Handlers run as the interrupted code did: with interrupts on, if
+    // it had them on.
+    let enabled = frame.rflags & FLAG_IF != 0;
+    if enabled {
+        super::enable_interrupts();
+    }
+    // SAFETY: the context is the interrupted code's, whose frames lie
+    // beneath this one; this function and its callers hold nothing a
+    // destructor would have to give back.
+    unsafe { crate::ke::seh::fault(&raw mut context, code, parameters) };
+    if enabled {
+        super::disable_interrupts();
+    }
+    resume_as(frame, &context);
+}
+
 extern "C" fn trap_handler(frame: &mut Frame) {
+    use crate::ke::seh::{
+        ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE, STATUS_ACCESS_VIOLATION, STATUS_BREAKPOINT,
+        STATUS_ILLEGAL_INSTRUCTION, STATUS_INTEGER_DIVIDE_BY_ZERO,
+    };
+    /// What the overflow trap, which only x86-64 has, is delivered as.
+    const STATUS_INTEGER_OVERFLOW: u32 = 0xC000_0095;
     let vector = (frame.stub - stubs()) / STUB_SIZE;
     if vector == BREAKPOINT {
-        // `int3` is a trap: rip already points past it. Whether to go
-        // on is not this layer's to say.
-        crate::kd::breakpoint(frame.rip - 1);
-        BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
-        if FP_CLOBBER.load(Ordering::Relaxed) {
-            let mut mxcsr = 0;
-            // SAFETY: the routine writes one `u32` and volatile registers.
-            unsafe { nk_fp_clobber(&raw mut mxcsr) };
-            HANDLER_MXCSR.store(mxcsr, Ordering::Relaxed);
+        // `int3` is a trap: rip already points past it.
+        if crate::kd::breakpoint(frame.rip - 1) {
+            BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
+            if FP_CLOBBER.load(Ordering::Relaxed) {
+                let mut mxcsr = 0;
+                // SAFETY: the routine writes one `u32` and volatile registers.
+                unsafe { nk_fp_clobber(&raw mut mxcsr) };
+                HANDLER_MXCSR.store(mxcsr, Ordering::Relaxed);
+            }
+            return;
         }
-        return;
+        // An exception at the instruction itself, as Windows reports it.
+        frame.rip -= 1;
+        return deliver(frame, STATUS_BREAKPOINT, &[0]);
     }
     if vector == NMI && crate::kd::stopping() {
         // Another processor is stopping the system and said so.
@@ -364,19 +459,48 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         && stacks
             .iter()
             .any(|&base| crate::mm::stack::is_overflow(base, cr2));
+    let memory = matches!(vector, GENERAL_PROTECTION | PAGE_FAULT) && !overflow;
+    // What a general protection fault reports: no address is known
+    // (Windows says a read of -1), and it is always an exception.
+    let (address, access, stop) = if vector == PAGE_FAULT {
+        let access = match frame.error {
+            e if e & PF_FETCH != 0 => ACCESS_EXECUTE,
+            e if e & PF_WRITE != 0 => ACCESS_WRITE,
+            _ => ACCESS_READ,
+        };
+        (
+            cr2,
+            access,
+            crate::ke::seh::memory_fault(cr2, access, frame.rip),
+        )
+    } else {
+        (u64::MAX, ACCESS_READ, None)
+    };
+    if memory {
+        // The kernel's own access to memory that may not be there: the
+        // routine returns an error instead.
+        if let Some(resume) = seh::fixup(frame.rip) {
+            (frame.rip, frame.rax, frame.rdx) = (resume, address, access);
+            return;
+        }
+        if stop.is_none() {
+            return deliver(frame, STATUS_ACCESS_VIOLATION, &[access, address]);
+        }
+    }
     let what = match vector {
         _ if overflow => "kernel stack overflow",
-        0 => "divide error",
-        6 => "invalid opcode",
+        DIVIDE_ERROR => return deliver(frame, STATUS_INTEGER_DIVIDE_BY_ZERO, &[]),
+        OVERFLOW => return deliver(frame, STATUS_INTEGER_OVERFLOW, &[]),
+        INVALID_OPCODE => return deliver(frame, STATUS_ILLEGAL_INSTRUCTION, &[]),
         DOUBLE_FAULT => "double fault",
-        13 => "general protection fault",
         PAGE_FAULT => "page fault",
         FAST_FAIL => "driver fast-fail (reason code in rcx)",
         _ => "exception",
     };
     let image = crate::ldr::locate_fatal(frame.rip);
+    let stop = crate::ke::seh::StopLine(stop);
     crate::kd::bugcheck(format_args!(
-        "{what} (vector {}, error {:#x}) at rip={:#018x} in {image}\n\
+        "{stop}{what} (vector {}, error {:#x}) at rip={:#018x} in {image}\n\
          cr2={cr2:#018x} rsp={:#018x} rflags={:#x} cs={:#x}\n\
          rax={:#018x} rbx={:#018x} rcx={:#018x} rdx={:#018x}\n\
          rsi={:#018x} rdi={:#018x} rbp={:#018x} r8 ={:#018x}\n\

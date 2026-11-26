@@ -1,0 +1,7 @@
+# An unwind passes a kernel frame without doing what the frame owes:
+# the critical region it entered is never left.
+scenario: aarch64
+fails: seh.cross.region
+file: kernel/ke/seh.rs
+replace:         Some(Guard::Undo { undo, context }) if unwinding => {
+with:         Some(Guard::Undo { undo, context }) if false => {

@@ -10,6 +10,7 @@ mm.low-half ok
 mm.user.map ok
 mm.user.refused ok
 mm.user.other-cpu ok
+mm.user.copy ok
 mm.pool ok
 mm.stack ok
 hal.cpus ok
@@ -50,6 +51,20 @@ thread.identity ok
 seh.walk.thread ok
 seh.walk.dpc ok
 seh.walk.interrupt ok
+seh.raise ok
+seh.decline ok
+seh.edge ok
+seh.finally ok
+seh.cross.region ok
+seh.cross.irql ok
+seh.cross.reference ok
+seh.cross.nested ok
+seh.fault.read ok
+seh.fault.write ok
+seh.fault.execute ok
+seh.fault.others ok
+seh.fault.continue ok
+seh.probe ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok
@@ -171,7 +186,8 @@ sioctl.buffered ok
 sioctl.out-direct ok
 sioctl.in-direct ok
 sioctl.bad-requests ok
-sioctl.neither skip
+sioctl.neither ok
+sioctl.user-buffers ok
 sioctl.close ok
 sioctl.unload ok
 sioctl.no-leak ok
@@ -195,3 +211,5 @@ oracle.cancel ok
 oracle.nkc-lib ok
 oracle.nkc-lib-twice ok
 oracle.nkc-libbad ok
+oracle.nkc-seh ok
+oracle.nkc-cross ok

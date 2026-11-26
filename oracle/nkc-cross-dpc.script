@@ -1,0 +1,11 @@
+# NK conformance driver nkc-cross: a DPC routine raises while the
+# thread that queued the DPC is inside a __try. The DPC's exception is
+# not the thread's to handle.
+
+load nkc-cross-b nkc-cross-b.sys
+load nkc-cross nkc-cross.sys
+open d \Device\NkcCross
+ioctl d 00222440 - 0
+close d
+unload nkc-cross
+unload nkc-cross-b

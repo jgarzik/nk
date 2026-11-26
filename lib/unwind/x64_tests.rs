@@ -149,6 +149,11 @@ fn lookup_finds_the_entry_covering_an_rva() {
         "the gap between two functions"
     );
     assert_eq!(img.lookup(0x1020), Ok(Some(b)));
+    assert_eq!(
+        locate(&img.bytes, PDATA, 36, 0x1020),
+        Ok(Some((PDATA + 12, b))),
+        "where the entry itself is"
+    );
     assert_eq!(img.lookup(0x102F), Ok(Some(b)));
     assert_eq!(img.lookup(0x1030), Ok(Some(c)));
     assert_eq!(img.lookup(0x10FF), Ok(Some(c)));
@@ -184,6 +189,11 @@ fn lookup_follows_an_indirect_entry() {
         unwind: 0x3000,
     };
     assert_eq!(img.lookup(0x1008), Ok(Some(target)));
+    // The entry a handler is told of is the one pointed at.
+    assert_eq!(
+        locate(&img.bytes, PDATA, 12, 0x1008),
+        Ok(Some((0x3800, target)))
+    );
 
     // An entry that names itself never resolves.
     img.func(0x1100, 0x1110, (PDATA + 12) | 1);

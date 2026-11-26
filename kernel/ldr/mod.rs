@@ -16,6 +16,7 @@
 
 #![allow(non_snake_case)]
 
+use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{Rank, SpinLock, mutex, wait};
 use crate::mm::{self, PAGE_SIZE, map};
 use crate::{arch, export};
@@ -162,11 +163,6 @@ struct Library {
     /// Its `DllUnload`, if it exports one.
     unload: Option<u64>,
 }
-
-/// What a library exports for the loader to call
-/// ([Creating Export Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/creating-export-drivers)).
-type DllInitialize = unsafe extern "C" fn(*mut UNICODE_STRING) -> NTSTATUS;
-type DllUnload = unsafe extern "C" fn() -> NTSTATUS;
 
 /// What serialises loading and unloading, and the libraries, which
 /// belong to whoever holds it.
@@ -422,10 +418,16 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
         };
         // SAFETY: the export of that name of an image just mapped,
         // relocated and bound, which has the signature every library's
-        // `DllInitialize` has; the string outlives the call.
+        // `DllInitialize` has; the string outlives the call. The load
+        // mutex is held, so nothing may be unwound through the call:
+        // an exception the library lets out is unhandled, in the system
+        // thread that loads images.
         let status = unsafe {
-            let initialize: DllInitialize = core::mem::transmute(initialize as usize);
-            initialize(&raw mut registry)
+            seh::call(
+                initialize as usize,
+                [(&raw mut registry).addr(), 0, 0, 0],
+                &Guard::Base(Unhandled::SystemThread),
+            ) as u32 as NTSTATUS
         };
         if !nt_success(status) {
             unload_image(&image);
@@ -628,10 +630,14 @@ fn drop_importer(base: u64) {
         return;
     };
     // SAFETY: the export called `DllUnload` of a loaded library, which
-    // has the signature every library's `DllUnload` has.
+    // has the signature every library's `DllUnload` has. As for
+    // `DllInitialize`, the load mutex is held and the call is a base.
     let status = unsafe {
-        let routine: DllUnload = core::mem::transmute(routine as usize);
-        routine()
+        seh::call(
+            routine as usize,
+            [0; 4],
+            &Guard::Base(Unhandled::SystemThread),
+        ) as u32 as NTSTATUS
     };
     if !nt_success(status) {
         kprintln!("ldr: a library's DllUnload failed, status {status:#010x}: it stays loaded");

@@ -830,11 +830,12 @@ fn deferred_close(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     let old = irql::raise(irql::DISPATCH_LEVEL);
     // SAFETY: the reference taken above, given up: the last one.
     unsafe { object::dereference(held) };
-    let at_dispatch = CLOSES.load(Ordering::Acquire);
     irql::lower(old);
-    if closed != STATUS_SUCCESS || at_dispatch != closes {
-        return Err("the driver was sent a close request at DISPATCH_LEVEL");
+    if closed != STATUS_SUCCESS {
+        return Err("the handle of a file with a reference left did not close");
     }
+    // A worker thread on another processor may have sent the close by
+    // now; where and by whom it was sent is what the driver recorded.
     // The close arrives, and after it the file object and the file's
     // hold on its device go.
     let deadline = time::interrupt_time() + 50_000_000;

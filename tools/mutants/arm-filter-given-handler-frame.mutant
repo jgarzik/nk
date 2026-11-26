@@ -1,0 +1,8 @@
+# A filter and a `__finally` block are given the frame their language
+# handler was given, the stack pointer their function was entered with,
+# where compiled arm64 code expects the function's frame pointer.
+scenario: aarch64
+fails: seh.raise
+file: kernel/arch/aarch64/seh.rs
+replace:     unsafe { dispatcher.NonVolatileRegisters.cast::<u64>().add(10).read() }
+with:     _frame

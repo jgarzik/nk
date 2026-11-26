@@ -57,7 +57,7 @@ impl Trace {
     fn record(&mut self) {
         let regs = arch::unwind::capture();
         let (frames, count) = (&mut self.frames, &mut self.count);
-        self.end = walk(&regs, |frame| {
+        self.end = walk(&regs, false, |frame| {
             if let Some(slot) = frames.get_mut(*count) {
                 *slot = *frame;
             }

@@ -5,6 +5,8 @@ mod atomic;
 mod clock;
 mod cpu;
 pub mod platform;
+pub mod seh;
+pub mod seh_test;
 mod smp;
 mod switch;
 mod trap;

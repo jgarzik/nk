@@ -1,0 +1,7 @@
+# A fault on an unmapped kernel address becomes an exception: a driver's
+# `__try` swallows what Windows stops the system for.
+scenario: x86_64-neg-seh-kernel-fault
+fails: scenario
+file: lib/unwind/dispatch.rs
+replace:     } else if address >= KERNEL_HALF {
+with:     } else if false {

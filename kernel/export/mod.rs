@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
+use crate::{arch, cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -18,6 +18,10 @@ pub enum State {
     /// the function.
     Partial,
     /// Present so the driver loads; bugchecks by name if ever called.
+    #[allow(
+        dead_code,
+        reason = "the ledger's vocabulary; nothing is bound this way at present"
+    )]
     Traps,
 }
 
@@ -105,11 +109,15 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::device::IoDeleteDevice),
     export!(Implemented, io::symlink::IoDeleteSymbolicLink),
     export!(Implemented, io::remlock::IoAcquireRemoveLockEx),
+    export!(Implemented, io::irp::IoAllocateIrp),
+    export!(Implemented, io::irp::IoFreeIrp),
     export!(Implemented, io::mdl::IoFreeMdl),
+    export!(Implemented, io::file::IoGetDeviceObjectPointer),
     export!(Implemented, io::remlock::IoInitializeRemoveLockEx),
     export!(Implemented, io::remlock::IoReleaseRemoveLockAndWaitEx),
     export!(Implemented, io::remlock::IoReleaseRemoveLockEx),
     export!(Implemented, io::irp::IoReleaseCancelSpinLock),
+    export!(Implemented, io::irp::IofCallDriver),
     export!(Implemented, io::irp::IofCompleteRequest),
     export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeAcquireSpinLockAtDpcLevel),
@@ -138,14 +146,22 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, MmGetSystemRoutineAddress),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
-    export!(Partial, io::mdl::MmProbeAndLockPages),
+    export_entry!(
+        Partial,
+        "MmProbeAndLockPages",
+        arch::seh::nk_entry_MmProbeAndLockPages
+    ),
     export!(Implemented, io::mdl::MmUnlockPages),
     export!(Implemented, ob::handle::ObReferenceObjectByHandle),
     export!(Implemented, ob::object::ObfDereferenceObject),
-    export!(Partial, ke::seh::ProbeForRead),
+    export_entry!(
+        Implemented,
+        "ProbeForRead",
+        arch::seh::nk_entry_ProbeForRead
+    ),
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
-    export!(Traps, ke::seh::__C_specific_handler),
+    export!(Implemented, ke::seh::__C_specific_handler),
     export!(Implemented, ke::mutex::ExAcquireFastMutex),
     export!(Implemented, ke::mutex::ExAcquireFastMutexUnsafe),
     export!(Implemented, ex::pushlock::ExAcquirePushLockExclusiveEx),
@@ -246,6 +262,32 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::csq::IoCsqRemoveNextIrp),
     export!(Implemented, io::csq::IoIsWdmVersionAvailable),
     export!(Implemented, ke::thread::KeSetPriorityThread),
+    export_entry!(
+        Implemented,
+        "ExRaiseStatus",
+        arch::seh::nk_entry_ExRaiseStatus
+    ),
+    export_entry!(
+        Implemented,
+        "ExRaiseAccessViolation",
+        arch::seh::nk_entry_ExRaiseAccessViolation
+    ),
+    export_entry!(
+        Implemented,
+        "ExRaiseDatatypeMisalignment",
+        arch::seh::nk_entry_ExRaiseDatatypeMisalignment
+    ),
+    export_entry!(
+        Implemented,
+        "ProbeForWrite",
+        arch::seh::nk_entry_ProbeForWrite
+    ),
+    export!(Implemented, ke::seh::_local_unwind),
+    export_variable!(
+        Implemented,
+        "MmUserProbeAddress",
+        mm::user::MmUserProbeAddress
+    ),
 ];
 
 /// The address a driver's import of `module!name` binds to.

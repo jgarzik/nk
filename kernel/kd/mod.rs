@@ -30,28 +30,25 @@ pub fn expect_breakpoint(expected: bool) {
     EXPECTED_BREAKPOINT.store(expected, Ordering::Relaxed);
 }
 
-/// A breakpoint instruction was executed at `address`. Returns if
+/// A breakpoint instruction was executed at `address`. Returns whether
 /// execution is to go on past it.
 ///
 /// A driver that executes one (`DbgBreakPoint`) gets what Windows gives
-/// it. With no debugger the exception is nobody's to handle, and in a
-/// system thread, which is all NK has, that stops the system. With a
-/// debugger attached the debugger decides, and NK's stands for one that
-/// always says go.
-pub fn breakpoint(address: u64) {
+/// it. A debugger, when one is attached, is asked first and decides;
+/// NK's stands for one that always says go. With no debugger the
+/// breakpoint is an exception like any other, for the code's own
+/// handlers, and stops the system if none takes it.
+pub fn breakpoint(address: u64) -> bool {
     if EXPECTED_BREAKPOINT.load(Ordering::Relaxed) {
-        return;
+        return true;
     }
     if DEBUGGER.load(Ordering::Relaxed) {
         print(format_args!(
             "kd: breakpoint at {address:#018x}; the debugger says go\n"
         ));
-        return;
+        return true;
     }
-    bugcheck(format_args!(
-        "0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003 (a breakpoint, and no \
-         debugger to take it) at {address:#018x}"
-    ));
+    false
 }
 
 struct Writer<'a>(&'a Uart);

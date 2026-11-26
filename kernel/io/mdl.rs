@@ -1,23 +1,27 @@
 //! Memory descriptor lists: describing a buffer by its physical pages so
 //! a driver can reach it through its own mapping (direct I/O).
 //!
-//! Limits, all of which fail loudly rather than quietly:
-//! - Only kernel addresses can be described. There is no user address
-//!   space, so a probe in `UserMode` has nothing to succeed on.
-//! - Where Windows raises an exception (`MmProbeAndLockPages` on an
-//!   invalid buffer), NK bugchecks: there is no SEH to deliver it to.
+//! A buffer is the kernel's, or lies in the user range and is probed
+//! as user memory (`mm::user`). `MmProbeAndLockPages` raises
+//! `STATUS_ACCESS_VIOLATION` in its caller for a buffer that is not all
+//! there, as Windows does.
+//!
+//! Limits:
 //! - Nothing is ever paged out, so "locking" pages records their frame
-//!   numbers and marks the MDL; there is no pin count to take.
+//!   numbers and marks the MDL; there is no pin count to take, and
+//!   nothing keeps a user page mapped while it is locked.
 //! - System mappings are always non-executable, whatever the caller's
 //!   priority flags say.
 
 #![allow(non_snake_case)]
 
 use crate::kd;
-use crate::mm::{PAGE_SIZE, map, pool};
+use crate::ke::seh;
+use crate::mm::{PAGE_SIZE, map, pool, user};
 use core::ffi::c_void;
 use nk_mm::pt::Prot;
 use nk_ntabi::io::*;
+use nk_ntabi::status::{NTSTATUS, STATUS_ACCESS_VIOLATION};
 
 const TAG_MDL: u32 = u32::from_le_bytes(*b"Mdl ");
 /// Largest buffer one MDL can describe: its `Size` field is 16 bits.
@@ -106,12 +110,19 @@ pub unsafe extern "C" fn IoFreeMdl(mdl: *mut MDL) {
     }
 }
 
-/// `MmProbeAndLockPages`: check the buffer is accessible and record the
-/// physical pages behind it.
+/// Check that the MDL's buffer is all there for `access_mode` and
+/// record the physical pages behind it: `MmProbeAndLockPages` without
+/// the exception. A user-mode buffer must lie in the user range. `Err`
+/// is the status Windows raises: a page is not mapped, or the range is
+/// not the mode's to name.
 ///
 /// # Safety
 /// `mdl` must be a live MDL whose pages are not already locked.
-pub unsafe extern "C" fn MmProbeAndLockPages(mdl: *mut MDL, access_mode: i8, _operation: u32) {
+pub unsafe fn probe_and_lock(
+    mdl: *mut MDL,
+    access_mode: i8,
+    _operation: u32,
+) -> Result<(), NTSTATUS> {
     // SAFETY: per the contract.
     unsafe {
         if (*mdl).MdlFlags & MDL_PAGES_LOCKED != 0 {
@@ -122,21 +133,41 @@ pub unsafe extern "C" fn MmProbeAndLockPages(mdl: *mut MDL, access_mode: i8, _op
         let start = (*mdl).StartVa as u64;
         for i in 0..pages(mdl) {
             let va = start + (i * PAGE_SIZE) as u64;
-            // A user-mode probe must find user memory, and there is none.
+            // User mode can name only pages of the user range.
             let frame = if access_mode == KERNEL_MODE {
                 map::translate(va)
             } else {
-                None
+                user::frame_of(va)
             };
             let Some(pa) = frame else {
-                kd::bugcheck(format_args!(
-                    "MmProbeAndLockPages: {va:#x} is not accessible (Windows would raise \
-                     STATUS_ACCESS_VIOLATION; SEH is not implemented)"
-                ));
+                return Err(STATUS_ACCESS_VIOLATION);
             };
             pfns(mdl).add(i).write(pa / PAGE_SIZE as u64);
         }
         (*mdl).MdlFlags |= MDL_PAGES_LOCKED;
+    }
+    Ok(())
+}
+
+/// What [`MmProbeAndLockPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprobeandlockpages)
+/// is entered as: probe and lock, and raise in the caller if the buffer
+/// is not all there.
+///
+/// # Safety
+/// Called through `nk_with_caller_context`; `mdl` as for
+/// [`probe_and_lock`].
+#[unsafe(no_mangle)]
+unsafe extern "C" fn nk_probe_and_lock_pages(
+    mdl: *mut MDL,
+    access_mode: i8,
+    operation: u32,
+    context: *mut seh::Context,
+) {
+    // SAFETY: per the contract; the context is the caller's.
+    unsafe {
+        if let Err(status) = probe_and_lock(mdl, access_mode, operation) {
+            seh::raise(context, status as u32, seh::EXCEPTION_NONCONTINUABLE, &[]);
+        }
     }
 }
 

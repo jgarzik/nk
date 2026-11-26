@@ -7,6 +7,7 @@
 
 pub mod process;
 
+use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::thread;
 use crate::ob::{handle, object};
 use alloc::boxed::Box;
@@ -28,8 +29,15 @@ fn system_thread(start: usize) {
     // ends its thread itself and never returns here.
     let Start { routine, context } = *unsafe { Box::from_raw(start as *mut Start) };
     // SAFETY: the routine the driver gave, at PASSIVE_LEVEL in a thread
-    // of its own, with the context it gave.
-    unsafe { routine(context) };
+    // of its own, with the context it gave. It is the thread's first
+    // driver frame: an exception it lets out is unhandled.
+    unsafe {
+        seh::call(
+            routine as usize,
+            [context.addr(), 0, 0, 0],
+            &Guard::Base(Unhandled::SystemThread),
+        )
+    };
     // A routine that returns has ended its thread.
 }
 

@@ -13,6 +13,7 @@ mod csq;
 mod dpc;
 mod driver_api;
 mod ex;
+pub mod except;
 mod library;
 mod loader;
 mod mutex;
@@ -44,6 +45,69 @@ fn open(name: &str) -> Result<u64, NTSTATUS> {
     file::open(&OpenRequest::new(name)).map(|(handle, _)| handle)
 }
 
+/// Where the tests that make requests as user mode keep the two
+/// buffers of a request: far above any memory firmware has.
+const USER_INPUT: u64 = 0x4E4B_0000_0000;
+const USER_OUTPUT: u64 = 0x4E4C_0000_0000;
+
+/// A buffer in the user range, as a user-mode program has its buffers
+/// in its address space: whole pages, mapped while this lives.
+struct UserMemory {
+    va: u64,
+    len: usize,
+}
+
+impl UserMemory {
+    /// Map pages at `va` and put `bytes` at their start. No bytes, no
+    /// pages: an empty buffer is no buffer.
+    fn new(va: u64, bytes: &[u8]) -> Result<Self, &'static str> {
+        let memory = Self {
+            va,
+            len: bytes.len(),
+        };
+        if !bytes.is_empty() {
+            mm::user::map_pages(va, memory.pages()).map_err(|_| "cannot map user pages")?;
+            // SAFETY: the pages just mapped, which hold the bytes.
+            unsafe { (va as *mut u8).copy_from_nonoverlapping(bytes.as_ptr(), bytes.len()) };
+        }
+        Ok(memory)
+    }
+
+    fn pages(&self) -> usize {
+        self.len.div_ceil(mm::PAGE_SIZE)
+    }
+
+    /// The buffer, as a request names it.
+    fn buffer(&self) -> file::Buffer {
+        if self.len == 0 {
+            file::Buffer::NONE
+        } else {
+            file::Buffer {
+                address: self.va as usize,
+                len: self.len,
+            }
+        }
+    }
+
+    /// What the buffer holds now.
+    fn contents(&self) -> alloc::vec::Vec<u8> {
+        let mut bytes = alloc::vec![0; self.len];
+        if self.len != 0 {
+            // SAFETY: the pages mapped by `new`.
+            unsafe { (self.va as *const u8).copy_to_nonoverlapping(bytes.as_mut_ptr(), self.len) };
+        }
+        bytes
+    }
+}
+
+impl Drop for UserMemory {
+    fn drop(&mut self) {
+        if self.len != 0 {
+            mm::user::unmap_pages(self.va, self.pages());
+        }
+    }
+}
+
 /// Every test group. `test=` on the command line selects among them.
 pub static GROUPS: &[&Group] = &[
     &base::GROUP,
@@ -53,6 +117,7 @@ pub static GROUPS: &[&Group] = &[
     &timer::GROUP,
     &thread::GROUP,
     &seh::GROUP,
+    &except::GROUP,
     &wait::GROUP,
     &ob::GROUP,
     &se::GROUP,
@@ -83,8 +148,20 @@ pub static GROUPS: &[&Group] = &[
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
     &neg::BREAKPOINT,
+    &except::THREAD,
+    &except::SERVICE,
+    &except::DPC,
+    &except::NO_ENTRY,
+    &except::KERNEL_FAULT,
+    &except::FAULT_AT_DISPATCH,
     &oracle::EVENT,
     &oracle::EVENT_DEBUG,
+    &oracle::FATAL_DISPATCH,
+    &oracle::FATAL_WORK,
+    &oracle::FATAL_DPC,
+    &oracle::FATAL_KERNEL_READ,
+    &oracle::FATAL_THREAD,
+    &oracle::CROSS_DPC,
     &smp::STUCK,
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,
