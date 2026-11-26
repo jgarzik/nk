@@ -88,6 +88,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::smp::KeGetCurrentNodeNumber),
     export!(Implemented, ke::smp::KeQueryHighestNodeNumber),
     export!(Implemented, ke::smp::KeQueryNodeActiveAffinity),
+    export!(Implemented, ke::smp::KeQueryLogicalProcessorRelationship),
     export!(Implemented, ke::smp::KeGetRecommendedSharedDataAlignment),
     export!(Implemented, ke::smp::KeFlushIoBuffers),
     export!(Implemented, ke::smp::KeFlushWriteBuffer),

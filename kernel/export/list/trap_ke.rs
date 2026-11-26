@@ -10,7 +10,6 @@ trap_list!(
     KeExpandKernelStackAndCalloutEx,
     KeIpiGenericCall,
     KeProcessorGroupAffinity,
-    KeQueryLogicalProcessorRelationship,
     KeRegisterProcessorChangeCallback,
     KeReportCacheIncoherentDevice,
     KeRevertToUserGroupAffinityThread,

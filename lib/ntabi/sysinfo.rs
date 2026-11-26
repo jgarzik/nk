@@ -80,8 +80,26 @@ pub const SYSTEM_LOGICAL_PROCESSOR_AND_GROUP_INFORMATION_CLASS: u32 = 107;
 pub const SYSTEM_INTERRUPT_STEERING_INFORMATION_CLASS: u32 = 180;
 
 /// `LOGICAL_PROCESSOR_RELATIONSHIP`: the relationships NK states.
+pub const RELATION_PROCESSOR_CORE: u32 = 0;
 pub const RELATION_NUMA_NODE: u32 = 1;
+pub const RELATION_CACHE: u32 = 2;
+pub const RELATION_PROCESSOR_PACKAGE: u32 = 3;
 pub const RELATION_GROUP: u32 = 4;
+pub const RELATION_ALL: u32 = 0xFFFF;
+
+/// `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` for a core or a package:
+/// the header and a `PROCESSOR_RELATIONSHIP` of one group.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PROCESSOR_RELATIONSHIP_ENTRY {
+    pub Relationship: u32,
+    pub Size: u32,
+    pub Flags: u8,
+    pub EfficiencyClass: u8,
+    pub Reserved: [u8; 20],
+    pub GroupCount: u16,
+    pub GroupMask: crate::interrupt::GROUP_AFFINITY,
+}
 
 /// [`SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_logical_processor_information_ex)
 /// for a NUMA node: the header and a `NUMA_NODE_RELATIONSHIP`.
@@ -125,6 +143,11 @@ pub struct SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT {
 
 const _: () = {
     use core::mem::{offset_of, size_of};
+    assert!(size_of::<PROCESSOR_RELATIONSHIP_ENTRY>() == 0x30);
+    assert!(offset_of!(PROCESSOR_RELATIONSHIP_ENTRY, Flags) == 0x08);
+    assert!(offset_of!(PROCESSOR_RELATIONSHIP_ENTRY, EfficiencyClass) == 0x09);
+    assert!(offset_of!(PROCESSOR_RELATIONSHIP_ENTRY, GroupCount) == 0x1E);
+    assert!(offset_of!(PROCESSOR_RELATIONSHIP_ENTRY, GroupMask) == 0x20);
     assert!(size_of::<NUMA_NODE_RELATIONSHIP_ENTRY>() == 0x30);
     assert!(offset_of!(NUMA_NODE_RELATIONSHIP_ENTRY, NodeNumber) == 0x08);
     assert!(offset_of!(NUMA_NODE_RELATIONSHIP_ENTRY, GroupMask) == 0x20);
