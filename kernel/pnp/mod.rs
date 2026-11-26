@@ -11,6 +11,7 @@
 //!
 //! `doc/DESIGN.md`, Plug and Play, says what is NK's own decision here.
 
+pub mod depend;
 pub mod engine;
 pub mod export;
 pub mod interface;

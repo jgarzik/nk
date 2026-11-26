@@ -5,6 +5,7 @@ pnp.match ok
 pnp.properties ok
 pnp.add-device-order ok
 pnp.start-resources ok
+pnp.dependency ok
 pnp.invalidate-relations ok
 pnp.failed-start ok
 pnp.invalid-instance-id ok

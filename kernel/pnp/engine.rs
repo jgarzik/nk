@@ -81,6 +81,9 @@ enum Action {
     /// Ask this device, which the entry holds a reference to, for its
     /// state again.
     Requery(usize),
+    /// Look at every device again: something a device waited for may
+    /// have come.
+    Look,
 }
 
 struct Requests {
@@ -191,6 +194,12 @@ pub unsafe fn requery_later(pdo: *mut DEVICE_OBJECT) {
     unsafe { later(pdo, Action::Requery(pdo as usize)) }
 }
 
+/// Have a worker look at every device again: a dependency was stated
+/// or resolved.
+pub fn look_later() {
+    request(Action::Look);
+}
+
 /// Queue `action`, which names `pdo`.
 ///
 /// # Safety
@@ -281,6 +290,7 @@ pub fn settle() {
                     // SAFETY: the action's reference.
                     unsafe { object::dereference(pdo as *mut u8) };
                 }
+                Some(Action::Look) => {}
                 None => {
                     let mut moved = false;
                     for pdo in node::all() {
@@ -508,6 +518,24 @@ fn add_drivers(pdo: usize) -> bool {
     let Some(found) = node::get(pdo) else {
         return false;
     };
+    // A device waits for the devices it depends on to have started.
+    if !found.reported && super::depend::blocked(pdo) {
+        if !node::with(pdo, |node| {
+            node.problem = node::CM_PROB_WAITING_ON_DEPENDENCY;
+            core::mem::replace(&mut node.held_back, true)
+        })
+        .unwrap_or(true)
+        {
+            kprintln!("pnp: {}: waits for a device it depends on", found.instance);
+        }
+        return false;
+    }
+    if found.problem == node::CM_PROB_WAITING_ON_DEPENDENCY {
+        node::with(pdo, |node| {
+            node.problem = node::PROBLEM_NONE;
+            node.held_back = false;
+        });
+    }
     let key = registry::enum_key(&found.instance);
     // A device seen for the first time is installed from the driver
     // database: NK's stand-in for device installation.
@@ -1151,6 +1179,7 @@ pub fn remove(pdo: usize, surprise: bool) {
     // `PASSIVE_LEVEL`. The reference dropped last is the tree's.
     unsafe {
         super::interface::device_stopped(pdo, true);
+        super::depend::forget(pdo);
         if found.state == State::Started && surprise {
             query::pnp(device, IRP_MN_SURPRISE_REMOVAL, [0; 4]);
         }
