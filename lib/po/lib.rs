@@ -10,11 +10,14 @@
 //! them (`PoRegisterPowerSettingCallback`), and [`fx`] the runtime power
 //! framework: a device's components, each active or idle, and what
 //! their driver is told (`PoFxActivateComponent`, `PoFxIdleComponent`).
+//! [`action`] is what becomes of a request to change the system's
+//! power state (`ZwInitiatePowerAction`).
 
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
+pub mod action;
 pub mod fx;
 pub mod request;
 pub mod setting;

@@ -55,6 +55,8 @@ pub enum Rank {
     Handles = 35,
     /// The power manager's records (`po`).
     Power = 37,
+    /// The firmware table providers drivers registered (`ex::firmware`).
+    FirmwareTables = 38,
     /// The executive pool (`mm::pool`).
     Pool = 40,
     /// Kernel address space and page tables (`mm::map`).

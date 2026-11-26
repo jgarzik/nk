@@ -43,3 +43,4 @@ ex.hypervisor ok
 ex.callback ok
 ex.sysinfo.with-input ok
 ex.no-notification-states ok
+ex.sysinfo.firmware-provider ok
