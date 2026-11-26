@@ -610,7 +610,10 @@ make that safe.
 - Every call into a driver is `ke::seh::call`: an assembly frame with a
   language handler of NK's own, holding a guard record the caller
   passes. Nothing else lies between NK's Rust and the driver's routine,
-  so no frame without an unwind entry can.
+  so no frame without an unwind entry can. A routine of more than four
+  arguments is called by a function of NK's own that is itself called
+  this way: one Rust frame more, which has an unwind entry and holds
+  nothing.
 - A guard says what the caller owes if the routine does not return.
   `Undo`: a function to call, once, when an unwind passes the frame
   (leave a critical region, lower the IRQL, drop a reference).
@@ -634,6 +637,7 @@ make that safe.
 | I/O work item's routine | undo: the device's reference |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
+| a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
@@ -984,6 +988,45 @@ without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
+
+### Query tables
+
+[`RtlQueryRegistryValues`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlqueryregistryvalues)
+and `RtlQueryRegistryValuesEx` read values as a table of entries asks:
+each value goes to the entry's routine or is stored where the entry
+points. What an entry's flags mean is Microsoft's to say, and
+`nk_cm::query` works it out without touching a driver's memory; the
+kernel (`kernel/cm/table.rs`) copies the table, reads the registry, and
+does what the query says. NK's decisions:
+
+- **The table is copied first**: every entry up to the one that ends
+  it, names and default data too (a string default of length zero is
+  measured), and the environment block. A routine that rewrites the
+  table changes nothing for the call in progress.
+- **The key is found once** and counted as open for the length of the
+  call. Each entry reads the registry afresh, holding the lock for the
+  read alone, so a routine may open, change or delete any key, this one
+  included. The query sees what the routine left: a key it deleted ends
+  the query with `STATUS_KEY_DELETED`.
+- **A routine is lent copies** of the value's name and data in a pool
+  block, never the registry's own memory. The data are followed by a
+  terminator, whether or not the value was stored with one. The call
+  that carries no value (`RTL_QUERY_REGISTRY_NOVALUE`) passes null for
+  both.
+- **A stored string** is the value without the terminator it ends
+  with, and a terminator after it: a counted string without a buffer is
+  given one from the pool, which the caller frees; one with a buffer
+  must have room for the terminator (`STATUS_BUFFER_TOO_SMALL`).
+- **`RelativeTo`**: `RTL_REGISTRY_OPTIONAL` changes nothing, a key that
+  is not there fails the call. `RTL_REGISTRY_USER` is
+  `\Registry\User\.Default`: the system is the only user.
+- **The type check** (`RTL_QUERY_REGISTRY_TYPECHECK`) is made where an
+  entry asks for it and demanded of none. Windows demands it of a key
+  in a hive it does not trust, and that is all that tells its two
+  exports apart; NK has no such hive, and the two are one routine.
+- **A routine that raises** an exception is unwound through the query
+  like any call into a driver (Exceptions). All the query holds is one
+  pool block, which the guard of that call gives back.
 
 ## Security descriptors
 

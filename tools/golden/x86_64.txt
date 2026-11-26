@@ -99,6 +99,10 @@ cm.enumerate.keys ok
 cm.enumerate.values ok
 cm.query.key ok
 cm.query.value ok
+cm.table.direct ok
+cm.table.routine ok
+cm.table.roots ok
+cm.table.raise ok
 cm.namespace ok
 cm.control-set ok
 cm.hive.values ok

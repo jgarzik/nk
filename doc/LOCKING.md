@@ -97,7 +97,9 @@ Why this order:
   old block is freed after the lock is dropped.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
-  memory is read and written outside it.
+  memory is read and written outside it. No routine of a driver's runs
+  under it: a query table takes it for each read and gives the routine
+  copies.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
   dropped under the handle table's lock, nor is its type told of a

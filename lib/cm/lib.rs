@@ -244,6 +244,11 @@ impl Hive {
         self.keys[key.0].open += 1;
     }
 
+    /// How many handles are open to `key`.
+    pub fn handles(&self, key: KeyId) -> Result<u32, Error> {
+        Ok(self.keys[self.live(key)?].open)
+    }
+
     /// A handle to `key` has been closed.
     pub fn closed(&mut self, key: KeyId) {
         self.keys[key.0].open -= 1;
@@ -772,7 +777,9 @@ mod tests {
         let (key, _) = hive.create(system, &w("Gone")).unwrap();
         let (sub, _) = hive.create(key, &w("Sub")).unwrap();
         hive.set_value(key, &w("V"), 4, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(hive.handles(key), Ok(0));
         hive.opened(key);
+        assert_eq!((hive.handles(key), hive.handles(sub)), (Ok(1), Ok(0)));
         // Not while it has a subkey; nor the root, ever.
         assert_eq!(hive.delete(key), Err(Error::HasSubkeys));
         assert_eq!(hive.delete(sub), Ok(()));
@@ -786,6 +793,7 @@ mod tests {
         // ...and through the handle still open, everything is refused.
         assert_eq!(hive.delete(key), Err(Error::Deleted));
         assert_eq!(hive.open(key, &[]), Err(Error::Deleted));
+        assert_eq!(hive.handles(key), Err(Error::Deleted));
         assert_eq!(hive.create(key, &w("New")), Err(Error::Deleted));
         assert_eq!(hive.set_value(key, &w("V"), 4, &[]), Err(Error::Deleted));
         assert_eq!(hive.value(key, &w("V")), Err(Error::Deleted));

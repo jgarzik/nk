@@ -1,0 +1,8 @@
+# An entry with RTL_QUERY_REGISTRY_DELETE delivers its value and leaves
+# it in the registry: the query succeeds, and the value a driver meant
+# to consume once is there the next time.
+scenario: x86_64
+fails: cm.table.direct
+file: kernel/cm/table.rs
+replace:                     .and_then(|key| hive.delete_value(key, name))
+with:                     .map(|_| ())

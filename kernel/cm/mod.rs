@@ -1,6 +1,7 @@
 //! The registry, as drivers reach it: `ZwCreateKey`, `ZwOpenKey`,
 //! `ZwDeleteKey`, `ZwEnumerateKey`, `ZwEnumerateValueKey`, `ZwQueryKey`,
-//! `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`.
+//! `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, and the
+//! query tables of `RtlQueryRegistryValues` (`table.rs`).
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
 //! keys every system has and, laid over `Machine\System`, the SYSTEM
@@ -15,6 +16,10 @@
 //! the registry's to walk.
 
 #![allow(non_snake_case)]
+
+mod table;
+
+pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
 use crate::ke::{Rank, SpinLock};
 use crate::ob::{handle, object};
@@ -230,37 +235,57 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(KeyId, Vec<u16>
             crate::rtl::copy_unicode((&raw const (*attributes).ObjectName).read_unaligned()),
         )
     };
-    let is = |body: *mut u8, ty: &'static object::ObjectType| {
-        // SAFETY: called with objects this function holds a reference to.
-        core::ptr::eq(unsafe { object::type_of(body) }, ty)
-    };
-    let (body, path) = if root.is_null() {
-        crate::ob::lookup(None, &path)?
+    if root.is_null() {
+        return absolute(&path);
+    }
+    let root = handle::reference(root as u64, None)?;
+    let (body, path) = if is(root, &object::DIRECTORY_TYPE) {
+        let found = crate::ob::lookup(Some(root), &path);
+        // SAFETY: the reference taken above.
+        unsafe { object::dereference(root) };
+        found?
+    } else if path.first() == Some(&u16::from(b'\\')) {
+        // Relative to an open object: not from the top.
+        // SAFETY: the reference taken above.
+        unsafe { object::dereference(root) };
+        return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
     } else {
-        let root = handle::reference(root as u64, None)?;
-        if is(root, &object::DIRECTORY_TYPE) {
-            let found = crate::ob::lookup(Some(root), &path);
-            // SAFETY: the reference taken above.
-            unsafe { object::dereference(root) };
-            found?
-        } else if path.first() == Some(&u16::from(b'\\')) {
-            // Relative to an open object: not from the top.
-            // SAFETY: the reference taken above.
-            unsafe { object::dereference(root) };
-            return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
-        } else {
-            (root, path)
-        }
+        (root, path)
     };
-    // SAFETY: the reference the look-up took, given up here; a key
-    // object's body is the key's number, written once when it was made.
+    // SAFETY: the reference the look-up or the handle gave.
+    Ok((unsafe { key_object(body) }?, path))
+}
+
+/// Whether the object `body` is of the type `ty`.
+fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
+    // SAFETY: called with objects the caller holds a reference to.
+    core::ptr::eq(unsafe { object::type_of(body) }, ty)
+}
+
+/// The key the object `body` is. What leads elsewhere in the namespace
+/// names no key.
+///
+/// # Safety
+/// The caller holds a reference to `body`, which is given up here.
+unsafe fn key_object(body: *mut u8) -> Result<KeyId, NTSTATUS> {
+    // SAFETY: per the contract; a key object's body is the key's
+    // number, written once when it was made.
     unsafe {
         let key =
             is(body, &object::KEY_TYPE).then(|| KeyId::from_index(body.cast::<usize>().read()));
         object::dereference(body);
-        // What leads elsewhere in the namespace names no key.
-        Ok((key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)?, path))
+        key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)
     }
+}
+
+/// The key the absolute name `path` starts at, and the path from
+/// there: the name is looked up in the object namespace, where it must
+/// lead to a key, the registry's root, with the rest of the path left
+/// over.
+fn absolute(path: &[u16]) -> Result<(KeyId, Vec<u16>), NTSTATUS> {
+    let (body, rest) = crate::ob::lookup(None, path)?;
+    // SAFETY: the reference the look-up took.
+    Ok((unsafe { key_object(body) }?, rest))
 }
 
 /// A handle to `key`, granted `access`. The caller has counted the key
@@ -352,6 +377,17 @@ pub fn boot_start() -> Result<Vec<(String, u32)>, &'static str> {
         services.push((String::from_utf16_lossy(name), error_control));
     }
     Ok(services)
+}
+
+/// How many handles are open to the key at `path` (from the
+/// registry's root), a query table at work counting as one; `None` if
+/// there is no such key. For the tests.
+pub fn open_count(path: &str) -> Option<u32> {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    let root = hive.root().ok()?;
+    let key = hive.open(root, &path).ok()?;
+    hive.handles(key).ok()
 }
 
 /// Whether there is a key at `path` (from the registry's root). For

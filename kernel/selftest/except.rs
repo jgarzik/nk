@@ -49,12 +49,12 @@ pub static GROUP: Group = Group {
 };
 
 /// A status of the tests' own.
-const CODE: u32 = 0xE04E_4B20;
+pub(super) const CODE: u32 = 0xE04E_4B20;
 /// `EXCEPTION_EXECUTE_HANDLER`, `EXCEPTION_CONTINUE_SEARCH`,
 /// `EXCEPTION_CONTINUE_EXECUTION`. A filter told to answer the last
 /// first repairs the context: see [`continue_test`].
-const ACCEPT: i32 = 1;
-const DECLINE: i32 = 0;
+pub(super) const ACCEPT: i32 = 1;
+pub(super) const DECLINE: i32 = 0;
 const CONTINUE: i32 = -1;
 
 /// Events, in the order they happened. The low byte says more.
@@ -87,7 +87,7 @@ fn note(event: u32) {
 
 /// Start a test: nothing has happened, and the filter will answer
 /// `answers` in turn.
-fn arm(answers: [i32; 2]) {
+pub(super) fn arm(answers: [i32; 2]) {
     EVENTS.store(0, Ordering::Relaxed);
     ASKED.store(0, Ordering::Relaxed);
     for (slot, answer) in ANSWERS.iter().zip(answers) {
@@ -151,7 +151,7 @@ pub extern "C" fn finally(abnormal: u8, _frame: u64) {
 extern "C" fn nothing(_: usize) {}
 
 /// Raise `code`, the way a driver calls `ExRaiseStatus`.
-extern "C" fn raise(code: usize) {
+pub(super) extern "C" fn raise(code: usize) {
     // SAFETY: the routine takes any status.
     unsafe { arch::seh::nk_entry_ExRaiseStatus(code as i32) };
     note(RETURNED);
@@ -206,7 +206,7 @@ fn caught_as(body: Body, argument: usize, code: u32) -> Result<(), &'static str>
     }
 }
 
-fn caught(body: Body, argument: usize) -> Result<(), &'static str> {
+pub(super) fn caught(body: Body, argument: usize) -> Result<(), &'static str> {
     caught_as(body, argument, CODE)
 }
 
