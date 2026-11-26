@@ -145,7 +145,8 @@ gate tier has, for each architecture:
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,
   `pshed.dll`, `storport.sys`, `storahci.sys`, `classpnp.sys`,
   `disk.sys`) on the machine's AHCI controller and data disk, as far as
-  NK runs it (`kernel/selftest/storage.rs`). The group is selected by
+  NK runs it (`kernel/selftest/storage.rs`): today its libraries that
+  initialise, `pshed.dll` and `classpnp.sys`. The group is selected by
   name and leaves the stack running, so the leak comparison is waived
   for it (`test::keeps_what_it_started`).
 
@@ -256,9 +257,13 @@ They are identified by hash and never patched or rebuilt to suit NK.
 The manifest pins what no boot loads as well: the layout tables the
 WDK's compiler recorded and the kernel's symbol file, which the host
 tests compare `lib/ntabi` with (`doc/ABI.md`).
-`fixtures/registry-overlay.txt` is the one fixture kept in this
-repository: registry content, as text, that the next release of the
-hive takes over (`doc/DESIGN.md`, The registry).
+`fixtures/registry-overlay.txt` is a fixture kept in this repository:
+registry content, as text, that the next release of the hive takes
+over (`doc/DESIGN.md`, The registry). `fixtures/registry-<name>.txt`
+are more of the same, laid over the hive after it only in the boots
+whose scenario names them (`registry`): `registry-storage.txt` holds
+what Microsoft's storage stack and the enumeration of its devices read,
+copied from the reference Windows installation.
 
 ## The Windows oracle
 

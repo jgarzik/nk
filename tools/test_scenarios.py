@@ -6,12 +6,13 @@ import unittest
 from pathlib import Path
 
 import datadisk
+import mkesp
 
 TOOLS = Path(__file__).resolve().parent
 SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
     "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
-    "golden", "canonical", "disk", "disk_size", "disk_expect",
+    "golden", "canonical", "disk", "disk_size", "disk_expect", "registry",
 }
 
 
@@ -55,6 +56,8 @@ class Scenarios(unittest.TestCase):
                 self.assertEqual("disk_expect" in sc, "disk" in sc)
                 if "disk_size" in sc:
                     self.assertIn("disk", sc)
+                for name in sc.get("registry", ()):
+                    self.assertTrue(mkesp.registry_file(name).exists(), name)
                 if "disk" in sc:
                     self.assertEqual(sc["disk"], "ahci")
                     self.assertIn(sc["disk_expect"], datadisk.CHECKS)

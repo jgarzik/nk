@@ -23,6 +23,8 @@
 #             "unchanged": every sector its original pattern;
 #             "written": the sectors of the write range the written
 #             pattern, every other sector its original one
+#   registry  list of names: fixtures/registry-<name>.txt is laid over the
+#             hive too, after registry-overlay.txt
 #   golden    directory in tools/golden/ listing every test and its verdict
 #   canonical true: this run's log and export list are kept as
 #             target/qemu/serial-<arch>.log and exports-<arch>.txt (the

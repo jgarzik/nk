@@ -16,7 +16,7 @@ pub static GROUP: Group = Group {
 };
 
 /// The libraries of the stack, in the order their importers need them.
-const LIBRARIES: [&str; 1] = ["pshed.dll"];
+const LIBRARIES: [&str; 2] = ["pshed.dll", "classpnp.sys"];
 
 /// Every library of the stack binds to NK's exports and initialises.
 fn load() -> Result<(), &'static str> {

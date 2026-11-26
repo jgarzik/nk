@@ -10,4 +10,5 @@ mod stress;
 pub mod sysinfo;
 pub mod timer;
 pub mod uuid;
+pub mod vsl;
 pub mod work;

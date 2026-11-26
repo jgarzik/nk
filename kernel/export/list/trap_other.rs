@@ -24,7 +24,6 @@ trap_list!(
     VfFailSystemBIOS,
     VfIsVerificationEnabled,
     VslGetSecurePciDeviceAlternateFunctionNumberForVtl0Dma,
-    VslGetSecurePciEnabled,
     VslQuerySecureDevice,
     __chkstk,
     _strnicmp,

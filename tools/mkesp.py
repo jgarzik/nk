@@ -85,6 +85,11 @@ def boot_drivers(arch):
     return drivers, missing
 
 
+def registry_file(name):
+    """The registry file a scenario asks for by `name`."""
+    return ROOT / "fixtures" / f"registry-{name}.txt"
+
+
 def hive():
     """(path, missing file name or None) of the registry hive fixture: the
     one fixture of kind "hive", the same for every architecture."""
@@ -94,8 +99,10 @@ def hive():
     return (path, None) if path.exists() else (None, fx["file"])
 
 
-def build(arch, image, drivers=True, cmdline=""):
-    """Write the ESP image for `arch` to `image`. Returns the names of the
+def build(arch, image, drivers=True, cmdline="", registry=()):
+    """Write the ESP image for `arch` to `image`. `registry` names further
+    registry files (fixtures/registry-<name>.txt) to lay over the hive
+    after registry-overlay.txt. Returns the names of the
     driver fixtures that should be on it but are not downloaded (or a
     marker when drivers were left out on purpose)."""
     loader, kernel = binaries(arch)
@@ -124,7 +131,13 @@ def build(arch, image, drivers=True, cmdline=""):
             mtools("mcopy", "-i", image, path, "::/NK/SYSTEM")
         else:
             missing.append(absent)
-        mtools("mcopy", "-i", image, OVERLAY, "::/NK/OVERLAY")
+        overlay = image.with_suffix(".overlay")
+        overlay.write_bytes(b"".join(
+            path.read_bytes() for path in [OVERLAY] + [registry_file(name) for name in registry]))
+        try:
+            mtools("mcopy", "-i", image, overlay, "::/NK/OVERLAY")
+        finally:
+            overlay.unlink()
     if cmdline:
         text = image.with_suffix(".cmdline")
         text.write_text(cmdline + "\n")

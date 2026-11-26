@@ -54,4 +54,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ex::license::ZwQueryLicenseValue),
     export!(Implemented, ex::shim::KseRegisterShim),
+    export!(Implemented, ex::vsl::VslGetSecurePciEnabled),
 ];

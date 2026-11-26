@@ -32,3 +32,4 @@ ex.sysinfo.driver ok
 ex.sysinfo.modules.no-memory ok
 ex.licence-values ok
 ex.shim-engine ok
+ex.secure-kernel ok

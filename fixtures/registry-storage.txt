@@ -1,0 +1,502 @@
+# Registry content for Microsoft's storage stack on QEMU's q35 machine,
+# laid over the SYSTEM hive with registry-overlay.txt in the boots that
+# ask for it (a scenario's `registry = "storage"`; tools/mkesp.py).
+#
+# Every value is copied from the reference Windows 10 installation
+# (10.0.19045.2006, the same machine type, its system disk on the ICH9
+# AHCI controller): the service keys of acpi.sys, pci.sys, storahci.sys
+# and disk.sys and of the filters Windows puts in the disk's stack, the
+# device classes, the driver database records that match the device IDs
+# of the path to their drivers, the Control keys these drivers read, and
+# the two root device keys from which enumeration starts. Letter case is
+# as found. Windows keeps DriverDatabase in a hive of its own, mounted
+# at this path.
+#
+# Not here, on purpose: the Enum keys the Plug and Play manager makes
+# for the devices it enumerates, each service's volatile Enum subkey,
+# and the Class\{guid}\NNNN driver keys made when a device is installed.
+#
+# Like registry-overlay.txt, this belongs in the Windows-written hive
+# and moves there at the next release of the fixtures.
+
+# --- Services --------------------------------------------------------------------
+#
+# Of the seven binaries only acpi.sys, pci.sys, storahci.sys and disk.sys are
+# services. storport.sys, classpnp.sys and pshed.dll have NO Services key: they are
+# loaded as imports (storahci -> storport, disk -> classpnp, the kernel -> pshed).
+# ImagePath is relative to \SystemRoot. All are Type 1, Start 0 (boot).
+# Each key also has a volatile subkey Enum (Count, NextInstance, 0 = instance id)
+# that the PnP manager writes when it starts a device with the service.
+
+# Group is "Core": that name is NOT in ServiceGroupOrder\List and has no line in
+# GroupOrderList, yet ACPI.sys is among the first drivers the boot log shows.
+# ErrorControl 3 (critical). acpi.inf sets Tag and Group by AddReg and creates no
+# Parameters values: the four below are not in the INF, so they were written at
+# run time (by acpi.sys / its WPP recorder). The binaries are 4 zero bytes each.
+key ControlSet001\Services\ACPI
+value ImagePath expand_sz System32\drivers\ACPI.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value DisplayName sz "@acpi.inf,%ACPI.SvcDesc%;Microsoft ACPI Driver"
+value Owners multi_sz acpi.inf
+value Tag dword 2
+value Group sz Core
+key ControlSet001\Services\ACPI\Parameters
+value WHEAOSCImplemented binary hex:00000000
+value APEIOSCGranted binary hex:00000000
+value CPPCRevisionGranted binary hex:00000000
+value WppRecorder_TraceGuid sz {03906a40-cce8-447f-83f4-e2346215db84}
+
+key ControlSet001\Services\pci
+value ImagePath expand_sz System32\drivers\pci.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz "Boot Bus Extender"
+value Tag dword 3
+value DisplayName sz "@pci.inf,%pci_svcdesc%;PCI Bus Driver"
+value Owners multi_sz pci.inf machine.inf pcmcia.inf
+key ControlSet001\Services\pci\Parameters
+value DmaRemappingCompatible dword 1
+value WppRecorder_TraceGuid sz {47711976-08c7-44ef-8fa2-082da6a30a30}
+
+# Group is spelled "SCSI Miniport" here and "SCSI miniport" in ServiceGroupOrder.
+# Tag 31 = 0x1f. Parameters\PnpInterface value "5" = 1: InterfaceType 5 (PCIBus).
+# Parameters\BusType 11 = BusTypeSata.
+key ControlSet001\Services\storahci
+value ImagePath expand_sz System32\drivers\storahci.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz "SCSI Miniport"
+value Tag dword 31
+value DisplayName sz "@mshdc.inf,%storahci_ServiceDescription%;Microsoft Standard SATA AHCI Driver"
+value Owners multi_sz mshdc.inf
+key ControlSet001\Services\storahci\Parameters
+value BusType dword 11
+value IoTimeoutValue dword 30
+value BusyRetryCount dword 240
+value BusyPauseTimeInMs dword 500
+value IoLatencyCap dword 500
+value DmaRemappingCompatible dword 2
+key ControlSet001\Services\storahci\Parameters\Device
+value ResetInInit multi_sz VEN_1106&DEV_6287&REV_*
+value SingleIO multi_sz VEN_1106&DEV_6287&REV_00 VEN_1106&DEV_6287&REV_10 VEN_1106&DEV_6287&REV_20
+value IgnoreHotPlug multi_sz VEN_1002&DEV_4380&REV_*
+value NeverNonQueuedErrorRecovery multi_sz VEN_1002&DEV_4380&REV_*
+value EnableCLOReset multi_sz VEN_1002&DEV_4391&REV_*
+value ExpectedMsiMessageCount multi_sz "VEN_1022&DEV_7801&REV_00 8"
+value NoFUACommand multi_sz HTE* Hitachi* HTS* HDS* HDT*
+value NeedSetTransferModeCommand multi_sz MCBQE64GBMPP*
+value NoLPM multi_sz WD740ADFD?00NLR1* "WDC WD740ADFD?00NLR1*" "Maxtor 6V???E0*" "Maxtor 6V???F0*" "Maxtor 7V???E0*" "Maxtor 7V???F0*" "SanDisk SSD P4*"
+value NoIdleD3 multi_sz "INTEL SSD?C??????A4" "INTEL SSD?C??????A4?" "INTEL SSD?C??????A4??" "INTEL SSD?C??????A5" "INTEL SSD?C??????A5?" "INTEL SSD?C??????A5??"
+value PRDTSplit multi_sz VEN_1022&DEV_43B5&REV_* VEN_1022&DEV_43B6&REV_* VEN_1022&DEV_43B7&REV_* VEN_1022&DEV_43B8&REV_* VEN_1022&DEV_43C8&REV_*
+key ControlSet001\Services\storahci\Parameters\PnpInterface
+value 5 dword 1
+
+# No Group, no Tag, ErrorControl 1.
+key ControlSet001\Services\disk
+value ImagePath expand_sz System32\drivers\disk.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 1
+value DisplayName sz "@disk.inf,%disk_ServiceDesc%;Disk Driver"
+value Owners multi_sz wstorflt.inf disk.inf virtdisk.inf smrdisk.inf
+value AutoRunAlwaysDisable multi_sz "Brother RemovableDisk(U)"
+value TimeOutValue dword 65
+value IoTimeoutValue dword 60
+
+# partmgr: the upper filter of class DiskDrive (see the class key below); it is in
+# the stack of every disk. No Tag.
+key ControlSet001\Services\partmgr
+value Description sz @%SystemRoot%\system32\drivers\partmgr.sys,-101
+value DisplayName sz @%SystemRoot%\system32\drivers\partmgr.sys,-100
+value ErrorControl dword 3
+value Group sz "Boot Bus Extender"
+value ImagePath expand_sz System32\drivers\partmgr.sys
+value Start dword 0
+value Type dword 1
+key ControlSet001\Services\partmgr\Parameters
+value SanPolicy dword 1
+key ControlSet001\Services\partmgr\Parameters\VolumeManagerAltitudes
+value clusbflt dword 4
+value spaceport dword 16
+value volmgr dword 32
+
+# EhStorClass: the LOWER filter of class DiskDrive. A KMDF driver (imports
+# Wdf01000/WDFLDR). Windows loads it and calls its AddDevice for both disks (its
+# Enum subkey lists them) but it does not appear in either disk's device stack.
+# NK has to either run it (needs KMDF) or leave it out of LowerFilters; see NOTES.md.
+key ControlSet001\Services\EhStorClass
+value Description sz @%SystemRoot%\system32\drivers\EhStorClass.sys,-101
+value DisplayName sz @%SystemRoot%\system32\drivers\EhStorClass.sys,-100
+value ErrorControl dword 1
+value Group sz "SCSI Class"
+value ImagePath expand_sz System32\drivers\EhStorClass.sys
+value Start dword 0
+value Type dword 1
+key ControlSet001\Services\EhStorClass\Parameters
+key ControlSet001\Services\EhStorClass\Parameters\Wdf
+value WdfMajorVersion dword 1
+value WdfMinorVersion dword 15
+
+# --- Device setup classes ---------------------------------------------------------
+#
+# Top-level values of the class keys of the path. The NNNN subkeys (driver keys,
+# made at install: InfPath, InfSection, MatchingDeviceId, ...) and the Properties
+# subkeys are not here. Only DiskDrive has filters.
+
+# Computer: ROOT\ACPI_HAL\0000
+key ControlSet001\Control\Class\{4d36e966-e325-11ce-bfc1-08002be10318}
+value Class sz Computer
+value ClassDesc sz @%SystemRoot%\System32\SysClass.dll,-3000
+value IconPath multi_sz %SystemRoot%\System32\setupapi.dll,-13
+value NoInstallClass sz 1
+
+# System: ACPI_HAL\PNP0C08\0 (acpi) and ACPI\PNP0A08\0 (pci)
+key ControlSet001\Control\Class\{4d36e97d-e325-11ce-bfc1-08002be10318}
+value Class sz System
+value ClassDesc sz @%SystemRoot%\System32\SysClass.Dll,-3008
+value IconPath multi_sz %SystemRoot%\System32\setupapi.dll,-27
+
+# HDC: the AHCI controller (storahci). Not SCSIAdapter.
+key ControlSet001\Control\Class\{4d36e96a-e325-11ce-bfc1-08002be10318}
+value Class sz HDC
+value ClassDesc sz @%SystemRoot%\System32\SysClass.Dll,-3001
+value IconPath multi_sz %SystemRoot%\System32\setupapi.dll,-9
+
+# DiskDrive: the disk. UpperFilters partmgr, LowerFilters EhStorClass.
+key ControlSet001\Control\Class\{4d36e967-e325-11ce-bfc1-08002be10318}
+value Class sz DiskDrive
+value ClassDesc sz "@c_diskdrive.inf,%ClassDesc%;Disk drives"
+value IconPath multi_sz %SystemRoot%\System32\setupapi.dll,-53
+value UpperFilters multi_sz partmgr
+value LowerFilters multi_sz EhStorClass
+value EnumPropPages32 sz storprop.dll,DiskPropPageProvider
+value NoInstallClass sz 1
+value SilentInstall sz 1
+
+# SCSIAdapter: no device of the path is in this class on this machine.
+key ControlSet001\Control\Class\{4d36e97b-e325-11ce-bfc1-08002be10318}
+value Class sz SCSIAdapter
+value ClassDesc sz @%SystemRoot%\System32\SysClass.Dll,-3005
+value IconPath multi_sz %SystemRoot%\System32\setupapi.dll,-12
+value LegacyAdapterDetection dword 0
+
+# --- Device id -> driver matching -------------------------------------------------
+#
+# This build has NO Control\CriticalDeviceDatabase key. Matching data is the driver
+# database: HKLM\SYSTEM\DriverDatabase, which on Windows is a separate hive
+# (\SystemRoot\System32\config\DRIVERS, mounted as \Registry\Machine\DRIVERS;
+# SYSTEM\DriverDatabase is how it is reached). Paths below are written as if it
+# were a key of the SYSTEM hive: NK decides where it lives.
+#   DeviceIds\<id>: value <inf name> = 01 ff 00 00 -> which INF matches the id
+#   DriverInfFiles\<inf>: Active -> the package key
+#   DriverPackages\<pkg>\Descriptors\<id>: Configuration -> the install section
+#   DriverPackages\<pkg>\Configurations\<section>: Service, and the registry
+#      content the section adds (Device\... -> the device's "Device Parameters",
+#      Services\... -> the service key)
+# Only the ids and sections of this device path are copied. Windows stores some
+# values there with types outside the standard set (0x40007 = multi_sz with a flag
+# in the high word; 0xffff00NN = a DEVPROP type): the format cannot express them,
+# so they are comments with their data.
+# UpdateDate is a FILETIME of this installation.
+key DriverDatabase
+value Version dword 0xa000000
+value SchemaVersion dword 0x10000
+value Architecture dword 9
+value UpdateDate binary hex:c0b7943d31c3d801
+value SetupStatus dword 0
+value OemInfMap binary hex:c0
+
+# ROOT\ACPI_HAL\0000 (hardware id acpiapic). The section names no Service.
+key DriverDatabase\DeviceIds\ACPIAPIC
+value hal.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\hal.inf
+value "" multi_sz hal.inf_amd64_fd0ae947345ac7bf
+value Active sz hal.inf_amd64_fd0ae947345ac7bf
+value Configurations multi_sz ACPI_AMD64_HAL
+key DriverDatabase\DriverPackages\hal.inf_amd64_fd0ae947345ac7bf
+value Version binary hex:ffff09000000000066e9364d25e3ce11bfc108002be1031800808ca3c594c6010100614a00000a000000000000000000
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value "" sz hal.inf
+key DriverDatabase\DriverPackages\hal.inf_amd64_fd0ae947345ac7bf\Configurations\ACPI_AMD64_HAL
+value ConfigScope dword 1
+value Reboot dword 1
+value ConfigFlags dword 0
+key DriverDatabase\DriverPackages\hal.inf_amd64_fd0ae947345ac7bf\Configurations\ACPI_AMD64_HAL\Properties
+key DriverDatabase\DriverPackages\hal.inf_amd64_fd0ae947345ac7bf\Configurations\ACPI_AMD64_HAL\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}
+key DriverDatabase\DriverPackages\hal.inf_amd64_fd0ae947345ac7bf\Configurations\ACPI_AMD64_HAL\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}\000C
+# value "" has registry type 0xffff0012, which this format cannot express; data hex:480041004c000000
+key DriverDatabase\DriverPackages\hal.inf_amd64_fd0ae947345ac7bf\Descriptors\ACPIAPIC
+value Configuration sz ACPI_AMD64_HAL
+value Manufacturer sz %gendev_mfg%
+value Description sz %acpi_amd64.devicedesc%
+
+# ACPI_HAL\PNP0C08\0 -> service ACPI
+key DriverDatabase\DeviceIds\*pnp0c08
+value acpi.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\acpi.inf
+value "" multi_sz acpi.inf_amd64_064004ff9d679793
+value Active sz acpi.inf_amd64_064004ff9d679793
+value Configurations multi_sz ACPI_Inst.NT
+key DriverDatabase\DriverPackages\acpi.inf_amd64_064004ff9d679793
+value Version binary hex:ffff0900000000007de9364d25e3ce11bfc108002be1031800808ca3c594c601cd06614a00000a000000000000000000
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value "" sz acpi.inf
+key DriverDatabase\DriverPackages\acpi.inf_amd64_064004ff9d679793\Configurations\ACPI_Inst.NT
+value Service sz ACPI
+value ConfigScope dword 5
+value Reboot dword 1
+value ConfigFlags dword 0
+key DriverDatabase\DriverPackages\acpi.inf_amd64_064004ff9d679793\Configurations\ACPI_Inst.NT\Properties
+key DriverDatabase\DriverPackages\acpi.inf_amd64_064004ff9d679793\Configurations\ACPI_Inst.NT\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}
+key DriverDatabase\DriverPackages\acpi.inf_amd64_064004ff9d679793\Configurations\ACPI_Inst.NT\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}\000D
+# value "" has registry type 0xffff0012, which this format cannot express; data hex:4900520051003a00480041004c000000
+key DriverDatabase\DriverPackages\acpi.inf_amd64_064004ff9d679793\Descriptors\*pnp0c08
+value Configuration sz ACPI_Inst.NT
+value Manufacturer sz %msft%
+value Description sz %*pnp0c08.devicedesc%
+
+# ACPI\PNP0A08\0 (compatible id *PNP0A03 also maps to pci.inf) -> service pci
+key DriverDatabase\DeviceIds\*PNP0A08
+value pci.inf binary hex:01ff0000
+key DriverDatabase\DeviceIds\*PNP0A03
+value pci.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\pci.inf
+value "" multi_sz pci.inf_amd64_bd47cfa2f19fd5af
+value Active sz pci.inf_amd64_bd47cfa2f19fd5af
+value Configurations multi_sz PCI_ROOT PCI_BRIDGE PciIoSpaceNotRequired PciSriovSupported PciAcsNotRequired PciASPMOptIn PciASPMOptOut PciD3ColdSupported PciDoNotUseAcs PciEnableAllBridgeInterrupts PciAtomicsOptIn PciExtraSettleTimeRequired PciIgnoreErrorsDuringPLDR PciForceSBR PciBridgeUseNativeWakeInfo
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af
+value Version binary hex:ffff0900000000007de9364d25e3ce11bfc108002be1031800808ca3c594c6019d07614a00000a000000000000000000
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value "" sz pci.inf
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT
+value Service sz pci
+value ConfigScope dword 7
+value ConfigFlags dword 0
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Properties
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Properties\{a45c254e-df1c-4efd-8020-67d146a850e0}
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Properties\{a45c254e-df1c-4efd-8020-67d146a850e0}\001F
+# value "" has registry type 0xffff0019, which this format cannot express; data hex:40007000630069002e0069006e0066002c00250050004300490053006c006f00740025003b00500043004900200053006c006f0074002000250031002100750021000000
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}\000C
+# value "" has registry type 0xffff0012, which this format cannot express; data hex:4d0042005200450053000000
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Properties\{a8b865dd-2e3d-4094-ad97-e593a70c75d6}\000D
+# value "" has registry type 0xffff0012, which this format cannot express; data hex:49004f003a00480041004c002c004d0042005200450053003b004d0045004d003a00480041004c002c004d0042005200450053000000
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Services
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Services\pci
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Configurations\PCI_ROOT\Services\pci\Parameters
+value DmaRemappingCompatible dword 1
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Descriptors\*PNP0A08
+value Configuration sz PCI_ROOT
+value Manufacturer sz %gendev_mfg%
+value Description sz %*pnp0a08.devicedesc%
+key DriverDatabase\DriverPackages\pci.inf_amd64_bd47cfa2f19fd5af\Descriptors\*PNP0A03
+value Configuration sz PCI_ROOT
+value Manufacturer sz %gendev_mfg%
+value Description sz %*pnp0a03.devicedesc%
+
+# the AHCI controller, by its compatible id PCI\CC_010601 -> service storahci
+key DriverDatabase\DeviceIds\PCI\CC_010601
+value mshdc.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\mshdc.inf
+value "" multi_sz mshdc.inf_amd64_ded026dc21bf9462
+value Active sz mshdc.inf_amd64_ded026dc21bf9462
+value Configurations multi_sz pcmcia_atapi_Inst atapi_Inst pciide_Inst intelide_Inst serverworks_Inst msahci_Inst
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462
+value Version binary hex:ffff0900000000006ae9364d25e3ce11bfc108002be1031800808ca3c594c6016107614a00000a000000000000000000
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 22
+value "" sz mshdc.inf
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst
+value Service sz storahci
+value ExcludeIds multi_sz PCI\VEN_8086&DEV_2653&SUBSYS_0F001179 PCI\VEN_8086&DEV_2653&SUBSYS_0F101179 PCI\VEN_8086&DEV_27C5&SUBSYS_0F001179 PCI\VEN_8086&DEV_27C5&SUBSYS_0F101179 PCI\VEN_8086&DEV_27C5&SUBSYS_0F031179 PCI\VEN_8086&DEV_27C5&SUBSYS_0F131179 PCI\VEN_8086&DEV_27C5&SUBSYS_FF011179 PCI\VEN_8086&DEV_2829&SUBSYS_0F031179 PCI\VEN_8086&DEV_2829&SUBSYS_0F131179 PCI\VEN_8086&DEV_2829&SUBSYS_FF011179 PCI\VEN_8086&DEV_2829&SUBSYS_FF021179 PCI\VEN_8086&DEV_2829&SUBSYS_FF031179 PCI\VEN_8086&DEV_2829&SUBSYS_FF041179 PCI\VEN_8086&DEV_2829&SUBSYS_FF111179 PCI\VEN_8086&DEV_2829&SUBSYS_FF121179 PCI\VEN_8086&DEV_2829&SUBSYS_FF131179 PCI\VEN_8086&DEV_2829&SUBSYS_FF141179 PCI\VEN_8086&DEV_2829&SUBSYS_FF311179 PCI\VEN_8086&DEV_2829&SUBSYS_FF321179 PCI\VEN_8086&DEV_2829&SUBSYS_FF331179 PCI\VEN_8086&DEV_2829&SUBSYS_FF341179
+value ConfigScope dword 7
+value ConfigFlags dword 0
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Device
+key "DriverDatabase\\DriverPackages\\mshdc.inf_amd64_ded026dc21bf9462\\Configurations\\msahci_Inst\\Device\\Interrupt Management"
+value 0x00000010 sz ""
+key "DriverDatabase\\DriverPackages\\mshdc.inf_amd64_ded026dc21bf9462\\Configurations\\msahci_Inst\\Device\\Interrupt Management\\Affinity Policy"
+value 0x00000010 sz ""
+value DevicePolicy dword 5
+value DevicePriority dword 3
+value GroupPolicy dword 1
+key "DriverDatabase\\DriverPackages\\mshdc.inf_amd64_ded026dc21bf9462\\Configurations\\msahci_Inst\\Device\\Interrupt Management\\MessageSignaledInterruptProperties"
+value 0x00000010 sz ""
+value MSISupported dword 1
+value MessageNumberLimit dword 8
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Device\StorPort
+value EnableIdlePowerManagement dword 1
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Services
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Services\storahci
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Services\storahci\Parameters
+value BusType dword 11
+value IoTimeoutValue dword 30
+value BusyRetryCount dword 240
+value BusyPauseTimeInMs dword 500
+value IoLatencyCap dword 500
+value DmaRemappingCompatible dword 2
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Services\storahci\Parameters\Device
+# value ResetInInit has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310031003000360026004400450056005f00360032003800370026005200450056005f002a0000000000
+# value SingleIO has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310031003000360026004400450056005f00360032003800370026005200450056005f00300030000000560045004e005f00310031003000360026004400450056005f00360032003800370026005200450056005f00310030000000560045004e005f00310031003000360026004400450056005f00360032003800370026005200450056005f003200300000000000
+# value IgnoreHotPlug has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310030003000320026004400450056005f00340033003800300026005200450056005f002a0000000000
+# value NeverNonQueuedErrorRecovery has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310030003000320026004400450056005f00340033003800300026005200450056005f002a0000000000
+# value EnableCLOReset has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310030003000320026004400450056005f00340033003900310026005200450056005f002a0000000000
+# value ExpectedMsiMessageCount has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310030003200320026004400450056005f00370038003000310026005200450056005f00300030002000380000000000
+# value NoFUACommand has registry type 0x40007, which this format cannot express; data hex:4800540045002a00000048006900740061006300680069002a0000004800540053002a0000004800440053002a0000004800440054002a0000000000
+# value NeedSetTransferModeCommand has registry type 0x40007, which this format cannot express; data hex:4d00430042005100450036003400470042004d00500050002a0000000000
+# value NoLPM has registry type 0x40007, which this format cannot express; data hex:5700440037003400300041004400460044003f00300030004e004c00520031002a00000057004400430020005700440037003400300041004400460044003f00300030004e004c00520031002a0000004d006100780074006f0072002000360056003f003f003f00450030002a0000004d006100780074006f0072002000360056003f003f003f00460030002a0000004d006100780074006f0072002000370056003f003f003f00450030002a0000004d006100780074006f0072002000370056003f003f003f00460030002a000000530061006e004400690073006b0020005300530044002000500034002a0000000000
+# value NoIdleD3 has registry type 0x40007, which this format cannot express; data hex:49004e00540045004c0020005300530044003f0043003f003f003f003f003f003f0041003400000049004e00540045004c0020005300530044003f0043003f003f003f003f003f003f00410034003f00000049004e00540045004c0020005300530044003f0043003f003f003f003f003f003f00410034003f003f00000049004e00540045004c0020005300530044003f0043003f003f003f003f003f003f0041003500000049004e00540045004c0020005300530044003f0043003f003f003f003f003f003f00410035003f00000049004e00540045004c0020005300530044003f0043003f003f003f003f003f003f00410035003f003f0000000000
+# value PRDTSplit has registry type 0x40007, which this format cannot express; data hex:560045004e005f00310030003200320026004400450056005f00340033004200350026005200450056005f002a000000560045004e005f00310030003200320026004400450056005f00340033004200360026005200450056005f002a000000560045004e005f00310030003200320026004400450056005f00340033004200370026005200450056005f002a000000560045004e005f00310030003200320026004400450056005f00340033004200380026005200450056005f002a000000560045004e005f00310030003200320026004400450056005f00340033004300380026005200450056005f002a0000000000
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Configurations\msahci_Inst\Services\storahci\Parameters\PnpInterface
+value 5 dword 1
+key DriverDatabase\DriverPackages\mshdc.inf_amd64_ded026dc21bf9462\Descriptors\PCI\CC_010601
+value Configuration sz msahci_Inst
+value Manufacturer sz %ms-ahci%
+value Description sz %pci\cc_010601.devicedesc%
+
+# the disk, by its hardware id GenDisk -> service disk
+key DriverDatabase\DeviceIds\GenDisk
+value disk.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\disk.inf
+value "" multi_sz disk.inf_amd64_502e7d1dac536e52
+value Active sz disk.inf_amd64_502e7d1dac536e52
+value Configurations multi_sz disk_install.NT media_unlockable_disk_install.NT expect_orderly_removal_disk_install.NT expect_surprise_removal_disk_install.NT disk_install_VHD_drive.NT
+key DriverDatabase\DriverPackages\disk.inf_amd64_502e7d1dac536e52
+value Version binary hex:ffff09000000000067e9364d25e3ce11bfc108002be1031800808ca3c594c6014907614a00000a000000000000000000
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value "" sz disk.inf
+key DriverDatabase\DriverPackages\disk.inf_amd64_502e7d1dac536e52\Configurations\disk_install.NT
+value Service sz disk
+value ExcludeIds multi_sz GenSFloppy SCSI\DiskMATSHITALS-120_COSM___04 SCSI\DiskCOMPAQ__LS-120_VER5___AB SCSI\DiskCOMPAQ__LS-120_HIMA___01 SCSI\DiskMATSHITALS-120_VER5___00 SCSI\DiskMATSHITALS-120/240____00
+value ConfigScope dword 5
+value ConfigFlags dword 0
+key DriverDatabase\DriverPackages\disk.inf_amd64_502e7d1dac536e52\Configurations\disk_install.NT\Services
+key DriverDatabase\DriverPackages\disk.inf_amd64_502e7d1dac536e52\Configurations\disk_install.NT\Services\disk
+# value AutoRunAlwaysDisable has registry type 0x40007, which this format cannot express; data hex:420072006f0074006800650072002000520065006d006f007600610062006c0065004400690073006b0028005500290000000000
+key DriverDatabase\DriverPackages\disk.inf_amd64_502e7d1dac536e52\Descriptors\GenDisk
+value Configuration sz disk_install.NT
+value Manufacturer sz %genmanufacturer%
+value Description sz %disk_devdesc%
+
+# --- Control keys the drivers read ------------------------------------------------
+#
+# ABSENT on Windows (the drivers get STATUS_OBJECT_NAME_NOT_FOUND; do not create):
+#   Control\CriticalDeviceDatabase, Control\DISK, Control\Classpnp, Control\WHEA,
+#   Control\Processor, Control\BiosInfo (so no BiosInfo\PCI), Control\MiniNT.
+
+# acpi and pci: arbiter configuration. All values are resource requirements lists
+# or the name of another value of the same key.
+key ControlSet001\Control\Arbiters
+key ControlSet001\Control\Arbiters\AllocationOrder
+value Pci resource_requirements_list hex:e801000000000000000000000000000000000000000000000000000001000000010001000e000000000100000000000000000000000000000000010000000000ffffffff00000000080100000000000000000000000000000005000000000000ffff0000000000000801000000000000000000000000000040010000000000007f01000000000000080100000000000000000000000000000002000000000000ff020000000000000801000000000000000000000000000000030000000000006f030000000000000801000000000000000000000000000078030000000000007a0300000000000008010000000000000000000000000000e802000000000000ff0200000000000008010000000000000000000000000000f001000000000000f80100000000000008010000000000000000000000000000b003000000000000cf0300000000000008010000000000000000000000000000e803000000000000ff0300000000000008010000000000000000000000000000ce01000000000000cf01000000000000080100000000000000000000000000000001000000000000ff03000000000000000300000000000000000000000000000000100000000000ffffffffffffffff080300000000000000000000000000000000080000000000ffff0d0000000000
+value Root resource_requirements_list hex:a8040000000000000000000000000000000000000000000000000000010000000100010024000000000100000000000000000000000000000005000000000000ffff0000000000000801000000000000000000000000000040010000000000007f01000000000000080100000000000000000000000000000002000000000000ff020000000000000801000000000000000000000000000000030000000000006f030000000000000801000000000000000000000000000078030000000000007a0300000000000008010000000000000000000000000000e802000000000000ff0200000000000008010000000000000000000000000000f001000000000000f80100000000000008010000000000000000000000000000b003000000000000cf0300000000000008010000000000000000000000000000e803000000000000ff0300000000000008010000000000000000000000000000ce01000000000000cf01000000000000080100000000000000000000000000000001000000000000ff0300000000000008020000000000000900000009000000000000000000000000000000000000000802000000000000080000000800000000000000000000000000000000000000080200000000000007000000070000000000000000000000000000000000000008020000000000000b0000000b0000000000000000000000000000000000000008020000000000000a0000000a00000000000000000000000000000000000000080200000000000002000000020000000000000000000000000000000000000000020000000000000300000003000000000000000000000000000000000000000802000000000000050000000500000000000000000000000000000000000000080200000000000004000000040000000000000000000000000000000000000008020000000000000f0000000f0000000000000000000000000000000000000008020000000000000d0000000d0000000000000000000000000000000000000008020000000000000e0000000e00000000000000000000000000000000000000080200000000000006000000060000000000000000000000000000000000000008020000000000000c0000000c00000000000000000000000000000000000000080200000000000001000000010000000000000000000000000000000000000008020000000000000000fffffeffffff00000000000000000000000000000000080200000000000010000000fffffeff00000000000000000000000000000000000300000000000000000000000000000000100000000000ffffffffffffffff0803000000000000000000000000000000000f0000000000ffff0f0000000000080300000000000000000000000000000000080000000000ffff0b0000000000080300000000000000000000000000000000080000000000ffff0f0000000000080300000000000000000000000000000000080000000000ffffbfff000000000004000000000000060000000f0000000000000000000000000000000000000008040000000000000300000004000000000000000000000000000000000000000804000000000000000000000f00000000000000000000000000000000000000
+key ControlSet001\Control\Arbiters\InaccessibleRange
+value Pci sz PhysicalAddress
+value Root sz PhysicalAddress
+value PhysicalAddress resource_requirements_list hex:48000000000000000000000000000000000000000000000000000000010000000000000001000000000300000000000000000000000000000000000000000100ffffffffffffffff
+key ControlSet001\Control\Arbiters\ReservedResources
+value BrokenMemAtF8 resource_requirements_list hex:0801000000000000000000000000000000000000000000000000000001000000010001000700000000010000000000000000000000000000f802000000000000ff0200000000000008010000000000000000000000000000b003000000000000bb0300000000000008010000000000000000000000000000bc03000000000000be0300000000000008010000000000000000000000000000c003000000000000df0300000000000008010000000000000000000000000000f803000000000000ff030000000000000003000000000000000000000000000000000a0000000000ffff0b000000000008030000000000000000000000000000000000f800000000fffffffb00000000
+value BrokenVideo resource_requirements_list hex:2805000000000000000000000000000000000000000000000000000001000000010001002800000000010000000000000000000000000000ec02000000000000ef0200000000000008010000000000000000000000000000f802000000000000ff0200000000000008010000000000000000000000000000b003000000000000bb0300000000000008010000000000000000000000000000c003000000000000df0300000000000008010000000000000000000000000000bc03000000000000be0300000000000008010000000000000000000000000000f803000000000000ff0300000000000008010000000000000000000000000000e842000000000000ef4200000000000008010000000000000000000000000000e84a000000000000ef4a00000000000008010000000000000000000000000000e882000000000000ef8200000000000008010000000000000000000000000000e886000000000000ef8600000000000008010000000000000000000000000000e88a000000000000ef8a00000000000008010000000000000000000000000000e88e000000000000ef8e00000000000008010000000000000000000000000000e892000000000000ef9200000000000008010000000000000000000000000000e896000000000000ef9600000000000008010000000000000000000000000000e89a000000000000ef9a00000000000008010000000000000000000000000000e89e000000000000ef9e00000000000008010000000000000000000000000000e8a2000000000000efa200000000000008010000000000000000000000000000e8a6000000000000efa600000000000008010000000000000000000000000000e8aa000000000000efaa00000000000008010000000000000000000000000000e8ae000000000000efae00000000000008010000000000000000000000000000e8b6000000000000efb600000000000008010000000000000000000000000000e8ba000000000000efba00000000000008010000000000000000000000000000e8be000000000000efbe00000000000008010000000000000000000000000000e8c2000000000000efc200000000000008010000000000000000000000000000e8c6000000000000efc600000000000008010000000000000000000000000000e8ca000000000000efca00000000000008010000000000000000000000000000e8ce000000000000efce00000000000008010000000000000000000000000000e8d2000000000000efd200000000000008010000000000000000000000000000e8d6000000000000efd600000000000008010000000000000000000000000000e8da000000000000efda00000000000008010000000000000000000000000000e8de000000000000efde00000000000008010000000000000000000000000000e8e2000000000000efe200000000000008010000000000000000000000000000e8e6000000000000efe600000000000008010000000000000000000000000000e8ea000000000000efea00000000000008010000000000000000000000000000e8ee000000000000efee00000000000008010000000000000000000000000000e8f6000000000000eff600000000000008010000000000000000000000000000e8fa000000000000effa00000000000008010000000000000000000000000000e8fe000000000000effe0000000000000003000000000000000000000000000000000a0000000000ffff0b0000000000080300000000000000000000000000000000f0ff00000000ffffffff00000000
+value Gateway9500Workaround resource_requirements_list hex:0801000000000000000000000000000000000000000000000000000001000000010001000700000000010000000000000000000000000000f802000000000000ff0200000000000008010000000000000000000000000000b003000000000000bb0300000000000008010000000000000000000000000000bc03000000000000be0300000000000008010000000000000000000000000000c003000000000000df0300000000000008010000000000000000000000000000f803000000000000ff030000000000000003000000000000000000000000000000000a0000000000ffff0b000000000008030000000000000000000000000000000000f000000000ffffffff00000000
+value Pci sz PCStandard
+value PCStandard resource_requirements_list hex:0801000000000000000000000000000000000000000000000000000001000000010001000700000000010000000000000000000000000000f802000000000000ff0200000000000008010000000000000000000000000000b003000000000000bb0300000000000008010000000000000000000000000000bc03000000000000be0300000000000008010000000000000000000000000000c003000000000000df0300000000000008010000000000000000000000000000f803000000000000ff030000000000000003000000000000000000000000000000000a0000000000ffff0b0000000000080300000000000000000000000000000000f0ff00000000ffffffff00000000
+value Root sz PCStandard
+value MmConfigRange resource_requirements_list hex:4800000000000000000000000000000000000000000000000000000001000000000000000100000000030000000000000000000000000000000000e000000000ffffffef00000000
+
+# acpi.
+key ControlSet001\Control\ACPI
+value AMLIGlobalHeapSize dword 0x80000
+
+# pci: Control\PnP\Pci (CardList). PnP manager: PollBootPartitionTimeout,
+# BusInformation.
+key ControlSet001\Control\PnP
+value PollBootPartitionTimeout dword 0x7530
+key ControlSet001\Control\PnP\BusInformation
+value 441ee000-4342-11d5-a184-00c04f60524d dword 2
+value 441ee001-4342-11d5-a184-00c04f60524d dword 2
+value 9d7debbc-c85d-11d1-9eb4-006008c3a19a dword 1
+value c4ca1000-2ddc-11d5-a17a-00c04f60524d dword 2
+value c8ebdfb0-b510-11d0-80e5-00a0c92542e3 dword 1
+value eeaf37d0-1963-47c4-aa48-72476db7cf49 dword 1
+value f74e73eb-9ac5-45eb-be4d-772cc71ddfb3 dword 1
+key ControlSet001\Control\PnP\Pci
+key ControlSet001\Control\PnP\Pci\CardList
+value Ali binary hex:01000000b91021150000000000000000
+value "Intel 82439HX" binary hex:01000000868050120000000000000000
+value "Intel 82439TX" binary hex:01000000868000710000000000000000
+value "Intel 82441FX" binary hex:01000000868037120000000000000000
+value "Intel 82443BX1" binary hex:01000000868090710000000000000000
+value "Intel 82443BX2" binary hex:01000000868092710000000000000000
+value "Intel 82443GX" binary hex:010000008680a0710000000000000000
+value "Intel 82443LX/EX" binary hex:01000000868080710000000000000000
+value Toshiba binary hex:01000000791101060000000000000000
+value "VIA Tech1" binary hex:01000000061101050000000000000000
+value "VIA Tech2" binary hex:01000000061191060000000000000000
+
+# storport: the key exists and is empty.
+key ControlSet001\Control\StorPort
+
+# storport.
+key ControlSet001\Control\Storage
+key ControlSet001\Control\Storage\EnabledDenyGP
+value DenyAllGPState dword 1
+key ControlSet001\Control\Storage\RegCacheState
+value RegCacheUpdated dword 1
+key ControlSet001\Control\Storage\StorageTelemetry
+value DeviceDumpLevel dword 1
+value DeviceDumpMaxSize dword 0x8000
+key ControlSet001\Control\Storage\StorageTelemetry\ATA
+value PrivateLogAddress dword 10
+key ControlSet001\Control\Storage\StorageTelemetry\ATA\PublicLogAddressList
+value DataStatistics dword 4
+value LPSMisalignment dword 13
+value NCQErrors dword 16
+value PowerConditions dword 8
+value SATAPHYErrors dword 17
+
+# storport opens this key. It also holds ProductPolicy (59416 bytes of licensing
+# data), OSProductContentId and OSProductPfn, which are not copied.
+key ControlSet001\Control\ProductOptions
+value ProductType sz WinNT
+value ProductSuite multi_sz "Terminal Server"
+
+# --- Root-enumerated devices ---------------------------------------------------------
+#
+# The root of the device tree. Its driver is \Driver\PnpManager.
+key ControlSet001\Enum\HTREE\ROOT\0
+value ContainerID sz {00000000-0000-0000-FFFF-FFFFFFFFFFFF}
+value ConfigFlags dword 0
+value Capabilities dword 112
+value UINumber dword 0
+
+# What starts ACPI. The device is REPORTED, not installed from the registry: the HAL
+# calls IoReportDetectedDevice at boot (DeviceReported = 1, compatible ids
+# DETECTEDInternal\ACPI_HAL and DETECTED\ACPI_HAL), its driver is the HAL's own
+# driver object \Driver\ACPI_HAL (there is no Services\ACPI_HAL key), and that
+# driver enumerates the one child ACPI_HAL\PNP0C08\0, which acpi.inf gives to
+# service ACPI. This key is what the report leaves behind; ClassGUID, DeviceDesc,
+# Driver and Mfg name hal.inf, so device installation added them. Its Properties
+# subkeys (DEVPROP-typed values) are not copied. Control is a volatile subkey.
+key ControlSet001\Enum\ROOT\ACPI_HAL\0000
+value ConfigFlags dword 0
+value DeviceReported dword 1
+value Service sz \Driver\ACPI_HAL
+value CompatibleIDs multi_sz DETECTEDInternal\ACPI_HAL DETECTED\ACPI_HAL
+value HardwareID multi_sz acpiapic
+value ClassGUID sz {4d36e966-e325-11ce-bfc1-08002be10318}
+value DeviceDesc sz "@hal.inf,%acpi_amd64.devicedesc%;ACPI x64-based PC"
+value Driver sz {4d36e966-e325-11ce-bfc1-08002be10318}\0000
+value Mfg sz "@hal.inf,%gendev_mfg%;(Standard computers)"
+value ContainerID sz {00000000-0000-0000-FFFF-FFFFFFFFFFFF}
+value Capabilities dword 0

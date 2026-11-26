@@ -10,7 +10,7 @@ use nk_ntabi::status::{
 };
 
 pub static GROUP: Group = Group {
-    names: &["ex.licence-values", "ex.shim-engine"],
+    names: &["ex.licence-values", "ex.shim-engine", "ex.secure-kernel"],
     run,
     manual: false,
 };
@@ -52,6 +52,12 @@ fn shim_engine() -> Result<(), &'static str> {
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ex.licence-values", licence_values);
     r.check("ex.shim-engine", shim_engine);
+    r.check("ex.secure-kernel", || {
+        if crate::ex::vsl::VslGetSecurePciEnabled() != 0 {
+            return Err("PCI devices were reported as guarded by a secure kernel");
+        }
+        Ok(())
+    });
 }
 
 /// This file's test groups, in the order they run.
