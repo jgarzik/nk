@@ -1,6 +1,6 @@
 //! The registry, as drivers reach it: `ZwCreateKey`, `ZwOpenKey`,
 //! `ZwDeleteKey`, `ZwEnumerateKey`, `ZwEnumerateValueKey`, `ZwQueryKey`,
-//! `ZwQueryValueKey`, `ZwSetValueKey`.
+//! `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`.
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
 //! keys every system has and, laid over `Machine\System`, the SYSTEM
@@ -501,6 +501,30 @@ pub unsafe extern "C" fn ZwSetValueKey(
         (crate::rtl::copy_unicode(value_name), data)
     };
     match HIVE.lock().set_value(key, &name, kind, &data) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
+    }
+}
+
+/// [`ZwDeleteValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletevaluekey):
+/// take a value away from a key. The values after it move up one place
+/// in the order they are enumerated in; set again, the value is the
+/// key's last.
+///
+/// # Safety
+/// `value_name` is null or a counted string.
+pub unsafe extern "C" fn ZwDeleteValueKey(
+    key_handle: *mut c_void,
+    value_name: *const UNICODE_STRING,
+) -> NTSTATUS {
+    let key = match key_of(key_handle) {
+        Ok(key) => key,
+        Err(status) => return status,
+    };
+    // SAFETY: per the contract. The name is the driver's memory: the
+    // registry is given a copy.
+    let name = unsafe { crate::rtl::copy_unicode(value_name) };
+    match HIVE.lock().delete_value(key, &name) {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }

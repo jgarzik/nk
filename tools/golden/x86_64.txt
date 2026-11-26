@@ -94,6 +94,7 @@ se.access-state ok
 cm.keys ok
 cm.values ok
 cm.delete ok
+cm.delete.value ok
 cm.enumerate.keys ok
 cm.enumerate.values ok
 cm.query.key ok

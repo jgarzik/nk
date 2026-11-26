@@ -978,7 +978,9 @@ Creating makes only the last key of a path, as on Windows, and gives a
 new key its class. A value is read by name in the forms it is
 enumerated in; there are no layered keys, so the form that describes a
 value of one (`KeyValueLayerInformation`) is refused like a form that
-does not exist, `STATUS_INVALID_PARAMETER`. A key without subkeys can be
+does not exist, `STATUS_INVALID_PARAMETER`. A deleted value leaves its
+place in the order to the next; set again, it is the key's last. A key
+without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.

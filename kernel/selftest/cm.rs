@@ -1,8 +1,8 @@
 //! Tests of the registry, through the routines drivers call.
 
 use crate::cm::{
-    ZwCreateKey, ZwDeleteKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey, ZwQueryKey,
-    ZwQueryValueKey, ZwSetValueKey,
+    ZwCreateKey, ZwDeleteKey, ZwDeleteValueKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey,
+    ZwQueryKey, ZwQueryValueKey, ZwSetValueKey,
 };
 use crate::ps::ZwClose;
 use crate::test::{Group, Report};
@@ -17,6 +17,7 @@ pub static GROUP: Group = Group {
         "cm.keys",
         "cm.values",
         "cm.delete",
+        "cm.delete.value",
         "cm.enumerate.keys",
         "cm.enumerate.values",
         "cm.query.key",
@@ -329,6 +330,73 @@ fn delete() -> Result<(), &'static str> {
     ZwClose(again);
     if (status, disposition, deleted) != (0, 1, 0) || !empty {
         return Err("a deleted key's name could not be used again for a new, empty key");
+    }
+    Ok(())
+}
+
+fn delete_named(key: *mut c_void, name: &str) -> u32 {
+    let text: Vec<u16> = name.encode_utf16().collect();
+    let name = counted(&text);
+    // SAFETY: a local that outlives the call.
+    (unsafe { ZwDeleteValueKey(key, &raw const name) }) as u32
+}
+
+/// A deleted value is gone under any spelling of its name, the values
+/// after it move up, and set again it is the last. The longest name
+/// and data the key reports stay what they were until its last value
+/// goes, as on Windows.
+fn delete_value(key: *mut c_void) -> Result<(), &'static str> {
+    let basic = |index, kind, name: &str| {
+        let name = utf16(name);
+        let whole = joined(&[&fields(&[0, kind, name.len() as u32]), &name]);
+        enumerate_value(key, index, 0, ROOM).is(ROOM, &whole, VALUE_BASIC, 0)
+    };
+    // Values, the longest name, the longest data, the key's own name.
+    let counts = |values, name, data| {
+        let whole = joined(&[&TIME, &fields(&[0, 3, 12, values, name, data, 14])]);
+        query_key_info(key, 4, ROOM).is(ROOM, &whole, 36, 8)
+    };
+    let deleted = [
+        delete_named(key, "NUMBER"),
+        delete_named(key, "NUMBER"),
+        delete_named(key, "Absent"),
+    ];
+    if deleted != [0, NOT_FOUND, NOT_FOUND] {
+        return Err("a value was not deleted once, by a name in other letter case");
+    }
+    if query_value_info(key, "Number", 0, ROOM).status != NOT_FOUND || !basic(0, 1, "Text") {
+        return Err("a deleted value is still there, or the next did not take its place");
+    }
+    // Number had the longest name, and is gone: the number stays.
+    if !counts(4, 12, 12) {
+        return Err("the key does not count four values, with the longest name it has held");
+    }
+    let number = 0x1234_5678u32.to_le_bytes();
+    if (delete_named(key, "Odd"), set(key, "Odd", 3, &number[..3])) != (0, 0)
+        || !basic(3, 3, "Odd")
+        || !basic(1, 1, "")
+    {
+        return Err("a value deleted and set again is not the key's last");
+    }
+    // The unnamed value is deleted by the empty name; with the last
+    // value gone the key counts from nothing again.
+    let emptied = ["", "Text", "multi", "odd"].map(|name| delete_named(key, name));
+    if emptied != [0; 4] || !enumerate_value(key, 0, 0, ROOM).refused(NO_MORE) || !counts(0, 0, 0) {
+        return Err("a key whose values were all deleted still has, or counts, some");
+    }
+    if set(key, "ab", 3, &number) != 0 || !counts(1, 4, 4) {
+        return Err("a key that lost all its values does not count its next from nothing");
+    }
+    let (_, gone) = child(key, "Gone", None);
+    let refused = [
+        delete_named(0x1234 as *mut c_void, "ab"),
+        ZwDeleteKey(gone) as u32,
+        delete_named(gone, "ab"),
+        ZwClose(gone) as u32,
+        delete_named(key, "ab"),
+    ];
+    if refused != [0xC000_0008, 0, 0xC000_017C, 0, 0] {
+        return Err("a value was deleted through no handle, or from a deleted key");
     }
     Ok(())
 }
@@ -1125,6 +1193,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
     r.check("cm.delete", delete);
+    r.check("cm.delete.value", || with_key(delete_value));
     r.check("cm.enumerate.keys", || with_key(enumerate_keys));
     r.check("cm.enumerate.values", || with_key(enumerate_values));
     r.check("cm.query.key", || with_key(query_key));
