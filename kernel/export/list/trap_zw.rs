@@ -15,6 +15,5 @@ trap_list!(
     ZwLoadDriver,
     ZwMakeTemporaryObject,
     ZwOpenFile,
-    ZwQueryWnfStateData,
     ZwSetSystemInformation,
 );

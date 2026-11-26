@@ -13,7 +13,8 @@
 //! [`uuid`] makes the time-based UUIDs of `ExUuidCreate`.
 //! [`sysinfo`] is the length rules of `ZwQuerySystemInformation` and the
 //! list of loaded modules it and `RtlQueryModuleInformation` report;
-//! [`sysinfo_ex`] is the classes that take an input.
+//! [`sysinfo_ex`] is the classes that take an input. [`wnf`] reads
+//! the state names of the notification facility.
 //!
 //! [`rundown`] is `EX_RUNDOWN_REF` and its cache-aware kind;
 //! [`spinlock`] is `EX_SPIN_LOCK`.
@@ -40,6 +41,7 @@ pub mod sysinfo;
 pub mod sysinfo_ex;
 pub mod timer;
 pub mod uuid;
+pub mod wnf;
 
 #[cfg(test)]
 mod model;

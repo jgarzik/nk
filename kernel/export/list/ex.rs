@@ -4,6 +4,9 @@ use super::super::{Export, NT, State};
 use crate::ex;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Partial, ex::wnf::ExSubscribeWnfStateChange),
+    export!(Partial, ex::wnf::ExUnsubscribeWnfStateChange),
+    export!(Partial, ex::wnf::ZwQueryWnfStateData),
     export!(Implemented, ex::absent::HeadlessDispatch),
     export!(Implemented, ex::absent::HviGetHypervisorFeatures),
     export!(Implemented, ex::absent::HviIsAnyHypervisorPresent),
