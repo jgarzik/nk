@@ -688,8 +688,8 @@ fn enumerate_value(key: *mut c_void, index: u32, class: u32, room: usize) -> Ans
 }
 
 /// The values of [`build`]'s key in each form, as (index, class, fixed
-/// part, the whole structure): what `ZwEnumerateValueKey` answers by
-/// index and `ZwQueryValueKey` by name.
+/// part, the whole structure): what `ZwQueryValueKey` answers by name
+/// and, in the first three classes, `ZwEnumerateValueKey` by index.
 fn value_forms() -> Vec<(u32, u32, usize, Vec<u8>)> {
     let gap = |bytes: usize| alloc::vec![UNTOUCHED; bytes];
     let number = 0x1234_5678u32.to_le_bytes();
@@ -769,10 +769,20 @@ fn value_forms() -> Vec<(u32, u32, usize, Vec<u8>)> {
     ]
 }
 
-/// Values come by index in the order they were first set, in every
-/// form, each with Windows' status and length for a buffer of any size.
+/// Values come by index in the order they were first set, in the basic,
+/// full and partial forms, each with Windows' status and length for a
+/// buffer of any size. The forms aligned for 64 bits are for a value
+/// asked for by name: enumerating in one is refused.
 fn enumerate_values(key: *mut c_void) -> Result<(), &'static str> {
     for (index, class, fixed, whole) in value_forms() {
+        if class > 2 {
+            let refused = [0, fixed, ROOM]
+                .map(|room| enumerate_value(key, index, class, room).refused(INVALID_PARAMETER));
+            if refused != [true; 3] {
+                return Err("a value was enumerated in a form aligned for 64 bits");
+            }
+            continue;
+        }
         let ask = |room| enumerate_value(key, index, class, room);
         if !at_every_room(&whole, fixed, 0, ask) {
             crate::kd::print(format_args!(
@@ -923,8 +933,8 @@ fn query_value_info(key: *mut c_void, name: &str, class: u32, room: usize) -> An
 }
 
 /// A value is described by name in every form it is described in by
-/// index: found whatever the letter case of the name asked for, and
-/// named as it was set.
+/// index and in the two aligned for 64 bits: found whatever the letter
+/// case of the name asked for, and named as it was set.
 fn query_value(key: *mut c_void) -> Result<(), &'static str> {
     let names = ["NUMBER", "text", "ODD", "", "mULTI"];
     for (index, class, fixed, whole) in value_forms() {

@@ -791,9 +791,10 @@ pub unsafe extern "C" fn ZwQueryKey(
 
 /// [`ZwEnumerateValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratevaluekey):
 /// describe value `index` of a key, counting in the order the values
-/// were first set. Past the last, `STATUS_NO_MORE_ENTRIES`, whatever
-/// the buffer. There are no layered keys, and a value is not described
-/// as part of one (`KeyValueLayerInformation`).
+/// were first set, in the basic, full and partial forms: Windows 10
+/// enumerates in no other, the two aligned for 64 bits included
+/// (`STATUS_INVALID_PARAMETER`). Past the last,
+/// `STATUS_NO_MORE_ENTRIES`, whatever the buffer.
 ///
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
@@ -806,7 +807,7 @@ pub unsafe extern "C" fn ZwEnumerateValueKey(
     length: u32,
     result_length: *mut u32,
 ) -> NTSTATUS {
-    if class > VALUE_PARTIAL_ALIGN64 {
+    if class > PARTIAL {
         return STATUS_INVALID_PARAMETER;
     }
     let key = match key_of(key_handle) {
@@ -827,8 +828,10 @@ pub unsafe extern "C" fn ZwEnumerateValueKey(
 
 /// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey):
 /// describe the value of that name, in the forms `ZwEnumerateValueKey`
-/// has. The name is matched whatever its letter case and reported as
-/// it was set.
+/// has and the two aligned for 64 bits. There are no layered keys, and
+/// a value is not described as part of one (`KeyValueLayerInformation`).
+/// The name is matched whatever its letter case and reported as it was
+/// set.
 ///
 /// # Safety
 /// `value_name` is null or a counted string; `information` is readable

@@ -1171,10 +1171,11 @@ holds: as on Windows, the numbers only grow while the key has subkeys
 hive file starts from the numbers the file gives it.
 
 Creating makes only the last key of a path, as on Windows, and gives a
-new key its class. A value is read by name in the forms it is
-enumerated in; there are no layered keys, so the form that describes a
-value of one (`KeyValueLayerInformation`) is refused like a form that
-does not exist, `STATUS_INVALID_PARAMETER`. A deleted value leaves its
+new key its class. A value is enumerated in the basic, full and partial
+forms, and read by name in those and the two aligned for 64 bits, which
+Windows 10 refuses to enumerate in (`STATUS_INVALID_PARAMETER`); there
+are no layered keys, so the form that describes a value of one
+(`KeyValueLayerInformation`) is refused the same way. A deleted value leaves its
 place in the order to the next; set again, it is the key's last. A key
 without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
