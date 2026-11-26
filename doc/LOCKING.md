@@ -68,7 +68,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
-| 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
+| 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links and state, and the priority each is queued at | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
@@ -232,6 +232,22 @@ rules stand in for the lock:
   of the one before it, or frees it if it exited. A thread never frees
   its own stack.
 
+A thread's priority can be changed by another thread while the thread
+runs, waits or is queued, and no one lock covers all three. Two rules
+do:
+
+- **One change at a time.** Whoever changes a thread's priority holds
+  that thread's own lock (its header's object lock, below) for the
+  whole change, and takes a ready queue's lock inside it.
+- **Write, then look; publish, then read.** The changer writes the
+  priority and then looks whether the thread is queued. A processor
+  queueing a thread marks it queued, under its queue's lock, and then
+  reads the priority. Whatever the interleaving, one of the two sees
+  the other: either the queueing processor reads the new priority, or
+  the changer finds the thread queued and moves it, under that queue's
+  lock. So a thread is never left queued at a priority it no longer
+  has.
+
 A thread at `DISPATCH_LEVEL` or above is never switched away from:
 preemption happens only at the end of an interrupt that returns below
 `DISPATCH_LEVEL`. So a held spin lock, which raises the IRQL, also pins
@@ -258,6 +274,9 @@ For a timer the lock also serialises setting and cancelling. Expiry
 takes the timer out under the table's lock, lets go, and only then takes
 the timer's own lock to signal it; a timer that was set again in
 between is left alone.
+
+A thread's lock also serialises changes of its priority ("Switching
+threads" above): a ready queue's lock is taken inside it.
 
 A mutex's lock also covers its owner and its place in the owner's list
 of mutexes held. A thread being let in to a mutex while it sleeps has

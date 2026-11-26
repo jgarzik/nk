@@ -239,9 +239,16 @@ A processor leaves a thread when it yields, waits or exits; when a higher
 priority becomes ready there; or when its quantum (two clock ticks, as on
 Windows client) is spent and an equal is waiting. A preempted thread goes
 to the front of its queue; one out of quantum, to the back. No priority
-boosts. A thread may change its own priority (`KeSetPriorityThread`);
-changing another's stops the system, because no lock covers a thread
-wherever it is queued.
+boosts.
+
+A thread's priority may be set by any thread (`KeSetPriorityThread`),
+wherever the thread is. If it is on a ready queue it moves to the back
+of the queue of its new priority and that processor looks again; if it
+is waiting it wakes with the new priority; if it is running and was
+lowered, its processor looks for a better thread. Its base priority
+stays. As on Windows, a thread with a base priority asked for 0 gets 1,
+and one whose base is real-time (16 and up) is not taken below 16
+(`nk_ke::sched::priority_to_set`).
 
 Preemption is requested, then done at the end of an interrupt: readying a
 thread, or the tick, marks the processor, and the switch happens when an
