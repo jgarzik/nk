@@ -5,8 +5,8 @@
 //! The driver is here, in Rust, written the way a WDM driver in C is,
 //! because what is under test is the I/O manager's side: it records
 //! each create request as it finds it and counts the cleanup and close
-//! requests. Microsoft's `npfs.sys` is the driver these requests are
-//! shaped for; nothing here loads it.
+//! requests. Microsoft's `npfs.sys` and `msfs.sys` are the drivers
+//! these requests are shaped for; nothing here loads them.
 
 use crate::io::file::{self, IoError, IoResult, Kind, OpenRequest};
 use crate::io::{device, irp};
@@ -29,6 +29,7 @@ pub static GROUP: Group = Group {
         "io.open.relative-lifetime",
         "io.open.create-request",
         "io.open.named-pipe",
+        "io.open.mailslot",
         "io.fs-control",
         "io.close.cleanup-then-close",
         "io.close.deferred",
@@ -41,7 +42,7 @@ const DEVICE: &str = "\\Device\\NkOpen";
 const LINK: &str = "\\??\\NkOpen";
 const STATUS_ACCESS_DENIED: NTSTATUS = 0xC000_0022u32 as NTSTATUS;
 /// What the driver reports as the result of a create: a marker for a
-/// file, `FILE_CREATED` for a pipe.
+/// file, `FILE_CREATED` for a pipe or a mailslot.
 const OPENED: usize = 0x5A;
 const CREATED: usize = 2;
 /// What the name of a file the driver refuses to open ends with.
@@ -82,6 +83,8 @@ struct Seen {
     token: *mut c_void,
     /// The named pipe's parameters, for a pipe.
     pipe: Option<NAMED_PIPE_CREATE_PARAMETERS>,
+    /// The mailslot's parameters, for a mailslot.
+    mailslot: Option<MAILSLOT_CREATE_PARAMETERS>,
 }
 
 /// The last create request. Requests are made by the test's own thread,
@@ -131,6 +134,8 @@ unsafe extern "C" fn create(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTAT
         };
         let pipe = (major == IRP_MJ_CREATE_NAMED_PIPE)
             .then(|| ((*location).Parameters[3] as *const NAMED_PIPE_CREATE_PARAMETERS).read());
+        let mailslot = (major == IRP_MJ_CREATE_MAILSLOT)
+            .then(|| ((*location).Parameters[3] as *const MAILSLOT_CREATE_PARAMETERS).read());
         SEEN.ptr().write(Seen {
             major,
             minor: (*location).MinorFunction,
@@ -155,6 +160,7 @@ unsafe extern "C" fn create(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTAT
             state_flags: (*state).Flags,
             token: (*state).SubjectSecurityContext.PrimaryToken,
             pipe,
+            mailslot,
         });
         CREATES.fetch_add(1, Ordering::AcqRel);
         let refused: Vec<u16> = REFUSED.encode_utf16().collect();
@@ -164,9 +170,9 @@ unsafe extern "C" fn create(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTAT
             STATUS_SUCCESS
         };
         (*irp).IoStatus.Status = status;
-        (*irp).IoStatus.Information = match (status, pipe) {
-            (STATUS_SUCCESS, Some(_)) => CREATED,
-            (STATUS_SUCCESS, None) => OPENED,
+        (*irp).IoStatus.Information = match status {
+            STATUS_SUCCESS if major == IRP_MJ_CREATE => OPENED,
+            STATUS_SUCCESS => CREATED,
             _ => 0,
         };
         irp::IofCompleteRequest(irp, 0);
@@ -249,7 +255,11 @@ fn with_driver(
     // sets one up.
     let result = unsafe {
         (*driver).MajorFunction = [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
-        for major in [IRP_MJ_CREATE, IRP_MJ_CREATE_NAMED_PIPE] {
+        for major in [
+            IRP_MJ_CREATE,
+            IRP_MJ_CREATE_NAMED_PIPE,
+            IRP_MJ_CREATE_MAILSLOT,
+        ] {
             (*driver).MajorFunction[usize::from(major)] = Some(create);
         }
         for major in [IRP_MJ_CLEANUP, IRP_MJ_CLOSE] {
@@ -661,6 +671,56 @@ fn named_pipe(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     Ok(1)
 }
 
+/// A mailslot is created with its own request, which carries the
+/// mailslot's parameters.
+fn mailslot(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
+    let parameters = MAILSLOT_CREATE_PARAMETERS {
+        MailslotQuota: 4096,
+        MaximumMessageSize: 400,
+        ReadTimeout: -2_500_000,
+        TimeoutSpecified: 1,
+    };
+    // As `NtCreateMailslotFile` asks: shared for reading and writing,
+    // and only if the name is free (`FILE_CREATE`).
+    let request = OpenRequest {
+        // GENERIC_READ | SYNCHRONIZE
+        desired_access: 0x8010_0000,
+        share_access: 3,
+        create_options: FILE_SYNCHRONOUS_IO_NONALERT,
+        disposition: 2,
+        kind: Kind::Mailslot(parameters),
+        ..OpenRequest::new("\\Device\\NkOpen\\slot-name")
+    };
+    let (handle, information) = file::open(&request).map_err(|_| "the mailslot was not created")?;
+    let seen = last();
+    file::close(handle);
+    if seen.major != IRP_MJ_CREATE_MAILSLOT || seen_name() != "\\slot-name" {
+        return Err("a mailslot was not created with IRP_MJ_CREATE_MAILSLOT and its name");
+    }
+    if information != CREATED {
+        return Err("creating a mailslot did not return what the driver reported");
+    }
+    if seen.parameters[1..3] != [0x0200_0020, 3 << 16] || seen.parameters[3] == 0 {
+        return Err("the mailslot's create parameters are not the options and share access");
+    }
+    let Some(got) = seen.mailslot else {
+        return Err("the driver found no mailslot parameters");
+    };
+    let fields = |p: &MAILSLOT_CREATE_PARAMETERS| {
+        (
+            (p.MailslotQuota, p.MaximumMessageSize),
+            (p.ReadTimeout, p.TimeoutSpecified),
+        )
+    };
+    if fields(&got) != fields(&parameters) {
+        return Err("the mailslot's parameters did not reach the driver as given");
+    }
+    if (seen.desired, seen.remaining) != (0x0012_0089, 0x0012_0089) {
+        return Err("a mailslot's create request does not carry the access asked for");
+    }
+    Ok(1)
+}
+
 /// Either kind of control request, as the requestor sends it.
 type Control = fn(u64, u32, &[u8], &mut [u8]) -> Result<IoResult, IoError>;
 
@@ -882,6 +942,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         with_driver(create_request),
     );
     counted(r, "io.open.named-pipe", "pipes:", with_driver(named_pipe));
+    counted(r, "io.open.mailslot", "mailslots:", with_driver(mailslot));
     counted(r, "io.fs-control", "kinds:", with_driver(fs_control));
     counted(
         r,

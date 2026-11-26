@@ -146,6 +146,7 @@ pub const IRP_MJ_WRITE: u8 = 0x04;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_CLEANUP: u8 = 0x12;
+pub const IRP_MJ_CREATE_MAILSLOT: u8 = 0x13;
 pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
 /// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
 /// its registration, the older way and the newer.
@@ -285,6 +286,17 @@ pub struct NAMED_PIPE_CREATE_PARAMETERS {
     pub InboundQuota: u32,
     pub OutboundQuota: u32,
     pub DefaultTimeout: i64,
+    pub TimeoutSpecified: u8,
+}
+
+/// [`MAILSLOT_CREATE_PARAMETERS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_mailslot_create_parameters):
+/// what `Parameters.CreateMailslot.Parameters` points to.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MAILSLOT_CREATE_PARAMETERS {
+    pub MailslotQuota: u32,
+    pub MaximumMessageSize: u32,
+    pub ReadTimeout: i64,
     pub TimeoutSpecified: u8,
 }
 
@@ -453,9 +465,10 @@ pub const fn create_parameters(
     ]
 }
 
-/// `Parameters.CreatePipe`: as `Parameters.Create`, with a reserved
-/// word where the file attributes are and a pointer to the
-/// `NAMED_PIPE_CREATE_PARAMETERS` where the EA length is.
+/// `Parameters.CreatePipe` and `Parameters.CreateMailslot`, which are
+/// laid out alike: as `Parameters.Create`, with a reserved word where
+/// the file attributes are and, where the EA length is, a pointer to
+/// the `NAMED_PIPE_CREATE_PARAMETERS` or `MAILSLOT_CREATE_PARAMETERS`.
 pub const fn create_pipe_parameters(
     security_context: u64,
     options: u32,
@@ -651,6 +664,10 @@ const _: () = {
     assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, OutboundQuota) == 0x14);
     assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, DefaultTimeout) == 0x18);
     assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, TimeoutSpecified) == 0x20);
+    assert!(size_of::<MAILSLOT_CREATE_PARAMETERS>() == 0x18);
+    assert!(offset_of!(MAILSLOT_CREATE_PARAMETERS, MaximumMessageSize) == 0x04);
+    assert!(offset_of!(MAILSLOT_CREATE_PARAMETERS, ReadTimeout) == 0x08);
+    assert!(offset_of!(MAILSLOT_CREATE_PARAMETERS, TimeoutSpecified) == 0x10);
     assert!(offset_of!(DISPATCHER_HEADER, SignalState) == 0x04);
     assert!(offset_of!(DISPATCHER_HEADER, WaitListHead) == 0x08);
 };

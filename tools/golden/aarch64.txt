@@ -197,6 +197,7 @@ io.open.relative ok
 io.open.relative-lifetime ok
 io.open.create-request ok
 io.open.named-pipe ok
+io.open.mailslot ok
 io.fs-control ok
 io.close.cleanup-then-close ok
 io.close.deferred ok

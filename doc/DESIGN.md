@@ -1128,7 +1128,8 @@ own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
-(`NtCreateFile`, `NtCreateNamedPipeFile`), `read`, `write`,
+(`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),
+`read`, `write`,
 `device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
 IRP and calls the dispatch routine inside a critical region (as Windows
 does for a synchronous request).
@@ -1177,7 +1178,8 @@ name still leads to the device; the open is then counted under the I/O
 database lock, or refused if the device is deleted.
 
 The create request (`IRP_MJ_CREATE`, or `IRP_MJ_CREATE_NAMED_PIPE` with
-the pipe's `NAMED_PIPE_CREATE_PARAMETERS`) carries what Windows' does:
+the pipe's `NAMED_PIPE_CREATE_PARAMETERS`, or `IRP_MJ_CREATE_MAILSLOT`
+with the mailslot's `MAILSLOT_CREATE_PARAMETERS`) carries what Windows' does:
 `Parameters.Create` with the disposition and create options, the share
 access, no attributes and no extended attributes; an
 `IO_SECURITY_CONTEXT` with the desired access and an `ACCESS_STATE` for
