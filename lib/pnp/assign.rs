@@ -93,7 +93,9 @@ pub fn held_by(partial: &Partial) -> Option<Option<Range>> {
 /// number of the caller's choosing.
 #[derive(Debug, Default)]
 pub struct Claims {
-    held: Vec<(usize, Range)>,
+    /// The holder, the range, and whether the range is only kept for
+    /// the holder (its boot configuration) rather than assigned to it.
+    held: Vec<(usize, Range, bool)>,
 }
 
 impl Claims {
@@ -102,29 +104,50 @@ impl Claims {
     }
 
     /// The claim that keeps `range` from being had, if there is one.
-    /// Holders `exempt` says so of do not count.
-    pub fn obstacle(&self, range: &Range, exempt: &dyn Fn(usize) -> bool) -> Option<Range> {
+    /// Holders `exempt` says so of do not count; nor, with
+    /// `over_kept`, do ranges that are only kept for a device.
+    pub fn obstacle(
+        &self,
+        range: &Range,
+        exempt: &dyn Fn(usize) -> bool,
+        over_kept: bool,
+    ) -> Option<Range> {
         self.held
             .iter()
-            .find(|(holder, held)| held.excludes(range) && !exempt(*holder))
-            .map(|(_, held)| *held)
+            .find(|(holder, held, kept)| {
+                held.excludes(range) && !exempt(*holder) && !(over_kept && *kept)
+            })
+            .map(|(_, held, _)| *held)
     }
 
     /// Record that `holder` holds `ranges`. `false`, and nothing
     /// recorded, if there is no memory.
     pub fn claim(&mut self, holder: usize, ranges: &[Range]) -> bool {
+        self.record(holder, ranges, false)
+    }
+
+    /// Record that `ranges` are kept for `holder`: what firmware
+    /// configured it with, until it is assigned its resources. A kept
+    /// range sends a device that could go elsewhere elsewhere, and
+    /// gives way to one that can go nowhere else, as Windows' arbiters
+    /// let a fixed requirement overlap a boot allocation.
+    pub fn keep(&mut self, holder: usize, ranges: &[Range]) -> bool {
+        self.record(holder, ranges, true)
+    }
+
+    fn record(&mut self, holder: usize, ranges: &[Range], kept: bool) -> bool {
         if self.held.try_reserve_exact(ranges.len()).is_err() {
             return false;
         }
         self.held
-            .extend(ranges.iter().map(|range| (holder, *range)));
+            .extend(ranges.iter().map(|range| (holder, *range, kept)));
         true
     }
 
     /// Forget what `holder` holds. Returns how many claims that was.
     pub fn release(&mut self, holder: usize) -> usize {
         let before = self.held.len();
-        self.held.retain(|(h, _)| *h != holder);
+        self.held.retain(|(h, _, _)| *h != holder);
         // What is no longer held takes no memory.
         self.held.shrink_to_fit();
         before - self.held.len()
@@ -132,7 +155,7 @@ impl Claims {
 
     /// How many claims `holder` has.
     pub fn count(&self, holder: usize) -> usize {
-        self.held.iter().filter(|(h, _)| *h == holder).count()
+        self.held.iter().filter(|(h, _, _)| *h == holder).count()
     }
 }
 
@@ -301,8 +324,15 @@ fn place(
         // Nothing is asked for: the descriptor is passed on.
         return Some(Placed::At(choice.partial(wanted.minimum), None));
     }
+    // A choice that names one place may have it though it is kept for
+    // another device.
+    let fixed = wanted
+        .minimum
+        .checked_add(wanted.length - 1)
+        .is_some_and(|end| end == wanted.maximum);
     let free = |range: &Range| {
-        claims.obstacle(range, exempt).is_none() && !own.iter().any(|held| held.excludes(range))
+        claims.obstacle(range, exempt, fixed).is_none()
+            && !own.iter().any(|held| held.excludes(range))
     };
     // Where firmware left the device, if this choice allows it.
     let configured = boot.iter().find_map(|partial| {
@@ -332,7 +362,7 @@ fn place(
         }
         let range = choice.range(start);
         let obstacle = claims
-            .obstacle(&range, exempt)
+            .obstacle(&range, exempt, fixed)
             .or_else(|| own.iter().find(|held| held.excludes(&range)).copied());
         match obstacle {
             None => return Some(Placed::At(choice.partial(start), Some(range))),
@@ -730,6 +760,53 @@ mod tests {
         assert_eq!(
             assignment.partials[0].as_interrupt(),
             Some((0, 4, MESSAGE_TOKEN, 0))
+        );
+    }
+
+    /// The reference machine's PCI root requires ports 0 to 0xCF7,
+    /// which hold the clock's ports that firmware configured another
+    /// device with: the root gets them all the same, while a device
+    /// that could go anywhere is sent past what is kept.
+    #[test]
+    fn a_fixed_requirement_overlaps_what_is_kept_for_another() {
+        let mut claims = Claims::new();
+        let clock = Range {
+            space: Space::Port,
+            start: 0x70,
+            end: 0x71,
+            shared: false,
+        };
+        assert!(claims.keep(9, &[clock]));
+        let wanted = |length, minimum, maximum| Wanted {
+            length,
+            alignment: 1,
+            minimum,
+            maximum,
+        };
+        let root = list(vec![IoDescriptor::range(
+            0,
+            TYPE_PORT,
+            1,
+            0,
+            wanted(0xCF8, 0, 0xCF7),
+        )]);
+        let assignment = assign(&root, &[], &claims, NOBODY).unwrap();
+        assert_eq!(assignment.partials[0].as_range(), Some((0, 0xCF8)));
+        let anywhere = list(vec![IoDescriptor::range(
+            0,
+            TYPE_PORT,
+            1,
+            0,
+            wanted(2, 0x70, 0xFFFF),
+        )]);
+        let assignment = assign(&anywhere, &[], &claims, NOBODY).unwrap();
+        assert_eq!(assignment.partials[0].as_range(), Some((0x72, 2)));
+        // What is assigned, not merely kept, gives way to nobody.
+        claims.release(9);
+        assert!(claims.claim(9, &[clock]));
+        assert_eq!(
+            assign(&root, &[], &claims, NOBODY),
+            Err(Failure::Conflict(0))
         );
     }
 
