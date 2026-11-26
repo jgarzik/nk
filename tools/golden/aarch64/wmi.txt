@@ -6,3 +6,4 @@ wmi.pdo ok
 wmi.deregister-waits ok
 wmi.event ok
 wmi.open-block ok
+wmi.stack ok
