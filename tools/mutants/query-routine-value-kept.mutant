@@ -1,0 +1,7 @@
+# The block a query routine is lent its value in is not taken back when
+# the routine returns: every call but a query's last leaves one behind.
+scenario: aarch64
+fails: cm.table.routine
+file: kernel/cm/table.rs
+replace:                 let lent = unsafe { core::mem::replace(&mut (*run).lent, core::ptr::null_mut()) };
+with:                 let lent: *mut u8 = core::ptr::null_mut();

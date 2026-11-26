@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-etw"
+version = "0.0.2"
+dependencies = [
+ "nk-ntabi",
+]
+
+[[package]]
 name = "nk-ex"
 version = "0.0.2"
 
@@ -40,6 +47,7 @@ version = "0.0.2"
 name = "nk-ntabi"
 version = "0.0.2"
 dependencies = [
+ "nk-ex",
  "nk-pdb",
  "nk-se",
 ]
@@ -61,6 +69,10 @@ version = "0.0.2"
 
 [[package]]
 name = "nk-pe"
+version = "0.0.2"
+
+[[package]]
+name = "nk-ps"
 version = "0.0.2"
 
 [[package]]
@@ -92,6 +104,8 @@ dependencies = [
  "nk-acpi",
  "nk-bootinfo",
  "nk-cm",
+ "nk-etw",
+ "nk-ex",
  "nk-hal",
  "nk-ke",
  "nk-mm",
@@ -99,6 +113,7 @@ dependencies = [
  "nk-ob",
  "nk-oracle",
  "nk-pe",
+ "nk-ps",
  "nk-rtl",
  "nk-se",
  "nk-selftest",

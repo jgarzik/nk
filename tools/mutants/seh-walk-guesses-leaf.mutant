@@ -4,5 +4,6 @@
 scenario: x86_64-neg-seh-no-entry
 fails: scenario
 file: kernel/ke/seh.rs
+occurrence: 2
 replace:         if !interrupted {
 with:         if false {

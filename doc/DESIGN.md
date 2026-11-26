@@ -82,10 +82,10 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, trace-provider bookkeeping (`etw`), process-structure rules (`ps`) |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -149,7 +149,13 @@ which NK enables, restrict only pages marked for user mode.
   requests of about a page or more get their own page-aligned frames, as
   on Windows. All pool is in the direct map: non-paged and physically
   contiguous. A paged-pool request gets non-paged memory, always a legal
-  answer.
+  answer. A request's priority (`ExAllocatePoolWithTagPriority`) is not
+  used: NK refuses only when it has no memory, which every priority
+  allows. A refusal is null, or the exception
+  `STATUS_INSUFFICIENT_RESOURCES` raised in the caller where Microsoft
+  documents one: a quota allocation without
+  `POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`, any allocation with
+  `POOL_RAISE_IF_ALLOCATION_FAILURE`.
 - **Pool checking.** Each block ends in guard bytes checked on free, a
   free of anything but a live block is refused, and live counts are kept;
   leak tests compare them. These are bug detectors, not mitigations.
@@ -239,9 +245,28 @@ A processor leaves a thread when it yields, waits or exits; when a higher
 priority becomes ready there; or when its quantum (two clock ticks, as on
 Windows client) is spent and an equal is waiting. A preempted thread goes
 to the front of its queue; one out of quantum, to the back. No priority
-boosts. A thread may change its own priority (`KeSetPriorityThread`);
-changing another's stops the system, because no lock covers a thread
-wherever it is queued.
+boosts.
+
+A thread's priority may be set by any thread (`KeSetPriorityThread`),
+wherever the thread is. If it is on a ready queue it moves to the back
+of the queue of its new priority and that processor looks again; if it
+is waiting it wakes with the new priority; if it is running and was
+lowered, its processor looks for a better thread. Its base priority
+stays. As on Windows, a thread with a base priority asked for 0 gets 1,
+and one whose base is real-time (16 and up) is not taken below 16
+(`nk_ke::sched::priority_to_set`).
+
+A thread's base priority is its process's (8 for the System process,
+`KPROCESS.BasePriority`) plus a step, set through
+`ZwSetInformationThread` (`ThreadBasePriority`): -2 to 2, or 16 and
+-16, which pin the thread at 15 and at 1 (`KTHREAD.Saturation`). The
+priority moves by as much as the base moved, so a priority that was
+set apart from the base keeps its distance
+(`nk_ps::info::set_base_priority`, from what Windows 10 computes).
+`ThreadPriority` sets the priority alone, 1 to 31. Each class makes
+its checks in Windows' order; a class Windows never sets is
+`STATUS_INVALID_INFO_CLASS`, and one it sets and NK does not is
+`STATUS_NOT_IMPLEMENTED`.
 
 Preemption is requested, then done at the end of an interrupt: readying a
 thread, or the tick, marks the processor, and the switch happens when an
@@ -265,6 +290,25 @@ There is one process, System, with Windows' id for it (4). Its block has
 is zero. Every thread belongs to it, the idle threads included (Windows
 gives those a process of their own), and carries a client id: the
 process id and a thread id from the same sequence of multiples of four.
+The id routines read those fields (`PsGetCurrentProcessId`,
+`PsGetThreadProcessId`, ...). There are no sessions: the process's
+`Session` is null, which Windows reads as session 0, and so do
+`PsGetProcessSessionId` and `PsGetThreadSessionId`.
+
+The System process is charged no quota, as on Windows, where the quota
+routines know it by `PsInitialSystemProcess` and answer success
+without a look at a quota block: `PsChargeProcessPagedPoolQuota`
+succeeds for any amount and `PsReturnProcessPagedPoolQuota` does
+nothing. Its `QuotaBlock` is null.
+
+A thread attaching to a process (`KeStackAttachProcess`) can only name
+the one it is in. Windows saves nothing then and marks the caller's
+`KAPC_STATE` with a 1 where the process would be; NK does exactly that,
+and `KeUnstackDetachProcess` accepts exactly that mark. Any other
+process pointer names no process, and a detach with any other state
+was preceded by no attach: both stop the system, the second with
+Windows' `INVALID_PROCESS_DETACH_ATTEMPT`, as does an attach from a DPC
+routine (`INVALID_PROCESS_ATTACH_ATTEMPT`).
 The kernel handle table is its handle table. `EPROCESS.Token` holds its
 primary token the way Windows stores it, as a fast reference: a pointer
 whose low four bits count references handed out in advance. NK hands out
@@ -273,6 +317,44 @@ reference on the token itself. `PsInitialSystemProcess` holds the
 process, and the current process (`PsGetCurrentProcess`,
 `IoGetCurrentProcess`) is the one the calling thread says it is attached
 to, `KTHREAD.ApcState.Process`.
+
+### Silos
+
+A silo is a job that isolates what runs in it
+([silo DDIs](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/)).
+NK has no jobs, so there is one silo, the host, which Windows too names
+by a null pointer. For that silo the routines do what they do on
+Windows (`kernel/ps/silo.rs`):
+
+- A thread is attached to a silo through `ETHREAD.Silo`, which starts
+  out as Windows' mark for "none; use the process's" (-3).
+  `PsAttachSiloToCurrentThread` returns what was there for the detach
+  to put back. The current silo is the attached one, else that of the
+  process's job: the host, the System process having no job.
+- A silo context is an object of one of two types, as on Windows
+  (`PsSiloContextPaged`, `PsSiloContextNonPaged`), with the driver's
+  bytes as its body. Its cleanup routine is called when its last
+  reference goes. NK's record of the silo and the routine sits in front
+  of the object's headers, where no binary looks.
+- Slots are numbers, the lowest free one first, 288 of them as on
+  Windows (`nk_ps::silo`). The host silo keeps one context per slot,
+  put there to stay (`PsInsertPermanentSiloContext`), and holds a
+  reference to it; `PsGetPermanentSiloContext` hands it out without
+  one, as Windows does. Freeing a slot does not empty it for the host
+  silo, on Windows either.
+- A silo monitor gets a slot of its own when registered. Started, one
+  that watches the host has its create callback called for the host
+  silo then and there, on the caller's thread; unregistered, its
+  terminate callback, and then what the host holds in its slot is let
+  go. No other silo is ever announced. The details (a monitor without a
+  create callback is never started; a failing create callback is undone
+  by the terminate callback) are Windows 10's.
+
+A silo pointer that is not null, or a job, names nothing that exists:
+where Windows would read the job behind it, NK stops by name. The job
+type itself is real (`PsJobType`): a driver that asks for the job
+behind a handle is told the handle names another type of object, which
+is true of every handle there is.
 
 ## Waits
 
@@ -284,9 +366,30 @@ limit is one more object, and the first signalled ends the wait. A wait
 may name up to 64 objects (the caller's wait blocks beyond three), for
 any one (it reports which) or for all (it takes all or none).
 
-Waits are not alertable. A wait that would block at `DISPATCH_LEVEL`
-stops the system (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a
-semaphore past its limit, an exception on Windows, stops the system.
+A wait by handle (`ZwWaitForSingleObject`) is a wait on the object the
+handle names, referenced for as long: an event, a thread, or the
+process, which never ends. Windows waits on an object of any other
+type through that type's default object; NK does not, and stops by
+name. `ZwCreateEvent` makes an event object without a name and hands
+back a handle; a name, or the attributes that go with one, is refused
+(`STATUS_NOT_IMPLEMENTED`). Both are `Partial` in the ledger for that.
+
+A wait that would block at `DISPATCH_LEVEL` stops the system
+(`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
+its limit, an exception on Windows, stops the system.
+
+**Alerts.** A thread can be alerted (`ZwAlertThread`), and an alert
+ends an alertable wait with `STATUS_ALERTED`
+([Waits and APCs](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/waits-and-apcs)).
+The state is where Windows keeps it: `KTHREAD.Alerted`, a byte per
+processor mode, and the `Alertable` flag and `WaitMode` of the wait in
+progress. A thread in an alertable wait is woken; any other keeps the
+alert, one at most per mode, for its next alertable wait, which
+returns at once without looking at its objects or its time limit and
+takes nothing. An alert made in kernel mode ends a wait of either
+mode; `ZwAlertThread` alerts in kernel mode. Waits that are not
+alertable never see an alert. An alert is the only thing that ends a
+wait this way: there are no APCs to deliver.
 
 ## Mutexes and critical regions
 
@@ -331,6 +434,11 @@ while queued; NK stores the queue's address there. A DPC running over 20
 seconds stops the system (`DPC_WATCHDOG_VIOLATION`); the tick checks.
 No targeting of another processor and no importance ordering.
 
+`ke::dpc::flush` waits until every DPC that was queued or running
+anywhere has finished: an interprocessor call has each processor queue
+one DPC more, and the caller, below `DISPATCH_LEVEL`, waits for those
+to run. The kernel uses it before freeing what a DPC may refer to.
+
 ## Timers
 
 Each processor has a table of timers set on it and not yet due: 256
@@ -362,12 +470,174 @@ An I/O work item is kernel-allocated at Windows' size and tied to a
 device, referenced from queueing until the routine returns, or to a
 driver object, which has no count to hold it by.
 
+## The executive's locks, lists and timers
+
+Each is state in the driver's memory, laid out as Windows lays it out,
+with the rules for changing it in `lib/ex` (tested on the host, the
+locks in every interleaving of a few threads) and the kernel's part,
+atomic steps on the driver's memory and sleeping, in `kernel/ex`.
+How they sit with the IRQL and NK's own locks: `doc/LOCKING.md`.
+
+### Push locks
+
+A push lock is one word: `Locked`, `Waiting`, `Waking`, and from bit 4
+the number of shared holders, where the pinned kernel's symbols put
+them. Semantics are the ones Microsoft documents for
+[`FltAcquirePushLockExclusive`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/fltkernel/nf-fltkernel-fltacquirepushlockexclusive)
+and its siblings. NK's decisions:
+
+- **Waiters are not in the word.** Windows chains wait blocks through
+  the word once a thread waits, and moves the share count into the
+  chain. NK keeps the count in the word always and the waiters in
+  queues of its own, found by the lock's address. So the word of a
+  contended lock reads `Locked`, `Waiting` and a count where Windows
+  has an address, and `MultipleShared` is never set. Nothing but the
+  kernel's routines reads the word.
+- **A waiter is woken to try again,** not handed the lock, as on
+  Windows; an arrival may get there first. When the lock comes free
+  the oldest waiter is woken alone if it wants exclusive access, and
+  every waiter if it wants shared.
+- **Nobody joins shared holders past a waiter,** so readers cannot
+  starve a writer.
+- The flags argument is not looked at. The WDK's own macros pass zero
+  (`EX_DEFAULT_PUSH_LOCK_FLAGS`); what other values ask of Windows is
+  not documented.
+- Releasing a lock the word says is not held stops the system.
+
+### Sequenced lists
+
+`SLIST_HEADER` is 16 bytes with the same fields on both architectures:
+depth, a sequence number, the first entry
+([Singly and doubly linked lists](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/singly-and-doubly-linked-lists)).
+Push, pop and flush are lock-free: each stores its new header with one
+16-byte compare-and-swap, `CMPXCHG16B` on x86-64 and an exclusive
+load and store of the pair on arm64 (`arch::swap_pair`).
+
+- The sequence number goes up on a push and stays on a pop or flush,
+  as Windows' x86-64 routines are seen to do; that is what makes a
+  swap against a stale header fail.
+- **A pop reads the first entry's link before it knows the entry is
+  still listed.** If the entry was popped and freed meanwhile the swap
+  fails and the value is dropped, but the read has happened. Windows
+  forgives a page fault at that instruction. NK relies on the memory
+  being mapped: pool memory always is, and lookaside lists, the main
+  user, keep pool blocks. An entry inside a driver's image goes when
+  the driver is unloaded; unloading with a pop in flight elsewhere is
+  a page fault that stops the system.
+- Pushing an entry that is not 16-byte aligned stops the system.
+
+### Lookaside lists
+
+Allocating from a
+[lookaside list](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-lookaside-lists)
+and freeing to it are code from the WDK's headers inside the driver,
+which works on the structure directly and calls its `Allocate` and
+`Free` pointers. The kernel initialises the structure and, on delete,
+hands the blocks still kept to `Free`.
+
+- `Allocate` and `Free` are the driver's routines or, where it gave
+  none, `ExAllocatePoolWithTag` and `ExFreePool`.
+- `Size` is stored as given, not rounded up.
+- `Depth` starts at 4 and stays there, `MaximumDepth` at 256. Windows
+  scans all lists periodically and moves `Depth` with the miss counts;
+  NK has no scan, and `ListEntry`, by which Windows finds the lists,
+  links the list to itself.
+
+### Resources
+
+An
+[`ERESOURCE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/introduction-to-eresource-routines)
+is a reader/writer lock that records its owners, so that an owner may
+acquire it again. The acquire rules are the ones Microsoft documents
+for each routine. NK's decisions:
+
+- **State is in Windows' fields:** `Flag`, `OwnerEntry`,
+  `ActiveEntries`, `ContentionCount`, the two waiter counts, all
+  changed under `ERESOURCE.SpinLock`. Owners beyond the first are in
+  `OwnerTable`, a pool block the kernel allocates when it is first
+  needed, doubles when it is full and frees in
+  `ExDeleteResourceLite`.
+- **Ownership is handed over.** A release that frees the resource
+  records the waiters it lets in as owners before it wakes them; a
+  woken thread does not compete again. The order is not documented and
+  NK's is: after an exclusive owner, every thread waiting for shared
+  access, or failing any the oldest exclusive waiter; after the last
+  shared owner, the oldest exclusive waiter.
+- **Waiters are on their own stacks.** `ExclusiveWaiters` and
+  `SharedWaiters` point to the oldest waiter of each kind, a block
+  that begins with the event its thread sleeps on. Windows allocates
+  one event and one semaphore per resource there.
+- `SystemResourcesList`, by which Windows links every resource for
+  its debugger, links the resource to itself.
+- No priority is raised for an owner that keeps others waiting, and a
+  thread that waits for a resource it can never get waits for ever
+  without the diagnostics Windows prints.
+- Releasing or converting a resource the thread does not own stops the
+  system (`RESOURCE_NOT_OWNED`).
+- `ExEnterCriticalRegionAndAcquireResource...` are not exported: what
+  they return is not documented.
+
+### Executive timers
+
+An
+[`EX_TIMER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/exxxxtimer-routines-and-ex-timer-objects)
+is opaque to a driver except that its address can be waited on. NK's
+is a pool block that begins with a `KTIMER`, followed by the DPC that
+calls the driver's callback at `DISPATCH_LEVEL` and by NK's own state
+(`kernel/ex/timer.rs`); the pinned kernel's symbols do not describe
+Windows'. Setting, cancelling, expiring and waiting are the kernel
+timer's. NK's decisions:
+
+- **Freed only when nothing can reach it.** A delete can race an
+  expiry on another processor, or come from the callback itself, and
+  the callback is promised a valid timer. Retiring a timer cancels it
+  and waits until every DPC queued on any processor has run
+  (`ke::dpc::flush`, the promise of Windows' `KeFlushQueuedDpcs`),
+  three times over: `kernel/ex/timer.rs` says why three. A delete that
+  waits does this itself; otherwise a worker thread does and the
+  delete returns at once.
+- **Deleted without cancelling,** a timer that is set stays for one
+  more expiry, callback included, and is retired then. Microsoft says
+  only that it is not cancelled.
+- The delete callback of `EXT_DELETE_PARAMETERS` is called after the
+  timer is freed, from the thread that retired it.
+- A period is kept in whole milliseconds, rounded up (the kernel
+  timer's unit), where Windows keeps 100 ns: `ExSetTimer` is partial.
+- A high-resolution timer expires on the clock tick like any other:
+  `ExAllocateTimer` is partial. The no-wake attribute and a stated
+  tolerance permit lateness NK never adds.
+- An attribute bit Windows does not define fails the allocation.
+  What Microsoft documents as a bug check is one: high resolution with
+  no-wake, a high-resolution timer set for a system time, a delete
+  that waits without cancelling. So is a period outside the
+  documented range.
+
+### UUIDs
+
+[`ExUuidCreate`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exuuidcreate)
+makes version-1 UUIDs ([RFC 4122](https://www.rfc-editor.org/rfc/rfc4122)):
+a time, a clock sequence, a node.
+
+- **The node is random and says so.** NK has no network card whose
+  address could be the node, so every UUID is unique on this machine
+  only and every call returns `RPC_NT_UUID_LOCAL_ONLY`, a success
+  status. The node carries both the multicast bit of an 802 address,
+  as the RFC asks of a made-up node, and the top bit of its first
+  byte.
+- **Each UUID is later than the last.** It carries the wall clock's
+  time, or one unit more than the UUID before it if the clock has not
+  moved or has gone back. So `STATUS_RETRY`, Windows' answer to a
+  caller faster than its clock, is never returned.
+- The clock sequence and the node are fixed at the first call, from
+  the wall clock, the cycle counter and the time since boot: enough to
+  tell boots and machines apart most of the time, and no secret.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
 pointer count, handle count, type. Events, threads, the System process,
-tokens, drivers, devices, open files, open registry keys, directories
-and symbolic links are such objects. An object is freed when its last
+tokens, drivers, devices, open files, open registry keys, directories,
+symbolic links and silo contexts are such objects. An object is freed when its last
 reference goes; its type may name a delete procedure that first releases
 what it owns, and a close procedure that is told of every handle closed
 and how many there were. A thread references itself until it has ended
@@ -381,9 +651,16 @@ count: the tag is for
 which is off, as it is on Windows unless asked for. A reference taken to
 an object that has none stops the system (`REFERENCE_BY_POINTER`).
 
-Kernel handles are entries in one table, the System process's, with
-Windows' kernel-handle bits; a handle holds a reference until closed. No
-per-process tables. Each handle has the access it was granted and its
+Handles are entries in one table, the System process's, which is the
+kernel's handle table as on Windows; a handle holds a reference until
+closed. An entry has two names: the kernel handle, with Windows'
+kernel-handle bits, which is a handle for kernel mode only
+(`STATUS_INVALID_HANDLE` for user mode), and the same number without
+those bits, the System process's own handle, good in that process for
+either mode. `OBJ_KERNEL_HANDLE` decides which an open returns
+(`ObOpenObjectByPointer`, `ZwCreateEvent`); NK's own opens for files,
+keys and new threads return the kernel handle. No other process, no
+other table. Each handle has the access it was granted and its
 attributes (inherit, protect from close). A handle protected from close
 stays open: user mode closing it is refused
 (`STATUS_HANDLE_NOT_CLOSABLE`), kernel mode closing it stops the system
@@ -621,7 +898,10 @@ make that safe.
 - Every call into a driver is `ke::seh::call`: an assembly frame with a
   language handler of NK's own, holding a guard record the caller
   passes. Nothing else lies between NK's Rust and the driver's routine,
-  so no frame without an unwind entry can.
+  so no frame without an unwind entry can. A routine of more than four
+  arguments is called by a function of NK's own that is itself called
+  this way: one Rust frame more, which has an unwind entry and holds
+  nothing.
 - A guard says what the caller owes if the routine does not return.
   `Undo`: a function to call, once, when an unwind passes the frame
   (leave a critical region, lower the IRQL, drop a reference).
@@ -641,11 +921,19 @@ make that safe.
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
 | dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
+| dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
+| silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
+| an executive timer's callback (from the timer's DPC) | base: kernel mode |
+| an executive timer's delete callback | nothing: the timer is freed before it is called |
+| a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
+| a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
+| bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
 where the exception was raised:
@@ -794,9 +1082,12 @@ thread starts those whose keys say `Start` 0 (boot) or 1 (system), in
 Windows' order (`nk_cm::services`): boot start before system start; in
 each, by the place of the service's `Group` in
 `Control\ServiceGroupOrder`, then by the place of its `Tag` in the
-group's list under `Control\GroupOrderList`; services of no listed
-group last; a service after those it names in `DependOnService` and
-`DependOnGroup`. Only keys whose `Type` is a driver's count. Windows'
+group's list under `Control\GroupOrderList` (a tag the list has not, or
+none, after those it has); services of no listed group last; a service
+after those it names in `DependOnService` and `DependOnGroup`. A group
+is the same group in any letter case: Windows' own keys say
+`File system` where its list says `File System`. Only keys whose `Type`
+is a driver's count. Windows'
 loader reads boot-start drivers into memory before the kernel runs and
 the I/O manager starts system-start ones later; on NK both are boot
 files and the order is all that tells them apart.
@@ -951,12 +1242,147 @@ that key, which walks the rest of the path in the registry's own tree. A
 name relative to an open key starts at that key. A key is no file:
 opening one through the I/O manager is `STATUS_OBJECT_TYPE_MISMATCH`.
 
-Creating makes only the last key of a path, as on Windows. Values are
-read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
-forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
+Subkeys are enumerated in the order of their upper-cased names, values
+in the order they were first set, as on Windows
+([`ZwEnumerateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratekey),
+[`ZwEnumerateValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratevaluekey)).
+A key or value is described in Microsoft's information structures
+(`lib/cm` writes them; the classes are those of
+[`KEY_INFORMATION_CLASS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_information_class)
+and
+[`KEY_VALUE_INFORMATION_CLASS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_value_information_class)).
+A buffer with room for a structure's fixed part and not all of the rest
+gets what fits and `STATUS_BUFFER_OVERFLOW`; one with less gets nothing
+and `STATUS_BUFFER_TOO_SMALL`; both are told the length that holds
+everything. Where a class or a value's data is aligned after a name,
+the bytes between are the caller's, untouched. A value's data start at
+a multiple of eight bytes in the full form, aligned or not, as Windows
+10 x64 places them.
+
+An open key describes itself
+([`ZwQueryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerykey))
+in every form. Its full name starts at `\REGISTRY`, each part in the
+letter case it was created in (`MACHINE`, `SYSTEM`, `HARDWARE` and
+`USER` are Windows' spellings), with symbolic links followed: a key
+opened through `CurrentControlSet` names its control set. What NK has
+none of is reported as Windows reports a key without it: no flags, no
+virtualization, no handle tags, no layer. Every key is trusted
+(`KeyTrustInformation`), because the registry holds only the system's
+own hive.
+
+A key's last write time is when its values or its list of subkeys last
+changed: setting or deleting a value stamps the key, making or deleting
+a key stamps the key above it, and a new key is stamped as it is made.
+A key copied from the hive keeps the file's time until then.
+
+A key remembers the longest subkey name, subkey class, value name and
+value data it has held, which is what it reports as the longest it
+holds: as on Windows, the numbers only grow while the key has subkeys
+(or values) and start again when the last one goes. A key copied from a
+hive file starts from the numbers the file gives it.
+
+Creating makes only the last key of a path, as on Windows, and gives a
+new key its class. A value is read by name in the forms it is
+enumerated in; there are no layered keys, so the form that describes a
+value of one (`KeyValueLayerInformation`) is refused like a form that
+does not exist, `STATUS_INVALID_PARAMETER`. A deleted value leaves its
+place in the order to the next; set again, it is the key's last. A key
+without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
+
+### Query tables
+
+[`RtlQueryRegistryValues`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlqueryregistryvalues)
+and `RtlQueryRegistryValuesEx` read values as a table of entries asks:
+each value goes to the entry's routine or is stored where the entry
+points. What an entry's flags mean is Microsoft's to say, and
+`nk_cm::query` works it out without touching a driver's memory; the
+kernel (`kernel/cm/table.rs`) copies the table, reads the registry, and
+does what the query says. NK's decisions:
+
+- **The table is copied first**: every entry up to the one that ends
+  it, names and default data too (a string default of length zero is
+  measured), and the environment block. A routine that rewrites the
+  table changes nothing for the call in progress.
+- **The key is found once** and counted as open for the length of the
+  call. Each entry reads the registry afresh, holding the lock for the
+  read alone, so a routine may open, change or delete any key, this one
+  included. The query sees what the routine left: a key it deleted ends
+  the query with `STATUS_KEY_DELETED`.
+- **A routine is lent copies** of the value's name and data in a pool
+  block, never the registry's own memory. The data are followed by a
+  terminator, whether or not the value was stored with one. The call
+  that carries no value (`RTL_QUERY_REGISTRY_NOVALUE`) passes null for
+  both.
+- **A stored string** is the value without the terminator it ends
+  with, and a terminator after it: a counted string without a buffer is
+  given one from the pool, which the caller frees; one with a buffer
+  must have room for the terminator (`STATUS_BUFFER_TOO_SMALL`).
+- **`RelativeTo`**: `RTL_REGISTRY_OPTIONAL` changes nothing, a key that
+  is not there fails the call. `RTL_REGISTRY_USER` is
+  `\Registry\User\.Default`: the system is the only user.
+- **The type check** (`RTL_QUERY_REGISTRY_TYPECHECK`) is made where an
+  entry asks for it and demanded of none. Windows demands it of a key
+  in a hive it does not trust, and that is all that tells its two
+  exports apart; NK has no such hive, and the two are one routine.
+- **A routine that raises** an exception is unwound through the query
+  like any call into a driver (Exceptions). All the query holds is one
+  pool block, which the guard of that call gives back.
+
+## Strings
+
+The rules are `lib/rtl`; the exports in `kernel/rtl` read and write a
+driver's strings where they lie. A routine that cannot fail (a
+comparison, a search, `RtlCompareMemory`) takes its input one unit at a
+time and stops at the unit that decides the answer, so it needs neither
+a copy nor memory for one. Strings the routines allocate come from the
+pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
+
+- **The ANSI code page is Windows-1252**, the page of the reference
+  machine's English (United States) installation, compiled in
+  (`nk_rtl::codepage`); the registry's `Nls\CodePage` key is not
+  consulted. A character the page lacks becomes `?`: Windows' "best fit"
+  table (a fullwidth or accented letter to its plain form) is absent.
+- **Upper case** is one table, `nk_rtl::upcase`, built from the Unicode
+  character database. `RtlUpcaseUnicodeChar`, the string comparisons,
+  the object namespace and the registry all use it. Windows carries a
+  table of its own; the units where the two may differ are listed in
+  that module.
+- **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
+  fold `A` to `Z` only and do not use that table.
+
+### File names
+
+`FsRtlIsNameInExpression` and `FsRtlLegalAnsiCharacterArray` are
+exported from `kernel/rtl` with the strings they work on. The matcher
+(`nk_rtl::wildcard`) runs the expression as a state machine over the
+name, a bit per expression character in a fixed four kilobytes of the
+caller's stack: its time is bounded by the product of the two lengths
+whatever the pattern, it allocates nothing, and so it never raises,
+where Windows raises `STATUS_NO_MEMORY`. The name is upper-cased by the
+caller's table when one is passed, read from the caller's memory a unit
+at a time. The table of legal characters is built from each file
+system's naming rules (`nk_rtl::legal`): Microsoft publishes the flags
+and the macros that read the table, not its contents.
+
+### The prefix table
+
+A [prefix table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlinsertunicodeprefix)
+and its entries are the driver's memory, with the fields `ntifs.h`
+declares (`nk_ntabi::rtl`), and an entry points to the caller's name
+without copying it. NK keeps nothing beside them: the routines link the
+driver's entries through the driver's own fields, as the header's names
+describe (a list of trees by number of name components, a search tree
+in each, a ring of the names that differ only in case). The algorithm
+is `nk_rtl::prefix`, written against a store of nodes: the kernel's
+store is the driver's fields behind raw pointers, the host tests' is a
+vector, checked against a plain list over random sequences. No routine
+allocates, so none can fail for want of memory. Which rotations balance
+a tree is NK's choice: a name found without regard to case is splayed
+to its tree's root. The caller serialises the calls on one table, as on
+Windows. `RtlNextUnicodePrefix` is not exported.
 
 ## Security descriptors
 
@@ -965,6 +1391,17 @@ the exports in `kernel/se`. A driver's descriptor is the driver's memory:
 read and written through raw pointers, the rules run on copies.
 `SeExports` points to the well-known SIDs and privilege numbers, laid out
 as in `ntifs.h`.
+
+A SID's first two bytes say whether it is one and how long it is, so
+the routines that take one read those before the rest and never read a
+SID by a length it does not have; they copy at most the 68 bytes of the
+largest SID, onto the stack. `RtlValidSecurityDescriptor` judges an
+access list on a pool copy and answers "not valid" without memory for
+one. App-container SIDs (`RtlGetAppContainerSidType`,
+`RtlGetAppContainerParent`) are told apart by shape alone, `S-1-15-2`
+with eight or twelve sub-authorities (`nk_se::sid`, which lists what
+Microsoft's pages leave open); a parent's SID is a pool block the
+caller frees.
 
 NK itself enforces none: every open it makes is a kernel-mode open,
 which Windows does not check either, and there is no user mode. A
@@ -995,12 +1432,21 @@ Where a descriptor lives:
   field a driver can read, as on Windows: a pool block the device owns,
   replaced under the I/O database lock.
 - Any other object can carry one in `OBJECT_HEADER.SecurityDescriptor`
-  (`kernel/ob/security.rs`): a counted pool block of its own, set,
-  referenced and released by kernel routines, freed with the object or
-  when replaced and no reader holds it. Windows shares one block among
-  objects with equal descriptors; NK does not. The field is Windows' fast
-  reference with its count bits zero. Nothing gives an object a
-  descriptor yet: that comes with the types' security procedures.
+  (`kernel/ob/security.rs`): a reference to a copy in the store below,
+  set, referenced and released by kernel routines, given up with the
+  object or when replaced. The field is Windows' fast reference with
+  its count bits zero. Nothing gives an object a descriptor yet: that
+  comes with the types' security procedures.
+- The store (`nk_ob::descriptors`) keeps one counted, self-relative
+  copy of each distinct descriptor, as Windows' does: logging the same
+  bytes again, from whatever address, returns the same copy with more
+  references, and the copy is freed with its last. A file system logs
+  its files' descriptors there (`ObLogSecurityDescriptor`) and holds
+  the copies (`ObReferenceSecurityDescriptor`,
+  `ObDereferenceSecurityDescriptor`); objects with equal descriptors
+  share a copy. What precedes a copy in its block (its count, a hash of
+  its bytes) is NK's own. Giving up more references than are held stops
+  the system, as Windows' fast fail does (`0x139`).
 
 ## Tokens and access state
 
@@ -1058,6 +1504,187 @@ privileges found enabled (`lib/se/privilege.rs`). A kernel-mode caller
 holds every privilege, unmarked. `SeAppendPrivileges` records the
 privileges an open used in its access state: in the state's own set
 while three are enough, in a pool block after.
+
+## Tracing
+
+**NK starts no trace session.** Windows starts sessions at boot from
+the registry's `Control\WMI\Autologger` keys and lets programs start
+more ([Event Tracing](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/event-tracing-for-windows--etw-));
+NK ignores those keys and has no program to ask. So no provider is ever
+enabled, and every answer below is the one Windows gives a provider
+nobody listens to: real per its contract, with nothing recorded. NK
+stands for a machine whose autologgers are all disabled.
+
+**Providers** (`kernel/etw`, bookkeeping in `nk_etw`).
+[`EtwRegister`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwregister)
+makes a registration and hands out its handle. The enable callback is
+never called, since nothing enables. An event written
+(`EtwWriteTransfer`) is dropped with success, the event itself not
+looked at, as Windows drops it. `EtwSetInformation` makes Windows'
+checks in Windows' order (traits are set once, and must be well formed)
+and keeps only the fact that traits are set: their content would go
+into events.
+
+A handle is NK's own: it names a slot of a fixed table and carries a
+number no other registration has had, so one that was unregistered
+stays invalid when the slot is taken again. The table is words changed
+by compare-and-swap, with no lock, because events are written at any
+IRQL. Windows' handle is a pointer it does not check: a stale one there
+reads freed memory. NK answers `STATUS_INVALID_HANDLE` to a write or a
+set through one, and stops with `EVENT_TRACING_FATAL_ERROR` (`0x11D`)
+when one is unregistered, the bugcheck Windows has for a registration
+handle that is not one. A full table is `STATUS_NO_MEMORY`, Windows'
+status for a registration it cannot allocate.
+
+**Classic providers and WPP.** The tracing start-up the WDK compiles
+into every driver that traces with WPP looks routines up by name
+(`MmGetSystemRoutineAddress`) and, where `EtwRegisterClassicProvider`
+is absent, registers with WMI the way drivers did before Windows 7. NK
+exports it, so such a driver takes the path it takes on Windows 10: a
+registration in the same table, of the classic kind (it must have a
+callback and cannot have traits), ended with `EtwUnregister`. The
+callback would carry an enabling session's handle and is never called.
+
+`WmiTraceMessage` writes a WPP message to a session: there is none,
+whatever its number, and the answer is Windows' for a session that does
+not exist (`STATUS_INVALID_HANDLE`), given before any argument is read.
+`WmiQueryTraceInformation` is what a provider asks about the session
+that enabled it (`nk_etw::logger`): the classes that take a session's
+handle apart answer as on Windows, where they do not ask whether the
+session exists; the rest find no session; the kernel's tables of trace
+routines are `STATUS_DEVICE_NOT_READY`, Windows' answer before tracing
+has started.
+
+**WMI** (`kernel/io/wmi.rs`, bookkeeping and the check of a driver's
+answer in `nk_etw::wmi`). There is no consumer of WMI data and never a
+query, so what a driver sees is what Windows shows one that nobody asks
+anything: its registration, and the request that follows it.
+
+- [`IoWMIRegistrationControl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiregistrationcontrol)
+  records the device, references it, gives it a provider id (counted
+  up, never reused) and returns. A system worker then sends the device
+  `IRP_MJ_SYSTEM_CONTROL` with `IRP_MN_REGINFO_EX`, and with
+  `IRP_MN_REGINFO` if the driver fails that; a driver that says how
+  large a buffer it needs is asked again with one that large. The
+  request is built as Windows builds it: a stack location of WMI's own
+  above the driver's, a pool buffer of 0x2000 bytes that is not zeroed,
+  the device as provider id, a completion routine that takes the IRP
+  back. NK has no device stacks, so it goes to the device itself where
+  Windows sends it to the top of the stack.
+- The answer is checked as Windows checks it and then let go: nothing
+  could ever read it. The references a driver takes on physical device
+  objects for WMI when it answers the newer request are given back.
+- `WMIREG_ACTION_UPDATE_GUIDS` sends the request again, marked as an
+  update; `WMIREG_ACTION_BLOCK_IRPS` ends the sending. Deregistering
+  drops what waits for the device, waits for a request that is with the
+  driver, and gives the device back.
+- A registration by callback or as a trace provider
+  (`WMIREG_FLAG_CALLBACK`, `WMIREG_FLAG_TRACE_PROVIDER`) is how WPP
+  registered before `EtwRegisterClassicProvider`. NK does not take it:
+  `STATUS_UNSUCCESSFUL`, Windows' answer while WMI is not running. The
+  export is `Partial` for that.
+- `IoWMIWriteEvent` takes an event and frees its block, the event
+  having nowhere to go. A trace event (`WNODE_FLAG_TRACED_GUID`) names
+  a session, of which there is none.
+
+One rule is NK's own: a driver that keeps asking for a buffer no larger
+than the one it was given is not asked again, where Windows asks for
+ever.
+
+The tests `etw.*` and `wmi.*` call the exports as a driver does, the
+latter with a driver object of their own that records each request as
+it arrives; a test group that leaves a provider registered fails like
+any other leak.
+
+## Questions about the system
+
+`kernel/ex/sysinfo.rs`, with the length rules in `nk_ex::sysinfo`.
+
+`ZwQuerySystemInformation` and `NtQuerySystemInformation` are one
+routine: every caller is in kernel mode. It answers the classes the
+binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
+Lengths, and what is reported as the length needed, are the pinned
+kernel's, class by class.
+
+| Class | Answer |
+| --- | --- |
+| 0, basic | page size, 64 KiB granularity, Windows' user range, the processors running, the memory NK uses as RAM |
+| 11, modules | the images in memory (below) |
+| 35, kernel debugger | enabled and present with `debug=on`; else neither |
+| 165, isolated user mode | sixteen zero bytes: no secure kernel. `msrpc.sys` asks, and pages itself out unless the first bit is set |
+
+**The module list** is the table of images in load order, as Windows
+lists them: `ntoskrnl.exe` first, then `hal.dll`, then the drivers.
+NK has no HAL image; `hal.dll` is a second name of the kernel's and is
+listed with the kernel's range, so a driver that expects Windows' first
+two modules finds them, and an address in the kernel is the kernel's to
+whoever takes the first module that contains it. The kernel and
+`hal.dll` are reported in `\SystemRoot\system32`, every other image in
+`\SystemRoot\System32\drivers`, which the boot files stand for. An
+entry's `Flags` is zero and its `Section` and `MappedBase` are left as
+the caller had them, which is what Windows does with those two.
+`RtlQueryModuleInformation`, which the WDK's auxiliary library calls,
+reports the same list in its two sizes.
+
+`PsGetVersion` gives `RtlGetVersion`'s numbers. `MmIsDriverVerifying`
+is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers
+`STATUS_DEVICE_NOT_READY`, Windows' answer before its live-dump support
+has started.
+
+## Stopping the system
+
+Every fatal error ends in one place (`kd::bugcheck`): the first
+processor to get there stops the others, prints one `BUGCHECK:` line,
+calls the drivers' bugcheck callbacks and powers the machine off. A
+stop with a Windows code prints the code first, then its name.
+
+[`KeBugCheckEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kebugcheckex)
+is that stop with the driver's code and four parameters, which
+`KiBugCheckData` (five words a driver imports) holds from then on. A
+stop of NK's own that carries no parameters leaves those words zero.
+
+**Bugcheck callbacks**
+([`KeRegisterBugCheckReasonCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterbugcheckreasoncallback),
+`kernel/ke/bugcheck.rs`, rules in `nk_ke::bugcheck`). The record is the
+driver's memory, filled in and linked as Windows does it: routine,
+reason, component, the checksum of the three, `State` inserted. One
+list holds them all, newest first, triage-data records behind the rest
+in the order they came. Any reason is accepted.
+
+NK writes no crash dump and has no debugger, and calls what Windows
+calls on such a system, at `HIGH_LEVEL` with the other processors
+stopped, after the report:
+
+| Reason | Called | With |
+| --- | --- | --- |
+| `KbCallbackReserved1` | yes | no data |
+| `KbCallbackTriageDumpData` | yes, after the above | `KBUGCHECK_TRIAGE_DUMP_DATA`: the code and parameters of `KiBugCheckData`, no ranges named |
+| `KbCallbackSecondaryDumpData`, `KbCallbackDumpIo`, `KbCallbackAddPages`, `KbCallbackRemovePages`, any other | never | they belong to the writing of a dump |
+
+Before a routine is called its record is looked at as Windows looks: it
+must lie where a pointer can, be linked from the record before it,
+still be in the inserted state, still add up to its checksum, and be
+registered for the reason being called. A record that fails the first
+two ends the walk; one that fails the others is passed over. Windows
+also asks whether the record's and the routine's pages are mapped; NK
+does not, and a record in unmapped memory is a second error. Afterwards
+the record's state is finished; a triage record whose routine named no
+ranges is incomplete. The ranges are not read: they would go into a
+dump.
+
+A callback may call only what Microsoft documents as safe at that
+point: a kernel routine that takes a lock may find it held by a stopped
+processor. What a callback prints goes out whoever held the console. An
+error inside a callback is a second error on the stopping processor:
+it is noted, nothing more is called, and the machine powers off.
+
+`KeRegisterBugCheckCallback`'s list, which Windows calls last, has no
+importer among the binaries NK runs and is not exported.
+
+The tests `ke.bugcheck.*` check registration; the
+`*-neg-bugcheck-callback` scenarios stop the system with callbacks of
+each kind registered, and the last one called prints which ran, in what
+order, and what they were shown.
 
 ## Breakpoints and the debugger
 

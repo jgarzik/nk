@@ -3,12 +3,17 @@
 //! and `RtlQueryRegistryValuesEx`, worked through without touching the
 //! caller's memory.
 //!
-//! [`query`] reads the registry through a [`Host`] and tells it what to
-//! do for each table entry as an [`Action`]: call the entry's routine
-//! with a value, store a value where the entry points, delete a value.
-//! The host is the kernel, which alone can call a driver's routine and
-//! write through its pointers; it has opened the key the call names and
-//! copied the table out of the caller's memory.
+//! A [`Query`] reads the registry through a [`Reader`] and says what is
+//! to be done for the table, one [`Action`] at a time: call an entry's
+//! routine with a value, store a value where the entry points, delete a
+//! value. The kernel does each, which it alone can (the routine is a
+//! driver's, the pointers are into a driver's memory), and asks for the
+//! next. It has opened the key the call names and copied the table out
+//! of the caller's memory.
+//!
+//! Between two actions everything the query holds is in the [`Query`]:
+//! a routine that never returns, because it raised an exception, leaves
+//! nothing behind that dropping the `Query` does not free.
 
 use alloc::vec::Vec;
 
@@ -34,7 +39,8 @@ pub const DELETE: u32 = 0x40;
 pub const TYPECHECK: u32 = 0x100;
 /// `RTL_QUERY_REGISTRY_TYPECHECK_SHIFT`.
 pub const TYPECHECK_SHIFT: u32 = 24;
-/// The status of a routine that [`query`] does not take for a failure.
+/// The status of a routine that a [`Query`] does not take for a
+/// failure.
 pub const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023_u32 as i32;
 
 const REG_NONE: u32 = 0;
@@ -58,7 +64,20 @@ pub struct Entry<'a> {
     pub default_data: &'a [u8],
 }
 
-/// What the host is to do for a table entry.
+/// The caller's table, as the kernel copied it: whatever keeps the
+/// copy hands out its entries by number.
+pub trait Table {
+    /// Entry `index`; `None` past the last the caller's memory held.
+    fn entry(&self, index: usize) -> Option<Entry<'_>>;
+}
+
+impl Table for [Entry<'_>] {
+    fn entry(&self, index: usize) -> Option<Entry<'_>> {
+        self.get(index).copied()
+    }
+}
+
+/// What the kernel is to do for a table entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action<'a> {
     /// Call the routine of entry `entry`. `name` is `None` for the call
@@ -70,9 +89,9 @@ pub enum Action<'a> {
         data: &'a [u8],
     },
     /// Store a string in the `UNICODE_STRING` that is `slot` such
-    /// structures past where entry `entry` points: `text` with its
-    /// terminator, in the buffer the structure names or, if it names
-    /// none, in a new one.
+    /// structures past where entry `entry` points: the characters of
+    /// `text` ([`string_to_store`]) and a terminator, in the buffer the
+    /// structure names or, if it names none, in a new one.
     StoreString {
         entry: usize,
         slot: usize,
@@ -108,17 +127,18 @@ pub enum QueryError {
     TypeMismatch,
     /// No memory to expand a string (`STATUS_INSUFFICIENT_RESOURCES`).
     NoMemory,
-    /// The host failed with this status: reading, or doing an action.
+    /// Reading the registry, or doing an action, failed with this
+    /// status.
     Failed(i32),
 }
 
 /// A value: its type and data.
 pub type Value = (u32, Vec<u8>);
 
-/// The registry as [`query`] reads it, and the doer of its actions.
-/// Keys are named from the key the call is about, the top key: `None`
-/// is that key, `Some` its subkey of that path.
-pub trait Host {
+/// The registry as a [`Query`] reads it. Keys are named from the key
+/// the call is about, the top key: `None` is that key, `Some` its
+/// subkey of that path.
+pub trait Reader {
     /// Whether the top key has the subkey `subkey`.
     fn has_key(&mut self, subkey: &[u16]) -> Result<bool, i32>;
     /// A value by name; `None` if the key has none of that name.
@@ -129,8 +149,6 @@ pub trait Host {
         subkey: Option<&[u16]>,
         index: usize,
     ) -> Result<Option<(Vec<u16>, Value)>, i32>;
-    /// Do `action`. An error is the status to stop the query with.
-    fn act(&mut self, action: Action<'_>) -> Result<(), i32>;
 }
 
 /// Where the data of an [`Action::StoreBuffer`] go in the caller's
@@ -141,6 +159,15 @@ pub trait Host {
 pub fn buffer_data_offset(declared: i32, len: usize) -> Option<usize> {
     let header = if declared < 0 { 0 } else { 8 };
     (declared.unsigned_abs() as usize >= header + len).then_some(header)
+}
+
+/// The characters of an [`Action::StoreString`]'s text: whole 16-bit
+/// units, without the terminator the text ends with if it ends with
+/// one (a string a driver stored may not). Their length is the
+/// `UNICODE_STRING`'s `Length`; its buffer holds them and a terminator.
+pub fn string_to_store(text: &[u8]) -> &[u8] {
+    let whole = &text[..text.len() & !1];
+    whole.strip_suffix(&[0, 0]).unwrap_or(whole)
 }
 
 /// The value of `name` in an environment block: `NAME=value` strings,
@@ -197,207 +224,368 @@ fn expand(data: &[u8], environment: &[u16]) -> Result<Vec<u8>, QueryError> {
     Ok(out)
 }
 
-/// The strings of a `REG_MULTI_SZ`, each with its terminator, up to
-/// the empty string that ends the list.
-fn strings(data: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let mut rest = data;
-    core::iter::from_fn(move || {
-        let (units, _) = rest.as_chunks::<2>();
-        let end = units
-            .iter()
-            .position(|&unit| unit == [0, 0])
-            .map_or(rest.len(), |at| 2 * at + 2);
-        let (text, after) = rest.split_at(end);
-        rest = after;
-        (!text.is_empty() && text != [0, 0]).then_some(text)
-    })
+/// The length of the string a `REG_MULTI_SZ` starts with, terminator
+/// included; `None` at the empty string that ends the list, and at the
+/// end of the data.
+fn string_len(rest: &[u8]) -> Option<usize> {
+    let (units, _) = rest.as_chunks::<2>();
+    let end = units
+        .iter()
+        .position(|&unit| unit == [0, 0])
+        .map_or(rest.len(), |at| 2 * at + 2);
+    (end != 0 && rest[..end] != [0, 0]).then_some(end)
 }
 
-/// One entry being worked on.
-struct Work<'a, H> {
-    host: &'a mut H,
-    index: usize,
-    entry: &'a Entry<'a>,
-    /// The key the entry is about.
-    subkey: Option<&'a [u16]>,
-    environment: &'a [u16],
+/// How far the entry in hand has got.
+#[derive(Clone, Copy)]
+enum Stage {
+    /// It has not been looked at.
+    Entry,
+    /// It wants every value of its key, and the next is to be read.
+    Next,
+    /// The value in hand goes out in one piece, which it has not yet.
+    Whole,
+    /// The value in hand is several strings: those before byte `at`
+    /// are out, `slot` of them.
+    Strings { at: usize, slot: usize },
+    /// The value in hand is out.
+    Delivered,
+    /// The value in hand is out and, if `deleted`, gone from its key.
+    Settled { deleted: bool },
+    /// The entry is done.
+    Done,
 }
 
-impl<H: Host> Work<'_, H> {
-    fn act(&mut self, action: Action<'_>) -> Result<(), QueryError> {
-        let call = matches!(action, Action::Call { .. });
-        match self.host.act(action) {
-            // Windows ignores this one status from a routine.
-            Err(STATUS_BUFFER_TOO_SMALL) if call => Ok(()),
-            Err(status) => Err(QueryError::Failed(status)),
-            Ok(()) => Ok(()),
+/// What [`Query::advance`] found to do; [`Query::action`] spells it
+/// out.
+#[derive(Clone, Copy)]
+enum Step {
+    /// Bytes `from..to` of the data in hand, for `slot`.
+    Piece { from: usize, to: usize, slot: usize },
+    /// The call that carries no value.
+    Bare,
+    /// Delete the value in hand.
+    Delete,
+}
+
+/// A query table being worked through: where it has got to, and the
+/// value in hand.
+pub struct Query {
+    /// The entry in hand.
+    entry: usize,
+    stage: Stage,
+    /// The entry whose name is the subkey the entries are about.
+    subkey: Option<usize>,
+    /// For an entry that wants every value: the index of the value in
+    /// hand.
+    index: Option<usize>,
+    /// Whether such an entry has had a value yet.
+    any: bool,
+    /// The value in hand: its name, the type it is delivered as, its
+    /// data (unless the entry's default is delivered in its place), and
+    /// whether the key has it.
+    name: Vec<u16>,
+    kind: u32,
+    data: Vec<u8>,
+    default: bool,
+    found: bool,
+    /// The action before this one called a routine.
+    called: bool,
+}
+
+impl Default for Query {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Query {
+    /// A query at the start of its table.
+    pub const fn new() -> Self {
+        Self {
+            entry: 0,
+            stage: Stage::Entry,
+            subkey: None,
+            index: None,
+            any: false,
+            name: Vec::new(),
+            kind: REG_NONE,
+            data: Vec::new(),
+            default: false,
+            found: false,
+            called: false,
         }
     }
 
-    /// Hand one value, or one string of several, to the routine or to
-    /// where the entry points.
-    fn emit(
-        &mut self,
-        name: &[u16],
-        kind: u32,
-        data: &[u8],
-        slot: usize,
-    ) -> Result<(), QueryError> {
-        let entry = self.index;
-        let action = if self.entry.flags & DIRECT == 0 {
-            if !self.entry.routine {
-                return Ok(());
-            }
-            let name = Some(name);
-            Action::Call {
-                entry,
-                name,
-                kind,
-                data,
-            }
-        } else if matches!(kind, REG_SZ | REG_EXPAND_SZ | REG_MULTI_SZ) {
-            let text = data;
-            Action::StoreString { entry, slot, text }
-        } else if data.len() <= 4 {
-            Action::StoreSmall { entry, data }
-        } else {
-            Action::StoreBuffer { entry, kind, data }
+    /// The next thing to do for `table`, the caller's; `None` when
+    /// there is nothing more. The table ends at the first entry with
+    /// neither routine nor name, or where the copy does. `environment`
+    /// is the block that `REG_EXPAND_SZ` values are expanded from,
+    /// empty if the caller gave none. `done` says how the action
+    /// before went: the status it failed with, or `Ok` (as before the
+    /// first).
+    ///
+    /// The query stops at the first entry that fails. An entry with
+    /// [`DIRECT`] is checked against [`TYPECHECK`] only if it sets
+    /// that flag: whether a caller must set it is the kernel's rule.
+    pub fn next<'a, T: Table + ?Sized, R: Reader>(
+        &'a mut self,
+        table: &'a T,
+        environment: &[u16],
+        reader: &mut R,
+        done: Result<(), i32>,
+    ) -> Result<Option<Action<'a>>, QueryError> {
+        match done {
+            // Windows ignores this one status from a routine.
+            Err(STATUS_BUFFER_TOO_SMALL) if self.called => {}
+            Err(status) => return Err(QueryError::Failed(status)),
+            Ok(()) => {}
+        }
+        let Some(step) = self.advance(table, environment, reader)? else {
+            return Ok(None);
         };
-        self.act(action)
+        Ok(self.action(table, step))
     }
 
-    /// Deliver the value `found` under `name`, or the entry's default
-    /// if there is none.
-    fn deliver(&mut self, name: &[u16], found: Option<&Value>) -> Result<(), QueryError> {
-        let flags = self.entry.flags;
-        let default_type = self.entry.default_type & 0xFF;
+    /// The name of the subkey the entries are about.
+    fn subkey_name<'a, T: Table + ?Sized>(&self, table: &'a T) -> Option<&'a [u16]> {
+        table.entry(self.subkey?)?.name
+    }
+
+    /// Move on to the next thing to do.
+    fn advance<T: Table + ?Sized, R: Reader>(
+        &mut self,
+        table: &T,
+        environment: &[u16],
+        reader: &mut R,
+    ) -> Result<Option<Step>, QueryError> {
+        self.called = false;
+        loop {
+            let Some(entry) = table.entry(self.entry) else {
+                return Ok(None);
+            };
+            let flags = entry.flags;
+            match self.stage {
+                Stage::Entry => {
+                    if !entry.routine && entry.name.is_none() {
+                        return Ok(None);
+                    }
+                    // Stored directly: a value by name, and no routine.
+                    if flags & DIRECT != 0
+                        && (flags & SUBKEY != 0 || entry.routine || entry.name.is_none())
+                    {
+                        return Err(QueryError::InvalidParameter);
+                    }
+                    if flags & (SUBKEY | TOPKEY) != 0 {
+                        self.subkey = None;
+                    }
+                    if flags & SUBKEY != 0 {
+                        let name = entry.name.ok_or(QueryError::InvalidParameter)?;
+                        if !reader.has_key(name).map_err(QueryError::Failed)? {
+                            return Err(QueryError::NotFound);
+                        }
+                        self.subkey = Some(self.entry);
+                    }
+                    self.index = None;
+                    match entry.name {
+                        // A subkey's routine is called for each of its
+                        // values.
+                        Some(_) if flags & SUBKEY != 0 && !entry.routine => {
+                            self.stage = Stage::Done;
+                        }
+                        Some(name) if flags & SUBKEY == 0 => {
+                            let found = reader
+                                .value(self.subkey_name(table), name)
+                                .map_err(QueryError::Failed)?;
+                            self.take(&entry, name, found, environment)?;
+                        }
+                        None if flags & NOVALUE != 0 => {
+                            self.stage = Stage::Done;
+                            self.called = true;
+                            return Ok(Some(Step::Bare));
+                        }
+                        _ => {
+                            self.index = Some(0);
+                            self.any = false;
+                            self.stage = Stage::Next;
+                        }
+                    }
+                }
+                Stage::Next => {
+                    let next = reader
+                        .value_at(self.subkey_name(table), self.index.unwrap_or(0))
+                        .map_err(QueryError::Failed)?;
+                    match next {
+                        Some((name, value)) => {
+                            self.any = true;
+                            self.take(&entry, &name, Some(value), environment)?;
+                        }
+                        None if !self.any && flags & REQUIRED != 0 => {
+                            return Err(QueryError::NotFound);
+                        }
+                        None => self.stage = Stage::Done,
+                    }
+                }
+                Stage::Whole => {
+                    self.stage = Stage::Delivered;
+                    let to = self.data(&entry).len();
+                    if let Some(step) = self.piece(&entry, 0, to, 0) {
+                        return Ok(Some(step));
+                    }
+                }
+                // One string at a time; stored directly, each in the
+                // next `UNICODE_STRING`.
+                Stage::Strings { at, slot } => match string_len(&self.data(&entry)[at..]) {
+                    Some(len) => {
+                        let to = at + len;
+                        self.stage = Stage::Strings {
+                            at: to,
+                            slot: slot + 1,
+                        };
+                        if let Some(step) = self.piece(&entry, at, to, slot) {
+                            return Ok(Some(step));
+                        }
+                    }
+                    None => self.stage = Stage::Delivered,
+                },
+                Stage::Delivered => {
+                    let deleted = self.found && flags & DELETE != 0;
+                    self.stage = Stage::Settled { deleted };
+                    if deleted {
+                        return Ok(Some(Step::Delete));
+                    }
+                }
+                Stage::Settled { deleted } => match self.index {
+                    // A deleted value leaves its place to the next.
+                    Some(index) => {
+                        self.index = Some(index + usize::from(!deleted));
+                        self.stage = Stage::Next;
+                    }
+                    None => self.stage = Stage::Done,
+                },
+                Stage::Done => {
+                    self.entry += 1;
+                    self.stage = Stage::Entry;
+                }
+            }
+        }
+    }
+
+    /// Take in hand the value `found` under `name`, or the entry's
+    /// default if there is none, and decide how it goes out.
+    fn take(
+        &mut self,
+        entry: &Entry<'_>,
+        name: &[u16],
+        found: Option<Value>,
+        environment: &[u16],
+    ) -> Result<(), QueryError> {
+        let flags = entry.flags;
+        let default_type = entry.default_type & 0xFF;
+        self.found = found.is_some();
+        self.name.clear();
+        self.name
+            .try_reserve(name.len())
+            .map_err(|_| QueryError::NoMemory)?;
+        self.name.extend_from_slice(name);
         // A value that is empty and of the default's type counts as
         // missing.
-        let (kind, data) = match found {
-            Some((kind, data)) if !(data.is_empty() && *kind == default_type) => {
-                let expected = self.entry.default_type >> TYPECHECK_SHIFT;
-                if flags & DIRECT != 0 && flags & TYPECHECK != 0 && *kind != expected {
+        let kind = match found {
+            Some((kind, data)) if !(data.is_empty() && kind == default_type) => {
+                let expected = entry.default_type >> TYPECHECK_SHIFT;
+                if flags & DIRECT != 0 && flags & TYPECHECK != 0 && kind != expected {
                     return Err(QueryError::TypeMismatch);
                 }
-                (*kind, &data[..])
+                self.data = data;
+                self.default = false;
+                kind
             }
             _ if flags & REQUIRED != 0 => return Err(QueryError::NotFound),
-            _ if default_type == REG_NONE => return Ok(()),
-            _ => (default_type, self.entry.default_data),
+            _ if default_type == REG_NONE => {
+                self.stage = Stage::Delivered;
+                return Ok(());
+            }
+            _ => {
+                self.default = true;
+                default_type
+            }
         };
+        self.kind = kind;
+        self.stage = Stage::Whole;
         if flags & NOEXPAND != 0 {
-            self.emit(name, kind, data, 0)
-        } else if kind == REG_EXPAND_SZ {
-            let expanded = expand(data, self.environment)?;
-            self.emit(name, REG_SZ, &expanded, 0)
+            return Ok(());
+        }
+        if kind == REG_EXPAND_SZ {
+            self.data = expand(self.data(entry), environment)?;
+            self.default = false;
+            self.kind = REG_SZ;
         } else if kind == REG_MULTI_SZ {
-            // One string at a time; stored directly, each in the next
-            // `UNICODE_STRING`.
-            strings(data)
-                .enumerate()
-                .try_for_each(|(slot, text)| self.emit(name, REG_SZ, text, slot))
+            self.kind = REG_SZ;
+            self.stage = Stage::Strings { at: 0, slot: 0 };
+        }
+        Ok(())
+    }
+
+    /// The data in hand.
+    fn data<'a>(&'a self, entry: &Entry<'a>) -> &'a [u8] {
+        if self.default {
+            entry.default_data
         } else {
-            self.emit(name, kind, data, 0)
+            &self.data
         }
     }
 
-    fn delete(&mut self, name: &[u16]) -> Result<(), QueryError> {
-        let subkey = self.subkey;
-        self.act(Action::Delete { subkey, name })
+    /// Bytes `from..to` of the data in hand as a step, if the entry
+    /// wants them at all: it may have neither a routine nor a place to
+    /// store.
+    fn piece(&mut self, entry: &Entry<'_>, from: usize, to: usize, slot: usize) -> Option<Step> {
+        self.called = entry.flags & DIRECT == 0;
+        (!self.called || entry.routine).then_some(Step::Piece { from, to, slot })
     }
 
-    /// The entry names a value.
-    fn one(&mut self, name: &[u16]) -> Result<(), QueryError> {
-        let found = self
-            .host
-            .value(self.subkey, name)
-            .map_err(QueryError::Failed)?;
-        self.deliver(name, found.as_ref())?;
-        if found.is_some() && self.entry.flags & DELETE != 0 {
-            self.delete(name)?;
-        }
-        Ok(())
-    }
-
-    /// The entry names no value: every value of the key is delivered.
-    fn all(&mut self) -> Result<(), QueryError> {
-        let (mut index, mut any) = (0, false);
-        loop {
-            let next = self
-                .host
-                .value_at(self.subkey, index)
-                .map_err(QueryError::Failed)?;
-            let Some((name, value)) = next else { break };
-            any = true;
-            self.deliver(&name, Some(&value))?;
-            // A deleted value leaves its place to the next.
-            if self.entry.flags & DELETE != 0 {
-                self.delete(&name)?;
-            } else {
-                index += 1;
+    /// `step` as the action the kernel is to do.
+    fn action<'a, T: Table + ?Sized>(&'a self, table: &'a T, step: Step) -> Option<Action<'a>> {
+        let index = self.entry;
+        let entry = table.entry(index)?;
+        Some(match step {
+            Step::Piece { from, to, slot } => {
+                let data = &self.data(&entry)[from..to];
+                let kind = self.kind;
+                if entry.flags & DIRECT == 0 {
+                    Action::Call {
+                        entry: index,
+                        name: Some(&self.name),
+                        kind,
+                        data,
+                    }
+                } else if matches!(kind, REG_SZ | REG_EXPAND_SZ | REG_MULTI_SZ) {
+                    Action::StoreString {
+                        entry: index,
+                        slot,
+                        text: data,
+                    }
+                } else if data.len() <= 4 {
+                    Action::StoreSmall { entry: index, data }
+                } else {
+                    Action::StoreBuffer {
+                        entry: index,
+                        kind,
+                        data,
+                    }
+                }
             }
-        }
-        if !any && self.entry.flags & REQUIRED != 0 {
-            return Err(QueryError::NotFound);
-        }
-        Ok(())
-    }
-}
-
-/// Work through a query table. `table` is the caller's table; it ends
-/// at the first entry with neither routine nor name, or with the
-/// slice. `environment` is the block that `REG_EXPAND_SZ` values are
-/// expanded from, empty if the caller gave none.
-///
-/// Stops at the first entry that fails. An entry with
-/// [`DIRECT`] is checked against [`TYPECHECK`] only if it sets that
-/// flag: whether a caller must set it is the host's rule.
-pub fn query<H: Host>(
-    table: &[Entry<'_>],
-    environment: &[u16],
-    host: &mut H,
-) -> Result<(), QueryError> {
-    let mut subkey = None;
-    for (index, entry) in table.iter().enumerate() {
-        if !entry.routine && entry.name.is_none() {
-            break;
-        }
-        let flags = entry.flags;
-        // Stored directly: a value by name, and no routine.
-        if flags & DIRECT != 0 && (flags & SUBKEY != 0 || entry.routine || entry.name.is_none()) {
-            return Err(QueryError::InvalidParameter);
-        }
-        if flags & (SUBKEY | TOPKEY) != 0 {
-            subkey = None;
-        }
-        if flags & SUBKEY != 0 {
-            let name = entry.name.ok_or(QueryError::InvalidParameter)?;
-            if !host.has_key(name).map_err(QueryError::Failed)? {
-                return Err(QueryError::NotFound);
-            }
-            subkey = Some(name);
-        }
-        let mut work = Work {
-            host: &mut *host,
-            index,
-            entry,
-            subkey,
-            environment,
-        };
-        match entry.name {
-            // A subkey's routine is called for each of its values.
-            Some(_) if flags & SUBKEY != 0 && !entry.routine => {}
-            Some(name) if flags & SUBKEY == 0 => work.one(name)?,
-            None if flags & NOVALUE != 0 => work.act(Action::Call {
+            Step::Bare => Action::Call {
                 entry: index,
                 name: None,
                 kind: REG_NONE,
                 data: &[],
-            })?,
-            _ => work.all()?,
-        }
+            },
+            Step::Delete => Action::Delete {
+                subkey: self.subkey_name(table),
+                name: &self.name,
+            },
+        })
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -470,7 +658,7 @@ mod tests {
         }
     }
 
-    impl Host for Fake {
+    impl Reader for Fake {
         fn has_key(&mut self, subkey: &[u16]) -> Result<bool, i32> {
             self.readable()?;
             Ok(self.keys.iter().any(|(key, _)| *key == text(subkey)))
@@ -491,7 +679,11 @@ mod tests {
             let found = self.key(subkey).get(index);
             Ok(found.map(|(name, kind, data)| (w(name), (*kind, data.clone()))))
         }
+    }
 
+    impl Fake {
+        /// Do `action` as the kernel would, by writing it down; the
+        /// status it is told to fail with.
         fn act(&mut self, action: Action<'_>) -> Result<(), i32> {
             let line = match action {
                 Action::Call {
@@ -537,6 +729,17 @@ mod tests {
     }
 
     /// Run a table against a registry; what was done, and how it ended.
+    /// Work through `table` as the kernel does: ask for an action, do
+    /// it, say how it went.
+    fn query(table: &[Entry<'_>], environment: &[u16], fake: &mut Fake) -> Result<(), QueryError> {
+        let mut query = Query::default();
+        let mut done = Ok(());
+        while let Some(action) = query.next(table, environment, fake, done)? {
+            done = fake.act(action);
+        }
+        Ok(())
+    }
+
     fn run(fake: &mut Fake, table: &[Entry<'_>]) -> (Vec<String>, Result<(), QueryError>) {
         let result = query(table, &[], fake);
         (std::mem::take(&mut fake.done), result)
@@ -658,8 +861,9 @@ mod tests {
         let (done, _) = run(&mut fake, &[entry(true, 0, Some(&open))]);
         assert_eq!(done, ["call 0 Open 1 'a|'", "call 0 Open 1 'b'"]);
         // An odd byte at the end goes with the last string.
-        let pieces: Vec<&[u8]> = strings(&[b'x', 0, 0, 0, b'y']).collect();
-        assert_eq!(pieces, [&[b'x', 0, 0, 0][..], b"y"]);
+        assert_eq!(string_len(&[b'x', 0, 0, 0, b'y']), Some(4));
+        assert_eq!(string_len(b"y"), Some(1));
+        assert_eq!(string_len(&[]), None);
         // An empty list is no strings at all.
         let bare = w("Bare");
         let (done, result) = run(&mut fake, &[entry(true, 0, Some(&bare))]);
@@ -959,6 +1163,43 @@ mod tests {
             assert_eq!(done.len(), 0);
             assert_eq!(result, Err(QueryError::Failed(STATUS_UNSUCCESSFUL)));
         }
+    }
+
+    #[test]
+    fn a_stored_string_is_its_characters_without_the_terminator() {
+        assert_eq!(string_to_store(&wide("nk\0")), wide("nk"));
+        // Several strings stored as one keep all terminators but the
+        // last.
+        assert_eq!(string_to_store(&wide("a\0bc\0\0")), wide("a\0bc\0"));
+        // A string a driver stored without a terminator, or with half
+        // a character at its end, loses no character.
+        assert_eq!(string_to_store(&wide("nk")), wide("nk"));
+        assert_eq!(string_to_store(&[b'n', 0, b'k']), [b'n', 0]);
+        assert_eq!(string_to_store(&[0, 0, 0]), []);
+        assert_eq!(string_to_store(&[]), []);
+    }
+
+    #[test]
+    fn a_table_cut_short_by_its_copy_ends_there() {
+        // The kernel's copy of a table may end before any entry says
+        // so; a subkey entry is found again by its number.
+        let (sub, v) = (w("Sub"), w("V"));
+        let keys: &[(&str, &[Given<'_>])] = &[("", &[]), ("Sub", &[("V", REG_DWORD, &[1])])];
+        let mut fake = Fake::new(keys);
+        let table = [
+            entry(false, SUBKEY, Some(&sub)),
+            entry(true, DELETE, Some(&v)),
+        ];
+        let (done, result) = run(&mut fake, &table);
+        assert_eq!(result, Ok(()));
+        assert_eq!(done, ["call 1 V 4 [1]", "delete Sub\\V"]);
+        // A status left over from before the first action is a failure
+        // like any other: nothing was called yet.
+        let mut query = Query::new();
+        assert_eq!(
+            query.next(&table[..], &[], &mut fake, Err(STATUS_BUFFER_TOO_SMALL)),
+            Err(QueryError::Failed(STATUS_BUFFER_TOO_SMALL))
+        );
     }
 
     #[test]

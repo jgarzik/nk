@@ -11,6 +11,8 @@
 //!   absolute one holds pointers; a self-relative one is a single block
 //!   holding offsets, with the parts after a 20-byte header.
 //!
+//! `sid` takes SIDs apart and tells app-container SIDs from others.
+//!
 //! On those layouts stand the rules, one module each: who a subject is
 //! (`token`), whether it may have an access (`access`) or holds a
 //! privilege (`privilege`), what descriptor a new object gets
@@ -29,6 +31,7 @@ pub mod assign;
 pub mod descriptor;
 pub mod information;
 pub mod privilege;
+pub mod sid;
 pub mod token;
 
 /// The revision of every SID.

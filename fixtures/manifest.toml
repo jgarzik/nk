@@ -24,6 +24,15 @@ sha256 = "876185b0fc0e802ff7954d84d6255fd61eeff217ace56e61510e1fa1f56cdef1"
 status = "microsoft-inbox"
 note = "null.sys 10.0.19041.1; the same binary ships in Windows 10 2004 through 22H2"
 
+[[fixture]]
+name = "wpprecorder"
+arch = "x86_64"
+file = "wpprecorder.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wpprecorder.sys/15060D0011000/wpprecorder.sys"
+sha256 = "7b4e4c2c0f70836e5117d04f819cd928b73b1aa7f3051b0079e298ba902dca21"
+status = "microsoft-inbox"
+note = "WppRecorder.sys 10.0.19041.1, the WPP trace recorder: an export driver"
+
 # null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
 # image size of the Windows 10 ARM64 build, which no public index lists.
 # Do not substitute a Windows 11 binary.
@@ -437,12 +446,12 @@ note = "Windows-driver-samples d49bb7d7 general/cancel/sys"
 name = "system-hive"
 arch = "any"
 file = "system.hiv"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/system.hiv"
-sha256 = "b867592587a585fcad1eade7c0fe6d4b40accc2e355b3a7d7c2f160810555841"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/system.hiv"
+sha256 = "253c9e65fc97b816bbb299c42febea1b4d34e9953583693cb3b3ca012e3ffd96"
 status = "windows-written"
 kind = "hive"
 boot = false
-note = "nk-fixtures v6 hive/system.hive.txt, saved by the registry of the Windows build runner"
+note = "nk-fixtures v8 hive/system.hive.txt, saved by the registry of the Windows build runner"
 
 # An export driver and what imports from it (nk-fixtures nkc/nkc-lib*.c).
 # nkc-lib.sys is a library: loaded when a driver that imports from it is

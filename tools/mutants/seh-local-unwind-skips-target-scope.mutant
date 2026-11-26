@@ -2,7 +2,7 @@
 # runs every `__finally` around the frame's program counter, the ones
 # the `goto` did not leave included.
 scenario: x86_64
-fails: oracle.nkc-seh
+fails: seh.local-unwind
 file: lib/unwind/dispatch.rs
 replace:         Some(t) if t == establisher => EXCEPTION_UNWINDING | EXCEPTION_TARGET_UNWIND,
 with:         Some(t) if t == establisher => EXCEPTION_UNWINDING,

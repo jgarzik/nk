@@ -14,6 +14,7 @@
 
 pub mod access;
 pub mod descriptor;
+pub mod sid;
 pub mod token;
 
 use crate::mm::pool;
@@ -509,6 +510,118 @@ pub unsafe extern "C" fn RtlGetGroupSecurityDescriptor(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe { get_sid(sd.cast(), 1, nk_se::SE_GROUP_DEFAULTED, group, defaulted) }
+}
+
+/// Set the SID field `field` of an absolute descriptor (the owner's or
+/// the group's) and its defaulted bit.
+///
+/// # Safety
+/// `sd` points to a security descriptor the caller may write, `field`
+/// to that field of it.
+unsafe fn set_sid(
+    sd: *mut SECURITY_DESCRIPTOR,
+    field: *mut *mut c_void,
+    defaulted_bit: u16,
+    sid: *mut c_void,
+    defaulted: u8,
+) -> NTSTATUS {
+    // SAFETY: per the contract. The descriptor is the driver's: fields
+    // are read and written one at a time through the raw pointer.
+    unsafe {
+        if !known_revision(sd.cast()) {
+            return STATUS_UNKNOWN_REVISION;
+        }
+        let control = &raw mut (*sd).Control;
+        let bits = control.read_unaligned();
+        // Only an absolute descriptor has a pointer to set.
+        if bits & nk_se::SE_SELF_RELATIVE != 0 {
+            return STATUS_INVALID_SECURITY_DESCR;
+        }
+        field.write_unaligned(sid);
+        control.write_unaligned(if defaulted != 0 {
+            bits | defaulted_bit
+        } else {
+            bits & !defaulted_bit
+        });
+    }
+    STATUS_SUCCESS
+}
+
+/// [`RtlSetOwnerSecurityDescriptor`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlsetownersecuritydescriptor):
+/// point an absolute descriptor at its owner's SID, or at none.
+///
+/// # Safety
+/// `sd` points to a security descriptor the caller may write.
+pub unsafe extern "C" fn RtlSetOwnerSecurityDescriptor(
+    sd: *mut SECURITY_DESCRIPTOR,
+    owner: *mut c_void,
+    defaulted: u8,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        set_sid(
+            sd,
+            &raw mut (*sd).Owner,
+            nk_se::SE_OWNER_DEFAULTED,
+            owner,
+            defaulted,
+        )
+    }
+}
+
+/// [`RtlSetGroupSecurityDescriptor`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlsetgroupsecuritydescriptor).
+///
+/// # Safety
+/// `sd` points to a security descriptor the caller may write.
+pub unsafe extern "C" fn RtlSetGroupSecurityDescriptor(
+    sd: *mut SECURITY_DESCRIPTOR,
+    group: *mut c_void,
+    defaulted: u8,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        set_sid(
+            sd,
+            &raw mut (*sd).Group,
+            nk_se::SE_GROUP_DEFAULTED,
+            group,
+            defaulted,
+        )
+    }
+}
+
+/// [`RtlValidSecurityDescriptor`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlvalidsecuritydescriptor):
+/// whether a descriptor has the known revision and each part it has is
+/// sound. It need have none. An access list is judged on a copy; with
+/// no memory for one the answer is no.
+///
+/// # Safety
+/// `sd` points to a security descriptor.
+pub unsafe extern "C" fn RtlValidSecurityDescriptor(sd: *const c_void) -> u8 {
+    // SAFETY: per the contract. Each part's header is read and judged
+    // before the length it states is believed.
+    unsafe {
+        if !known_revision(sd.cast()) {
+            return 0;
+        }
+        let (_, parts) = parts_of(sd.cast());
+        for (i, &part) in parts.iter().enumerate() {
+            if part.is_null() {
+                continue;
+            }
+            let sound = if i < 2 {
+                nk_se::sid::valid_header(part.read(), part.add(1).read())
+            } else {
+                acl_length(part) >= nk_se::ACL_HEADER
+                    && copied(part, acl_length(part))
+                        .is_some_and(|acl| nk_se::acl_used(&acl).is_some())
+            };
+            if !sound {
+                return 0;
+            }
+        }
+    }
+    1
 }
 
 /// [`RtlLengthSecurityDescriptor`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtllengthsecuritydescriptor):

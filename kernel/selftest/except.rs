@@ -15,7 +15,8 @@
 use crate::arch;
 use crate::arch::seh_test::{
     Body, FAULTS, REGISTERS_LOST, SEED_SLOT, nk_seh_call, nk_seh_clobber, nk_seh_edge,
-    nk_seh_finally, nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try, nk_seh_write,
+    nk_seh_finally, nk_seh_local, nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try,
+    nk_seh_write,
 };
 use crate::ke::dpc::{KeInitializeDpc, KeInsertQueueDpc};
 use crate::ke::seh::{self, Guard, system_service};
@@ -33,6 +34,7 @@ pub static GROUP: Group = Group {
         "seh.decline",
         "seh.edge",
         "seh.finally",
+        "seh.local-unwind",
         "seh.cross.region",
         "seh.cross.irql",
         "seh.cross.reference",
@@ -49,12 +51,12 @@ pub static GROUP: Group = Group {
 };
 
 /// A status of the tests' own.
-const CODE: u32 = 0xE04E_4B20;
+pub(super) const CODE: u32 = 0xE04E_4B20;
 /// `EXCEPTION_EXECUTE_HANDLER`, `EXCEPTION_CONTINUE_SEARCH`,
 /// `EXCEPTION_CONTINUE_EXECUTION`. A filter told to answer the last
 /// first repairs the context: see [`continue_test`].
-const ACCEPT: i32 = 1;
-const DECLINE: i32 = 0;
+pub(super) const ACCEPT: i32 = 1;
+pub(super) const DECLINE: i32 = 0;
 const CONTINUE: i32 = -1;
 
 /// Events, in the order they happened. The low byte says more.
@@ -87,7 +89,7 @@ fn note(event: u32) {
 
 /// Start a test: nothing has happened, and the filter will answer
 /// `answers` in turn.
-fn arm(answers: [i32; 2]) {
+pub(super) fn arm(answers: [i32; 2]) {
     EVENTS.store(0, Ordering::Relaxed);
     ASKED.store(0, Ordering::Relaxed);
     for (slot, answer) in ANSWERS.iter().zip(answers) {
@@ -151,7 +153,7 @@ pub extern "C" fn finally(abnormal: u8, _frame: u64) {
 extern "C" fn nothing(_: usize) {}
 
 /// Raise `code`, the way a driver calls `ExRaiseStatus`.
-extern "C" fn raise(code: usize) {
+pub(super) extern "C" fn raise(code: usize) {
     // SAFETY: the routine takes any status.
     unsafe { arch::seh::nk_entry_ExRaiseStatus(code as i32) };
     note(RETURNED);
@@ -206,8 +208,16 @@ fn caught_as(body: Body, argument: usize, code: u32) -> Result<(), &'static str>
     }
 }
 
-fn caught(body: Body, argument: usize) -> Result<(), &'static str> {
+pub(super) fn caught(body: Body, argument: usize) -> Result<(), &'static str> {
     caught_as(body, argument, CODE)
+}
+
+/// For the tests of routines documented to raise: run `body(argument)`
+/// inside a `__try` that takes whatever is raised, and require the
+/// exception code `code`.
+pub(super) fn raises(body: Body, argument: usize, code: u32) -> Result<(), &'static str> {
+    arm([ACCEPT, DECLINE]);
+    caught_as(body, argument, code)
 }
 
 /// A raise is offered to the filter with its record, and the handler
@@ -285,6 +295,20 @@ fn finally_test() -> Result<(), &'static str> {
     unsafe { nk_seh_finally(nothing, 0) };
     if !happened(&[FINALLY]) {
         return Err("a __finally left normally did not run once, as a normal termination");
+    }
+    Ok(())
+}
+
+/// A `goto` out of the inner of two nested `__try` blocks to a place
+/// still inside the outer one runs the inner `__finally` alone: the
+/// frame an unwind ends in is told so, and leaves only the scopes
+/// between where it was and where it is to go on.
+fn local_unwind_test() -> Result<(), &'static str> {
+    arm([DECLINE, DECLINE]);
+    // SAFETY: the routine takes no argument and returns.
+    unsafe { nk_seh_local() };
+    if !happened(&[FINALLY | 1]) {
+        return Err("not the inner __finally alone, as an abnormal termination");
     }
     Ok(())
 }
@@ -629,6 +653,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("seh.decline", decline_test);
     r.check("seh.edge", edge_test);
     r.check("seh.finally", finally_test);
+    r.check("seh.local-unwind", local_unwind_test);
     r.check("seh.cross.region", || cross_test(REGION));
     r.check("seh.cross.irql", || cross_test(IRQL));
     r.check("seh.cross.reference", || cross_test(REFERENCE));

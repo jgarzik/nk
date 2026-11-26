@@ -1,0 +1,9 @@
+# A query table's routine is called with a guard that owes nothing: a
+# routine that raises an exception is unwound, and what the query held
+# (its copy of the table, the value it lent, its count on the key) is
+# never given back.
+scenario: x86_64
+fails: cm.table.raise
+file: kernel/cm/table.rs
+replace:                         &guard,
+with:                         &Guard::Nothing,

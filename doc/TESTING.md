@@ -107,8 +107,10 @@ gate tier has, for each architecture:
   processors; and `*-smp1`: on one;
 - `*-neg-*`: boots that break a rule on purpose (a panic, a stack
   overflow, a lock taken out of order, a wait at `DISPATCH_LEVEL`, a
-  driver breakpoint with no debugger, an exception nothing handles,
-  ...) and must end in the named bugcheck;
+  driver breakpoint with no debugger, an exception nothing handles, a
+  driver's `KeBugCheckEx`, ...) and must end in the named bugcheck;
+  `*-neg-bugcheck-callback` also requires the line a bugcheck callback
+  prints after it (the scenario's `then`);
 - `*-oracle-event*`, `*-debugger-breakpoint`: Microsoft's event sample,
   whose first act is a breakpoint, stops NK with Windows' bugcheck at
   the same step, and with `debug=on` runs as on Windows with a debugger;
@@ -163,6 +165,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | started at boot from its key in the hive; read gives end-of-file, write accepts all bytes; unloads without leaks |
+| `wpprecorder.sys` | Microsoft's WPP trace recorder, an export driver (x86-64 only) | loads as a library, its `DllInitialize` succeeds with every routine it looks up by name found, and it unloads without leaks |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered, direct and `METHOD_NEITHER` control requests return the sample's data; bad requests fail with its status codes, and buffers that are not there with an access violation its `__try` catches; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
@@ -173,7 +176,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
-All but `null.sys` (from Microsoft's symbol server) are made in
+All but Microsoft's own binaries (from its symbol server) are made in
 [nk-fixtures](https://github.com/jgarzik/nk-fixtures), the drivers built
 with the WDK and the hive saved by Windows' registry: a separate
 repository so the test drivers cannot drift toward what NK supports.

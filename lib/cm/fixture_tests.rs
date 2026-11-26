@@ -69,16 +69,27 @@ fn what_a_kernel_reads_at_boot_is_there() {
         "List",
     );
     assert_eq!(kind, REG_MULTI_SZ);
-    assert!(order.starts_with(&utf16("System Reserved\0Boot Bus Extender\0")));
-    assert!(order.ends_with(&utf16("Base\0File System\0\0")));
+    // Windows' list: it starts with this group, and `Base` comes
+    // before `File System`.
+    assert!(order.starts_with(&utf16("System Reserved\0")));
+    let place = |group: &str| {
+        let group = utf16(&format!("\0{group}\0"));
+        order
+            .windows(group.len())
+            .position(|window| window == group)
+            .unwrap_or_else(|| panic!("no group {group:?}"))
+    };
+    assert!(place("Base") < place("File System"));
     // Names differ in case from how they are asked for.
     assert_eq!(
         value(&hive, root, "controlset001\\SERVICES\\npfs", "start"),
         (REG_DWORD, 1u32.to_le_bytes().to_vec())
     );
+    // Windows spells this group `File system` in its drivers' keys and
+    // `File System` in the list of groups, and so does the hive.
     assert_eq!(
         value(&hive, root, "ControlSet001\\Services\\Npfs", "Group"),
-        (REG_SZ, utf16("File System\0"))
+        (REG_SZ, utf16("File system\0"))
     );
 }
 
@@ -92,9 +103,10 @@ fn the_boot_start_services_come_in_group_order() {
         .into_iter()
         .map(|key| String::from_utf16(hive.info(key).unwrap().name).unwrap())
         .collect();
-    // `Base` comes before `File System` in the group list; msrpc and
-    // the libraries start on demand.
-    assert_eq!(names, ["Null", "Npfs"]);
+    // `Base` comes before `File System` in the group list, however
+    // the keys spell the latter; in that group, which has no tag list,
+    // Msfs comes before Npfs as the keys do; msrpc starts on demand.
+    assert_eq!(names, ["Null", "Msfs", "Npfs"]);
 }
 
 #[test]

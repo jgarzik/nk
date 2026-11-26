@@ -1,0 +1,7 @@
+# ExUuidCreate returns STATUS_SUCCESS for a UUID built on a random node:
+# the driver takes it for unique everywhere.
+scenario: x86_64
+fails: ex.uuid.fields
+file: kernel/ex/uuid.rs
+replace:     RPC_NT_UUID_LOCAL_ONLY as NTSTATUS
+with:     0

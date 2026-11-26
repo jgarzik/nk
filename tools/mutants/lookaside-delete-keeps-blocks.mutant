@@ -1,0 +1,6 @@
+# Deleting a lookaside list empties it without handing the blocks it
+# kept to its free routine: they are lost.
+scenario: aarch64
+fails: ex.lookaside.routines
+file: kernel/ex/lookaside.rs
+remove:             seh::call(free as usize, [entry.addr(), 0, 0, 0], &Guard::Nothing);

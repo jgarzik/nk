@@ -1,0 +1,8 @@
+# The module list counts its entries as if no header came before them:
+# the last entry written runs past the end of a buffer that is a few
+# bytes short of it.
+scenario: x86_64
+fails: ex.sysinfo.modules.short
+file: lib/ex/sysinfo.rs
+replace:     let entries = (given.saturating_sub(MODULES_HEADER) / MODULE_ENTRY).min(count);
+with:     let entries = (given / MODULE_ENTRY).min(count);

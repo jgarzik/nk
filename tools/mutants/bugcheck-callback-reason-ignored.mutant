@@ -1,0 +1,6 @@
+# A stop calls every registered bugcheck callback whatever it was
+# registered for: one that expects a crash dump's buffers gets none.
+scenario: x86_64-neg-bugcheck-callback
+fails: scenario
+file: lib/ke/bugcheck.rs
+remove:         && record.reason == wanted

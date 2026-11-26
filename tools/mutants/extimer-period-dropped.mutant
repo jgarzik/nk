@@ -1,0 +1,7 @@
+# ExSetTimer sets the timer without its period: a periodic timer
+# expires once.
+scenario: x86_64
+fails: ex.timer.periodic
+file: kernel/ex/timer.rs
+replace:         timer::KeSetTimerEx(timer.cast(), due_time, period_ms, &raw mut (*timer).dpc)
+with:         timer::KeSetTimerEx(timer.cast(), due_time, period_ms * 0, &raw mut (*timer).dpc)

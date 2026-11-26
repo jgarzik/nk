@@ -12,7 +12,9 @@ use crate::ke::thread;
 use crate::ob::object;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use nk_ntabi::ke::{KAPC_STATE, KAPC_STATE_NOT_ATTACHED};
 use nk_ntabi::process as layout;
+use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
 use nk_ntabi::thread as thread_layout;
 
 /// A variable a driver imports that holds a process: the import is
@@ -51,16 +53,23 @@ pub fn init(time: u64) -> Result<(), &'static str> {
         // references in advance, every one is taken from the object.
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
         process.write(layout::PROCESS_OBJECT);
+        // A process is something a thread can wait on: for its end,
+        // which never comes.
+        crate::ke::object::init_wait_list(process.cast());
         process
             .add(layout::UNIQUE_PROCESS_ID)
             .cast::<u64>()
             .write(layout::SYSTEM_PROCESS_ID);
         process.add(layout::CREATE_TIME).cast::<u64>().write(time);
         process
+            .add(layout::BASE_PRIORITY)
+            .write(thread::NORMAL_PRIORITY);
+        process
             .add(layout::IMAGE_FILE_NAME)
             .copy_from_nonoverlapping(b"System".as_ptr(), 6);
     }
     PsInitialSystemProcess.0.store(process, Ordering::Release);
+    super::silo::init();
     Ok(())
 }
 
@@ -94,6 +103,195 @@ pub extern "C" fn PsGetCurrentProcess() -> *mut c_void {
 /// [`PsGetCurrentProcess`] by its documented name.
 pub extern "C" fn IoGetCurrentProcess() -> *mut c_void {
     PsGetCurrentProcess()
+}
+
+/// [`KeStackAttachProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess):
+/// put the calling thread in `process`'s address space. A thread
+/// already there is left as it is, and the caller's `apc_state` gets
+/// Windows' mark for that, 1 where the process would be, and nothing
+/// else. Every thread is in the one process there is, so that is all
+/// an attach can be; naming anything else names no process, and the
+/// system stops. From a DPC routine it stops as on Windows
+/// ([`INVALID_PROCESS_ATTACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x5--invalid-process-attach-attempt)).
+///
+/// # Safety
+/// `process` is a process object; `apc_state` points to room for a
+/// `KAPC_STATE`.
+pub unsafe extern "C" fn KeStackAttachProcess(process: *mut c_void, apc_state: *mut KAPC_STATE) {
+    let current = PsGetCurrentProcess();
+    if crate::ke::dpc::running() {
+        crate::kd::bugcheck(format_args!(
+            "0x00000005 INVALID_PROCESS_ATTACH_ATTEMPT: a DPC routine attached to a process \
+             (parameters {process:p}, {current:p}, 0, 1)"
+        ));
+    }
+    if process != current {
+        crate::kd::bugcheck(format_args!(
+            "KeStackAttachProcess: {process:p} is not the System process, and there is no other"
+        ));
+    }
+    // SAFETY: per the contract; the driver's memory, written through
+    // its pointer.
+    unsafe {
+        (&raw mut (*apc_state).Process)
+            .write_unaligned(core::ptr::without_provenance_mut(KAPC_STATE_NOT_ATTACHED));
+    }
+}
+
+/// [`KeUnstackDetachProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess):
+/// undo [`KeStackAttachProcess`]. A state marked as an attach that did
+/// nothing needs nothing undone. Any other state was not left by an
+/// attach, the thread being attached nowhere: Windows stops there
+/// ([`INVALID_PROCESS_DETACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x6--invalid-process-detach-attempt)),
+/// and so does NK.
+///
+/// # Safety
+/// `apc_state` is the state a `KeStackAttachProcess` filled in.
+pub unsafe extern "C" fn KeUnstackDetachProcess(apc_state: *mut KAPC_STATE) {
+    // SAFETY: per the contract.
+    let saved = unsafe { (&raw const (*apc_state).Process).read_unaligned() };
+    if saved.addr() != KAPC_STATE_NOT_ATTACHED {
+        crate::kd::bugcheck(format_args!(
+            "0x00000006 INVALID_PROCESS_DETACH_ATTEMPT: a detach by a thread that is not \
+             attached (saved process {saved:p})"
+        ));
+    }
+}
+
+/// Stop unless `process` is the System process: quota is asked about
+/// a process, and there is no other.
+fn only_the_system_process(routine: &str, process: *mut c_void) {
+    if process != system().cast() {
+        crate::kd::bugcheck(format_args!(
+            "{routine}: {process:p} is not the System process, and there is no other"
+        ));
+    }
+}
+
+/// `PsChargeProcessPagedPoolQuota` (`ntoskrnl.exe` exports it; the
+/// kit's headers do not declare it): charge `amount` bytes of paged
+/// pool to a process's quota. The System process is charged nothing,
+/// whatever the amount: Windows compares the process with
+/// `PsInitialSystemProcess` and answers success without looking at a
+/// quota block, and so does NK, which has no other process to charge.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsChargeProcessPagedPoolQuota(
+    process: *mut c_void,
+    _amount: usize,
+) -> NTSTATUS {
+    only_the_system_process("PsChargeProcessPagedPoolQuota", process);
+    STATUS_SUCCESS
+}
+
+/// `PsReturnProcessPagedPoolQuota` (exported, not in the kit's
+/// headers): give back quota [`PsChargeProcessPagedPoolQuota`] charged.
+/// Nothing was charged to the System process, and nothing is returned.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsReturnProcessPagedPoolQuota(process: *mut c_void, _amount: usize) {
+    only_the_system_process("PsReturnProcessPagedPoolQuota", process);
+}
+
+/// The running thread's client id: its process's id, then its own.
+fn current_client_id() -> [*mut c_void; 2] {
+    // SAFETY: the running thread's block; the field is pointer-aligned
+    // and written once, when the thread is made.
+    unsafe {
+        thread::object_field::<[*mut c_void; 2]>(thread::current(), thread_layout::CID).read()
+    }
+}
+
+/// [`PsGetCurrentProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid):
+/// the id of the calling thread's process, from the thread's client id.
+pub extern "C" fn PsGetCurrentProcessId() -> *mut c_void {
+    current_client_id()[0]
+}
+
+/// [`PsGetCurrentThreadId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentthreadid):
+/// the calling thread's id.
+pub extern "C" fn PsGetCurrentThreadId() -> *mut c_void {
+    current_client_id()[1]
+}
+
+/// [`PsGetProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetprocessid).
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsGetProcessId(process: *mut c_void) -> *mut c_void {
+    // SAFETY: per the contract; the field is pointer-aligned and
+    // written once.
+    unsafe {
+        process
+            .cast::<u8>()
+            .add(layout::UNIQUE_PROCESS_ID)
+            .cast::<*mut c_void>()
+            .read()
+    }
+}
+
+/// [`PsGetThreadProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psgetthreadprocessid):
+/// the id of the process `thread` belongs to, from the thread's client
+/// id.
+///
+/// # Safety
+/// `thread` is a thread object.
+pub unsafe extern "C" fn PsGetThreadProcessId(thread: *mut c_void) -> *mut c_void {
+    // SAFETY: per the contract; the field is pointer-aligned and
+    // written once.
+    unsafe {
+        thread
+            .cast::<u8>()
+            .add(thread_layout::CID)
+            .cast::<*mut c_void>()
+            .read()
+    }
+}
+
+/// `PsGetProcessSessionId` (`ntoskrnl.exe` exports it; the kit's
+/// headers do not declare it): the id of the session `process` is in.
+/// A process in no session (`EPROCESS.Session` null) reads as session
+/// 0, as on Windows, and no process is ever in one: there are no
+/// session spaces to point at.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsGetProcessSessionId(process: *mut c_void) -> u32 {
+    // SAFETY: per the contract; the field is pointer-aligned.
+    let session = unsafe {
+        process
+            .cast::<u8>()
+            .add(layout::SESSION)
+            .cast::<*mut c_void>()
+            .read()
+    };
+    if !session.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "PsGetProcessSessionId: process {process:p} names a session, and there are none"
+        ));
+    }
+    0
+}
+
+/// `PsGetThreadSessionId` (exported, not in the kit's headers): the
+/// session of the process `thread` belongs to.
+///
+/// # Safety
+/// `thread` is a thread object.
+pub unsafe extern "C" fn PsGetThreadSessionId(thread: *mut c_void) -> u32 {
+    // SAFETY: per the contract: a thread names its process, which
+    // lives at least as long, at a pointer-aligned offset.
+    unsafe {
+        PsGetProcessSessionId(
+            thread
+                .cast::<u8>()
+                .add(thread_layout::PROCESS)
+                .cast::<*mut c_void>()
+                .read(),
+        )
+    }
 }
 
 /// [`PsReferencePrimaryToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psreferenceprimarytoken):
@@ -196,6 +394,127 @@ pub fn self_test() -> Result<(), &'static str> {
     }
     if handle::reference(current, Some(&raw const object::THREAD_TYPE)).is_ok() {
         return Err("NtCurrentProcess was accepted as a thread");
+    }
+    Ok(())
+}
+
+/// What a thread beside the tested one says it is.
+static PEER: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+
+/// Who a thread is, as a driver asks: the System process's id is 4 by
+/// every route, each thread has an id of its own from the same
+/// sequence, and process and threads are in session 0. Returns the
+/// questions asked.
+pub fn identity_test() -> Result<u32, &'static str> {
+    fn peer(_: usize) {
+        PEER[0].store(PsGetCurrentProcessId().addr() as u64, Ordering::Release);
+        PEER[1].store(PsGetCurrentThreadId().addr() as u64, Ordering::Release);
+        PEER[2].store(PsGetCurrentProcess().addr() as u64, Ordering::Release);
+    }
+    let process = system().cast::<c_void>();
+    let me = thread::current().cast::<c_void>();
+    let (pid, tid) = (
+        PsGetCurrentProcessId().addr(),
+        PsGetCurrentThreadId().addr(),
+    );
+    // SAFETY: the System process and the running thread.
+    let (of_process, of_thread) = unsafe {
+        (
+            PsGetProcessId(process).addr(),
+            PsGetThreadProcessId(me).addr(),
+        )
+    };
+    if pid as u64 != layout::SYSTEM_PROCESS_ID || of_process != pid || of_thread != pid {
+        return Err("the System process's id is not 4 by every way of asking");
+    }
+    if tid == 0 || tid % 4 != 0 || tid == pid {
+        return Err("the calling thread's id is not an id of its own");
+    }
+    let other = thread::create_referenced(peer, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    // SAFETY: a thread this test holds a reference to, which it gives
+    // up at the end; the wait is for that thread's end.
+    let (waited, its_process, sessions) = unsafe {
+        let waited = crate::ke::wait::wait(Some(other.cast()), None);
+        let facts = (
+            PsGetThreadProcessId(other.cast()).addr(),
+            [
+                PsGetProcessSessionId(process),
+                PsGetThreadSessionId(me),
+                PsGetThreadSessionId(other.cast()),
+            ],
+        );
+        object::dereference(other.cast());
+        (waited, facts.0, facts.1)
+    };
+    let said = PEER
+        .each_ref()
+        .map(|fact| fact.load(Ordering::Acquire) as usize);
+    if waited != 0 {
+        return Err("the other thread could not be waited for");
+    }
+    if said[0] != pid || said[2] != process.addr() || its_process != pid {
+        return Err("another system thread is not in the System process");
+    }
+    if said[1] == tid || said[1] == 0 || said[1] % 4 != 0 || said[1] == pid {
+        return Err("another thread does not have an id of its own");
+    }
+    if sessions != [0; 3] {
+        return Err("the System process or a thread of it is not in session 0");
+    }
+    Ok(11)
+}
+
+/// Attaching to the process the thread is in: the caller's state gets
+/// the mark and nothing else, the thread stays where and as it was,
+/// and the detach that follows is accepted.
+pub fn attach_test() -> Result<(), &'static str> {
+    let process = system().cast::<c_void>();
+    let before = crate::ke::irql::current();
+    let mut state = [0xAAu8; size_of::<KAPC_STATE>()];
+    let at = core::mem::offset_of!(KAPC_STATE, Process);
+    // SAFETY: the System process, and a local of a `KAPC_STATE`'s size.
+    unsafe { KeStackAttachProcess(process, state.as_mut_ptr().cast()) };
+    let marked = state[at..at + 8] == KAPC_STATE_NOT_ATTACHED.to_le_bytes();
+    let untouched = state[..at]
+        .iter()
+        .chain(&state[at + 8..])
+        .all(|&b| b == 0xAA);
+    if !marked {
+        return Err("an attach to the thread's own process did not mark the saved state");
+    }
+    if !untouched {
+        return Err("an attach that saved nothing wrote more than the mark");
+    }
+    if PsGetCurrentProcess() != process || crate::ke::irql::current() != before {
+        return Err("an attach to the thread's own process moved the thread or the IRQL");
+    }
+    // SAFETY: the state the attach filled in.
+    unsafe { KeUnstackDetachProcess(state.as_mut_ptr().cast()) };
+    if PsGetCurrentProcess() != process || crate::ke::irql::current() != before {
+        return Err("a detach moved the thread or the IRQL");
+    }
+    Ok(())
+}
+
+/// The System process is charged no quota: any amount is fine, giving
+/// it back is too, and neither touches the process's quota block,
+/// which it does not have.
+pub fn quota_test() -> Result<(), &'static str> {
+    let process = system();
+    let pool = crate::mm::pool::usage().blocks;
+    // SAFETY: the System process, here and below.
+    let block = || unsafe { process.add(layout::QUOTA_BLOCK).cast::<usize>().read() };
+    for amount in [0, 4096, usize::MAX] {
+        // SAFETY: as above.
+        unsafe {
+            if PsChargeProcessPagedPoolQuota(process.cast(), amount) != STATUS_SUCCESS {
+                return Err("the System process was refused quota");
+            }
+            PsReturnProcessPagedPoolQuota(process.cast(), amount);
+        }
+    }
+    if block() != 0 || crate::mm::pool::usage().blocks != pool {
+        return Err("charging the System process left something behind");
     }
     Ok(())
 }

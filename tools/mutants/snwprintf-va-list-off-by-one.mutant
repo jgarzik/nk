@@ -1,0 +1,8 @@
+# _snwprintf hands _vsnwprintf a va_list that starts at its last named
+# argument, not after it: every argument of the format is the one
+# before.
+scenario: aarch64
+fails: rtl.printf
+file: kernel/rtl/print.rs
+replace:             args.add(3),
+with:             args.add(2),

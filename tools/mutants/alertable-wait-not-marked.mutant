@@ -1,0 +1,6 @@
+# A thread in an alertable wait is not marked as such: an alert is left
+# for a later wait and the one in progress sleeps on.
+scenario: x86_64
+fails: wait.alert
+file: kernel/ke/wait.rs
+remove:         misc_flags(me).fetch_or(MISC_FLAG_ALERTABLE, Ordering::Relaxed);

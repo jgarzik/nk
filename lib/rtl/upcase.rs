@@ -298,9 +298,20 @@ pub fn equal_unicode_string(a: &[u16], b: &[u16], ignore_case: bool) -> bool {
 /// `RtlPrefixUnicodeString`: whether `string` starts with `prefix`. A
 /// string is a prefix of itself, and the empty string of every string.
 pub fn prefix_unicode_string(prefix: &[u16], string: &[u16], ignore_case: bool) -> bool {
-    string
-        .get(..prefix.len())
-        .is_some_and(|head| compare_unicode_string(prefix, head, ignore_case) == 0)
+    prefix_units(prefix.iter().copied(), string.iter().copied(), ignore_case)
+}
+
+/// The same for strings given as their units in order, which are read
+/// no further than the first two that differ.
+pub fn prefix_units(
+    prefix: impl ExactSizeIterator<Item = u16>,
+    string: impl ExactSizeIterator<Item = u16>,
+    ignore_case: bool,
+) -> bool {
+    prefix.len() <= string.len()
+        && prefix
+            .zip(string)
+            .all(|(x, y)| fold(x, ignore_case) == fold(y, ignore_case))
 }
 
 #[cfg(test)]
@@ -487,6 +498,9 @@ mod tests {
             ("b", "abc", false, false),
             ("\\Device\\", "\\DEVICE\\NamedPipe", false, true),
             ("a", "", false, false),
+            ("ac", "abc", false, false),
+            // By the system's table, not ASCII alone.
+            ("\u{C9}", "\u{E9}x", false, true),
         ] {
             let (prefix, string) = (w(prefix), w(string));
             assert_eq!(

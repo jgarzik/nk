@@ -1,0 +1,6 @@
+# The reference a driver takes for WMI on its physical device object is
+# never given back: the device object can never go away.
+scenario: x86_64
+fails: wmi.pdo
+file: kernel/io/wmi.rs
+remove:                 unsafe { ob::object::dereference(pdo as *mut u8) };

@@ -1,0 +1,6 @@
+# A stop calls none of the drivers' bugcheck callbacks: what they keep
+# for that moment is never asked for.
+scenario: x86_64-neg-bugcheck-callback
+fails: scenario
+file: kernel/kd/mod.rs
+remove:     unsafe { crate::ke::bugcheck::run_callbacks() };

@@ -94,6 +94,12 @@ call's arguments one array and pass its address on:
   point included, then on the stack; pushing the eight registers
   directly below the stack arguments completes it.
 
+A `va_list` is the address of such an array on both architectures:
+Windows declares it `char *`, `va_start` points it at the first unnamed
+argument, and every argument takes eight bytes. So `_vsnwprintf`, which
+takes one, is an ordinary function, and `_snwprintf` calls it with the
+address of what follows its three named arguments.
+
 The formatting itself is `nk_rtl::format`, tested on the host: flags,
 width, precision, the Microsoft size prefixes (`I64`, `w`, `h`), `%p` as
 sixteen upper-case digits, strings of either width, counted strings.
@@ -179,8 +185,16 @@ it on the fields they share.
 the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
 `gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number.
 Security descriptors (absolute and self-relative), ACL and SID headers
-agree too. A structure is added to the
-comparison by the commit that starts using it.
+agree too. So do the fields of the thread and process blocks that NK
+keeps (`lib/ntabi/thread.rs`, `process.rs`): among them a thread's
+alert state (`Alerted`, `MiscFlags.Alertable`, `WaitMode`), its base
+priority and `Saturation`, the silo it is attached to (`ETHREAD.Silo`)
+and where its impersonation would be (`ClientSecurity`,
+`CrossThreadFlags.ActiveImpersonationInfo`); a process's base priority,
+`Session`, `Job` and `ServerSilo`; and `KAPC_STATE`. Microsoft's
+`npfs.sys`, `msfs.sys` and `msrpc.sys` read none of the current
+thread's fields in line: they go through exports. A structure is added
+to the comparison by the commit that starts using it.
 
 `AUX_ACCESS_DATA` is such a private layout that a driver nevertheless
 allocates: whoever calls `SeCreateAccessState` supplies the room, 0xE0
@@ -191,6 +205,16 @@ arm64 kernels or symbols. arm64 uses the documented structures, the facts
 the WDK compiles into the probe, and layouts of NK's own for whatever no
 available binary can observe.
 
+The executive's structures that live in a driver's memory (`ERESOURCE`,
+`OWNER_ENTRY`, the lookaside lists, `SLIST_HEADER`) are documented ones:
+the probe states them for both architectures and the symbols agree on
+x86-64. The bits of a push lock's word are the symbols'
+(`_EX_PUSH_LOCK`), on both architectures: no header declares them, and
+only the kernel's routines look inside the word. `EX_TIMER` is in
+neither the headers nor the symbols; all a driver may do with one is
+wait on its address, so NK's begins with a `KTIMER` and is otherwise
+its own.
+
 ## Not yet verified
 
 - `SE_EXPORTS` past `SeUserModeDriversSid` (0x210). Up to there, the
@@ -200,6 +224,9 @@ available binary can observe.
   size (0x230), are what NK takes the Windows 10 kernel to publish; the
   current WDK's header has grown further (0x260), so the probe cannot
   say, and no fixture reads them yet.
+- `SILO_MONITOR_REGISTRATION` (`lib/ntabi/silo.rs`). Its layout is
+  `ntddk.h`'s and agrees with the offsets the Windows 10 kernel reads
+  it at; the WDK probe has no line for it.
 
 - The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
   documented convention; no symbol file, probe fact or fixture driver

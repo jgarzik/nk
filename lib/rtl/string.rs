@@ -15,7 +15,7 @@
 //!
 //! - a terminator is written by the copy and append routines exactly
 //!   when two bytes remain after the new `Length`;
-//! - `RtlStringFromGUID` prints upper-case digits;
+//! - `RtlStringFromGUID` prints lower-case digits;
 //! - `RtlConvertSidToUnicodeString` prints an identifier authority of
 //!   2^32 or more as `0x` and twelve lower-case digits, a smaller one
 //!   in decimal, and the revision in decimal;
@@ -73,16 +73,16 @@ pub fn guid_text(data1: u32, data2: u16, data3: u16, data4: &[u8; 8]) -> [u16; G
     let mut out = [0u16; GUID_TEXT_LENGTH];
     let mut at = 0;
     push_text(&mut out, &mut at, "{");
-    push_number(&mut out, &mut at, u64::from(data1), 16, 8, true);
+    push_number(&mut out, &mut at, u64::from(data1), 16, 8, false);
     for group in [data2, data3] {
         push_text(&mut out, &mut at, "-");
-        push_number(&mut out, &mut at, u64::from(group), 16, 4, true);
+        push_number(&mut out, &mut at, u64::from(group), 16, 4, false);
     }
     for (i, &byte) in data4.iter().enumerate() {
         if i == 0 || i == 2 {
             push_text(&mut out, &mut at, "-");
         }
-        push_number(&mut out, &mut at, u64::from(byte), 16, 2, true);
+        push_number(&mut out, &mut at, u64::from(byte), 16, 2, false);
     }
     push_text(&mut out, &mut at, "}");
     out
@@ -250,10 +250,11 @@ pub fn append_unicode_string(
 }
 
 /// [`RtlCompareMemory`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlcomparememory):
-/// how many bytes, from the start, the two blocks have in common. The
-/// routine's `Length` is the length of both slices.
-pub fn compare_memory(a: &[u8], b: &[u8]) -> usize {
-    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+/// how many bytes, from the start, the two blocks have in common. Each
+/// block is given as its bytes in order, the routine's `Length` of
+/// them; none is read after the first that differs.
+pub fn compare_memory(a: impl Iterator<Item = u8>, b: impl Iterator<Item = u8>) -> usize {
+    a.zip(b).take_while(|(x, y)| x == y).count()
 }
 
 #[cfg(test)]
@@ -304,12 +305,12 @@ mod tests {
                     0x11CE,
                     [0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18],
                 ),
-                "{4D36E96C-E325-11CE-BFC1-08002BE10318}",
+                "{4d36e96c-e325-11ce-bfc1-08002be10318}",
             ),
             ((0, 0, 0, [0; 8]), "{00000000-0000-0000-0000-000000000000}"),
             (
                 (u32::MAX, u16::MAX, u16::MAX, [0xFF; 8]),
-                "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
+                "{ffffffff-ffff-ffff-ffff-ffffffffffff}",
             ),
             (
                 (
@@ -318,7 +319,7 @@ mod tests {
                     0x3,
                     [0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B],
                 ),
-                "{00000001-0002-0003-0405-060708090A0B}",
+                "{00000001-0002-0003-0405-060708090a0b}",
             ),
         ];
         for ((d1, d2, d3, d4), expected) in cases {
@@ -551,7 +552,19 @@ mod tests {
             (b"abc", b"ab", 2),
             (b"\0\0", b"\0\x01", 1),
         ] {
-            assert_eq!(compare_memory(a, b), expected, "{a:?} {b:?}");
+            assert_eq!(
+                compare_memory(a.iter().copied(), b.iter().copied()),
+                expected,
+                "{a:?} {b:?}"
+            );
         }
+        // Nothing is read after the first difference.
+        let poisoned = |bytes: &'static [u8]| {
+            bytes
+                .iter()
+                .copied()
+                .chain(core::iter::from_fn(|| panic!("read past the difference")))
+        };
+        assert_eq!(compare_memory(poisoned(b"abc"), poisoned(b"abd")), 2);
     }
 }

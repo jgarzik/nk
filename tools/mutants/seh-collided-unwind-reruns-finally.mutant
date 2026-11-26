@@ -2,6 +2,6 @@
 # the block runs: an unwind that begins inside the block takes the
 # first one over and runs the block again.
 scenario: aarch64
-fails: oracle.nkc-seh
+fails: scenario
 file: kernel/ke/seh.rs
 remove:                     (&raw mut (*dispatcher).ScopeIndex).write(index);

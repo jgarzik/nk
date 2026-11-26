@@ -1,0 +1,8 @@
+# The store never finds a descriptor it holds: every logging makes a
+# new copy, so a file system that compares the pointers it was given
+# (the same descriptor, the same pointer) sees strangers.
+scenario: x86_64
+fails: ob.security-store
+file: lib/ob/descriptors.rs
+replace:                 if (*entry).hash == hash && Entry::bytes(entry) == bytes {
+with:                 if false {

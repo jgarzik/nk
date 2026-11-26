@@ -1,0 +1,6 @@
+# hal.dll is missing from the list of loaded modules: a driver that looks
+# for the second module Windows always has finds another.
+scenario: x86_64
+fails: ex.sysinfo.modules
+file: kernel/ex/sysinfo.rs
+remove:                 (Origin::System, b"hal.dll"),

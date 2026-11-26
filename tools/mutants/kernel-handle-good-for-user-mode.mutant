@@ -1,0 +1,7 @@
+# A kernel handle names its entry for user mode too: a requestor in
+# user mode reaches whatever the kernel has open by guessing a number.
+scenario: x86_64
+fails: ob.handle-access
+file: kernel/ob/handle.rs
+replace:     let index = handle_index(handle, mode == Mode::Kernel).ok_or(STATUS_INVALID_HANDLE)?;
+with:     let index = handle_index(handle, true).ok_or(STATUS_INVALID_HANDLE)?;

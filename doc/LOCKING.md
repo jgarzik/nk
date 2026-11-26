@@ -60,18 +60,24 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
+| 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
-| 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
+| 35 | `ob::handle::TABLE` | which object each handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
-| 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
+| 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
+| 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
+| 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links and state, and the priority each is queued at | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
+| 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
+| 233 | `ps::silo::HOST` | which silo context slots are allocated, and the context the host silo holds in each | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
+| 242 | `ke::bugcheck::RECORDS` | the list of bugcheck callback records drivers registered, and each record's links and state | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
@@ -95,9 +101,16 @@ Why this order:
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
   old block is freed after the lock is dropped.
+- WMI's lock covers its lists and nothing else: a device is referenced
+  before it is entered and released after it is taken out, the worker
+  is queued after the lock is dropped, and a driver is sent its
+  registration request with no lock held. Like the tables above the
+  pool, the lists allocate from it under the lock.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
-  memory is read and written outside it.
+  memory is read and written outside it. No routine of a driver's runs
+  under it: a query table takes it for each read and gives the routine
+  copies.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
   dropped under the handle table's lock, nor is its type told of a
@@ -114,12 +127,30 @@ Why this order:
 - A work queue's lock covers only linking and unlinking items. The
   semaphore that wakes a worker is released after the lock is dropped,
   and no work routine runs with it held.
+- A queue of push-lock waiters is locked only to link a waiter, or to
+  take waiters off and store the lock's word. Nothing is taken inside
+  it: the waiters' events are set, and so the ready queues locked,
+  after it is dropped. The queues share a rank and no two are held
+  together.
+- The UUID lock is held while one UUID's time is chosen, reading the
+  clock and nothing else; nothing is taken inside it.
 - A timer table's lock owns a pending timer's links, due time,
   processor and `Inserted` bit. Expiry holds it while it takes a due
   timer out and puts a periodic one back, then drops it before queueing
   the timer's DPC. No two tables are held together: a timer moves from
   one processor's table to another's by leaving the first under its lock
   and entering the second under its own.
+- The store of security descriptors is searched and changed under its
+  lock and nothing else is done there: a descriptor's block is
+  allocated before the lock is taken and freed after it is dropped, so
+  the pool's lock, though it ranks below, is never wanted inside. A
+  descriptor's count is raised without the lock by whoever already
+  holds a reference, and lowered only under it, so a count that
+  reaches zero there finds the entry still in its bucket to take out.
+- The silo lock is held to read or change one word of the slot table
+  or of the host silo's storage. A context's reference is taken before
+  the lock and dropped after it, never inside: dropping the last calls
+  the driver's cleanup routine.
 - An object's header lock is the `Lock` word of its `OBJECT_HEADER`,
   where Windows has it, not a `SpinLock`: its holder spins on the word,
   and the hold is ranked and recorded all the same (`ke::Ranked`). It
@@ -130,6 +161,10 @@ Why this order:
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.
+- A bugcheck callback record is registered and taken back at any IRQL,
+  so the list's lock is held at `HIGH_LEVEL`; it covers a few pointer
+  writes and nothing is taken inside it. The stop itself walks the list
+  without the lock: no other processor runs.
 - The table of loaded images is searched from any context, a fault
   handler included, so it is held at `HIGH_LEVEL` and holds no memory:
   nothing but the console is taken inside it.
@@ -155,8 +190,9 @@ thread can sleep on. Spin locks stand in for those; they are stricter,
 never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
-path that stops the system uses it, on the console and on the table of
-loaded images, and never returns.
+path that stops the system uses it, on the console, the table of
+loaded images and the list of bugcheck callback records, and never
+returns.
 
 ### The loader's mutex
 
@@ -177,6 +213,17 @@ owner).
 - A library's `DllInitialize` and `DllUnload` run with it held, as on
   Windows, where the system's load lock is held around them. A driver's
   entry point and unload routine run without it.
+
+### The silo monitors' mutex
+
+Starting and unregistering silo monitors are serialised by a kernel
+mutex, `ps::silo::MONITORS`, as Windows serialises them with a lock a
+thread can sleep on: the monitor's create and terminate callbacks run
+with it held, at `PASSIVE_LEVEL`, and may wait. It is taken with no
+spin lock held and nothing ranked is held across a callback. An
+exception that unwinds a callback releases it (the guard of that call,
+`doc/DESIGN.md`). What a monitor's slot holds is let go after the mutex
+is released.
 
 ### Per-processor state
 
@@ -224,6 +271,22 @@ rules stand in for the lock:
   of the one before it, or frees it if it exited. A thread never frees
   its own stack.
 
+A thread's priority can be changed by another thread while the thread
+runs, waits or is queued, and no one lock covers all three. Two rules
+do:
+
+- **One change at a time.** Whoever changes a thread's priority holds
+  that thread's own lock (its header's object lock, below) for the
+  whole change, and takes a ready queue's lock inside it.
+- **Write, then look; publish, then read.** The changer writes the
+  priority and then looks whether the thread is queued. A processor
+  queueing a thread marks it queued, under its queue's lock, and then
+  reads the priority. Whatever the interleaving, one of the two sees
+  the other: either the queueing processor reads the new priority, or
+  the changer finds the thread queued and moves it, under that queue's
+  lock. So a thread is never left queued at a priority it no longer
+  has.
+
 A thread at `DISPATCH_LEVEL` or above is never switched away from:
 preemption happens only at the end of an interrupt that returns below
 `DISPATCH_LEVEL`. So a held spin lock, which raises the IRQL, also pins
@@ -250,6 +313,15 @@ For a timer the lock also serialises setting and cancelling. Expiry
 takes the timer out under the table's lock, lets go, and only then takes
 the timer's own lock to signal it; a timer that was set again in
 between is left alone.
+
+A thread's lock also serialises changes of its priority ("Switching
+threads" above): a ready queue's lock is taken inside it. And it
+covers the thread's alert state (`Alerted`, `Alertable`, `WaitMode`).
+A thread takes its own lock, holding no other, to say its wait is
+alertable, after looking for an alert left for it, and again to say
+the wait is over; an alerter takes it to claim such a wait through the
+wait register or else to leave the alert. So an alert either ends the
+wait in progress or is found by the next: none falls between.
 
 A mutex's lock also covers its owner and its place in the owner's list
 of mutexes held. A thread being let in to a mutex while it sleeps has
@@ -325,6 +397,28 @@ none of its ranked locks while holding it, except through what the
 driver's routine calls; the cancel routine of a cancel-safe queue
 releases it before it takes the queue's lock.
 
+### Locks a driver's thread sleeps on
+
+A push lock (`kernel/ex/pushlock.rs`) is one word the driver owns, with
+Windows' bits; NK changes it only by compare-and-swap through the
+driver's pointer. A thread that cannot have it sleeps: the routines
+are for `PASSIVE_LEVEL` and `APC_LEVEL`, and a wait at `DISPATCH_LEVEL`
+stops the system like any other. They leave the IRQL and the thread's
+APC state alone. As on Windows it is the caller that enters a critical
+region first, so that the holder cannot be suspended; NK queues no
+APCs and does not check that it did. The waiters are in NK's own
+queues (rank 215), not chained through the word as Windows chains
+them.
+
+A resource (`ERESOURCE`, `kernel/ex/resource.rs`) keeps its state in
+the driver's structure under the structure's own `SpinLock`, a
+`KSPIN_LOCK` like any the driver has: held at `DISPATCH_LEVEL`, not
+ranked or recorded. NK takes none of its ranked locks inside it: the
+owner table is allocated and freed with it dropped, and waiters are
+woken after it. An acquire that may wait is for below `DISPATCH_LEVEL`;
+the queries and an acquire that does not wait work at `DISPATCH_LEVEL`
+too. The critical region is the caller's to enter, as for a push lock.
+
 NK's own rules above are not applied to drivers. A driver that moves the
 IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
@@ -348,3 +442,15 @@ so does NK, with the same bugcheck code.
 - Mutants (`tools/mutants/`): a lock that does not raise the IRQL, a
   rank check that accepts any order, no end-of-interrupt, an IRQL that
   does not move the GIC's mask, a driver lock that does not raise.
+- `lib/ex`: the push lock's transitions, every interleaving of three
+  threads; `ex.pushlock.*`: on the booted kernel a waiter is woken for
+  each pairing of shared and exclusive, readers that waited get in
+  together, and threads taking the lock every way at once keep a
+  writer alone. Mutants: a releaser that wakes nobody, one that wakes
+  a single reader.
+- `lib/ex`: the resource's rules, and every interleaving of its
+  hand-over; `ex.resource.*`: recursion both ways, a waiter of each
+  kind let in as owner, the starving and yielding acquisitions, an
+  owner table that grows, and contention. Mutants: a waiter let in
+  but not woken, one woken but not recorded, a table grown without
+  its owners.

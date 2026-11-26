@@ -30,6 +30,18 @@ pub const KERNEL_STACK: usize = 0x58;
 /// `Running`: one byte, non-zero while a processor is on this thread's
 /// stack.
 pub const RUNNING: usize = 0x71;
+/// `Alerted`: two bytes, one per processor mode (kernel, then user),
+/// non-zero while an alert in that mode is waiting for the thread's
+/// next alertable wait.
+pub const ALERTED: usize = 0x72;
+/// `MiscFlags`: 32 bits of flags, of which NK keeps
+/// [`MISC_FLAG_ALERTABLE`].
+pub const MISC_FLAGS: usize = 0x74;
+/// `MiscFlags.Alertable`: the thread is in a wait an alert may end.
+pub const MISC_FLAG_ALERTABLE: u32 = 1 << 4;
+/// `WaitMode`: the processor mode of the thread's alertable wait, one
+/// signed byte.
+pub const WAIT_MODE: usize = 0x187;
 /// `Priority`: the current priority, one signed byte.
 pub const PRIORITY: usize = 0xC3;
 /// `WaitListEntry`: links the thread into a ready queue.
@@ -40,6 +52,18 @@ pub const STATE: usize = 0x184;
 pub const NEXT_PROCESSOR: usize = 0x218;
 /// `BasePriority`: one signed byte.
 pub const BASE_PRIORITY: usize = 0x233;
+/// `Saturation`: one signed byte, 1 while the thread's base priority
+/// is the time-critical step, -1 while it is the idle step, else 0.
+pub const SATURATION: usize = 0x285;
+/// `ETHREAD.ClientSecurity`: the token the thread impersonates and how
+/// (a `PS_CLIENT_SECURITY_CONTEXT`, one pointer-sized word). Zero: no
+/// thread impersonates.
+pub const CLIENT_SECURITY: usize = 0x4A8;
+/// `ETHREAD.CrossThreadFlags`: 32 bits of flags, of which
+/// [`ACTIVE_IMPERSONATION_INFO`] says the thread impersonates.
+pub const CROSS_THREAD_FLAGS: usize = 0x510;
+/// `CrossThreadFlags.ActiveImpersonationInfo`.
+pub const ACTIVE_IMPERSONATION_INFO: u32 = 1 << 3;
 /// `Timer`: the thread's own `KTIMER`, for waits with a time limit.
 pub const TIMER: usize = 0x100;
 /// `WaitBlock`: four `KWAIT_BLOCK`s.
@@ -65,6 +89,9 @@ pub const START_ADDRESS: usize = 0x450;
 pub const APC_STATE_PROCESS: usize = 0xB8;
 /// `Process`: the process the thread belongs to.
 pub const PROCESS: usize = 0x220;
+/// `ETHREAD.Silo`: the silo the thread is attached to, a pointer, or
+/// `silo::THREAD_NOT_ATTACHED` for none.
+pub const SILO: usize = 0x608;
 /// `ETHREAD.Cid`: a `CLIENT_ID`, the process id then the thread id,
 /// each pointer-sized.
 pub const CID: usize = 0x478;

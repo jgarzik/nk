@@ -1,0 +1,8 @@
+# A new subkey is put last instead of in its place among the names: every
+# key is still found by name, and only what enumerates subkeys by index
+# sees them in the order they were created, not Windows' order.
+scenario: x86_64
+fails: cm.enumerate.keys
+file: lib/cm/lib.rs
+replace:         self.keys[key].children.insert(at, new);
+with:         self.keys[key].children.push(new);

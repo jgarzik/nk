@@ -12,12 +12,22 @@ pub static GROUP: Group = Group {
         "ob.handles",
         "ob.thread",
         "ps.system",
+        "ps.identity",
+        "ps.attach",
+        "ps.thread-information",
+        "ps.quota",
         "ps.token",
         "ob.namespace.paths",
+        "ps.silo",
+        "ps.silo-monitor",
+        "ps.silo-smp",
         "ob.namespace.links",
         "ob.namespace.name-info",
         "ob.handle-access",
+        "ob.event-handle",
         "ob.security",
+        "ob.security-store",
+        "ob.security-store-smp",
     ],
     run,
     manual: false,
@@ -49,9 +59,36 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("ps.system", crate::ps::process::self_test);
     counted(
         r,
+        "ps.identity",
+        "questions:",
+        crate::ps::process::identity_test(),
+    );
+    r.check("ps.attach", crate::ps::process::attach_test);
+    counted(
+        r,
+        "ps.thread-information",
+        "calls:",
+        crate::ps::thread_information_test(),
+    );
+    r.check("ps.quota", crate::ps::process::quota_test);
+    counted(
+        r,
         "ps.token",
         "references taken:",
         crate::ps::process::token_test(),
+    );
+    counted(r, "ps.silo", "calls:", crate::ps::silo::self_test());
+    counted(
+        r,
+        "ps.silo-monitor",
+        "calls:",
+        crate::ps::silo::monitor_test(),
+    );
+    counted(
+        r,
+        "ps.silo-smp",
+        "monitors on several processors:",
+        crate::ps::silo::smp_test(),
     );
     counted(
         r,
@@ -67,5 +104,23 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     r.check("ob.namespace.name-info", crate::ob::name_info_test);
     counted(r, "ob.handle-access", "look-ups:", handle::access_test());
+    counted(
+        r,
+        "ob.event-handle",
+        "waits by handle:",
+        crate::ob::event::self_test(),
+    );
     r.check("ob.security", crate::ob::security::self_test);
+    counted(
+        r,
+        "ob.security-store",
+        "descriptors logged:",
+        crate::ob::security::store_test(),
+    );
+    counted(
+        r,
+        "ob.security-store-smp",
+        "descriptors logged on several processors:",
+        crate::ob::security::store_smp_test(),
+    );
 }

@@ -147,6 +147,20 @@ impl ObjectType {
         )
     }
 
+    /// How many bytes of NK's own an object of this type carries at
+    /// the very front of its block, before any header: a silo context
+    /// has a record there (`ps::silo`). A multiple of the pool's
+    /// alignment, so the header after it stays aligned.
+    fn own_front(&self) -> usize {
+        let has_record = core::ptr::eq(self, &raw const SILO_CONTEXT_PAGED_TYPE)
+            || core::ptr::eq(self, &raw const SILO_CONTEXT_NONPAGED_TYPE);
+        if has_record {
+            crate::ps::silo::CONTEXT_RECORD
+        } else {
+            0
+        }
+    }
+
     /// Whether the type's delete procedure must run at `PASSIVE_LEVEL`:
     /// a file's sends its driver the close request.
     fn deletes_at_passive(&self) -> bool {
@@ -172,6 +186,9 @@ static DIRECTORY_NAME: [u16; 9] = wide(b"Directory");
 static SYMBOLIC_LINK_NAME: [u16; 12] = wide(b"SymbolicLink");
 static DRIVER_NAME: [u16; 6] = wide(b"Driver");
 static FILE_NAME: [u16; 4] = wide(b"File");
+static JOB_NAME: [u16; 3] = wide(b"Job");
+static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
+static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
 /// Events (`KEVENT`).
 pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
@@ -226,8 +243,26 @@ pub static FILE_TYPE: ObjectType = ObjectType::new(
 .closing(crate::io::file::handle_closed)
 .rights(nk_ntabi::io::FILE_GENERIC_MAPPING);
 
+/// Silo contexts (`ps::silo`): what a driver keeps per silo. Windows
+/// has one type for contexts made from paged pool and one for the
+/// rest; a context's routine is called when its last reference goes.
+pub static SILO_CONTEXT_PAGED_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 10,
+    &SILO_CONTEXT_PAGED_NAME,
+    Some(crate::ps::silo::context_deleted),
+);
+pub static SILO_CONTEXT_NONPAGED_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 11,
+    &SILO_CONTEXT_NONPAGED_NAME,
+    Some(crate::ps::silo::context_deleted),
+);
+
+/// Jobs (`EJOB`). The type is there for drivers to name: no job is
+/// ever made, so no object has it and no handle names one.
+pub static JOB_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 12, &JOB_NAME, None);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 10] = [
+static TYPES: [&ObjectType; 13] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -238,6 +273,9 @@ static TYPES: [&ObjectType; 10] = [
     &SYMBOLIC_LINK_TYPE,
     &DRIVER_TYPE,
     &FILE_TYPE,
+    &SILO_CONTEXT_PAGED_TYPE,
+    &SILO_CONTEXT_NONPAGED_TYPE,
+    &JOB_TYPE,
 ];
 
 /// What hides type indices in object headers. Chosen once, before the
@@ -269,6 +307,13 @@ pub static PsThreadType: TypeVariable = TypeVariable(&raw const THREAD_TYPE);
 /// `IoDeviceObjectType` (`wdm.h`): what a driver passes to insist on a
 /// device.
 pub static IoDeviceObjectType: TypeVariable = TypeVariable(&raw const DEVICE_TYPE);
+
+/// [`PsJobType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetjobsilo):
+/// what a driver passes to insist on a job. A file system asks for the
+/// job behind a handle a requestor gave it, to find the job's silo;
+/// with no jobs, every such handle names something else and is refused
+/// as the wrong type.
+pub static PsJobType: TypeVariable = TypeVariable(&raw const JOB_TYPE);
 
 impl TypeVariable {
     /// The address drivers import.
@@ -315,19 +360,33 @@ pub unsafe fn name_info(body: *mut u8) -> *mut OBJECT_HEADER_NAME_INFO {
     header.cast::<OBJECT_HEADER_NAME_INFO>().wrapping_sub(1)
 }
 
-/// Where the pool block of an object begins: at its name information
-/// if it has any, else at its header.
+/// Where the pool block of an object begins: at what its type keeps in
+/// front (`ObjectType::own_front`), then its name information if it
+/// has any, then its header.
 ///
 /// # Safety
 /// As [`name_info`].
 unsafe fn block(body: *mut u8) -> *mut u8 {
     // SAFETY: per the contract.
-    let info = unsafe { name_info(body) };
-    if info.is_null() {
-        header(body).cast()
-    } else {
-        info.cast()
+    unsafe {
+        let info = name_info(body);
+        let headers: *mut u8 = if info.is_null() {
+            header(body).cast()
+        } else {
+            info.cast()
+        };
+        headers.sub(type_of(body).own_front())
     }
+}
+
+/// The record an object's type keeps at the front of the object's
+/// block (`ObjectType::own_front`).
+///
+/// # Safety
+/// `body` is a live object of a type that keeps one.
+pub unsafe fn own_record(body: *mut u8) -> *mut u8 {
+    // SAFETY: per the contract.
+    unsafe { block(body) }
 }
 
 /// Allocate a zeroed object of `size` bytes and type `ty`, with one
@@ -345,10 +404,14 @@ pub fn create_named(ty: &'static ObjectType, size: usize, name: &[u16]) -> Optio
 }
 
 fn allocate(ty: &'static ObjectType, size: usize, name: Option<&[u16]>) -> Option<*mut u8> {
-    let front = match name {
-        Some(_) => size_of::<OBJECT_HEADER_NAME_INFO>(),
-        None => 0,
-    };
+    let own = ty.own_front();
+    let named = name.is_some();
+    let front = own
+        + if named {
+            size_of::<OBJECT_HEADER_NAME_INFO>()
+        } else {
+            0
+        };
     let name = name.unwrap_or(&[]);
     // A counted string's length is 16 bits.
     let name_bytes = u16::try_from(name.len() * 2).ok()?;
@@ -358,9 +421,10 @@ fn allocate(ty: &'static ObjectType, size: usize, name: Option<&[u16]>) -> Optio
     if block.is_null() {
         return None;
     }
-    // SAFETY: a fresh, zeroed block large enough for the name
-    // information, the header and the name, which the pool aligns to 16
-    // bytes; the name information's size keeps the header so aligned.
+    // SAFETY: a fresh, zeroed block large enough for the type's own
+    // record, the name information, the header and the name, which the
+    // pool aligns to 16 bytes; the sizes of what precedes the header
+    // keep it so aligned.
     unsafe {
         let header = block.add(front).cast::<OBJECT_HEADER>();
         (&raw mut (*header).PointerCount).write(1);
@@ -369,8 +433,8 @@ fn allocate(ty: &'static ObjectType, size: usize, name: Option<&[u16]>) -> Optio
             COOKIE.load(Ordering::Relaxed),
             header as u64,
         ));
-        if front != 0 {
-            let info = block.cast::<OBJECT_HEADER_NAME_INFO>();
+        if named {
+            let info = block.add(own).cast::<OBJECT_HEADER_NAME_INFO>();
             let buffer = block.add(characters).cast::<u16>();
             buffer.copy_from_nonoverlapping(name.as_ptr(), name.len());
             (&raw mut (*info).Name).write(UNICODE_STRING {
@@ -631,6 +695,7 @@ pub fn type_test() -> Result<(), &'static str> {
         (&ExEventObjectType, "Event", EVENT_TYPE.0.Index),
         (&PsThreadType, "Thread", THREAD_TYPE.0.Index),
         (&IoDeviceObjectType, "Device", DEVICE_TYPE.0.Index),
+        (&PsJobType, "Job", JOB_TYPE.0.Index),
     ] {
         // SAFETY: the variable holds the address of a static type.
         let ty = unsafe { &*variable.value() };
@@ -642,6 +707,12 @@ pub fn type_test() -> Result<(), &'static str> {
         }
         if ty.0.Index != index || index < FIRST_TYPE_INDEX {
             return Err("a type has the wrong index");
+        }
+    }
+    // Every type is known by its index, and no two share one.
+    for (at, ty) in TYPES.iter().enumerate() {
+        if usize::from(ty.0.Index) != usize::from(FIRST_TYPE_INDEX) + at {
+            return Err("a type is not listed under its index");
         }
     }
     // Objects big enough to get pages of their own, so their headers'

@@ -1,0 +1,7 @@
+# A classic provider is registered without the callback through which
+# alone it could ever learn that a session wants it.
+scenario: x86_64
+fails: etw.classic
+file: kernel/etw/mod.rs
+replace:     if callback.is_none() {
+with:     if callback.is_none() && false {
