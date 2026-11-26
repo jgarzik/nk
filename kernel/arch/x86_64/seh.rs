@@ -15,6 +15,11 @@
 //!   dispatcher context in use, so that an exception raised inside the
 //!   handler finds the dispatch it interrupted;
 //! - `nk_restore_context`: resume at the end of an unwind.
+//!
+//! And `nk_fault_copy`, the one place NK touches memory that may not be
+//! there (a requestor's buffer): a fault inside it is not an exception
+//! but an error it returns, because the trap handler knows the
+//! instruction ([`fixup`]) and resumes the routine at its way out.
 
 use core::arch::global_asm;
 use core::ffi::c_void;
@@ -176,6 +181,59 @@ nk_guarded_call:
     nk_call_handler nk_call_handler_search, {nested_handler}
     nk_call_handler nk_call_handler_unwind, {collided_handler}
 
+    .globl nk_fault_copy
+    .globl nk_fault_copy_access
+    .globl nk_fault_copy_access_end
+    .globl nk_fault_copy_fixup
+// rcx: destination. rdx: source. r8: bytes. r9: two words for a fault's
+// address and kind. Copies, and returns 0; or, if a byte of either
+// range cannot be read or written, fills in the two words and returns 1.
+// The trap handler resumes a fault in the one instruction that touches
+// the ranges at `nk_fault_copy_fixup`, with the address in rax and the
+// kind in rdx.
+nk_fault_copy:
+    .seh_proc nk_fault_copy
+    push rsi
+    .seh_pushreg rsi
+    push rdi
+    .seh_pushreg rdi
+    .seh_endprologue
+    mov rdi, rcx
+    mov rsi, rdx
+    mov rcx, r8
+nk_fault_copy_access:
+    rep movsb
+nk_fault_copy_access_end:
+    xor eax, eax
+2:  pop rdi
+    pop rsi
+    ret
+nk_fault_copy_fixup:
+    mov [r9], rax
+    mov [r9 + 8], rdx
+    mov eax, 1
+    jmp 2b
+    .seh_endproc
+
+    .globl nk_load_xmm6_to_15
+// rcx: ten 16-byte values. Loads them into xmm6-xmm15: the registers a
+// trap frame does not hold, for a context a handler changed.
+nk_load_xmm6_to_15:
+    .seh_proc nk_load_xmm6_to_15
+    .seh_endprologue
+    movups xmm6, xmmword ptr [rcx + 0x00]
+    movups xmm7, xmmword ptr [rcx + 0x10]
+    movups xmm8, xmmword ptr [rcx + 0x20]
+    movups xmm9, xmmword ptr [rcx + 0x30]
+    movups xmm10, xmmword ptr [rcx + 0x40]
+    movups xmm11, xmmword ptr [rcx + 0x50]
+    movups xmm12, xmmword ptr [rcx + 0x60]
+    movups xmm13, xmmword ptr [rcx + 0x70]
+    movups xmm14, xmmword ptr [rcx + 0x80]
+    movups xmm15, xmmword ptr [rcx + 0x90]
+    ret
+    .seh_endproc
+
     .globl nk_restore_context
 // rcx: a CONTEXT. Continue at its `rip` with its stack pointer, the
 // registers a call preserves and `rax`. The stack pointer is loaded
@@ -238,6 +296,11 @@ unsafe extern "C" {
         handler: Handler,
     ) -> u32;
     fn nk_restore_context(context: *const Context) -> !;
+    fn nk_fault_copy(to: *mut u8, from: *const u8, len: usize, fault: *mut [u64; 2]) -> u64;
+    fn nk_load_xmm6_to_15(values: *const M128A);
+    static nk_fault_copy_access: u8;
+    static nk_fault_copy_access_end: u8;
+    static nk_fault_copy_fixup: u8;
     pub fn nk_entry_ExRaiseStatus(status: i32);
     pub fn nk_entry_ExRaiseAccessViolation();
     pub fn nk_entry_ExRaiseDatatypeMisalignment();
@@ -315,6 +378,50 @@ pub unsafe fn call_handler_unwind(
 pub unsafe fn restore_context(context: &Context) -> ! {
     // SAFETY: per the contract.
     unsafe { nk_restore_context(context) }
+}
+
+/// Copy `len` bytes from `from` to `to`, either of which may be memory
+/// that is not mapped or not writable. `Err` is the address that
+/// faulted and the kind of access (`ke::seh::ACCESS_*`); some bytes may
+/// have been copied by then.
+///
+/// # Safety
+/// Whatever of the two ranges is mapped may be read and written by the
+/// caller.
+pub unsafe fn fault_copy(to: *mut u8, from: *const u8, len: usize) -> Result<(), (u64, u64)> {
+    let mut fault = [0; 2];
+    // SAFETY: per the contract; a fault is turned into the result.
+    match unsafe { nk_fault_copy(to, from, len, &raw mut fault) } {
+        0 => Ok(()),
+        _ => Err((fault[0], fault[1])),
+    }
+}
+
+/// Where the code at `pc` is to resume after a memory fault, if it is
+/// the access of [`fault_copy`].
+pub fn fixup(pc: u64) -> Option<u64> {
+    let (start, end) = (
+        &raw const nk_fault_copy_access as u64,
+        &raw const nk_fault_copy_access_end as u64,
+    );
+    (start..end)
+        .contains(&pc)
+        .then_some(&raw const nk_fault_copy_fixup as u64)
+}
+
+/// Load xmm6-xmm15 from `context`.
+pub fn load_nonvolatile_vectors(context: &Context) {
+    // SAFETY: ten registers' worth of the context's sixteen, which a
+    // called function is expected to leave as it found them: the caller
+    // is the trap handler, restoring the interrupted code's.
+    unsafe { nk_load_xmm6_to_15(context.FltSave.XmmRegisters[6..].as_ptr()) };
+}
+
+/// Make `context`'s first argument register hold `value`, and move its
+/// stack pointer down by `drop` bytes.
+pub fn repair(c: &mut Context, value: u64, drop: u64) {
+    c.Rcx = value;
+    c.Rsp -= drop;
 }
 
 /// A context with every field zero.

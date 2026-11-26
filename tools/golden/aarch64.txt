@@ -10,6 +10,7 @@ mm.low-half ok
 mm.user.map ok
 mm.user.refused ok
 mm.user.other-cpu ok
+mm.user.copy ok
 mm.pool ok
 mm.stack ok
 hal.cpus ok
@@ -57,6 +58,11 @@ seh.cross.region ok
 seh.cross.irql ok
 seh.cross.reference ok
 seh.cross.nested ok
+seh.fault.read ok
+seh.fault.write ok
+seh.fault.execute ok
+seh.fault.others ok
+seh.fault.continue ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok

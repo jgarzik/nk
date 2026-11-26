@@ -7,17 +7,22 @@
 //! tests stack them around NK's own frames the way driver frames lie
 //! around a kernel routine that calls a driver back, raise at the top,
 //! and check what ran, in what order, and what state came back.
+//!
+//! The same frames around bodies that fault check which processor
+//! faults arrive as exceptions, with what record, and that a handler
+//! which repairs the faulting code's context has it continue.
 
 use crate::arch;
 use crate::arch::seh_test::{
-    Body, REGISTERS_LOST, nk_seh_clobber, nk_seh_edge, nk_seh_finally, nk_seh_no_unwind, nk_seh_try,
+    Body, FAULTS, REGISTERS_LOST, nk_seh_call, nk_seh_clobber, nk_seh_edge, nk_seh_finally,
+    nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try, nk_seh_write,
 };
 use crate::ke::dpc::{KeInitializeDpc, KeInsertQueueDpc};
 use crate::ke::seh::{self, Guard, system_service};
 use crate::ke::{irql, mutex};
 use crate::test::{Group, Report, Slot};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::ke::KDPC;
 use nk_ntabi::seh::EXCEPTION_POINTERS;
@@ -32,6 +37,11 @@ pub static GROUP: Group = Group {
         "seh.cross.irql",
         "seh.cross.reference",
         "seh.cross.nested",
+        "seh.fault.read",
+        "seh.fault.write",
+        "seh.fault.execute",
+        "seh.fault.others",
+        "seh.fault.continue",
     ],
     run,
     manual: false,
@@ -39,9 +49,12 @@ pub static GROUP: Group = Group {
 
 /// A status of the tests' own.
 const CODE: u32 = 0xE04E_4B20;
-/// `EXCEPTION_EXECUTE_HANDLER`, `EXCEPTION_CONTINUE_SEARCH`.
+/// `EXCEPTION_EXECUTE_HANDLER`, `EXCEPTION_CONTINUE_SEARCH`,
+/// `EXCEPTION_CONTINUE_EXECUTION`. A filter told to answer the last
+/// first repairs the context: see [`continue_test`].
 const ACCEPT: i32 = 1;
 const DECLINE: i32 = 0;
+const CONTINUE: i32 = -1;
 
 /// Events, in the order they happened. The low byte says more.
 const FILTER: u32 = 0x100;
@@ -55,9 +68,11 @@ static EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// What the filter answers, by how often it has been asked.
 static ANSWERS: [AtomicI32; 2] = [const { AtomicI32::new(0) }; 2];
 static ASKED: AtomicUsize = AtomicUsize::new(0);
-/// The code and parameter count of the record the filter was last shown.
+/// The code, parameter count and first two parameters of the record the
+/// filter was last shown.
 static SEEN_CODE: AtomicU32 = AtomicU32::new(0);
 static SEEN_PARAMETERS: AtomicU32 = AtomicU32::new(0);
+static SEEN_INFORMATION: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 
 fn note(event: u32) {
     let at = EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -91,21 +106,32 @@ fn happened(expected: &[u32]) -> bool {
 /// Called by `__C_specific_handler` as a filter.
 pub unsafe extern "C" fn filter(pointers: *mut EXCEPTION_POINTERS, _frame: u64) -> i32 {
     // SAFETY: a filter's argument names the exception's record.
-    let (code, flags, parameters) = unsafe {
+    let (code, flags, parameters, information) = unsafe {
         let record = (*pointers).ExceptionRecord;
         (
             (*record).ExceptionCode,
             (*record).ExceptionFlags,
             (*record).NumberParameters,
+            (*record).ExceptionInformation,
         )
     };
     note(FILTER | flags);
     SEEN_CODE.store(code, Ordering::Relaxed);
     SEEN_PARAMETERS.store(parameters, Ordering::Relaxed);
+    for (slot, value) in SEEN_INFORMATION.iter().zip(information) {
+        slot.store(value, Ordering::Relaxed);
+    }
     let asked = ASKED.fetch_add(1, Ordering::Relaxed);
-    ANSWERS
+    let answer = ANSWERS
         .get(asked)
-        .map_or(DECLINE, |answer| answer.load(Ordering::Relaxed))
+        .map_or(DECLINE, |answer| answer.load(Ordering::Relaxed));
+    if answer == CONTINUE {
+        // SAFETY: a filter's argument names the context the faulting
+        // code is to continue with, which is the filter's to change.
+        let context = unsafe { &mut *(*pointers).ContextRecord.cast::<arch::seh::Context>() };
+        arch::seh::repair(context, (&raw const REPAIRED).addr() as u64, MOVED);
+    }
+    answer
 }
 
 /// The `__finally` block of `nk_seh_finally`.
@@ -386,6 +412,94 @@ fn cross_test(kind: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// An address in the lowest 64 KiB, where nothing is ever mapped.
+const UNMAPPED: usize = 0x8000;
+
+/// Read from under a frame that has changed every register a call
+/// preserves.
+extern "C" fn clobber_and_read(address: usize) {
+    // SAFETY: the read is meant to fault.
+    unsafe { nk_seh_clobber(nk_seh_read, address) };
+}
+
+/// Whether the filter was asked once, about an exception that may be
+/// continued, with exactly `parameters`.
+fn shown(parameters: &[u64]) -> bool {
+    happened(&[FILTER])
+        && SEEN_PARAMETERS.load(Ordering::Relaxed) as usize == parameters.len()
+        && SEEN_INFORMATION
+            .iter()
+            .zip(parameters)
+            .all(|(seen, wanted)| seen.load(Ordering::Relaxed) == *wanted)
+}
+
+/// A fault on an unmapped user address is an access violation the
+/// `__try` around it handles: it may be continued, and says which kind
+/// of access it was and where.
+fn fault_test(body: Body, access: u64) -> Result<(), &'static str> {
+    arm([ACCEPT, DECLINE]);
+    caught_as(body, UNMAPPED, seh::STATUS_ACCESS_VIOLATION)?;
+    if !shown(&[access, UNMAPPED as u64]) {
+        return Err("the filter was not shown one continuable record with the access and address");
+    }
+    Ok(())
+}
+
+/// The architecture's other faults arrive as the exceptions Windows
+/// makes of them. Returns how many kinds there are.
+fn other_faults_test() -> Result<usize, &'static str> {
+    for fault in FAULTS {
+        arm([ACCEPT, DECLINE]);
+        if let Err(why) = caught_as(fault.body, fault.argument, fault.code) {
+            kprintln!("seh.fault.others: {}: {why}", fault.what);
+            return Err("a fault did not arrive as its exception");
+        }
+        if !shown(fault.parameters) {
+            kprintln!("seh.fault.others: {}", fault.what);
+            return Err("a fault's record is not continuable, or has other parameters");
+        }
+    }
+    Ok(FAULTS.len())
+}
+
+/// What the faulting read finds once its pointer is repaired.
+static REPAIRED: AtomicU64 = AtomicU64::new(0x4E4B_600D);
+/// How far down the repairing filter moves the stack pointer.
+const MOVED: u64 = 32;
+/// What the read returned, and how far the stack pointer had moved.
+static READ: AtomicU64 = AtomicU64::new(0);
+static DROPPED: AtomicU64 = AtomicU64::new(0);
+
+/// Read through `address`, and note the value and where the stack
+/// pointer was right after.
+extern "C" fn read_and_report(address: usize) {
+    let mut value = 0;
+    // SAFETY: the read is meant to fault; the routine writes one word.
+    let dropped = unsafe { nk_seh_resume(address, &raw mut value) };
+    READ.store(value, Ordering::Relaxed);
+    DROPPED.store(dropped, Ordering::Relaxed);
+}
+
+/// A filter that changes the faulting code's context and answers
+/// "continue" has the code go on with the context as changed: a
+/// register (the pointer, now good) and the stack pointer.
+fn continue_test() -> Result<(), &'static str> {
+    // Asked a second time, the filter accepts: the fault came again.
+    arm([CONTINUE, ACCEPT]);
+    READ.store(0, Ordering::Relaxed);
+    // SAFETY: the body takes any argument.
+    if unsafe { nk_seh_try(read_and_report, UNMAPPED, 5) } != 0 || !shown(&[0, UNMAPPED as u64]) {
+        return Err("the code did not go on after its filter said to continue");
+    }
+    if READ.load(Ordering::Relaxed) != REPAIRED.load(Ordering::Relaxed) {
+        return Err("the code went on without the register its filter changed");
+    }
+    if DROPPED.load(Ordering::Relaxed) != MOVED {
+        return Err("the code went on without the stack pointer its filter changed");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("seh.raise", raise_test);
     r.check("seh.decline", decline_test);
@@ -395,6 +509,20 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("seh.cross.irql", || cross_test(IRQL));
     r.check("seh.cross.reference", || cross_test(REFERENCE));
     r.check("seh.cross.nested", || cross_test(OUTER));
+    r.check("seh.fault.read", || {
+        fault_test(clobber_and_read, seh::ACCESS_READ)
+    });
+    r.check("seh.fault.write", || {
+        fault_test(nk_seh_write, seh::ACCESS_WRITE)
+    });
+    r.check("seh.fault.execute", || {
+        fault_test(nk_seh_call, seh::ACCESS_EXECUTE)
+    });
+    match other_faults_test() {
+        Ok(kinds) => r.ok_with("seh.fault.others", format_args!("{kinds} kinds")),
+        Err(why) => r.fail("seh.fault.others", format_args!("{why}")),
+    }
+    r.check("seh.fault.continue", continue_test);
 }
 
 // ---- exceptions nothing handles: each ends the boot ---------------------
@@ -490,5 +618,51 @@ fn no_unwind_entry(r: &mut Report, _: &BootInfo) {
     r.fail(
         "neg.seh-no-entry",
         format_args!("the walk passed a function with no unwind entry: the handler got {code:#x}"),
+    );
+}
+
+/// A fault on a kernel address is no exception: the `__try` around the
+/// access is not asked, and the system stops with Windows' bugcheck.
+pub static KERNEL_FAULT: Group = Group {
+    names: &["neg.seh-kernel-fault"],
+    run: kernel_fault,
+    manual: true,
+};
+
+fn kernel_fault(r: &mut Report, _: &BootInfo) {
+    // Address space that is reserved but has nothing mapped in it.
+    let Some(va) = crate::mm::map::alloc_va(1) else {
+        return r.fail(
+            "neg.seh-kernel-fault",
+            format_args!("no kernel address space"),
+        );
+    };
+    kprintln!("NK-NEG-ARMED neg.seh-kernel-fault");
+    arm([ACCEPT, ACCEPT]);
+    // SAFETY: the read is meant to fault.
+    let code = unsafe { nk_seh_try(nk_seh_read, va as usize, 6) };
+    r.fail(
+        "neg.seh-kernel-fault",
+        format_args!("a read of unmapped kernel memory was survived: the __try returned {code:#x}"),
+    );
+}
+
+/// Nor is a fault at `DISPATCH_LEVEL`, wherever the address.
+pub static FAULT_AT_DISPATCH: Group = Group {
+    names: &["neg.seh-fault-at-dispatch"],
+    run: fault_at_dispatch,
+    manual: true,
+};
+
+fn fault_at_dispatch(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.seh-fault-at-dispatch");
+    arm([ACCEPT, ACCEPT]);
+    let old = irql::raise(irql::DISPATCH_LEVEL);
+    // SAFETY: the read is meant to fault.
+    let code = unsafe { nk_seh_try(nk_seh_read, UNMAPPED, 7) };
+    irql::lower(old);
+    r.fail(
+        "neg.seh-fault-at-dispatch",
+        format_args!("a fault at DISPATCH_LEVEL was survived: the __try returned {code:#x}"),
     );
 }

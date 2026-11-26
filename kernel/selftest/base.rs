@@ -19,6 +19,7 @@ pub static GROUP: Group = Group {
         "mm.user.map",
         "mm.user.refused",
         "mm.user.other-cpu",
+        "mm.user.copy",
         "mm.pool",
         "mm.stack",
         "hal.cpus",
@@ -52,6 +53,7 @@ fn run(r: &mut Report, info: &BootInfo) {
         Ok(n) => r.ok_with("mm.user.other-cpu", format_args!("read on processor {n}")),
         Err(why) => r.fail("mm.user.other-cpu", format_args!("{why}")),
     }
+    r.check("mm.user.copy", mm::user::copy_test);
     r.check("mm.pool", mm::pool::self_test);
     r.check("mm.stack", mm::stack::self_test);
     match hal::platform::self_test(info) {

@@ -1,0 +1,7 @@
+# The context of a fault does not carry xmm6-xmm15, which no trap frame
+# holds: code a handler has continue goes on with them zero.
+scenario: x86_64
+fails: seh.fault.continue
+file: kernel/arch/x86_64/trap.rs
+replace:         xmm: live.xmm,
+with:         xmm: [0; 10],

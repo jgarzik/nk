@@ -13,9 +13,9 @@ global_asm!(
 // x0: body. x1: its argument. x2: a seed. Every register a call
 // preserves, but the frame pointer, holds a value made from the seed
 // while the body runs. Returns 0 if the body returned; if the
-// `__except` block got control, the exception's code, or
-// `REGISTERS_LOST` if one of those registers did not come back with
-// its value.
+// `__except` block got control, the exception's code; either way
+// `REGISTERS_LOST` instead if one of those registers did not come back
+// with its value.
 nk_seh_try:
     .seh_proc nk_seh_try
     .seh_handler {c_handler}, @unwind, @except
@@ -53,8 +53,8 @@ nk_seh_try_begin:
     blr x9
 nk_seh_try_end:
     mov x0, #0
-    b 3f
-// The `__except` block: x0 is the exception's code.
+// The `__except` block: x0 is the exception's code. The body's return
+// arrives here too, with zero for a code.
 nk_seh_try_except:
     ldr x2, [sp, #112]
     add x9, x2, #1
@@ -243,6 +243,87 @@ nk_seh_clobber:
     ret
     .seh_endproc
 
+// Bodies that fault, each a function that uses no stack.
+
+    .globl nk_seh_read
+// x0: an address. Read there.
+nk_seh_read:
+    .seh_proc nk_seh_read
+    .seh_endprologue
+    ldr x0, [x0]
+    ret
+    .seh_endproc
+
+    .globl nk_seh_write
+// x0: an address. Write there.
+nk_seh_write:
+    .seh_proc nk_seh_write
+    .seh_endprologue
+    mov x9, #0x4E4B
+    str x9, [x0]
+    ret
+    .seh_endproc
+
+    .globl nk_seh_call
+// x0: an address. Call it.
+nk_seh_call:
+    .seh_proc nk_seh_call
+    stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    .seh_endprologue
+    blr x0
+    .seh_startepilogue
+    ldp x29, x30, [sp], #16
+    .seh_save_fplr_x 16
+    .seh_endepilogue
+    ret
+    .seh_endproc
+
+    .globl nk_seh_divide
+// What compiled code does on finding a divisor zero: the processor has
+// no trap for it.
+nk_seh_divide:
+    .seh_proc nk_seh_divide
+    .seh_endprologue
+    brk #0xf004
+    ret
+    .seh_endproc
+
+    .globl nk_seh_illegal
+// An instruction the processor does not have.
+nk_seh_illegal:
+    .seh_proc nk_seh_illegal
+    .seh_endprologue
+    udf #0
+    ret
+    .seh_endproc
+
+    .globl nk_seh_break
+// A breakpoint, as `DbgBreakPoint` is one.
+nk_seh_break:
+    .seh_proc nk_seh_break
+    .seh_endprologue
+    brk #0xf000
+    ret
+    .seh_endproc
+
+    .globl nk_seh_resume
+// x0: an address. x1: where to put what is read there. Reads, and
+// returns how far below its place at entry the stack pointer is right
+// after the read: zero, unless whoever handled a fault of the read and
+// had it continue moved it.
+nk_seh_resume:
+    .seh_proc nk_seh_resume
+    .seh_endprologue
+    mov x9, sp
+    ldr x10, [x0]
+    str x10, [x1]
+    mov x10, sp
+    sub x0, x9, x10
+    mov sp, x9
+    ret
+    .seh_endproc
+
     .globl nk_seh_no_unwind
 // x0: body. x1: its argument. A function that calls another and has no
 // unwind entry: what a walk must refuse to pass.
@@ -274,4 +355,47 @@ unsafe extern "C" {
     pub fn nk_seh_edge(body: Body, argument: usize);
     pub fn nk_seh_clobber(body: Body, argument: usize);
     pub fn nk_seh_no_unwind(body: Body, argument: usize);
+    pub fn nk_seh_read(address: usize);
+    pub fn nk_seh_write(address: usize);
+    pub fn nk_seh_call(address: usize);
+    pub fn nk_seh_resume(address: usize, value: *mut u64) -> u64;
+    fn nk_seh_divide(unused: usize);
+    fn nk_seh_illegal(unused: usize);
+    fn nk_seh_break(unused: usize);
 }
+
+/// A fault that is neither a read, a write nor a call: the body that
+/// takes it, the body's argument, and the exception it must arrive as,
+/// with its parameters.
+pub struct Fault {
+    pub what: &'static str,
+    pub body: Body,
+    pub argument: usize,
+    pub code: u32,
+    pub parameters: &'static [u64],
+}
+
+/// The faults of that kind this architecture has.
+pub const FAULTS: &[Fault] = &[
+    Fault {
+        what: "a division by zero",
+        body: nk_seh_divide,
+        argument: 0,
+        code: 0xC000_0094,
+        parameters: &[],
+    },
+    Fault {
+        what: "an illegal instruction",
+        body: nk_seh_illegal,
+        argument: 0,
+        code: 0xC000_001D,
+        parameters: &[],
+    },
+    Fault {
+        what: "a breakpoint",
+        body: nk_seh_break,
+        argument: 0,
+        code: 0x8000_0003,
+        parameters: &[0],
+    },
+];

@@ -16,6 +16,11 @@
 //!   handler finds the dispatch it interrupted;
 //! - `nk_restore_context`: resume at the end of an unwind.
 //!
+//! And `nk_fault_copy`, the one place NK touches memory that may not be
+//! there (a requestor's buffer): a fault inside it is not an exception
+//! but an error it returns, because the trap handler knows the
+//! instructions ([`fixup`]) and resumes the routine at its way out.
+//!
 //! A frame's base, as a language handler is given it, is the stack
 //! pointer its function was entered with.
 
@@ -186,6 +191,34 @@ nk_guarded_call:
     nk_call_handler nk_call_handler_search, {nested_handler}
     nk_call_handler nk_call_handler_unwind, {collided_handler}
 
+    .globl nk_fault_copy
+    .globl nk_fault_copy_access
+    .globl nk_fault_copy_access_end
+    .globl nk_fault_copy_fixup
+// x0: destination. x1: source. x2: bytes. x3: two words for a fault's
+// address and kind. Copies, and returns 0; or, if a byte of either
+// range cannot be read or written, fills in the two words and returns 1.
+// The trap handler resumes a fault in the two instructions that touch
+// the ranges at `nk_fault_copy_fixup`, with the address in x9 and the
+// kind in x10.
+nk_fault_copy:
+    .seh_proc nk_fault_copy
+    .seh_endprologue
+    cbz x2, 3f
+nk_fault_copy_access:
+2:  ldrb w9, [x1], #1
+    strb w9, [x0], #1
+nk_fault_copy_access_end:
+    subs x2, x2, #1
+    b.ne 2b
+3:  mov x0, #0
+    ret
+nk_fault_copy_fixup:
+    stp x9, x10, [x3]
+    mov x0, #1
+    ret
+    .seh_endproc
+
     .globl nk_restore_context
 // x0: a CONTEXT. Continue at its `pc` with its stack pointer, the
 // registers a call preserves and x0. Everything is loaded before the
@@ -243,6 +276,10 @@ unsafe extern "C" {
         handler: Handler,
     ) -> u32;
     fn nk_restore_context(context: *const Context) -> !;
+    fn nk_fault_copy(to: *mut u8, from: *const u8, len: usize, fault: *mut [u64; 2]) -> u64;
+    static nk_fault_copy_access: u8;
+    static nk_fault_copy_access_end: u8;
+    static nk_fault_copy_fixup: u8;
     pub fn nk_entry_ExRaiseStatus(status: i32);
     pub fn nk_entry_ExRaiseAccessViolation();
     pub fn nk_entry_ExRaiseDatatypeMisalignment();
@@ -320,6 +357,42 @@ pub unsafe fn call_handler_unwind(
 pub unsafe fn restore_context(context: &Context) -> ! {
     // SAFETY: per the contract.
     unsafe { nk_restore_context(context) }
+}
+
+/// Copy `len` bytes from `from` to `to`, either of which may be memory
+/// that is not mapped or not writable. `Err` is the address that
+/// faulted and the kind of access (`ke::seh::ACCESS_*`); some bytes may
+/// have been copied by then.
+///
+/// # Safety
+/// Whatever of the two ranges is mapped may be read and written by the
+/// caller.
+pub unsafe fn fault_copy(to: *mut u8, from: *const u8, len: usize) -> Result<(), (u64, u64)> {
+    let mut fault = [0; 2];
+    // SAFETY: per the contract; a fault is turned into the result.
+    match unsafe { nk_fault_copy(to, from, len, &raw mut fault) } {
+        0 => Ok(()),
+        _ => Err((fault[0], fault[1])),
+    }
+}
+
+/// Where the code at `pc` is to resume after a memory fault, if it is
+/// the access of [`fault_copy`].
+pub fn fixup(pc: u64) -> Option<u64> {
+    let (start, end) = (
+        &raw const nk_fault_copy_access as u64,
+        &raw const nk_fault_copy_access_end as u64,
+    );
+    (start..end)
+        .contains(&pc)
+        .then_some(&raw const nk_fault_copy_fixup as u64)
+}
+
+/// Make `context`'s first argument register hold `value`, and move its
+/// stack pointer down by `drop` bytes.
+pub fn repair(c: &mut Context, value: u64, drop: u64) {
+    c.X[0] = value;
+    c.Sp -= drop;
 }
 
 /// A context with every field zero.

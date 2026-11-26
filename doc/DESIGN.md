@@ -207,7 +207,8 @@ affinity, not position. The IRQL is the controller's priority mask;
 levels and vectors are in `doc/LOCKING.md`. The only interrupts are the
 clock and ones a processor sends itself or another: no device interrupts.
 
-Any exception other than a breakpoint is a bugcheck with a register dump.
+A processor fault is an exception for the faulting code's handlers
+("Exceptions") or a bugcheck with a register dump.
 
 ## Time
 
@@ -462,10 +463,10 @@ exception handling. The Makefile builds the loader and kernel with
 
 Not covered:
 
-- arm64 exception entry up to the frame's last store, and the final
-  `eret`: the interrupted `pc` is in `ELR_EL1` alone there, where no
-  unwind code reaches. The vector table and the overflow stub have no
-  entries.
+- arm64 exception entry up to the frame's last store, and the last two
+  instructions of the way out: the interrupted `pc` is in `ELR_EL1`
+  alone there, where no unwind code reaches. The vector table and the
+  overflow stub have no entries.
 - Code that starts a processor before it is on the kernel's page tables
   (the x86-64 trampoline, arm64's `nk_ap_stub`).
 - The prebuilt `core`, `alloc` and `compiler_builtins`: Rust ships them
@@ -533,7 +534,38 @@ architecture (`kernel/arch/*/seh.rs`).
 records its caller's `CONTEXT` as it will be when the call has
 returned. The exception is raised there: its address is the return
 address in the driver, and no frame of NK's lies between the driver and
-its exception.
+its exception. Such an exception cannot be continued.
+
+**Processor faults.** The trap handler builds the faulting code's full
+`CONTEXT` and raises the fault there, as an exception that may be
+continued: a handler that changes the context and says "continue" has
+the code go on with every register, the stack pointer and the program
+counter as changed.
+
+| Fault | Exception | Parameters |
+| --- | --- | --- |
+| memory fault on an address in the user half, below `DISPATCH_LEVEL` | `STATUS_ACCESS_VIOLATION` | 0 read, 1 write, 8 execute; the address |
+| x86-64 general protection fault | `STATUS_ACCESS_VIOLATION` | 0; -1 |
+| x86-64 divide error; arm64 `brk #0xF004`, which compiled code executes for a zero divisor | `STATUS_INTEGER_DIVIDE_BY_ZERO` | |
+| x86-64 overflow trap | `STATUS_INTEGER_OVERFLOW` | |
+| undefined instruction | `STATUS_ILLEGAL_INSTRUCTION` | |
+| breakpoint (`int3`, `brk #0xF000`), no debugger | `STATUS_BREAKPOINT`, at the instruction | 0 |
+
+Not exceptions, whatever `__try` surrounds them, as on Windows: a
+memory fault on a kernel address (`0x50 PAGE_FAULT_IN_NONPAGED_AREA`),
+one at `DISPATCH_LEVEL` or above (`0xA IRQL_NOT_LESS_OR_EQUAL`, `0xD1`
+in a driver), a fast-fail, a stack overflow. The decision is
+`nk_unwind::dispatch::memory_fault`.
+
+A call through a pointer that leads nowhere faults at its target, in no
+image: that frame is undone as a leaf's, and the search goes on in the
+caller.
+
+NK's own accesses to memory that may not be there (a requestor's
+buffer) are all one assembly routine, `mm::user::copy`. A fault in its
+access is not an exception: the trap handler resumes the routine at its
+way out, and it returns the address and the kind of access as an error.
+Nothing is unwound.
 
 **Finding a handler.** The dispatcher walks the stack from that context
 and calls the language handler of each function that names one,
@@ -603,7 +635,8 @@ not on the stack: never a guess.
 
 The tests `seh.*` stack assembly routines shaped like a driver's
 compiled C (`kernel/arch/*/seh_test.rs`) around NK frames of each kind
-and check what ran, in which order, and what state came back.
+and around instructions that fault, and check what ran, in which order,
+with what record, and what state came back.
 
 ## Exports
 
@@ -817,10 +850,11 @@ file system reads it in line (`kernel/se/token.rs`):
 ## Breakpoints and the debugger
 
 A driver's breakpoint (`DbgBreakPoint`, in-line code) gets one of
-Windows' two answers. By default, as with no debugger: an unhandled
-exception, bugcheck `0x7E` with `0x80000003`. With `debug=on` on the
-command line, as with a debugger that says "go" every time: noted on the
-console and passed over. NK has no debugger protocol; the reference
+Windows' two answers. By default, as with no debugger: an exception,
+`0x80000003`, which stops the system unless a handler takes it (bugcheck
+`0x7E` in a system thread). With `debug=on` on the command line, as with
+a debugger that says "go" every time: noted on the console and passed
+over, before any handler is asked. NK has no debugger protocol; the reference
 Windows machine gets a real debugger, played by `tools/kd.py`.
 
 ## What is absent
@@ -829,7 +863,5 @@ No APCs, device interrupts, PnP, power management, user processes or
 user mode. Where a fixture imports something in that territory but never
 reaches it on the tested path, the export is `Traps`.
 
-A processor fault is not an exception: one inside a driver's `__try` is
-a bugcheck. `ProbeForRead` performs Windows' checks, but where Windows
-raises NK bugchecks, as does `MmProbeAndLockPages` on an inaccessible
-buffer.
+`ProbeForRead` performs Windows' checks, but where Windows raises NK
+bugchecks, as does `MmProbeAndLockPages` on an inaccessible buffer.

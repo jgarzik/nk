@@ -30,13 +30,21 @@ use nk_ntabi::seh::{EXCEPTION_MAXIMUM_PARAMETERS, EXCEPTION_POINTERS, EXCEPTION_
 use nk_unwind::dispatch::{
     EXCEPTION_COLLIDED_UNWIND, EXCEPTION_COLLIDED_UNWIND_DISPOSITION, EXCEPTION_CONTINUE_EXECUTION,
     EXCEPTION_CONTINUE_SEARCH, EXCEPTION_NESTED_CALL, EXCEPTION_NESTED_EXCEPTION,
-    EXCEPTION_NONCONTINUABLE, EXCEPTION_TARGET_UNWIND, EXCEPTION_UNWIND, FilterResult, Next,
-    STATUS_UNWIND, after_filter, after_search_handler, after_unwind_handler, unwind_flags,
+    EXCEPTION_NONCONTINUABLE, EXCEPTION_TARGET_UNWIND, EXCEPTION_UNWIND, FilterResult, MemoryFault,
+    Next, STATUS_UNWIND, after_filter, after_search_handler, after_unwind_handler, unwind_flags,
 };
 use nk_unwind::scope::{self, Action, Phase};
 
 pub const STATUS_DATATYPE_MISALIGNMENT: u32 = 0x8000_0002;
+pub const STATUS_BREAKPOINT: u32 = 0x8000_0003;
 pub const STATUS_ACCESS_VIOLATION: u32 = 0xC000_0005;
+pub const STATUS_ILLEGAL_INSTRUCTION: u32 = 0xC000_001D;
+pub const STATUS_INTEGER_DIVIDE_BY_ZERO: u32 = 0xC000_0094;
+
+/// The first parameter of an access violation: what the access was.
+pub const ACCESS_READ: u64 = 0;
+pub const ACCESS_WRITE: u64 = 1;
+pub const ACCESS_EXECUTE: u64 = 8;
 
 /// How the system stops for an exception nothing handles: which of
 /// Windows' bugchecks, by where the exception was raised.
@@ -213,7 +221,28 @@ fn frame_of(context: &Context, interrupted: bool) -> Result<Frame, WalkError> {
     let stacks = unwind::stacks();
     let mut read = |address| unwind::read_slot(&stacks, address);
     let pc = cpu::pc(context);
-    let module = ldr::module_containing(pc).ok_or(WalkError::NoImage { pc })?;
+    let regs = cpu::regs(context);
+    let mut caller = *context;
+    let Some(module) = ldr::module_containing(pc) else {
+        // Code in no image cannot be waiting for a call to return. An
+        // interrupt can find the processor there: a call through a
+        // pointer that leads nowhere faults at its target, with the
+        // return address where a call leaves it, as in a leaf.
+        if !interrupted {
+            return Err(WalkError::NoImage { pc });
+        }
+        let beneath = frames::leaf(&regs, &mut read).map_err(|_| WalkError::NoImage { pc })?;
+        cpu::set_regs(&mut caller, &beneath, true);
+        return Ok(Frame {
+            control_pc: pc,
+            image_base: 0,
+            function_entry: 0,
+            establisher: cpu::sp(context),
+            handler: None,
+            caller,
+            caller_interrupted: false,
+        });
+    };
     let offset = pc - module.base;
     let failed = |error| WalkError::Unwind {
         module,
@@ -223,7 +252,6 @@ fn frame_of(context: &Context, interrupted: bool) -> Result<Frame, WalkError> {
     // SAFETY: the image's code is on the stack being walked, which is
     // this thread's own: it cannot be unloaded meanwhile.
     let image = unsafe { ldr::view(&module) };
-    let regs = cpu::regs(context);
     let step = frames::step(
         image,
         module.pdata,
@@ -233,7 +261,6 @@ fn frame_of(context: &Context, interrupted: bool) -> Result<Frame, WalkError> {
         &mut read,
     )
     .map_err(failed)?;
-    let mut caller = *context;
     let Some(step) = step else {
         // Only interrupted code can be a leaf.
         if !interrupted {
@@ -670,6 +697,97 @@ pub unsafe fn raise(context: *mut Context, code: u32, flags: u32, parameters: &[
         // SAFETY: per the contract.
         unsafe { dispatch(&raw mut record, context, false) };
     }
+}
+
+/// Deliver a processor fault as the exception `code`: the trap handler's
+/// way in. `context` is the faulting code as the processor stopped it.
+/// Returns if a handler asks for the code to be continued, with what it
+/// made of `context`.
+///
+/// # Safety
+/// `context` describes the code the trap interrupted, on this stack;
+/// the trap handler's own frames hold nothing a destructor must give
+/// back.
+pub unsafe fn fault(context: *mut Context, code: u32, parameters: &[u64]) {
+    // SAFETY: per the contract.
+    let mut record = new_record(code, 0, cpu::pc(unsafe { &*context }), parameters);
+    // SAFETY: per the contract.
+    unsafe { dispatch(&raw mut record, context, true) };
+}
+
+/// Why a memory fault stops the system instead of becoming an
+/// exception: the first line of its bugcheck.
+pub struct FaultStop {
+    verdict: MemoryFault,
+    address: u64,
+    access: u64,
+    level: u8,
+    in_kernel: bool,
+}
+
+impl fmt::Display for FaultStop {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            address,
+            access,
+            level,
+            ..
+        } = *self;
+        let low = address as u32;
+        match self.verdict {
+            MemoryFault::KernelAddress => {
+                // Windows' second parameter: 0 read, 2 write, 0x10 execute.
+                let operation = [(ACCESS_WRITE, 2), (ACCESS_EXECUTE, 0x10)]
+                    .iter()
+                    .find(|(kind, _)| *kind == access)
+                    .map_or(0, |(_, operation)| *operation);
+                write!(
+                    f,
+                    "0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: {low:#010X} (parameter 1 \
+                     {address:#018x}, parameter 2 {operation:#x})"
+                )
+            }
+            _ => {
+                let (number, name) = if self.in_kernel {
+                    (0xA, "IRQL_NOT_LESS_OR_EQUAL")
+                } else {
+                    (0xD1, "DRIVER_IRQL_NOT_LESS_OR_EQUAL")
+                };
+                write!(
+                    f,
+                    "{number:#010X} {name}: {low:#010X} (parameter 1 {address:#018x}): memory \
+                     that is not there was touched at IRQL {level} (access {access})"
+                )
+            }
+        }
+    }
+}
+
+/// The first line of a fatal trap's report: the bugcheck Windows names
+/// for it, when it has one.
+pub struct StopLine(pub Option<FaultStop>);
+
+impl fmt::Display for StopLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Some(stop) => writeln!(f, "{stop}"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Decide a memory fault on `address` by the code at `pc`: `None` if it
+/// is an access violation to deliver, else why the system stops.
+pub fn memory_fault(address: u64, access: u64, pc: u64) -> Option<FaultStop> {
+    let level = super::irql::current();
+    let verdict = nk_unwind::dispatch::memory_fault(address, level >= super::irql::DISPATCH_LEVEL);
+    (verdict != MemoryFault::Exception).then(|| FaultStop {
+        verdict,
+        address,
+        access,
+        level,
+        in_kernel: ldr::module_containing(pc).is_some_and(|m| m.name() == b"ntoskrnl.exe"),
+    })
 }
 
 /// Raise `code`, which cannot be continued, in the function this is

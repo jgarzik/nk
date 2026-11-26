@@ -32,6 +32,10 @@ Consequences:
   word (round to nearest, exceptions masked), not the interrupted code's.
   `cpu.fp-preserved` checks this with a handler that overwrites every
   register it is entitled to.
+- A fault that becomes an exception needs the faulting code's whole
+  `CONTEXT`. On x86-64 XMM6-XMM15 are not in the trap frame: they are
+  read from the processor, where they still are because nothing NK ran
+  in between uses them, and loaded back if a handler changed them.
 - x18 holds the processor control region on arm64 Windows; the target
   leaves it alone, so the kernel can set it once per CPU.
 How to re-measure: compile a small `#![no_std]` library for each target

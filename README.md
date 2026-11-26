@@ -16,7 +16,7 @@ It sends them real IRPs, which they may pend, complete later or have
 cancelled, and what they answer matches a recording made on real
 Windows 10, request by request.
 
-Not yet: APCs, device interrupts, processor faults as exceptions, Plug
+Not yet: APCs, device interrupts, Plug
 and Play, user mode, physical hardware.
 
 ## What it intends to do

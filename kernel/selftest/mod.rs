@@ -83,6 +83,8 @@ pub static GROUPS: &[&Group] = &[
     &except::SERVICE,
     &except::DPC,
     &except::NO_ENTRY,
+    &except::KERNEL_FAULT,
+    &except::FAULT_AT_DISPATCH,
     &oracle::EVENT,
     &oracle::EVENT_DEBUG,
     &smp::STUCK,
