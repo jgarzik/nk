@@ -293,3 +293,56 @@ pub unsafe extern "C" fn IoOpenDeviceRegistryKey(
         }
     }
 }
+
+/// [`IoInvalidateDeviceState`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinvalidatedevicestate):
+/// the state of the device whose physical device object is `device`
+/// has changed. A started device is sent
+/// `IRP_MN_QUERY_PNP_DEVICE_STATE` again, by a worker thread, and one
+/// its drivers then call failed, disabled or removed is taken down;
+/// for a device that is not started nothing is done, as on Windows.
+///
+/// Of the other state bits, NK acts on none: it does not rebalance
+/// resources (`PNP_RESOURCE_REQUIREMENTS_CHANGED`) and has no user
+/// interface to hide a device from.
+///
+/// Windows stops the system for a device that is not a physical
+/// device object (`PNP_DETECTED_FATAL_ERROR`); so does NK.
+///
+/// # Safety
+/// `device` is a live device object.
+pub unsafe extern "C" fn IoInvalidateDeviceState(device: *mut DEVICE_OBJECT) {
+    // SAFETY: per the contract.
+    unsafe {
+        crate::io::device::check(device, "IoInvalidateDeviceState");
+        if node::get(device as usize).is_none() {
+            crate::kd::bugcheck(format_args!(
+                "0x000000CA PNP_DETECTED_FATAL_ERROR: IoInvalidateDeviceState for {device:p}, \
+                 which is not a physical device object"
+            ));
+        }
+        engine::requery_later(device);
+    }
+}
+
+/// [`IoGetDeviceNumaNode`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdevicenumanode):
+/// the NUMA node of the device whose physical device object is
+/// `device`. NK records no node for a device, and Windows' answer for
+/// such a device is node 0 on a machine with one node and
+/// `STATUS_NOT_FOUND` on any other.
+///
+/// # Safety
+/// `device` is null or a live device object; `node_number` is writable.
+pub unsafe extern "C" fn IoGetDeviceNumaNode(
+    device: *mut DEVICE_OBJECT,
+    node_number: *mut u16,
+) -> NTSTATUS {
+    if device.is_null() || node::get(device as usize).is_none() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if crate::ke::smp::KeQueryHighestNodeNumber() != 0 {
+        return STATUS_NOT_FOUND;
+    }
+    // SAFETY: per the contract.
+    unsafe { node_number.write_unaligned(0) };
+    STATUS_SUCCESS
+}

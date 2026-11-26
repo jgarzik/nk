@@ -2008,10 +2008,8 @@ is no query-remove, no eject, no stop and no rebalance.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
 not bring up yet because their `AddDevice` or start stops the system
-over something NK lacks: at present `ACPI`, whose start reads the
-firmware description Windows keeps under `HARDWARE\Description`
-(the "ACPI BIOS" record) and stops without it, so nothing below the
-HAL's ACPI device is enumerated.
+over something NK lacks, with the reason beside each name: at present
+`ACPI`, so nothing below the HAL's ACPI device is enumerated.
 
 ## The registry
 
