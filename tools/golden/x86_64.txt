@@ -43,6 +43,7 @@ thread.priority ok
 thread.set-priority ok
 thread.set-priority-other ok
 thread.raise-ready ok
+thread.raise-preempted ok
 thread.other-cpu ok
 thread.registers ok
 thread.preempt ok

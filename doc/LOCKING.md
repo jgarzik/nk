@@ -298,6 +298,15 @@ do:
   the changer finds the thread queued and moves it, under that queue's
   lock. So a thread is never left queued at a priority it no longer
   has.
+- **Whoever queues, answers for the queue.** A changer that finds the
+  thread on no queue does nothing more about a raise. So a processor
+  looking for work reads another's best thread where it is, under that
+  queue's lock, and takes it off only to run it. And a processor that
+  queues a thread has the queue's processor look again: always, for a
+  thread made ready; for the thread it is itself leaving, when the
+  priority it queued the thread at is above the one it chose the next
+  thread against. (A thread put back because it is still leaving its
+  last stack is put back for the idle thread, which looks at once.)
 
 A thread at `DISPATCH_LEVEL` or above is never switched away from:
 preemption happens only at the end of an interrupt that returns below

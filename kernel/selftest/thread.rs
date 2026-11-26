@@ -13,6 +13,7 @@ pub static GROUP: Group = Group {
         "thread.set-priority",
         "thread.set-priority-other",
         "thread.raise-ready",
+        "thread.raise-preempted",
         "thread.other-cpu",
         "thread.registers",
         "thread.preempt",
@@ -65,6 +66,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         "thread.raise-ready",
         "ready threads raised:",
         thread::raise_ready_test(),
+    );
+    counted(
+        r,
+        "thread.raise-preempted",
+        "threads raised while put aside:",
+        thread::raise_preempted_test(),
     );
     counted(
         r,

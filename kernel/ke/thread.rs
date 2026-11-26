@@ -166,18 +166,25 @@ unsafe fn next_processor<'a>(thread: *mut Thread) -> &'a AtomicU32 {
 }
 
 /// Put `thread` on `ready`, the queues of processor `processor`, at
-/// its priority.
+/// its priority, which is returned.
 ///
 /// Where it is queued is published before its priority is read, and
 /// whoever changes a thread's priority writes it before looking where
 /// the thread is queued (`apply_priority`): one of the two sees the
 /// other, so a thread is never left queued at a priority it no longer
-/// has.
+/// has. A change that finds the thread on no queue leaves the rest to
+/// whoever queues it: the caller has that processor look at its queues
+/// afterwards, or has decided what runs there on the priority returned.
 ///
 /// # Safety
 /// `ready` is that processor's, locked; `thread` is live and on no
 /// queue.
-unsafe fn enqueue(ready: &mut ReadyQueues, processor: usize, thread: *mut Thread, front: bool) {
+unsafe fn enqueue(
+    ready: &mut ReadyQueues,
+    processor: usize,
+    thread: *mut Thread,
+    front: bool,
+) -> u8 {
     // SAFETY: per the contract.
     unsafe {
         (*thread)
@@ -186,6 +193,7 @@ unsafe fn enqueue(ready: &mut ReadyQueues, processor: usize, thread: *mut Thread
         let level = priority(thread);
         (*thread).queued_at.store(level, Ordering::Relaxed);
         ready.insert(link_of(thread), level, front);
+        level
     }
 }
 
@@ -683,7 +691,14 @@ fn dispatch(leaving: Leaving) {
                 _ => {
                     set_state(me, layout::state::READY);
                     let front = leaving.requeue_in_front(spent);
-                    enqueue(&mut ready, here, me, front);
+                    // The thread taken was chosen against the priority
+                    // this one came in with. If another processor has
+                    // raised it since, it found this thread on no queue
+                    // and left the rest to this processor: look again
+                    // once the switch is made.
+                    if enqueue(&mut ready, here, me, front) > my_priority {
+                        reconsider(here);
+                    }
                 }
             }
         }
@@ -1450,6 +1465,155 @@ pub fn raise_ready_test() -> Result<u32, &'static str> {
     }
     if late != 0 {
         return Err("a ready thread raised above the running one did not run at once");
+    }
+    Ok(ROUNDS)
+}
+
+/// The round `raise_preempted_test` is in.
+static ROUND: AtomicU32 = AtomicU32::new(0);
+/// The round its pusher is waiting to be woken for, plus one.
+static PARKED: AtomicU32 = AtomicU32::new(0);
+/// The round its pusher has been woken for, plus one.
+static AWAKE: AtomicU32 = AtomicU32::new(0);
+/// Its runner has been raised above its pusher, and the raise is over.
+static RAISED: AtomicBool = AtomicBool::new(false);
+
+/// A thread raised while a higher thread is taking its processor from
+/// it keeps the processor, or has it back at once: the processor that
+/// puts it back on its queue finds the new priority there and looks
+/// again. On another processor a runner spins and a pusher of higher
+/// priority is woken to push it aside, round after round, while this
+/// thread raises the runner above the pusher at that moment; the pusher
+/// counts how long it runs while outranked. Returns the rounds.
+pub fn raise_preempted_test() -> Result<u32, &'static str> {
+    use super::wait;
+    const ROUNDS: u32 = 3000;
+    const PUSHER: u8 = NORMAL_PRIORITY + 2;
+    const TOP: u8 = NORMAL_PRIORITY + 4;
+    /// Looks the pusher may take while outranked: an interrupt from
+    /// another processor is on its way, and arrives well within them.
+    const PATIENCE: u32 = 1000;
+    fn runner(_: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    fn pusher(runner: usize) {
+        let runner = runner as *mut Thread;
+        for round in 0.. {
+            PARKED.store(round + 1, Ordering::Release);
+            // SAFETY: a static, initialised event.
+            unsafe { wait::wait(Some(OTHER.ptr().cast()), None) };
+            if STOP.load(Ordering::Acquire) {
+                return;
+            }
+            AWAKE.store(round + 1, Ordering::Release);
+            let mut outranked = 0;
+            while ROUND.load(Ordering::Acquire) == round && !STOP.load(Ordering::Acquire) {
+                // SAFETY: the test holds the runner until this thread
+                // has ended.
+                let above = unsafe { priority(runner) } > PUSHER;
+                if RAISED.load(Ordering::Acquire) && above {
+                    outranked += 1;
+                    if outranked == PATIENCE {
+                        WRONG.fetch_add(1, Ordering::Relaxed);
+                    }
+                } else {
+                    outranked = 0;
+                }
+                core::hint::spin_loop();
+            }
+        }
+    }
+    let processors = super::smp::online_count();
+    if processors < 2 {
+        // Nothing can raise a thread while its processor is busy
+        // putting it aside.
+        return Ok(0);
+    }
+    let before = count();
+    let there = (pcr::current_processor() as usize + 1) % processors;
+    STOP.store(false, Ordering::Release);
+    RAISED.store(false, Ordering::Release);
+    WRONG.store(0, Ordering::Relaxed);
+    ROUND.store(0, Ordering::Release);
+    PARKED.store(0, Ordering::Release);
+    AWAKE.store(0, Ordering::Release);
+    // SAFETY: static storage nothing waits on; a synchronization event.
+    unsafe { wait::KeInitializeEvent(OTHER.ptr(), 1, 0) };
+    let running = create_referenced(runner, 0, NORMAL_PRIORITY, 1 << there)?;
+    let pushing = create_referenced(pusher, running as usize, PUSHER, 1 << there)?;
+    let set = |new: u8| {
+        // SAFETY: a thread this test holds a reference to.
+        unsafe { KeSetPriorityThread(running.cast(), i32::from(new)) };
+    };
+    // Wait for the pusher to say it has got as far as `round`.
+    let reached = |stage: &AtomicU32, round: u32| {
+        let deadline = super::time::interrupt_time() + 20_000_000;
+        while stage.load(Ordering::Acquire) != round + 1 {
+            if super::time::interrupt_time() > deadline {
+                return false;
+            }
+            core::hint::spin_loop();
+        }
+        true
+    };
+    let mut stuck = false;
+    for round in 0..ROUNDS {
+        if !reached(&PARKED, round) {
+            stuck = true;
+            break;
+        }
+        // The pusher wakes there and the runner is put aside for it: a
+        // little later each round, and over a wider span every so
+        // often, the raise meets that moment.
+        // SAFETY: a static, initialised event.
+        unsafe { wait::KeSetEvent(OTHER.ptr(), 0, 0) };
+        for _ in 0..(round % 128) << (round / 128 % 7) {
+            core::hint::spin_loop();
+        }
+        set(TOP);
+        RAISED.store(true, Ordering::Release);
+        // Time for the pusher to be seen running, if it is: four
+        // times what it needs, in looks like its own.
+        for _ in 0..4 * PATIENCE {
+            // SAFETY: a thread this test holds a reference to.
+            let above = unsafe { priority(running) } > PUSHER;
+            core::hint::black_box(
+                above
+                    && RAISED.load(Ordering::Acquire)
+                    && ROUND.load(Ordering::Acquire) == round
+                    && !STOP.load(Ordering::Acquire),
+            );
+            core::hint::spin_loop();
+        }
+        RAISED.store(false, Ordering::Release);
+        // Below the pusher again, the runner gives way to it; the
+        // pusher has then run this round, and may go back to wait.
+        set(NORMAL_PRIORITY);
+        if !reached(&AWAKE, round) {
+            stuck = true;
+            break;
+        }
+        ROUND.store(round + 1, Ordering::Release);
+    }
+    STOP.store(true, Ordering::Release);
+    // SAFETY: a static, initialised event; threads this test holds
+    // references to, which it gives up here.
+    unsafe {
+        wait::KeSetEvent(OTHER.ptr(), 0, 0);
+        for thread in [pushing, running] {
+            wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    if stuck || count() != before {
+        return Err("the threads did not finish");
+    }
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err(
+            "a thread raised while it was put aside did not get its processor back at once",
+        );
     }
     Ok(ROUNDS)
 }
