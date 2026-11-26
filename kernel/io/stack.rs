@@ -49,6 +49,25 @@ pub unsafe fn send_synchronous(
     minor: u8,
     parameters: [u64; 4],
 ) -> (NTSTATUS, usize) {
+    // SAFETY: the caller's contract is this routine's.
+    unsafe { send_synchronous_from(device, major, minor, parameters, None) }
+}
+
+/// As [`send_synchronous`], with the request starting out at the
+/// status and `IoStatus.Information` given in `start`: what Windows
+/// does for the Plug and Play requests whose answer drivers build up
+/// as the request travels (`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`
+/// starts out successful, holding the list to filter).
+///
+/// # Safety
+/// As [`send_synchronous`].
+pub unsafe fn send_synchronous_from(
+    device: *mut DEVICE_OBJECT,
+    major: u8,
+    minor: u8,
+    parameters: [u64; 4],
+    start: Option<(NTSTATUS, usize)>,
+) -> (NTSTATUS, usize) {
     irql::expect_passive("sending a request to a device stack and waiting for it");
     // SAFETY: per the contract. The reference keeps the top's memory;
     // the boxed block stays where it is until the request has been
@@ -76,6 +95,10 @@ pub unsafe fn send_synchronous(
         (*request).Thread = ke::pcr::current_thread().cast();
         if matches!(major, IRP_MJ_PNP | IRP_MJ_POWER) {
             (*request).IoStatus.Status = STATUS_NOT_SUPPORTED;
+        }
+        if let Some((status, information)) = start {
+            (*request).IoStatus.Status = status;
+            (*request).IoStatus.Information = information;
         }
         let location = irp::next_location(request);
         (*location).MajorFunction = major;

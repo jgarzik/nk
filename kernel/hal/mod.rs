@@ -2,6 +2,7 @@
 //! the description of the machine.
 
 pub mod acpi;
+pub mod bus;
 pub mod dispatch;
 pub mod dma;
 pub mod interrupt;

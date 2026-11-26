@@ -1,0 +1,10 @@
+pnp.root ok
+pnp.hal-device ok
+pnp.enumerate ok
+pnp.match ok
+pnp.properties ok
+pnp.add-device-order ok
+pnp.start-resources ok
+pnp.invalidate-relations ok
+pnp.failed-start ok
+pnp.removed ok

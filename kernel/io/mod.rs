@@ -22,6 +22,7 @@ pub mod stack;
 pub mod startio;
 pub mod symlink;
 pub mod wmi;
+pub mod zwfile;
 
 // Pool tags, as Windows spells its own.
 

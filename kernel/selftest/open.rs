@@ -30,6 +30,7 @@ pub static GROUP: Group = Group {
         "io.open.create-request",
         "io.open.named-pipe",
         "io.open.mailslot",
+        "io.open.zw-file",
         "io.fs-control",
         "io.close.cleanup-then-close",
         "io.close.deferred",
@@ -67,6 +68,9 @@ struct Seen {
     name_buffer: bool,
     file_flags: u32,
     parameters: [u64; 4],
+    /// The stack location's flags, and `Irp->Overlay.AllocationSize`.
+    location_flags: u8,
+    allocation: u64,
     irp_flags: u32,
     requestor_mode: i8,
     /// The `IO_SECURITY_CONTEXT`: desired access, full create options,
@@ -149,6 +153,8 @@ unsafe extern "C" fn create(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTAT
             name_buffer: !name.Buffer.is_null(),
             file_flags: (*file).Flags,
             parameters: (*location).Parameters,
+            location_flags: (*location).Flags,
+            allocation: (*irp).Overlay[0],
             irp_flags: (*irp).Flags,
             requestor_mode: (*irp).RequestorMode,
             desired: (*context).DesiredAccess,
@@ -204,6 +210,225 @@ unsafe extern "C" fn cleanup_or_close(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> N
         irp::IofCompleteRequest(irp, 0);
     }
     STATUS_SUCCESS
+}
+
+/// A driver's own opens, `ZwCreateFile` and `ZwOpenFile`: a device by
+/// name, a name relative to a directory and to an open file, names
+/// that lead nowhere, and what is written back and when. Returns the
+/// opens asked for.
+fn zw_file(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
+    use crate::io::zwfile::{ZwCreateFile, ZwOpenFile};
+    use nk_ntabi::ob::OBJECT_ATTRIBUTES;
+    const UNTOUCHED: usize = 0x5A5A;
+    // OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, as acpi.sys asks.
+    const KERNEL: u32 = 0x240;
+    // SYNCHRONIZE | FILE_READ_DATA | FILE_WRITE_DATA.
+    const ACCESS: u32 = 0x10_0003;
+    let none = core::ptr::null_mut::<c_void>();
+    let open_file = |name: &str, root: *mut c_void, flags: u32| {
+        let mut text: Vec<u16> = name.encode_utf16().collect();
+        let name = UNICODE_STRING {
+            Length: (text.len() * 2) as u16,
+            MaximumLength: (text.len() * 2) as u16,
+            Buffer: text.as_mut_ptr(),
+        };
+        let attributes = OBJECT_ATTRIBUTES {
+            Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+            RootDirectory: root,
+            ObjectName: &raw const name,
+            Attributes: flags,
+            SecurityDescriptor: none,
+            SecurityQualityOfService: none,
+        };
+        let mut handle = UNTOUCHED as *mut c_void;
+        let mut iosb = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: UNTOUCHED,
+        };
+        // SAFETY: everything pointed to is a local that outlives the call.
+        let status = unsafe {
+            ZwOpenFile(
+                &raw mut handle,
+                ACCESS,
+                &raw const attributes,
+                &raw mut iosb,
+                3,
+                FILE_SYNCHRONOUS_IO_ALERT,
+            )
+        };
+        (status, handle, iosb.Status, iosb.Information)
+    };
+    let failed = |status: NTSTATUS| (status, UNTOUCHED as *mut c_void, STATUS_PENDING, UNTOUCHED);
+
+    // A device by its name, as acpi.sys opens the resource hub.
+    let creates = CREATES.load(Ordering::Acquire);
+    let (status, device_handle, final_status, information) =
+        open_file("\\DEVICE\\nkopen", none, KERNEL);
+    if (status, final_status, information) != (STATUS_SUCCESS, STATUS_SUCCESS, OPENED) {
+        return Err("a device did not open by name, or the status block is not the create's");
+    }
+    let seen = last();
+    let verdict = (|| {
+        if nk_ntabi::ob::handle_index(device_handle as u64, false).is_some() {
+            return Err("OBJ_KERNEL_HANDLE did not give a kernel handle");
+        }
+        if seen.parameters[1..] != [0x0100_0010, 3 << 16, 0]
+            || seen.desired != ACCESS
+            || seen.location_flags != 0
+            || seen.allocation != 0
+            || seen.requestor_mode != KERNEL_MODE
+            || seen.name_bytes != 0
+        {
+            return Err("ZwOpenFile's create request is not FILE_OPEN with what was asked");
+        }
+        // A name the namespace does not have: its statuses, and
+        // nothing written back.
+        let missing = [
+            ("\\Device\\RESOURCE_HUB", STATUS_OBJECT_NAME_NOT_FOUND),
+            ("\\NkNoDirectory\\X", STATUS_OBJECT_PATH_NOT_FOUND),
+            (
+                "\\SystemRoot\\System32\\x.dat",
+                STATUS_OBJECT_PATH_NOT_FOUND,
+            ),
+            ("\\Device", STATUS_OBJECT_TYPE_MISMATCH),
+            ("Device\\NkOpen", STATUS_OBJECT_PATH_SYNTAX_BAD),
+            ("\\Device\\NkOpen\\refuse", STATUS_ACCESS_DENIED),
+        ];
+        for (name, expected) in missing {
+            if open_file(name, none, KERNEL) != failed(expected) {
+                return Err("an open that failed did not give its status and leave the rest be");
+            }
+        }
+        // Relative to the open device, and to a directory.
+        let (status, leaf, ..) = open_file("leaf", device_handle, 0);
+        if status != STATUS_SUCCESS {
+            return Err("an open relative to an open file failed");
+        }
+        let relative = last();
+        let own = nk_ntabi::ob::handle_index(leaf as u64, false).is_some();
+        file::close(leaf as u64);
+        if relative.related != seen.file
+            || seen_name() != "leaf"
+            || relative.location_flags != SL_CASE_SENSITIVE
+            || !own
+        {
+            return Err("a relative, case-sensitive open for a process handle was not sent as one");
+        }
+        if open_file("\\Device\\NkOpen", device_handle, 0) != failed(STATUS_OBJECT_PATH_SYNTAX_BAD)
+        {
+            return Err("an absolute name was accepted relative to a file");
+        }
+        let path: Vec<u16> = "\\Device".encode_utf16().collect();
+        let (directory, _) = ob::lookup(None, &path).map_err(|_| "no \\Device")?;
+        // SAFETY: the look-up's reference, given up once the handle
+        // holds the directory.
+        let directory = unsafe {
+            let opened = handle::open(directory, 0);
+            object::dereference(directory);
+            opened.map_err(|_| "no handle to \\Device")?
+        };
+        // OBJ_FORCE_ACCESS_CHECK | OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE.
+        let below = open_file("nkopen\\below", directory as *mut c_void, 0x640);
+        let (below_seen, below_name) = (last(), seen_name());
+        let nowhere = open_file("NkNone", directory as *mut c_void, KERNEL);
+        handle::close(directory);
+        if below.0 != STATUS_SUCCESS {
+            return Err("an open relative to a directory failed");
+        }
+        file::close(below.1 as u64);
+        if below_name != "\\below"
+            || !below_seen.related.is_null()
+            || below_seen.location_flags != SL_FORCE_ACCESS_CHECK
+        {
+            return Err("an open relative to a directory did not reach the device as any other");
+        }
+        if nowhere != failed(STATUS_OBJECT_NAME_NOT_FOUND) {
+            return Err("a name a directory does not have was not reported as not found");
+        }
+
+        // ZwCreateFile: every argument where the driver looks for it.
+        let mut text: Vec<u16> = "\\Device\\NkOpen\\new".encode_utf16().collect();
+        let name = UNICODE_STRING {
+            Length: (text.len() * 2) as u16,
+            MaximumLength: (text.len() * 2) as u16,
+            Buffer: text.as_mut_ptr(),
+        };
+        let mut attributes = OBJECT_ATTRIBUTES {
+            Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+            RootDirectory: none,
+            ObjectName: &raw const name,
+            Attributes: KERNEL,
+            SecurityDescriptor: none,
+            SecurityQualityOfService: none,
+        };
+        let allocation = 0x1_0000_2000i64;
+        let ea = 0u64;
+        let mut handle = UNTOUCHED as *mut c_void;
+        let mut iosb = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: UNTOUCHED,
+        };
+        let mut create = |attributes: *const OBJECT_ATTRIBUTES, ea: *const c_void| {
+            // SAFETY: locals that outlive the call, or null.
+            unsafe {
+                ZwCreateFile(
+                    &raw mut handle,
+                    ACCESS,
+                    attributes,
+                    &raw mut iosb,
+                    &raw const allocation,
+                    0x80,
+                    1,
+                    // FILE_OPEN_IF
+                    3,
+                    FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
+                    ea,
+                    8,
+                )
+            }
+        };
+        if create(&raw const attributes, core::ptr::null()) != STATUS_SUCCESS {
+            return Err("ZwCreateFile failed");
+        }
+        let created = last();
+        let mut refused = [0; 5];
+        refused[0] = create(core::ptr::null(), core::ptr::null());
+        refused[1] = create(&raw const attributes, (&raw const ea).cast());
+        attributes.Length -= 8;
+        refused[2] = create(&raw const attributes, core::ptr::null());
+        attributes.Length += 8;
+        attributes.Attributes = 0x8000;
+        refused[3] = create(&raw const attributes, core::ptr::null());
+        attributes.Attributes = KERNEL;
+        attributes.SecurityQualityOfService = (&raw const ea).cast_mut().cast();
+        refused[4] = create(&raw const attributes, core::ptr::null());
+        file::close(handle as u64);
+        if created.parameters[1..] != [0x0300_0060, 0x80 | 1 << 16, 0]
+            || created.allocation != allocation as u64
+            || created.full_options != 0x60
+            || created.file_flags != FO_SYNCHRONOUS_IO
+            || iosb.Information != OPENED
+        {
+            return Err("ZwCreateFile's create request does not carry what was asked");
+        }
+        if refused
+            != [
+                STATUS_INVALID_PARAMETER,
+                STATUS_EAS_NOT_SUPPORTED,
+                STATUS_INVALID_PARAMETER,
+                STATUS_INVALID_PARAMETER,
+                STATUS_NOT_IMPLEMENTED,
+            ]
+        {
+            return Err("arguments ZwCreateFile cannot serve were not refused, each as it is");
+        }
+        if CREATES.load(Ordering::Acquire) != creates + 5 {
+            return Err("the driver did not see one create request for each open that reached it");
+        }
+        Ok(missing.len() as u32 + 6)
+    })();
+    file::close(device_handle as u64);
+    verdict
 }
 
 /// A buffered control request: the input comes back reversed.
@@ -953,6 +1178,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "io.open.named-pipe", "pipes:", with_driver(named_pipe));
     counted(r, "io.open.mailslot", "mailslots:", with_driver(mailslot));
+    counted(r, "io.open.zw-file", "opens:", with_driver(zw_file));
     counted(r, "io.fs-control", "kinds:", with_driver(fs_control));
     counted(
         r,
