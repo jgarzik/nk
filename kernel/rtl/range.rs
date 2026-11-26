@@ -35,10 +35,6 @@ const _: () = {
 /// Pool tag of the entries.
 const TAG: u32 = u32::from_le_bytes(*b"RRle");
 
-/// A flag of `RtlAddRange` that no header declares: Windows 10 marks
-/// the range with it and counts through the range's user data.
-const ADD_UNDECLARED: u32 = 0x10;
-
 /// A driver's list.
 struct Driver(*mut RTL_RANGE_LIST);
 
@@ -145,10 +141,27 @@ unsafe fn changed(list: *mut RTL_RANGE_LIST, by: i32) {
     }
 }
 
-/// Give an entry back to the pool.
+/// Give an entry back to the pool. One added with the flag 0x10 gives
+/// up its share of its user data, a pool block of the driver's that
+/// starts with a count of the entries pointing to it, and frees the
+/// block with the last share: what the pinned kernel does
+/// (`RtlpFreeRangeListEntry`).
 fn free(entry: *mut Entry) {
-    // SAFETY: the entry is a pool block of this module's, in no list.
-    unsafe { pool::ExFreePoolWithTag(entry.cast(), TAG) };
+    // SAFETY: the entry is a pool block of this module's, in no list;
+    // counted user data is, by the flag's contract, a pool block that
+    // starts with a `ULONG`. The caller serialises the list's users.
+    unsafe {
+        if (&raw const (*entry).range.Flags).read() & range::COUNTED != 0 {
+            let data = (&raw const (*entry).range.UserData).read();
+            let count = data.cast::<u32>();
+            let left = count.read_unaligned().wrapping_sub(1);
+            count.write_unaligned(left);
+            if left == 0 {
+                pool::ExFreePoolWithTag(data, 0);
+            }
+        }
+        pool::ExFreePoolWithTag(entry.cast(), TAG);
+    }
 }
 
 /// `RtlInitializeRangeList`: make `list` an empty list.
@@ -192,11 +205,16 @@ pub unsafe extern "C" fn RtlFreeRangeList(list: *mut RTL_RANGE_LIST) {
 /// if it overlaps a range it may not share with, unless the flags say
 /// to add it anyway.
 ///
-/// The flag 0x10, which no header declares, is not implemented: the
-/// system stops if a driver passes it.
+/// With the flag 0x10, which no header declares and `acpi.sys`
+/// passes, `user_data` is a pool block of the caller's that starts
+/// with a `ULONG` count of the entries that point to it. The range is
+/// marked (0x10 in its flags); adding does not count, a copy of the
+/// entry counts one more, and an entry freed counts one less and
+/// frees the block at zero, an entry this call could not add included.
 ///
 /// # Safety
-/// `list` is an initialised range list.
+/// `list` is an initialised range list; with the flag 0x10,
+/// `user_data` is such a block.
 pub unsafe extern "C" fn RtlAddRange(
     list: *mut RTL_RANGE_LIST,
     start: u64,
@@ -208,11 +226,6 @@ pub unsafe extern "C" fn RtlAddRange(
 ) -> NTSTATUS {
     if end < start {
         return STATUS_INVALID_PARAMETER;
-    }
-    if flags & ADD_UNDECLARED != 0 {
-        crate::kd::bugcheck(format_args!(
-            "RtlAddRange: NK does not implement the flag 0x10"
-        ));
     }
     let entry = pool::alloc(size_of::<Entry>(), TAG).cast::<Entry>();
     if entry.is_null() {
@@ -230,6 +243,10 @@ pub unsafe extern "C" fn RtlAddRange(
             Attributes: attributes,
             Flags: if flags & range::ADD_SHARED != 0 {
                 range::SHARED
+            } else {
+                0
+            } | if flags & range::ADD_COUNTED != 0 {
+                range::COUNTED
             } else {
                 0
             },
@@ -289,7 +306,9 @@ pub unsafe extern "C" fn RtlDeleteOwnersRanges(
 }
 
 /// `RtlCopyRangeList`: make `copy`, which must hold no ranges, a copy of
-/// `source`, flags, count and stamp included.
+/// `source`, flags, count and stamp included. Counted user data
+/// (`RtlAddRange`'s flag 0x10) is counted once more for each copy of an
+/// entry that points to it.
 ///
 /// # Safety
 /// Both are initialised range lists.
@@ -319,6 +338,11 @@ pub unsafe extern "C" fn RtlCopyRangeList(
                     (&raw const (*entry).range).cast(),
                     size_of::<RTL_RANGE>(),
                 );
+            // The copy points to the same counted user data.
+            if (&raw const (*twin).range.Flags).read() & range::COUNTED != 0 {
+                let count = (&raw const (*twin).range.UserData).read().cast::<u32>();
+                count.write_unaligned(count.read_unaligned().wrapping_add(1));
+            }
             to.insert(twin, None);
             at = from.next(entry);
         }

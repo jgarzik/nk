@@ -44,6 +44,12 @@
 pub const ADD_IF_CONFLICT: u32 = 1;
 /// `RTL_RANGE_LIST_ADD_SHARED`: the range may share with shared ranges.
 pub const ADD_SHARED: u32 = 2;
+/// A flag of `RtlAddRange` that no header declares: the range's user
+/// data is a pool block that starts with a count of the entries that
+/// point to it.
+pub const ADD_COUNTED: u32 = 0x10;
+/// The flag a range added so carries, which no header declares either.
+pub const COUNTED: u8 = 0x10;
 /// `RTL_RANGE_SHARED`, of a range's flags.
 pub const SHARED: u8 = 1;
 /// `RTL_RANGE_CONFLICT`, of a range's flags.
