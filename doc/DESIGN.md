@@ -1577,6 +1577,22 @@ NK opens the device for kernel mode and closes the handle again, so the
 device's driver is sent a create and a cleanup at once and a close when
 the caller gives up the file object's reference it is handed.
 
+A driver opens a name itself with
+[`ZwCreateFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ntcreatefile)
+or `ZwOpenFile` (`kernel/io/zwfile.rs`), which are the requestor's open
+on kernel mode's behalf. As in the pinned kernel, a kernel-mode
+caller's share access, disposition and options are not checked: they
+go to the device's driver as given, with the file attributes and the
+allocation size, and the stack location says whether the name was to
+be case-sensitive or the access checked. The handle is the kernel
+handle if `OBJ_KERNEL_HANDLE` asks for one, else the System process's
+own; it and the status block are written only when the open succeeds.
+A name that leads nowhere fails with what the namespace says
+(`\Device\RESOURCE_HUB`, which `acpi.sys` looks for, is not found; a
+`\SystemRoot` path has no `\SystemRoot` to start at). An
+extended-attribute buffer and a security quality of service are
+refused, not ignored.
+
 A driver also has the I/O manager build a request for it
 ([`IoBuildSynchronousFsdRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildsynchronousfsdrequest),
 [`IoBuildDeviceIoControlRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuilddeviceiocontrolrequest),
