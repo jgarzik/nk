@@ -6,6 +6,7 @@
 #![allow(non_snake_case)]
 
 pub mod process;
+pub mod silo;
 
 use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::thread;

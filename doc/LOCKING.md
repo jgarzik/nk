@@ -71,6 +71,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links and state, and the priority each is queued at | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
+| 233 | `ps::silo::HOST` | which silo context slots are allocated, and the context the host silo holds in each | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
@@ -128,6 +129,10 @@ Why this order:
   descriptor's count is raised without the lock by whoever already
   holds a reference, and lowered only under it, so a count that
   reaches zero there finds the entry still in its bucket to take out.
+- The silo lock is held to read or change one word of the slot table
+  or of the host silo's storage. A context's reference is taken before
+  the lock and dropped after it, never inside: dropping the last calls
+  the driver's cleanup routine.
 - An object's header lock is the `Lock` word of its `OBJECT_HEADER`,
   where Windows has it, not a `SpinLock`: its holder spins on the word,
   and the hold is ranked and recorded all the same (`ke::Ranked`). It
@@ -185,6 +190,17 @@ owner).
 - A library's `DllInitialize` and `DllUnload` run with it held, as on
   Windows, where the system's load lock is held around them. A driver's
   entry point and unload routine run without it.
+
+### The silo monitors' mutex
+
+Starting and unregistering silo monitors are serialised by a kernel
+mutex, `ps::silo::MONITORS`, as Windows serialises them with a lock a
+thread can sleep on: the monitor's create and terminate callbacks run
+with it held, at `PASSIVE_LEVEL`, and may wait. It is taken with no
+spin lock held and nothing ranked is held across a callback. An
+exception that unwinds a callback releases it (the guard of that call,
+`doc/DESIGN.md`). What a monitor's slot holds is let go after the mutex
+is released.
 
 ### Per-processor state
 

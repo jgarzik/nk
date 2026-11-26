@@ -24,6 +24,7 @@ pub mod pcr;
 pub mod process;
 pub mod se;
 pub mod seh;
+pub mod silo;
 pub mod status;
 pub mod thread;
 

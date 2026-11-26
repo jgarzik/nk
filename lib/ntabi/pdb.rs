@@ -275,6 +275,7 @@ fn thread_matches_the_kernel() {
         field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")
     );
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
+    assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueThread"), 8);
@@ -298,6 +299,8 @@ fn process_matches_the_kernel() {
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
     assert_eq!(SESSION, field("Session"));
+    assert_eq!(JOB, field("Job"));
+    assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.

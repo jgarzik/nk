@@ -68,6 +68,7 @@ pub fn init(time: u64) -> Result<(), &'static str> {
             .copy_from_nonoverlapping(b"System".as_ptr(), 6);
     }
     PsInitialSystemProcess.0.store(process, Ordering::Release);
+    super::silo::init();
     Ok(())
 }
 

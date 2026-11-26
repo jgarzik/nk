@@ -89,6 +89,9 @@ pub const START_ADDRESS: usize = 0x450;
 pub const APC_STATE_PROCESS: usize = 0xB8;
 /// `Process`: the process the thread belongs to.
 pub const PROCESS: usize = 0x220;
+/// `ETHREAD.Silo`: the silo the thread is attached to, a pointer, or
+/// `silo::THREAD_NOT_ATTACHED` for none.
+pub const SILO: usize = 0x608;
 /// `ETHREAD.Cid`: a `CLIENT_ID`, the process id then the thread id,
 /// each pointer-sized.
 pub const CID: usize = 0x478;

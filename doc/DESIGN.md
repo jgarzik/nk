@@ -306,6 +306,41 @@ process, and the current process (`PsGetCurrentProcess`,
 `IoGetCurrentProcess`) is the one the calling thread says it is attached
 to, `KTHREAD.ApcState.Process`.
 
+### Silos
+
+A silo is a job that isolates what runs in it
+([silo DDIs](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/)).
+NK has no jobs, so there is one silo, the host, which Windows too names
+by a null pointer. For that silo the routines do what they do on
+Windows (`kernel/ps/silo.rs`):
+
+- A thread is attached to a silo through `ETHREAD.Silo`, which starts
+  out as Windows' mark for "none; use the process's" (-3).
+  `PsAttachSiloToCurrentThread` returns what was there for the detach
+  to put back. The current silo is the attached one, else that of the
+  process's job: the host, the System process having no job.
+- A silo context is an object of one of two types, as on Windows
+  (`PsSiloContextPaged`, `PsSiloContextNonPaged`), with the driver's
+  bytes as its body. Its cleanup routine is called when its last
+  reference goes. NK's record of the silo and the routine sits in front
+  of the object's headers, where no binary looks.
+- Slots are numbers, the lowest free one first, 288 of them as on
+  Windows (`nk_ps::silo`). The host silo keeps one context per slot,
+  put there to stay (`PsInsertPermanentSiloContext`), and holds a
+  reference to it; `PsGetPermanentSiloContext` hands it out without
+  one, as Windows does. Freeing a slot does not empty it for the host
+  silo, on Windows either.
+- A silo monitor gets a slot of its own when registered. Started, one
+  that watches the host has its create callback called for the host
+  silo then and there, on the caller's thread; unregistered, its
+  terminate callback, and then what the host holds in its slot is let
+  go. No other silo is ever announced. The details (a monitor without a
+  create callback is never started; a failing create callback is undone
+  by the terminate callback) are Windows 10's.
+
+A silo pointer that is not null, or a job, names nothing that exists:
+where Windows would read the job behind it, NK stops by name.
+
 ## Waits
 
 A thread waits on an event, semaphore, timer, mutex or thread by linking
@@ -703,6 +738,8 @@ make that safe.
 | dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
+| silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
 | a system service made for user mode (the oracle's requests) | base: a system service |

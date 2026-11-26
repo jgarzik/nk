@@ -88,6 +88,9 @@ ps.identity ok
 ps.attach ok
 ps.thread-information ok
 ps.token ok
+ps.silo ok
+ps.silo-monitor ok
+ps.silo-smp ok
 ob.namespace.paths ok
 ob.namespace.links ok
 ob.namespace.name-info ok

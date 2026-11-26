@@ -17,6 +17,9 @@ pub static GROUP: Group = Group {
         "ps.thread-information",
         "ps.token",
         "ob.namespace.paths",
+        "ps.silo",
+        "ps.silo-monitor",
+        "ps.silo-smp",
         "ob.namespace.links",
         "ob.namespace.name-info",
         "ob.handle-access",
@@ -71,6 +74,19 @@ fn run(r: &mut Report, _: &BootInfo) {
         "ps.token",
         "references taken:",
         crate::ps::process::token_test(),
+    );
+    counted(r, "ps.silo", "calls:", crate::ps::silo::self_test());
+    counted(
+        r,
+        "ps.silo-monitor",
+        "calls:",
+        crate::ps::silo::monitor_test(),
+    );
+    counted(
+        r,
+        "ps.silo-smp",
+        "monitors on several processors:",
+        crate::ps::silo::smp_test(),
     );
     counted(
         r,
