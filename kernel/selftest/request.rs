@@ -253,9 +253,11 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
         {
             return Err("a request with no transfer was given a buffer or parameters");
         }
+        // As whoever sends a Plug and Play request sets it; the bus
+        // driver does not know this one and completes it as it came.
         (*request).IoStatus.Status = STATUS_NOT_SUPPORTED;
         let (status, count, _) = sender.send(top.0, request)?;
-        if status != STATUS_SUCCESS || count != 0 {
+        if status != STATUS_NOT_SUPPORTED || count != 0 {
             return Err("a request with no transfer did not come back");
         }
     }

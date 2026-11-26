@@ -962,6 +962,7 @@ make that safe.
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
 | dispatch routine, for a request a driver sends (`IoCallDriver`, `IoSynchronousCallDriver`) | nothing: the request, and for `IoSynchronousCallDriver` the event in the sender's frame that its completion routine sets, are left to the driver that raised |
+| dispatch routine, for a request the kernel sends to a stack and waits for (`io::stack::send_synchronous`) | nothing: the request, and the block its results go to, are left to the driver that raised |
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
@@ -1393,6 +1394,18 @@ and `PoStartNextPowerIrp` does nothing, as in the pinned kernel. A
 driver's dispatch table starts out with one routine for every major
 function, these two included, which fails the request as invalid for
 the device, as Windows' does.
+
+The kernel's own requests to a stack go through
+`io::stack::send_synchronous(device, major, minor, parameters)`, which
+returns `(status, information)`: it builds an IRP for the whole stack
+the device is in, sends it to the top in the name of the calling
+thread, and waits for it, at `PASSIVE_LEVEL`. It is what the Plug and
+Play manager asks a device's drivers through. A Plug and Play or a
+power request starts out with `STATUS_NOT_SUPPORTED`, as Windows
+requires, so that status coming back means no driver handled it. A
+driver that returns other than `STATUS_PENDING` without completing the
+request keeps it: the breach is reported and the returned status is
+the answer.
 
 **StartIo** (`kernel/io/startio.rs`). A driver with a `StartIo` routine
 queues its requests with
