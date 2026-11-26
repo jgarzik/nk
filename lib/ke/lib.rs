@@ -11,6 +11,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod bugcheck;
+pub mod kdpower;
 pub mod sched;
 pub mod wait;
 

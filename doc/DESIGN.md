@@ -2360,6 +2360,14 @@ a debugger that says "go" every time: noted on the console and passed
 over, before any handler is asked. NK has no debugger protocol; the reference
 Windows machine gets a real debugger, played by `tools/kd.py`.
 
+What a driver asks of the debugger (`kernel/kd/debugger.rs`) is
+answered as Windows answers with a debugger never set up:
+`KdDisableDebugger` and `KdEnableDebugger` are
+`STATUS_DEBUGGER_INACTIVE`, and `KdPowerTransitionEx` succeeds at once.
+The debugger's lock (`KdAcquireDebuggerLock`) is a real spin lock, and
+power handlers register and deregister (`lib/ke/kdpower.rs`); no
+transition calls them.
+
 ## What is absent
 
 No APCs, Plug and Play, power management, processes
