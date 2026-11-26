@@ -5,7 +5,9 @@ what the kernel does about each import.
 Imports are read from the fetched fixture binaries with `peinfo`, which uses
 the kernel's own PE loader. Export states come from the kernel itself: the
 boot test saves the `NK-EXPORT <module> <name> <state>` lines the kernel
-prints. With no boot log yet, every import is "missing".
+prints. With no boot log yet, every import is "missing". The names drivers
+looked up at run time (`MmGetSystemRoutineAddress`) and did not find come
+from the same boot, as `NK-LOOKUP <name> absent` lines.
 
 Usage: ledger.py [--check | --missing <binary>...]
   default    rewrite ledger/<arch>.json
@@ -39,6 +41,23 @@ def kernel_exports(arch):
             _, module, name, state = line.split()
             exports[(module.lower(), name)] = state
     return exports, path.exists()
+
+
+def looked_up_absent(lines):
+    """The names in the kernel's `NK-LOOKUP <name> absent` lines, each once,
+    sorted. No import table shows such a name: a driver asks for it by
+    name while it runs and does without when the kernel has none."""
+    names = set()
+    for line in lines:
+        words = line.split()
+        if len(words) == 3 and words[0] == "NK-LOOKUP" and words[2] == "absent":
+            names.add(words[1])
+    return sorted(names)
+
+
+def kernel_lookups(arch):
+    path = ROOT / "target" / "qemu" / f"lookups-{arch}.txt"
+    return looked_up_absent(path.read_text().splitlines()) if path.exists() else []
 
 
 def imports_of(path):
@@ -169,6 +188,12 @@ def build(arch, fixtures):
             "note": "distinct imports of the fixtures loaded at boot",
             "total": len(needed),
             **{s: sum(1 for v in needed.values() if v == s) for s in STATES},
+        },
+        "looked_up_absent": {
+            "note": "names MmGetSystemRoutineAddress was asked for during the boot test, by "
+                    "the fixtures and by the kernel's own test of the routine, that the "
+                    "kernel does not export; in no import table",
+            "names": kernel_lookups(arch),
         },
         "fixtures": entries,
         # No source offers Windows 10 arm64 binaries, so only x86-64 has one.

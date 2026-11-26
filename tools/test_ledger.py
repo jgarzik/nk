@@ -73,6 +73,22 @@ class MicrosoftKernel(unittest.TestCase):
         self.assertEqual(kernel["nk_names_it_lacks"], ["NkOnly", "ProbeForRead"])
 
 
+class LookedUp(unittest.TestCase):
+    def test_names_the_kernel_reported_absent_once_each_and_sorted(self):
+        lines = [
+            "NK-LOOKUP PsGetVersion absent",
+            "NK-EXPORT ntoskrnl.exe ZwClose implemented",
+            "NK-LOOKUP EtwRegister absent",
+            "NK-LOOKUP PsGetVersion absent",
+            "NK-TEST null.load:OK",
+            # Not the kernel's line: torn, or another word.
+            "NK-LOOKUP Torn",
+            "NK-LOOKUP KeSetEvent found",
+        ]
+        self.assertEqual(ledger.looked_up_absent(lines), ["EtwRegister", "PsGetVersion"])
+        self.assertEqual(ledger.looked_up_absent([]), [])
+
+
 class Missing(unittest.TestCase):
     def test_names_by_area_for_the_binaries_asked(self):
         areas, seen = ledger.missing(EXPORTS, LISTS, {"a.sys", "nosuch.sys"})

@@ -534,6 +534,11 @@ through the boot log, the ledger, so the ledger cannot drift from what
 the kernel exports. An import with no entry rejects the driver and names
 the symbol.
 
+A driver can also ask for a routine by name while it runs
+(`MmGetSystemRoutineAddress`) and do without it when the answer is
+null. No import table shows such a name, so each one not found is
+printed in the boot log and the ledger lists them (`looked_up_absent`).
+
 Not handled: imports by ordinal, kernel-mode API-set names (`ext-ms-*`),
 drivers that export to other drivers.
 

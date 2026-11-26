@@ -19,6 +19,14 @@ will need.
 Export states come from what the booted kernel prints, so the ledger
 describes the kernel that ran, not a hand-kept list.
 
+`looked_up_absent` lists the names `MmGetSystemRoutineAddress` was
+asked for during the boot test that the kernel does not export. A
+driver that asks this way goes on without the routine, so no import
+table shows the name and nothing rejects the driver: the list is the
+only place such a gap appears. The kernel's own test of the routine
+asks for names that exist nowhere (`NoSuchRoutineInAnyKernel`); they
+are listed too.
+
 ## The corpus
 
 `x86_64.json` also has a `corpus` section: Microsoft's own kernel-mode
