@@ -77,6 +77,23 @@ pub fn spcr(table: &[u8]) -> Option<Spcr> {
     })
 }
 
+/// The interrupt of the console UART an SPCR table describes, as a
+/// global system interrupt: on ARM, the GIC interrupt id. `None` if the
+/// table names no such interrupt.
+pub fn spcr_interrupt(table: &[u8]) -> Option<u32> {
+    /// Interrupt type bits that say the GSI field is meaningful: I/O
+    /// APIC, I/O SAPIC, ARM GIC.
+    const HAS_GSI: u8 = 0b1110;
+    (*table.get(52)? & HAS_GSI != 0).then(|| u32_at(table, 54))?
+}
+
+/// The physical address of the registers of the high precision event
+/// timer an HPET table describes, if they are in memory.
+pub fn hpet(table: &[u8]) -> Option<u64> {
+    let in_memory = *table.get(40)? == 0;
+    u64_at(table, 44).filter(|&address| in_memory && address != 0)
+}
+
 /// One entry of the MADT that NK acts on. Processor entries of both
 /// encodings (8-bit APIC id and x2APIC) read as [`MadtEntry::LocalApic`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -537,6 +554,38 @@ mod tests {
             );
             assert!(find_table(&fw, 0x1000, b"MCFG").is_none());
         }
+    }
+
+    #[test]
+    fn the_console_s_interrupt_comes_from_the_spcr() {
+        let table = |kind: u8, gsi: u32| {
+            let mut body = spcr_body(3, 0, 0x0900_0000);
+            body[52 - SDT_HEADER] = kind;
+            body[54 - SDT_HEADER..58 - SDT_HEADER].copy_from_slice(&gsi.to_le_bytes());
+            sdt(b"SPCR", &body)
+        };
+        // QEMU's arm64 `virt`: the GIC, interrupt 33.
+        assert_eq!(spcr_interrupt(&table(8, 33)), Some(33));
+        assert_eq!(spcr_interrupt(&table(2, 4)), Some(4));
+        // A PC-AT interrupt alone names no GSI; nor does no interrupt.
+        assert_eq!(spcr_interrupt(&table(1, 4)), None);
+        assert_eq!(spcr_interrupt(&table(0, 33)), None);
+        assert_eq!(spcr_interrupt(&table(8, 33)[..57]), None, "truncated");
+        assert_eq!(spcr_interrupt(&[0; 40]), None);
+    }
+
+    #[test]
+    fn the_event_timer_s_registers_come_from_the_hpet_table() {
+        let table = |space: u8, address: u64| {
+            let mut body = vec![0u8; 20];
+            body[4] = space;
+            body[8..16].copy_from_slice(&address.to_le_bytes());
+            sdt(b"HPET", &body)
+        };
+        assert_eq!(hpet(&table(0, 0xFED0_0000)), Some(0xFED0_0000));
+        assert_eq!(hpet(&table(1, 0xFED0_0000)), None, "I/O ports");
+        assert_eq!(hpet(&table(0, 0)), None);
+        assert_eq!(hpet(&table(0, 0xFED0_0000)[..50]), None, "truncated");
     }
 
     #[test]

@@ -16,6 +16,7 @@ mod etw;
 mod ex;
 pub mod except;
 mod fsd;
+mod interrupt;
 mod library;
 mod loader;
 mod mmio;
@@ -132,6 +133,7 @@ pub static GROUPS: &[&[&Group]] = &[
     base::GROUPS,
     pci::GROUPS,
     mmio::GROUPS,
+    interrupt::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,

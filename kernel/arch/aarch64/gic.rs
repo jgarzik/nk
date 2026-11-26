@@ -52,16 +52,31 @@ const SGI_IPRIORITYR: usize = GICR_FRAME + 0x400;
 static REDISTRIBUTORS: [AtomicU64; MAX_CPUS] = [const { AtomicU64::new(0) }; MAX_CPUS];
 /// The private interrupts NK has enabled; each processor enables them.
 static ENABLED: AtomicU32 = AtomicU32::new(0);
-/// IRQL of each private interrupt that has been enabled.
-static LEVELS: [AtomicU8; PRIVATE as usize] = [const { AtomicU8::new(0) }; PRIVATE as usize];
+/// IRQL of each interrupt that has been enabled, by interrupt id.
+static LEVELS: [AtomicU8; INTERRUPTS] = [const { AtomicU8::new(0) }; INTERRUPTS];
+/// Interrupt ids from here up are not interrupts.
+const INTERRUPTS: usize = 1020;
+/// The distributor, in the direct map, and how many interrupts it has.
+static DISTRIBUTOR: AtomicU64 = AtomicU64::new(0);
+static LINES: AtomicU32 = AtomicU32::new(0);
 
-fn read32(base: u64, offset: usize) -> u32 {
+/// The distributor's registers.
+pub(super) fn distributor() -> u64 {
+    DISTRIBUTOR.load(Ordering::Relaxed)
+}
+
+/// How many interrupt ids the distributor has, private ones included.
+pub(super) fn lines() -> u32 {
+    LINES.load(Ordering::Relaxed)
+}
+
+pub(super) fn read32(base: u64, offset: usize) -> u32 {
     // SAFETY: `base` is a GIC register frame in the direct map; device
     // registers are read with volatile accesses.
     unsafe { ((base as usize + offset) as *const u32).read_volatile() }
 }
 
-fn write32(base: u64, offset: usize, value: u32) {
+pub(super) fn write32(base: u64, offset: usize, value: u32) {
     // SAFETY: as `read32`.
     unsafe { ((base as usize + offset) as *mut u32).write_volatile(value) }
 }
@@ -128,7 +143,9 @@ pub fn init() -> Result<(), &'static str> {
     let distributor = mm::phys_to_virt(controllers.distributor) as u64;
     // Firmware may have left device interrupts enabled; nothing here
     // handles them yet.
-    let lines = distributor_lines(read32(distributor, GICD_TYPER));
+    let lines = distributor_lines(read32(distributor, GICD_TYPER)).min(INTERRUPTS as u32);
+    DISTRIBUTOR.store(distributor, Ordering::Relaxed);
+    LINES.store(lines, Ordering::Relaxed);
     for word in 1..lines / 32 {
         write32(distributor, GICD_ICENABLER + 4 * word as usize, u32::MAX);
     }
@@ -213,11 +230,14 @@ fn enable_on(redistributor: u64, vector: u32) {
     write32(redistributor, SGI_ISENABLER0, 1 << vector);
 }
 
-/// Enable private interrupt `vector` at IRQL `level`, on every processor
-/// running and every one started later.
+/// Have interrupt `vector` run at IRQL `level`. A private interrupt is
+/// enabled, on every processor running and every one started later; a
+/// device's line is enabled by `line_enable`, once routed.
 pub fn interrupt_enable(vector: u32, level: u8) {
-    assert!(vector < PRIVATE, "only per-processor interrupts so far");
     LEVELS[vector as usize].store(level, Ordering::Relaxed);
+    if vector >= PRIVATE {
+        return;
+    }
     ENABLED.fetch_or(1 << vector, Ordering::Relaxed);
     for redistributor in &REDISTRIBUTORS {
         match redistributor.load(Ordering::Acquire) {

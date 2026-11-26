@@ -73,6 +73,37 @@ pub const fn next_tick(last: u64, period: u64, now: u64) -> u64 {
     if due <= now { now + period } else { due }
 }
 
+/// The first shared peripheral interrupt: ids below are private to a
+/// processor.
+pub const SPI_BASE: u32 = 32;
+
+/// The IRQL a shared peripheral interrupt runs at. The GIC ties no
+/// priority to an interrupt id, so NK spreads them over the device
+/// levels, 3 to 11, by id.
+pub const fn spi_level(intid: u32) -> u8 {
+    3 + (intid % 9) as u8
+}
+
+/// Where interrupt `intid` is in a distributor register that holds one
+/// bit per interrupt (enable, group): the offset of its 32-bit word from
+/// the register's start, and its bit.
+pub const fn bit_of(intid: u32) -> (usize, u32) {
+    (4 * (intid / 32) as usize, 1 << (intid % 32))
+}
+
+/// Where interrupt `intid` is in the configuration register
+/// (`GICD_ICFGR`), two bits per interrupt: the offset of its word and
+/// the bit that makes it edge triggered.
+pub const fn config_of(intid: u32) -> (usize, u32) {
+    (4 * (intid / 16) as usize, 2 << (2 * (intid % 16)))
+}
+
+/// The routing register value (`GICD_IROUTER`) that sends an interrupt
+/// to the processor with affinity `id`.
+pub const fn route_to(id: u64) -> u64 {
+    id & MPIDR_AFFINITY
+}
+
 /// A stretch of redistributor frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Redistributors {
@@ -182,6 +213,24 @@ pub fn usable_cpu(entry: &MadtEntry) -> Option<Cpu> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_shared_interrupt_has_a_device_irql_and_a_place_in_each_register() {
+        assert_eq!(spi_level(32), 8);
+        assert_eq!(spi_level(33), 9);
+        assert_eq!(spi_level(36), 3);
+        assert!((SPI_BASE..1020).all(|id| (3..=11).contains(&spi_level(id))));
+        assert_eq!(bit_of(32), (4, 1));
+        assert_eq!(bit_of(33), (4, 2));
+        assert_eq!(bit_of(95), (8, 1 << 31));
+        assert_eq!(config_of(32), (8, 2));
+        assert_eq!(config_of(33), (8, 8));
+        assert_eq!(config_of(47), (8, 2 << 30));
+        assert_eq!(config_of(48), (12, 2));
+        assert_eq!(route_to(0x0000_0001), 1);
+        assert_eq!(route_to(0x8000_0003), 3, "bits that are not affinity");
+        assert_eq!(route_to(0x12_0034_5678), 0x12_0034_5678);
+    }
 
     use crate::table;
     use nk_acpi::madt;

@@ -20,6 +20,7 @@ pub mod cm;
 pub mod etw;
 pub mod ex;
 pub mod fsrtl;
+pub mod interrupt;
 pub mod io;
 pub mod ke;
 pub mod ob;

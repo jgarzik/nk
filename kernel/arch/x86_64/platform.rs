@@ -22,11 +22,15 @@ pub struct Firmware {
     /// The reference the time counter is calibrated against: the ACPI
     /// power-management timer, where the machine has one.
     pub pm_timer: Option<nk_acpi::PmTimer>,
+    /// Physical address of the high precision event timer's registers,
+    /// where the machine has one.
+    pub hpet: Option<u64>,
 }
 
 /// Read it from the ACPI tables `find` returns.
 pub fn firmware<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Firmware {
     Firmware {
         pm_timer: find(b"FACP").and_then(nk_acpi::pm_timer),
+        hpet: find(b"HPET").and_then(nk_acpi::hpet),
     }
 }

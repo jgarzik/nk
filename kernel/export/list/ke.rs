@@ -4,7 +4,11 @@ use super::super::{Export, NT, State};
 use crate::ke;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, ke::kinterrupt::IoGetAffinityInterrupt),
     export!(Partial, ke::kspin::KeAcquireInStackQueuedSpinLock),
+    export!(Implemented, ke::kinterrupt::KeAcquireInterruptSpinLock),
+    export!(Implemented, ke::kinterrupt::KeReleaseInterruptSpinLock),
+    export!(Implemented, ke::kinterrupt::KeSynchronizeExecution),
     export!(Implemented, ke::kspin::KeAcquireSpinLockAtDpcLevel),
     export!(Implemented, ke::kspin::KeAcquireSpinLockRaiseToDpc),
     export!(Implemented, ke::bugcheck::KeBugCheckEx),

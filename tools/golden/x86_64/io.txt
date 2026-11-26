@@ -32,3 +32,8 @@ io.driver.unload-reentered ok
 io.requestor-process ok
 io.file-generic-mapping ok
 io.open.missing-name ok
+io.interrupt.line ok
+io.interrupt.synchronize ok
+io.interrupt.shared ok
+io.interrupt.message ok
+io.interrupt.refused ok
