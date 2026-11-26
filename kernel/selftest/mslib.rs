@@ -13,7 +13,7 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["ms.wpprecorder"],
+    names: &["ms.wpprecorder", "ms.wmilib"],
     run,
     manual: false,
 };
@@ -51,4 +51,5 @@ fn report(r: &mut Report, name: &str, file: &str) {
 
 fn run(r: &mut Report, _: &BootInfo) {
     report(r, "ms.wpprecorder", "wpprecorder.sys");
+    report(r, "ms.wmilib", "wmilib.sys");
 }

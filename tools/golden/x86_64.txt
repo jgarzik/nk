@@ -254,6 +254,7 @@ io.open.missing-name ok
 null.unload ok
 null.no-leak ok
 ms.wpprecorder ok
+ms.wmilib ok
 sioctl.load ok
 sioctl.open ok
 sioctl.buffered ok

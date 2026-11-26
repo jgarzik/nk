@@ -33,6 +33,15 @@ sha256 = "7b4e4c2c0f70836e5117d04f819cd928b73b1aa7f3051b0079e298ba902dca21"
 status = "microsoft-inbox"
 note = "WppRecorder.sys 10.0.19041.1, the WPP trace recorder: an export driver"
 
+[[fixture]]
+name = "wmilib"
+arch = "x86_64"
+file = "wmilib.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wmilib.sys/CD518505c000/wmilib.sys"
+sha256 = "0241160ae1e5635d8e12c517c50b327471ec9ae6af08538751892cbe467ba7ff"
+status = "microsoft-inbox"
+note = "wmilib.sys 10.0.19041.1, the WMI library drivers import from: an export driver"
+
 # null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
 # image size of the Windows 10 ARM64 build, which no public index lists.
 # Do not substitute a Windows 11 binary.

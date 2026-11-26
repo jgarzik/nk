@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 151,
-  "implemented": 140,
+  "total": 152,
+  "implemented": 141,
   "partial": 6,
   "traps": 0,
   "missing": 0,
@@ -242,6 +242,50 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeInitializeSpinLock",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "wmilib",
+   "file": "wmilib.x64.sys",
+   "sha256": "0241160ae1e5635d8e12c517c50b327471ec9ae6af08538751892cbe467ba7ff",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePool",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfReferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIWriteEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIDeviceObjectToProviderId",
      "state": "implemented"
     }
    ]
