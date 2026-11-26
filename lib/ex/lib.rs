@@ -12,7 +12,7 @@
 //! [`lookaside`] is what initialising a lookaside list writes.
 //! [`uuid`] makes the time-based UUIDs of `ExUuidCreate`.
 //!
-//! The `ExAllocateTimer` family has no logic of its own to put here: an
+//! [`timer`] reads the arguments of the `ExAllocateTimer` family: an
 //! executive timer is a kernel timer with a callback, and the rules for
 //! due times are `nk_ke::wait`'s.
 
@@ -22,6 +22,7 @@ pub mod lookaside;
 pub mod pushlock;
 pub mod resource;
 pub mod slist;
+pub mod timer;
 pub mod uuid;
 
 #[cfg(test)]

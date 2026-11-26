@@ -24,6 +24,21 @@ pub struct SLIST_HEADER {
     pub Region: u64,
 }
 
+/// `EXT_DELETE_CALLBACK`: what a driver may ask `ExDeleteTimer` to call
+/// once the timer is gone.
+pub type EXT_DELETE_CALLBACK = unsafe extern "C" fn(*mut c_void);
+
+/// `EXT_DELETE_PARAMETERS`: the optional last argument of
+/// `ExDeleteTimer`, set up by the header's
+/// `ExInitializeDeleteTimerParameters`.
+#[repr(C)]
+pub struct EXT_DELETE_PARAMETERS {
+    pub Version: u32,
+    pub Reserved: u32,
+    pub DeleteCallback: Option<EXT_DELETE_CALLBACK>,
+    pub DeleteContext: *mut c_void,
+}
+
 /// `ALLOCATE_FUNCTION`: a lookaside list's routine for a block it does
 /// not have: pool type, size, tag.
 pub type ALLOCATE_FUNCTION = unsafe extern "C" fn(u32, usize, u32) -> *mut c_void;
@@ -159,6 +174,10 @@ const _: () = {
     assert!(offset_of!(IO_WORKITEM, Routine) == 0x20);
     assert!(offset_of!(IO_WORKITEM, Context) == 0x30);
     assert!(offset_of!(IO_WORKITEM, ActivityId) == 0x44);
+
+    assert!(size_of::<EXT_DELETE_PARAMETERS>() == 0x18);
+    assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteCallback) == 0x08);
+    assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteContext) == 0x10);
 
     assert!(size_of::<EX_PUSH_LOCK>() == 8);
     assert!(size_of::<SLIST_ENTRY>() == 0x10);

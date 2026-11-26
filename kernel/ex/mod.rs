@@ -5,4 +5,5 @@ pub mod pushlock;
 pub mod resource;
 pub mod slist;
 mod stress;
+pub mod timer;
 pub mod work;

@@ -327,6 +327,11 @@ while queued; NK stores the queue's address there. A DPC running over 20
 seconds stops the system (`DPC_WATCHDOG_VIOLATION`); the tick checks.
 No targeting of another processor and no importance ordering.
 
+`ke::dpc::flush` waits until every DPC that was queued or running
+anywhere has finished: an interprocessor call has each processor queue
+one DPC more, and the caller, below `DISPATCH_LEVEL`, waits for those
+to run. The kernel uses it before freeing what a DPC may refer to.
+
 ## Timers
 
 Each processor has a table of timers set on it and not yet due: 256
@@ -464,6 +469,41 @@ for each routine. NK's decisions:
   system (`RESOURCE_NOT_OWNED`).
 - `ExEnterCriticalRegionAndAcquireResource...` are not exported: what
   they return is not documented.
+
+### Executive timers
+
+An
+[`EX_TIMER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/exxxxtimer-routines-and-ex-timer-objects)
+is opaque to a driver except that its address can be waited on. NK's
+is a pool block that begins with a `KTIMER`, followed by the DPC that
+calls the driver's callback at `DISPATCH_LEVEL` and by NK's own state
+(`kernel/ex/timer.rs`); the pinned kernel's symbols do not describe
+Windows'. Setting, cancelling, expiring and waiting are the kernel
+timer's. NK's decisions:
+
+- **Freed only when nothing can reach it.** A delete can race an
+  expiry on another processor, or come from the callback itself, and
+  the callback is promised a valid timer. Retiring a timer cancels it
+  and waits until every DPC queued on any processor has run
+  (`ke::dpc::flush`, the promise of Windows' `KeFlushQueuedDpcs`),
+  three times over: `kernel/ex/timer.rs` says why three. A delete that
+  waits does this itself; otherwise a worker thread does and the
+  delete returns at once.
+- **Deleted without cancelling,** a timer that is set stays for one
+  more expiry, callback included, and is retired then. Microsoft says
+  only that it is not cancelled.
+- The delete callback of `EXT_DELETE_PARAMETERS` is called after the
+  timer is freed, from the thread that retired it.
+- A period is kept in whole milliseconds, rounded up (the kernel
+  timer's unit), where Windows keeps 100 ns: `ExSetTimer` is partial.
+- A high-resolution timer expires on the clock tick like any other:
+  `ExAllocateTimer` is partial. The no-wake attribute and a stated
+  tolerance permit lateness NK never adds.
+- An attribute bit Windows does not define fails the allocation.
+  What Microsoft documents as a bug check is one: high resolution with
+  no-wake, a high-resolution timer set for a system time, a delete
+  that waits without cancelling. So is a period outside the
+  documented range.
 
 ## Objects, references and handles
 

@@ -164,7 +164,10 @@ The executive's structures that live in a driver's memory (`ERESOURCE`,
 the probe states them for both architectures and the symbols agree on
 x86-64. The bits of a push lock's word are the symbols'
 (`_EX_PUSH_LOCK`), on both architectures: no header declares them, and
-only the kernel's routines look inside the word.
+only the kernel's routines look inside the word. `EX_TIMER` is in
+neither the headers nor the symbols; all a driver may do with one is
+wait on its address, so NK's begins with a `KTIMER` and is otherwise
+its own.
 
 ## Not yet verified
 

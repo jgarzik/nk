@@ -630,6 +630,27 @@ fn push_lock_matches_the_kernel() {
 }
 
 #[test]
+fn timer_delete_parameters_match_the_kernel() {
+    use crate::ex::EXT_DELETE_PARAMETERS;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let parameters = types
+        .layout("_EXT_DELETE_PARAMETERS")
+        .expect("_EXT_DELETE_PARAMETERS");
+    let field = |name| offset(&parameters, "_EXT_DELETE_PARAMETERS", name);
+    assert_eq!(size_of::<EXT_DELETE_PARAMETERS>(), parameters.size as usize);
+    assert_eq!(offset_of!(EXT_DELETE_PARAMETERS, Version), field("Version"));
+    assert_eq!(
+        offset_of!(EXT_DELETE_PARAMETERS, DeleteCallback),
+        field("DeleteCallback")
+    );
+    assert_eq!(
+        offset_of!(EXT_DELETE_PARAMETERS, DeleteContext),
+        field("DeleteContext")
+    );
+}
+
+#[test]
 fn lists_match_the_kernel() {
     use crate::ex::{GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST, PAGED_LOOKASIDE_LIST, SLIST_HEADER};
     use core::mem::{offset_of, size_of};

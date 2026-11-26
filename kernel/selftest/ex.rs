@@ -1,7 +1,7 @@
 //! Tests of the executive's locks, lists and timers, called the way a
 //! driver calls them: through the exports, on memory of the caller's.
 
-use crate::ex::{lookaside, pushlock, resource, slist};
+use crate::ex::{lookaside, pushlock, resource, slist, timer};
 use crate::test::{Group, Report};
 use core::fmt::Display;
 use nk_bootinfo::BootInfo;
@@ -24,6 +24,10 @@ pub static GROUP: Group = Group {
         "ex.resource.starve",
         "ex.resource.table",
         "ex.resource.contention",
+        "ex.timer.callback",
+        "ex.timer.periodic",
+        "ex.timer.delete",
+        "ex.timer.wait",
     ],
     run,
     manual: false,
@@ -106,4 +110,13 @@ fn run(r: &mut Report, _: &BootInfo) {
         "writes:",
         resource::contention_test(),
     );
+    counted(r, "ex.timer.callback", "callbacks:", timer::callback_test());
+    counted(r, "ex.timer.periodic", "callbacks:", timer::periodic_test());
+    counted(
+        r,
+        "ex.timer.delete",
+        "timers deleted:",
+        timer::delete_test(),
+    );
+    r.check("ex.timer.wait", timer::wait_test);
 }
