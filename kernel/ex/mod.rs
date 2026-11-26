@@ -12,6 +12,7 @@ pub mod slist;
 pub mod spinlock;
 mod stress;
 pub mod sysinfo;
+pub mod sysinfo_ex;
 pub mod timer;
 pub mod uuid;
 pub mod vsl;

@@ -21,6 +21,7 @@ pub static GROUP: Group = Group {
         "rtl.debug-filter",
         "cpu.stack-probe",
         "kd.no-debugger",
+        "ex.sysinfo.with-input",
     ],
     run,
     manual: false,
@@ -215,6 +216,137 @@ fn no_debugger() -> Result<(), &'static str> {
     Ok(())
 }
 
+fn sysinfo_with_input() -> Result<(), &'static str> {
+    use crate::ex::sysinfo_ex::NtQuerySystemInformationEx as query;
+    use nk_ntabi::interrupt::GROUP_AFFINITY;
+    use nk_ntabi::status::STATUS_INFO_LENGTH_MISMATCH;
+    use nk_ntabi::sysinfo::{
+        GROUP_RELATIONSHIP_ENTRY, NUMA_NODE_RELATIONSHIP_ENTRY,
+        SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT,
+    };
+    let online = crate::ke::smp::online();
+    let mut length = 0u32;
+    let numa = 1u32;
+    let group = 4u32;
+    let mut entry = [0u8; 0x50];
+    // SAFETY: inputs, outputs and lengths in locals, of the sizes
+    // given.
+    unsafe {
+        // As pci.sys asks: the length first, then the entry.
+        if query(
+            107,
+            (&raw const numa).cast(),
+            4,
+            core::ptr::null_mut(),
+            0,
+            &raw mut length,
+        ) != STATUS_INFO_LENGTH_MISMATCH
+            || length != 0x30
+        {
+            return Err("the length of the NUMA node's entry was not reported");
+        }
+        if query(
+            107,
+            (&raw const numa).cast(),
+            4,
+            entry.as_mut_ptr().cast(),
+            0x30,
+            &raw mut length,
+        ) != STATUS_SUCCESS
+        {
+            return Err("the NUMA node was not reported");
+        }
+        let node = entry
+            .as_ptr()
+            .cast::<NUMA_NODE_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        if (node.Relationship, node.Size, node.NodeNumber) != (1, 0x30, 0)
+            || node.GroupMask.Mask as u64 != online
+            || node.GroupMask.Group != 0
+        {
+            return Err("the NUMA node is not the one node of every running processor");
+        }
+        if query(
+            107,
+            (&raw const group).cast(),
+            4,
+            entry.as_mut_ptr().cast(),
+            0x50,
+            &raw mut length,
+        ) != STATUS_SUCCESS
+            || length != 0x50
+        {
+            return Err("the processor group was not reported");
+        }
+        let groups = entry
+            .as_ptr()
+            .cast::<GROUP_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        if (groups.ActiveGroupCount, groups.MaximumGroupCount) != (1, 1)
+            || u32::from(groups.ActiveProcessorCount) != online.count_ones()
+            || groups.ActiveProcessorMask as u64 != online
+        {
+            return Err("the group is not the one group of every running processor");
+        }
+        if query(
+            107,
+            core::ptr::null(),
+            4,
+            entry.as_mut_ptr().cast(),
+            0x50,
+            &raw mut length,
+        ) != STATUS_INVALID_PARAMETER
+            || query(
+                107,
+                (&raw const numa).cast(),
+                0,
+                entry.as_mut_ptr().cast(),
+                0x50,
+                &raw mut length,
+            ) != STATUS_INVALID_PARAMETER
+        {
+            return Err("a question without its input was not refused");
+        }
+        // Interrupt steering, as pci.sys asks about it.
+        let question = SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT {
+            Gsiv: u32::MAX,
+            ControllerInterrupt: 1,
+            EdgeInterrupt: 0,
+            IsPrimaryInterrupt: 0,
+            TargetAffinity: GROUP_AFFINITY {
+                Mask: 0,
+                Group: 0,
+                Reserved: [0; 3],
+            },
+        };
+        let mut steered = 0xFFFF_FFFFu32;
+        if query(
+            180,
+            (&raw const question).cast(),
+            0x18,
+            (&raw mut steered).cast(),
+            4,
+            core::ptr::null_mut(),
+        ) != STATUS_SUCCESS
+            || steered != 0
+        {
+            return Err("interrupts were not reported as not steered");
+        }
+        if query(
+            180,
+            (&raw const question).cast(),
+            0x10,
+            (&raw mut steered).cast(),
+            4,
+            &raw mut length,
+        ) != STATUS_INFO_LENGTH_MISMATCH
+        {
+            return Err("a steering question of the wrong length was not refused");
+        }
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ex.verifier-off", verifier_off);
     r.check("ex.headless-off", headless_off);
@@ -224,6 +356,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.debug-filter", debug_filter);
     r.check("cpu.stack-probe", crate::arch::chkstk_test);
     r.check("kd.no-debugger", no_debugger);
+    r.check("ex.sysinfo.with-input", sysinfo_with_input);
 }
 
 /// This file's test groups, in the order they run.

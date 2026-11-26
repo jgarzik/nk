@@ -12,7 +12,8 @@
 //! [`lookaside`] is what initialising a lookaside list writes.
 //! [`uuid`] makes the time-based UUIDs of `ExUuidCreate`.
 //! [`sysinfo`] is the length rules of `ZwQuerySystemInformation` and the
-//! list of loaded modules it and `RtlQueryModuleInformation` report.
+//! list of loaded modules it and `RtlQueryModuleInformation` report;
+//! [`sysinfo_ex`] is the classes that take an input.
 //!
 //! [`rundown`] is `EX_RUNDOWN_REF` and its cache-aware kind;
 //! [`spinlock`] is `EX_SPIN_LOCK`.
@@ -36,6 +37,7 @@ pub mod rundown;
 pub mod slist;
 pub mod spinlock;
 pub mod sysinfo;
+pub mod sysinfo_ex;
 pub mod timer;
 pub mod uuid;
 

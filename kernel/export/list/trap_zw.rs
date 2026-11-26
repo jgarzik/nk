@@ -9,7 +9,6 @@ use super::super::{Export, NT, State};
 trap_list!(
     NtGetEnvironmentVariableEx,
     NtQueryEnvironmentVariableInfoEx,
-    NtQuerySystemInformationEx,
     ZwCreateDirectoryObject,
     ZwCreateFile,
     ZwInitiatePowerAction,
@@ -17,7 +16,6 @@ trap_list!(
     ZwMakeTemporaryObject,
     ZwNotifyChangeKey,
     ZwOpenFile,
-    ZwQuerySystemInformationEx,
     ZwQueryWnfStateData,
     ZwSetSystemInformation,
 );

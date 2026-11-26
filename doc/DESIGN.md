@@ -2342,6 +2342,15 @@ is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers
 `STATUS_DEVICE_NOT_READY`, Windows' answer before its live-dump support
 has started.
 
+`NtQuerySystemInformationEx` (`kernel/ex/sysinfo_ex.rs`, rules in
+`lib/ex/sysinfo_ex.rs`) takes the classes that come with an input.
+Two are answered: the processor relationships a driver asks for by
+kind, of which NK states the NUMA node and the group (one of each,
+holding every running processor; cores, caches and packages are not
+stated), and whether interrupts are steered between processors, which
+they are not. Any other class, and any other part of these two, stops
+the system naming it.
+
 ## Hardware errors
 
 WHEA is Windows' path for hardware errors: a *source* reports them, the

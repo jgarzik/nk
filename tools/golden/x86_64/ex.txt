@@ -39,3 +39,4 @@ ex.verifier-off ok
 ex.headless-off ok
 ex.secure-devices ok
 ex.hypervisor ok
+ex.sysinfo.with-input ok
