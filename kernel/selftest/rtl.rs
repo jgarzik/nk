@@ -18,6 +18,11 @@ pub static GROUP: Group = Group {
         "rtl.multibyte",
         "rtl.ansi-string",
         "rtl.guid",
+        "rtl.sid",
+        "rtl.sid-text",
+        "rtl.app-container",
+        "rtl.acl",
+        "rtl.owner-group",
     ],
     run,
     manual: false,
@@ -602,6 +607,343 @@ fn guid() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Room for the largest SID, aligned as one is.
+#[repr(C, align(4))]
+struct SidRoom([u8; nk_se::SID_MAX_SIZE]);
+
+impl SidRoom {
+    /// S-1-`authority`-`subs`, built the way a driver builds one.
+    fn new(authority: u8, subs: &[u32]) -> Self {
+        use crate::se::sid::{RtlInitializeSid, RtlSubAuthoritySid};
+        let mut room = Self([0xEE; nk_se::SID_MAX_SIZE]);
+        let value = [0, 0, 0, 0, 0, authority];
+        // SAFETY: the room holds the largest SID; no caller passes more
+        // than fifteen sub-authorities.
+        unsafe {
+            RtlInitializeSid(room.0.as_mut_ptr(), value.as_ptr(), subs.len() as u8);
+            for (index, &sub) in subs.iter().enumerate() {
+                RtlSubAuthoritySid(room.0.as_ptr(), index as u32).write(sub);
+            }
+        }
+        room
+    }
+
+    fn at(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+}
+
+/// SIDs built, measured, compared, judged and copied.
+fn sid() -> Result<(), &'static str> {
+    use crate::se::sid::*;
+    use crate::se::{RtlLengthSid, SeExports};
+    // SAFETY: every SID is in room for the largest one, or is one of
+    // the kernel's own.
+    unsafe {
+        let mut room = SidRoom([0xEE; nk_se::SID_MAX_SIZE]);
+        let nt = [0u8, 0, 0, 0, 0, 5];
+        let one = room.0.as_mut_ptr();
+        if RtlLengthRequiredSid(2) != 16 || RtlInitializeSid(one, nt.as_ptr(), 2) != 0 {
+            return Err("a SID of two sub-authorities was not measured or initialised");
+        }
+        let places = [
+            *RtlSubAuthorityCountSid(one) as usize,
+            RtlSubAuthoritySid(one, 0) as usize - one as usize,
+            RtlSubAuthoritySid(one, 1) as usize - one as usize,
+        ];
+        if places != [2, 8, 12] || room.0[16] != 0xEE {
+            return Err("a SID's count or sub-authorities are not where Windows has them");
+        }
+        *RtlSubAuthoritySid(one, 0) = 32;
+        *RtlSubAuthoritySid(one, 1) = 544;
+        let table = SeExports.table();
+        if RtlLengthSid(one) != 16
+            || RtlValidSid(one) != 1
+            || RtlEqualSid(one, (*table).SeAliasAdminsSid) != 1
+            || RtlEqualSid(one, (*table).SeLocalSystemSid) != 0
+        {
+            return Err("a SID built by hand is not the administrators' SID");
+        }
+        let equal = [
+            RtlEqualSid(one, SidRoom::new(5, &[32, 545]).at()),
+            RtlEqualSid(one, SidRoom::new(5, &[32]).at()),
+            RtlEqualSid(one, SidRoom::new(1, &[32, 544]).at()),
+            RtlEqualSid(one, one),
+        ];
+        if equal != [0, 0, 0, 1] {
+            return Err("RtlEqualSid called different SIDs equal, or a SID unlike itself");
+        }
+        let fifteen = SidRoom::new(5, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let (mut sixteen, mut revised) = (SidRoom::new(5, &[1]), SidRoom::new(5, &[32, 544]));
+        sixteen.0[1] = 16;
+        revised.0[0] = 2;
+        let valid = [
+            RtlValidSid(fifteen.at()),
+            RtlValidSid(sixteen.at()),
+            RtlValidSid(revised.at()),
+            RtlValidSid(SidRoom::new(5, &[]).at()),
+            RtlValidSid(core::ptr::null()),
+        ];
+        if valid != [1, 0, 0, 1, 0] {
+            return Err("RtlValidSid judged a SID wrongly");
+        }
+        let mut copy = SidRoom([0xEE; nk_se::SID_MAX_SIZE]);
+        if RtlCopySid(16, copy.0.as_mut_ptr(), one) != 0
+            || RtlEqualSid(copy.at(), one) != 1
+            || copy.0[16] != 0xEE
+        {
+            return Err("RtlCopySid did not copy a SID, or wrote past it");
+        }
+        copy.0[0] = 0xEE;
+        if RtlCopySid(15, copy.0.as_mut_ptr(), one) as u32 != 0xC000_0023 || copy.0[0] != 0xEE {
+            return Err("RtlCopySid wrote a SID into less room than it needs");
+        }
+    }
+    Ok(())
+}
+
+/// `RtlConvertSidToUnicodeString`.
+fn sid_text() -> Result<(), &'static str> {
+    use crate::rtl::print::RtlFreeUnicodeString;
+    use crate::se::sid::RtlConvertSidToUnicodeString;
+    /// The status, and whether the allocated string is `expected` with
+    /// room for its terminator.
+    fn text(sid: &SidRoom, expected: &str) -> (u32, bool) {
+        let mut made = UNICODE_STRING {
+            Length: 0,
+            MaximumLength: 0,
+            Buffer: core::ptr::null_mut(),
+        };
+        let expected = wide(expected);
+        // SAFETY: the SID is in room for the largest one; the string
+        // made is read within its `MaximumLength` and freed.
+        unsafe {
+            let status = RtlConvertSidToUnicodeString(&raw mut made, sid.at(), 1) as u32;
+            if status != 0 {
+                return (status, made.Buffer.is_null());
+            }
+            let bytes = expected.len() * 2;
+            let right = (usize::from(made.Length), usize::from(made.MaximumLength))
+                == (bytes - 2, bytes)
+                && (0..expected.len()).all(|at| made.Buffer.add(at).read() == expected[at]);
+            RtlFreeUnicodeString(&raw mut made);
+            (status, right)
+        }
+    }
+    let mut wide_authority = SidRoom::new(5, &[18]);
+    wide_authority.0[2] = 1;
+    let mut revised = SidRoom::new(5, &[18]);
+    revised.0[0] = 2;
+    if text(&SidRoom::new(5, &[32, 544]), "S-1-5-32-544") != (0, true)
+        || text(&SidRoom::new(5, &[18]), "S-1-5-18") != (0, true)
+        || text(
+            &SidRoom::new(5, &[u32::MAX, 0x8000_0000]),
+            "S-1-5-4294967295-2147483648",
+        ) != (0, true)
+    {
+        return Err("a SID's text is wrong");
+    }
+    if text(&wide_authority, "S-1-0x010000000005-18") != (0, true) {
+        return Err("an authority beyond 32 bits is not printed in hexadecimal");
+    }
+    if text(&revised, "") != (0xC000_0078, true) {
+        return Err("a SID of another revision was printed");
+    }
+    // Into the caller's buffer: twelve characters need room for
+    // thirteen.
+    let admins = SidRoom::new(5, &[32, 544]);
+    let mut room = [0xEEEEu16; 16];
+    let mut given = UNICODE_STRING {
+        Length: 0,
+        MaximumLength: 16,
+        Buffer: room.as_mut_ptr(),
+    };
+    // SAFETY: the buffer has the sixteen units the last call is told of.
+    unsafe {
+        let status = RtlConvertSidToUnicodeString(&raw mut given, admins.at(), 0);
+        if status as u32 != 0x8000_0005 || given.Length != 0 || room[0] != 0xEEEE {
+            return Err("text that does not fit the caller's buffer was not refused");
+        }
+        given.MaximumLength = 24;
+        let status = RtlConvertSidToUnicodeString(&raw mut given, admins.at(), 0);
+        if status as u32 != 0x8000_0005 {
+            return Err("text without room for its terminator was not refused");
+        }
+        given.MaximumLength = 26;
+        let status = RtlConvertSidToUnicodeString(&raw mut given, admins.at(), 0);
+        if status != 0
+            || (given.Length, given.MaximumLength) != (24, 26)
+            || room[..14] != [wide("S-1-5-32-544"), alloc::vec![0xEEEE]].concat()[..]
+        {
+            return Err("a SID's text was not written to the caller's buffer");
+        }
+    }
+    Ok(())
+}
+
+/// `RtlGetAppContainerSidType` and `RtlGetAppContainerParent`.
+fn app_container() -> Result<(), &'static str> {
+    use crate::mm::pool;
+    use crate::se::sid::{RtlEqualSid, RtlGetAppContainerParent, RtlGetAppContainerSidType};
+    const PACKAGE: [u32; 12] = [2, 11, 22, 33, 44, 55, 66, 77, 1001, 1002, 1003, 1004];
+    /// The first routine's status and the type it stored; the second's
+    /// status and whether it gave the SID's first eight sub-authorities.
+    fn asked(sid: &SidRoom) -> (u32, u32, u32, bool) {
+        let mut kind = 0xEEEE_EEEEu32;
+        let mut parent: *const u8 = core::ptr::null();
+        // SAFETY: the SID is in room for the largest one; a parent
+        // returned is a pool block, compared and freed.
+        unsafe {
+            let first = RtlGetAppContainerSidType(sid.at(), &raw mut kind) as u32;
+            let second = RtlGetAppContainerParent(sid.at(), &raw mut parent) as u32;
+            let mut right = false;
+            if !parent.is_null() {
+                right = RtlEqualSid(parent, SidRoom::new(15, &PACKAGE[..8]).at()) == 1;
+                pool::ExFreePoolWithTag(parent.cast_mut().cast(), 0);
+            }
+            (first, kind, second, right)
+        }
+    }
+    const NOT_APPCONTAINER: u32 = 0xC000_0200;
+    const INVALID_PARAMETER: u32 = 0xC000_000D;
+    if asked(&SidRoom::new(5, &[18])) != (NOT_APPCONTAINER, 0, NOT_APPCONTAINER, false)
+        || asked(&SidRoom::new(15, &[3, 1])) != (NOT_APPCONTAINER, 0, NOT_APPCONTAINER, false)
+    {
+        return Err("a SID that is no app container's was taken for one");
+    }
+    if asked(&SidRoom::new(15, &PACKAGE[..8])) != (0, 2, INVALID_PARAMETER, false) {
+        return Err("a package's SID is not a parent, or was given a parent");
+    }
+    if asked(&SidRoom::new(15, &PACKAGE)) != (0, 1, 0, true) {
+        return Err("a child's SID did not give its parent");
+    }
+    if asked(&SidRoom::new(15, &PACKAGE[..2])) != (0, 3, INVALID_PARAMETER, false)
+        || asked(&SidRoom::new(15, &PACKAGE[..9])) != (0, 3, INVALID_PARAMETER, false)
+    {
+        return Err("a package SID of the wrong length is not of the invalid type");
+    }
+    Ok(())
+}
+
+/// `RtlCreateAcl`.
+fn acl() -> Result<(), &'static str> {
+    use crate::se::sid::RtlCreateAcl;
+    let mut room = [0xEEEE_EEEEu32; 32];
+    let acl = room.as_mut_ptr().cast::<core::ffi::c_void>();
+    let create = |length: u32, revision: u32| {
+        // SAFETY: the room is 128 bytes; a length beyond it is refused
+        // before anything is written.
+        let status = unsafe { RtlCreateAcl(acl, length, revision) } as u32;
+        // SAFETY: the room is initialised and aligned.
+        (status, unsafe { acl.cast::<[u32; 3]>().read() })
+    };
+    // Revision, a zero byte, the size; no entries, a zero word; and
+    // nothing after the header.
+    if create(64, 2) != (0, [0x0040_0002, 0, 0xEEEE_EEEE])
+        || create(64, 4) != (0, [0x0040_0004, 0, 0xEEEE_EEEE])
+        // A size is brought down to a multiple of four.
+        || create(67, 3) != (0, [0x0040_0003, 0, 0xEEEE_EEEE])
+    {
+        return Err("RtlCreateAcl did not write an empty list's header");
+    }
+    let untouched = [0x0040_0003, 0, 0xEEEE_EEEE];
+    if create(64, 1) != (0xC000_000D, untouched)
+        || create(64, 5) != (0xC000_000D, untouched)
+        || create(4, 2) != (0xC000_0023, untouched)
+        || create(0x1_0000, 2) != (0xC000_000D, untouched)
+    {
+        return Err("RtlCreateAcl took a revision or a size an access list cannot have");
+    }
+    Ok(())
+}
+
+/// Owner and group of a descriptor, and `RtlValidSecurityDescriptor`.
+fn owner_group() -> Result<(), &'static str> {
+    use crate::se::sid::RtlCreateAcl;
+    use crate::se::*;
+    use nk_ntabi::se::SECURITY_DESCRIPTOR;
+    let admins = SidRoom::new(5, &[32, 544]);
+    let mut revised = SidRoom::new(5, &[32, 544]);
+    revised.0[0] = 2;
+    let sid = admins.at().cast_mut().cast::<core::ffi::c_void>();
+    let mut log = Vec::new();
+    // SAFETY: every pointer names a local that outlives the calls.
+    unsafe {
+        let mut sd = core::mem::zeroed::<SECURITY_DESCRIPTOR>();
+        let at = &raw mut sd;
+        let control = |at: *mut SECURITY_DESCRIPTOR| u32::from((&raw const (*at).Control).read());
+        RtlCreateSecurityDescriptor(at, 1);
+        log.push(RtlSetOwnerSecurityDescriptor(at, sid, 0) as u32);
+        log.push(u32::from((&raw const (*at).Owner).read() == sid));
+        log.push(control(at) & 1);
+        log.push(RtlSetOwnerSecurityDescriptor(at, sid, 1) as u32);
+        log.push(control(at) & 1);
+        let (mut got, mut defaulted) = (core::ptr::null_mut(), 0xEEu8);
+        log.push(RtlGetOwnerSecurityDescriptor(at.cast(), &raw mut got, &raw mut defaulted) as u32);
+        log.push(u32::from(got == sid));
+        log.push(u32::from(defaulted));
+        log.push(RtlSetGroupSecurityDescriptor(at, sid, 1) as u32);
+        log.push(u32::from((&raw const (*at).Group).read() == sid));
+        log.push(control(at) & 2);
+        log.push(RtlSetOwnerSecurityDescriptor(at, core::ptr::null_mut(), 0) as u32);
+        log.push(u32::from((&raw const (*at).Owner).read().is_null()));
+        log.push(control(at) & 1);
+        if log != [0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 2, 0, 1, 0] {
+            return Err("owner or group was not set, cleared or marked defaulted");
+        }
+        log.clear();
+        // Valid with a group and no owner; with an owner and an access
+        // list; not with an owner of revision 2, nor at revision 2, nor
+        // with a damaged list; valid again in self-relative form.
+        let mut list = [0u32; 16];
+        let dacl = list.as_mut_ptr().cast::<core::ffi::c_void>();
+        RtlCreateAcl(dacl, 64, 2);
+        log.push(u32::from(RtlValidSecurityDescriptor(at.cast())));
+        RtlSetOwnerSecurityDescriptor(at, sid, 0);
+        RtlSetDaclSecurityDescriptor(at, 1, dacl, 0);
+        log.push(u32::from(RtlValidSecurityDescriptor(at.cast())));
+        RtlSetOwnerSecurityDescriptor(at, revised.at().cast_mut().cast(), 0);
+        log.push(u32::from(RtlValidSecurityDescriptor(at.cast())));
+        RtlSetOwnerSecurityDescriptor(at, sid, 0);
+        (&raw mut (*at).Revision).write(2);
+        log.push(u32::from(RtlValidSecurityDescriptor(at.cast())));
+        (&raw mut (*at).Revision).write(1);
+        // One entry claimed, none there.
+        dacl.cast::<u32>().add(1).write(1);
+        log.push(u32::from(RtlValidSecurityDescriptor(at.cast())));
+        dacl.cast::<u32>().add(1).write(0);
+        let mut relative = [0u8; 128];
+        let mut length = 128u32;
+        log.push(
+            RtlAbsoluteToSelfRelativeSD(at.cast(), relative.as_mut_ptr(), &raw mut length) as u32,
+        );
+        log.push(u32::from(RtlValidSecurityDescriptor(
+            relative.as_ptr().cast(),
+        )));
+        if log != [1, 1, 0, 0, 0, 0, 1] {
+            return Err("RtlValidSecurityDescriptor judged a descriptor wrongly");
+        }
+        log.clear();
+        // Neither can be set in a self-relative descriptor, nor in one
+        // of another revision; and nothing is written.
+        let block = relative.as_mut_ptr().cast::<SECURITY_DESCRIPTOR>();
+        let before = relative;
+        log.push(RtlSetOwnerSecurityDescriptor(block, sid, 0) as u32);
+        log.push(RtlSetGroupSecurityDescriptor(block, sid, 0) as u32);
+        (&raw mut (*at).Revision).write(2);
+        (&raw mut (*at).Group).write(core::ptr::null_mut());
+        log.push(RtlSetOwnerSecurityDescriptor(at, sid, 0) as u32);
+        log.push(RtlSetGroupSecurityDescriptor(at, sid, 0) as u32);
+        if log != [0xC000_0079, 0xC000_0079, 0xC000_0058, 0xC000_0058]
+            || relative != before
+            || !(&raw const (*at).Group).read().is_null()
+        {
+            return Err("owner or group was set where a descriptor has no pointer for it");
+        }
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.crt", crt);
     r.check("rtl.vsnwprintf", vsnwprintf);
@@ -610,4 +952,9 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.multibyte", multibyte);
     r.check("rtl.ansi-string", ansi_string);
     r.check("rtl.guid", guid);
+    r.check("rtl.sid", sid);
+    r.check("rtl.sid-text", sid_text);
+    r.check("rtl.app-container", app_container);
+    r.check("rtl.acl", acl);
+    r.check("rtl.owner-group", owner_group);
 }

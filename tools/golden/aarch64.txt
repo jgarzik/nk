@@ -92,6 +92,11 @@ rtl.upcase ok
 rtl.multibyte ok
 rtl.ansi-string ok
 rtl.guid ok
+rtl.sid ok
+rtl.sid-text ok
+rtl.app-container ok
+rtl.acl ok
+rtl.owner-group ok
 se.well-known ok
 se.descriptor ok
 se.capture ok

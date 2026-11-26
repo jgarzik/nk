@@ -972,6 +972,17 @@ read and written through raw pointers, the rules run on copies.
 `SeExports` points to the well-known SIDs and privilege numbers, laid out
 as in `ntifs.h`.
 
+A SID's first two bytes say whether it is one and how long it is, so
+the routines that take one read those before the rest and never read a
+SID by a length it does not have; they copy at most the 68 bytes of the
+largest SID, onto the stack. `RtlValidSecurityDescriptor` judges an
+access list on a pool copy and answers "not valid" without memory for
+one. App-container SIDs (`RtlGetAppContainerSidType`,
+`RtlGetAppContainerParent`) are told apart by shape alone, `S-1-15-2`
+with eight or twelve sub-authorities (`nk_se::sid`, which lists what
+Microsoft's pages leave open); a parent's SID is a pool block the
+caller frees.
+
 Nothing is enforced: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
 replaces the named parts of a device's descriptor; for other objects it
