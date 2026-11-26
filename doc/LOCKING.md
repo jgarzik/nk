@@ -64,6 +64,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
 | 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and a worker has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
 | 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |
+| 20 | `pnp::depend::DEPENDENCIES` | which device depends on which, and the strings devices are bound by; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::notify::REGISTRATIONS` | the Plug and Play notification registrations and each one's count of callbacks in progress; never held with another lock of this rank, nor across a callback | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |

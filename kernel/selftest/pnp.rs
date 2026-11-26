@@ -37,6 +37,7 @@ pub static GROUP: Group = Group {
         "pnp.properties",
         "pnp.add-device-order",
         "pnp.start-resources",
+        "pnp.dependency",
         "pnp.invalidate-relations",
         "pnp.failed-start",
         "pnp.invalid-instance-id",
@@ -1355,9 +1356,57 @@ fn run(r: &mut Report, _: &BootInfo) {
     }
     // A second child appears; the function driver fails its start.
     FAILING.store(2, Ordering::Release);
+    // It depends on a device named by a string nobody is bound to yet.
+    let mut provider: Vec<u16> = "\\NKPNP.PROVIDER".encode_utf16().collect();
+    let provider = UNICODE_STRING {
+        Length: (provider.len() * 2) as u16,
+        MaximumLength: (provider.len() * 2) as u16,
+        Buffer: provider.as_mut_ptr(),
+    };
+    let second = CHILDREN[1].load(Ordering::Acquire);
+    // SAFETY: a live device object of the test's and a counted string.
+    let reserved = unsafe { pnp::depend::IoReserveDependency(second, &raw const provider, 1) };
     bench.report(2);
     // The worker thread does the rest: wait for it by doing the same.
     pnp::settle();
+    r.check("pnp.dependency", || {
+        use pnp::depend::{IoReserveDependency, IoResolveDependency, IoSetDependency};
+        if reserved != STATUS_SUCCESS {
+            return Err("the dependency was not reserved");
+        }
+        let waiting = child(2).ok_or("the second child has no node")?;
+        if waiting.state != State::Identified
+            || waiting.problem != node::CM_PROB_WAITING_ON_DEPENDENCY
+            || !waiting.drivers.is_empty()
+        {
+            return Err("a device whose provider is not there was not left waiting");
+        }
+        let first = CHILDREN[0].load(Ordering::Acquire);
+        // SAFETY: live device objects of the test's and a counted
+        // string; null where the routine is to refuse it.
+        unsafe {
+            if IoReserveDependency(second, &raw const provider, 0) != STATUS_INVALID_PARAMETER
+                || IoReserveDependency(second, &raw const provider, 4) != STATUS_INVALID_PARAMETER
+                || IoReserveDependency(core::ptr::null_mut(), &raw const provider, 1)
+                    != STATUS_INVALID_PARAMETER
+                || IoSetDependency(second, second, 1) != STATUS_UNSUCCESSFUL
+                || IoSetDependency(second, core::ptr::null_mut(), 1) != STATUS_INVALID_PARAMETER
+            {
+                return Err("a malformed dependency was not refused as Windows refuses it");
+            }
+            // The string is bound to the first child, which is started:
+            // the second no longer waits.
+            if IoResolveDependency(&raw const provider, first) != STATUS_SUCCESS {
+                return Err("the string could not be bound to a device");
+            }
+        }
+        pnp::settle();
+        let now = child(2).ok_or("the second child has no node")?;
+        if now.problem == node::CM_PROB_WAITING_ON_DEPENDENCY {
+            return Err("the device still waits after its provider was bound and is started");
+        }
+        Ok(())
+    });
     r.check("pnp.invalidate-relations", || {
         child(2)
             .map(|_| ())

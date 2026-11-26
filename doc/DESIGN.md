@@ -2228,7 +2228,12 @@ started, an interface waits for the start. Notification registrations
 for hardware profile changes and for a target device's removal are
 kept and never called: NK produces neither event.
 `IoInvalidateDeviceState` has a started device asked for its state
-again by the worker.
+again by the worker. Dependencies between devices
+(`IoReserveDependency`, `IoResolveDependency`, `IoSetDependency`;
+`pnp/depend.rs`, rules in `nk_pnp::depend`) are kept, and a device's
+drivers are not added while a device it depends on is unbound or not
+started (problem 51); NK treats the two kinds of dependency alike and
+derives no power relations from them.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
 not bring up yet because their `AddDevice` or start stops the system
