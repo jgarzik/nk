@@ -42,6 +42,11 @@ public static class Nt {
         uint inQuota, uint outQuota, ref long timeout);
 
     [DllImport("ntdll.dll")]
+    static extern uint NtCreateMailslotFile(out IntPtr handle, uint access,
+        ref OBJECT_ATTRIBUTES oa, out IO_STATUS_BLOCK iosb, uint options, uint quota,
+        uint maxMessage, IntPtr timeout);
+
+    [DllImport("ntdll.dll")]
     static extern uint NtDeviceIoControlFile(IntPtr handle, IntPtr ev, IntPtr apc, IntPtr ctx,
         ref IO_STATUS_BLOCK iosb, uint code, byte[] input, uint inputLength,
         byte[] output, uint outputLength);
@@ -114,6 +119,24 @@ public static class Nt {
         uint status = NtCreateNamedPipeFile(out handle, access, ref oa, out iosb, share,
             disposition, options, type, readMode, completionMode, maxInstances,
             inQuota, outQuota, ref relative);
+        Release(oa);
+        return Done(status, iosb);
+    }
+
+    // Create a mailslot: its server end. The read timeout is passed as
+    // it is, in units of 100 ns, or not at all.
+    public static uint Mailslot(string path, uint access, uint options, uint quota,
+            uint maxMessage, bool timed, long timeout, out IntPtr handle) {
+        OBJECT_ATTRIBUTES oa = Named(path, IntPtr.Zero);
+        IO_STATUS_BLOCK iosb;
+        IntPtr readTimeout = IntPtr.Zero;
+        if (timed) {
+            readTimeout = Marshal.AllocHGlobal(8);
+            Marshal.WriteInt64(readTimeout, timeout);
+        }
+        uint status = NtCreateMailslotFile(out handle, access, ref oa, out iosb, options,
+            quota, maxMessage, readTimeout);
+        if (timed) Marshal.FreeHGlobal(readTimeout);
         Release(oa);
         return Done(status, iosb);
     }
@@ -339,6 +362,26 @@ foreach ($raw in Get-Content (Join-Path $Dir "$Name.script")) {
                 [uint32]$o.disposition, (Hex32 $o.options), [uint32]$o.type, [uint32]$o.read,
                 [uint32]$o.completion, [uint32]$o.instances, [uint32]$o.inquota,
                 [uint32]$o.outquota, [uint32]$o.timeout, [ref]$h)
+            if ($status -eq 0) { $handles[$w[1]] = $h }
+            Say "$($w -join ' '): $(Outcome $status)"
+        }
+        "mailslot" {
+            # GENERIC_READ | SYNCHRONIZE; FILE_SYNCHRONOUS_IO_NONALERT; a
+            # read of an empty mailslot returns at once.
+            $o = Options $w 3 @{ access = "80100000"; options = "20"; quota = "0"
+                maxmessage = "0"; timeout = "0" }
+            if ($null -eq $o) {
+                Say "error: bad option: $line"
+                break
+            }
+            # The read timeout: none given, -1 for ever, or relative.
+            $timed = $o.timeout -ne "none"
+            $timeout = [int64]0
+            if ($o.timeout -eq "forever") { $timeout = [int64]-1 }
+            elseif ($timed) { $timeout = -10000 * [int64][uint32]$o.timeout }
+            $h = [IntPtr]::Zero
+            $status = [Nt]::Mailslot($w[2], (Hex32 $o.access), (Hex32 $o.options),
+                [uint32]$o.quota, [uint32]$o.maxmessage, $timed, $timeout, [ref]$h)
             if ($status -eq 0) { $handles[$w[1]] = $h }
             Say "$($w -join ' '): $(Outcome $status)"
         }

@@ -26,7 +26,7 @@ use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::{
     FILE_OPEN, IRP_MJ_DEVICE_CONTROL, IRP_MJ_FILE_SYSTEM_CONTROL, IRP_MJ_READ, IRP_MJ_WRITE,
-    NAMED_PIPE_CREATE_PARAMETERS, USER_MODE,
+    MAILSLOT_CREATE_PARAMETERS, NAMED_PIPE_CREATE_PARAMETERS, USER_MODE,
 };
 use nk_oracle::{Checker, Dump, FILL, Input, Mismatch, Outcome, Output, Step};
 
@@ -167,6 +167,42 @@ impl<'a> Replay<'a> {
                         // Relative, in units of 100 ns.
                         DefaultTimeout: -10_000 * i64::from(args.timeout),
                         TimeoutSpecified: 1,
+                    }),
+                    requestor_mode: USER_MODE,
+                };
+                let opened = system_service(|| file::open(&request));
+                let (status, information) = match opened {
+                    Ok((file, information)) => {
+                        self.files.push((handle, file));
+                        (0, information)
+                    }
+                    Err(status) => (status as u32, 0),
+                };
+                format!(
+                    "{}",
+                    Outcome {
+                        status,
+                        information
+                    }
+                )
+            }
+            Step::Mailslot { handle, path, args } => {
+                let request = OpenRequest {
+                    name: path,
+                    root: None,
+                    desired_access: args.access,
+                    // What `NtCreateMailslotFile` asks of the I/O
+                    // manager whatever its caller says: shared for
+                    // reading and writing (3), and only if the name is
+                    // free (2, `FILE_CREATE`).
+                    share_access: 3,
+                    create_options: args.options,
+                    disposition: 2,
+                    kind: Kind::Mailslot(MAILSLOT_CREATE_PARAMETERS {
+                        MailslotQuota: args.quota,
+                        MaximumMessageSize: args.maxmessage,
+                        ReadTimeout: args.timeout.unwrap_or(0),
+                        TimeoutSpecified: u8::from(args.timeout.is_some()),
                     }),
                     requestor_mode: USER_MODE,
                 };
