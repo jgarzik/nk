@@ -25,6 +25,9 @@ import sys
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mkesp  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "target" / "fixtures"
 PEINFO = ROOT / "target" / "debug" / "peinfo"
@@ -207,9 +210,9 @@ def corpus(exports, lists):
 
 def build(arch, fixtures):
     exports, booted = kernel_exports(arch)
-    # A fixture is on the boot volume as <name>.sys, which is what an
-    # importer's table calls it.
-    libraries = {fx["name"].lower() + ".sys": exports_of(peinfo(CACHE / fx["file"]))
+    # What a fixture is called on the boot volume is what an importer's
+    # table calls it.
+    libraries = {mkesp.boot_name(fx).lower(): exports_of(peinfo(CACHE / fx["file"]))
                  for fx in fixtures}
     entries, needed = [], {}
     for fx in fixtures:

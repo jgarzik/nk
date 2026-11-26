@@ -5,7 +5,8 @@ Layout, mirroring where Windows keeps its boot files:
 
     \\EFI\\BOOT\\BOOT{X64,AA64}.EFI   nkload (the path firmware boots by default)
     \\NK\\nkkrnl.exe                  the kernel
-    \\NK\\drivers\\<name>.sys         boot drivers, from the fixture cache
+    \\NK\\drivers\\<name>.<ext>       boot files (drivers and the libraries
+                                    they import from), from the fixture cache
     \\NK\\SYSTEM                      the SYSTEM registry hive, from the fixture cache
     \\NK\\cmdline.txt                 the kernel command line, if any
 
@@ -35,34 +36,49 @@ def binaries(arch):
     return out / "nkload.efi", out / "nkkrnl.efi"
 
 
-def boot_drivers(arch):
-    """([(name on the ESP, path)], [missing file names]) for the fixtures
-    the kernel uses on this arch. A fixture that is not downloaded is left
-    out and named in the second list; the kernel skips its tests.
+def boot_name(fx):
+    """The name a fixture image has on the boot volume, which is the name
+    the kernel and the import tables of other images know it by: the
+    fixture's `name` with the extension of its `file` (`null.x64.sys` is
+    `null.sys`, `pshed.x64.dll` is `pshed.dll`)."""
+    return fx["name"] + Path(fx["file"]).suffix
 
-    Besides the drivers it loads, the kernel is given real binaries it
+
+def boot_files(arch, manifest):
+    """[(name on the ESP, fixture)] for the fixtures of `manifest` the
+    kernel uses on this arch.
+
+    Besides the images it loads, the kernel is given real binaries it
     must refuse:
       wrongarch.sys   the WDM sample built for the other architecture
       unresolved.sys  the KMDF sample, whose framework imports NK lacks
       nkc-libbad.sys  imports a name the library nkc-lib.sys does not export
     """
-    manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
-    drivers, missing = [], []
+    files = []
     for fx in manifest:
-        if "kind" in fx:  # a table or symbol file, not a driver
-            continue
-        path = FIXTURES / fx["file"]
-        if not path.exists():
-            missing.append(fx["file"])
+        if "kind" in fx:  # a table or symbol file, not an image
             continue
         if fx["arch"] == arch and fx.get("boot", True):
-            drivers.append((fx["name"] + ".sys", path))
+            files.append((boot_name(fx), fx))
         elif fx["arch"] != arch and fx["name"] == "sioctl":
-            drivers.append(("wrongarch.sys", path))
+            files.append(("wrongarch.sys", fx))
         elif fx["arch"] == arch and fx["name"] == "kmdf-echo":
-            drivers.append(("unresolved.sys", path))
+            files.append(("unresolved.sys", fx))
         elif fx["arch"] == arch and fx["name"] == "nkc-libbad":
-            drivers.append(("nkc-libbad.sys", path))
+            files.append(("nkc-libbad.sys", fx))
+    return files
+
+
+def boot_drivers(arch):
+    """([(name on the ESP, path)], [missing file names]) for the fixtures
+    the kernel uses on this arch. A fixture that is not downloaded is left
+    out and named in the second list; the kernel skips its tests."""
+    manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
+    # Any image that is absent is named, whichever arch it is for.
+    missing = [fx["file"] for fx in manifest
+               if "kind" not in fx and not (FIXTURES / fx["file"]).exists()]
+    drivers = [(name, FIXTURES / fx["file"]) for name, fx in boot_files(arch, manifest)
+               if (FIXTURES / fx["file"]).exists()]
     return drivers, missing
 
 
