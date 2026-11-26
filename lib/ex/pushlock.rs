@@ -110,24 +110,6 @@ pub const fn acquire_shared(word: u64) -> (u64, Acquire) {
     }
 }
 
-/// Take the lock exclusively if nobody holds it; never waits.
-pub const fn try_acquire_exclusive(word: u64) -> Option<u64> {
-    match acquire_exclusive(word) {
-        (new, Acquire::Acquired) => Some(new),
-        (_, Acquire::Wait) => None,
-    }
-}
-
-/// Turn the caller's shared hold into an exclusive one. Only when it is
-/// the sole holder and nobody waits: the one word Windows converts from.
-pub const fn try_convert_shared_to_exclusive(word: u64) -> Option<u64> {
-    if word == LOCKED | ONE_SHARE {
-        Some(LOCKED)
-    } else {
-        None
-    }
-}
-
 /// What a releaser does after its transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Release {
@@ -248,9 +230,6 @@ mod tests {
         assert_eq!(acquire_exclusive(WAITING), (X | WAITING, Acquire::Acquired));
         assert_eq!(acquire_exclusive(X), (X | WAITING, Acquire::Wait));
         assert_eq!(acquire_exclusive(S2), (S2 | WAITING, Acquire::Wait));
-        assert_eq!(try_acquire_exclusive(0), Some(X));
-        assert_eq!(try_acquire_exclusive(X), None);
-        assert_eq!(try_acquire_exclusive(S1), None);
     }
 
     #[test]
@@ -261,14 +240,6 @@ mod tests {
         assert_eq!(acquire_shared(S1 | WAITING), (S1 | WAITING, Acquire::Wait));
         // Free, though others still queue: taken.
         assert_eq!(acquire_shared(WAITING), (S1 | WAITING, Acquire::Acquired));
-    }
-
-    #[test]
-    fn conversion_needs_a_sole_holder_and_no_waiters() {
-        assert_eq!(try_convert_shared_to_exclusive(S1), Some(X));
-        for word in [0, X, S2, S1 | WAITING, S1 | WAITING | WAKING] {
-            assert_eq!(try_convert_shared_to_exclusive(word), None, "{word:#x}");
-        }
     }
 
     #[test]
@@ -356,9 +327,9 @@ mod tests {
     #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
     enum Op {
         Acquire(Access),
+        /// Exclusive if it can be had as the word stands; else nothing,
+        /// and nothing stored (`ExTryAcquirePushLockExclusiveEx`).
         TryExclusive,
-        /// Shared to exclusive, if the thread holds shared.
-        Convert,
         /// Give up what the thread holds, if anything, by the routine
         /// for that kind.
         Release,
@@ -464,19 +435,10 @@ mod tests {
                         self.threads[i].phase = Phase::Asleep;
                     }
                 },
-                (Phase::Ready, Op::TryExclusive) => match try_acquire_exclusive(self.word) {
-                    Some(new) => self.took(i, new, Access::Exclusive),
-                    None => self.threads[i].at += 1,
+                (Phase::Ready, Op::TryExclusive) => match acquire_exclusive(self.word) {
+                    (new, Acquire::Acquired) => self.took(i, new, Access::Exclusive),
+                    (_, Acquire::Wait) => self.threads[i].at += 1,
                 },
-                (Phase::Ready, Op::Convert) => {
-                    if self.threads[i].holds == Some(Access::Shared)
-                        && let Some(new) = try_convert_shared_to_exclusive(self.word)
-                    {
-                        self.word = new;
-                        self.threads[i].holds = Some(Access::Exclusive);
-                    }
-                    self.threads[i].at += 1;
-                }
                 (Phase::Ready, Op::Release | Op::ReleaseAny) => {
                     let Some(held) = self.threads[i].holds.take() else {
                         self.threads[i].at += 1;
@@ -551,7 +513,6 @@ mod tests {
         &[Op::Acquire(Access::Exclusive), Op::ReleaseAny],
         &[Op::Acquire(Access::Shared), Op::ReleaseAny],
         &[Op::TryExclusive, Op::Release],
-        &[Op::Acquire(Access::Shared), Op::Convert, Op::Release],
         &[
             Op::Acquire(Access::Shared),
             Op::Release,
