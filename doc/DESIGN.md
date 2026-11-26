@@ -367,7 +367,9 @@ vector's chain; the vector's first object unmasks the line, its last
 masks it. Fully specified connections name a translated vector and
 IRQL; line-based ones use the device's first line, or, for a device
 given none as a resource, the first line of the interrupt connection
-data a driver stored on it (which is where Windows looks; shared);
+data a driver stored on it that is placed now (which is where
+Windows looks; shared; a value left from interrupts since withdrawn
+states nothing, and the connection fails with `STATUS_NOT_FOUND`);
 message-based ones
 connect every message of the device and return the table of addresses
 and data, or fall back to the line when the device has no messages and
