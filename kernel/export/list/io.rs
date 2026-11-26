@@ -71,4 +71,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::priority::IoUnregisterPriorityCallback),
     export!(Partial, io::zwfile::ZwCreateFile),
     export!(Partial, io::zwfile::ZwOpenFile),
+    export!(Partial, io::service::ZwLoadDriver),
 ];

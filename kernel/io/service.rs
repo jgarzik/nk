@@ -160,3 +160,69 @@ pub fn start_boot_services() -> Result<(), &'static str> {
 pub fn stop(name: &str) -> Result<(), &'static str> {
     driver::unload(driver::running(name).ok_or("the service is not running")?)
 }
+
+/// [`ZwLoadDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwloaddriver):
+/// start the driver whose service key `driver_service_name` names, by
+/// its full path from the namespace's root
+/// (`\Registry\Machine\System\CurrentControlSet\Services\<name>`), and
+/// return what its entry point returned, or why it never ran
+/// ([`ServiceError::status`]). A name that leads to no key fails with
+/// what the namespace or the registry says of it, as Windows' routine
+/// fails with the status of opening the key. A kernel-mode caller
+/// needs no privilege.
+///
+/// A key that exists elsewhere than under `...\Services`, which
+/// Windows would load from all the same, stops the system by name:
+/// the ledger's "partial".
+///
+/// # Safety
+/// `driver_service_name` is null or points to a counted string.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ZwLoadDriver(
+    driver_service_name: *const nk_ntabi::io::UNICODE_STRING,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    let path = unsafe { crate::rtl::copy_unicode(driver_service_name) };
+    let (root, rest) = match crate::ob::lookup(None, &path) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    // SAFETY: the look-up's reference; the type is read before it is
+    // given up.
+    let is_key = unsafe {
+        let is_key = core::ptr::eq(
+            crate::ob::object::type_of(root),
+            &raw const crate::ob::object::KEY_TYPE,
+        );
+        crate::ob::object::dereference(root);
+        is_key
+    };
+    if !is_key {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    // What follows `\Registry`, without its backslash.
+    let rest = rest.get(1..).unwrap_or(&[]);
+    let services: Vec<u16> = SERVICES.encode_utf16().chain([u16::from(b'\\')]).collect();
+    let name = rest
+        .split_at_checked(services.len())
+        .filter(|(prefix, name)| {
+            nk_rtl::names_equal(prefix, &services)
+                && !name.is_empty()
+                && !name.contains(&u16::from(b'\\'))
+        })
+        .and_then(|(_, name)| String::from_utf16(name).ok());
+    let Some(name) = name else {
+        let rest = String::from_utf16_lossy(rest);
+        if !cm::exists(&rest) {
+            return STATUS_OBJECT_NAME_NOT_FOUND;
+        }
+        crate::kd::bugcheck(format_args!(
+            "ZwLoadDriver: loading a driver from the key \\Registry\\{rest}, which is not a key \
+             of ...\\Services, is not implemented"
+        ));
+    };
+    match start(&name) {
+        Ok(_) => STATUS_SUCCESS,
+        Err(error) => error.status(),
+    }
+}

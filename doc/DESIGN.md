@@ -1502,6 +1502,13 @@ on Windows.
 
 Other services start when something asks: the tests make a key the way
 `sc create` does and start it, or start one the hive describes.
+A driver asks with
+[`ZwLoadDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwloaddriver),
+naming the key by its full path; the status is the entry point's, or
+that of opening the key when there is none (`acpi.sys` asks for
+`acpiex`, the resource hub, which no key of NK's describes). The entry
+point runs in the caller's thread, as it does on Windows for a caller
+in the System process.
 
 ## I/O
 

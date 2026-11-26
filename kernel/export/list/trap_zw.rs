@@ -11,7 +11,6 @@ trap_list!(
     NtQueryEnvironmentVariableInfoEx,
     ZwCreateDirectoryObject,
     ZwInitiatePowerAction,
-    ZwLoadDriver,
     ZwMakeTemporaryObject,
     ZwSetSystemInformation,
 );
