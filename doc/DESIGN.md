@@ -2414,6 +2414,21 @@ The tests `ke.bugcheck.*` check registration; the
 each kind registered, and the last one called prints which ran, in what
 order, and what they were shown.
 
+## Debug messages
+
+`DbgPrint` goes to the console, prefixed `DbgPrint:`. `DbgPrintEx` and
+`vDbgPrintExWithPrefix` go there too when the component filter lets
+them through (`lib/rtl/dbgfilter.rs`): at boot, as on Windows, only
+messages at the error level; `DbgSetDebugFilterState` changes a
+component's mask. `DbgCommandString` does nothing, as with no debugger.
+`DbgPrompt` is a breakpoint (next section); when it is passed over the
+response is empty.
+
+`__chkstk` (`kernel/arch/*/chkstk.rs`) probes each page of the stack a
+function is about to take. Kernel stacks are committed whole, so the
+probe finds every page there or lands in the unmapped stretch below
+the stack, which is a stack overflow.
+
 ## Breakpoints and the debugger
 
 A driver's breakpoint (`DbgBreakPoint`, in-line code) gets one of
@@ -2431,7 +2446,10 @@ other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
 publishes no arm64 binaries NK may use, so its own drivers run on x86-64
-alone. NK has run on no physical machine.
+alone. NK has run on no physical machine. NK has no errata database
+(Windows' comes from `errata.inf`, which NK does not read): a rule a
+driver asks the errata manager about is unknown, `STATUS_NOT_FOUND`,
+where Windows answers the rule's state.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
@@ -2457,7 +2475,14 @@ callbacks from the providers that register them, checked as Windows
 checks a registration whose GUIDs it knows; it has no rule, so a client
 that asks about one is told `STATUS_NOT_FOUND`, the rule's state
 unknown, and `acpi.sys` and `pci.sys` go on as on a machine no erratum
-matches. With no rule nothing calls a provider's callbacks). A routine with many sub-functions
+matches. With no rule nothing calls a provider's callbacks), no
+driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
+reported to it goes nowhere), no headless terminal (the same file:
+it cannot be enabled, questions are answered with zeros, output
+succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no paging
+file, and a hypervisor only as far as the processor's CPUID names one
+(`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
+none). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
 (`kernel/po/mod.rs`, `ZwPowerInformation`).
 

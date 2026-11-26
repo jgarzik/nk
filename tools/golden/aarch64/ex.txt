@@ -35,3 +35,7 @@ ex.shim-engine ok
 ex.secure-kernel ok
 ex.rundown ok
 ex.spin-lock ok
+ex.verifier-off ok
+ex.headless-off ok
+ex.secure-devices ok
+ex.hypervisor ok

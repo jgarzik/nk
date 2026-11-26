@@ -1,6 +1,7 @@
 //! arm64.
 
 mod atomic;
+mod chkstk;
 mod clock;
 mod cpu;
 mod device;
@@ -16,6 +17,7 @@ pub mod unwind;
 mod variadic;
 
 pub use atomic::swap_pair;
+pub use chkstk::{chkstk_test, nk_chkstk};
 pub use device::{
     InterruptVectors, TestSource as InterruptTestSource, interrupt_message, isa_line, line_enable,
     line_route,

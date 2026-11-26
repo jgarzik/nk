@@ -17,6 +17,27 @@ pub fn current_cpu_id() -> u64 {
     u64::from(__cpuid_count(1, 0).ebx >> 24)
 }
 
+/// Whether the processor says it runs under a hypervisor.
+pub fn hypervisor_present() -> bool {
+    nk_hal::x86::hypervisor_present(__cpuid_count(1, 0).ecx, || {
+        __cpuid_count(0x4000_0001, 0).eax
+    })
+}
+
+/// The feature words (CPUID leaf 0x40000003: EAX, EBX, ECX, EDX) of a
+/// hypervisor that offers Microsoft's interface; zeros under any other
+/// and under none.
+pub fn hypervisor_features() -> [u32; 4] {
+    if hypervisor_present()
+        && nk_hal::x86::hypervisor_is_microsoft(__cpuid_count(0x4000_0001, 0).eax)
+    {
+        let features = __cpuid_count(0x4000_0003, 0);
+        [features.eax, features.ebx, features.ecx, features.edx]
+    } else {
+        [0; 4]
+    }
+}
+
 /// What else firmware says that x86-64 needs.
 pub struct Firmware {
     /// The reference the time counter is calibrated against: the ACPI

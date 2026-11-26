@@ -4,6 +4,7 @@ use super::super::{Export, NT, State};
 use crate::io;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, io::fsrtl::FsRtlIsSystemPagingFile),
     export!(Partial, io::mdl::IoAllocateMdl),
     export!(Implemented, io::interrupt::IoConnectInterruptEx),
     export!(Implemented, io::interrupt::IoDisconnectInterruptEx),

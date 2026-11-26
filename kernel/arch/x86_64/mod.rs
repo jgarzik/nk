@@ -2,6 +2,7 @@
 
 mod apic;
 mod atomic;
+mod chkstk;
 mod clock;
 mod cpu;
 mod ioapic;
@@ -16,6 +17,7 @@ pub mod unwind;
 mod variadic;
 
 pub use atomic::swap_pair;
+pub use chkstk::{chkstk_test, nk_chkstk};
 pub use ioapic::{
     InterruptVectors, TestSource as InterruptTestSource, interrupt_message, isa_line, line_enable,
     line_route,

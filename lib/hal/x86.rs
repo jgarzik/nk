@@ -275,9 +275,35 @@ pub fn usable_cpu(entry: &MadtEntry) -> Option<Cpu> {
     }
 }
 
+/// Whether the processor says it runs under a hypervisor, as the
+/// pinned kernel's `HviIsAnyHypervisorPresent` decides it: bit 31 of
+/// CPUID leaf 1's ECX, unless the hypervisor's interface (EAX of leaf
+/// 0x40000001, asked for only when the bit is set) is `XbnV`.
+pub fn hypervisor_present(leaf1_ecx: u32, interface: impl FnOnce() -> u32) -> bool {
+    leaf1_ecx & (1 << 31) != 0 && interface() != u32::from_le_bytes(*b"XbnV")
+}
+
+/// Whether a hypervisor's interface is Microsoft's, `Hv#1`: the only
+/// one whose feature leaf (0x40000003) Windows reads.
+pub fn hypervisor_is_microsoft(interface: u32) -> bool {
+    interface == u32::from_le_bytes(*b"Hv#1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hypervisor_is_the_bit_and_an_interface() {
+        assert!(!hypervisor_present(0, || panic!(
+            "not asked without the bit"
+        )));
+        assert!(hypervisor_present(1 << 31, || 0));
+        assert!(hypervisor_present(u32::MAX, || 0x3123_7648));
+        assert!(!hypervisor_present(1 << 31, || 0x566E_6258));
+        assert!(hypervisor_is_microsoft(0x3123_7648));
+        assert!(!hypervisor_is_microsoft(0));
+    }
 
     use crate::table;
     use nk_acpi::madt;

@@ -4,6 +4,7 @@ use super::super::{Export, NT, State};
 use crate::arch;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export_entry!(Implemented, "__chkstk", arch::nk_chkstk),
     export_entry!(
         Partial,
         "MmProbeAndLockPages",

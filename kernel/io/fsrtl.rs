@@ -112,3 +112,11 @@ pub unsafe extern "C" fn FsRtlTeardownPerStreamContexts(header: *mut FSRTL_ADVAN
         unlock_contexts(header);
     }
 }
+
+/// [`FsRtlIsSystemPagingFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlissystempagingfile):
+/// whether `file` is one of the system's paging files. Windows looks
+/// the file object up in its list of paging files; NK pages nothing to
+/// disk and has no such file.
+pub extern "C" fn FsRtlIsSystemPagingFile(_file: *const core::ffi::c_void) -> u32 {
+    0
+}
