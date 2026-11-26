@@ -367,6 +367,7 @@ pub static SYSTEM: Group = Group {
         "ex.sysinfo.modules.short",
         "ex.sysinfo.driver",
         "rtl.module-information",
+        "ex.sysinfo.modules.no-memory",
         "ps.version",
         "dbgk.live-dump",
     ],
@@ -390,6 +391,7 @@ fn system(r: &mut Report, _: &BootInfo) {
         );
     }
     r.check("rtl.module-information", module_information);
+    r.check("ex.sysinfo.modules.no-memory", modules_no_memory);
     r.check("ps.version", version);
     r.check("dbgk.live-dump", live_dump);
 }
@@ -639,6 +641,58 @@ fn modules_short() -> Result<(), &'static str> {
         || list != [FILL; 8]
     {
         return Err("a buffer shorter than the count was written");
+    }
+    Ok(())
+}
+
+/// Both module lists are made from a copy of the table of images, which
+/// takes memory. Whichever allocation the pool refuses, the query fails
+/// with `STATUS_INSUFFICIENT_RESOURCES` and writes nothing: a driver's
+/// question does not stop the system.
+fn modules_no_memory() -> Result<(), &'static str> {
+    let whole = module_list()?;
+    let mut list = alloc::vec![FILL; whole.len()];
+    let class_11 = |list: &mut [u8]| {
+        let room = list.len();
+        query(SYSTEM_MODULE_INFORMATION_CLASS, list, room)
+    };
+    let mut words = alloc::vec![0u64; aux_modules()?.len() * AUX / 8];
+    let stated = (words.len() * 8) as u32;
+    let aux = |words: &mut [u64]| {
+        let mut length = stated;
+        let status = aux_query(&mut length, AUX as u32, words.as_mut_ptr().cast());
+        (status, length)
+    };
+    // How many allocations each query makes when all are granted.
+    crate::rt::watch(0);
+    let answer = class_11(&mut list);
+    let granted = crate::rt::unwatch();
+    crate::rt::watch(0);
+    let aux_answer = aux(&mut words);
+    let aux_granted = crate::rt::unwatch();
+    if answer.0 != STATUS_SUCCESS || aux_answer != (STATUS_SUCCESS, stated) {
+        return Err("the module lists could not be asked for");
+    }
+    if granted == 0 || aux_granted == 0 {
+        return Err("a module list allocated nothing: nothing can be refused");
+    }
+    for refuse in 1..=granted {
+        list.fill(FILL);
+        crate::rt::watch(refuse);
+        let answer = class_11(&mut list);
+        crate::rt::unwatch();
+        if answer != (STATUS_INSUFFICIENT_RESOURCES, FILLED) || list.iter().any(|&b| b != FILL) {
+            return Err("a module query without memory did not fail as such, untouched");
+        }
+    }
+    for refuse in 1..=aux_granted {
+        words.fill(0);
+        crate::rt::watch(refuse);
+        let answer = aux(&mut words);
+        crate::rt::unwatch();
+        if answer != (STATUS_INSUFFICIENT_RESOURCES, stated) || words.iter().any(|&w| w != 0) {
+            return Err("RtlQueryModuleInformation without memory did not fail as such, untouched");
+        }
     }
     Ok(())
 }

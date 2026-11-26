@@ -1809,7 +1809,10 @@ whoever takes the first module that contains it. The kernel and
 entry's `Flags` is zero and its `Section` and `MappedBase` are left as
 the caller had them, which is what Windows does with those two.
 `RtlQueryModuleInformation`, which the WDK's auxiliary library calls,
-reports the same list in its two sizes.
+reports the same list in its two sizes. Either is answered from a copy
+of the table, made in memory sized outside the table's lock; without
+that memory the query fails with `STATUS_INSUFFICIENT_RESOURCES` and
+writes nothing.
 
 `PsGetVersion` gives `RtlGetVersion`'s numbers. `MmIsDriverVerifying`
 is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers

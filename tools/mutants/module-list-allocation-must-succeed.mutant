@@ -1,0 +1,8 @@
+# The copy of the table of images that answers a module query is
+# reserved by a call that cannot fail: without memory, a driver's
+# question stops the system.
+scenario: x86_64
+fails: scenario
+file: kernel/ldr/mod.rs
+replace:         list.try_reserve_exact(count).ok()?;
+with:         list.reserve_exact(count);

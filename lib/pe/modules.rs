@@ -156,12 +156,14 @@ impl<const N: usize> Modules<N> {
         Some(module.references)
     }
 
-    /// Copy the images into `out`, oldest load first, as far as it has
-    /// room, and return how many there are. Nothing is allocated.
-    pub fn in_load_order(&self, out: &mut [Option<Module>]) -> usize {
+    /// Hand the images to `take`, oldest load first, for as long as it
+    /// takes them (it says so by returning `true`), and return how many
+    /// there are. Nothing is allocated here.
+    pub fn in_load_order(&self, mut take: impl FnMut(Module) -> bool) -> usize {
         let mut count = 0;
         let mut after = 0;
-        // Each pass finds the oldest image not yet copied.
+        let mut taking = true;
+        // Each pass finds the oldest image not yet handed over.
         while let Some(next) = self
             .slots
             .iter()
@@ -169,9 +171,7 @@ impl<const N: usize> Modules<N> {
             .filter(|m| m.order > after)
             .min_by_key(|m| m.order)
         {
-            if let Some(slot) = out.get_mut(count) {
-                *slot = Some(*next);
-            }
+            taking = taking && take(*next);
             after = next.order;
             count += 1;
         }
@@ -232,15 +232,32 @@ mod tests {
         // still the newest.
         table.remove(0x1000).unwrap();
         table.insert(module("c.sys", 0x5000, 0x1000)).unwrap();
-        let mut out = [None; 4];
-        assert_eq!(table.in_load_order(&mut out), 3);
-        let names: Vec<&[u8]> = out.iter().flatten().map(|m| m.name()).collect();
+        let mut out = Vec::new();
+        let all = |out: &mut Vec<Module>, room: usize, table: &Modules<4>| {
+            out.clear();
+            table.in_load_order(|module| {
+                let fits = out.len() < room;
+                if fits {
+                    out.push(module);
+                }
+                fits
+            })
+        };
+        assert_eq!(all(&mut out, 4, &table), 3);
+        let names: Vec<&[u8]> = out.iter().map(|m| m.name()).collect();
         assert_eq!(names, [&b"kernel"[..], b"b.sys", b"c.sys"]);
-        // With too little room the count is still all of them.
-        let mut short = [None; 1];
-        assert_eq!(table.in_load_order(&mut short), 3);
-        assert_eq!(short[0].unwrap().name(), b"kernel");
-        assert_eq!(Modules::<4>::new().in_load_order(&mut out), 0);
+        // With too little room the count is still all of them, and
+        // nothing is offered once one was declined.
+        assert_eq!(all(&mut out, 1, &table), 3);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name(), b"kernel");
+        let mut offered = 0;
+        let count = table.in_load_order(|_| {
+            offered += 1;
+            false
+        });
+        assert_eq!((count, offered), (3, 1));
+        assert_eq!(all(&mut out, 4, &Modules::<4>::new()), 0);
     }
 
     #[test]
