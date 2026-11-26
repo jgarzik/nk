@@ -40,6 +40,7 @@ mod open;
 mod oracle;
 mod pci;
 mod pend;
+mod pnp;
 mod po;
 mod range;
 mod request;
@@ -193,6 +194,7 @@ pub static GROUPS: &[&[&Group]] = &[
     open::GROUPS,
     requestor::GROUPS,
     stack::GROUPS,
+    pnp::GROUPS,
     request::GROUPS,
     iosupport::GROUPS,
     startio::GROUPS,

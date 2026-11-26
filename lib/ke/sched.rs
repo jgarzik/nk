@@ -15,6 +15,9 @@ pub enum Leaving {
     Preempt,
     /// It waits for something, and runs again when made ready.
     Wait,
+    /// Its affinity no longer allows this processor: anything else runs
+    /// here, and it is made ready on a processor it may run on.
+    Move,
 }
 
 impl Leaving {
@@ -30,7 +33,7 @@ impl Leaving {
     /// priority: nothing qualifies then.
     pub const fn floor(self, idle: bool, spent: bool, priority: u8) -> u8 {
         match self {
-            Leaving::Exit | Leaving::Wait => 0,
+            Leaving::Exit | Leaving::Wait | Leaving::Move => 0,
             _ if idle => 0,
             Leaving::Preempt if !spent => priority + 1,
             _ => priority,
@@ -43,10 +46,27 @@ impl Leaving {
         spent || matches!(self, Leaving::Yield | Leaving::Wait)
     }
 
-    /// Whether the thread stops being runnable: when no ready thread
-    /// takes over, the processor's idle thread must.
+    /// Whether the thread stops being runnable.
     pub const fn stops(self) -> bool {
         matches!(self, Leaving::Exit | Leaving::Wait)
+    }
+
+    /// Whether the thread cannot go on here: when no ready thread takes
+    /// over, the processor's idle thread must.
+    pub const fn vacates(self) -> bool {
+        self.stops() || matches!(self, Leaving::Move)
+    }
+
+    /// Why a thread that called the dispatcher for `self` is leaving,
+    /// given whether its affinity still `allows` the processor it is
+    /// on. A thread that can go on, on a processor it may not run on,
+    /// moves; the idle thread is its processor's and never does.
+    pub const fn or_move(self, idle: bool, allows: bool) -> Leaving {
+        if idle || allows || self.stops() {
+            self
+        } else {
+            Leaving::Move
+        }
     }
 
     /// Where a thread that stays runnable goes on its priority's queue:
@@ -71,6 +91,64 @@ pub const fn priority_to_set(base: u8, new: u8) -> Option<u8> {
         None
     } else {
         Some(new)
+    }
+}
+
+/// The affinity
+/// [`KeSetSystemGroupAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemgroupaffinitythread)
+/// gives the calling thread for a `GROUP_AFFINITY` of `mask`, `group`
+/// and `reserved`, where the processors `online` run: those of the
+/// mask that run. `None` if the routine leaves the affinity as it is:
+/// a group other than 0, a reserved field not zero, or no running
+/// processor in the mask.
+pub fn system_affinity(mask: u64, group: u16, reserved: [u16; 3], online: u64) -> Option<u64> {
+    (group == 0 && reserved == [0; 3] && mask & online != 0).then_some(mask & online)
+}
+
+/// What
+/// [`KeRevertToUserGroupAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereverttousergroupaffinitythread)
+/// does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Revert {
+    /// Nothing.
+    Nothing,
+    /// The thread goes back to its own affinity and ideal processor,
+    /// and is no longer in system affinity.
+    ToUser,
+    /// The thread stays in system affinity, with this one.
+    To(u64),
+}
+
+/// What `KeRevertToUserGroupAffinityThread` does for a thread that is
+/// (`active`) or is not in system affinity, given the `GROUP_AFFINITY`
+/// its caller got from `KeSetSystemGroupAffinityThread`. As the pinned
+/// kernel decides it: a mask of zero goes back to the thread's own
+/// affinity, whatever the group; any other must be one
+/// [`system_affinity`] takes.
+pub fn revert_affinity(
+    active: bool,
+    mask: u64,
+    group: u16,
+    reserved: [u16; 3],
+    online: u64,
+) -> Revert {
+    if !active || reserved != [0; 3] {
+        Revert::Nothing
+    } else if mask == 0 {
+        Revert::ToUser
+    } else {
+        system_affinity(mask, group, reserved, online).map_or(Revert::Nothing, Revert::To)
+    }
+}
+
+/// The ideal processor of a thread whose affinity becomes `affinity`
+/// (not empty): the one it has, `ideal`, if the affinity allows it,
+/// else the highest processor of the affinity, as on Windows.
+pub fn ideal_within(affinity: u64, ideal: usize) -> usize {
+    if ideal < 64 && affinity & 1 << ideal != 0 {
+        ideal
+    } else {
+        63 - affinity.leading_zeros() as usize
     }
 }
 
@@ -149,6 +227,79 @@ mod tests {
         }
         assert!(!Yield.stops());
         assert!(!Preempt.stops());
+    }
+
+    #[test]
+    fn a_thread_its_processor_no_longer_allows_moves() {
+        use super::Leaving::Move;
+        for spent in [false, true] {
+            // Anything runs in its place, the idle thread failing all.
+            assert_eq!(Move.floor(false, spent, 31), 0);
+        }
+        assert!(Move.vacates() && !Move.stops());
+        assert!(Exit.vacates() && Wait.vacates());
+        assert!(!Yield.vacates() && !Preempt.vacates());
+        // It keeps its turn as an interrupted thread does.
+        assert!(!Move.new_turn(false) && Move.new_turn(true));
+        assert!(!Move.requeue_in_front(false));
+        for leaving in [Yield, Preempt] {
+            assert_eq!(leaving.or_move(false, false), Move);
+            assert_eq!(leaving.or_move(false, true), leaving);
+            // The idle thread is its processor's.
+            assert_eq!(leaving.or_move(true, false), leaving);
+        }
+        // A thread that stops is placed by its affinity when it is
+        // next made ready.
+        for leaving in [Exit, Wait] {
+            assert_eq!(leaving.or_move(false, false), leaving);
+        }
+    }
+
+    #[test]
+    fn a_system_affinity_is_the_running_processors_of_group_0_named() {
+        let none = [0; 3];
+        assert_eq!(system_affinity(0b0110, 0, none, 0b1111), Some(0b0110));
+        assert_eq!(system_affinity(0b1110, 0, none, 0b0011), Some(0b0010));
+        assert_eq!(system_affinity(u64::MAX, 0, none, 1), Some(1));
+        assert_eq!(system_affinity(0b1100, 0, none, 0b0011), None);
+        assert_eq!(system_affinity(0, 0, none, 0b0011), None);
+        assert_eq!(system_affinity(1, 1, none, 0b0011), None);
+        for reserved in [[1, 0, 0], [0, 1, 0], [0, 0, 1]] {
+            assert_eq!(system_affinity(1, 0, reserved, 0b0011), None);
+        }
+    }
+
+    #[test]
+    fn reverting_goes_back_to_the_threads_own_affinity_or_to_the_one_given() {
+        let none = [0; 3];
+        assert_eq!(revert_affinity(true, 0, 0, none, 0b11), Revert::ToUser);
+        // The group of an empty mask is not looked at.
+        assert_eq!(revert_affinity(true, 0, 7, none, 0b11), Revert::ToUser);
+        assert_eq!(
+            revert_affinity(true, 0b110, 0, none, 0b11),
+            Revert::To(0b10)
+        );
+        assert_eq!(revert_affinity(true, 0b100, 0, none, 0b11), Revert::Nothing);
+        assert_eq!(revert_affinity(true, 0b1, 1, none, 0b11), Revert::Nothing);
+        assert_eq!(
+            revert_affinity(true, 0, 0, [0, 0, 1], 0b11),
+            Revert::Nothing
+        );
+        // Not in system affinity: nothing to go back from.
+        assert_eq!(revert_affinity(false, 0, 0, none, 0b11), Revert::Nothing);
+        assert_eq!(revert_affinity(false, 0b1, 0, none, 0b11), Revert::Nothing);
+    }
+
+    #[test]
+    fn the_ideal_processor_stays_if_allowed_and_is_else_the_highest_allowed() {
+        assert_eq!(ideal_within(0b1010, 1), 1);
+        assert_eq!(ideal_within(0b1010, 3), 3);
+        assert_eq!(ideal_within(0b1010, 0), 3);
+        assert_eq!(ideal_within(0b0010, 2), 1);
+        assert_eq!(ideal_within(1, 63), 0);
+        assert_eq!(ideal_within(1 << 63, 0), 63);
+        assert_eq!(ideal_within(u64::MAX, 63), 63);
+        assert_eq!(ideal_within(1, 64), 0);
     }
 
     #[test]

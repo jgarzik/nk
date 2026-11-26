@@ -111,6 +111,26 @@ pub fn isa_line(irq: u8) -> Option<Line> {
     platform::get().controllers.isa_line(irq)
 }
 
+/// How a level-triggered line that is not an ISA interrupt signals,
+/// when all that is known of it is a resource descriptor, which does
+/// not say: active low, as PCI's interrupt lines are.
+pub fn level_line_polarity() -> nk_hal::interrupt::Polarity {
+    nk_hal::interrupt::Polarity::Low
+}
+
+/// The hardware identifier of the HAL's own device, as Windows' HAL
+/// for this architecture answers it.
+pub fn hal_hardware_id() -> Option<&'static str> {
+    Some("acpiapic")
+}
+
+/// The interrupts the HAL offers the ACPI driver's device, as runs of
+/// numbers.
+pub fn acpi_device_interrupts() -> &'static [(u32, u32)] {
+    const RUNS: [(u32, u32); 2] = nk_hal::x86::acpi_device_interrupts();
+    &RUNS
+}
+
 /// The address and data a device writes to interrupt `processor` on
 /// `vector`.
 pub fn interrupt_message(vector: u32, processor: usize) -> Option<(u64, u32)> {

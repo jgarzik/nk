@@ -98,6 +98,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::dpc::KeInitializeThreadedDpc),
     export!(Implemented, ke::dpc::KeSetImportanceDpc),
     export!(Implemented, ke::dpc::KeSetTargetProcessorDpcEx),
+    export!(Implemented, ke::thread::KeSetSystemGroupAffinityThread),
+    export!(Implemented, ke::thread::KeRevertToUserGroupAffinityThread),
     export!(Implemented, ke::dpc::KeFlushQueuedDpcs),
     export!(Implemented, ke::timer::KeSetCoalescableTimer),
     export!(Implemented, ke::wait::KeClearEvent),

@@ -140,18 +140,29 @@ const ERROR_CRITICAL: u32 = 3;
 pub fn start_boot_services() -> Result<(), &'static str> {
     for (name, error_control) in cm::boot_start()? {
         match start(&name) {
-            Ok(_) => kprintln!("io: boot-start service {name} started"),
+            Ok(_) => {
+                kprintln!("io: boot-start service {name} started");
+                // The devices this driver serves are started, and what
+                // they bring enumerated, before the next driver's turn,
+                // as on Windows.
+                crate::pnp::settle();
+            }
             Err(ServiceError::NoImage(file)) => {
                 kprintln!("io: boot-start service {name} skipped: no boot file {file}");
             }
             Err(e) => {
                 kprintln!("io: boot-start service {name} failed: {e:?}");
+                crate::pnp::driver_failed(&name);
                 if error_control == ERROR_CRITICAL {
                     return Err("a boot-start driver whose failure is critical did not start");
                 }
             }
         }
     }
+    // From here on a device's driver is loaded when the device needs
+    // it. The boot drivers' reinitialisation routines run once the
+    // devices they serve have been started.
+    crate::pnp::boot_drivers_loaded();
     driver::reinitialize_boot_drivers();
     Ok(())
 }

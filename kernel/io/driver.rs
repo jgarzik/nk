@@ -17,7 +17,9 @@ use nk_ntabi::status::*;
 /// strings in the driver object and the registry path given to its entry.
 struct Record {
     object: *mut DRIVER_OBJECT,
-    image: Image,
+    /// The image the driver is; `None` for a driver that is part of
+    /// the kernel ([`builtin`]).
+    image: Option<Image>,
     _driver_name: Vec<u16>,
     _registry_path: Vec<u16>,
 }
@@ -55,7 +57,7 @@ fn counted(s: &mut [u16]) -> UNICODE_STRING {
 }
 
 /// The running driver of the service `name`, if it is running.
-pub(super) fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
+pub fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
     DRIVERS
         .lock()
         .iter()
@@ -135,7 +137,7 @@ pub(super) fn load(
     if !nt_success(status) {
         // Windows does not call the unload routine of a driver whose entry
         // failed; the driver must have cleaned up after itself.
-        free(object, &image);
+        free(object, Some(&image));
         return Err(DriverError::EntryFailed(status));
     }
     // SAFETY: the driver object and its device list are live; devices made
@@ -153,14 +155,79 @@ pub(super) fn load(
     drivers.reserve_exact(1);
     drivers.push(Record {
         object,
-        image,
+        image: Some(image),
         _driver_name: driver_name,
         _registry_path: registry_path,
     });
     Ok(object)
 }
 
-fn free(object: *mut DRIVER_OBJECT, image: &Image) {
+/// Make the driver object `\Driver\<name>` of a driver that is part of
+/// the kernel: the Plug and Play manager's own, the HAL's, a test's.
+/// It has no image and no service key; `setup` gives it its dispatch
+/// routines and its `AddDevice`, as an entry point would. Found by its
+/// name like any running driver ([`running`]).
+pub fn builtin(
+    name: &str,
+    setup: impl FnOnce(*mut DRIVER_OBJECT),
+) -> Result<*mut DRIVER_OBJECT, DriverError> {
+    let mut driver_name = wide("\\Driver\\", name);
+    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+    let path = &driver_name[..driver_name.len() - 1];
+    let body = ob::object::create_named(&ob::object::DRIVER_TYPE, size, ob::leaf(path))
+        .ok_or(DriverError::NoMemory)?;
+    let object = body.cast::<DRIVER_OBJECT>();
+    // SAFETY: a named object made above; `remove_builtin` takes the
+    // name away before it gives up the reference.
+    let named = unsafe { ob::insert(path, body) };
+    if !nt_success(named) {
+        // SAFETY: the creating reference of an object nothing else has.
+        unsafe { ob::object::dereference(body) };
+        return Err(DriverError::Name(named));
+    }
+    // SAFETY: a fresh zeroed block holding a DRIVER_OBJECT followed by
+    // its DRIVER_EXTENSION, which nothing else knows yet.
+    unsafe {
+        let extension = object.add(1).cast::<DRIVER_EXTENSION>();
+        (*extension).DriverObject = object;
+        (*extension).ServiceKeyName = counted(&mut driver_name[8..]);
+        (*object).Type = IO_TYPE_DRIVER;
+        (*object).Size = size_of::<DRIVER_OBJECT>() as i16;
+        (*object).DriverExtension = extension;
+        (*object).DriverName = counted(&mut driver_name);
+        (*object).MajorFunction = [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
+    }
+    setup(object);
+    let mut drivers = DRIVERS.lock();
+    drivers.reserve_exact(1);
+    drivers.push(Record {
+        object,
+        image: None,
+        _driver_name: driver_name,
+        _registry_path: Vec::new(),
+    });
+    Ok(object)
+}
+
+/// Take a driver made by [`builtin`] away again. Its devices are gone:
+/// the caller deleted them.
+pub fn remove_builtin(object: *mut DRIVER_OBJECT) {
+    let record = {
+        let mut drivers = DRIVERS.lock();
+        let Some(index) = drivers
+            .iter()
+            .position(|r| r.object == object && r.image.is_none())
+        else {
+            return;
+        };
+        let record = drivers.swap_remove(index);
+        drivers.shrink_to_fit();
+        record
+    };
+    free(record.object, None);
+}
+
+fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
     // SAFETY: `object` is a driver object this module made and named;
     // clearing Type makes a stale pointer recognisable. The name goes
     // before the reference the object was made with.
@@ -169,7 +236,9 @@ fn free(object: *mut DRIVER_OBJECT, image: &Image) {
         (*object).Type = 0;
         ob::object::dereference(object.cast());
     }
-    ldr::unload(image);
+    if let Some(image) = image {
+        ldr::unload(image);
+    }
 }
 
 /// Unload a driver: call its unload routine, then free its object and
@@ -180,7 +249,12 @@ fn free(object: *mut DRIVER_OBJECT, image: &Image) {
 /// looked up afterwards, under the lock hold that removes it.
 pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
-    let listed = |drivers: &[Record]| drivers.iter().position(|r| r.object == object);
+    // A driver that is part of the kernel is not unloaded.
+    let listed = |drivers: &[Record]| {
+        drivers
+            .iter()
+            .position(|r| r.object == object && r.image.is_some())
+    };
     if listed(&DRIVERS.lock()).is_none() {
         return Err("not a loaded driver");
     }
@@ -210,7 +284,7 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         core::mem::forget(record);
         return Err("unload routine left device objects behind");
     }
-    free(record.object, &record.image);
+    free(record.object, record.image.as_ref());
     Ok(())
 }
 
