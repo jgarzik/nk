@@ -192,7 +192,7 @@ impl Token {
     /// | System mandatory label S-1-16-16384 with `SE_GROUP_INTEGRITY` and `SE_GROUP_INTEGRITY_ENABLED` | INFERRED |
     /// | The order of the groups: Administrators, Everyone, Authenticated Users, label | INFERRED |
     /// | Default owner Administrators, primary group S-1-5-18 | INFERRED |
-    /// | Default DACL: SYSTEM `GENERIC_ALL`, then Administrators `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL`; revision 2, no spare room | INFERRED |
+    /// | Default DACL: SYSTEM `GENERIC_ALL`, then Administrators `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL`; revision 2, 60 bytes of which 8 are spare | INFERRED |
     /// | The 24 privileges [LocalSystem account] lists, with the enabled state it gives each | CONFIRMED for the LocalSystem logon; INFERRED to be the same in the System process's own token |
     /// | `SeSystemProfilePrivilege`, `SeIncreaseWorkingSetPrivilege`, `SeTimeZonePrivilege`, `SeCreateSymbolicLinkPrivilege`, `SeDelegateSessionUserImpersonatePrivilege` held and enabled; `SeTrustedCredManAccessPrivilege`, `SeRelabelPrivilege` held and disabled | INFERRED |
     /// | Every enabled privilege is also enabled by default; the privileges are ordered by number | INFERRED |
@@ -246,7 +246,9 @@ impl Token {
             attributes,
         };
         // GENERIC_ALL; GENERIC_READ | GENERIC_EXECUTE | READ_CONTROL.
-        let mut dacl = [0u8; ACL_HEADER + 20 + 24];
+        // Windows sizes the list with four bytes more than each entry
+        // takes, as it does the anonymous token's.
+        let mut dacl = [0u8; ACL_HEADER + 20 + 24 + 8];
         dacl[0] = ACL_REVISION;
         dacl[2] = dacl.len() as u8;
         let added = add_access_allowed(&mut dacl, 2, 0x1000_0000, &LOCAL_SYSTEM)
@@ -628,13 +630,15 @@ mod tests {
     fn the_system_token_has_a_default_dacl() {
         let token = Token::system();
         let dacl = token.default_dacl.unwrap();
-        assert_eq!(dacl.len(), 52);
-        assert_eq!(dacl[..8], [2, 0, 52, 0, 2, 0, 0, 0]);
+        // Two entries in 60 bytes, 52 of them used.
+        assert_eq!(dacl.len(), 60);
+        assert_eq!(dacl[..8], [2, 0, 60, 0, 2, 0, 0, 0]);
         assert_eq!(acl_used(&dacl), Some(52));
         assert_eq!(dacl[8..16], [0, 0, 20, 0, 0, 0, 0, 0x10]);
         assert_eq!(dacl[16..28], LOCAL_SYSTEM);
         assert_eq!(dacl[28..36], [0, 0, 24, 0, 0, 0, 0x02, 0xA0]);
-        assert_eq!(dacl[36..], ADMINISTRATORS);
+        assert_eq!(dacl[36..52], ADMINISTRATORS);
+        assert_eq!(dacl[52..], [0; 8]);
     }
 
     #[test]

@@ -1385,8 +1385,8 @@ fn token_query() -> Result<(), &'static str> {
                 }
             }
             let (block, list) = block_of(token, 6, 2).ok_or("no default list")?;
-            // An ACL header: revision 2, 52 bytes, two entries.
-            let right = list[0] == block as u64 + 8 && list[1] == 0x0002_0034_0002;
+            // An ACL header: revision 2, 60 bytes, two entries.
+            let right = list[0] == block as u64 + 8 && list[1] == 0x0002_003C_0002;
             free(block);
             if !right {
                 return Err("the token's default list is not the System token's");

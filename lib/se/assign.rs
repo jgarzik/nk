@@ -337,9 +337,9 @@ mod tests {
     }
 
     /// The token's default DACL as an object gets it: generic rights
-    /// mapped.
+    /// mapped, and its 8 spare bytes.
     fn default_dacl() -> Vec<u8> {
-        acl(&[
+        let mut dacl = acl(&[
             (ALLOW, 0, MAPPING.all, &LOCAL_SYSTEM),
             (
                 ALLOW,
@@ -347,7 +347,10 @@ mod tests {
                 0x0002_0000 | MAPPING.read | MAPPING.execute,
                 &ADMINISTRATORS,
             ),
-        ])
+        ]);
+        dacl.extend([0; 8]);
+        dacl[2] += 8;
+        dacl
     }
 
     /// What a parent's entry with these flags gives a directory and
@@ -578,8 +581,8 @@ mod tests {
         assert_eq!(made.group, Some(&LOCAL_SYSTEM[..]));
         assert_eq!(made.dacl.unwrap(), default_dacl());
         assert_eq!(made.sacl, None);
-        // DACL (52), owner (16), group (12) after the header.
-        assert_eq!(block.len(), 20 + 52 + 16 + 12);
+        // DACL (60), owner (16), group (12) after the header.
+        assert_eq!(block.len(), 20 + 60 + 16 + 12);
         // A parent with nothing to inherit changes nothing.
         let parent = acl(&[(ALLOW, 0, 1, USERS)]);
         assert_eq!(
