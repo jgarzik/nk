@@ -1,8 +1,8 @@
 name: CI
 
-# Runs the commit gate (`make gate`): format, lint, host unit tests, and
-# every boot scenario of the gate tier on both architectures, with real
-# driver fixtures. See doc/TESTING.md.
+# Runs the batch gate (`make gate`): format, lint for both architectures,
+# host unit tests, and every x86-64 boot scenario of the gate tier, with
+# real driver fixtures. arm64 is compiled, not booted. See doc/TESTING.md.
 on:
   push:
   pull_request:
@@ -15,8 +15,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      # Hosted runners have no usable KVM, so both architectures are
-      # emulated; give the boots more room than the local default.
+      # Hosted runners have no usable KVM, so x86-64 is emulated; give
+      # the boots more room than the local default.
       BOOT_TEST_TIMEOUT: 600
       # A fixture that cannot be downloaded fails the run instead of
       # turning its tests into skips.
@@ -27,7 +27,7 @@ jobs:
       - name: Install packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 mtools
+          sudo apt-get install -y qemu-system-x86 ovmf mtools
 
       # Installs the toolchain, components and targets from rust-toolchain.toml
       - name: Install Rust toolchain

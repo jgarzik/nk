@@ -4,14 +4,38 @@ Windows defines the expected behaviour. Oracle tests hold NK to a
 transcript recorded on real Windows; other expectations come from
 Microsoft's documentation, sample source and the fixture binaries.
 
-| Target | What | In the gate |
+## The gates
+
+| Gate | Passes | Prints | Runs |
+| --- | --- | --- | --- |
+| `make gate-fast` | every commit | `GATE-FAST-OK` | format, clippy (host, x86-64), host unit tests, x86-64 unwind coverage; boots the main scenario `x86_64` and the x86-64 scenarios whose `paths` name a file the branch changed since it left `updates` |
+| `make gate` (the batch gate) | the merged tip of `updates`; CI | `GATE-OK` | the same, clippy for arm64 (the proof that arm64 compiles), and every x86-64 scenario of the gate tier, except that a scenario that must end in a bugcheck or a failed test boots only when its `paths` name a file changed since the commit this gate last passed at |
+| `make gate-full` | nightly; milestones | `GATE-FULL-OK` | every step on both architectures and every scenario of the gate tier |
+
+Each runs its steps in order, the host tests while the machines boot,
+and stops at the first that fails (`tools/gate.sh`). A file is changed
+if it differs between the commit compared with and the working tree, or
+is untracked. Where that commit is not known, every file counts as
+changed: the fast gate without a branch `updates` (`GATE_BASE=<commit>`
+names another base), the batch gate without `target/gate-passed`, which
+`tools/gate.sh` writes when the batch or full gate passes on a clean
+tree. CI (`.github/workflows/ci.yml`) starts with neither, so its
+`make gate` boots every x86-64 scenario of the gate tier, emulated,
+with `NK_REQUIRE_FIXTURES=1`, which turns a fixture that cannot be
+downloaded from a SKIP into a failure.
+
+arm64 is paused until x86-64 reaches a `cmd.exe` prompt: no gate but
+the full one boots it, and the batch gate holds it to compiling without
+a warning. Its scenarios stay in `tools/scenarios.toml`, each bootable
+by name (`tools/boot_test.py aarch64-smp1`, `make check-arm`).
+
+| Target | What | In the gates |
 | --- | --- | --- |
-| `make test` | host unit tests of `lib/` and of the tools | yes |
-| `make check`, `check-arm` | one boot of the main scenario | (as part of `boot-gate`) |
-| `make boot-gate` | every gate-tier boot scenario, in parallel | yes |
+| `make test` | host unit tests of `lib/` and of the tools | all |
+| `make check`, `check-arm` | one boot of the main scenario | `check`: all (as part of the boots); `check-arm`: full |
+| `make boot-fast`, `boot-gate`, `boot-full` | the boots of the fast, batch and full gate, in parallel | one each |
 | `make ledger-check` | the committed ledger is what the last boots printed | no: the ledger is a report, regenerated with `make ledger` when a milestone is reached |
-| `make unwind-check` | kernel code with no unwind entry is on the allow-list | yes |
-| `make gate` | fmt, clippy (both arches), the gated targets above; prints `GATE-OK` | |
+| `make unwind-check`, `unwind-check-arm` | kernel code with no unwind entry is on the allow-list | `unwind-check`: all; `unwind-check-arm`: full |
 | `make soak` | the whole list, repeated, on an overloaded host | no: long |
 | `make mutants` | each deliberate break must fail its test | no: a build and boot each |
 | `make coverage` | `lib/` line coverage, 95% per file | no: needs `cargo-llvm-cov` |
@@ -19,9 +43,7 @@ Microsoft's documentation, sample source and the fixture binaries.
 
 `make help` lists the targets that test nothing themselves (`fixtures`,
 `ledger`, `corpus`). The ungated targets run when the code they cover
-changes and at the end of a phase. CI (`.github/workflows/ci.yml`) runs `make gate` with both
-architectures emulated and `NK_REQUIRE_FIXTURES=1`, which turns a
-fixture that cannot be downloaded from a SKIP into a failure.
+changes and at the end of a phase.
 
 ## Host unit tests
 
@@ -122,8 +144,14 @@ once.
 
 ### Scenarios
 
-`tools/scenarios.toml` lists the boots and documents their fields. The
-gate tier has, for each architecture:
+`tools/scenarios.toml` lists the boots and documents their fields,
+among them `paths`: the files and directories whose change selects a
+scenario for the fast gate and, if it must end in a bugcheck or a
+failed test, for the batch gate. Microsoft's storage stack
+(`x86_64-storage`, `x86_64-storage-direct`) is selected by any change
+to the kernel, the loader, `lib/` or the fixtures; a scenario that
+breaks a rule on purpose by the code that enforces the rule. The gate
+tier has, for each architecture:
 
 - the main scenario (`x86_64`, `aarch64`): the tests pass on several
   processors; and `*-smp1`: on one;
@@ -356,7 +384,7 @@ prints its own state.
 
 A tier prints its boots in the order they are listed, a line for each
 that passed and everything a failed one said. When the boots fail,
-`make gate` shows the failed ones and the tier's last line
+each gate shows the failed ones and the tier's last line
 (`tools/boot_test.py --failures <log>`), not the end of the output.
 
 Knobs: `BOOT_TEST_TIMEOUT` (seconds), `QEMU_SMP`, `QEMU_MEM`,
@@ -418,7 +446,7 @@ routines itself and reports what it saw as a list of numbers. What
 Windows returns is the specification, even where it surprises.
 
 Transcripts do not depend on the architecture, so arm64 NK is held to
-lines recorded on x86-64 Windows. The gate runs only the NK side; a
+lines recorded on x86-64 Windows. The gates run only the NK side; a
 transcript records the hashes of its script and driver, and
 `tools/test_oracle.py` fails if either changed without re-recording.
 
@@ -457,7 +485,7 @@ symbol that no `.pdata` entry covers. Such a symbol must be one of:
   nothing else checks.
 
 A new assembly routine without unwind directives therefore fails the
-gate until it gets them or is listed; so does a listed name that no
+gates until it gets them or is listed; so does a listed name that no
 longer applies. The check prints the count and bytes of each kind.
 
 ## Release images

@@ -4,6 +4,9 @@
 Usage:
   boot_test.py <scenario>            run one scenario from tools/scenarios.toml
   boot_test.py --tier <tier>         run every scenario of a tier, in parallel
+  boot_test.py --gate fast|batch|full
+                                     run the gate tier's scenarios that this
+                                     gate selects (below), in parallel
   boot_test.py <scenario> --run      serial console on this terminal, no verdict
   boot_test.py <scenario> --image <esp.img>
                                      boot an existing image (e.g. from `make
@@ -21,6 +24,22 @@ Usage:
 What passing means is the scenario's `expect` (see tools/judge.py). A hung
 boot is killed at the timeout, after every CPU's registers are saved.
 
+The three gates (`make gate-fast`, `gate`, `gate-full`) each boot a
+selection of the gate tier (`select`):
+
+  fast   the scenario `x86_64`, and the x86-64 scenarios whose `paths`
+         name a file changed since the merge base with the branch
+         `updates` ($GATE_BASE names another commit to compare with)
+  batch  every x86-64 scenario that must pass (`expect = "ok"`); those
+         that must end in a bugcheck or a failed test only when their
+         `paths` name a file changed since the commit the batch gate last
+         passed at (target/gate-passed, written by tools/gate.sh)
+  full   every scenario of the tier, on both architectures
+
+A file is changed if it differs between that commit and the working tree,
+or is not yet tracked. Where the commit is not known (no branch `updates`,
+no target/gate-passed, as in CI) every file counts as changed.
+
 Each scenario works in target/qemu/<scenario>/. QEMU runs in its own
 session, is killed on every exit path (success, failure, timeout, Ctrl-C,
 SIGTERM), and dies with this process even if this process is killed
@@ -34,7 +53,8 @@ before the boot and compared after it with what the scenario's
 
 Environment: BOOT_TEST_TIMEOUT (seconds, default 120), QEMU_SMP, QEMU_MEM,
 NO_KVM=1 (emulate x86-64 too), JOBS (parallel boots in a tier), KEEP=1
-(keep every scenario directory), QEMU_LOG_DIR (default target/qemu).
+(keep every scenario directory), QEMU_LOG_DIR (default target/qemu),
+GATE_BASE (above).
 """
 
 import concurrent.futures
@@ -63,6 +83,8 @@ TIMEOUT = int(os.environ.get("BOOT_TEST_TIMEOUT", "120"))
 SMP = os.environ.get("QEMU_SMP", "4")
 MEM = os.environ.get("QEMU_MEM", "512M")
 KEEP = bool(os.environ.get("KEEP"))
+# The commit the batch gate last passed at (tools/gate.sh writes it).
+GATE_PASSED = ROOT / "target" / "gate-passed"
 
 FIRMWARE = {
     "x86_64": ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
@@ -396,10 +418,91 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             shutil.rmtree(directory, ignore_errors=True)
 
 
-def run_tier(tier, scenarios, repeat=1):
-    """Run every scenario of `tier`, `repeat` times each, several at a
-    time, each in its own process so that one cannot disturb another."""
-    names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
+def matches(paths, changed):
+    """Does a scenario's `paths` name one of the changed files? Each path
+    is a file, or a directory ending in `/`: a prefix of what it names.
+    `changed` None is "everything changed"."""
+    if changed is None:
+        return True
+    return any(file.startswith(path) for path in paths for file in changed)
+
+
+def select(scenarios, gate, changed):
+    """The names of the gate tier's scenarios that `gate` ("fast", "batch"
+    or "full") boots, given the changed files (None: all of them)."""
+    names = []
+    for name, sc in scenarios.items():
+        if sc.get("tier") != "gate":
+            continue
+        selected = "paths" in sc and matches(sc["paths"], changed)
+        if gate == "fast":
+            run = sc["arch"] == "x86_64" and (name == "x86_64" or selected)
+        elif gate == "batch":
+            run = sc["arch"] == "x86_64" and (
+                sc.get("expect", "ok") == "ok" or changed is None or selected)
+        else:
+            run = True
+        if run:
+            names.append(name)
+    return names
+
+
+def git(*args):
+    """The output of a git command in the tree, or None if it failed."""
+    done = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    return done.stdout if done.returncode == 0 else None
+
+
+def gate_base(gate):
+    """The commit a gate compares the tree with, or None if there is none:
+    the fast gate's is where the branch left `updates`, the batch gate's
+    is where that gate last passed."""
+    if gate == "fast":
+        base = os.environ.get("GATE_BASE") or (git("merge-base", "HEAD", "updates") or "").strip()
+    else:
+        try:
+            base = GATE_PASSED.read_text().strip()
+        except OSError:
+            base = ""
+    if base and git("cat-file", "-e", f"{base}^{{commit}}") is not None:
+        return base
+    return None
+
+
+def changed_files(base):
+    """The files that differ between the commit `base` and the working
+    tree, and those not tracked; None (everything) if `base` is None or
+    git cannot say."""
+    if base is None:
+        return None
+    differing = git("diff", "--name-only", base)
+    untracked = git("ls-files", "--others", "--exclude-standard")
+    if differing is None or untracked is None:
+        return None
+    return sorted(set((differing + untracked).split("\n")) - {""})
+
+
+def run_gate(gate, scenarios):
+    """Run what `gate` selects of the gate tier, and say what that was."""
+    if gate == "full":
+        return run_tier("gate", scenarios)
+    total = sum(sc.get("tier") == "gate" for sc in scenarios.values())
+    base = gate_base(gate)
+    changed = changed_files(base)
+    names = select(scenarios, gate, changed)
+    since = "every file taken as changed" if changed is None \
+        else f"{len(changed)} files changed since {base[:12]}"
+    print(f"{gate} gate: {len(names)} of the gate tier's {total} scenarios ({since})")
+    return run_tier("gate", scenarios, label=f"tier gate ({gate})", names=names)
+
+
+def run_tier(tier, scenarios, repeat=1, label=None, names=None):
+    """Run every scenario of `tier` (or those of it in `names`), `repeat`
+    times each, several at a time, each in its own process so that one
+    cannot disturb another."""
+    label = label or f"tier {tier}"
+    if names is None:
+        names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
     if not names:
         sys.exit(f"boot_test: no scenario in tier {tier!r}")
     # Each boot runs up to its `smp` guest CPUs flat out. The gate keeps
@@ -456,12 +559,12 @@ def run_tier(tier, scenarios, repeat=1):
                     proc.terminate()
         pool.shutdown(wait=True, cancel_futures=True)
     if failed:
-        print(f"tier {tier}: FAILED {len(failed)} of {len(runs)} boots ({', '.join(failed)})")
+        print(f"{label}: FAILED {len(failed)} of {len(runs)} boots ({', '.join(failed)})")
         return 1
     if repeat == 1:
-        print(f"tier {tier}: {len(names)} scenarios passed")
+        print(f"{label}: {len(names)} scenarios passed")
     else:
-        print(f"tier {tier}: {len(runs)} boots passed ({len(names)} scenarios, {repeat} times each)")
+        print(f"{label}: {len(runs)} boots passed ({len(names)} scenarios, {repeat} times each)")
     return 0
 
 
@@ -511,7 +614,7 @@ def main():
         for line in lines:
             print(line)
         return 0 if lines else 1
-    image, tier = option("--image"), option("--tier")
+    image, tier, gate = option("--image"), option("--tier"), option("--gate")
     repeat, instance = int(option("--repeat") or 1), option("--instance")
     flags = {a for a in argv if a.startswith("--")}
     args = [a for a in argv if not a.startswith("--")]
@@ -522,6 +625,10 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda n, _: sys.exit(128 + n))
     OUT.mkdir(parents=True, exist_ok=True)
+    if gate:
+        if args or flags or image or tier or repeat != 1 or gate not in ("fast", "batch", "full"):
+            sys.exit(__doc__)
+        return run_gate(gate, scenarios)
     if tier:
         if args or flags or image:
             sys.exit(__doc__)
