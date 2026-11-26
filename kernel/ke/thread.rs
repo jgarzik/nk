@@ -441,7 +441,9 @@ fn wake_an_idle(allowed: u64) {
 }
 
 /// Take a thread this processor may run from another processor's queues:
-/// the best that one has, if its affinity allows.
+/// the best that one has, if its affinity allows. A thread it may not
+/// have is looked at where it is and never leaves its queue: whoever
+/// changes its priority meanwhile finds it there (`apply_priority`).
 fn steal() -> Option<*mut Thread> {
     let me = pcr::current_processor() as usize;
     let processors = super::smp::online_count();
@@ -453,13 +455,13 @@ fn steal() -> Option<*mut Thread> {
         // SAFETY: queued threads are live, and while queued their
         // affinity and processor belong to the queue's lock.
         unsafe {
-            let Some(thread) = dequeue(&mut ready, 0) else {
+            let Some((best, _)) = ready.first(0) else {
                 continue;
             };
-            if field::<u64>(thread, layout::AFFINITY).read() & 1 << me == 0 {
-                enqueue(&mut ready, other, thread, true);
+            if field::<u64>(thread_of(best), layout::AFFINITY).read() & 1 << me == 0 {
                 continue;
             }
+            let thread = dequeue(&mut ready, 0)?;
             next_processor(thread).store(me as u32, Ordering::Relaxed);
             return Some(thread);
         }
@@ -1397,6 +1399,59 @@ pub fn set_other_priority_test() -> Result<u32, &'static str> {
         return Err("threads on the move lost a priority that was set, or stopped moving");
     }
     Ok(changes)
+}
+
+/// A ready thread raised above the running one runs at once, whatever
+/// the other processors are doing: here they are kept looking through
+/// this processor's queue for a thread to take, where the one about to
+/// be raised is the best there is and not theirs to have. Returns the
+/// threads raised.
+pub fn raise_ready_test() -> Result<u32, &'static str> {
+    fn body(_: usize) {
+        RAN.fetch_add(1, Ordering::Release);
+    }
+    const ROUNDS: u32 = 3000;
+    let before = count();
+    let me = pcr::current_processor() as usize;
+    let processors = super::smp::online_count();
+    RAN.store(0, Ordering::Release);
+    let mut late = 0;
+    for round in 0..ROUNDS {
+        let thread = create_referenced(body, 0, NORMAL_PRIORITY - 1, 1 << me)?;
+        // An idle processor that is interrupted looks for work: a
+        // run of interrupts, of a length that differs from round to
+        // round, keeps them looking while the priority changes.
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        for _ in 0..1 + round % 24 {
+            for other in (0..processors).filter(|&other| other != me) {
+                reconsider(other);
+            }
+        }
+        irql::lower(old);
+        // A halted processor takes longer to start looking.
+        for _ in 0..round % 509 {
+            core::hint::spin_loop();
+        }
+        let waiting = RAN.load(Ordering::Acquire);
+        // SAFETY: a thread this test holds a reference to, which it
+        // gives up here; the wait is for that thread's end.
+        unsafe {
+            KeSetPriorityThread(thread.cast(), i32::from(NORMAL_PRIORITY + 1));
+            let ran = RAN.load(Ordering::Acquire);
+            if (waiting, ran) != (round, round + 1) {
+                late += 1;
+            }
+            super::wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    if count() != before {
+        return Err("the threads did not finish");
+    }
+    if late != 0 {
+        return Err("a ready thread raised above the running one did not run at once");
+    }
+    Ok(ROUNDS)
 }
 
 /// A thread created for another processor runs there. Returns that

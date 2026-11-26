@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: scenario
 file: kernel/ke/thread.rs
-replace:             if field::<u64>(thread, layout::AFFINITY).read() & 1 << me == 0 {
+replace:             if field::<u64>(thread_of(best), layout::AFFINITY).read() & 1 << me == 0 {
 with:             if false {
