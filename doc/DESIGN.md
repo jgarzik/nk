@@ -986,12 +986,21 @@ Where a descriptor lives:
   field a driver can read, as on Windows: a pool block the device owns,
   replaced under the I/O database lock.
 - Any other object can carry one in `OBJECT_HEADER.SecurityDescriptor`
-  (`kernel/ob/security.rs`): a counted pool block of its own, set,
-  referenced and released by kernel routines, freed with the object or
-  when replaced and no reader holds it. Windows shares one block among
-  objects with equal descriptors; NK does not. The field is Windows' fast
-  reference with its count bits zero. Nothing gives an object a
-  descriptor yet: that comes with the types' security procedures.
+  (`kernel/ob/security.rs`): a reference to a copy in the store below,
+  set, referenced and released by kernel routines, given up with the
+  object or when replaced. The field is Windows' fast reference with
+  its count bits zero. Nothing gives an object a descriptor yet: that
+  comes with the types' security procedures.
+- The store (`nk_ob::descriptors`) keeps one counted, self-relative
+  copy of each distinct descriptor, as Windows' does: logging the same
+  bytes again, from whatever address, returns the same copy with more
+  references, and the copy is freed with its last. A file system logs
+  its files' descriptors there (`ObLogSecurityDescriptor`) and holds
+  the copies (`ObReferenceSecurityDescriptor`,
+  `ObDereferenceSecurityDescriptor`); objects with equal descriptors
+  share a copy. What precedes a copy in its block (its count, a hash of
+  its bytes) is NK's own. Giving up more references than are held stops
+  the system, as Windows' fast fail does (`0x139`).
 
 ## Tokens and access state
 

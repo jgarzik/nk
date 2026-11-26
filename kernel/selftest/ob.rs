@@ -18,6 +18,8 @@ pub static GROUP: Group = Group {
         "ob.namespace.name-info",
         "ob.handle-access",
         "ob.security",
+        "ob.security-store",
+        "ob.security-store-smp",
     ],
     run,
     manual: false,
@@ -68,4 +70,16 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("ob.namespace.name-info", crate::ob::name_info_test);
     counted(r, "ob.handle-access", "look-ups:", handle::access_test());
     r.check("ob.security", crate::ob::security::self_test);
+    counted(
+        r,
+        "ob.security-store",
+        "descriptors logged:",
+        crate::ob::security::store_test(),
+    );
+    counted(
+        r,
+        "ob.security-store-smp",
+        "descriptors logged on several processors:",
+        crate::ob::security::store_smp_test(),
+    );
 }

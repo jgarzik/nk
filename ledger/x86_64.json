@@ -2000,10 +2000,10 @@
   "binaries": 58,
   "kernel_names": {
    "total": 1740,
-   "implemented": 119,
+   "implemented": 122,
    "partial": 4,
    "traps": 0,
-   "missing": 1617
+   "missing": 1614
   },
   "by_binary": [
    {
@@ -2028,10 +2028,10 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 66,
+     "implemented": 69,
      "partial": 4,
      "traps": 0,
-     "missing": 181
+     "missing": 178
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2129,10 +2129,10 @@
     "version": "10.0.19041.1110",
     "kernel": {
      "total": 85,
-     "implemented": 31,
+     "implemented": 33,
      "partial": 3,
      "traps": 0,
-     "missing": 51
+     "missing": 49
     },
     "by_ordinal": 2,
     "other_modules": {}
@@ -2375,10 +2375,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 76,
-     "implemented": 34,
+     "implemented": 37,
      "partial": 0,
      "traps": 0,
-     "missing": 42
+     "missing": 39
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2445,10 +2445,10 @@
     "version": "10.0.19041.1682",
     "kernel": {
      "total": 235,
-     "implemented": 66,
+     "implemented": 67,
      "partial": 3,
      "traps": 0,
-     "missing": 166
+     "missing": 165
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2462,10 +2462,10 @@
     "version": "10.0.19041.1526",
     "kernel": {
      "total": 111,
-     "implemented": 43,
+     "implemented": 46,
      "partial": 3,
      "traps": 0,
-     "missing": 65
+     "missing": 62
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2639,10 +2639,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 70,
+     "implemented": 73,
      "partial": 4,
      "traps": 0,
-     "missing": 255
+     "missing": 252
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2902,7 +2902,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 128,
+   "exported_by_nk": 131,
    "nk_names_it_lacks": [
     "KfLowerIrql"
    ]

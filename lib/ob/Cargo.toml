@@ -1,6 +1,6 @@
 [package]
 name = "nk-ob"
-description = "The object manager's tables: names and handle slots"
+description = "The object manager's tables: names, handle slots, security descriptors"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

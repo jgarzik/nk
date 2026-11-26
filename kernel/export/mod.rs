@@ -150,8 +150,11 @@ static EXPORTS: &[Export] = &[
         arch::seh::nk_entry_MmProbeAndLockPages
     ),
     export!(Implemented, io::mdl::MmUnlockPages),
+    export!(Implemented, ob::security::ObDereferenceSecurityDescriptor),
+    export!(Implemented, ob::security::ObLogSecurityDescriptor),
     export!(Implemented, ob::handle::ObReferenceObjectByHandle),
     export!(Implemented, ob::handle::ObReferenceObjectByHandleWithTag),
+    export!(Implemented, ob::security::ObReferenceSecurityDescriptor),
     export!(Implemented, ob::object::ObfDereferenceObject),
     export!(Implemented, ob::object::ObfDereferenceObjectWithTag),
     export!(Implemented, ob::object::ObfReferenceObject),

@@ -70,6 +70,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
+| 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
@@ -120,6 +121,13 @@ Why this order:
   the timer's DPC. No two tables are held together: a timer moves from
   one processor's table to another's by leaving the first under its lock
   and entering the second under its own.
+- The store of security descriptors is searched and changed under its
+  lock and nothing else is done there: a descriptor's block is
+  allocated before the lock is taken and freed after it is dropped, so
+  the pool's lock, though it ranks below, is never wanted inside. A
+  descriptor's count is raised without the lock by whoever already
+  holds a reference, and lowered only under it, so a count that
+  reaches zero there finds the entry still in its bucket to take out.
 - An object's header lock is the `Lock` word of its `OBJECT_HEADER`,
   where Windows has it, not a `SpinLock`: its holder spins on the word,
   and the hold is ranked and recorded all the same (`ke::Ranked`). It
