@@ -16,4 +16,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, cm::ZwQueryKey),
     export!(Implemented, cm::ZwQueryValueKey),
     export!(Implemented, cm::ZwSetValueKey),
+    export!(Implemented, cm::RtlCheckRegistryKey),
+    export!(Implemented, cm::RtlCreateRegistryKey),
+    export!(Implemented, cm::RtlDeleteRegistryValue),
+    export!(Implemented, cm::RtlWriteRegistryValue),
 ];

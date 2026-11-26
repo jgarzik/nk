@@ -2184,6 +2184,16 @@ does what the query says. NK's decisions:
   like any call into a driver (Exceptions). All the query holds is one
   pool block, which the guard of that call gives back.
 
+`RtlCheckRegistryKey`, `RtlCreateRegistryKey`, `RtlWriteRegistryValue`
+and `RtlDeleteRegistryValue` (`kernel/cm/helper.rs`) name their key the
+same way and find it by the same code. Each is what the pinned kernel
+makes of it: the key opened, or for all but the check made if it is
+not there (under a key that is), then the one system service; so a
+value written or deleted stamps the key and tells its watchers as
+`ZwSetValueKey` and `ZwDeleteValueKey` do, and deleting a value of a
+key that is not there makes the key. A key given by handle is not
+looked at by the check or the create, which succeed.
+
 ## Strings
 
 The rules are `lib/rtl`; the exports in `kernel/rtl` read and write a
