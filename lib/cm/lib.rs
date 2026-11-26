@@ -36,9 +36,9 @@ mod writer;
 
 pub use import::{ImportError, import};
 pub use info::{
-    KEY_BASIC_HEADER, KEY_FULL_HEADER, KEY_NAME_HEADER, KEY_NODE_HEADER, KeyInfo, NO_CLASS,
-    VALUE_BASIC_HEADER, key_basic_information, key_full_information, key_name_information,
-    key_node_information, value_basic_information,
+    KEY_BASIC_HEADER, KEY_CACHED_SIZE, KEY_FULL_HEADER, KEY_NAME_HEADER, KEY_NODE_HEADER, KeyInfo,
+    NO_CLASS, VALUE_BASIC_HEADER, fixed_information, key_basic_information, key_cached_information,
+    key_full_information, key_name_information, key_node_information, value_basic_information,
 };
 
 /// A key in a hive.
@@ -85,6 +85,11 @@ struct Key {
     values: Vec<Value>,
     /// The class it was given: bytes, UTF-16 by convention.
     class: Vec<u8>,
+    /// The longest it has had since it last had none, in bytes: subkey
+    /// name, subkey class, value name, value data. Windows keeps these
+    /// numbers in the key and does not lower them when the longest
+    /// goes while others stay.
+    longest: Longest,
     /// Its security descriptor, self-relative; empty if it has none.
     security: Vec<u8>,
     /// When it was last written, as a `FILETIME`.
@@ -97,6 +102,26 @@ struct Key {
     /// request. Its place in the table is reused once no handle is
     /// open to it.
     deleted: bool,
+}
+
+/// The lengths a key remembers: the longest subkey name, subkey class,
+/// value name and value data, in bytes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Longest {
+    pub name: u32,
+    pub class: u32,
+    pub value_name: u32,
+    pub value_data: u32,
+}
+
+impl Longest {
+    /// Each length the longer of the two.
+    fn raise(&mut self, other: Longest) {
+        self.name = self.name.max(other.name);
+        self.class = self.class.max(other.class);
+        self.value_name = self.value_name.max(other.value_name);
+        self.value_data = self.value_data.max(other.value_data);
+    }
 }
 
 /// A registry.
@@ -178,6 +203,7 @@ impl Hive {
             children: Vec::new(),
             values: Vec::new(),
             class: Vec::new(),
+            longest: Longest::default(),
             security: Vec::new(),
             last_write: 0,
             link: false,
@@ -232,8 +258,13 @@ impl Hive {
             return Err(Error::HasSubkeys);
         }
         let parent = self.keys[index].parent;
-        self.keys[parent].children.retain(|&child| child != index);
-        self.keys[parent].children.shrink_to_fit();
+        let above = &mut self.keys[parent];
+        above.children.retain(|&child| child != index);
+        above.children.shrink_to_fit();
+        if above.children.is_empty() {
+            above.longest.name = 0;
+            above.longest.class = 0;
+        }
         let gone = &mut self.keys[index];
         gone.deleted = true;
         gone.name = Vec::new();
@@ -336,6 +367,10 @@ impl Hive {
             .children
             .partition_point(|&child| order(&self.keys[child].name, name).is_lt());
         self.keys[key].children.insert(at, new);
+        self.keys[key].longest.raise(Longest {
+            name: name.len() as u32 * 2,
+            ..Longest::default()
+        });
         Ok(new)
     }
 
@@ -360,15 +395,21 @@ impl Hive {
     ) -> Result<(), Error> {
         let index = self.live(key)?;
         let data = exact(data)?;
+        let longest = Longest {
+            value_name: name.len() as u32 * 2,
+            value_data: data.len() as u32,
+            ..Longest::default()
+        };
         let values = &mut self.keys[index].values;
         if let Some(value) = values.iter_mut().find(|value| same(&value.name, name)) {
             value.kind = kind;
             value.data = data;
-            return Ok(());
+        } else {
+            let name = exact(name)?;
+            values.try_reserve_exact(1).map_err(|_| Error::NoMemory)?;
+            values.push(Value { name, kind, data });
         }
-        let name = exact(name)?;
-        values.try_reserve_exact(1).map_err(|_| Error::NoMemory)?;
-        values.push(Value { name, kind, data });
+        self.keys[index].longest.raise(longest);
         Ok(())
     }
 
@@ -445,6 +486,31 @@ pub fn partial_information(kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usiz
     )
 }
 
+/// Size of a `KEY_VALUE_PARTIAL_INFORMATION_ALIGN64` before its data:
+/// type, data length. The data then start at a multiple of eight bytes.
+pub const PARTIAL_ALIGN64_HEADER: usize = 8;
+
+/// Write a value as a `KEY_VALUE_PARTIAL_INFORMATION_ALIGN64` into
+/// `out`: the partial form without the title index. Returns how much
+/// fitted, and the length that holds all of it.
+pub fn partial_align64_information(kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usize) {
+    let needed = PARTIAL_ALIGN64_HEADER + data.len();
+    let Some((header, room)) = out.split_at_mut_checked(PARTIAL_ALIGN64_HEADER) else {
+        return (Fit::Nothing, needed);
+    };
+    header[..4].copy_from_slice(&kind.to_le_bytes());
+    header[4..].copy_from_slice(&(data.len() as u32).to_le_bytes());
+    room.iter_mut().zip(data).for_each(|(to, &from)| *to = from);
+    (
+        if room.len() >= data.len() {
+            Fit::All
+        } else {
+            Fit::Part
+        },
+        needed,
+    )
+}
+
 /// Size of a `KEY_VALUE_FULL_INFORMATION` before the name: title
 /// index, type, data offset, data length, name length.
 pub const FULL_HEADER: usize = 20;
@@ -454,8 +520,10 @@ pub const NO_DATA: u32 = u32::MAX;
 
 /// Write a value as a `KEY_VALUE_FULL_INFORMATION` into `out`: the
 /// header, the name, then the data at the next multiple of eight bytes
-/// (so Windows 10 x64 places it; `oracle/nkc-reg.txt`). A value with no
-/// data ends with its name and gives [`NO_DATA`] as the offset.
+/// (so Windows 10 x64 places it; `oracle/nkc-reg.txt`), which makes it
+/// a `KEY_VALUE_FULL_INFORMATION_ALIGN64` as well. The bytes between
+/// name and data are left alone. A value with no data ends with its
+/// name and gives [`NO_DATA`] as the offset.
 /// Returns how much fitted, and the length that holds all of it.
 pub fn full_information(name: &[u16], kind: u32, data: &[u8], out: &mut [u8]) -> (Fit, usize) {
     let name_bytes = name.len() * 2;
@@ -848,5 +916,31 @@ mod tests {
         assert_eq!(partial_information(1, &data, &mut []), (Fit::Nothing, 18));
         // A value without data fits its header.
         assert_eq!(partial_information(3, &[], &mut header), (Fit::All, 12));
+    }
+
+    #[test]
+    fn the_aligned_partial_form_has_no_title_index() {
+        let data = [b'n', 0, b'k', 0, 0, 0];
+        let mut out = [0xEEu8; 16];
+        let form = |out: &mut [u8]| partial_align64_information(1, &data, out);
+        assert_eq!(form(&mut out), (Fit::All, 14));
+        assert_eq!(out[..8], [1, 0, 0, 0, 6, 0, 0, 0]);
+        assert_eq!(out[8..14], data);
+        assert_eq!(out[14..], [0xEE; 2], "nothing past the value");
+        assert_eq!(form(&mut out[..14]).0, Fit::All, "exactly enough");
+        // The header and some of the data; the header alone.
+        let mut part = [0xEEu8; 11];
+        assert_eq!(form(&mut part), (Fit::Part, 14));
+        assert_eq!(part, [1, 0, 0, 0, 6, 0, 0, 0, b'n', 0, b'k']);
+        assert_eq!(form(&mut part[..8]), (Fit::Part, 14));
+        // Not even the header: untouched.
+        let mut short = [0xEEu8; 7];
+        assert_eq!(form(&mut short), (Fit::Nothing, 14));
+        assert_eq!(short, [0xEE; 7]);
+        // A value without data is its header.
+        assert_eq!(
+            partial_align64_information(3, &[], &mut out[..8]),
+            (Fit::All, 8)
+        );
     }
 }

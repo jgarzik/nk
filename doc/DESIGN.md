@@ -940,6 +940,12 @@ that key, which walks the rest of the path in the registry's own tree. A
 name relative to an open key starts at that key. A key is no file:
 opening one through the I/O manager is `STATUS_OBJECT_TYPE_MISMATCH`.
 
+A key remembers the longest subkey name, subkey class, value name and
+value data it has held, which is what it reports as the longest it
+holds: as on Windows, the numbers only grow while the key has subkeys
+(or values) and start again when the last one goes. A key copied from a
+hive file starts from the numbers the file gives it.
+
 Creating makes only the last key of a path, as on Windows. Values are
 read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
 forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
