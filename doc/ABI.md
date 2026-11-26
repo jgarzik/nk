@@ -38,6 +38,7 @@ Consequences:
   in between uses them, and loaded back if a handler changed them.
 - x18 holds the processor control region on arm64 Windows; the target
   leaves it alone, so the kernel can set it once per CPU.
+
 How to re-measure: compile a small `#![no_std]` library for each target
 with `rustc --emit asm` and read the argument registers.
 
@@ -64,7 +65,8 @@ TSS 0x40). That is a debugging convenience, not a driver dependency.
 
 ## What is a call and what is not
 
-The import tables of the conformance drivers, built with the current WDK,
+The import tables of the conformance drivers, built with the WDK the
+fixture manifest names,
 show which routines a driver calls and which the headers compile in line:
 
 | | x86-64 | arm64 |
@@ -191,7 +193,7 @@ alert state (`Alerted`, `MiscFlags.Alertable`, `WaitMode`), its base
 priority and `Saturation`, the silo it is attached to (`ETHREAD.Silo`)
 and where its impersonation would be (`ClientSecurity`,
 `CrossThreadFlags.ActiveImpersonationInfo`); a process's base priority,
-`Session`, `Job` and `ServerSilo`; and `KAPC_STATE`. Microsoft's
+`Session`, `Job` and `ServerSilo`; and `KAPC_STATE`.
 The FCB header a file system shares with the kernel
 (`FSRTL_ADVANCED_FCB_HEADER`, `lib/ntabi/fsrtl.rs`) agrees, its
 `Version` bits included; the symbols do not have
@@ -224,26 +226,26 @@ neither the headers nor the symbols; all a driver may do with one is
 wait on its address, so NK's begins with a `KTIMER` and is otherwise
 its own.
 
-## Not yet verified
+## Unverified
 
 - `SE_EXPORTS` past `SeUserModeDriversSid` (0x210). Up to there, the
   offsets are the ones the WDK probe records and Microsoft's
   device-security library, linked into the `cancel` fixture, reads SIDs
   from. The two SIDs and one privilege after it, and the structure's
   size (0x230), are what NK takes the Windows 10 kernel to publish; the
-  current WDK's header has grown further (0x260), so the probe cannot
-  say, and no fixture reads them yet.
+  WDK's header is larger (0x260), so the probe cannot say, and no
+  fixture reads them.
 - `SILO_MONITOR_REGISTRATION` (`lib/ntabi/silo.rs`). Its layout is
   `ntddk.h`'s and agrees with the offsets the Windows 10 kernel reads
   it at; the WDK probe has no line for it.
 
 - The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
   documented convention; no symbol file, probe fact or fixture driver
-  confirms it yet. Where the processor number sits, and the PCR's size,
+  confirms it. Where the processor number sits, and the PCR's size,
   are NK's own until something shows what Windows uses.
 - Behaviour beyond the oracle scripts. What `oracle/` replays on real
   Windows is verified line for line (`doc/TESTING.md`); every other
-  expectation still comes from documentation, sample source and the
+  expectation comes from documentation, sample source and the
   binaries themselves.
 - Pointer authentication on arm64: WDK-built arm64 drivers contain
   `pacibsp`/`autibsp`. They execute as no-ops on the emulated CPU used

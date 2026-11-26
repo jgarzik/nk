@@ -12,7 +12,7 @@ lock changes this file in the same commit.
 | `DISPATCH_LEVEL` | 2 | `0x2F` | SGI 3 | DPCs, the dispatcher, code holding a spin lock |
 | clock | 13 | `0xD1` | virtual timer PPI | the clock tick |
 | interprocessor | 14 | `0xE1` | SGI 1 | `ke::ipi` routines |
-| `HIGH_LEVEL` | 15 | | | the DPC-queue and console locks; the bugcheck path |
+| `HIGH_LEVEL` | 15 | | | the locks of the highest ranks (the DPC queues, the console and those beside them in the table below); the bugcheck path |
 
 The IRQL is the interrupt controller's priority mask and nothing else;
 on neither architecture is it a copy in memory (see "Per-processor
@@ -193,8 +193,8 @@ Each of these stops the system when broken:
 - **No call into a driver with a lock held.** A driver entry point
   expects `PASSIVE_LEVEL`; a held lock means `DISPATCH_LEVEL`.
 
-The locks at ranks 10 to 30 protect data that Windows guards with locks a
-thread can sleep on. Spin locks stand in for those; they are stricter,
+The locks ranked below the pool's protect data that Windows guards with
+locks a thread can sleep on. Spin locks stand in for those; they are stricter,
 never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
@@ -395,6 +395,22 @@ interleaving with several wakers is checked on the host.
   and, if an expiry had already taken the timer out of its table, waits
   until that expiry has finished with it, before it returns. Reaping a
   thread checks that its timer is neither pending nor mid-expiry.
+
+## Without a lock
+
+Some shared state has no lock, because a driver may reach it at any
+IRQL or because Windows defines it as one word changed atomically:
+
+- The table of registered trace providers (`kernel/etw`): a slot is
+  claimed and given up by compare-and-swap, so a provider writes an
+  event at any IRQL.
+- A sequenced list (`SLIST_HEADER`): push, pop and flush are one
+  16-byte compare-and-swap on the header in the driver's memory
+  (`arch::swap_pair`).
+- A push lock's word and a thread's wait register
+  (`nk_ke::WaitRegister`), each changed only by compare-and-swap; the
+  queues of threads behind them are under ranked locks (the table
+  above).
 
 ## What drivers get
 

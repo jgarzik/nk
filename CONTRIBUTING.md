@@ -31,8 +31,8 @@ If unsure whether something qualifies, ask before writing it.
 - **Stay honest at the driver boundary.** No export reports success for
   work it did not do. An incomplete routine is `Partial` or `Traps` in
   `kernel/export/mod.rs`, with the gap in its doc comment.
-- **Be driven by a real driver.** An export is added because a fixture
-  imports it.
+- **Be driven by a real driver.** An export is added because a binary in
+  the pinned corpus or a pinned fixture imports it.
 - **Build for both architectures.** CPU-specific code lives in
   `kernel/arch/`; pure logic in `lib/`.
 - **Document as it goes,** in the same commit. Record NK's decisions;

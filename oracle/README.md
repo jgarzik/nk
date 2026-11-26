@@ -7,8 +7,8 @@ print a transcript, one line per step. `<name>.txt` is the transcript
 Windows produced; the kernel test fails at the first line where NK's
 differs.
 
-`make oracle` re-records every transcript on Windows and fails if one no
-longer matches its file. It needs KVM and the reference VM, so it is not
+`make oracle` re-records every transcript on Windows and fails if one
+differs from its file. It needs KVM and the reference VM, so it is not
 part of the gate; the gate runs the NK side against the committed files.
 A transcript records the SHA-256 of its script and of every file it was
 made with (the drivers of its `load` steps and the libraries of its

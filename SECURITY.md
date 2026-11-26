@@ -8,12 +8,14 @@ NK is a research kernel, not a system to deploy.
   access to all memory. NK checks that an image is well formed and that
   its imports resolve; it does not verify signatures or restrict what a
   driver does. Load only drivers you trust, in a virtual machine.
-- **There is no user mode**, so there is no boundary between applications
-  and the kernel to defend yet.
-- **Known weaknesses** in the current memory layout are listed under
-  "Known limits" in `doc/BOOT.md`: for example, the direct map is a
-  writable alias of kernel text, and stack-protector cookies are seeded
-  from the CPU cycle counter rather than a real random source.
+- **No user-mode code runs**, so there is no boundary between
+  applications and the kernel to defend. Requests made on behalf of user
+  mode (the oracle's) are probed and held to their handle's access for
+  compatibility, not for protection.
+- **Known weaknesses** in the memory layout are listed under "Known
+  limits" in `doc/BOOT.md`: for example, the direct map is a writable
+  alias of kernel text, and the stack cookies given to drivers are
+  seeded from the CPU cycle counter rather than a real random source.
 
 Checks such as pool guard bytes and bad-free detection exist to catch
 bugs during development. They are not security mitigations.

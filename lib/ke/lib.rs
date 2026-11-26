@@ -3,6 +3,10 @@
 //!
 //! The kernel wraps these with the per-processor state and the IRQL
 //! register; see `kernel/ke`. `doc/LOCKING.md` states the rules.
+//!
+//! This crate uses `unsafe`: its queues link entries that live in the
+//! caller's memory (a thread's block), reached by raw pointer. Each
+//! such routine says what the caller owes it.
 
 #![cfg_attr(not(test), no_std)]
 

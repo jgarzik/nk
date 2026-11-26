@@ -12,6 +12,9 @@
 //! [`header`] is how an object's header names its type.
 //! [`descriptors`] is the store of security descriptors: one counted
 //! copy of each.
+//!
+//! [`descriptors`] uses `unsafe`: it links and counts blocks the kernel
+//! allocated, reached by raw pointer. Nothing else in the crate does.
 
 #![cfg_attr(not(test), no_std)]
 

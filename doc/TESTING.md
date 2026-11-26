@@ -11,14 +11,15 @@ Microsoft's documentation, sample source and the fixture binaries.
 | `make boot-gate` | every gate-tier boot scenario, in parallel | yes |
 | `make ledger-check` | the committed ledger is what the boot printed | yes |
 | `make unwind-check` | kernel code with no unwind entry is on the allow-list | yes |
-| `make gate` | fmt, clippy (both arches), the four above; prints `GATE-OK` | |
+| `make gate` | fmt, clippy (both arches), the gated targets above; prints `GATE-OK` | |
 | `make soak` | the whole list, repeated, on an overloaded host | no: long |
 | `make mutants` | each deliberate break must fail its test | no: a build and boot each |
 | `make coverage` | `lib/` line coverage, 95% per file | no: needs `cargo-llvm-cov` |
 | `make oracle` | re-record the transcripts on Windows | no: needs KVM and the VM |
 
-The ungated targets run when the code they cover changes and at the end
-of a phase. CI (`.github/workflows/ci.yml`) runs `make gate` with both
+`make help` lists the targets that test nothing themselves (`fixtures`,
+`ledger`, `corpus`). The ungated targets run when the code they cover
+changes and at the end of a phase. CI (`.github/workflows/ci.yml`) runs `make gate` with both
 architectures emulated and `NK_REQUIRE_FIXTURES=1`, which turns a
 fixture that cannot be downloaded from a SKIP into a failure.
 
@@ -173,7 +174,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered, direct and `METHOD_NEITHER` control requests return the sample's data; bad requests fail with its status codes, and buffers that are not there with an access violation its `__try` catches; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
-| `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
+| the other `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
 | `\NK\SYSTEM` | a registry hive written by Windows' own registry from nk-fixtures' `hive/system.hive.txt` (one file for both architectures) | the kernel boots from it: its keys and values, of every size and name, are read back through `CurrentControlSet` (`cm.hive.*`); its boot-start services are started in group order, those without a boot file passed over (`io.service.boot-start`) |
 | `nkc-lib.sys`, `nkc-libuser.sys` | an export driver and a driver that imports from it by name, by ordinal and a variable (nk-fixtures `nkc/nkc-lib*.c`) | the library is loaded with its importer, initialised once per load, kept while an importer is left and unloaded with the last; the importer logs the values it logs on Windows |
 | `nkc-libbad.sys` | imports a name `nkc-lib.sys` does not export | refused with Windows' status, naming the import; its library is not left loaded |
@@ -185,6 +186,9 @@ All but Microsoft's own binaries (from its symbol server) are made in
 with the WDK and the hive saved by Windows' registry: a separate
 repository so the test drivers cannot drift toward what NK supports.
 They are identified by hash and never patched or rebuilt to suit NK.
+The manifest pins what no boot loads as well: the layout tables the
+WDK's compiler recorded and the kernel's symbol file, which the host
+tests compare `lib/ntabi` with (`doc/ABI.md`).
 
 ## The Windows oracle
 
