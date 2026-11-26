@@ -74,6 +74,67 @@ pub struct AUX_MODULE_EXTENDED_INFO {
     pub FullPathName: [u8; MODULE_PATH_LENGTH],
 }
 
+/// `SYSTEM_INFORMATION_CLASS`: the classes of
+/// `NtQuerySystemInformationEx` NK answers.
+pub const SYSTEM_LOGICAL_PROCESSOR_AND_GROUP_INFORMATION_CLASS: u32 = 107;
+pub const SYSTEM_INTERRUPT_STEERING_INFORMATION_CLASS: u32 = 180;
+
+/// `LOGICAL_PROCESSOR_RELATIONSHIP`: the relationships NK states.
+pub const RELATION_NUMA_NODE: u32 = 1;
+pub const RELATION_GROUP: u32 = 4;
+
+/// [`SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_logical_processor_information_ex)
+/// for a NUMA node: the header and a `NUMA_NODE_RELATIONSHIP`.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NUMA_NODE_RELATIONSHIP_ENTRY {
+    pub Relationship: u32,
+    pub Size: u32,
+    pub NodeNumber: u32,
+    pub Reserved: [u8; 20],
+    pub GroupMask: crate::interrupt::GROUP_AFFINITY,
+}
+
+/// `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX` for the processor groups:
+/// the header and a `GROUP_RELATIONSHIP` of one `PROCESSOR_GROUP_INFO`.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GROUP_RELATIONSHIP_ENTRY {
+    pub Relationship: u32,
+    pub Size: u32,
+    pub MaximumGroupCount: u16,
+    pub ActiveGroupCount: u16,
+    pub Reserved: [u8; 20],
+    pub MaximumProcessorCount: u8,
+    pub ActiveProcessorCount: u8,
+    pub Reserved2: [u8; 38],
+    pub ActiveProcessorMask: usize,
+}
+
+/// `SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT`: the question of
+/// class 180. The answer is a `u32` of flags, the lowest "enabled".
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT {
+    pub Gsiv: u32,
+    pub ControllerInterrupt: u8,
+    pub EdgeInterrupt: u8,
+    pub IsPrimaryInterrupt: u8,
+    pub TargetAffinity: crate::interrupt::GROUP_AFFINITY,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<NUMA_NODE_RELATIONSHIP_ENTRY>() == 0x30);
+    assert!(offset_of!(NUMA_NODE_RELATIONSHIP_ENTRY, NodeNumber) == 0x08);
+    assert!(offset_of!(NUMA_NODE_RELATIONSHIP_ENTRY, GroupMask) == 0x20);
+    assert!(size_of::<GROUP_RELATIONSHIP_ENTRY>() == 0x50);
+    assert!(offset_of!(GROUP_RELATIONSHIP_ENTRY, MaximumProcessorCount) == 0x20);
+    assert!(offset_of!(GROUP_RELATIONSHIP_ENTRY, ActiveProcessorMask) == 0x48);
+    assert!(size_of::<SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT>() == 0x18);
+    assert!(offset_of!(SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT, TargetAffinity) == 0x08);
+};
+
 const _: () = {
     use core::mem::{offset_of, size_of};
     assert!(size_of::<SYSTEM_BASIC_INFORMATION>() == 0x40);

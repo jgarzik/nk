@@ -176,6 +176,7 @@ pub struct IO_INTERRUPT_MESSAGE_INFO {
 
 /// `GROUP_AFFINITY`: a set of processors of one group.
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GROUP_AFFINITY {
     pub Mask: usize,
     pub Group: u16,
