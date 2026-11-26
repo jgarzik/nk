@@ -93,3 +93,51 @@ pub const AML_FORBIDDEN_PORTS: &[(u32, u32, u32, bool)] = &[
     (0x4D0, 0x02, 0, false),
     (0xCF8, 0x08, 1, true),
 ];
+
+/// Read `bytes` (1, 2 or 4) bytes from the I/O port `port`. `None` for
+/// any other size.
+///
+/// # Safety
+/// Reading the port has no effect the kernel's memory safety rests on:
+/// the caller knows whose port it is.
+pub unsafe fn port_read(port: u16, bytes: u32) -> Option<u32> {
+    // SAFETY: per the contract; a port read touches no memory.
+    unsafe {
+        Some(match bytes {
+            1 => {
+                let value: u8;
+                asm!("in al, dx", in("dx") port, out("al") value, options(nomem, nostack));
+                u32::from(value)
+            }
+            2 => {
+                let value: u16;
+                asm!("in ax, dx", in("dx") port, out("ax") value, options(nomem, nostack));
+                u32::from(value)
+            }
+            4 => {
+                let value: u32;
+                asm!("in eax, dx", in("dx") port, out("eax") value, options(nomem, nostack));
+                value
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// Write the low `bytes` (1, 2 or 4) bytes of `value` to the I/O port
+/// `port`. False for any other size.
+///
+/// # Safety
+/// As [`port_read`], for a write.
+pub unsafe fn port_write(port: u16, bytes: u32, value: u32) -> bool {
+    // SAFETY: per the contract; a port write touches no memory.
+    unsafe {
+        match bytes {
+            1 => asm!("out dx, al", in("dx") port, in("al") value as u8, options(nomem, nostack)),
+            2 => asm!("out dx, ax", in("dx") port, in("ax") value as u16, options(nomem, nostack)),
+            4 => asm!("out dx, eax", in("dx") port, in("eax") value, options(nomem, nostack)),
+            _ => return false,
+        }
+    }
+    true
+}

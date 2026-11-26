@@ -21,3 +21,19 @@ impl PciPorts {
 /// The I/O ports firmware's AML code must not touch: this machine has
 /// no I/O ports.
 pub const AML_FORBIDDEN_PORTS: &[(u32, u32, u32, bool)] = &[];
+
+/// Read an I/O port: this machine has none.
+///
+/// # Safety
+/// None is needed: nothing is read.
+pub unsafe fn port_read(_port: u16, _bytes: u32) -> Option<u32> {
+    None
+}
+
+/// Write an I/O port: this machine has none.
+///
+/// # Safety
+/// None is needed: nothing is written.
+pub unsafe fn port_write(_port: u16, _bytes: u32, _value: u32) -> bool {
+    false
+}

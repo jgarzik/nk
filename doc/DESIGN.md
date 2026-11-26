@@ -1398,7 +1398,15 @@ the same kind with Windows' signature, version and slot order, whose
 FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
 table the root table lists but the root tables, the DSDT and the FACS,
 as a count and pointers, made once. Both give the firmware's own
-tables where Windows gives copies. `HalQuerySystemInformation`
+tables where Windows gives copies. The table's remaining routines that
+`acpi.sys` uses at start (`kernel/hal/pm.rs`) give it the FACS and
+ACPI's fixed hardware: whether a register block exists, and one access
+of it read or written. The blocks are set up once from the FADT by
+Windows' rules (`nk_acpi::pm_registers`: the 32-bit ports before
+revision 5 of the table, the extended addresses from it, none on a
+hardware-reduced machine), and `acpi.sys` names a block by its number
+in Windows' order. A block in PCI configuration space, which Windows
+supports, is absent on NK. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other. One is the list of I/O
 ports the ACPI driver must keep firmware's AML code away from: on
