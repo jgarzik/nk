@@ -6,6 +6,7 @@ pub mod bus;
 pub mod description;
 pub mod dispatch;
 pub mod dma;
+pub mod fatal;
 pub mod interrupt;
 pub mod pci;
 pub mod platform;

@@ -558,6 +558,55 @@ pub fn packet(severity: u32, flags: u32, source_found: bool) -> Packet {
     }
 }
 
+/// A section of an error record, as `HalBugCheckSystem` looks at it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FatalSection {
+    /// A non-maskable interrupt (`NMI_SECTION_GUID`), and whether it
+    /// was the hypervisor's.
+    Nmi { hypervisor: bool },
+    /// A machine check (`XPF_MCA_SECTION_GUID`): its `MCi_STATUS`.
+    MachineCheck { status: u64 },
+    /// Anything else.
+    Other,
+}
+
+/// `HalBugCheckSystem`: the stop code and parameters for the fatal
+/// error whose record is at address `record`, with these `sections` in
+/// order, from a source of type `source_type`. As the pinned kernel
+/// decides it:
+///
+/// | First section that decides | Stop |
+/// | --- | --- |
+/// | an NMI not the hypervisor's | `NMI_HARDWARE_FAILURE` (0x80), parameter 1 0x4F4454 |
+/// | a machine check | `WHEA_UNCORRECTABLE_ERROR` (0x124): the source's type, the record, the high and the low half of `MCi_STATUS` |
+/// | none | `WHEA_UNCORRECTABLE_ERROR`: the source's type, the record, 0, 0 |
+pub fn fatal_stop(
+    source_type: u32,
+    record: usize,
+    sections: impl IntoIterator<Item = FatalSection>,
+) -> (u32, [usize; 4]) {
+    let mut status = 0u64;
+    for section in sections {
+        match section {
+            FatalSection::Nmi { hypervisor: false } => return (0x80, [0x4F_4454, 0, 0, 0]),
+            FatalSection::MachineCheck { status: bank } => {
+                status = bank;
+                break;
+            }
+            FatalSection::Nmi { hypervisor: true } | FatalSection::Other => {}
+        }
+    }
+    (
+        0x124,
+        [
+            source_type as i32 as isize as usize,
+            record,
+            (status >> 32) as usize,
+            status as u32 as usize,
+        ],
+    )
+}
+
 /// The routines of one kind of source, 0 for one not given: what
 /// `WheaConfigureErrorSource` records of a configuration, as far as NK
 /// calls them.
@@ -920,6 +969,53 @@ mod tests {
         assert_eq!({ s.SectionSeverity }, 1);
         assert_eq!(&s.FRUText, b"a device name of mo\0");
         assert_eq!(&record[0xC8..], &data);
+    }
+
+    #[test]
+    fn a_fatal_error_stops_by_its_first_nmi_or_machine_check() {
+        use FatalSection::{MachineCheck, Nmi, Other};
+        let check = MachineCheck {
+            status: 0xB200_0000_1234_5678,
+        };
+        let whea = |status: u64| {
+            (
+                0x124,
+                [4, 0x7000, (status >> 32) as usize, status as u32 as usize],
+            )
+        };
+        assert_eq!(fatal_stop(4, 0x7000, []), whea(0));
+        assert_eq!(fatal_stop(4, 0x7000, [Other, Other]), whea(0));
+        assert_eq!(
+            fatal_stop(4, 0x7000, [Other, check]),
+            whea(0xB200_0000_1234_5678)
+        );
+        let nmi = (0x80, [0x4F_4454, 0, 0, 0]);
+        assert_eq!(fatal_stop(4, 0x7000, [Nmi { hypervisor: false }]), nmi);
+        assert_eq!(
+            fatal_stop(4, 0x7000, [Other, Nmi { hypervisor: false }, check]),
+            nmi
+        );
+        // The hypervisor's NMI decides nothing.
+        assert_eq!(
+            fatal_stop(4, 0x7000, [Nmi { hypervisor: true }, Other]),
+            whea(0)
+        );
+        assert_eq!(
+            fatal_stop(4, 0x7000, [Nmi { hypervisor: true }, check]),
+            whea(0xB200_0000_1234_5678)
+        );
+        // The first machine check ends the search: an NMI after it is
+        // not looked at, nor a second machine check.
+        assert_eq!(
+            fatal_stop(
+                4,
+                0x7000,
+                [check, Nmi { hypervisor: false }, MachineCheck { status: 1 }]
+            ),
+            whea(0xB200_0000_1234_5678)
+        );
+        // The type is a signed number, widened.
+        assert_eq!(fatal_stop(0xFFFF_FFFF, 0, []).1[0], usize::MAX);
     }
 
     #[test]

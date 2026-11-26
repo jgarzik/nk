@@ -177,6 +177,28 @@ pub struct WHEA_ERROR_SOURCE_CONFIGURATION {
     pub Reserved: *mut c_void,
 }
 
+/// `NMI_SECTION_GUID`: the type of a record's section about a
+/// non-maskable interrupt, a `WHEA_NMI_ERROR_SECTION`.
+pub const NMI_SECTION_GUID: GUID = GUID {
+    Data1: 0xE712_54E7,
+    Data2: 0xC1B9,
+    Data3: 0x4940,
+    Data4: [0xAB, 0x76, 0x90, 0x97, 0x03, 0xA4, 0x32, 0x0F],
+};
+/// Offset of `WHEA_NMI_ERROR_SECTION.Flags`, whose lowest bit says the
+/// interrupt was the hypervisor's (`HypervisorError`).
+pub const WHEA_NMI_ERROR_SECTION_FLAGS: usize = 0x08;
+/// `XPF_MCA_SECTION_GUID`: the type of a record's section about a
+/// machine check, a `WHEA_XPF_MCA_SECTION`.
+pub const XPF_MCA_SECTION_GUID: GUID = GUID {
+    Data1: 0x8A1E_1D01,
+    Data2: 0x42F9,
+    Data3: 0x4557,
+    Data4: [0x9C, 0x33, 0x56, 0x5E, 0x5C, 0xC3, 0xF7, 0xE8],
+};
+/// Offset of `WHEA_XPF_MCA_SECTION.Status`, the bank's `MCi_STATUS`.
+pub const WHEA_XPF_MCA_SECTION_STATUS: usize = 0x28;
+
 /// `WHEA_ERROR_SEVERITY`.
 pub const WHEA_ERR_SEV_RECOVERABLE: u32 = 0;
 pub const WHEA_ERR_SEV_FATAL: u32 = 1;

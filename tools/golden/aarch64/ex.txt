@@ -16,6 +16,7 @@ ex.resource.table ok
 ex.resource.contention ok
 ex.timer.callback ok
 ex.timer.periodic ok
+ex.timer.internal ok
 ex.timer.delete ok
 ex.timer.wait ok
 ex.pool.raise ok
