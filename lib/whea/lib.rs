@@ -196,6 +196,10 @@ pub struct Source {
     pub context: usize,
     /// The address of the source's descriptor.
     pub descriptor: usize,
+    /// The report packets and their states the kernel allocated for
+    /// the source, 0 for none. The descriptor names packets too, but
+    /// a descriptor may come from a driver: these are the ones to free.
+    pub packets: [usize; 2],
 }
 
 /// What removing a source finds.
@@ -224,7 +228,13 @@ impl Table {
     /// Enter a source, stopped, and give it the next id: ids count from
     /// zero in the order sources are added. None, and no id is used,
     /// when there is no memory for the entry.
-    pub fn insert(&mut self, kind: u32, context: usize, descriptor: usize) -> Option<u32> {
+    pub fn insert(
+        &mut self,
+        kind: u32,
+        context: usize,
+        descriptor: usize,
+        packets: [usize; 2],
+    ) -> Option<u32> {
         self.sources.try_reserve(1).ok()?;
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
@@ -235,6 +245,7 @@ impl Table {
             busy: 0,
             context,
             descriptor,
+            packets,
         });
         Some(id)
     }
@@ -736,9 +747,9 @@ mod tests {
     fn ids_count_from_zero_and_a_source_is_found_only_started() {
         let mut table = Table::new();
         assert_eq!(table.storage(), 0);
-        assert_eq!(table.insert(16, 7, 0x100), Some(0));
+        assert_eq!(table.insert(16, 7, 0x100, [0x10, 0x20]), Some(0));
         assert!(table.storage() >= size_of::<Source>());
-        assert_eq!(table.insert(4, 8, 0x200), Some(1));
+        assert_eq!(table.insert(4, 8, 0x200, [0; 2]), Some(1));
         assert_eq!(table.started(0), None);
         table.set_state(0, WHEA_ERR_SRC_STATE_STARTED);
         let found = table.started(0).unwrap();
@@ -756,7 +767,7 @@ mod tests {
     #[test]
     fn removal_waits_for_calls_and_closes_the_source() {
         let mut table = Table::new();
-        let id = table.insert(16, 0, 0).unwrap();
+        let id = table.insert(16, 0, 0, [0; 2]).unwrap();
         // Not started: not removable.
         assert_eq!(table.begin_remove(id), None);
         table.set_state(id, WHEA_ERR_SRC_STATE_STARTED);
@@ -775,7 +786,7 @@ mod tests {
         table.set_state(id, WHEA_ERR_SRC_STATE_STARTED);
         assert_eq!(table.started(id), None);
         // The id is not used again.
-        assert_eq!(table.insert(16, 0, 0), Some(1));
+        assert_eq!(table.insert(16, 0, 0, [0; 2]), Some(1));
         // Nothing to do for sources that do not exist.
         assert!(!table.enter(77));
         table.leave(77);
@@ -785,7 +796,7 @@ mod tests {
     #[test]
     fn a_source_the_firmware_describes_is_not_removed() {
         let mut table = Table::new();
-        let id = table.insert(0, 0, 0).unwrap();
+        let id = table.insert(0, 0, 0, [0; 2]).unwrap();
         table.set_state(id, WHEA_ERR_SRC_STATE_STARTED);
         assert_eq!(table.begin_remove(id), None);
         assert!(table.started(id).is_some());

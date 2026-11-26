@@ -104,7 +104,9 @@ unsafe fn set_state(id: u32, block: *mut WHEA_ERROR_SOURCE_DESCRIPTOR, state: u3
 }
 
 /// Add the source `descriptor` describes, whose routines are called
-/// with `context`, and start it. The status, and the source's
+/// with `context`, and start it. `packets` are the report packets and
+/// their states the kernel allocated for it, null for none: the only
+/// ones removal frees, whatever the descriptor names. The status, and the source's
 /// descriptor block, which is null unless the source is in the table,
 /// started.
 ///
@@ -117,6 +119,7 @@ unsafe fn set_state(id: u32, block: *mut WHEA_ERROR_SOURCE_DESCRIPTOR, state: u3
 fn add(
     descriptor: &WHEA_ERROR_SOURCE_DESCRIPTOR,
     context: usize,
+    packets: [*mut u8; 2],
 ) -> (NTSTATUS, *mut WHEA_ERROR_SOURCE_DESCRIPTOR) {
     let none = core::ptr::null_mut();
     let kind = descriptor.Type;
@@ -131,11 +134,12 @@ fn add(
     if block.is_null() {
         return (STATUS_INSUFFICIENT_RESOURCES, none);
     }
-    let Some(id) = SOURCES
-        .lock()
-        .table
-        .insert(kind, context, block.expose_provenance())
-    else {
+    let Some(id) = SOURCES.lock().table.insert(
+        kind,
+        context,
+        block.expose_provenance(),
+        packets.map(|p| p.expose_provenance()),
+    ) else {
         let _ = pool::free(block.cast());
         return (STATUS_INSUFFICIENT_RESOURCES, none);
     };
@@ -222,7 +226,7 @@ fn add_device_driver(
         descriptor.Info.DeviceDriverDescriptor.PacketBuffer = buffer;
         descriptor.Info.DeviceDriverDescriptor.PacketStateBuffer = states;
     }
-    let (status, block) = add(&descriptor, context);
+    let (status, block) = add(&descriptor, context, [buffer, states]);
     if block.is_null() {
         free_packets(buffer, states);
     }
@@ -282,8 +286,10 @@ pub extern "C" fn WheaGetErrorSource(id: u32) -> *mut WHEA_ERROR_SOURCE_DESCRIPT
 /// that names no started source.
 ///
 /// The descriptor stays allocated, as on Windows, for whoever was given
-/// its address; a device driver source's packets are freed and the
-/// descriptor names none.
+/// its address. The packets the kernel allocated for a device driver's
+/// source are freed and the descriptor names none; packets named by a
+/// descriptor a driver brought to `WheaAddErrorSource` are the
+/// driver's and are left alone, as Windows' routine leaves them.
 pub extern "C" fn WheaRemoveErrorSource(id: u32) {
     let Some(source) = SOURCES.lock().table.begin_remove(id) else {
         return;
@@ -317,12 +323,16 @@ pub extern "C" fn WheaRemoveErrorSource(id: u32) {
                     &Guard::Nothing,
                 );
             }
-            free_packets(
-                (&raw const (*driver).PacketBuffer).read_unaligned(),
-                (&raw const (*driver).PacketStateBuffer).read_unaligned(),
-            );
-            (&raw mut (*driver).PacketBuffer).write_unaligned(core::ptr::null_mut());
-            (&raw mut (*driver).PacketStateBuffer).write_unaligned(core::ptr::null_mut());
+            // The packets the kernel allocated are freed and the
+            // descriptor names none; packets a caller's descriptor
+            // brought are the caller's, and stay.
+            let [buffer, states]: [*mut u8; 2] =
+                source.packets.map(core::ptr::with_exposed_provenance_mut);
+            if !buffer.is_null() {
+                free_packets(buffer, states);
+                (&raw mut (*driver).PacketBuffer).write_unaligned(core::ptr::null_mut());
+                (&raw mut (*driver).PacketStateBuffer).write_unaligned(core::ptr::null_mut());
+            }
         } else if configured.uninitialize != 0 {
             seh::call(
                 configured.uninitialize,
@@ -358,7 +368,8 @@ pub unsafe extern "C" fn WheaAddErrorSource(
 ) -> NTSTATUS {
     // SAFETY: per the contract; a copy, since the driver may write it.
     let descriptor = unsafe { descriptor.read_unaligned() };
-    add(&descriptor, context.addr()).0
+    // The descriptor's packets, if it names any, are the caller's.
+    add(&descriptor, context.addr(), [core::ptr::null_mut(); 2]).0
 }
 
 /// [`WheaConfigureErrorSource`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-wheaconfigureerrorsource):

@@ -2366,8 +2366,10 @@ code).
   in the descriptor is a copy for drivers to read.
 - `WheaRemoveErrorSource` waits for the calls into the source to end,
   calls `Uninitialize(Context)` and leaves the descriptor allocated in
-  the removed state, as Windows does. A device driver source's packets
-  are freed there.
+  the removed state, as Windows does. The packets NK allocated for a
+  device driver's source are freed there: NK's table records which
+  those are, and the packet pointers in a descriptor a driver brought
+  to `WheaAddErrorSource` are never freed.
 - NK has no firmware or platform sources: the first source a driver
   adds has id 0.
 - A source of another kind is added with `WheaAddErrorSource`. Its
