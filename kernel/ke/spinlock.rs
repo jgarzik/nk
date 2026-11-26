@@ -69,6 +69,8 @@ pub enum Rank {
     /// Which vector each device interrupt has, and the interrupt
     /// controllers' routing registers (`hal::interrupt`).
     InterruptRouting = 218,
+    /// The registrations of every callback object (`ex::callback`).
+    Callbacks = 219,
     /// A processor's ready queues (`ke::thread`).
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).

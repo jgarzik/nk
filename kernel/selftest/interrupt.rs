@@ -548,14 +548,18 @@ fn shared(source: &InterruptTestSource) -> Result<u32, &'static str> {
                 wait_for(|| stranger.calls() == calls && owner.served() == served)
             };
             let before = kinterrupt::unclaimed(translated.vector);
+            let unclaimed = || kinterrupt::unclaimed(translated.vector) - before;
             source.fire();
             if !wait_for(|| stranger.calls() == 1 && owner.calls() == 1) {
                 return Err("both objects of a shared vector were not asked");
             }
-            let unclaimed = kinterrupt::unclaimed(translated.vector) - before;
-            if unclaimed != 1 || owner.served() != 0 {
+            // The count is made once the chain has been walked, on the
+            // processor the interrupt arrived on, which need not be this
+            // one: the routines have been called before it is made.
+            if !wait_for(|| unclaimed() != 0) || unclaimed() != 1 || owner.served() != 0 {
                 return Err("an interrupt nobody claimed was not counted once");
             }
+            let unclaimed = unclaimed();
             report(first, false);
             if !fire(1, 1) {
                 return Err("an inactive object was called, or the active one was not");

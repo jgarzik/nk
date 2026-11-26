@@ -129,4 +129,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::range::RtlGetNextRange),
     export!(Implemented, rtl::range::RtlInvertRangeList),
     export!(Implemented, rtl::range::RtlInvertRangeListEx),
+    export!(Implemented, rtl::once::RtlRunOnceExecuteOnce),
 ];

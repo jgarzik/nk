@@ -141,4 +141,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::sysinfo::MmAddVerifierThunks),
     export!(Implemented, ex::sysinfo::ExIsSoftBoot),
     export!(Implemented, ex::sysinfo::MmIsAddressValid),
+    export!(Partial, ex::callback::ExCreateCallback),
+    export!(Implemented, ex::callback::ExRegisterCallback),
+    export!(Implemented, ex::callback::ExUnregisterCallback),
+    export!(Implemented, ex::callback::ExNotifyCallback),
 ];

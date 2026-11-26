@@ -58,13 +58,14 @@ const THE_LINK: Options = Options {
 };
 
 /// The directories in the root, as on Windows.
-const DIRECTORIES: [&str; 6] = [
+const DIRECTORIES: [&str; 7] = [
     "Device",
     "Driver",
     "FileSystem",
     "GLOBAL??",
     "BaseNamedObjects",
     "KernelObjects",
+    "Callback",
 ];
 
 fn status(error: Error) -> NTSTATUS {

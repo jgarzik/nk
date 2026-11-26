@@ -24,3 +24,4 @@ rtl.crt-strings ok
 rtl.resource ok
 rtl.range-list ok
 rtl.debug-filter ok
+rtl.run-once ok

@@ -903,6 +903,24 @@ they can be called at any IRQL. `ExTryQueueWorkItem` always queues and
 says so. `ExQueryTimerResolution` answers NK's one clock rate three
 times.
 
+### Callback objects and one-time initialisation
+
+A [callback object](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/callback-objects)
+is an object of type `Callback`; the named ones live in `\Callback`.
+Its body is a list of registrations, each a pool block holding a
+reference to the object, all under one lock (`doc/LOCKING.md`). A
+notification calls each routine with the lock dropped, at the caller's
+IRQL, its registration counted busy so that unregistering waits for the
+call to end. NK makes the three objects Windows has from the start
+(`SetSystemTime`, `PowerState`, `ProcessorAdd`) and never notifies
+them: nothing they report happens. A named object made without
+`OBJ_PERMANENT` has no name, which is what Windows leaves of it too;
+making one relative to a directory handle is refused.
+
+`RtlRunOnceExecuteOnce` keeps Windows' values in the driver's word
+(`nk_rtl::once`). A thread that finds the initialisation under way
+sleeps a millisecond and looks again, where Windows queues it.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
@@ -1225,6 +1243,8 @@ make that safe.
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
 | a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
+| a callback object's registered routine (`ExNotifyCallback`) | undo: the registration is no longer in use, so unregistering it does not wait for ever |
+| a one-time initialisation routine (`RtlRunOnceExecuteOnce`) | undo: the `RTL_RUN_ONCE` is new again, so the threads waiting for it try in their turn |
 | a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
@@ -1318,6 +1338,12 @@ FADT; `nk_acpi::lookup`). It returns the firmware's own table where
 Windows returns a copy. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other.
+
+`HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
+rather than a slot, tells `pci.sys` how interrupts name their
+destination: by a processor's own identifier (physical mode) on both
+architectures, with messages deliverable where the architecture's
+controller takes them.
 
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
@@ -2575,7 +2601,9 @@ file, and a hypervisor only as far as the processor's CPUID names one
 (`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
 none). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
-(`kernel/po/mod.rs`, `ZwPowerInformation`).
+(`kernel/po/mod.rs`, `ZwPowerInformation`). There is no sleep study:
+the request for its helper's table of routines fails, where Windows
+always has the helper, and `pci.sys` then reports nothing to it.
 
 | Territory | Imported by | Why |
 | --- | --- | --- |
