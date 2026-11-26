@@ -85,7 +85,7 @@ into memory a driver can write.
 | `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, trace-provider bookkeeping (`etw`) |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, trace-provider bookkeeping (`etw`), process-structure rules (`ps`) |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -245,9 +245,28 @@ A processor leaves a thread when it yields, waits or exits; when a higher
 priority becomes ready there; or when its quantum (two clock ticks, as on
 Windows client) is spent and an equal is waiting. A preempted thread goes
 to the front of its queue; one out of quantum, to the back. No priority
-boosts. A thread may change its own priority (`KeSetPriorityThread`);
-changing another's stops the system, because no lock covers a thread
-wherever it is queued.
+boosts.
+
+A thread's priority may be set by any thread (`KeSetPriorityThread`),
+wherever the thread is. If it is on a ready queue it moves to the back
+of the queue of its new priority and that processor looks again; if it
+is waiting it wakes with the new priority; if it is running and was
+lowered, its processor looks for a better thread. Its base priority
+stays. As on Windows, a thread with a base priority asked for 0 gets 1,
+and one whose base is real-time (16 and up) is not taken below 16
+(`nk_ke::sched::priority_to_set`).
+
+A thread's base priority is its process's (8 for the System process,
+`KPROCESS.BasePriority`) plus a step, set through
+`ZwSetInformationThread` (`ThreadBasePriority`): -2 to 2, or 16 and
+-16, which pin the thread at 15 and at 1 (`KTHREAD.Saturation`). The
+priority moves by as much as the base moved, so a priority that was
+set apart from the base keeps its distance
+(`nk_ps::info::set_base_priority`, from what Windows 10 computes).
+`ThreadPriority` sets the priority alone, 1 to 31. Each class makes
+its checks in Windows' order; a class Windows never sets is
+`STATUS_INVALID_INFO_CLASS`, and one it sets and NK does not is
+`STATUS_NOT_IMPLEMENTED`.
 
 Preemption is requested, then done at the end of an interrupt: readying a
 thread, or the tick, marks the processor, and the switch happens when an
@@ -271,10 +290,71 @@ There is one process, System, with Windows' id for it (4). Its block has
 is zero. Every thread belongs to it, the idle threads included (Windows
 gives those a process of their own), and carries a client id: the
 process id and a thread id from the same sequence of multiples of four.
+The id routines read those fields (`PsGetCurrentProcessId`,
+`PsGetThreadProcessId`, ...). There are no sessions: the process's
+`Session` is null, which Windows reads as session 0, and so do
+`PsGetProcessSessionId` and `PsGetThreadSessionId`.
+
+The System process is charged no quota, as on Windows, where the quota
+routines know it by `PsInitialSystemProcess` and answer success
+without a look at a quota block: `PsChargeProcessPagedPoolQuota`
+succeeds for any amount and `PsReturnProcessPagedPoolQuota` does
+nothing. Its `QuotaBlock` is null.
+
+A thread attaching to a process (`KeStackAttachProcess`) can only name
+the one it is in. Windows saves nothing then and marks the caller's
+`KAPC_STATE` with a 1 where the process would be; NK does exactly that,
+and `KeUnstackDetachProcess` accepts exactly that mark. Any other
+process pointer names no process, and a detach with any other state
+was preceded by no attach: both stop the system, the second with
+Windows' `INVALID_PROCESS_DETACH_ATTEMPT`, as does an attach from a DPC
+routine (`INVALID_PROCESS_ATTACH_ATTEMPT`).
 The kernel handle table is its handle table. `EPROCESS.Token` holds its
 primary token the way Windows stores it, as a fast reference: a pointer
 whose low four bits count references handed out in advance. NK hands out
-none, so the bits are zero.
+none, so the bits are zero: `PsReferencePrimaryToken` takes each
+reference on the token itself. `PsInitialSystemProcess` holds the
+process, and the current process (`PsGetCurrentProcess`,
+`IoGetCurrentProcess`) is the one the calling thread says it is attached
+to, `KTHREAD.ApcState.Process`.
+
+### Silos
+
+A silo is a job that isolates what runs in it
+([silo DDIs](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/)).
+NK has no jobs, so there is one silo, the host, which Windows too names
+by a null pointer. For that silo the routines do what they do on
+Windows (`kernel/ps/silo.rs`):
+
+- A thread is attached to a silo through `ETHREAD.Silo`, which starts
+  out as Windows' mark for "none; use the process's" (-3).
+  `PsAttachSiloToCurrentThread` returns what was there for the detach
+  to put back. The current silo is the attached one, else that of the
+  process's job: the host, the System process having no job.
+- A silo context is an object of one of two types, as on Windows
+  (`PsSiloContextPaged`, `PsSiloContextNonPaged`), with the driver's
+  bytes as its body. Its cleanup routine is called when its last
+  reference goes. NK's record of the silo and the routine sits in front
+  of the object's headers, where no binary looks.
+- Slots are numbers, the lowest free one first, 288 of them as on
+  Windows (`nk_ps::silo`). The host silo keeps one context per slot,
+  put there to stay (`PsInsertPermanentSiloContext`), and holds a
+  reference to it; `PsGetPermanentSiloContext` hands it out without
+  one, as Windows does. Freeing a slot does not empty it for the host
+  silo, on Windows either.
+- A silo monitor gets a slot of its own when registered. Started, one
+  that watches the host has its create callback called for the host
+  silo then and there, on the caller's thread; unregistered, its
+  terminate callback, and then what the host holds in its slot is let
+  go. No other silo is ever announced. The details (a monitor without a
+  create callback is never started; a failing create callback is undone
+  by the terminate callback) are Windows 10's.
+
+A silo pointer that is not null, or a job, names nothing that exists:
+where Windows would read the job behind it, NK stops by name. The job
+type itself is real (`PsJobType`): a driver that asks for the job
+behind a handle is told the handle names another type of object, which
+is true of every handle there is.
 
 ## Waits
 
@@ -286,9 +366,30 @@ limit is one more object, and the first signalled ends the wait. A wait
 may name up to 64 objects (the caller's wait blocks beyond three), for
 any one (it reports which) or for all (it takes all or none).
 
-Waits are not alertable. A wait that would block at `DISPATCH_LEVEL`
-stops the system (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a
-semaphore past its limit, an exception on Windows, stops the system.
+A wait by handle (`ZwWaitForSingleObject`) is a wait on the object the
+handle names, referenced for as long: an event, a thread, or the
+process, which never ends. Windows waits on an object of any other
+type through that type's default object; NK does not, and stops by
+name. `ZwCreateEvent` makes an event object without a name and hands
+back a handle; a name, or the attributes that go with one, is refused
+(`STATUS_NOT_IMPLEMENTED`). Both are `Partial` in the ledger for that.
+
+A wait that would block at `DISPATCH_LEVEL` stops the system
+(`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
+its limit, an exception on Windows, stops the system.
+
+**Alerts.** A thread can be alerted (`ZwAlertThread`), and an alert
+ends an alertable wait with `STATUS_ALERTED`
+([Waits and APCs](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/waits-and-apcs)).
+The state is where Windows keeps it: `KTHREAD.Alerted`, a byte per
+processor mode, and the `Alertable` flag and `WaitMode` of the wait in
+progress. A thread in an alertable wait is woken; any other keeps the
+alert, one at most per mode, for its next alertable wait, which
+returns at once without looking at its objects or its time limit and
+takes nothing. An alert made in kernel mode ends a wait of either
+mode; `ZwAlertThread` alerts in kernel mode. Waits that are not
+alertable never see an alert. An alert is the only thing that ends a
+wait this way: there are no APCs to deliver.
 
 ## Mutexes and critical regions
 
@@ -535,17 +636,31 @@ a time, a clock sequence, a node.
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
 pointer count, handle count, type. Events, threads, the System process,
-tokens, drivers, devices, open files, open registry keys, directories
-and symbolic links are such objects. An object is freed when its last
+tokens, drivers, devices, open files, open registry keys, directories,
+symbolic links and silo contexts are such objects. An object is freed when its last
 reference goes; its type may name a delete procedure that first releases
 what it owns, and a close procedure that is told of every handle closed
 and how many there were. A thread references itself until it has ended
 and been reaped, so an unreferenced thread frees itself and a referenced
 one stays a valid, signalled object.
 
-Kernel handles are entries in one table, the System process's, with
-Windows' kernel-handle bits; a handle holds a reference until closed. No
-per-process tables. Each handle has the access it was granted and its
+A driver's reference returns the count it made, its release the count it
+left. The tagged forms (`ObfReferenceObjectWithTag`) count on the same
+count: the tag is for
+[reference tracing](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/object-reference-tracing-with-tags),
+which is off, as it is on Windows unless asked for. A reference taken to
+an object that has none stops the system (`REFERENCE_BY_POINTER`).
+
+Handles are entries in one table, the System process's, which is the
+kernel's handle table as on Windows; a handle holds a reference until
+closed. An entry has two names: the kernel handle, with Windows'
+kernel-handle bits, which is a handle for kernel mode only
+(`STATUS_INVALID_HANDLE` for user mode), and the same number without
+those bits, the System process's own handle, good in that process for
+either mode. `OBJ_KERNEL_HANDLE` decides which an open returns
+(`ObOpenObjectByPointer`, `ZwCreateEvent`); NK's own opens for files,
+keys and new threads return the kernel handle. No other process, no
+other table. Each handle has the access it was granted and its
 attributes (inherit, protect from close). A handle protected from close
 stays open: user mode closing it is refused
 (`STATUS_HANDLE_NOT_CLOSABLE`), kernel mode closing it stops the system
@@ -809,6 +924,8 @@ make that safe.
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
+| silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
 | an executive timer's callback (from the timer's DPC) | base: kernel mode |
@@ -1299,12 +1416,21 @@ Where a descriptor lives:
   field a driver can read, as on Windows: a pool block the device owns,
   replaced under the I/O database lock.
 - Any other object can carry one in `OBJECT_HEADER.SecurityDescriptor`
-  (`kernel/ob/security.rs`): a counted pool block of its own, set,
-  referenced and released by kernel routines, freed with the object or
-  when replaced and no reader holds it. Windows shares one block among
-  objects with equal descriptors; NK does not. The field is Windows' fast
-  reference with its count bits zero. Nothing gives an object a
-  descriptor yet: that comes with the types' security procedures.
+  (`kernel/ob/security.rs`): a reference to a copy in the store below,
+  set, referenced and released by kernel routines, given up with the
+  object or when replaced. The field is Windows' fast reference with
+  its count bits zero. Nothing gives an object a descriptor yet: that
+  comes with the types' security procedures.
+- The store (`nk_ob::descriptors`) keeps one counted, self-relative
+  copy of each distinct descriptor, as Windows' does: logging the same
+  bytes again, from whatever address, returns the same copy with more
+  references, and the copy is freed with its last. A file system logs
+  its files' descriptors there (`ObLogSecurityDescriptor`) and holds
+  the copies (`ObReferenceSecurityDescriptor`,
+  `ObDereferenceSecurityDescriptor`); objects with equal descriptors
+  share a copy. What precedes a copy in its block (its count, a hash of
+  its bytes) is NK's own. Giving up more references than are held stops
+  the system, as Windows' fast fail does (`0x139`).
 
 ## Tokens and access state
 

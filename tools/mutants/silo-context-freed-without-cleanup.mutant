@@ -1,0 +1,7 @@
+# A silo context's memory goes without its cleanup routine being
+# called: whatever the driver hung on the context is leaked.
+scenario: x86_64
+fails: ps.silo
+file: kernel/ps/silo.rs
+replace:         if record.cleanup != 0 {
+with:         if false {

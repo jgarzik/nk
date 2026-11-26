@@ -27,6 +27,7 @@ pub mod process;
 pub mod rtl;
 pub mod se;
 pub mod seh;
+pub mod silo;
 pub mod status;
 pub mod sysinfo;
 pub mod thread;

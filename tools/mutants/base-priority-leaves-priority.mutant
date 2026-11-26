@@ -1,0 +1,7 @@
+# Setting a thread's base priority changes the base and leaves the
+# thread running at its old priority: the step never takes effect.
+scenario: x86_64
+fails: ps.thread-information
+file: kernel/ke/thread.rs
+replace:         if change.priority != old {
+with:         if false {

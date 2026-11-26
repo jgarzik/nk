@@ -58,6 +58,22 @@ impl Leaving {
     }
 }
 
+/// The priority
+/// [`KeSetPriorityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetprioritythread)
+/// gives a thread whose base priority is `base` when asked for `new`,
+/// or `None` if it leaves the thread as it is. As Windows 10 decides
+/// it: priority 0 is the zero-page thread's, so a thread with a base
+/// gets 1 instead; and a thread with a real-time base (16 and up) is
+/// not taken below 16.
+pub const fn priority_to_set(base: u8, new: u8) -> Option<u8> {
+    let new = if new == 0 && base != 0 { 1 } else { new };
+    if base >= 16 && new < 16 {
+        None
+    } else {
+        Some(new)
+    }
+}
+
 /// The processors of a mask, lowest first.
 fn processors(mask: u64) -> impl Iterator<Item = usize> {
     (0..64).filter(move |n| mask & 1 << n != 0)
@@ -99,6 +115,26 @@ mod tests {
     use super::Leaving::{Exit, Preempt, Wait, Yield};
     use super::*;
     use crate::{ListEntry, ReadyQueues};
+
+    #[test]
+    fn what_a_thread_is_set_to() {
+        assert_eq!(priority_to_set(8, 9), Some(9));
+        assert_eq!(priority_to_set(8, 31), Some(31));
+        assert_eq!(
+            priority_to_set(8, 0),
+            Some(1),
+            "0 is not for a thread with a base"
+        );
+        assert_eq!(priority_to_set(0, 0), Some(0));
+        assert_eq!(
+            priority_to_set(16, 15),
+            None,
+            "a real-time base stays real-time"
+        );
+        assert_eq!(priority_to_set(16, 0), None);
+        assert_eq!(priority_to_set(16, 16), Some(16));
+        assert_eq!(priority_to_set(24, 31), Some(31));
+    }
 
     #[test]
     fn a_thread_that_stops_gives_way_to_anything() {

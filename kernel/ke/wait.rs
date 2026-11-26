@@ -22,6 +22,14 @@
 //! Wakers never wait for the waiter and never touch the object after
 //! dropping its lock, so an event on a thread's stack may be freed as
 //! soon as that thread's wait returns.
+//!
+//! An alert is one more waker, of alertable waits only ([`alert`]). A
+//! thread says under its own lock that its wait may be alerted, having
+//! first looked for an alert left for it; the alerter, under the same
+//! lock, either claims such a wait or leaves the alert for the next
+//! one. An alert that is waiting is looked at before the objects and
+//! before the time limit, as on Windows: the wait returns
+//! `STATUS_ALERTED` and takes nothing.
 
 #![allow(non_snake_case)]
 
@@ -29,15 +37,19 @@ use super::object::{self, ObjectLock};
 use super::{dpc, irql, thread, time, timer};
 use crate::arch;
 use core::ffi::c_void;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use nk_ke::Claimed;
 use nk_ke::wait::MAXIMUM_WAIT_OBJECTS;
+use nk_ntabi::io::KERNEL_MODE;
 use nk_ntabi::ke::{
     DISPATCHER_HEADER, EVENT_NOTIFICATION_OBJECT, EVENT_SYNCHRONIZATION_OBJECT, KEVENT, KSEMAPHORE,
     KWAIT_BLOCK, SEMAPHORE_OBJECT, WAIT_BLOCK_INACTIVE,
 };
-use nk_ntabi::thread::TIMER_WAIT_BLOCK;
+use nk_ntabi::thread::{ALERTED, MISC_FLAG_ALERTABLE, MISC_FLAGS, TIMER_WAIT_BLOCK, WAIT_MODE};
 
 pub const STATUS_SUCCESS: u32 = 0;
+/// The thread was alerted: an alertable wait returns this.
+pub const STATUS_ALERTED: u32 = 0x101;
 /// The wait's time limit passed first.
 pub const STATUS_TIMEOUT: u32 = 0x102;
 
@@ -92,10 +104,110 @@ unsafe fn withdraw(object: *mut DISPATCHER_HEADER, block: *mut KWAIT_BLOCK) {
     }
 }
 
+/// Whether an alert in `mode` is waiting for `thread`.
+///
+/// # Safety
+/// `thread` is a live thread; `mode` is a processor mode, 0 or 1.
+unsafe fn alerted<'a>(thread: *mut thread::Thread, mode: i8) -> &'a AtomicU8 {
+    // SAFETY: per the contract: a byte of the thread's block.
+    unsafe { AtomicU8::from_ptr(thread::object_field(thread, ALERTED + mode as usize)) }
+}
+
+/// The thread's `MiscFlags`.
+///
+/// # Safety
+/// `thread` is a live thread.
+unsafe fn misc_flags<'a>(thread: *mut thread::Thread) -> &'a AtomicU32 {
+    // SAFETY: per the contract: an aligned field of the thread's block.
+    unsafe { AtomicU32::from_ptr(thread::object_field(thread, MISC_FLAGS)) }
+}
+
+/// The running thread begins a wait in `mode` that an alert may end.
+/// `true` if an alert was waiting for it: the alert is used up, and the
+/// wait is to return `STATUS_ALERTED` at once. An alert made in kernel
+/// mode ends a wait of either mode, one made in user mode a user-mode
+/// wait only, as on Windows. Otherwise the thread is marked as
+/// alertable until [`alertable_wait_over`].
+///
+/// # Safety
+/// `me` is the running thread, at `DISPATCH_LEVEL`, its wait begun and
+/// no object lock held.
+unsafe fn alertable_wait_begins(me: *mut thread::Thread, mode: i8) -> bool {
+    // SAFETY: per the contract; the thread's own lock covers its alert
+    // state.
+    unsafe {
+        let _lock = ObjectLock::take(me.cast());
+        if alerted(me, mode).swap(0, Ordering::Relaxed) != 0
+            || (mode != KERNEL_MODE && alerted(me, KERNEL_MODE).swap(0, Ordering::Relaxed) != 0)
+        {
+            return true;
+        }
+        thread::object_field::<i8>(me, WAIT_MODE).write(mode);
+        misc_flags(me).fetch_or(MISC_FLAG_ALERTABLE, Ordering::Relaxed);
+        false
+    }
+}
+
+/// The running thread's alertable wait is over: an alert from now on
+/// is kept for its next one.
+///
+/// # Safety
+/// As [`alertable_wait_begins`].
+unsafe fn alertable_wait_over(me: *mut thread::Thread) {
+    // SAFETY: per the contract.
+    unsafe {
+        let _lock = ObjectLock::take(me.cast());
+        misc_flags(me).fetch_and(!MISC_FLAG_ALERTABLE, Ordering::Relaxed);
+    }
+}
+
+/// Alert `thread` in `mode`, as Windows' `KeAlertThread` does. If the
+/// thread is in an alertable wait the alert's mode may end (a
+/// kernel-mode alert ends any, a user-mode alert a user-mode wait),
+/// that wait returns `STATUS_ALERTED`. Otherwise, or if something else
+/// ended the wait first, the alert is left for the thread's next
+/// alertable wait. An alert already waiting is not doubled. Returns
+/// whether one was.
+///
+/// # Safety
+/// `thread` is a live thread the caller holds a reference to; `mode`
+/// is a processor mode, 0 or 1.
+pub unsafe fn alert(thread: *mut thread::Thread, mode: i8) -> bool {
+    // SAFETY: per the contract. The thread's lock covers its alert
+    // state; a thread claimed asleep is made ready after the lock is
+    // dropped, like any waiter.
+    unsafe {
+        let (was, asleep) = {
+            let _lock = ObjectLock::take(thread.cast());
+            let waiting = alerted(thread, mode);
+            if waiting.load(Ordering::Relaxed) != 0 {
+                (true, false)
+            } else {
+                let alertable = misc_flags(thread).load(Ordering::Relaxed) & MISC_FLAG_ALERTABLE
+                    != 0
+                    && mode <= thread::object_field::<i8>(thread, WAIT_MODE).read();
+                let claimed = if alertable {
+                    thread::wait_register(thread).claim(STATUS_ALERTED)
+                } else {
+                    None
+                };
+                if claimed.is_none() {
+                    waiting.store(1, Ordering::Relaxed);
+                }
+                (false, claimed == Some(Claimed::Asleep))
+            }
+        };
+        if asleep {
+            thread::make_ready(thread);
+        }
+        was
+    }
+}
+
 /// Wait until `object` (if any) is signalled or `timeout` (if any)
 /// passes: a negative timeout is that many 100 ns units from now, a
 /// positive one a system time. Returns `STATUS_SUCCESS` or
-/// `STATUS_TIMEOUT`.
+/// `STATUS_TIMEOUT`. Not alertable.
 ///
 /// # Safety
 /// `object` is a live dispatcher object that stays valid until this
@@ -103,12 +215,39 @@ unsafe fn withdraw(object: *mut DISPATCHER_HEADER, block: *mut KWAIT_BLOCK) {
 pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>) -> u32 {
     let blocks = thread::wait_block(thread::current(), 0);
     // SAFETY: per the contract; the blocks are the running thread's own.
-    unsafe { wait_objects(object.as_slice(), false, timeout, blocks) }
+    unsafe { wait_objects(object.as_slice(), false, timeout, blocks, None) }
+}
+
+/// As [`wait`], for a caller that says whether the wait is alertable
+/// and in which processor mode: what `KeWaitForSingleObject` is given.
+/// An alertable wait may also return `STATUS_ALERTED`.
+///
+/// # Safety
+/// As [`wait`]; `wait_mode` is a processor mode, 0 or 1.
+pub unsafe fn wait_as(
+    object: Option<*mut DISPATCHER_HEADER>,
+    timeout: Option<i64>,
+    wait_mode: i8,
+    alertable: bool,
+) -> u32 {
+    let blocks = thread::wait_block(thread::current(), 0);
+    // SAFETY: per the contract; the blocks are the running thread's own.
+    unsafe {
+        wait_objects(
+            object.as_slice(),
+            false,
+            timeout,
+            blocks,
+            alertable.then_some(wait_mode),
+        )
+    }
 }
 
 /// Wait on several objects: until any one is signalled (returning its
 /// index) or, with `all`, until all are at once (returning
-/// `STATUS_SUCCESS`); or until `timeout` passes (`STATUS_TIMEOUT`).
+/// `STATUS_SUCCESS`); or until `timeout` passes (`STATUS_TIMEOUT`); or,
+/// if `alert` gives the processor mode of an alertable wait, until the
+/// thread is alerted (`STATUS_ALERTED`).
 ///
 /// A wait for all takes all the objects or none. Wakers do not take
 /// objects for such a waiter: they only wake it, and it looks again for
@@ -118,12 +257,14 @@ pub unsafe fn wait(object: Option<*mut DISPATCHER_HEADER>, timeout: Option<i64>)
 /// # Safety
 /// Every object is a live dispatcher object that stays valid until this
 /// returns; no object appears twice when `all`; `blocks` has room for
-/// one wait block per object and is used by nothing else meanwhile.
+/// one wait block per object and is used by nothing else meanwhile;
+/// `alert`, if any, is a processor mode, 0 or 1.
 pub unsafe fn wait_objects(
     objects: &[*mut DISPATCHER_HEADER],
     all: bool,
     timeout: Option<i64>,
     blocks: *mut KWAIT_BLOCK,
+    alert: Option<i8>,
 ) -> u32 {
     let old = irql::current();
     if old > irql::DISPATCH_LEVEL {
@@ -154,7 +295,16 @@ pub unsafe fn wait_objects(
             // caller's array is whatever the caller left in it.
             register.begin();
             let mut linked = 0;
-            if all {
+            // An alert left for the thread comes before everything
+            // else: nothing is looked at, nothing taken.
+            if let Some(mode) = alert
+                && alertable_wait_begins(me, mode)
+            {
+                let _ = register.claim(STATUS_ALERTED);
+            }
+            if register.status().is_some() {
+                // Alerted already.
+            } else if all {
                 let mut locks: [Option<ObjectLock>; MAXIMUM_WAIT_OBJECTS] =
                     [const { None }; MAXIMUM_WAIT_OBJECTS];
                 for (lock, &index) in locks.iter_mut().zip(by_address.iter()) {
@@ -232,6 +382,9 @@ pub unsafe fn wait_objects(
             }
             for (index, &object) in objects.iter().enumerate().take(linked) {
                 withdraw(object, blocks.add(index));
+            }
+            if alert.is_some() {
+                alertable_wait_over(me);
             }
             register.finish();
             if status != WAKE_AND_LOOK {
@@ -388,7 +541,8 @@ pub unsafe extern "C" fn KeReadStateSemaphore(semaphore: *mut KSEMAPHORE) -> i32
 }
 
 /// [`KeWaitForSingleObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kewaitforsingleobject).
-/// Waits are not alertable and take no APCs yet: there are none.
+/// An alertable wait returns `STATUS_ALERTED` when the thread is
+/// alerted ([`alert`]). No wait takes APCs: there are none.
 ///
 /// # Safety
 /// `object` is a live dispatcher object that stays valid until this
@@ -396,14 +550,19 @@ pub unsafe extern "C" fn KeReadStateSemaphore(semaphore: *mut KSEMAPHORE) -> i32
 pub unsafe extern "C" fn KeWaitForSingleObject(
     object: *mut c_void,
     _wait_reason: u32,
-    _wait_mode: i8,
-    _alertable: u8,
+    wait_mode: i8,
+    alertable: u8,
     timeout: *const i64,
 ) -> i32 {
     // SAFETY: per the contract.
     unsafe {
         let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
-        wait(Some(object.cast()), timeout) as i32
+        wait_as(
+            Some(object.cast()),
+            timeout,
+            i8::from(wait_mode != KERNEL_MODE),
+            alertable != 0,
+        ) as i32
     }
 }
 
@@ -421,8 +580,8 @@ pub unsafe extern "C" fn KeWaitForMultipleObjects(
     object: *const *mut c_void,
     wait_type: u32,
     _wait_reason: u32,
-    _wait_mode: i8,
-    _alertable: u8,
+    wait_mode: i8,
+    alertable: u8,
     timeout: *const i64,
     wait_block_array: *mut KWAIT_BLOCK,
 ) -> i32 {
@@ -450,24 +609,37 @@ pub unsafe extern "C" fn KeWaitForMultipleObjects(
             wait_block_array
         };
         let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
-        wait_objects(objects, all, timeout, blocks) as i32
+        let alert = (alertable != 0).then_some(i8::from(wait_mode != KERNEL_MODE));
+        wait_objects(objects, all, timeout, blocks, alert) as i32
     }
 }
 
 /// [`KeDelayExecutionThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kedelayexecutionthread).
+/// An alertable delay ends early, with `STATUS_ALERTED`, when the
+/// thread is alerted.
 ///
 /// # Safety
 /// `interval` points to a due time.
 pub unsafe extern "C" fn KeDelayExecutionThread(
-    _wait_mode: i8,
-    _alertable: u8,
+    wait_mode: i8,
+    alertable: u8,
     interval: *const i64,
 ) -> i32 {
     // SAFETY: per the contract; no object is involved.
-    unsafe {
-        wait(None, Some(interval.read_unaligned()));
+    let status = unsafe {
+        wait_as(
+            None,
+            Some(interval.read_unaligned()),
+            i8::from(wait_mode != KERNEL_MODE),
+            alertable != 0,
+        )
+    };
+    // The time passing is how a delay succeeds.
+    if status == STATUS_ALERTED {
+        STATUS_ALERTED as i32
+    } else {
+        STATUS_SUCCESS as i32
     }
-    STATUS_SUCCESS as i32
 }
 
 // ---- tests --------------------------------------------------------------
@@ -475,7 +647,7 @@ pub unsafe extern "C" fn KeDelayExecutionThread(
 use super::{pcr, smp};
 use crate::test::Slot;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
+use core::sync::atomic::{AtomicBool, AtomicU64};
 use nk_ke::TIME_INCREMENT;
 
 static EVENT: Slot<KEVENT> = Slot::new();
@@ -861,6 +1033,280 @@ pub fn race_test() -> Result<u64, &'static str> {
         return Err("settings of an event were lost or taken twice");
     }
     Ok(effective)
+}
+
+static NEVER: Slot<KEVENT> = Slot::new();
+static GO: Slot<KEVENT> = Slot::new();
+/// What the alerted threads' waits returned.
+static SAW: [AtomicU32; 2] = [const { AtomicU32::new(0) }; 2];
+
+/// An alertable wait on a test event, the way a driver would call for
+/// it; `ms` is a time limit in milliseconds.
+fn wait_alertable(event: &Slot<KEVENT>, mode: i8, ms: Option<i64>) -> u32 {
+    let due = ms.map(|ms| -ms * 10_000);
+    let timeout = due.as_ref().map_or(core::ptr::null(), core::ptr::from_ref);
+    // SAFETY: a static, initialised event; the due time is a local.
+    unsafe { KeWaitForSingleObject(event.ptr().cast(), 0, mode, 1, timeout) as u32 }
+}
+
+/// Alerts as drivers make and meet them: a thread in an alertable wait
+/// is woken with `STATUS_ALERTED`, once; a thread that is not keeps
+/// the alert for its next alertable wait, which it ends before the
+/// object or the time is looked at; waits that are not alertable never
+/// see one. Returns the waits made.
+pub fn alert_test() -> Result<u32, &'static str> {
+    use crate::ob::{handle, object};
+    use crate::ps::ZwAlertThread;
+    use nk_ntabi::status::{STATUS_INVALID_HANDLE, STATUS_OBJECT_TYPE_MISMATCH};
+    const UNSEEN: u32 = 0xAAAA_AAAA;
+    fn alerted_waiting(_: usize) {
+        // Five seconds stand for "for ever": the test must not hang
+        // when the alert does not arrive.
+        SAW[0].store(wait_alertable(&NEVER, 0, Some(5_000)), Ordering::Release);
+        SAW[1].store(wait_alertable(&NEVER, 0, Some(0)), Ordering::Release);
+    }
+    fn alerted_before(_: usize) {
+        wait_event(&GO, Some(5_000));
+        SAW[0].store(wait_alertable(&NEVER, 0, Some(0)), Ordering::Release);
+    }
+    let start = |entry: thread::Entry| -> Result<(*mut thread::Thread, u64), &'static str> {
+        for saw in &SAW {
+            saw.store(UNSEEN, Ordering::Release);
+        }
+        let new = thread::create_referenced(entry, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+        // SAFETY: a thread this test holds a reference to.
+        match unsafe { handle::open(new.cast(), 0x001F_FFFF) } {
+            Ok(opened) => Ok((new, opened)),
+            Err(_) => Err("no memory for a handle"),
+        }
+    };
+    let end = |(ended, opened): (*mut thread::Thread, u64)| {
+        // SAFETY: a thread this test holds a reference to, which it
+        // gives up here.
+        unsafe {
+            let status = wait(Some(ended.cast()), Some(-100_000_000));
+            object::dereference(ended.cast());
+            handle::close(opened);
+            status
+        }
+    };
+    let alert_me = || ZwAlertThread(-2i64 as *mut c_void);
+    let before = thread::count();
+    init_event(&NEVER, false, false);
+    init_event(&GO, false, false);
+
+    // In an alertable wait: woken, and the alert is used up.
+    let waiting = start(alerted_waiting)?;
+    delay_ms(20);
+    let asked = time::interrupt_time();
+    let alerted_it = ZwAlertThread(waiting.1 as *mut c_void);
+    let ended = end(waiting);
+    let took = time::interrupt_time() - asked;
+    let in_wait = [
+        SAW[0].load(Ordering::Acquire),
+        SAW[1].load(Ordering::Acquire),
+    ];
+
+    // In a wait that is not alertable: the wait goes on, and the alert
+    // ends the thread's next alertable wait though that has no time.
+    let later = start(alerted_before)?;
+    delay_ms(20);
+    let alerted_later = ZwAlertThread(later.1 as *mut c_void);
+    delay_ms(20);
+    // SAFETY: a thread this test holds a reference to.
+    let still_waiting = unsafe { wait(Some(later.0.cast()), Some(0)) };
+    set(&GO);
+    let later_ended = end(later);
+    let kept = SAW[0].load(Ordering::Acquire);
+
+    // This thread, alerted by itself. A signalled event is not taken
+    // by the wait the alert ends.
+    init_event(&EVENT, true, true);
+    let own = [
+        alert_me() as u32,
+        wait_alertable(&EVENT, 0, Some(0)),
+        wait_alertable(&EVENT, 0, Some(0)),
+        wait_alertable(&EVENT, 0, Some(0)),
+    ];
+    // Two alerts are one; a wait that is not alertable sees none; a
+    // kernel-mode alert ends a user-mode wait.
+    let twice = [
+        alert_me() as u32,
+        alert_me() as u32,
+        wait_event(&EVENT, Some(0)),
+        wait_alertable(&EVENT, 1, Some(0)),
+        wait_alertable(&EVENT, 1, Some(0)),
+    ];
+    // A delay and a wait on several objects are alertable waits too.
+    let interval = -300_000i64;
+    let objects = [EVENT.ptr().cast::<c_void>(), NEVER.ptr().cast::<c_void>()];
+    let none = 0i64;
+    let asked = time::interrupt_time();
+    // SAFETY: static, initialised events; the times are locals.
+    let others = unsafe {
+        [
+            alert_me() as u32,
+            KeDelayExecutionThread(0, 1, &raw const interval) as u32,
+            KeDelayExecutionThread(0, 1, &raw const interval) as u32,
+            alert_me() as u32,
+            KeWaitForMultipleObjects(
+                2,
+                objects.as_ptr(),
+                1,
+                0,
+                0,
+                1,
+                &raw const none,
+                core::ptr::null_mut(),
+            ) as u32,
+            alert_me() as u32,
+            KeWaitForMultipleObjects(
+                2,
+                objects.as_ptr(),
+                0,
+                0,
+                0,
+                1,
+                &raw const none,
+                core::ptr::null_mut(),
+            ) as u32,
+        ]
+    };
+    let delayed = time::interrupt_time() - asked;
+    // What is not a thread cannot be alerted.
+    // SAFETY: a fresh event object, which this test gives up.
+    let not_a_thread = unsafe {
+        let body = object::create(&object::EVENT_TYPE, size_of::<KEVENT>()).ok_or("no memory")?;
+        KeInitializeEvent(body.cast(), 0, 0);
+        let opened = handle::open(body, 0);
+        object::dereference(body);
+        let opened = opened.map_err(|_| "no memory for a handle")?;
+        let status = ZwAlertThread(opened as *mut c_void);
+        handle::close(opened);
+        status
+    };
+    let no_handle = ZwAlertThread(core::ptr::null_mut());
+
+    if !settle(before) {
+        return Err("the helper threads did not finish");
+    }
+    if alerted_it != 0 || ended != STATUS_SUCCESS || in_wait[0] != STATUS_ALERTED {
+        return Err("an alert did not end an alertable wait with STATUS_ALERTED");
+    }
+    if took > 20_000_000 {
+        return Err("an alerted wait went on to its time limit");
+    }
+    if in_wait[1] != STATUS_TIMEOUT {
+        return Err("an alert was not used up by the wait it ended");
+    }
+    if alerted_later != 0 || still_waiting != STATUS_TIMEOUT || later_ended != STATUS_SUCCESS {
+        return Err("an alert disturbed a wait that is not alertable");
+    }
+    if kept != STATUS_ALERTED {
+        return Err("an alert was not kept for the next alertable wait, ahead of its time limit");
+    }
+    if own != [0, STATUS_ALERTED, STATUS_SUCCESS, STATUS_TIMEOUT] {
+        return Err("an alerted wait took its object, or the alert was not looked at first");
+    }
+    if twice != [0, 0, STATUS_TIMEOUT, STATUS_ALERTED, STATUS_TIMEOUT] {
+        return Err("two alerts were not one, or a wait saw an alert it should not");
+    }
+    if others != [0, STATUS_ALERTED, 0, 0, STATUS_ALERTED, 0, STATUS_ALERTED]
+        || !(300_000..3_000_000).contains(&delayed)
+    {
+        return Err("a delay or a wait on several objects was not alertable");
+    }
+    if not_a_thread != STATUS_OBJECT_TYPE_MISMATCH || no_handle != STATUS_INVALID_HANDLE {
+        return Err("something that is not a thread was alerted");
+    }
+    Ok(19)
+}
+
+/// Alerts race with the event a thread waits for and with its time
+/// limit, on every processor: each alert that took ends exactly one
+/// wait, and no setting of the event is lost to one. Returns the
+/// alerts that took.
+pub fn alert_race_test() -> Result<u64, &'static str> {
+    use crate::ob::object;
+    static ALERTS: AtomicU64 = AtomicU64::new(0);
+    static SIGNALS: AtomicU64 = AtomicU64::new(0);
+    static SETS: AtomicU64 = AtomicU64::new(0);
+    fn count(status: u32) {
+        match status {
+            STATUS_ALERTED => ALERTS.fetch_add(1, Ordering::Relaxed),
+            STATUS_SUCCESS => SIGNALS.fetch_add(1, Ordering::Relaxed),
+            STATUS_TIMEOUT => 0,
+            _ => u64::from(WRONG.fetch_add(1, Ordering::Relaxed)),
+        };
+    }
+    fn waiter(_: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            count(wait_alertable(&EVENT, 0, Some(1)));
+        }
+        // What is still there for it: the last setting, the last alert.
+        loop {
+            let status = wait_alertable(&EVENT, 0, Some(0));
+            count(status);
+            if status == STATUS_TIMEOUT {
+                break;
+            }
+        }
+    }
+    fn setter(_: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            if set(&EVENT) == 0 {
+                SETS.fetch_add(1, Ordering::Relaxed);
+            }
+            thread::yield_now();
+        }
+    }
+    let before = thread::count();
+    init_event(&EVENT, true, false);
+    STOP.store(false, Ordering::Release);
+    for counter in [&ALERTS, &SIGNALS, &SETS] {
+        counter.store(0, Ordering::Relaxed);
+    }
+    WRONG.store(0, Ordering::Relaxed);
+    let target = thread::create_referenced(waiter, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    let helper = thread::create_referenced(setter, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    let mut took = 0u64;
+    let until = time::interrupt_time() + 8_000_000;
+    while time::interrupt_time() < until {
+        for _ in 0..50 {
+            // SAFETY: a thread this test holds a reference to.
+            if !unsafe { alert(target, 0) } {
+                took += 1;
+            }
+            core::hint::spin_loop();
+        }
+        thread::yield_now();
+    }
+    STOP.store(true, Ordering::Release);
+    // SAFETY: threads this test holds references to, which it gives up
+    // here; the setter has ended before the waiter is let run dry.
+    let ended = unsafe {
+        let first = wait(Some(helper.cast()), Some(-100_000_000));
+        let second = wait(Some(target.cast()), Some(-100_000_000));
+        object::dereference(helper.cast());
+        object::dereference(target.cast());
+        (first, second)
+    };
+    if ended != (STATUS_SUCCESS, STATUS_SUCCESS) || !settle(before) {
+        return Err("the threads did not finish");
+    }
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a wait returned a status that is none of its three");
+    }
+    if ALERTS.load(Ordering::Relaxed) != took {
+        return Err("alerts that took and waits they ended do not match");
+    }
+    if SIGNALS.load(Ordering::Relaxed) != SETS.load(Ordering::Relaxed) {
+        return Err("a setting of the event was lost or taken twice among the alerts");
+    }
+    if took == 0 || SETS.load(Ordering::Relaxed) == 0 {
+        return Err("the race was not run");
+    }
+    Ok(took)
 }
 
 /// A delay lasts at least as long as asked. Returns the delays tried.

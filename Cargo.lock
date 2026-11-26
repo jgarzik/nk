@@ -72,6 +72,10 @@ name = "nk-pe"
 version = "0.0.2"
 
 [[package]]
+name = "nk-ps"
+version = "0.0.2"
+
+[[package]]
 name = "nk-rtl"
 version = "0.0.2"
 
@@ -109,6 +113,7 @@ dependencies = [
  "nk-ob",
  "nk-oracle",
  "nk-pe",
+ "nk-ps",
  "nk-rtl",
  "nk-se",
  "nk-selftest",

@@ -185,8 +185,16 @@ it on the fields they share.
 the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
 `gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number.
 Security descriptors (absolute and self-relative), ACL and SID headers
-agree too. A structure is added to the
-comparison by the commit that starts using it.
+agree too. So do the fields of the thread and process blocks that NK
+keeps (`lib/ntabi/thread.rs`, `process.rs`): among them a thread's
+alert state (`Alerted`, `MiscFlags.Alertable`, `WaitMode`), its base
+priority and `Saturation`, the silo it is attached to (`ETHREAD.Silo`)
+and where its impersonation would be (`ClientSecurity`,
+`CrossThreadFlags.ActiveImpersonationInfo`); a process's base priority,
+`Session`, `Job` and `ServerSilo`; and `KAPC_STATE`. Microsoft's
+`npfs.sys`, `msfs.sys` and `msrpc.sys` read none of the current
+thread's fields in line: they go through exports. A structure is added
+to the comparison by the commit that starts using it.
 
 There is nothing to compare arm64 with: NK has no source of Windows 10
 arm64 kernels or symbols. arm64 uses the documented structures, the facts
@@ -212,6 +220,9 @@ its own.
   size (0x230), are what NK takes the Windows 10 kernel to publish; the
   current WDK's header has grown further (0x260), so the probe cannot
   say, and no fixture reads them yet.
+- `SILO_MONITOR_REGISTRATION` (`lib/ntabi/silo.rs`). Its layout is
+  `ntddk.h`'s and agrees with the offsets the Windows 10 kernel reads
+  it at; the WDK probe has no line for it.
 
 - The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
   documented convention; no symbol file, probe fact or fixture driver

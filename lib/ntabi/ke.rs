@@ -73,6 +73,33 @@ const _: () = {
     assert!(offset_of!(KDPC, DpcData) == 0x38);
 };
 
+/// [`KAPC_STATE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess):
+/// a thread's APC state, and the room a driver gives
+/// `KeStackAttachProcess` to save one in. The driver owns it.
+#[repr(C)]
+pub struct KAPC_STATE {
+    pub ApcListHead: [LIST_ENTRY; 2],
+    /// The process the saved state belongs to. `KeStackAttachProcess`
+    /// leaves [`KAPC_STATE_NOT_ATTACHED`] here when the thread was in
+    /// the process already and nothing was saved.
+    pub Process: *mut core::ffi::c_void,
+    pub InProgressFlags: u8,
+    pub KernelApcPending: u8,
+    pub UserApcPendingAll: u8,
+}
+
+/// What `KAPC_STATE.Process` holds after an attach that did nothing.
+pub const KAPC_STATE_NOT_ATTACHED: usize = 1;
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KAPC_STATE>() == 0x30);
+    assert!(offset_of!(KAPC_STATE, Process) == 0x20);
+    assert!(offset_of!(KAPC_STATE, InProgressFlags) == 0x28);
+    assert!(offset_of!(KAPC_STATE, KernelApcPending) == 0x29);
+    assert!(offset_of!(KAPC_STATE, UserApcPendingAll) == 0x2A);
+};
+
 /// `LIST_ENTRY`.
 #[repr(C)]
 #[derive(Clone, Copy)]

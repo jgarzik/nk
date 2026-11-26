@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: thread.set-priority
 file: kernel/ke/thread.rs
-replace:     if (new as u8) < before {
-with:     if false {
+replace:         } else if new < old {
+with:         } else if false {

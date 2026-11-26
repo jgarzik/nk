@@ -196,10 +196,36 @@ fn thread_matches_the_kernel() {
     assert_eq!(KERNEL_STACK, field("KernelStack"));
     assert_eq!(RUNNING, field("Running"));
     assert_eq!(PRIORITY, field("Priority"));
+    assert_eq!(ALERTED, field("Alerted"));
+    assert_eq!(MISC_FLAGS, field("MiscFlags"));
+    let alertable = kthread.member("Alertable").expect("_KTHREAD.Alertable");
+    assert_eq!(alertable.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        alertable.bits,
+        Some((MISC_FLAG_ALERTABLE.trailing_zeros() as u8, 1))
+    );
+    assert_eq!(WAIT_MODE, field("WaitMode"));
     assert_eq!(WAIT_LIST_ENTRY, field("WaitListEntry"));
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
+    assert_eq!(SATURATION, field("Saturation"));
+    assert_eq!(
+        CLIENT_SECURITY,
+        offset(&ethread, "_ETHREAD", "ClientSecurity")
+    );
+    assert_eq!(
+        CROSS_THREAD_FLAGS,
+        offset(&ethread, "_ETHREAD", "CrossThreadFlags")
+    );
+    let impersonating = ethread
+        .member("ActiveImpersonationInfo")
+        .expect("_ETHREAD.ActiveImpersonationInfo");
+    assert_eq!(impersonating.offset as usize, CROSS_THREAD_FLAGS);
+    assert_eq!(
+        impersonating.bits,
+        Some((ACTIVE_IMPERSONATION_INFO.trailing_zeros() as u8, 1))
+    );
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
@@ -224,11 +250,32 @@ fn thread_matches_the_kernel() {
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
     assert_eq!(PROCESS, field("Process"));
     let apc_state = types.layout("_KAPC_STATE").expect("_KAPC_STATE");
+    {
+        use crate::ke::KAPC_STATE;
+        use core::mem::{offset_of, size_of};
+        let saved = |name| offset(&apc_state, "_KAPC_STATE", name);
+        assert_eq!(size_of::<KAPC_STATE>(), apc_state.size as usize);
+        assert_eq!(offset_of!(KAPC_STATE, ApcListHead), saved("ApcListHead"));
+        assert_eq!(offset_of!(KAPC_STATE, Process), saved("Process"));
+        assert_eq!(
+            offset_of!(KAPC_STATE, InProgressFlags),
+            saved("InProgressFlags")
+        );
+        assert_eq!(
+            offset_of!(KAPC_STATE, KernelApcPending),
+            saved("KernelApcPending")
+        );
+        assert_eq!(
+            offset_of!(KAPC_STATE, UserApcPendingAll),
+            saved("UserApcPendingAll")
+        );
+    }
     assert_eq!(
         APC_STATE_PROCESS,
         field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")
     );
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
+    assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueThread"), 8);
@@ -244,9 +291,17 @@ fn process_matches_the_kernel() {
     assert_eq!(EPROCESS_SIZE, eprocess.size as usize);
     assert_eq!(field("Pcb"), 0);
     assert_eq!(offset(&kprocess, "_KPROCESS", "Header"), 0);
+    assert_eq!(
+        BASE_PRIORITY,
+        offset(&kprocess, "_KPROCESS", "BasePriority")
+    );
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
+    assert_eq!(SESSION, field("Session"));
+    assert_eq!(JOB, field("Job"));
+    assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));
+    assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.

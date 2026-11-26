@@ -1,0 +1,6 @@
+# A started monitor is not marked as started: the host silo's end is
+# never announced to it.
+scenario: x86_64
+fails: ps.silo-monitor
+file: kernel/ps/silo.rs
+remove:                 (&raw mut (*monitor).started).write(true);

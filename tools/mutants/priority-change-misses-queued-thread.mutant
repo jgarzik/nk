@@ -1,0 +1,8 @@
+# A thread's priority is changed without looking whether the thread is
+# on a ready queue: it stays queued at the old priority, and a thread
+# raised above the running one does not get the processor.
+scenario: x86_64
+fails: thread.set-priority-other
+file: kernel/ke/thread.rs
+replace:         if on != 0 {
+with:         if false {

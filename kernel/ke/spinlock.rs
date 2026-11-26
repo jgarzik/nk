@@ -56,6 +56,10 @@ pub enum Rank {
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).
     TimerTable = 230,
+    /// The store of security descriptors (`ob::security`).
+    Descriptors = 232,
+    /// Silo context slots and the host silo's storage (`ps::silo`).
+    Silo = 233,
     /// An object's own lock, a word of its header (`ob::security`):
     /// innermost of the locks held at `DISPATCH_LEVEL`.
     ObjectHeader = 235,
