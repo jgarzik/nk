@@ -35,6 +35,8 @@ pub fn name(code: u32) -> Option<&'static str> {
         0xE2 => "MANUALLY_INITIATED_CRASH",
         0xE4 => "WORKER_INVALID",
         0x11D => "EVENT_TRACING_FATAL_ERROR",
+        0x122 => "WHEA_INTERNAL_ERROR",
+        0x124 => "WHEA_UNCORRECTABLE_ERROR",
         0x133 => "DPC_WATCHDOG_VIOLATION",
         0x139 => "KERNEL_SECURITY_CHECK_FAILURE",
         0x189 => "BAD_OBJECT_HEADER",
@@ -157,7 +159,7 @@ mod tests {
 
     /// Every code that has a name, with Microsoft's name for it (the
     /// bug check code reference).
-    const NAMED: [(u32, &str); 27] = [
+    const NAMED: [(u32, &str); 29] = [
         (0x09, "IRQL_NOT_GREATER_OR_EQUAL"),
         (0x0A, "IRQL_NOT_LESS_OR_EQUAL"),
         (0x0C, "MAXIMUM_WAIT_OBJECTS_EXCEEDED"),
@@ -182,6 +184,8 @@ mod tests {
         (0xE2, "MANUALLY_INITIATED_CRASH"),
         (0xE4, "WORKER_INVALID"),
         (0x11D, "EVENT_TRACING_FATAL_ERROR"),
+        (0x122, "WHEA_INTERNAL_ERROR"),
+        (0x124, "WHEA_UNCORRECTABLE_ERROR"),
         (0x133, "DPC_WATCHDOG_VIOLATION"),
         (0x139, "KERNEL_SECURITY_CHECK_FAILURE"),
         (0x189, "BAD_OBJECT_HEADER"),

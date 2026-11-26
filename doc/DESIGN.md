@@ -1147,7 +1147,8 @@ make that safe.
 | a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
-| a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
+| a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`, `WheaAddErrorSource`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
+| the `Correct` of a kind of hardware error source (`WheaAddErrorSource`) | nothing: the source is in the table, stopped, and stays |
 | a hardware error source's `Uninitialize` (`WheaRemoveErrorSource`) | nothing: the source stays pending removal, closed to calls |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
@@ -2247,6 +2248,37 @@ code).
   are freed there.
 - NK has no firmware or platform sources: the first source a driver
   adds has id 0.
+- A source of another kind is added with `WheaAddErrorSource`. Its
+  routines are those `WheaConfigureErrorSource` recorded for its kind:
+  `Correct(Descriptor, SectionLength)` and
+  `Initialize(1, Descriptor, Context)` when it is added,
+  `Uninitialize(Context)` when it is removed; a kind not configured
+  has none and its sources start with nothing called. The kinds the
+  firmware's tables describe are refused, as on Windows.
+- A device driver reports an error with
+  `WheaReportHwErrorDeviceDriverEx`. The report is held to the limits
+  the source registered with, an error record is made (the header of
+  `WheaInitializeRecordHeader`, the source's GUID, creator and
+  partition, one section: the driver's data, with the device's name),
+  and its summary is printed: NK has no event log, and does not keep
+  the record or the log data. Windows' record carries sections of its
+  own besides; NK's does not.
+- `WheaReportFatalHwErrorDeviceDriverEx` does the same and stops the
+  system with `0x124 WHEA_UNCORRECTABLE_ERROR`: the source's type, the
+  record, the source's GUID, the driver's word.
+- `WheaReportHwError` judges a packet as Windows does before a record
+  is made: a malformed severity is refused, an informational report
+  dropped, a report from no started source stops the system
+  (`0x122 WHEA_INTERNAL_ERROR`) when it is recoverable or fatal and is
+  `STATUS_DEVICE_DOES_NOT_EXIST` otherwise. For a started source the
+  record would come from its kind's `CreateRecord`, which NK does not
+  call: the system stops naming the kind.
+- Reports are made at or below `DISPATCH_LEVEL`: the table's lock and
+  the pool are that high and no higher.
+- `pshed.dll`, the platform's part of the error path, is loaded as a
+  library for what `pci.sys` imports from it. NK does not call its
+  `PshedInitialize`, which takes Windows' loader block, nor any other
+  of its routines.
 
 ## Stopping the system
 

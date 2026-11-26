@@ -30,7 +30,6 @@ mod trap_ke;
 mod trap_mm;
 mod trap_po;
 mod trap_rtl;
-mod trap_whea;
 mod trap_zw;
 mod whea;
 
@@ -62,7 +61,6 @@ pub(super) static ALL: &[&[Export]] = &[
     trap_mm::EXPORTS,
     trap_po::EXPORTS,
     trap_rtl::EXPORTS,
-    trap_whea::EXPORTS,
     trap_zw::EXPORTS,
     whea::EXPORTS,
 ];
