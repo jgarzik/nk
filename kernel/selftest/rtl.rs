@@ -816,10 +816,10 @@ fn app_container() -> Result<(), &'static str> {
             (first, kind, second, right)
         }
     }
-    const NOT_APPCONTAINER: u32 = 0xC000_0200;
+    const NOT_APPCONTAINER: u32 = 0xC000_A200;
     const INVALID_PARAMETER: u32 = 0xC000_000D;
-    if asked(&SidRoom::new(5, &[18])) != (NOT_APPCONTAINER, 0, NOT_APPCONTAINER, false)
-        || asked(&SidRoom::new(15, &[3, 1])) != (NOT_APPCONTAINER, 0, NOT_APPCONTAINER, false)
+    if asked(&SidRoom::new(5, &[18])) != (NOT_APPCONTAINER, 0, INVALID_PARAMETER, false)
+        || asked(&SidRoom::new(15, &[3, 1])) != (NOT_APPCONTAINER, 0, INVALID_PARAMETER, false)
     {
         return Err("a SID that is no app container's was taken for one");
     }
@@ -829,8 +829,10 @@ fn app_container() -> Result<(), &'static str> {
     if asked(&SidRoom::new(15, &PACKAGE)) != (0, 1, 0, true) {
         return Err("a child's SID did not give its parent");
     }
-    if asked(&SidRoom::new(15, &PACKAGE[..2])) != (0, 3, INVALID_PARAMETER, false)
-        || asked(&SidRoom::new(15, &PACKAGE[..9])) != (0, 3, INVALID_PARAMETER, false)
+    // Of the invalid type, which is stored, and no app container's.
+    let invalid = (NOT_APPCONTAINER, 3, INVALID_PARAMETER, false);
+    if asked(&SidRoom::new(15, &PACKAGE[..2])) != invalid
+        || asked(&SidRoom::new(15, &PACKAGE[..9])) != invalid
     {
         return Err("a package SID of the wrong length is not of the invalid type");
     }

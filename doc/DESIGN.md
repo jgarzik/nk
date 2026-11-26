@@ -1306,9 +1306,9 @@ largest SID, onto the stack. `RtlValidSecurityDescriptor` judges an
 access list on a pool copy and answers "not valid" without memory for
 one. App-container SIDs (`RtlGetAppContainerSidType`,
 `RtlGetAppContainerParent`) are told apart by shape alone, `S-1-15-2`
-with eight or twelve sub-authorities (`nk_se::sid`, which lists what
-Microsoft's pages leave open); a parent's SID is a pool block the
-caller frees.
+with eight or twelve sub-authorities, and refused with Windows'
+statuses (`nk_se::sid`); a parent's SID is a pool block the caller
+frees.
 
 Nothing is enforced: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`

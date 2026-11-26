@@ -176,8 +176,9 @@ pub unsafe extern "C" fn RtlConvertSidToUnicodeString(
 
 /// [`RtlGetAppContainerSidType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlgetappcontainersidtype):
 /// whether a SID is an app container's, and a parent's or a child's.
-/// A SID that is none stores "not an app container" and fails with
-/// `STATUS_NOT_APPCONTAINER`.
+/// The type is stored whatever it is; a SID that is neither, not an
+/// app container's or one of the wrong length (the invalid type),
+/// fails with `STATUS_NOT_APPCONTAINER`, as on Windows.
 ///
 /// # Safety
 /// `sid` is null or points to a SID; `kind` is writable.
@@ -190,17 +191,16 @@ pub unsafe extern "C" fn RtlGetAppContainerSidType(sid: PSID, kind: *mut u32) ->
         let found = nk_se::sid::app_container_sid_type(&bytes[..length]);
         kind.write_unaligned(found as u32);
         match found {
-            AppContainerSidType::NotAppContainer => STATUS_NOT_APPCONTAINER,
-            _ => STATUS_SUCCESS,
+            AppContainerSidType::Child | AppContainerSidType::Parent => STATUS_SUCCESS,
+            _ => STATUS_NOT_APPCONTAINER,
         }
     }
 }
 
 /// [`RtlGetAppContainerParent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlgetappcontainerparent):
 /// the SID of a child app container's parent, in a pool block the
-/// caller frees. A SID that is no app container's fails as
-/// [`RtlGetAppContainerSidType`] does; one that is but is no child's,
-/// with `STATUS_INVALID_PARAMETER`.
+/// caller frees. Any SID that is no child's, an app container's or
+/// not, fails with `STATUS_INVALID_PARAMETER`, as on Windows.
 ///
 /// # Safety
 /// `sid` is null or points to a SID; `parent` is writable.
@@ -212,10 +212,7 @@ pub unsafe extern "C" fn RtlGetAppContainerParent(sid: PSID, parent: *mut PSID) 
         };
         let sid = &bytes[..length];
         let Some((bytes, length)) = nk_se::sid::app_container_parent(sid) else {
-            return match nk_se::sid::app_container_sid_type(sid) {
-                AppContainerSidType::NotAppContainer => STATUS_NOT_APPCONTAINER,
-                _ => STATUS_INVALID_PARAMETER,
-            };
+            return STATUS_INVALID_PARAMETER;
         };
         let block = pool::alloc(length, TAG);
         if block.is_null() {

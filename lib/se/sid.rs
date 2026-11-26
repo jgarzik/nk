@@ -13,11 +13,13 @@
 //! [`RtlGetAppContainerParent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlgetappcontainerparent)
 //! gives a child's parent.
 //!
-//! INFERRED, to be checked against Windows: that only authority 15 with
-//! a first sub-authority of 2 is an app-container SID at all; that one
-//! of neither eight nor twelve sub-authorities (the well-known
-//! `S-1-15-2-1` among them) is of the invalid type rather than refused;
-//! and the statuses the kernel gives for each (`kernel/se/sid.rs`).
+//! Only authority 15 with a first sub-authority of 2 is an
+//! app-container SID at all, and one of neither eight nor twelve
+//! sub-authorities is of the invalid type. Windows 10 answers so, and
+//! with these statuses (`kernel/se/sid.rs`): asked for its type, a SID
+//! that is neither a parent's nor a child's has its type stored (none,
+//! or invalid) and `STATUS_NOT_APPCONTAINER`; asked for its parent,
+//! every SID but a child's is `STATUS_INVALID_PARAMETER`.
 
 use crate::{ACL_HEADER, ACL_REVISION, ACL_REVISION4, SID_MAX_SIZE, SID_MAX_SUB_AUTHORITIES};
 use crate::{SID_REVISION, sid_length};
