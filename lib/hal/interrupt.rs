@@ -98,9 +98,30 @@ pub const fn message_routable(kind: u32, mask: u64, group: u16, mode: u32, onlin
         && (mask.is_power_of_two() || mask == online)
 }
 
+/// What Windows' HAL answers `acpi.sys` for the version register of
+/// the I/O APIC whose inputs start at a global system interrupt
+/// (`HalpInterruptGetApicVersion`): not the register, but one made up
+/// from the number of lines the HAL knows the controller to have:
+/// version 0x11, the last input's number in the third byte and the
+/// count in the fourth. With no controller there (`lines` is `None`)
+/// the fourth byte alone, 0xF0.
+pub const fn apic_version(lines: Option<u32>) -> u32 {
+    match lines {
+        Some(lines) => 0x11 | (lines.wrapping_sub(1) & 0xFF) << 16 | (lines & 0xFF) << 24,
+        None => 0xF000_0000,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_apic_version_is_made_from_the_line_count() {
+        assert_eq!(apic_version(Some(24)), 0x1817_0011);
+        assert_eq!(apic_version(Some(1)), 0x0100_0011);
+        assert_eq!(apic_version(None), 0xF000_0000);
+    }
 
     #[test]
     fn a_message_goes_to_one_running_processor_or_to_all() {

@@ -1403,8 +1403,11 @@ the sleep states the firmware has and answers with the interrupt model
 for the firmware's `_PIC` method (the APIC's on x86-64, a version 3
 GIC's on arm64); Windows' HAL registers its sleep routine with the
 power manager for each state, NK registers nothing, since it never
-sleeps and powers off through the firmware's runtime services. The
-table's remaining routines that
+sleeps and powers off through the firmware's runtime services.
+`HalInterruptGetApicVersion` (`kernel/hal/interrupt.rs`) tells it how
+many lines an interrupt controller has, in the shape of an I/O APIC's
+version register, which Windows' HAL makes up from its own count
+rather than read. The table's remaining routines that
 `acpi.sys` uses at start (`kernel/hal/pm.rs`) give it the FACS and
 ACPI's fixed hardware: whether a register block exists, and one access
 of it read or written. The blocks are set up once from the FADT by
@@ -1426,7 +1429,9 @@ configuration access. arm64 has no I/O ports and an empty list.
 rather than a slot, tells `pci.sys` how interrupts name their
 destination: by a processor's own identifier (physical mode) on both
 architectures, with messages deliverable where the architecture's
-controller takes them.
+controller takes them. `acpi.sys` asks it for each processor the
+firmware lists, by its controller's identifier, and gets the
+processor's number, or `STATUS_NOT_FOUND` for one that is not running.
 
 Four more undocumented exports answer from the same facts
 (`kernel/hal/query.rs`). `HalGetProcessorIdByNtNumber` gives a
@@ -1656,10 +1661,25 @@ on Windows: NK stops, naming both.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
 (`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),
-`read`, `write`,
+`read`, `write`, `read_at`, `write_at` (`NtReadFile`, `NtWriteFile`
+without and with a byte offset), `flush` (`NtFlushBuffersFile`),
 `device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
 IRP and calls the dispatch routine inside a critical region (as Windows
 does for a synchronous request).
+
+A read's or a write's buffer reaches the driver the way the device at
+the top of the stack asks for, as on Windows: through a system buffer
+(`DO_BUFFERED_IO`), as an MDL over the requestor's own buffer with its
+pages locked (`DO_DIRECT_IO`; a read locks them for writing, a write
+for reading, and final completion unlocks and frees the MDL), or as
+the address it is. A transfer of no bytes has neither system buffer nor
+MDL. Without a byte offset the transfer is where the file object's
+`CurrentByteOffset` says; NK does not move that position after a
+transfer, so a requestor that wants the next bytes says where they are.
+A flush is a request with no buffer and no parameters. A disk is read
+and written this way, with direct I/O at byte offsets: by NK's own test
+disk and by Microsoft's `disk.sys` alike (`doc/TESTING.md`, "The data
+disk").
 
 **The requestor.** A request is made on behalf of kernel mode, whose
 buffers are trusted, or of user mode (`user_control`,
@@ -2246,7 +2266,11 @@ One tree of keys and values in memory (`lib/cm`; exports in `kernel/cm`).
 It is built at boot:
 
 1. the keys every system has: `\Registry\Machine\System` with
-   `Select`, `\Registry\Machine\Hardware`, `\Registry\User`;
+   `Select`, `\Registry\Machine\Hardware` with `DeviceMap` and
+   `ResourceMap` (which Windows makes at every boot, and under which
+   drivers make volatile keys of their own: storport its
+   `DeviceMap\Scsi\Scsi Port N`; every key of NK's lives in memory, so
+   `REG_OPTION_VOLATILE` changes nothing), `\Registry\User`;
 2. the SYSTEM hive the loader read (`doc/BOOT.md`), if it read one,
    copied over `\Registry\Machine\System`: keys, values, classes,
    security descriptors, times. A hive that is damaged, or that needs

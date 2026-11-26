@@ -13,6 +13,7 @@ pub static GROUP: Group = Group {
         "hal.acpi-machine-states",
         "hal.system-information",
         "hal.interrupt-targets",
+        "hal.interrupt-controller-lines",
         "hal.description",
         "hal.pm-registers",
         "hal.queries",
@@ -32,6 +33,10 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     r.check("hal.system-information", crate::hal::sysinfo::test);
     r.check("hal.interrupt-targets", crate::hal::target::test);
+    r.check(
+        "hal.interrupt-controller-lines",
+        crate::hal::interrupt::version_test,
+    );
     r.check("hal.description", crate::hal::description::test);
     r.check("hal.pm-registers", crate::hal::pm::test);
     r.check("hal.queries", crate::hal::query::test);

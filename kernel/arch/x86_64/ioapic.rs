@@ -69,6 +69,19 @@ fn input(gsi: u32) -> Option<(&'static IoApic, u32)> {
         })
 }
 
+/// The global system interrupts of the controller `gsi` is a line of:
+/// the first, and how many.
+pub fn line_set(gsi: u32) -> Option<(u32, u32)> {
+    platform::get()
+        .controllers
+        .io_apics()
+        .iter()
+        .find_map(|io| {
+            let inputs = io_apic_inputs(read(io, REG_VERSION));
+            (gsi.checked_sub(io.gsi_base)? < inputs).then_some((io.gsi_base, inputs))
+        })
+}
+
 /// Have `line` raise `vector` on processor `processor`, masked for now.
 /// `false` if no I/O APIC has that input or the processor cannot be
 /// named in a redirection register.
