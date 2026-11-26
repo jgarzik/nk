@@ -21,3 +21,4 @@ hal.firmware-variables ok
 hal.acpi-machine-states ok
 hal.interrupt-controller-lines ok
 hal.interrupt-arbiter ok
+hal.pci.interface ok
