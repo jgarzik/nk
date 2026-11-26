@@ -246,6 +246,16 @@ impl VectorMap {
         }
     }
 
+    /// Take `vector` itself, which someone else chose (the interrupt
+    /// arbiter). `false` if it is no device vector or is in use.
+    pub fn claim(&mut self, vector: u32) -> bool {
+        if !DEVICE_VECTORS.contains(&vector) || self.is_used(vector) {
+            return false;
+        }
+        self.set(vector, true);
+        true
+    }
+
     /// Take `count` consecutive vectors of one IRQL, the first a
     /// multiple of `count`, which is what a device that sends several
     /// messages needs: it adds the message number to the low bits.
@@ -326,6 +336,23 @@ pub const fn acpi_device_interrupts() -> [(u32, u32); 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_chosen_vector_is_claimed_once() {
+        let mut map = VectorMap::new();
+        assert!(map.claim(0x51));
+        assert!(!map.claim(0x51));
+        assert!(!map.claim(0x2F));
+        assert!(!map.claim(0xC0));
+        map.give_back(0x51, 1);
+        assert!(map.claim(0x51));
+        // A claimed vector is not handed out.
+        let mut map = VectorMap::new();
+        let first = map.take(1).unwrap();
+        map.give_back(first, 1);
+        assert!(map.claim(first));
+        assert_ne!(map.take(1), Some(first));
+    }
 
     #[test]
     fn a_hypervisor_is_the_bit_and_an_interface() {

@@ -14,6 +14,7 @@ pub static GROUP: Group = Group {
         "hal.system-information",
         "hal.interrupt-targets",
         "hal.interrupt-controller-lines",
+        "hal.interrupt-arbiter",
         "hal.description",
         "hal.pm-registers",
         "hal.queries",
@@ -37,6 +38,18 @@ fn run(r: &mut Report, info: &BootInfo) {
         "hal.interrupt-controller-lines",
         crate::hal::interrupt::version_test,
     );
+    match crate::hal::interrupt::arbiter_test() {
+        // Where a vector can be chosen, the line must have moved.
+        Ok(moved) if moved == (crate::arch::INTERRUPT_MODEL == 1) => r.ok_with(
+            "hal.interrupt-arbiter",
+            format_args!("a line moved to the arbiter's vector: {moved}"),
+        ),
+        Ok(_) => r.fail(
+            "hal.interrupt-arbiter",
+            format_args!("the line was not placed as this controller places lines"),
+        ),
+        Err(why) => r.fail("hal.interrupt-arbiter", format_args!("{why}")),
+    }
     r.check("hal.description", crate::hal::description::test);
     r.check("hal.pm-registers", crate::hal::pm::test);
     r.check("hal.queries", crate::hal::query::test);

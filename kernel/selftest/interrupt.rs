@@ -169,13 +169,14 @@ fn settle() {
 }
 
 /// Stands for a physical device object: `io::interrupt` knows devices
-/// by address alone.
-fn device_object(which: &'static u8) -> *mut DEVICE_OBJECT {
+/// by address, and looks no further at one whose first word is not a
+/// device object's type.
+fn device_object(which: &'static i16) -> *mut DEVICE_OBJECT {
     core::ptr::from_ref(which).cast_mut().cast()
 }
 
-static DEVICE_A: u8 = 0;
-static DEVICE_B: u8 = 0;
+static DEVICE_A: i16 = 0;
+static DEVICE_B: i16 = 0;
 
 /// Connection parameters of `version`, with `member` as the union.
 fn parameters<T>(version: u32, member: T) -> IO_CONNECT_INTERRUPT_PARAMETERS {

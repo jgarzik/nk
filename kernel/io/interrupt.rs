@@ -28,12 +28,15 @@ use crate::mm::pool;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_ntabi::interrupt::*;
+use nk_ntabi::interrupt::{INTERRUPT_CONNECTION_CONTROLLER_INPUT, INTERRUPT_VECTOR_DATA};
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::ke::{KIRQL, KSPIN_LOCK};
+use nk_ntabi::pnp::DEVPROPKEY;
 use nk_ntabi::status::{
     NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER, STATUS_NOT_FOUND,
     STATUS_NOT_SUPPORTED, STATUS_SUCCESS,
 };
+use nk_pnp::connection::{CONNECTION_DATA_CATEGORY, CONNECTION_DATA_NUMBER};
 
 const TAG: u32 = u32::from_le_bytes(*b"IntM");
 
@@ -253,6 +256,64 @@ unsafe fn objects_of_table(table: *mut IO_INTERRUPT_MESSAGE_INFO) -> Vec<*mut KI
     }
 }
 
+/// The first line in the interrupt connection data a driver stored on
+/// the device (`INTERRUPT_CONNECTION_DATA_PKEY`, which is where
+/// Windows' line-based connection looks): its vector and IRQL.
+///
+/// # Safety
+/// `device` is readable for two bytes, and a live physical device
+/// object if those are a device object's type.
+unsafe fn stated_line(device: *mut DEVICE_OBJECT) -> Option<(u32, KIRQL)> {
+    // SAFETY: per the contract.
+    if unsafe { (&raw const (*device).Type).read_unaligned() } != nk_ntabi::io::IO_TYPE_DEVICE {
+        return None;
+    }
+    const HEADER: usize = 8;
+    const ENTRIES: usize = 4;
+    let key = DEVPROPKEY {
+        fmtid: CONNECTION_DATA_CATEGORY,
+        pid: CONNECTION_DATA_NUMBER,
+    };
+    let mut data = [0u8; HEADER + ENTRIES * size_of::<INTERRUPT_VECTOR_DATA>()];
+    let mut length = 0u32;
+    // SAFETY: per the contract; locals for the key, the value and its
+    // length.
+    let status = unsafe {
+        crate::pnp::export::IoGetDevicePropertyData(
+            device,
+            &raw const key,
+            0,
+            0,
+            data.len() as u32,
+            data.as_mut_ptr(),
+            &raw mut length,
+            core::ptr::null_mut(),
+        )
+    };
+    if status != STATUS_SUCCESS {
+        return None;
+    }
+    let count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+    let entries = data[HEADER..length.min(data.len() as u32) as usize]
+        .as_chunks::<{ size_of::<INTERRUPT_VECTOR_DATA>() }>()
+        .0
+        .iter()
+        .take(count);
+    for entry in entries {
+        // SAFETY: a chunk of the structure's size, of plain integers.
+        let entry = unsafe {
+            entry
+                .as_ptr()
+                .cast::<INTERRUPT_VECTOR_DATA>()
+                .read_unaligned()
+        };
+        if entry.Type == INTERRUPT_CONNECTION_CONTROLLER_INPUT {
+            return Some((entry.Vector, entry.Irql));
+        }
+    }
+    None
+}
+
 /// Connect the device's first line for a line-based connection.
 ///
 /// # Safety
@@ -265,16 +326,34 @@ unsafe fn connect_first_line(
     synchronize_irql: KIRQL,
     floating_save: u8,
 ) -> Result<*mut KINTERRUPT, NTSTATUS> {
-    let line = of(device, false).first().copied().ok_or(STATUS_NOT_FOUND)?;
+    let (vector, level, shared) = match of(device, false).first() {
+        // Where the line is now: the interrupt arbiter may have moved
+        // it since it was translated (`hal::interrupt::assign_line`).
+        Some(line) => {
+            let (vector, level) = routing::placed(line.translated.vector).map_or(
+                (line.translated.vector, line.translated.level),
+                |(vector, info)| (vector, info.level),
+            );
+            (vector, level, line.shared)
+        }
+        // A device given no line as a resource may still have one its
+        // driver stated: `acpi.sys` connects its system control
+        // interrupt so.
+        None => {
+            // SAFETY: per the contract, the device is live.
+            let (vector, level) = unsafe { stated_line(device) }.ok_or(STATUS_NOT_FOUND)?;
+            (vector, level, true)
+        }
+    };
     // SAFETY: per the contract.
     unsafe {
         connect_line(
             device,
-            line.translated.vector,
-            line.translated.level,
+            vector,
+            level,
             synchronize_irql,
             None,
-            line.shared,
+            shared,
             routine,
             context,
             lock,

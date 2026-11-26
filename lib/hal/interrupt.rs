@@ -60,6 +60,34 @@ pub struct Line {
     pub polarity: Polarity,
 }
 
+impl Polarity {
+    /// The polarity a `KINTERRUPT_POLARITY` value names, of the two NK
+    /// routes.
+    pub const fn from_value(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Polarity::High),
+            2 => Some(Polarity::Low),
+            _ => None,
+        }
+    }
+}
+
+impl Line {
+    /// The line an `INTERRUPT_VECTOR_DATA` names: its global system
+    /// interrupt, `KINTERRUPT_POLARITY` and `KINTERRUPT_MODE`. `None`
+    /// for a polarity or mode NK does not route.
+    pub const fn from_vector_data(gsi: u32, polarity: u32, mode: u32) -> Option<Self> {
+        match (Trigger::from_mode(mode), Polarity::from_value(polarity)) {
+            (Some(trigger), Some(polarity)) => Some(Line {
+                gsi,
+                trigger,
+                polarity,
+            }),
+            _ => None,
+        }
+    }
+}
+
 /// The processor an interrupt is sent to: one of those `allowed` (a
 /// bit per processor) names, chosen by `seed` so that different
 /// interrupts go to different processors. `None` if none is allowed.
@@ -115,6 +143,30 @@ pub const fn apic_version(lines: Option<u32>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vector_data_names_a_line() {
+        assert_eq!(
+            Line::from_vector_data(9, 2, 0),
+            Some(Line {
+                gsi: 9,
+                trigger: Trigger::Level,
+                polarity: Polarity::Low
+            })
+        );
+        assert_eq!(
+            Line::from_vector_data(1, 1, 1),
+            Some(Line {
+                gsi: 1,
+                trigger: Trigger::Edge,
+                polarity: Polarity::High
+            })
+        );
+        // Unknown polarity, both edges, and a mode that is neither.
+        assert_eq!(Line::from_vector_data(9, 0, 0), None);
+        assert_eq!(Line::from_vector_data(9, 3, 1), None);
+        assert_eq!(Line::from_vector_data(9, 1, 2), None);
+    }
 
     #[test]
     fn an_apic_version_is_made_from_the_line_count() {

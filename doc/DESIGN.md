@@ -341,12 +341,34 @@ translated interrupts the physical device object has (and `withdraw`
 when the device stops), since two of the three ways to connect name
 only the device.
 
+On Windows the vectors are not the HAL's to choose: the interrupt
+arbiter, in `acpi.sys`, chooses them and has the HAL carry each choice
+out (`HalPrivateDispatchTable.HalAddInterruptRemapping`, named for what
+it also does under an IOMMU). NK's Plug and Play manager does not ask
+that arbiter, but `acpi.sys` runs it for its own system control
+interrupt as its device starts: it picks a vector for the line the
+FADT names, tells the HAL, stores the result on its physical device
+object as interrupt connection data, and connects by line. NK carries
+the choice out (`hal::interrupt::assign_line`): the line raises the
+vector stated, at the vector's IRQL, on a processor of those stated; a
+line NK had translated to another vector is moved, unless an interrupt
+object is connected, and its translations find it where it is
+(`placed`). On arm64, where a line's vector is its own number, only
+that vector is accepted. A message handed to this routine stops the
+system: the arbiter places none on NK. The arbiter asks, of every line,
+whether it is a secondary interrupt (`HalIsInterruptTypeSecondary`:
+never). `HalRemoveInterruptRemapping`, by which the arbiter takes a
+choice back, is a trap.
+
 **Interrupt objects** (`kernel/ke/kinterrupt.rs`,
 `kernel/io/interrupt.rs`). `IoConnectInterruptEx` allocates a
 `KINTERRUPT`, of the pinned build's layout, and links it into its
 vector's chain; the vector's first object unmasks the line, its last
 masks it. Fully specified connections name a translated vector and
-IRQL; line-based ones use the device's first line; message-based ones
+IRQL; line-based ones use the device's first line, or, for a device
+given none as a resource, the first line of the interrupt connection
+data a driver stored on it (which is where Windows looks; shared);
+message-based ones
 connect every message of the device and return the table of addresses
 and data, or fall back to the line when the device has no messages and
 say so in the version, as documented.
@@ -1429,7 +1451,9 @@ HAL's secondary interrupt services, which NK lacks (no interrupt
 controller behind another interrupt, such as a GPIO controller, is
 served) and reports as Windows' HAL does while it has none, a failure;
 and the limit of message-signalled interrupts for one device, where NK
-keeps Windows' value, 2048, which is no limit.
+keeps Windows' value, 2048, which is no limit. For the same reason
+the private table's `HalIsInterruptTypeSecondary`, which the arbiter
+asks of every line it gives out, says no for every interrupt.
 
 `HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
 rather than a slot, tells `pci.sys` how interrupts name their
