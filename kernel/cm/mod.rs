@@ -19,6 +19,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod notify;
 mod table;
 
 pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
@@ -29,6 +30,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_cm::manifest::Op;
+use nk_cm::notify::{CHANGE_LAST_SET, CHANGE_NAME};
 use nk_cm::regf::{Regf, RegfError};
 use nk_cm::services::OrderError;
 use nk_cm::{Error, Fit, Hive, ImportError, KeyId};
@@ -397,6 +399,8 @@ fn open(key: KeyId, access: u32) -> Result<*mut c_void, NTSTATUS> {
 /// # Safety
 /// `body` is a key object nothing refers to any more.
 pub unsafe extern "C" fn closed(body: *mut c_void) {
+    // The watches made through this object end with it.
+    notify::closed(body);
     // SAFETY: per the contract: the body is the key's number.
     let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
     HIVE.lock().closed(key);
@@ -411,15 +415,37 @@ pub fn write(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> 
     let mut hive = HIVE.lock();
     let root = hive.root().map_err(status)?;
     let (key, new) = hive.create(root, &path).map_err(status)?;
+    let mut made = None;
     if new {
         stamp_new(&mut hive, key, now).map_err(status)?;
+        made = Some(new_key_seen(&hive, key));
     }
+    let mut written = Ok(());
     for (name, kind, data) in values {
         let name: Vec<u16> = name.encode_utf16().collect();
-        hive.set_value(key, &name, *kind, data).map_err(status)?;
-        hive.set_last_write(key, now).map_err(status)?;
+        written = hive
+            .set_value(key, &name, *kind, data)
+            .and_then(|()| hive.set_last_write(key, now))
+            .map_err(status);
+        if written.is_err() {
+            break;
+        }
     }
-    Ok(())
+    let set = (!values.is_empty()).then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    for met in [made, set].into_iter().flatten() {
+        met.tell();
+    }
+    written
+}
+
+/// The watches met by `key` having just been made: a change of name at
+/// the key it was made under. Called with the registry's lock held.
+fn new_key_seen(hive: &Hive, key: KeyId) -> notify::Met {
+    match hive.parent(key) {
+        Ok(parent) => notify::changed(hive, parent, CHANGE_NAME),
+        Err(_) => notify::changed(hive, key, 0),
+    }
 }
 
 /// The type and data of the value `name` of the key at `path` (from
@@ -503,10 +529,18 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
     // The key it was a subkey of has changed with it.
     let deleted = hive.parent(key).and_then(|parent| {
         hive.delete(key)?;
-        hive.set_last_write(parent, now)
+        hive.set_last_write(parent, now)?;
+        Ok(parent)
     });
+    let met = deleted
+        .ok()
+        .map(|parent| notify::changed(&hive, parent, CHANGE_NAME));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
     match deleted {
-        Ok(()) => STATUS_SUCCESS,
+        Ok(_) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
 }
@@ -610,6 +644,11 @@ pub unsafe extern "C" fn ZwCreateKey(
             }
         }
         hive.opened(key);
+        let met = new.then(|| new_key_seen(&hive, key));
+        drop(hive);
+        if let Some(met) = met {
+            met.tell();
+        }
         Ok((key, new))
     });
     match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
@@ -657,7 +696,15 @@ pub unsafe extern "C" fn ZwSetValueKey(
     let now = now();
     let mut hive = HIVE.lock();
     let set = hive.set_value(key, &name, kind, &data);
-    match set.and_then(|()| hive.set_last_write(key, now)) {
+    let set = set.and_then(|()| hive.set_last_write(key, now));
+    let met = set
+        .is_ok()
+        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    match set {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
@@ -686,7 +733,15 @@ pub unsafe extern "C" fn ZwDeleteValueKey(
     let now = now();
     let mut hive = HIVE.lock();
     let deleted = hive.delete_value(key, &name);
-    match deleted.and_then(|()| hive.set_last_write(key, now)) {
+    let deleted = deleted.and_then(|()| hive.set_last_write(key, now));
+    let met = deleted
+        .is_ok()
+        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    match deleted {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }

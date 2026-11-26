@@ -1255,6 +1255,7 @@ make that safe.
 | a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`, `WheaAddErrorSource`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
 | the `Correct` of a kind of hardware error source (`WheaAddErrorSource`) | nothing: the source is in the table, stopped, and stays |
 | a hardware error source's `Uninitialize` (`WheaRemoveErrorSource`) | nothing: the source stays pending removal, closed to calls |
+| the work item of a key's watcher (`ZwNotifyChangeKey`) | none of NK's: it is queued, and runs from a worker, whose base stops the system |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
@@ -1904,6 +1905,23 @@ meanwhile, leave the call with the key it was asked about
 (`STATUS_KEY_DELETED`) and not with whichever key has its place. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
+
+### Watching a key
+
+`ZwNotifyChangeKey` (`kernel/cm/notify.rs`, rules in
+`lib/cm/notify.rs`) makes a watch on a key: for some kinds of change,
+with the keys below it or not. NK has the form kernel-mode callers
+use, asynchronous: the call returns `STATUS_PENDING`, and the change
+that meets the watch writes `STATUS_NOTIFY_ENUM_DIR` to the caller's
+status block, sets its event and queues its work item (the routine's
+`ApcRoutine` and `ApcContext` are a work item and its queue for a
+kernel-mode caller). A watch is met once. Closing the handle it was
+made through ends it and tells the watcher `STATUS_NOTIFY_CLEANUP`.
+The changes seen are a value set or deleted (`ZwSetValueKey`,
+`ZwDeleteValueKey`, NK's own writes) and a key made or deleted, which
+is a change of name at the key above; a change made through the query
+table routines' deletions or `RtlWriteRegistryValue` is not seen. A
+synchronous request stops the system by name.
 
 ### Query tables
 

@@ -46,6 +46,8 @@ pub enum Rank {
     KdPower = 31,
     /// The registry (`cm`).
     Registry = 33,
+    /// The watches on registry keys (`cm::notify`).
+    RegistryWatches = 34,
     /// The kernel handle table (`ob::handle`).
     Handles = 35,
     /// The executive pool (`mm::pool`).

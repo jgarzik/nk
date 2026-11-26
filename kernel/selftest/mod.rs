@@ -12,6 +12,7 @@ mod callback;
 mod cancel;
 mod clock;
 mod cm;
+mod cmnotify;
 mod counted;
 mod csq;
 mod dma;
@@ -174,6 +175,7 @@ pub static GROUPS: &[&[&Group]] = &[
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,
+    cmnotify::GROUPS,
     hal::GROUPS,
     absent::GROUPS,
     po::GROUPS,
