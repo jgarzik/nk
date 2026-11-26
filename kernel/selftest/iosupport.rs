@@ -1,19 +1,24 @@
 //! Tests of what the I/O manager keeps for a driver beside its requests:
-//! the extensions of its driver object.
+//! the extensions of its driver object, and work items in memory of the
+//! driver's own.
 //!
 //! The drivers are the test's own, made as `stack` makes them.
 
 use super::stack;
+use crate::ex::work;
 use crate::io::driver;
+use crate::ke::wait;
 use crate::mm::pool;
-use crate::test::{Group, Report};
+use crate::test::{Group, Report, Slot};
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
+use nk_ntabi::ex::IO_WORKITEM;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["io.driver-extension"],
+    names: &["io.driver-extension", "work.caller-memory"],
     run,
     manual: false,
 };
@@ -121,10 +126,157 @@ fn driver_extension() -> Result<u32, &'static str> {
     Ok(result + 1)
 }
 
+/// The work item in the driver's own memory, what its routine was last
+/// handed, and how often it ran.
+static ITEM: Slot<IO_WORKITEM> = Slot::new();
+static RAN: Slot<KEVENT> = Slot::new();
+static HANDED: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
+static RUNS: AtomicUsize = AtomicUsize::new(0);
+/// The count the item's device had while its routine ran.
+static COUNTED: AtomicUsize = AtomicUsize::new(0);
+
+/// # Safety
+/// Called as the routine of a work item queued by `IoQueueWorkItemEx`.
+unsafe extern "C" fn work_ex(object: *mut c_void, context: *mut c_void, item: *mut IO_WORKITEM) {
+    HANDED[0].store(object.addr(), Ordering::Release);
+    HANDED[1].store(context.addr(), Ordering::Release);
+    HANDED[2].store(item.addr(), Ordering::Release);
+    // SAFETY: the object is a live device or driver object: the item
+    // keeps a device until this routine has returned.
+    unsafe {
+        if object.cast::<i16>().read() == IO_TYPE_DEVICE {
+            let count = (*object.cast::<DEVICE_OBJECT>()).ReferenceCount;
+            COUNTED.store(count as usize, Ordering::Release);
+        }
+        RUNS.fetch_add(1, Ordering::AcqRel);
+        wait::KeSetEvent(RAN.ptr(), 0, 0);
+    }
+}
+
+/// # Safety
+/// Called as the routine of a work item queued by `IoQueueWorkItem`.
+unsafe extern "C" fn work_plain(device: *mut DEVICE_OBJECT, context: *mut c_void) {
+    // SAFETY: as `work_ex`; nothing is handed in the third place.
+    unsafe { work_ex(device.cast(), context, core::ptr::null_mut()) };
+}
+
+/// Queue the item with `IoQueueWorkItemEx` and wait for its routine.
+/// Says whether the routine was handed `object`, `context` and the
+/// item.
+///
+/// # Safety
+/// The item is initialised for `object` and not queued.
+unsafe fn run_ex(object: *mut c_void, context: usize) -> bool {
+    // SAFETY: per the contract; static storage for the event.
+    unsafe {
+        wait::KeInitializeEvent(RAN.ptr(), 0, 0);
+        work::IoQueueWorkItemEx(ITEM.ptr(), Some(work_ex), 1, context as *mut c_void);
+        wait::wait(Some(RAN.ptr().cast()), None);
+    }
+    [object.addr(), context, ITEM.ptr().addr()]
+        .iter()
+        .zip(&HANDED)
+        .all(|(expected, seen)| seen.load(Ordering::Acquire) == *expected)
+}
+
+/// Wait until the worker that ran the item's routine has let go of the
+/// device it counted.
+///
+/// # Safety
+/// `device` is a live device of the test's.
+unsafe fn settled(device: *mut DEVICE_OBJECT) -> bool {
+    for _ in 0..1000 {
+        // SAFETY: per the contract.
+        if unsafe { (&raw const (*device).ReferenceCount).read_volatile() } == 0 {
+            return true;
+        }
+        crate::ke::thread::yield_now();
+    }
+    false
+}
+
+/// A work item in the driver's own memory, of the size the I/O manager
+/// names, is initialised for a device or a driver object, queued, and
+/// queued again; its routine is handed the item, and a device is
+/// counted while it runs. Returns the facts checked.
+fn caller_memory_work_item() -> Result<u32, &'static str> {
+    if work::IoSizeofWorkItem() as usize != size_of::<IO_WORKITEM>()
+        || work::IoSizeofWorkItem() != 0x58
+    {
+        return Err("IoSizeofWorkItem is not the size of Windows' work item");
+    }
+    let object = stack::make_driver(refuse)?;
+    let result = (|| {
+        let device = stack::make_device(object, stack::PDO, None)?;
+        RUNS.store(0, Ordering::Release);
+        // SAFETY: a device and a driver object of the test's; static
+        // storage for the item, which held something else.
+        let result = unsafe {
+            ITEM.ptr()
+                .cast::<u8>()
+                .write_bytes(0xA5, size_of::<IO_WORKITEM>());
+            work::IoInitializeWorkItem(device.cast(), ITEM.ptr());
+            let item = ITEM.ptr();
+            let result = (|| {
+                if !(*item).WorkItem.List.Flink.is_null()
+                    || (*item).IoObject != device.cast()
+                    || (*item).Type != 1
+                    || !(*item).WorkOnBehalfThread.is_null()
+                {
+                    return Err("IoInitializeWorkItem did not set the item up as Windows does");
+                }
+                for round in 0..3 {
+                    if !run_ex(device.cast(), 0x1000 + round) {
+                        return Err("the routine was not handed its device, context and item");
+                    }
+                    if COUNTED.load(Ordering::Acquire) != 1 {
+                        return Err("the device was not counted while the routine ran");
+                    }
+                    if !settled(device) {
+                        return Err("the device stayed counted after the routine returned");
+                    }
+                }
+                // The older call, on the same item: nothing is handed
+                // in the item's place.
+                wait::KeInitializeEvent(RAN.ptr(), 0, 0);
+                work::IoQueueWorkItem(item, Some(work_plain), 1, 0x2000 as *mut c_void);
+                wait::wait(Some(RAN.ptr().cast()), None);
+                if HANDED[1].load(Ordering::Acquire) != 0x2000
+                    || HANDED[2].load(Ordering::Acquire) != 0
+                    || (*item).Type != 0
+                {
+                    return Err("IoQueueWorkItem did not run the item as one of the older kind");
+                }
+                if !settled(device) {
+                    return Err("the device stayed counted after the routine returned");
+                }
+                work::IoUninitializeWorkItem(item);
+                // For a driver object, which is not counted.
+                work::IoInitializeWorkItem(object.cast(), item);
+                if !run_ex(object.cast(), 0x3000) {
+                    return Err("the routine was not handed its driver object");
+                }
+                work::IoUninitializeWorkItem(item);
+                Ok(9)
+            })();
+            crate::io::device::IoDeleteDevice(device);
+            result
+        };
+        if result.is_ok() && RUNS.load(Ordering::Acquire) != 5 {
+            return Err("the routine did not run once for each time it was queued");
+        }
+        result
+    })();
+    // SAFETY: its device is gone.
+    unsafe { stack::free_driver(object) };
+    result
+}
+
 fn run(report: &mut Report, _: &BootInfo) {
     let mut numbered = |name: &str, result: Result<u32, &'static str>| match result {
         Ok(n) => report.ok_with(name, format_args!("{n} checked")),
         Err(why) => report.fail(name, format_args!("{why}")),
     };
     numbered("io.driver-extension", driver_extension());
+    numbered("work.caller-memory", caller_memory_work_item());
 }

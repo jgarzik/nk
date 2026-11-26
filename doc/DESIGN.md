@@ -487,6 +487,16 @@ An I/O work item is kernel-allocated at Windows' size and tied to a
 device, referenced from queueing until the routine returns, or to a
 driver object, which has no count to hold it by.
 
+A driver may keep an I/O work item in memory of its own instead:
+`IoSizeofWorkItem` bytes (Windows' `IO_WORKITEM`, which NK's is, so
+nothing of NK's lies outside them), made a work item by
+`IoInitializeWorkItem` and given up with `IoUninitializeWorkItem`,
+which stops the system if the item is still queued. A routine queued
+with `IoQueueWorkItemEx` is handed the item as well. Which kind of
+routine an item has is its `Type`, set as the pinned kernel sets it:
+`IoInitializeWorkItem` makes the newer kind, `IoQueueWorkItem` the
+older, and `IoQueueWorkItemEx` leaves it.
+
 ## The executive's locks, lists and timers
 
 Each is state in the driver's memory, laid out as Windows lays it out,
