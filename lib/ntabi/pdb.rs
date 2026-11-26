@@ -131,6 +131,57 @@ fn dpc_matches_the_kernel() {
 }
 
 #[test]
+fn interrupt_object_matches_the_kernel() {
+    use crate::interrupt::KINTERRUPT;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let interrupt = types.layout("_KINTERRUPT").expect("_KINTERRUPT");
+    let field = |name| offset(&interrupt, "_KINTERRUPT", name);
+    assert_eq!(size_of::<KINTERRUPT>(), interrupt.size as usize);
+    macro_rules! same {
+        ($($name:ident),*) => {
+            $(assert_eq!(offset_of!(KINTERRUPT, $name), field(stringify!($name)));)*
+        };
+    }
+    same!(
+        Type,
+        Size,
+        InterruptListEntry,
+        ServiceRoutine,
+        MessageServiceRoutine,
+        MessageIndex,
+        ServiceContext,
+        SpinLock,
+        TickCount,
+        ActualLock,
+        DispatchAddress,
+        Vector,
+        Irql,
+        SynchronizeIrql,
+        FloatingSave,
+        Connected,
+        Number,
+        ShareVector,
+        EmulateActiveBoth,
+        ActiveCount,
+        InternalState,
+        Mode,
+        Polarity,
+        ServiceCount,
+        DispatchCount,
+        PassiveEvent,
+        TrapFrame,
+        DisconnectData,
+        ServiceThread,
+        ConnectionData,
+        IntTrackEntry,
+        IsrDpcStats,
+        RedirectObject,
+        PhysicalDeviceObject
+    );
+}
+
+#[test]
 fn timer_matches_the_kernel() {
     use crate::ke::{DISPATCHER_HEADER, KTIMER, TIMER_INSERTED};
     use core::mem::{offset_of, size_of};

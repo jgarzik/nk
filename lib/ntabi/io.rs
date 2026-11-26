@@ -190,6 +190,63 @@ pub struct IO_CLIENT_EXTENSION {
     pub ClientIdentificationAddress: PVOID,
 }
 
+/// `ERROR_LOG_ENTRY.Type` (`IO_TYPE_ERROR_LOG`).
+pub const IO_TYPE_ERROR_LOG: i16 = 0x0B;
+
+/// [`IO_ERROR_LOG_PACKET`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_io_error_log_packet):
+/// what a driver fills in to report an error. Dump data and insertion
+/// strings follow it, within the size the driver asked for.
+#[repr(C)]
+pub struct IO_ERROR_LOG_PACKET {
+    pub MajorFunctionCode: u8,
+    pub RetryCount: u8,
+    pub DumpDataSize: u16,
+    pub NumberOfStrings: u16,
+    pub StringOffset: u16,
+    pub EventCategory: u16,
+    pub ErrorCode: NTSTATUS,
+    pub UniqueErrorValue: u32,
+    pub FinalStatus: NTSTATUS,
+    pub SequenceNumber: u32,
+    pub IoControlCode: u32,
+    pub DeviceOffset: i64,
+    pub DumpData: [u32; 1],
+}
+
+/// What the I/O manager keeps in front of an error-log packet: the
+/// pinned kernel's `ERROR_LOG_ENTRY`, which no header and no symbol
+/// file declares, as `IoAllocateErrorLogEntry` and
+/// `IoWriteErrorLogEntry` of that kernel fill it in.
+#[repr(C)]
+pub struct ERROR_LOG_ENTRY {
+    pub Type: i16,
+    pub Size: i16,
+    pub ListEntry: LIST_ENTRY,
+    pub DeviceObject: *mut DEVICE_OBJECT,
+    pub DriverObject: *mut DRIVER_OBJECT,
+    pub TimeStamp: i64,
+}
+
+/// `ERROR_LOG_MAXIMUM_SIZE` (`wdm.h`): the largest packet, strings and
+/// dump data included.
+pub const ERROR_LOG_MAXIMUM_SIZE: u8 = 240;
+
+/// How many bytes of error-log packets may be outstanding before the
+/// pinned kernel allocates no more.
+pub const ERROR_LOG_OUTSTANDING_LIMIT: u32 = 0x6_4000;
+
+/// The bytes `IoAllocateErrorLogEntry` allocates for a packet of
+/// `entry_size` bytes: the header, then the packet rounded up to eight
+/// bytes. `None` for a size smaller than the packet's fixed part or
+/// larger than `ERROR_LOG_MAXIMUM_SIZE`, which Windows refuses.
+pub const fn error_log_allocation(entry_size: u8) -> Option<usize> {
+    let size = entry_size as usize;
+    if size < size_of::<IO_ERROR_LOG_PACKET>() || entry_size > ERROR_LOG_MAXIMUM_SIZE {
+        return None;
+    }
+    Some(size_of::<ERROR_LOG_ENTRY>() + ((size + 7) & !7))
+}
+
 /// The largest extension `IoAllocateDriverObjectExtension` of the
 /// pinned kernel allocates: its header must still fit a 32-bit size.
 pub const MAXIMUM_DRIVER_OBJECT_EXTENSION: u32 = 0xFFFF_FFEF;
@@ -802,6 +859,22 @@ const _: () = {
     assert!(offset_of!(DRIVER_EXTENSION, ClientDriverExtension) == 0x28);
     assert!(offset_of!(DRIVER_EXTENSION, VerifierContext) == 0x48);
     assert!(size_of::<IO_CLIENT_EXTENSION>() == 0x10);
+    assert!(size_of::<IO_ERROR_LOG_PACKET>() == 0x30);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, DumpDataSize) == 0x02);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, StringOffset) == 0x06);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, EventCategory) == 0x08);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, ErrorCode) == 0x0C);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, UniqueErrorValue) == 0x10);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, FinalStatus) == 0x14);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, SequenceNumber) == 0x18);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, IoControlCode) == 0x1C);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, DeviceOffset) == 0x20);
+    assert!(offset_of!(IO_ERROR_LOG_PACKET, DumpData) == 0x28);
+    assert!(size_of::<ERROR_LOG_ENTRY>() == 0x30);
+    assert!(offset_of!(ERROR_LOG_ENTRY, ListEntry) == 0x08);
+    assert!(offset_of!(ERROR_LOG_ENTRY, DeviceObject) == 0x18);
+    assert!(offset_of!(ERROR_LOG_ENTRY, DriverObject) == 0x20);
+    assert!(offset_of!(ERROR_LOG_ENTRY, TimeStamp) == 0x28);
     assert!(offset_of!(IO_CLIENT_EXTENSION, ClientIdentificationAddress) == 0x08);
     assert!(size_of::<DRIVER_OBJECT>() == 0x150);
     assert!(size_of::<DEVICE_OBJECT>() == 0x150);
@@ -1005,6 +1078,24 @@ mod layout {
             Some(0xD8)
         );
         assert_eq!(fast_io_routine_offset(u32::MAX, FAST_IO_ROUTINES), None);
+    }
+
+    #[test]
+    fn an_error_log_packet_is_held_to_windows_sizes() {
+        // The fixed part alone, and nothing smaller.
+        assert_eq!(error_log_allocation(0x30), Some(0x60));
+        assert_eq!(error_log_allocation(0x2F), None);
+        assert_eq!(error_log_allocation(0), None);
+        // Rounded up to eight bytes behind the header.
+        assert_eq!(error_log_allocation(0x31), Some(0x30 + 0x38));
+        assert_eq!(error_log_allocation(0x38), Some(0x30 + 0x38));
+        // The largest, and nothing larger.
+        assert_eq!(
+            error_log_allocation(ERROR_LOG_MAXIMUM_SIZE),
+            Some(0x30 + 0xF0)
+        );
+        assert_eq!(error_log_allocation(ERROR_LOG_MAXIMUM_SIZE + 1), None);
+        assert_eq!(error_log_allocation(u8::MAX), None);
     }
 
     #[test]

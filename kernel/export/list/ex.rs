@@ -4,6 +4,10 @@ use super::super::{Export, NT, State};
 use crate::ex;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, ex::em::EmClientQueryRuleState),
+    export!(Implemented, ex::em::EmClientRuleEvaluate),
+    export!(Implemented, ex::em::EmProviderDeregister),
+    export!(Implemented, ex::em::EmProviderRegister),
     export!(Implemented, ex::sysinfo::MmIsDriverVerifying),
     export!(Implemented, ex::sysinfo::RtlQueryModuleInformation),
     export!(Implemented, ex::pushlock::ExAcquirePushLockExclusiveEx),
@@ -44,6 +48,10 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::work::IoAllocateWorkItem),
     export!(Implemented, ex::work::IoFreeWorkItem),
     export!(Implemented, ex::work::IoQueueWorkItem),
+    export!(Implemented, ex::work::IoInitializeWorkItem),
+    export!(Implemented, ex::work::IoQueueWorkItemEx),
+    export!(Implemented, ex::work::IoSizeofWorkItem),
+    export!(Implemented, ex::work::IoUninitializeWorkItem),
     export!(Implemented, ex::sysinfo::DbgkWerCaptureLiveKernelDump),
     export!(Partial, ex::sysinfo::NtQuerySystemInformation),
     export!(Implemented, ex::sysinfo::PsGetVersion),

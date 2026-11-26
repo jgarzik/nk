@@ -10,6 +10,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod arm;
+pub mod interrupt;
 pub mod pci;
 pub mod x86;
 

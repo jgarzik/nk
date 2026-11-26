@@ -39,6 +39,11 @@ pub enum OrderError {
     Cycle(usize),
 }
 
+/// The group Windows' loader loads before every group of
+/// `ServiceGroupOrder`, though no list names it: `acpi.sys` is in it.
+/// Its drivers go in the order of their tags.
+const CORE: [u16; 4] = ascii(b"Core");
+
 /// Where `service` stands before dependencies are looked at: its
 /// group's place, then its tag's place in the group's tag list.
 fn rank(
@@ -48,7 +53,10 @@ fn rank(
 ) -> (usize, usize) {
     let same = nk_rtl::names_equal;
     let listed = |group: &&[u16]| !service.group.is_empty() && same(group, service.group);
-    let group = group_order
+    if same(service.group, &CORE) {
+        return (0, service.tag.map_or(usize::MAX, |tag| tag as usize));
+    }
+    let group = 1 + group_order
         .iter()
         .position(listed)
         .unwrap_or(group_order.len());
@@ -384,6 +392,21 @@ mod tests {
         ];
         assert_eq!(order(&lines, GROUPS, &[]).unwrap(), "boot1 boot2 sys2 sys1");
         assert_eq!(order(&[], GROUPS, &[]).unwrap(), "");
+    }
+
+    #[test]
+    fn the_core_group_starts_first_by_tag_though_no_list_names_it() {
+        let lines = [
+            "loose 0 - - - -",
+            "bus 0 Bus - - -",
+            "acpi 0 Core 2 - -",
+            "untagged 0 core - - -",
+            "acpiex 0 Core 1 - -",
+        ];
+        assert_eq!(
+            order(&lines, GROUPS, &[]).unwrap(),
+            "acpiex acpi untagged bus loose"
+        );
     }
 
     #[test]

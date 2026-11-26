@@ -10,12 +10,10 @@ trap_list!(
     HalBugCheckSystem,
     HalConvertDeviceIdtToIrql,
     HalEnumerateEnvironmentVariablesEx,
-    HalGetBusDataByOffset,
     HalGetInterruptTargetInformation,
     HalGetMemoryCachingRequirements,
     HalGetMessageRoutingInfo,
     HalGetProcessorIdByNtNumber,
-    HalSetBusDataByOffset,
     HalSetEnvironmentVariableEx,
     HalTranslateBusAddress,
 );

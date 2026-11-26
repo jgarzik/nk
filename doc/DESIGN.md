@@ -218,8 +218,9 @@ Each controller comes up with everything masked that NK did not ask for:
 the local APIC (x2APIC when available) with the 8259s and every I/O APIC
 input masked; GICv3, where a processor finds its redistributor by
 affinity, not position. The IRQL is the controller's priority mask;
-levels and vectors are in `doc/LOCKING.md`. The only interrupts are the
-clock and ones a processor sends itself or another: no device interrupts.
+levels and vectors are in `doc/LOCKING.md`. The kernel's own interrupts
+are the clock and ones a processor sends itself or another; a device's
+are in "Devices".
 
 A processor fault is an exception for the faulting code's handlers
 ("Exceptions") or a bugcheck with a register dump.
@@ -294,6 +295,67 @@ written at any IRQL, as Windows allows.
   they are mapped nowhere until the driver maps them.
   `MmProtectMdlSystemAddress` rewrites the entries of the MDL's own
   mapping.
+
+### Device interrupts
+
+Three layers, bottom up.
+
+**The controller** (`kernel/arch`). x86-64: the I/O APICs, every input
+masked until connected; a redirection register names the vector, the
+processor (by APIC id, physical destination) and how the line signals.
+ISA interrupts reach their global system interrupt through the MADT's
+interrupt source overrides, which also say when one is level triggered
+or active low. A message-signalled interrupt is a write to the local
+APIC's message address. arm64: the GIC's shared peripheral interrupts,
+each given a priority, an edge or level configuration and a route to
+one processor; an active-low line is refused, since the GIC cannot be
+told. arm64 has no message-signalled interrupts: they need the GIC's
+interrupt translation service (LPIs, the ITS's tables and command
+queue) or a GICv2m frame, neither of which NK drives.
+
+**Translation** (`kernel/hal/interrupt.rs`). A device's interrupt is
+*raw* as firmware or its bus names it and *translated* once it has a
+vector, an IRQL and a processor:
+
+| Raw | Translated |
+| --- | --- |
+| a line: global system interrupt, trigger, polarity | a vector at a device IRQL (3 to 11); on x86-64 a free vector, spread over the IRQLs, whose upper four bits are the IRQL; on arm64 the interrupt id, at an IRQL fixed by the id. Devices on one line get one vector |
+| a count of messages (a power of two, at most 16) | that many consecutive vectors of one IRQL, the first a multiple of the count, as a device that adds the message number to its data needs |
+
+`hal::interrupt::translate(raw, affinity)` returns `Translated { level,
+vector, affinity }`, the three fields of a translated
+`CmResourceTypeInterrupt` descriptor; the affinity is the one processor
+chosen, among those allowed and running, by the vector.
+`hal::interrupt::release` undoes it, `hal::interrupt::isa` maps an ISA
+interrupt to its line, and `hal::interrupt::message` gives the address
+and data a bus driver programs into a device for a message vector.
+**This is the boundary with the Plug and Play manager:** it calls
+`translate` when it builds a device's translated resource list, hands
+the list to the driver, and tells `io::interrupt::assign` which
+translated interrupts the physical device object has (and `withdraw`
+when the device stops), since two of the three ways to connect name
+only the device.
+
+**Interrupt objects** (`kernel/ke/kinterrupt.rs`,
+`kernel/io/interrupt.rs`). `IoConnectInterruptEx` allocates a
+`KINTERRUPT`, of the pinned build's layout, and links it into its
+vector's chain; the vector's first object unmasks the line, its last
+masks it. Fully specified connections name a translated vector and
+IRQL; line-based ones use the device's first line; message-based ones
+connect every message of the device and return the table of addresses
+and data, or fall back to the line when the device has no messages and
+say so in the version, as documented.
+
+When the interrupt arrives, on the processor it was routed to, each
+routine runs at its object's `SynchronizeIrql` with the object's spin
+lock held: one object alone is called once; of several, level
+triggered, each in turn until one claims; of several, edge triggered,
+all, until a pass in which none claims. An interrupt nobody claims is
+counted. `KeSynchronizeExecution` and `KeAcquireInterruptSpinLock` take
+the same IRQL and lock. An object reported inactive
+(`IoReportInterruptInactive`) is out of its chain until reported active.
+Disconnecting waits for the chain's walkers (`doc/LOCKING.md`), so no
+routine of a disconnected object is running when it is freed.
 
 ## Time
 
@@ -557,6 +619,16 @@ stops (`WORKER_THREAD_RETURNED_AT_BAD_IRQL`).
 An I/O work item is kernel-allocated at Windows' size and tied to a
 device, referenced from queueing until the routine returns, or to a
 driver object, which has no count to hold it by.
+
+A driver may keep an I/O work item in memory of its own instead:
+`IoSizeofWorkItem` bytes (Windows' `IO_WORKITEM`, which NK's is, so
+nothing of NK's lies outside them), made a work item by
+`IoInitializeWorkItem` and given up with `IoUninitializeWorkItem`,
+which stops the system if the item is still queued. A routine queued
+with `IoQueueWorkItemEx` is handed the item as well. Which kind of
+routine an item has is its `Type`, set as the pinned kernel sets it:
+`IoInitializeWorkItem` makes the newer kind, `IoQueueWorkItem` the
+older, and `IoQueueWorkItemEx` leaves it.
 
 ## The executive's locks, lists and timers
 
@@ -1064,6 +1136,8 @@ make that safe.
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
+| interrupt service routine, a message's included | base: kernel mode |
+| the routine of `KeSynchronizeExecution` | undo: release the interrupt's lock and restore the IRQL |
 | an executive timer's callback (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
@@ -1269,7 +1343,11 @@ each, by the place of the service's `Group` in
 `Control\ServiceGroupOrder`, then by the place of its `Tag` in the
 group's list under `Control\GroupOrderList` (a tag the list has not, or
 none, after those it has); services of no listed group last; a service
-after those it names in `DependOnService` and `DependOnGroup`. A group
+after those it names in `DependOnService` and `DependOnGroup`. The
+group `Core` comes before every listed group, in the order of its
+tags, though neither list names it: it is `acpi.sys`'s group, and the
+reference Windows' boot log has `acpi.sys` loaded before every bus
+driver. A group
 is the same group in any letter case: Windows' own keys say
 `File system` where its list says `File System`. Only keys whose `Type`
 is a driver's count. Windows'
@@ -1390,6 +1468,16 @@ allocates and finds again by an address of its choosing
 `ClientDriverExtension`, as on Windows, each behind an
 `IO_CLIENT_EXTENSION`, and are freed by the driver type's delete
 procedure when the driver object goes.
+
+A driver reports an error with a device through the error log
+([`IoAllocateErrorLogEntry`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateerrorlogentry),
+`IoWriteErrorLogEntry`, `kernel/io/errlog.rs`). A packet is allocated
+as the pinned kernel allocates it: within Windows' sizes, behind the
+I/O manager's header, counted against the limit on outstanding
+packets, holding its device and driver object. NK has no event log
+service to queue it to: writing a packet prints one `NK-ERRORLOG` line
+to the boot log, naming the driver, the device, the error code and the
+final status, and frees the packet.
 
 A driver counts the requests in progress on a device with a
 [remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
@@ -2208,7 +2296,7 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 
 ## What is absent
 
-No APCs, device interrupts, Plug and Play, power management, processes
+No APCs, Plug and Play, power management, processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
@@ -2231,7 +2319,12 @@ answer, found in the pinned kernel: no feature configuration
 notifications registered and never made), no product policy
 (`kernel/ex/license.rs`: every licence value unknown, each name asked
 for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
-when Windows' engine is not running). A routine with many sub-functions
+when Windows' engine is not running), no errata rules
+(`kernel/ex/em.rs`: the errata manager's database is empty, so a
+provider that names an entry type or callback and a client that asks
+about a rule are both told `STATUS_NOT_FOUND`, the rule's state
+unknown; `acpi.sys` and `pci.sys` go on as on a machine no erratum
+matches). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
 (`kernel/po/mod.rs`, `ZwPowerInformation`).
 

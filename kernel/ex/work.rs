@@ -225,6 +225,64 @@ unsafe fn is_device(object: *mut c_void) -> bool {
     unsafe { object.cast::<i16>().read() == nk_ntabi::io::IO_TYPE_DEVICE }
 }
 
+/// `IO_WORKITEM.Type`, as the pinned kernel sets it: an item is made
+/// (`IoInitializeWorkItem`) as one whose routine is handed the item
+/// itself, and `IoQueueWorkItem` turns it into one whose routine is
+/// not. `IoQueueWorkItemEx` leaves the type as it finds it.
+const ITEM_ROUTINE_EX: u32 = 1;
+const ITEM_ROUTINE: u32 = 0;
+
+/// [`IoSizeofWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosizeofworkitem):
+/// how much memory a driver sets aside for a work item it initialises
+/// itself: Windows' `IO_WORKITEM`, which NK's is.
+pub extern "C" fn IoSizeofWorkItem() -> u32 {
+    size_of::<IO_WORKITEM>() as u32
+}
+
+/// [`IoInitializeWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinitializeworkitem):
+/// make `IoSizeofWorkItem()` bytes of the driver's a work item for
+/// `io_object`, a device or a driver object. The fields the pinned
+/// kernel writes are written; the rest is the driver's to have
+/// cleared or not.
+///
+/// # Safety
+/// `io_object` is a live device or driver object; `item` is writable
+/// for `IoSizeofWorkItem()` bytes and is not queued.
+pub unsafe extern "C" fn IoInitializeWorkItem(io_object: *mut c_void, item: *mut IO_WORKITEM) {
+    // SAFETY: per the contract; both kinds of object begin with their
+    // type.
+    unsafe {
+        let kind = io_object.cast::<i16>().read();
+        if kind != nk_ntabi::io::IO_TYPE_DEVICE && kind != nk_ntabi::io::IO_TYPE_DRIVER {
+            crate::kd::bugcheck(format_args!(
+                "IoInitializeWorkItem: {io_object:p} is neither a device nor a driver object"
+            ));
+        }
+        (&raw mut (*item).WorkOnBehalfThread).write(core::ptr::null_mut());
+        (&raw mut (*item).Type).write(ITEM_ROUTINE_EX);
+        (&raw mut (*item).IoObject).write(io_object);
+        (&raw mut (*item).WorkItem.List.Flink).write(core::ptr::null_mut());
+        (&raw mut (*item).WorkItem.WorkerRoutine).write(Some(run_io_item));
+        (&raw mut (*item).WorkItem.Parameter).write(item.cast());
+    }
+}
+
+/// [`IoUninitializeWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iouninitializeworkitem):
+/// the driver is about to free the memory of a work item it
+/// initialised. An item still queued stops the system, as on Windows:
+/// a worker would run freed memory.
+///
+/// # Safety
+/// `item` was initialised by `IoInitializeWorkItem`.
+pub unsafe extern "C" fn IoUninitializeWorkItem(item: *mut IO_WORKITEM) {
+    // SAFETY: per the contract.
+    if !unsafe { (&raw const (*item).WorkItem.List.Flink).read() }.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "IoUninitializeWorkItem: work item {item:p} is still queued"
+        ));
+    }
+}
+
 /// [`IoAllocateWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateworkitem).
 /// Null if memory ran out.
 ///
@@ -234,7 +292,7 @@ pub unsafe extern "C" fn IoAllocateWorkItem(device: *mut DEVICE_OBJECT) -> *mut 
     let item = pool::alloc_zeroed(size_of::<IO_WORKITEM>(), TAG).cast::<IO_WORKITEM>();
     if !item.is_null() {
         // SAFETY: a fresh block of the right size.
-        unsafe { (&raw mut (*item).IoObject).write(device.cast()) };
+        unsafe { IoInitializeWorkItem(device.cast(), item) };
     }
     item
 }
@@ -258,60 +316,65 @@ unsafe fn release_device(device: *mut c_void) {
     unsafe { device::dereference(device.cast()) };
 }
 
-/// [`IoQueueWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioqueueworkitem).
+/// Run a queued I/O work item: its routine is handed the item's object
+/// and context, and the item itself if it was queued by
+/// `IoQueueWorkItemEx`.
 ///
 /// # Safety
-/// `item` came from `IoAllocateWorkItem`, is not queued, and its device
-/// is live; `routine` may be called with `context` at any later time.
-pub unsafe extern "C" fn IoQueueWorkItem(
+/// `parameter` is an I/O work item queued by [`queue_io_item`].
+unsafe extern "C" fn run_io_item(parameter: *mut c_void) {
+    let item = parameter.cast::<IO_WORKITEM>();
+    // SAFETY: per the contract. Everything is read first: the
+    // routine may free the item.
+    unsafe {
+        let routine = (&raw const (*item).Routine).read();
+        let object = (&raw const (*item).IoObject).read();
+        let context = (&raw const (*item).Context).read();
+        let handed = if (&raw const (*item).Type).read() == ITEM_ROUTINE {
+            0
+        } else {
+            item.addr()
+        };
+        let referenced = is_device(object);
+        // The device's reference is given back whether the routine
+        // returns or is unwound.
+        let guard = if referenced {
+            Guard::Undo {
+                undo: release_device,
+                context: object,
+            }
+        } else {
+            Guard::Nothing
+        };
+        if !routine.is_null() {
+            seh::call(
+                routine.addr(),
+                [object.addr(), context.addr(), handed, 0],
+                &guard,
+            );
+        }
+        if referenced {
+            device::dereference(object.cast());
+        }
+    }
+}
+
+/// Queue an I/O work item to call `routine`.
+///
+/// # Safety
+/// `item` is an initialised I/O work item that is not queued, and its
+/// object is live; `routine` may be called at any later time.
+unsafe fn queue_io_item(
     item: *mut IO_WORKITEM,
-    routine: Option<IoWorkRoutine>,
+    routine: *mut c_void,
     queue_type: u32,
     context: *mut c_void,
 ) {
-    /// Run a queued I/O work item.
-    ///
-    /// # Safety
-    /// `parameter` is an I/O work item queued by `IoQueueWorkItem`.
-    unsafe extern "C" fn run(parameter: *mut c_void) {
-        let item = parameter.cast::<IO_WORKITEM>();
-        // SAFETY: per the contract. Everything is read first: the
-        // routine may free the item.
-        unsafe {
-            let routine: Option<IoWorkRoutine> =
-                core::mem::transmute((&raw const (*item).Routine).read());
-            let object = (&raw const (*item).IoObject).read();
-            let context = (&raw const (*item).Context).read();
-            let referenced = is_device(object);
-            // The device's reference is given back whether the routine
-            // returns or is unwound.
-            let guard = if referenced {
-                Guard::Undo {
-                    undo: release_device,
-                    context: object,
-                }
-            } else {
-                Guard::Nothing
-            };
-            if let Some(routine) = routine {
-                seh::call(
-                    routine as usize,
-                    [object.addr(), context.addr(), 0, 0],
-                    &guard,
-                );
-            }
-            if referenced {
-                device::dereference(object.cast());
-            }
-        }
-    }
     // SAFETY: per the contract.
     unsafe {
-        (&raw mut (*item).Routine).write(
-            core::mem::transmute::<Option<IoWorkRoutine>, *mut c_void>(routine),
-        );
+        (&raw mut (*item).Routine).write(routine);
         (&raw mut (*item).Context).write(context);
-        (&raw mut (*item).WorkItem.WorkerRoutine).write(Some(run));
+        (&raw mut (*item).WorkItem.WorkerRoutine).write(Some(run_io_item));
         (&raw mut (*item).WorkItem.Parameter).write(item.cast());
         // A device stays until the routine has returned.
         let object = (&raw const (*item).IoObject).read();
@@ -319,6 +382,51 @@ pub unsafe extern "C" fn IoQueueWorkItem(
             device::reference(object.cast());
         }
         ExQueueWorkItem(&raw mut (*item).WorkItem, queue_type);
+    }
+}
+
+/// [`IoQueueWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioqueueworkitem).
+///
+/// # Safety
+/// `item` came from `IoAllocateWorkItem` or `IoInitializeWorkItem`, is
+/// not queued, and its device is live; `routine` may be called with
+/// `context` at any later time.
+pub unsafe extern "C" fn IoQueueWorkItem(
+    item: *mut IO_WORKITEM,
+    routine: Option<IoWorkRoutine>,
+    queue_type: u32,
+    context: *mut c_void,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        (&raw mut (*item).Type).write(ITEM_ROUTINE);
+        let routine = core::mem::transmute::<Option<IoWorkRoutine>, *mut c_void>(routine);
+        queue_io_item(item, routine, queue_type, context);
+    }
+}
+
+/// What a routine queued by `IoQueueWorkItemEx` looks like to a driver:
+/// it is handed the work item too, which it may free or queue again.
+type IoWorkRoutineEx = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut IO_WORKITEM);
+
+/// [`IoQueueWorkItemEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioqueueworkitemex):
+/// as [`IoQueueWorkItem`], for a routine that is handed the work item.
+/// As in the pinned kernel, which kind of routine an item has is
+/// decided by `IoQueueWorkItem` alone: an item once queued by it stays
+/// one whose routine is not handed the item.
+///
+/// # Safety
+/// As [`IoQueueWorkItem`].
+pub unsafe extern "C" fn IoQueueWorkItemEx(
+    item: *mut IO_WORKITEM,
+    routine: Option<IoWorkRoutineEx>,
+    queue_type: u32,
+    context: *mut c_void,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        let routine = core::mem::transmute::<Option<IoWorkRoutineEx>, *mut c_void>(routine);
+        queue_io_item(item, routine, queue_type, context);
     }
 }
 

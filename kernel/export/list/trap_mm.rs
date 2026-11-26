@@ -8,20 +8,8 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     MmAddVerifierThunks,
-    MmAllocateContiguousNodeMemory,
-    MmAllocatePagesForMdlEx,
-    MmBuildMdlForNonPagedPool,
-    MmFreeContiguousMemory,
-    MmFreeContiguousMemorySpecifyCache,
-    MmFreePagesFromMdl,
-    MmGetPhysicalAddress,
-    MmGetVirtualForPhysical,
     MmIsAddressValid,
     MmIsVerifierEnabled,
     MmLockPagableDataSection,
-    MmMapIoSpaceEx,
-    MmProtectMdlSystemAddress,
     MmUnlockPagableImageSection,
-    MmUnmapIoSpace,
-    MmUnmapLockedPages,
 );

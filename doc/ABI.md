@@ -186,6 +186,9 @@ it on the fields they share.
 0x180, `KPRCB.CurrentThread` 0x8, `Number` 0x24, `LegacyNumber` 0x4 and
 the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
 `gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number.
+The interrupt object (`KINTERRUPT`, `lib/ntabi/interrupt.rs`) agrees in every
+field; the structures a driver passes to connect an interrupt are not in
+the symbols or the WDK table and stand on their const asserts alone.
 Security descriptors (absolute and self-relative), ACL and SID headers
 agree too. So do the fields of the thread and process blocks that NK
 keeps (`lib/ntabi/thread.rs`, `process.rs`): among them a thread's

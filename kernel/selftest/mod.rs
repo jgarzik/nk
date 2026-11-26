@@ -15,12 +15,14 @@ mod counted;
 mod csq;
 mod dpc;
 mod driver_api;
+mod em;
 mod etw;
 mod ex;
 pub mod except;
 mod exlock;
 mod fsd;
 mod hal;
+mod interrupt;
 mod iosupport;
 mod library;
 mod loader;
@@ -145,6 +147,7 @@ pub static GROUPS: &[&[&Group]] = &[
     base::GROUPS,
     pci::GROUPS,
     mmio::GROUPS,
+    interrupt::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,
@@ -165,6 +168,7 @@ pub static GROUPS: &[&[&Group]] = &[
     hal::GROUPS,
     absent::GROUPS,
     po::GROUPS,
+    em::GROUPS,
     whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,

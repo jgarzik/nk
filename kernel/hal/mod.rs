@@ -2,6 +2,7 @@
 //! the description of the machine.
 
 pub mod dispatch;
+pub mod interrupt;
 pub mod pci;
 pub mod platform;
 

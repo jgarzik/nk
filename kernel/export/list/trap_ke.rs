@@ -10,7 +10,6 @@ trap_list!(
     KeAcquireGuardedMutex,
     KeAcquireInStackQueuedSpinLockAtDpcLevel,
     KeAcquireInStackQueuedSpinLockForDpc,
-    KeAcquireInterruptSpinLock,
     KeBugCheck,
     KeCancelTimer2,
     KeClearEvent,
@@ -43,7 +42,6 @@ trap_list!(
     KeReleaseGuardedMutex,
     KeReleaseInStackQueuedSpinLockForDpc,
     KeReleaseInStackQueuedSpinLockFromDpcLevel,
-    KeReleaseInterruptSpinLock,
     KeReportCacheIncoherentDevice,
     KeRevertToUserGroupAffinityThread,
     KeSetCoalescableTimer,
@@ -52,5 +50,4 @@ trap_list!(
     KeSetTargetProcessorDpcEx,
     KeSetTimer2,
     KeStartDynamicProcessor,
-    KeSynchronizeExecution,
 );

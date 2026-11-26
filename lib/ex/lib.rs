@@ -21,8 +21,12 @@
 //! executive timer is a kernel timer with a callback, and the rules for
 //! due times are `nk_ke::wait`'s.
 
+//!
+//! [`em`] is the errata manager's answers over an empty database.
+
 #![cfg_attr(not(test), no_std)]
 
+pub mod em;
 pub mod lookaside;
 pub mod pushlock;
 pub mod resource;

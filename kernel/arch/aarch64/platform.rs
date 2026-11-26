@@ -23,6 +23,10 @@ pub struct Firmware {
     pub virtual_timer: Option<u32>,
     /// How to ask firmware to start a processor.
     pub psci: Option<nk_acpi::Psci>,
+    /// The console UART, where firmware says it is a PL011 in memory
+    /// with an interrupt: the physical address of its registers, and
+    /// the interrupt.
+    pub console: Option<(u64, u32)>,
 }
 
 /// Read it from the ACPI tables `find` returns.
@@ -30,5 +34,11 @@ pub fn firmware<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Firmware {
     Firmware {
         virtual_timer: find(b"GTDT").and_then(nk_acpi::virtual_timer_interrupt),
         psci: find(b"FACP").and_then(nk_acpi::psci),
+        console: find(b"SPCR").and_then(|table| {
+            /// SPCR interface type: ARM PL011.
+            const PL011: u8 = 3;
+            let uart = nk_acpi::spcr(table).filter(|s| s.mmio && s.interface == PL011)?;
+            Some((uart.address, nk_acpi::spcr_interrupt(table)?))
+        }),
     }
 }

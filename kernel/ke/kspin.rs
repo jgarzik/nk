@@ -20,7 +20,7 @@ use nk_ntabi::ke::{KIRQL, KLOCK_QUEUE_HANDLE, KSPIN_LOCK};
 ///
 /// # Safety
 /// `lock` points to a live, aligned `KSPIN_LOCK`.
-unsafe fn word<'a>(lock: *mut KSPIN_LOCK) -> &'a AtomicUsize {
+pub(super) unsafe fn word<'a>(lock: *mut KSPIN_LOCK) -> &'a AtomicUsize {
     // SAFETY: per the contract; an atomic view is how a word that other
     // processors and the driver also touch must be accessed.
     unsafe { AtomicUsize::from_ptr(lock) }
@@ -30,7 +30,7 @@ unsafe fn word<'a>(lock: *mut KSPIN_LOCK) -> &'a AtomicUsize {
 ///
 /// # Safety
 /// As `word`.
-unsafe fn acquire(lock: *mut KSPIN_LOCK) {
+pub(super) unsafe fn acquire(lock: *mut KSPIN_LOCK) {
     // SAFETY: per the contract.
     let word = unsafe { word(lock) };
     while word
@@ -43,7 +43,7 @@ unsafe fn acquire(lock: *mut KSPIN_LOCK) {
 
 /// Set the IRQL for a driver. A driver asking for a move in the wrong
 /// direction gets it, as on Windows, and a report.
-fn set_irql(new: KIRQL, raising: bool) -> KIRQL {
+pub(super) fn set_irql(new: KIRQL, raising: bool) -> KIRQL {
     let old = irql::current();
     if raising && new < old {
         crate::kd::verify(format_args!("IRQL raised from {old} down to {new}"));
