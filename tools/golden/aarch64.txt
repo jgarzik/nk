@@ -149,6 +149,13 @@ etw.lookup ok
 etw.classic ok
 etw.trace-message ok
 etw.trace-information ok
+wmi.register ok
+wmi.refused ok
+wmi.too-small ok
+wmi.update ok
+wmi.pdo ok
+wmi.deregister-waits ok
+wmi.event ok
 ke.bugcheck.register ok
 ke.bugcheck.order ok
 ex.sysinfo.basic ok

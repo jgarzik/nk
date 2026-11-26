@@ -29,6 +29,9 @@ pub enum Rank {
     Drivers = 10,
     /// Devices' reference counts and delete-pending marks (`io::device`).
     IoDatabase = 25,
+    /// Devices registered with WMI and the requests owed them
+    /// (`io::wmi`).
+    IoWmi = 27,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).

@@ -54,8 +54,62 @@ pub type ETW_CLASSIC_CALLBACK = unsafe extern "C" fn(*const GUID, u8, *mut c_voi
 pub const EVENT_PROVIDER_SET_TRAITS: u32 = 2;
 pub const EVENT_PROVIDER_USE_DESCRIPTOR_TYPE: u32 = 3;
 
+/// [`WNODE_HEADER`](https://learn.microsoft.com/en-us/windows/win32/etw/wnode-header):
+/// what every block of WMI data begins with, an event a driver fires
+/// included.
+#[repr(C)]
+pub struct WNODE_HEADER {
+    pub BufferSize: u32,
+    pub ProviderId: u32,
+    /// For a trace: the handle of the session, with level and flags.
+    pub HistoricalContext: u64,
+    pub TimeStamp: i64,
+    pub Guid: GUID,
+    pub ClientContext: u32,
+    pub Flags: u32,
+}
+
+/// `WNODE_HEADER.Flags`: the block is a trace event for a session; it
+/// is to be logged as well as delivered.
+pub const WNODE_FLAG_TRACED_GUID: u32 = 0x0002_0000;
+pub const WNODE_FLAG_LOG_WNODE: u32 = 0x0004_0000;
+
+/// [`WMIREGGUIDW`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wmistr/ns-wmistr-wmiregguidw):
+/// one data block of a driver's registration. The last field is a
+/// union: here the physical device object the block's instances are
+/// named after.
+#[repr(C)]
+pub struct WMIREGGUIDW {
+    pub Guid: GUID,
+    pub Flags: u32,
+    pub InstanceCount: u32,
+    pub Pdo: *mut c_void,
+}
+
+/// [`WMIREGINFOW`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wmistr/ns-wmistr-wmireginfow):
+/// a driver's answer to a registration request. `GuidCount` entries
+/// begin at `WmiRegGuid`.
+#[repr(C)]
+pub struct WMIREGINFOW {
+    pub BufferSize: u32,
+    pub NextWmiRegInfo: u32,
+    pub RegistryPath: u32,
+    pub MofResourceName: u32,
+    pub GuidCount: u32,
+    pub WmiRegGuid: [WMIREGGUIDW; 0],
+}
+
 const _: () = {
     use core::mem::{offset_of, size_of};
+    assert!(size_of::<WNODE_HEADER>() == 0x30);
+    assert!(offset_of!(WNODE_HEADER, HistoricalContext) == 0x08);
+    assert!(offset_of!(WNODE_HEADER, Guid) == 0x18);
+    assert!(offset_of!(WNODE_HEADER, Flags) == 0x2C);
+    assert!(size_of::<WMIREGGUIDW>() == 0x20);
+    assert!(offset_of!(WMIREGGUIDW, Flags) == 0x10);
+    assert!(offset_of!(WMIREGGUIDW, Pdo) == 0x18);
+    assert!(offset_of!(WMIREGINFOW, GuidCount) == 0x10);
+    assert!(offset_of!(WMIREGINFOW, WmiRegGuid) == 0x18);
     assert!(size_of::<GUID>() == 16);
     assert!(size_of::<EVENT_DESCRIPTOR>() == 16);
     assert!(offset_of!(EVENT_DESCRIPTOR, Task) == 6);

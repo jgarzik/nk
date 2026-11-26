@@ -7,10 +7,15 @@
 //!
 //! [`provider`] is the table of registered providers. [`traits`] checks
 //! the blob a provider names itself with. [`logger`] answers questions
-//! about trace sessions when there are none.
+//! about trace sessions when there are none. [`wmi`] is the record of
+//! devices registered with WMI and the check of a driver's
+//! registration.
 
 #![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
 
 pub mod logger;
 pub mod provider;
 pub mod traits;
+pub mod wmi;

@@ -1999,10 +1999,10 @@
   "binaries": 58,
   "kernel_names": {
    "total": 1740,
-   "implemented": 124,
-   "partial": 6,
+   "implemented": 126,
+   "partial": 7,
    "traps": 0,
-   "missing": 1610
+   "missing": 1607
   },
   "by_binary": [
    {
@@ -2011,9 +2011,9 @@
     "kernel": {
      "total": 260,
      "implemented": 56,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 203
+     "missing": 202
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -2027,10 +2027,10 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 65,
-     "partial": 4,
+     "implemented": 66,
+     "partial": 5,
      "traps": 0,
-     "missing": 182
+     "missing": 180
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2089,10 +2089,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 171,
-     "implemented": 54,
-     "partial": 5,
+     "implemented": 56,
+     "partial": 6,
      "traps": 0,
-     "missing": 112
+     "missing": 109
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2103,9 +2103,9 @@
     "kernel": {
      "total": 186,
      "implemented": 46,
-     "partial": 3,
+     "partial": 4,
      "traps": 0,
-     "missing": 137
+     "missing": 136
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2116,9 +2116,9 @@
     "kernel": {
      "total": 121,
      "implemented": 44,
-     "partial": 3,
+     "partial": 4,
      "traps": 0,
-     "missing": 74
+     "missing": 73
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2142,9 +2142,9 @@
     "kernel": {
      "total": 68,
      "implemented": 29,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 38
+     "missing": 37
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2192,9 +2192,9 @@
     "kernel": {
      "total": 325,
      "implemented": 61,
-     "partial": 4,
+     "partial": 5,
      "traps": 0,
-     "missing": 260
+     "missing": 259
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2205,9 +2205,9 @@
     "kernel": {
      "total": 78,
      "implemented": 32,
-     "partial": 2,
+     "partial": 3,
      "traps": 0,
-     "missing": 44
+     "missing": 43
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2222,9 +2222,9 @@
     "kernel": {
      "total": 107,
      "implemented": 47,
-     "partial": 2,
+     "partial": 3,
      "traps": 0,
-     "missing": 58
+     "missing": 57
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2253,9 +2253,9 @@
     "kernel": {
      "total": 33,
      "implemented": 24,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 8
+     "missing": 7
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2270,9 +2270,9 @@
     "kernel": {
      "total": 91,
      "implemented": 51,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 40
+     "missing": 39
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2301,9 +2301,9 @@
     "kernel": {
      "total": 66,
      "implemented": 39,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 27
+     "missing": 26
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2317,9 +2317,9 @@
     "kernel": {
      "total": 66,
      "implemented": 43,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 22
+     "missing": 21
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2362,9 +2362,9 @@
     "kernel": {
      "total": 91,
      "implemented": 33,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 58
+     "missing": 57
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2416,9 +2416,9 @@
     "kernel": {
      "total": 147,
      "implemented": 41,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 106
+     "missing": 105
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2428,10 +2428,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 91,
-     "partial": 3,
+     "implemented": 93,
+     "partial": 4,
      "traps": 0,
-     "missing": 265
+     "missing": 262
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2445,9 +2445,9 @@
     "kernel": {
      "total": 235,
      "implemented": 68,
-     "partial": 4,
+     "partial": 5,
      "traps": 0,
-     "missing": 163
+     "missing": 162
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2475,9 +2475,9 @@
     "kernel": {
      "total": 625,
      "implemented": 77,
-     "partial": 5,
+     "partial": 6,
      "traps": 0,
-     "missing": 543
+     "missing": 542
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2508,9 +2508,9 @@
     "kernel": {
      "total": 137,
      "implemented": 47,
-     "partial": 2,
+     "partial": 3,
      "traps": 0,
-     "missing": 88
+     "missing": 87
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2523,9 +2523,9 @@
     "kernel": {
      "total": 239,
      "implemented": 80,
-     "partial": 3,
+     "partial": 4,
      "traps": 0,
-     "missing": 156
+     "missing": 155
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2566,9 +2566,9 @@
     "kernel": {
      "total": 68,
      "implemented": 32,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 36
+     "missing": 35
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2581,9 +2581,9 @@
     "kernel": {
      "total": 19,
      "implemented": 11,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 8
+     "missing": 7
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2625,10 +2625,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 269,
-     "implemented": 62,
-     "partial": 5,
+     "implemented": 64,
+     "partial": 6,
      "traps": 0,
-     "missing": 202
+     "missing": 199
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2639,9 +2639,9 @@
     "kernel": {
      "total": 329,
      "implemented": 72,
-     "partial": 5,
+     "partial": 6,
      "traps": 0,
-     "missing": 252
+     "missing": 251
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2675,9 +2675,9 @@
     "kernel": {
      "total": 54,
      "implemented": 37,
-     "partial": 2,
+     "partial": 3,
      "traps": 0,
-     "missing": 15
+     "missing": 14
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2692,9 +2692,9 @@
     "kernel": {
      "total": 29,
      "implemented": 19,
-     "partial": 0,
+     "partial": 1,
      "traps": 0,
-     "missing": 10
+     "missing": 9
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2705,9 +2705,9 @@
     "kernel": {
      "total": 115,
      "implemented": 43,
-     "partial": 2,
+     "partial": 3,
      "traps": 0,
-     "missing": 70
+     "missing": 69
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2724,9 +2724,9 @@
     "kernel": {
      "total": 121,
      "implemented": 40,
-     "partial": 3,
+     "partial": 4,
      "traps": 0,
-     "missing": 78
+     "missing": 77
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2741,9 +2741,9 @@
     "kernel": {
      "total": 109,
      "implemented": 42,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 66
+     "missing": 65
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2770,10 +2770,10 @@
     "version": "1.31.19041.1566",
     "kernel": {
      "total": 217,
-     "implemented": 91,
-     "partial": 4,
+     "implemented": 93,
+     "partial": 5,
      "traps": 0,
-     "missing": 122
+     "missing": 119
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2834,9 +2834,9 @@
     "kernel": {
      "total": 451,
      "implemented": 59,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 391
+     "missing": 390
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2854,9 +2854,9 @@
     "kernel": {
      "total": 439,
      "implemented": 64,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 374
+     "missing": 373
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -2874,10 +2874,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 7,
-     "implemented": 3,
+     "implemented": 5,
      "partial": 0,
      "traps": 0,
-     "missing": 4
+     "missing": 2
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2888,9 +2888,9 @@
     "kernel": {
      "total": 36,
      "implemented": 30,
-     "partial": 1,
+     "partial": 2,
      "traps": 0,
-     "missing": 5
+     "missing": 4
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -2901,7 +2901,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 136,
+   "exported_by_nk": 139,
    "nk_names_it_lacks": [
     "KfLowerIrql"
    ]

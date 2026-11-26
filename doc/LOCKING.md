@@ -60,6 +60,7 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
+| 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
@@ -96,6 +97,11 @@ Why this order:
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
   old block is freed after the lock is dropped.
+- WMI's lock covers its lists and nothing else: a device is referenced
+  before it is entered and released after it is taken out, the worker
+  is queued after the lock is dropped, and a driver is sent its
+  registration request with no lock held. Like the tables above the
+  pool, the lists allocate from it under the lock.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
   memory is read and written outside it.

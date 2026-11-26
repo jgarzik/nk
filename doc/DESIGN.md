@@ -630,6 +630,7 @@ make that safe.
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
 | dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
+| dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
@@ -1045,8 +1046,46 @@ session exists; the rest find no session; the kernel's tables of trace
 routines are `STATUS_DEVICE_NOT_READY`, Windows' answer before tracing
 has started.
 
-The tests `etw.*` call the exports as a driver does; a test group that
-leaves a provider registered fails like any other leak.
+**WMI** (`kernel/io/wmi.rs`, bookkeeping and the check of a driver's
+answer in `nk_etw::wmi`). There is no consumer of WMI data and never a
+query, so what a driver sees is what Windows shows one that nobody asks
+anything: its registration, and the request that follows it.
+
+- [`IoWMIRegistrationControl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiregistrationcontrol)
+  records the device, references it, gives it a provider id (counted
+  up, never reused) and returns. A system worker then sends the device
+  `IRP_MJ_SYSTEM_CONTROL` with `IRP_MN_REGINFO_EX`, and with
+  `IRP_MN_REGINFO` if the driver fails that; a driver that says how
+  large a buffer it needs is asked again with one that large. The
+  request is built as Windows builds it: a stack location of WMI's own
+  above the driver's, a pool buffer of 0x2000 bytes that is not zeroed,
+  the device as provider id, a completion routine that takes the IRP
+  back. NK has no device stacks, so it goes to the device itself where
+  Windows sends it to the top of the stack.
+- The answer is checked as Windows checks it and then let go: nothing
+  could ever read it. The references a driver takes on physical device
+  objects for WMI when it answers the newer request are given back.
+- `WMIREG_ACTION_UPDATE_GUIDS` sends the request again, marked as an
+  update; `WMIREG_ACTION_BLOCK_IRPS` ends the sending. Deregistering
+  drops what waits for the device, waits for a request that is with the
+  driver, and gives the device back.
+- A registration by callback or as a trace provider
+  (`WMIREG_FLAG_CALLBACK`, `WMIREG_FLAG_TRACE_PROVIDER`) is how WPP
+  registered before `EtwRegisterClassicProvider`. NK does not take it:
+  `STATUS_UNSUCCESSFUL`, Windows' answer while WMI is not running. The
+  export is `Partial` for that.
+- `IoWMIWriteEvent` takes an event and frees its block, the event
+  having nowhere to go. A trace event (`WNODE_FLAG_TRACED_GUID`) names
+  a session, of which there is none.
+
+One rule is NK's own: a driver that keeps asking for a buffer no larger
+than the one it was given is not asked again, where Windows asks for
+ever.
+
+The tests `etw.*` and `wmi.*` call the exports as a driver does, the
+latter with a driver object of their own that records each request as
+it arrives; a test group that leaves a provider registered fails like
+any other leak.
 
 ## Questions about the system
 

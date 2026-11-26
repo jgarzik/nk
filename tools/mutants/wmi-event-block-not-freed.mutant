@@ -1,0 +1,6 @@
+# An event a driver fires is taken and its block kept: every event leaks
+# the memory the driver handed over.
+scenario: x86_64
+fails: wmi.event
+file: kernel/io/wmi.rs
+remove:     unsafe { pool::ExFreePoolWithTag(event, 0) };

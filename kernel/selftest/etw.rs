@@ -1,5 +1,6 @@
 //! Tests of what a tracing driver asks of the kernel: registering as a
-//! provider and writing events nobody listens to, the callbacks it
+//! provider and writing events nobody listens to, registering a device
+//! with WMI and the requests that brings, the callbacks it
 //! leaves for a bugcheck and the stop itself, and its questions about
 //! the system (which modules are loaded, is a debugger there, which
 //! version is this).
@@ -15,19 +16,20 @@ use crate::ex::sysinfo::{
     DbgkWerCaptureLiveKernelDump, MmIsDriverVerifying, NtQuerySystemInformation, PsGetVersion,
     RtlQueryModuleInformation,
 };
+use crate::io::wmi::{IoWMIDeviceObjectToProviderId, IoWMIRegistrationControl, IoWMIWriteEvent};
 use crate::ke::bugcheck::{
     KeBugCheckEx, KeDeregisterBugCheckReasonCallback, KeRegisterBugCheckReasonCallback,
     KiBugCheckData,
 };
 use crate::test::{Group, Report, Slot};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::etw::{
-    ETW_ENABLE_CALLBACK, EVENT_DATA_DESCRIPTOR, EVENT_DESCRIPTOR, EVENT_PROVIDER_SET_TRAITS,
-    EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, GUID, REGHANDLE,
+use nk_ntabi::etw::*;
+use nk_ntabi::io::{
+    DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT, IRP, IRP_MJ_SYSTEM_CONTROL, IRP_MN_REGINFO,
+    IRP_MN_REGINFO_EX, UNICODE_STRING,
 };
-use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ke::{
     BUFFER_EMPTY, BUFFER_FINISHED, BUFFER_INSERTED, KB_CALLBACK_RESERVED1,
     KB_CALLBACK_TRIAGE_DUMP_DATA, KBUGCHECK_REASON_CALLBACK_RECORD, KBUGCHECK_TRIAGE_DUMP_DATA,
@@ -1421,6 +1423,509 @@ fn trace_information() -> Result<(), &'static str> {
     };
     if (status, table, needed) != (STATUS_DEVICE_NOT_READY, 0, 8) {
         return Err("a table of trace routines was not refused as not ready");
+    }
+    Ok(())
+}
+
+// ---- WMI registration -------------------------------------------------------
+
+pub static WMI: Group = Group {
+    names: &[
+        "wmi.register",
+        "wmi.refused",
+        "wmi.too-small",
+        "wmi.update",
+        "wmi.pdo",
+        "wmi.deregister-waits",
+        "wmi.event",
+    ],
+    run: wmi,
+    manual: false,
+};
+
+fn wmi(r: &mut Report, _: &BootInfo) {
+    r.check("wmi.register", || with_wmi_device(wmi_register));
+    r.check("wmi.refused", || with_wmi_device(wmi_refused));
+    r.check("wmi.too-small", || with_wmi_device(wmi_too_small));
+    r.check("wmi.update", || with_wmi_device(wmi_update));
+    r.check("wmi.pdo", || with_wmi_device(wmi_pdo));
+    r.check("wmi.deregister-waits", || {
+        with_wmi_device(wmi_deregister_waits)
+    });
+    r.check("wmi.event", wmi_event);
+}
+
+/// One registration request, as the test driver saw it arrive.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Seen {
+    minor: u8,
+    irql: u8,
+    /// On another thread than the one that registered.
+    other_thread: bool,
+    /// `Parameters.WMI.ProviderId` is the device.
+    for_device: bool,
+    data_path: u64,
+    buffer_size: u64,
+    /// What the IRP itself carries: its buffer is the system buffer,
+    /// and it came with the status Windows presets.
+    as_windows_builds_it: bool,
+}
+
+const SEEN_MAX: usize = 8;
+
+impl Seen {
+    /// As three words, so that a request can be noted without a lock.
+    fn pack(self) -> [u64; 3] {
+        let bits = u64::from(self.minor)
+            | u64::from(self.irql) << 8
+            | u64::from(self.other_thread) << 16
+            | u64::from(self.for_device) << 17
+            | u64::from(self.as_windows_builds_it) << 18;
+        [bits, self.data_path, self.buffer_size]
+    }
+
+    fn unpack([bits, data_path, buffer_size]: [u64; 3]) -> Self {
+        Self {
+            minor: bits as u8,
+            irql: (bits >> 8) as u8,
+            other_thread: bits & 1 << 16 != 0,
+            for_device: bits & 1 << 17 != 0,
+            data_path,
+            buffer_size,
+            as_windows_builds_it: bits & 1 << 18 != 0,
+        }
+    }
+}
+
+/// The requests the test driver has seen, in the order they arrived.
+static SEEN: [[AtomicU64; 3]; SEEN_MAX] = [const { [const { AtomicU64::new(0) }; 3] }; SEEN_MAX];
+static SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// How the test driver answers a registration request.
+const ANSWER: u32 = 0;
+/// Refuse every request.
+const REFUSE: u32 = 1;
+/// Say the buffer is too small, the way wmilib.sys says it, until it is
+/// `LARGE` bytes.
+const GROW: u32 = 2;
+/// Answer with one data block whose instances are named after a
+/// physical device object, referenced for WMI if the request is the
+/// newer one.
+const PDO: u32 = 3;
+/// Take a while to answer.
+const SLOW: u32 = 4;
+static MODE: AtomicU32 = AtomicU32::new(ANSWER);
+/// The thread that registers, and the device standing in as the PDO.
+static REGISTRAR: AtomicUsize = AtomicUsize::new(0);
+static PDO_DEVICE: AtomicUsize = AtomicUsize::new(0);
+/// A slow answer has begun, and has ended.
+static SLOW_STAGE: AtomicU32 = AtomicU32::new(0);
+
+/// The buffer the growing driver asks for.
+const LARGE: u32 = 0x3000;
+/// `FIELD_OFFSET(WMIREGINFOW, WmiRegGuid)`: a registration with no
+/// data blocks.
+const REGINFO_SIZE: usize = core::mem::offset_of!(WMIREGINFOW, WmiRegGuid);
+
+/// Complete `irp` as a driver does.
+///
+/// # Safety
+/// `irp` is the request being dispatched.
+unsafe fn complete(irp: *mut IRP, status: NTSTATUS, information: usize) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        (*irp).IoStatus.Status = status;
+        (*irp).IoStatus.Information = information;
+        crate::io::irp::IofCompleteRequest(irp, 0);
+    }
+    status
+}
+
+/// The test driver's `IRP_MJ_SYSTEM_CONTROL` routine: note the request,
+/// and answer a registration query as `MODE` says.
+///
+/// # Safety
+/// Called as a dispatch routine.
+unsafe extern "C" fn system_control(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    // SAFETY: per the contract: the IRP's current location is this
+    // driver's, and its buffer is as large as the request says.
+    unsafe {
+        let location = (*irp).CurrentStackLocation;
+        let [provider, data_path, buffer_size, buffer] = (*location).Parameters;
+        let minor = (*location).MinorFunction;
+        let seen = Seen {
+            minor,
+            irql: crate::ke::irql::current(),
+            other_thread: crate::ke::pcr::current_thread().addr()
+                != REGISTRAR.load(Ordering::Relaxed),
+            for_device: provider == device.addr() as u64,
+            data_path,
+            buffer_size,
+            as_windows_builds_it: (*irp).SystemBuffer.addr() as u64 == buffer
+                && (*irp).IoStatus.Status == STATUS_NOT_SUPPORTED
+                && (*irp).UserBuffer.is_null()
+                && (*irp).RequestorMode == 0,
+        };
+        if let Some(slot) = SEEN.get(SEEN_COUNT.fetch_add(1, Ordering::AcqRel)) {
+            for (word, value) in slot.iter().zip(seen.pack()) {
+                word.store(value, Ordering::Release);
+            }
+        }
+        let buffer = buffer as *mut u8;
+        let size = buffer_size as usize;
+        let empty = |guids: u32| {
+            buffer.write_bytes(0, REGINFO_SIZE + guids as usize * size_of::<WMIREGGUIDW>());
+            let info = buffer.cast::<WMIREGINFOW>();
+            (&raw mut (*info).BufferSize)
+                .write((REGINFO_SIZE + guids as usize * size_of::<WMIREGGUIDW>()) as u32);
+            (&raw mut (*info).GuidCount).write(guids);
+            info
+        };
+        match MODE.load(Ordering::Relaxed) {
+            REFUSE => complete(irp, STATUS_INVALID_DEVICE_REQUEST, 0),
+            GROW if size < LARGE as usize => {
+                // The size needed, and a success that reports those
+                // four bytes.
+                buffer.cast::<u32>().write(LARGE);
+                complete(irp, STATUS_SUCCESS, size_of::<u32>())
+            }
+            PDO => {
+                let info = empty(1);
+                let entry = (&raw mut (*info).WmiRegGuid).cast::<WMIREGGUIDW>();
+                (&raw mut (*entry).Guid).write(PROVIDER);
+                (&raw mut (*entry).Flags).write(nk_etw::wmi::WMIREG_FLAG_INSTANCE_PDO);
+                let pdo = PDO_DEVICE.load(Ordering::Relaxed);
+                (&raw mut (*entry).Pdo).write(pdo as *mut c_void);
+                if minor == IRP_MN_REGINFO_EX {
+                    // As wmilib.sys does for the newer request.
+                    crate::ob::object::reference(pdo as *mut u8);
+                }
+                complete(irp, STATUS_SUCCESS, (*info).BufferSize as usize)
+            }
+            mode => {
+                if mode == SLOW {
+                    SLOW_STAGE.store(1, Ordering::Release);
+                    crate::ke::wait::wait(None, Some(-2_000_000));
+                    SLOW_STAGE.store(2, Ordering::Release);
+                }
+                empty(0);
+                complete(irp, STATUS_SUCCESS, REGINFO_SIZE)
+            }
+        }
+    }
+}
+
+/// Run `test` with a device of a driver made up for the purpose, whose
+/// `IRP_MJ_SYSTEM_CONTROL` routine is [`system_control`].
+fn with_wmi_device(
+    test: impl FnOnce(*mut DEVICE_OBJECT) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+    let driver =
+        crate::mm::pool::alloc_zeroed(size, u32::from_le_bytes(*b"Test")).cast::<DRIVER_OBJECT>();
+    if driver.is_null() {
+        return Err("no memory for a driver object");
+    }
+    let mut device = core::ptr::null_mut();
+    // SAFETY: a zeroed driver object is enough to hang a nameless
+    // device on; both are freed below.
+    let status = unsafe {
+        (*driver).MajorFunction[usize::from(IRP_MJ_SYSTEM_CONTROL)] = Some(system_control);
+        crate::io::device::IoCreateDevice(driver, 0, core::ptr::null(), 0x22, 0, 0, &raw mut device)
+    };
+    let result = if status == STATUS_SUCCESS {
+        SEEN_COUNT.store(0, Ordering::Release);
+        MODE.store(ANSWER, Ordering::Relaxed);
+        REGISTRAR.store(crate::ke::pcr::current_thread().addr(), Ordering::Relaxed);
+        let result = test(device);
+        // Whatever the test left registered.
+        wmi_control(device, 2);
+        // SAFETY: created just above, with nothing referring to it.
+        unsafe { crate::io::device::IoDeleteDevice(device) };
+        result
+    } else {
+        Err("could not create a device object")
+    };
+    let _ = crate::mm::pool::free(driver.cast());
+    result
+}
+
+fn wmi_control(device: *mut DEVICE_OBJECT, action: u32) -> NTSTATUS {
+    // SAFETY: a live device object of the tests' own.
+    unsafe { IoWMIRegistrationControl(device.cast(), action) }
+}
+
+/// Wait until `count` requests have arrived, then a little longer for
+/// any that should not: the requests seen.
+fn requests(count: usize) -> alloc::vec::Vec<Seen> {
+    let deadline = crate::ke::time::interrupt_time() + 50_000_000;
+    while SEEN_COUNT.load(Ordering::Acquire) < count && crate::ke::time::interrupt_time() < deadline
+    {
+        // SAFETY: no object is waited on.
+        unsafe { crate::ke::wait::wait(None, Some(-10_000)) };
+    }
+    // SAFETY: no object is waited on.
+    unsafe { crate::ke::wait::wait(None, Some(-500_000)) };
+    SEEN.iter()
+        .take(SEEN_COUNT.load(Ordering::Acquire))
+        .map(|slot| Seen::unpack([0, 1, 2].map(|word| slot[word].load(Ordering::Acquire))))
+        .collect()
+}
+
+/// A registration request as Windows sends the first one.
+fn first(minor: u8) -> Seen {
+    Seen {
+        minor,
+        irql: 0,
+        other_thread: true,
+        for_device: true,
+        data_path: 0,
+        buffer_size: 0x2000,
+        as_windows_builds_it: true,
+    }
+}
+
+/// A device registers, is asked once for its registration from a worker
+/// thread, has a provider id while registered, and deregisters.
+fn wmi_register(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    if IoWMIDeviceObjectToProviderId(device) != 0 {
+        return Err("a device that has not registered has a provider id");
+    }
+    if wmi_control(device, 2) != STATUS_INVALID_PARAMETER {
+        return Err("a device that has not registered was deregistered");
+    }
+    if wmi_control(device, 1) != STATUS_SUCCESS {
+        return Err("a device was not registered");
+    }
+    if requests(1) != [first(IRP_MN_REGINFO_EX)] {
+        return Err("the registration request is not the one Windows sends, once");
+    }
+    let id = IoWMIDeviceObjectToProviderId(device);
+    if id == 0 || IoWMIDeviceObjectToProviderId(device) != id {
+        return Err("a registered device has no provider id, or not the same each time");
+    }
+    if wmi_control(device, 1) != STATUS_OBJECT_NAME_EXISTS {
+        return Err("a second registration was not answered as existing");
+    }
+    if wmi_control(device, 0) != STATUS_INVALID_PARAMETER
+        || wmi_control(device, 6) != STATUS_INVALID_PARAMETER
+    {
+        return Err("an action there is not was taken");
+    }
+    // By callback, and as a trace provider: the way of before
+    // EtwRegisterClassicProvider, which NK does not take.
+    if wmi_control(device, 0x8001_0001) != STATUS_UNSUCCESSFUL
+        || wmi_control(device, 0x8000_0002) != STATUS_UNSUCCESSFUL
+        || wmi_control(device, 0x0001_0001) != STATUS_UNSUCCESSFUL
+    {
+        return Err("a registration by callback was not refused");
+    }
+    if wmi_control(device, 2) != STATUS_SUCCESS {
+        return Err("a registered device was not deregistered");
+    }
+    if requests(1).len() != 1 {
+        return Err("a request arrived because of deregistering");
+    }
+    if IoWMIDeviceObjectToProviderId(device) != 0 {
+        return Err("a deregistered device still has a provider id");
+    }
+    // Registered again, it is a new provider.
+    if wmi_control(device, 1) != STATUS_SUCCESS || requests(2).len() != 2 {
+        return Err("a device could not register a second time");
+    }
+    if matches!(IoWMIDeviceObjectToProviderId(device), 0)
+        || IoWMIDeviceObjectToProviderId(device) == id
+    {
+        return Err("a second registration has the first one's provider id");
+    }
+    // Deregister and register in one.
+    if wmi_control(device, 3) != STATUS_SUCCESS || requests(3).len() != 3 {
+        return Err("reregistering did not bring a new request");
+    }
+    Ok(())
+}
+
+/// A driver that refuses the newer request is sent the older.
+fn wmi_refused(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    MODE.store(REFUSE, Ordering::Relaxed);
+    if wmi_control(device, 1) != STATUS_SUCCESS {
+        return Err("a device was not registered");
+    }
+    if requests(2) != [first(IRP_MN_REGINFO_EX), first(IRP_MN_REGINFO)] {
+        return Err("a refused request was not followed by the older one, once");
+    }
+    // Refusing does not undo the registration.
+    if IoWMIDeviceObjectToProviderId(device) == 0 || wmi_control(device, 2) != STATUS_SUCCESS {
+        return Err("a device that refused the requests is not registered");
+    }
+    Ok(())
+}
+
+/// A driver that says how large a buffer it needs is asked again with
+/// one that large.
+fn wmi_too_small(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    MODE.store(GROW, Ordering::Relaxed);
+    if wmi_control(device, 1) != STATUS_SUCCESS {
+        return Err("a device was not registered");
+    }
+    let larger = Seen {
+        buffer_size: u64::from(LARGE),
+        ..first(IRP_MN_REGINFO_EX)
+    };
+    if requests(2) != [first(IRP_MN_REGINFO_EX), larger] {
+        return Err("the request was not sent again with the size the driver asked for");
+    }
+    Ok(())
+}
+
+/// A device that asks for it is queried again, as an update; one that
+/// blocks requests gets no more.
+fn wmi_update(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    if wmi_control(device, 4) != STATUS_INVALID_PARAMETER
+        || wmi_control(device, 5) != STATUS_INVALID_PARAMETER
+    {
+        return Err("a device that has not registered was updated or blocked");
+    }
+    if wmi_control(device, 1) != STATUS_SUCCESS || wmi_control(device, 4) != STATUS_SUCCESS {
+        return Err("a registered device could not ask to be queried again");
+    }
+    let update = Seen {
+        data_path: 1,
+        ..first(IRP_MN_REGINFO_EX)
+    };
+    if requests(2) != [first(IRP_MN_REGINFO_EX), update] {
+        return Err("an update did not bring a request that says it is one");
+    }
+    if wmi_control(device, 5) != STATUS_SUCCESS || wmi_control(device, 4) != STATUS_SUCCESS {
+        return Err("a registered device could not block requests");
+    }
+    if requests(2).len() != 2 {
+        return Err("a request was sent to a device that blocks them");
+    }
+    Ok(())
+}
+
+/// The references a driver takes for WMI on physical device objects it
+/// names in its answer are given back.
+fn wmi_pdo(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    // The device stands in as its own physical device object.
+    PDO_DEVICE.store(device.addr(), Ordering::Relaxed);
+    MODE.store(PDO, Ordering::Relaxed);
+    let references = || {
+        // SAFETY: a live device object; the count after the pair is the
+        // count before it.
+        unsafe {
+            crate::ob::object::reference(device.cast());
+            crate::ob::object::dereference(device.cast())
+        }
+    };
+    let before = references();
+    if wmi_control(device, 1) != STATUS_SUCCESS {
+        return Err("a device was not registered");
+    }
+    if requests(1) != [first(IRP_MN_REGINFO_EX)] {
+        return Err("the registration request is not the one Windows sends, once");
+    }
+    // The registration itself holds one reference.
+    if references() != before + 1 {
+        return Err("the driver's reference on its physical device object was not given back");
+    }
+    if wmi_control(device, 2) != STATUS_SUCCESS || references() != before {
+        return Err("deregistering did not give the device object back");
+    }
+    Ok(())
+}
+
+/// Deregistering waits for a request that is with the driver.
+fn wmi_deregister_waits(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    SLOW_STAGE.store(0, Ordering::Release);
+    MODE.store(SLOW, Ordering::Relaxed);
+    if wmi_control(device, 1) != STATUS_SUCCESS {
+        return Err("a device was not registered");
+    }
+    let deadline = crate::ke::time::interrupt_time() + 50_000_000;
+    while SLOW_STAGE.load(Ordering::Acquire) == 0 {
+        if crate::ke::time::interrupt_time() > deadline {
+            return Err("the registration request never arrived");
+        }
+        crate::ke::thread::yield_now();
+    }
+    let status = wmi_control(device, 2);
+    let stage = SLOW_STAGE.load(Ordering::Acquire);
+    // Whatever came of it, the device is not let go under the request.
+    while SLOW_STAGE.load(Ordering::Acquire) != 2 {
+        crate::ke::thread::yield_now();
+    }
+    if status != STATUS_SUCCESS {
+        return Err("a registered device was not deregistered");
+    }
+    if stage != 2 {
+        return Err("deregistering returned while a request was with the driver");
+    }
+    Ok(())
+}
+
+/// An event block from the pool whose header says `size` and `flags`.
+fn event_block(size: u32, flags: u32) -> *mut c_void {
+    // The header states the size; the block is what the test needs.
+    let block = crate::mm::pool::alloc_zeroed(0x40, u32::from_le_bytes(*b"Test"));
+    assert!(!block.is_null());
+    let header = block.cast::<WNODE_HEADER>();
+    // SAFETY: a fresh block at least as large as the header.
+    unsafe {
+        (&raw mut (*header).BufferSize).write(size);
+        (&raw mut (*header).Flags).write(flags);
+    }
+    block.cast()
+}
+
+/// An event nobody asked for is taken and its block freed; a trace
+/// event stays the caller's, there being no session to take it.
+fn wmi_event() -> Result<(), &'static str> {
+    /// `WNODE_FLAG_SINGLE_INSTANCE | WNODE_FLAG_EVENT_ITEM`.
+    const EVENT: u32 = 0x2 | 0x8;
+    let before = crate::mm::pool::usage().blocks;
+    // SAFETY: a pool block that begins with a header.
+    if unsafe { IoWMIWriteEvent(event_block(0x40, EVENT)) } != STATUS_SUCCESS {
+        return Err("an event nobody asked for was not taken");
+    }
+    if crate::mm::pool::usage().blocks != before {
+        return Err("the block of an event that was taken was not freed");
+    }
+    // From a DPC's level too.
+    let block = event_block(0x40, EVENT);
+    let old = crate::ke::irql::raise(crate::ke::irql::DISPATCH_LEVEL);
+    // SAFETY: as above.
+    let raised = unsafe { IoWMIWriteEvent(block) };
+    crate::ke::irql::lower(old);
+    if raised != STATUS_SUCCESS || crate::mm::pool::usage().blocks != before {
+        return Err("an event fired at DISPATCH_LEVEL was not taken and freed");
+    }
+    // Trace events: refused, and still the caller's to free.
+    for (size, flags, expected) in [
+        (0x40, WNODE_FLAG_TRACED_GUID, STATUS_INVALID_HANDLE),
+        (0x20, WNODE_FLAG_TRACED_GUID, STATUS_BUFFER_TOO_SMALL),
+        (0x1_0000, WNODE_FLAG_TRACED_GUID, STATUS_BUFFER_OVERFLOW),
+        (0x20, WNODE_FLAG_LOG_WNODE, STATUS_BUFFER_TOO_SMALL),
+        (0x8000_0000, WNODE_FLAG_LOG_WNODE, STATUS_BUFFER_OVERFLOW),
+    ] {
+        let block = event_block(size, flags);
+        // SAFETY: as above.
+        let status = unsafe { IoWMIWriteEvent(block) };
+        if crate::mm::pool::usage().blocks != before + 1 {
+            return Err("a refused event's block was freed");
+        }
+        let _ = crate::mm::pool::free(block.cast());
+        if status != expected {
+            return Err("a trace event was not refused with Windows' status");
+        }
+    }
+    // A logged event of a size that passes is fired like any other.
+    // SAFETY: as above.
+    if unsafe { IoWMIWriteEvent(event_block(0x40, WNODE_FLAG_LOG_WNODE)) } != STATUS_SUCCESS
+        || crate::mm::pool::usage().blocks != before
+    {
+        return Err("a logged event was not taken and freed");
     }
     Ok(())
 }
