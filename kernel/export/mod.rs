@@ -127,6 +127,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::timer::KeInitializeTimer),
     export!(Implemented, ke::dpc::KeInsertQueueDpc),
     export!(Implemented, ke::kspin::KeLowerIrql),
+    export!(Implemented, ke::smp::KeQueryActiveProcessorCountEx),
     export!(Implemented, ke::time::KeQueryPerformanceCounter),
     export!(Implemented, ke::time::KeQueryTimeIncrement),
     export!(Implemented, ke::kspin::KeReleaseInStackQueuedSpinLock),
@@ -249,6 +250,8 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::csq::IoCsqRemoveNextIrp),
     export!(Implemented, io::csq::IoIsWdmVersionAvailable),
     export!(Implemented, ke::thread::KeSetPriorityThread),
+    export!(Implemented, ps::process::KeStackAttachProcess),
+    export!(Implemented, ps::process::KeUnstackDetachProcess),
     export_entry!(
         Implemented,
         "ExRaiseStatus",

@@ -82,6 +82,7 @@ ob.handles ok
 ob.thread ok
 ps.system ok
 ps.identity ok
+ps.attach ok
 ps.token ok
 ob.namespace.paths ok
 ob.namespace.links ok

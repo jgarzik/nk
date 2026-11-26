@@ -269,6 +269,15 @@ The id routines read those fields (`PsGetCurrentProcessId`,
 `PsGetThreadProcessId`, ...). There are no sessions: the process's
 `Session` is null, which Windows reads as session 0, and so do
 `PsGetProcessSessionId` and `PsGetThreadSessionId`.
+
+A thread attaching to a process (`KeStackAttachProcess`) can only name
+the one it is in. Windows saves nothing then and marks the caller's
+`KAPC_STATE` with a 1 where the process would be; NK does exactly that,
+and `KeUnstackDetachProcess` accepts exactly that mark. Any other
+process pointer names no process, and a detach with any other state
+was preceded by no attach: both stop the system, the second with
+Windows' `INVALID_PROCESS_DETACH_ATTEMPT`, as does an attach from a DPC
+routine (`INVALID_PROCESS_ATTACH_ATTEMPT`).
 The kernel handle table is its handle table. `EPROCESS.Token` holds its
 primary token the way Windows stores it, as a fast reference: a pointer
 whose low four bits count references handed out in advance. NK hands out

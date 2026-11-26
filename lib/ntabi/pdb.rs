@@ -224,6 +224,26 @@ fn thread_matches_the_kernel() {
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
     assert_eq!(PROCESS, field("Process"));
     let apc_state = types.layout("_KAPC_STATE").expect("_KAPC_STATE");
+    {
+        use crate::ke::KAPC_STATE;
+        use core::mem::{offset_of, size_of};
+        let saved = |name| offset(&apc_state, "_KAPC_STATE", name);
+        assert_eq!(size_of::<KAPC_STATE>(), apc_state.size as usize);
+        assert_eq!(offset_of!(KAPC_STATE, ApcListHead), saved("ApcListHead"));
+        assert_eq!(offset_of!(KAPC_STATE, Process), saved("Process"));
+        assert_eq!(
+            offset_of!(KAPC_STATE, InProgressFlags),
+            saved("InProgressFlags")
+        );
+        assert_eq!(
+            offset_of!(KAPC_STATE, KernelApcPending),
+            saved("KernelApcPending")
+        );
+        assert_eq!(
+            offset_of!(KAPC_STATE, UserApcPendingAll),
+            saved("UserApcPendingAll")
+        );
+    }
     assert_eq!(
         APC_STATE_PROCESS,
         field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")

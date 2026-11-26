@@ -12,6 +12,7 @@ use crate::ke::thread;
 use crate::ob::object;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use nk_ntabi::ke::{KAPC_STATE, KAPC_STATE_NOT_ATTACHED};
 use nk_ntabi::process as layout;
 use nk_ntabi::thread as thread_layout;
 
@@ -94,6 +95,59 @@ pub extern "C" fn PsGetCurrentProcess() -> *mut c_void {
 /// [`PsGetCurrentProcess`] by its documented name.
 pub extern "C" fn IoGetCurrentProcess() -> *mut c_void {
     PsGetCurrentProcess()
+}
+
+/// [`KeStackAttachProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess):
+/// put the calling thread in `process`'s address space. A thread
+/// already there is left as it is, and the caller's `apc_state` gets
+/// Windows' mark for that, 1 where the process would be, and nothing
+/// else. Every thread is in the one process there is, so that is all
+/// an attach can be; naming anything else names no process, and the
+/// system stops. From a DPC routine it stops as on Windows
+/// ([`INVALID_PROCESS_ATTACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x5--invalid-process-attach-attempt)).
+///
+/// # Safety
+/// `process` is a process object; `apc_state` points to room for a
+/// `KAPC_STATE`.
+pub unsafe extern "C" fn KeStackAttachProcess(process: *mut c_void, apc_state: *mut KAPC_STATE) {
+    let current = PsGetCurrentProcess();
+    if crate::ke::dpc::running() {
+        crate::kd::bugcheck(format_args!(
+            "0x00000005 INVALID_PROCESS_ATTACH_ATTEMPT: a DPC routine attached to a process \
+             (parameters {process:p}, {current:p}, 0, 1)"
+        ));
+    }
+    if process != current {
+        crate::kd::bugcheck(format_args!(
+            "KeStackAttachProcess: {process:p} is not the System process, and there is no other"
+        ));
+    }
+    // SAFETY: per the contract; the driver's memory, written through
+    // its pointer.
+    unsafe {
+        (&raw mut (*apc_state).Process)
+            .write_unaligned(core::ptr::without_provenance_mut(KAPC_STATE_NOT_ATTACHED));
+    }
+}
+
+/// [`KeUnstackDetachProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess):
+/// undo [`KeStackAttachProcess`]. A state marked as an attach that did
+/// nothing needs nothing undone. Any other state was not left by an
+/// attach, the thread being attached nowhere: Windows stops there
+/// ([`INVALID_PROCESS_DETACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x6--invalid-process-detach-attempt)),
+/// and so does NK.
+///
+/// # Safety
+/// `apc_state` is the state a `KeStackAttachProcess` filled in.
+pub unsafe extern "C" fn KeUnstackDetachProcess(apc_state: *mut KAPC_STATE) {
+    // SAFETY: per the contract.
+    let saved = unsafe { (&raw const (*apc_state).Process).read_unaligned() };
+    if saved.addr() != KAPC_STATE_NOT_ATTACHED {
+        crate::kd::bugcheck(format_args!(
+            "0x00000006 INVALID_PROCESS_DETACH_ATTEMPT: a detach by a thread that is not \
+             attached (saved process {saved:p})"
+        ));
+    }
 }
 
 /// The running thread's client id: its process's id, then its own.
@@ -363,6 +417,38 @@ pub fn identity_test() -> Result<u32, &'static str> {
         return Err("the System process or a thread of it is not in session 0");
     }
     Ok(11)
+}
+
+/// Attaching to the process the thread is in: the caller's state gets
+/// the mark and nothing else, the thread stays where and as it was,
+/// and the detach that follows is accepted.
+pub fn attach_test() -> Result<(), &'static str> {
+    let process = system().cast::<c_void>();
+    let before = crate::ke::irql::current();
+    let mut state = [0xAAu8; size_of::<KAPC_STATE>()];
+    let at = core::mem::offset_of!(KAPC_STATE, Process);
+    // SAFETY: the System process, and a local of a `KAPC_STATE`'s size.
+    unsafe { KeStackAttachProcess(process, state.as_mut_ptr().cast()) };
+    let marked = state[at..at + 8] == KAPC_STATE_NOT_ATTACHED.to_le_bytes();
+    let untouched = state[..at]
+        .iter()
+        .chain(&state[at + 8..])
+        .all(|&b| b == 0xAA);
+    if !marked {
+        return Err("an attach to the thread's own process did not mark the saved state");
+    }
+    if !untouched {
+        return Err("an attach that saved nothing wrote more than the mark");
+    }
+    if PsGetCurrentProcess() != process || crate::ke::irql::current() != before {
+        return Err("an attach to the thread's own process moved the thread or the IRQL");
+    }
+    // SAFETY: the state the attach filled in.
+    unsafe { KeUnstackDetachProcess(state.as_mut_ptr().cast()) };
+    if PsGetCurrentProcess() != process || crate::ke::irql::current() != before {
+        return Err("a detach moved the thread or the IRQL");
+    }
+    Ok(())
 }
 
 /// How many references `body` has, the caller's own included.
