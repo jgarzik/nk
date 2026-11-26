@@ -87,6 +87,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::EXIT_HOLDING,
     &work::BAD_RETURN,
     &pend::OVERSTATED,
+    &neg::PROTECTED_CLOSE,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

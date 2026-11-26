@@ -468,3 +468,20 @@ cmdline = "test=oracle.event-debug debug=on"
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=oracle.event-debug debug=on"
+
+# Kernel code that closes a kernel handle protected from close stops
+# the system, as on Windows; user mode is refused with a status.
+
+[x86_64-neg-protected-close]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.protected-close"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
+
+[aarch64-neg-protected-close]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.protected-close"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"

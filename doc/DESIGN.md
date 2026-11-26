@@ -371,7 +371,10 @@ one stays a valid, signalled object.
 Kernel handles are entries in one table, the System process's, with
 Windows' kernel-handle bits; a handle holds a reference until closed. No
 per-process tables. Each handle has the access it was granted and its
-attributes (inherit, protect from close). Nothing decides what a subject
+attributes (inherit, protect from close). A handle protected from close
+stays open: user mode closing it is refused
+(`STATUS_HANDLE_NOT_CLOSABLE`), kernel mode closing it stops the system
+(`INVALID_KERNEL_HANDLE`), as on Windows. Nothing decides what a subject
 may have: a handle is granted what its opener asked for, generic rights
 turned into what they mean for the object's type. A use of a handle on
 behalf of user mode is refused (`STATUS_ACCESS_DENIED`) access the handle
