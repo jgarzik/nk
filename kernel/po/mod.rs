@@ -23,9 +23,10 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::status::{
-    NTSTATUS, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED,
-    STATUS_SUCCESS,
+    NTSTATUS, STATUS_BUFFER_TOO_SMALL, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER,
+    STATUS_NOT_SUPPORTED, STATUS_OBJECT_NAME_COLLISION, STATUS_SUCCESS,
 };
+use nk_po::logging::{Logged, Reasons};
 use nk_po::request::Turns;
 use nk_po::setting::Registrations;
 
@@ -74,6 +75,8 @@ struct Power {
     /// first, and whether a worker is making them or queued to.
     fx_work: Vec<usize>,
     fx_working: bool,
+    /// Why sleep states cannot be entered, as logged.
+    sleep_disabled: Reasons,
 }
 
 static POWER: SpinLock<Power> = SpinLock::new(
@@ -87,6 +90,7 @@ static POWER: SpinLock<Power> = SpinLock::new(
         fx: Vec::new(),
         fx_work: Vec::new(),
         fx_working: false,
+        sleep_disabled: Reasons::new(),
     },
 );
 
@@ -148,15 +152,37 @@ pub unsafe fn run_down(device: *mut DEVICE_OBJECT) {
     }
 }
 
+/// `POWER_INFORMATION_LEVEL` `SystemPowerLoggingEntry`: the input is
+/// a reason code and the sleep states it rules out, two `ULONG`s, to be
+/// logged.
+const SYSTEM_POWER_LOGGING_ENTRY: i32 = 24;
+
 /// `POWER_INFORMATION_LEVEL` `PlatformInformation`: a
 /// `POWER_PLATFORM_INFORMATION`, one `BOOLEAN`, whether the platform
 /// has an always-on, always-connected low-power idle state.
 const PLATFORM_INFORMATION: i32 = 66;
 
+/// `POWER_INFORMATION_LEVEL` `FirmwareTableInformationRegistered`: the
+/// firmware's tables can be read now, so what the power manager takes
+/// from them is to be read again.
+const FIRMWARE_TABLE_INFORMATION_REGISTERED: i32 = 69;
+
 /// `POWER_INFORMATION_LEVEL` `PowerInformationInternal`: requests of
 /// Windows' own components, told apart by the number the input starts
 /// with.
 const INTERNAL: i32 = 87;
+
+/// `POWER_INFORMATION_LEVEL` `QueryPotentialDripsConstraint`: whether
+/// a device would keep the platform out of its low-power idle state.
+const QUERY_POTENTIAL_DRIPS_CONSTRAINT: i32 = 91;
+
+/// The internal requests that set and clear a device's flags for the
+/// platform's low-power idle state: the request number, padded to a
+/// pointer, the device object, the flags.
+const INTERNAL_DRIPS_SET_DEVICE_FLAGS: u32 = 0x3A;
+const INTERNAL_DRIPS_CLEAR_DEVICE_FLAGS: u32 = 0x3B;
+/// The bytes of input those two need.
+const INTERNAL_DRIPS_INPUT: u32 = 0x18;
 
 /// The internal request for the sleep study helper's table of routines,
 /// through which `pci.sys` and others report what keeps the machine
@@ -166,8 +192,25 @@ const INTERNAL_SLEEP_STUDY_ROUTINES: u32 = 0x3F;
 /// [`ZwPowerInformation`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwpowerinformation):
 /// read or set power information of one level.
 ///
+/// `SystemPowerLoggingEntry` records the reason and the states it
+/// rules out; a reason logged before is refused with
+/// `STATUS_OBJECT_NAME_COLLISION`. NK never sleeps, so nothing reads
+/// the record but the self-tests.
+///
 /// `PlatformInformation` is answered: NK has no low-power idle state,
 /// so the platform is not always on, always connected.
+///
+/// `FirmwareTableInformationRegistered` succeeds with nothing to do:
+/// what Windows reads again from the firmware's tables is whether the
+/// platform has the low-power idle state, which it then turns off
+/// when it runs as Windows PE; NK's platform never has it.
+///
+/// `QueryPotentialDripsConstraint` fails with `STATUS_NOT_SUPPORTED`,
+/// Windows' answer on a platform without the low-power idle state,
+/// given before it looks at the buffers.
+///
+/// The internal requests that set and clear a device's flags for that
+/// state go to `PoDirectedDripsSetDeviceFlags` and its counterpart.
 ///
 /// The internal request for the sleep study helper's routines fails
 /// with `STATUS_NOT_SUPPORTED`. Windows always has the helper and
@@ -177,7 +220,9 @@ const INTERNAL_SLEEP_STUDY_ROUTINES: u32 = 0x3F;
 /// Any other level, or internal request, stops the system naming it.
 ///
 /// # Safety
-/// `output` points to `output_length` writable bytes.
+/// `input` points to `input_length` readable bytes and `output` to
+/// `output_length` writable bytes; a device object an internal request
+/// names is null or live.
 pub unsafe extern "C" fn ZwPowerInformation(
     level: i32,
     input: *mut c_void,
@@ -185,21 +230,70 @@ pub unsafe extern "C" fn ZwPowerInformation(
     output: *mut c_void,
     output_length: u32,
 ) -> NTSTATUS {
+    // As the pinned kernel: a null buffer has no length.
+    let input_length = if input.is_null() { 0 } else { input_length };
+    let output_length = if output.is_null() { 0 } else { output_length };
     match level {
+        SYSTEM_POWER_LOGGING_ENTRY => {
+            if input_length == 0 || output_length != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if input_length < 8 {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            // SAFETY: the caller's buffer, of at least eight bytes.
+            let (reason, states) = unsafe {
+                let words = input.cast::<u32>();
+                (words.read_unaligned(), words.add(1).read_unaligned())
+            };
+            match POWER.lock().sleep_disabled.log(reason, states) {
+                Logged::Recorded => STATUS_SUCCESS,
+                Logged::Already => STATUS_OBJECT_NAME_COLLISION,
+                Logged::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            }
+        }
         PLATFORM_INFORMATION => {
-            if output.is_null() || output_length < 1 {
+            if output_length < 1 {
                 return STATUS_BUFFER_TOO_SMALL;
             }
             // SAFETY: the caller's buffer, of at least a byte.
             unsafe { output.cast::<u8>().write(0) };
             STATUS_SUCCESS
         }
-        INTERNAL => {
-            if input.is_null() || input_length < 4 {
+        FIRMWARE_TABLE_INFORMATION_REGISTERED => {
+            if input_length != 0 || output_length != 0 {
                 return STATUS_INVALID_PARAMETER;
             }
-            // SAFETY: the caller's buffer, of at least four bytes.
-            match unsafe { input.cast::<u32>().read_unaligned() } {
+            STATUS_SUCCESS
+        }
+        QUERY_POTENTIAL_DRIPS_CONSTRAINT => STATUS_NOT_SUPPORTED,
+        INTERNAL => {
+            if input_length < 8 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            // SAFETY: the caller's buffer, of at least eight bytes.
+            let request = unsafe { input.cast::<u32>().read_unaligned() };
+            match request {
+                INTERNAL_DRIPS_SET_DEVICE_FLAGS | INTERNAL_DRIPS_CLEAR_DEVICE_FLAGS => {
+                    if input_length < INTERNAL_DRIPS_INPUT {
+                        return STATUS_INVALID_PARAMETER;
+                    }
+                    // SAFETY: the buffer holds the three fields; the
+                    // device is the caller's, null or live.
+                    unsafe {
+                        let device = input
+                            .cast::<u8>()
+                            .add(8)
+                            .cast::<*mut DEVICE_OBJECT>()
+                            .read_unaligned();
+                        let flags = input.cast::<u8>().add(16).cast::<u32>().read_unaligned();
+                        if request == INTERNAL_DRIPS_SET_DEVICE_FLAGS {
+                            request::PoDirectedDripsSetDeviceFlags(device, flags)
+                        } else {
+                            request::drips_clear_device_flags(device, flags)
+                        }
+                    }
+                }
                 INTERNAL_SLEEP_STUDY_ROUTINES => STATUS_NOT_SUPPORTED,
                 request => crate::kd::bugcheck(format_args!(
                     "ZwPowerInformation: NK does not implement internal request {request:#x}"
@@ -262,5 +356,83 @@ pub fn test() -> Result<(), &'static str> {
     if status != STATUS_INVALID_PARAMETER {
         return Err("an internal request that names no request was not refused");
     }
+
+    // A reason no driver logs, ruling out S1 and S4.
+    const REASON: u32 = 0x4E4B_0001;
+    let mut entry = [REASON, 0x9];
+    let null = core::ptr::null_mut::<c_void>();
+    let mut log = |length: u32, output: *mut c_void, output_length: u32| {
+        // SAFETY: a local of at least the length given.
+        unsafe {
+            ZwPowerInformation(
+                SYSTEM_POWER_LOGGING_ENTRY,
+                entry.as_mut_ptr().cast(),
+                length,
+                output,
+                output_length,
+            )
+        }
+    };
+    if log(0, null, 0) != STATUS_INVALID_PARAMETER
+        || log(8, (&raw mut platform).cast(), 1) != STATUS_INVALID_PARAMETER
+        || log(4, null, 0) != STATUS_BUFFER_TOO_SMALL
+    {
+        return Err("a malformed logging entry was not refused as Windows refuses it");
+    }
+    let first = log(8, null, 0);
+    let recorded = POWER.lock().sleep_disabled.states(REASON);
+    let second = log(8, null, 0);
+    POWER.lock().sleep_disabled.forget(REASON);
+    if first != STATUS_SUCCESS || recorded != Some(0x9) {
+        return Err("a reason sleep is disabled was not recorded");
+    }
+    if second != STATUS_OBJECT_NAME_COLLISION {
+        return Err("a reason was logged twice");
+    }
+
+    let mut simple = |level: i32, length: u32| {
+        // SAFETY: a local of at least the length given, and no output.
+        unsafe { ZwPowerInformation(level, entry.as_mut_ptr().cast(), length, null, 0) }
+    };
+    if simple(FIRMWARE_TABLE_INFORMATION_REGISTERED, 0) != STATUS_SUCCESS
+        || simple(FIRMWARE_TABLE_INFORMATION_REGISTERED, 8) != STATUS_INVALID_PARAMETER
+    {
+        return Err(
+            "the notice that firmware tables can be read was not taken as Windows takes it",
+        );
+    }
+    if simple(QUERY_POTENTIAL_DRIPS_CONSTRAINT, 8) != STATUS_NOT_SUPPORTED {
+        return Err("a low-power idle constraint was answered for a platform without the state");
+    }
     Ok(())
+}
+
+/// For the self-tests: the internal request to set (else clear) a
+/// device's flags for the low-power idle state, made as `storport.sys`
+/// makes it, with `length` bytes of input.
+///
+/// # Safety
+/// `device` is null or a live device object.
+pub unsafe fn test_drips(
+    set: bool,
+    device: *mut DEVICE_OBJECT,
+    flags: u32,
+    length: u32,
+) -> NTSTATUS {
+    let request = if set {
+        INTERNAL_DRIPS_SET_DEVICE_FLAGS
+    } else {
+        INTERNAL_DRIPS_CLEAR_DEVICE_FLAGS
+    };
+    let mut input = [u64::from(request), device as u64, u64::from(flags)];
+    // SAFETY: a local of three pointers; the device per the contract.
+    unsafe {
+        ZwPowerInformation(
+            INTERNAL,
+            input.as_mut_ptr().cast(),
+            length,
+            core::ptr::null_mut(),
+            0,
+        )
+    }
 }
