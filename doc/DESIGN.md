@@ -2133,7 +2133,9 @@ for the machine; a device's ancestors do not stand in its way; each
 requirement gets its first choice that can be had, at the boot
 configuration if the choice allows it, else at the lowest free place;
 a boot configuration is kept for its device until the device is
-assigned. A line interrupt is given only where the requirement names
+assigned, and gives way only to a requirement that names one place
+(as Windows' arbiters let a fixed requirement overlap a boot
+allocation). A line interrupt is given only where the requirement names
 one line or firmware configured one: NK asks no bus driver's arbiter or
 translator interface. Translation: memory, ports and bus numbers are
 what they are; an interrupt gets its vector from the hardware layer
