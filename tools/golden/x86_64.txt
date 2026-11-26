@@ -255,6 +255,7 @@ ldr.lib.as-service ok
 io.requestor-process ok
 io.file-generic-mapping ok
 fsrtl.teardown-stream-contexts ok
+mm.driver-paging ok
 null.load ok
 null.device ok
 null.open ok

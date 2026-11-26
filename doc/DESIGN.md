@@ -1081,6 +1081,13 @@ One image is loaded or unloaded at a time, under a mutex
 (`doc/LOCKING.md`): loading calls a library's `DllInitialize`, which may
 wait, and loads a library from inside the load of its importer.
 
+**Paging a driver.** `MmPageEntireDriver` and `MmResetDriverPaging`,
+which a driver calls to let its whole image be paged out while it is
+idle and to take that back, change nothing: NK never pages kernel
+memory out, so an image is resident from load to unload, which is
+within what both promise. The first still answers the base of the image
+an address is in, or null.
+
 ## Starting a driver
 
 A driver is started from its service key, as on Windows

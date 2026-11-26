@@ -166,6 +166,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ex::sysinfo::MmIsDriverVerifying),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Implemented, ldr::MmPageEntireDriver),
+    export!(Implemented, ldr::MmResetDriverPaging),
     export_entry!(
         Partial,
         "MmProbeAndLockPages",

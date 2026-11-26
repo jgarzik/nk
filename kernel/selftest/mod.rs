@@ -157,6 +157,7 @@ pub static GROUPS: &[&Group] = &[
     &library::GROUP,
     &fsd::REQUESTOR,
     &fsd::STREAM_CONTEXTS,
+    &fsd::DRIVER_PAGING,
     &null::GROUP,
     &mslib::GROUP,
     &sioctl::GROUP,

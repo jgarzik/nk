@@ -599,6 +599,88 @@ fn stream_contexts() -> Result<u32, &'static str> {
     Ok(total)
 }
 
+pub static DRIVER_PAGING: Group = Group {
+    names: &["mm.driver-paging"],
+    run: |r, _| r.check(DRIVER_PAGING.names[0], driver_paging),
+    manual: false,
+};
+
+/// Stands for the routine in its own image whose address `msfs.sys`
+/// passes to both paging routines.
+#[inline(never)]
+extern "C" fn paged_routine(value: u32) -> u32 {
+    core::hint::black_box(value).rotate_left(7) ^ 0x4E4B
+}
+
+/// `MmPageEntireDriver` and `MmResetDriverPaging`, called as `msfs.sys`
+/// calls them: with the address of a routine of its own image; the
+/// first at initialisation and whenever its last file closes, the
+/// second when its count of open files goes from none to one, after
+/// which it runs code that may not fault. The image here is the
+/// kernel's own, which is in the table of images like a driver's.
+/// Checked: the first names the image's base; after the second the
+/// image's code is as it was and can be read and run at
+/// `DISPATCH_LEVEL`, where a page that had to be brought in would stop
+/// the system; the pair can be repeated, as files open and close; and
+/// an address in no image is taken by both, the first answering null,
+/// with the table of images unchanged.
+fn driver_paging() -> Result<(), &'static str> {
+    use crate::ke::{irql, kspin};
+    use crate::ldr;
+    let routine = paged_routine as *const () as *mut c_void;
+    let image = ldr::module_containing(routine as u64).ok_or("the routine is in no image")?;
+    let images = ldr::modules().len();
+    // What the routine's code is, and what it computes, read at
+    // `DISPATCH_LEVEL`.
+    let at_dispatch = || {
+        let old = kspin::KfRaiseIrql(irql::DISPATCH_LEVEL);
+        // SAFETY: sixteen bytes of this image's code, and the start of
+        // its headers.
+        let facts = unsafe {
+            (
+                routine.cast::<[u8; 16]>().read_volatile(),
+                (image.base as *const u16).read_volatile(),
+                paged_routine(0x1234_5678),
+            )
+        };
+        kspin::KeLowerIrql(old);
+        facts
+    };
+    let before = at_dispatch();
+    for _ in 0..3 {
+        // SAFETY: both take any address.
+        let base = unsafe { ldr::MmPageEntireDriver(routine) };
+        if base as u64 != image.base {
+            return Err("MmPageEntireDriver did not answer the image's base");
+        }
+        // SAFETY: as above.
+        unsafe { ldr::MmResetDriverPaging(routine) };
+        if at_dispatch() != before {
+            return Err("after MmResetDriverPaging the image's code is not what it was");
+        }
+    }
+    // Not in any image: memory from the pool, and no address at all.
+    let block = pool::alloc(64, TAG);
+    if block.is_null() {
+        return Err("no memory");
+    }
+    for nowhere in [block.cast::<c_void>(), core::ptr::null_mut()] {
+        // SAFETY: both take any address.
+        unsafe {
+            if !ldr::MmPageEntireDriver(nowhere).is_null() {
+                let _ = pool::free(block);
+                return Err("an address in no image has an image's base");
+            }
+            ldr::MmResetDriverPaging(nowhere);
+        }
+    }
+    let _ = pool::free(block);
+    if ldr::modules().len() != images || at_dispatch() != before {
+        return Err("the paging routines changed the images");
+    }
+    Ok(())
+}
+
 /// A stream whose list of contexts does not link back must stop the
 /// system, as the pinned kernel's check of the links does (a fast
 /// fail), before anything is unlinked through it.
