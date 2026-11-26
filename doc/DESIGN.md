@@ -1286,6 +1286,7 @@ make that safe.
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | a driver's `AddDevice` (the Plug and Play manager) | base: a system thread |
+| a Plug and Play notification callback | nothing: the registration's count of calls in progress stays raised, so it can no longer be taken back |
 | boot driver's reinitialisation routine | base of the system thread: the queue's reference to the driver object is not given back |
 | a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
 | a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
@@ -2073,6 +2074,24 @@ those no longer reported are told they are gone (surprise removal, then
 removal) with everything below them. That, the removal after a failed
 start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
+
+**What drivers call** (`pnp/export.rs`, `pnp/interface.rs`,
+`pnp/notify.rs`). A device's properties (`IoGetDeviceProperty`) come
+from its node and its key; `IoOpenDeviceRegistryKey` opens its
+`Device Parameters` key or its driver key. A property set with
+`IoSetDevicePropertyData` is kept in the key where Windows keeps it and
+read back by `IoGetDevicePropertyData`; the properties Windows computes
+(`DEVPKEY_Device_*`) are not answered unless a driver set them. A
+device interface is registered under Windows' link name and
+`DeviceClasses` record; enabling it makes the symbolic link to the
+physical device object (which therefore needs a name) and calls the
+callbacks registered for the class's arrivals, on the caller's thread
+where Windows queues them for a worker; enabled before its device has
+started, an interface waits for the start. Notification registrations
+for hardware profile changes and for a target device's removal are
+kept and never called: NK produces neither event.
+`IoInvalidateDeviceState` has a started device asked for its state
+again by the worker.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
 not bring up yet because their `AddDevice` or start stops the system
@@ -2893,8 +2912,8 @@ not made.
 **Plug and Play** (the section of that name says what NK does). No
 device installation: a driver-database record is applied when a device
 is first seen. No arbiters or translators of bus drivers are asked: NK
-assigns resources itself. No removal on request, eject, stop,
-rebalance, hot-plug notification or device interface. A filter driver
+assigns resources itself. No removal on request, eject, stop or
+rebalance, and so none of the notifications that go with them. A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver

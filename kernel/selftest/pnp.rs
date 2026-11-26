@@ -40,6 +40,7 @@ pub static GROUP: Group = Group {
         "pnp.invalidate-relations",
         "pnp.failed-start",
         "pnp.invalid-instance-id",
+        "pnp.interface",
         "pnp.invalidate-state",
         "pnp.removed",
     ],
@@ -487,6 +488,7 @@ fn delete_registry(bus_prefix: Option<&str>) {
         format!("{DATABASE}\\DriverPackages\\{PACKAGE}"),
         format!("{control_set}\\Enum\\ROOT\\{BUS}"),
         format!("{control_set}\\Enum\\NKPNP"),
+        format!("{control_set}\\Control\\DeviceClasses\\{CLASS}"),
         registry::service_key(FUNCTION),
     ] {
         let _ = cm::delete_tree(&key);
@@ -938,6 +940,220 @@ fn driver_key_of(key: &str) -> Result<String, &'static str> {
     ))
 }
 
+/// What the notification callback saw: arrivals and removals of the
+/// test's interface, and whether each came with the link's name and
+/// the context registered.
+static ARRIVALS: AtomicU32 = AtomicU32::new(0);
+static REMOVALS: AtomicU32 = AtomicU32::new(0);
+static NOTIFIED_WRONG: AtomicU32 = AtomicU32::new(0);
+/// The link the callback expects, as UTF-16 in a block of the test's.
+static EXPECTED_LINK: AtomicPtr<Vec<u16>> = AtomicPtr::new(core::ptr::null_mut());
+const NOTIFY_CONTEXT: usize = 0x4E4B_504E;
+
+/// The notification callback of the test.
+///
+/// # Safety
+/// Called as a notification callback for interface changes.
+unsafe extern "C" fn notified(
+    structure: *const DEVICE_INTERFACE_CHANGE_NOTIFICATION,
+    context: usize,
+) -> NTSTATUS {
+    // SAFETY: the structure of an interface change, valid during the
+    // call; the expected name is the test's, set before any call.
+    unsafe {
+        let name = crate::rtl::copy_unicode((*structure).SymbolicLinkName);
+        let expected = &*EXPECTED_LINK.load(Ordering::Acquire);
+        let class = ids::guid_from_text(CLASS);
+        if context != NOTIFY_CONTEXT
+            || name != *expected
+            || (*structure).Version != 1
+            || usize::from((*structure).Size) != size_of::<DEVICE_INTERFACE_CHANGE_NOTIFICATION>()
+            || Some((*structure).InterfaceClassGuid) != class
+            || crate::ke::irql::current() != 0
+        {
+            NOTIFIED_WRONG.fetch_add(1, Ordering::AcqRel);
+        }
+        match (*structure).Event {
+            GUID_DEVICE_INTERFACE_ARRIVAL => ARRIVALS.fetch_add(1, Ordering::AcqRel),
+            GUID_DEVICE_INTERFACE_REMOVAL => REMOVALS.fetch_add(1, Ordering::AcqRel),
+            _ => NOTIFIED_WRONG.fetch_add(1, Ordering::AcqRel),
+        };
+    }
+    STATUS_SUCCESS
+}
+
+/// A device interface of the started child: registered under Windows'
+/// name and key, enabled and disabled, with a registered callback told
+/// of each.
+fn interface(bench: &Bench) -> Result<(), &'static str> {
+    use pnp::interface::{IoRegisterDeviceInterface, IoSetDeviceInterfaceState};
+    use pnp::notify::{IoRegisterPlugPlayNotification, IoUnregisterPlugPlayNotificationEx};
+    let found = child(1).ok_or("the bus's child has no node")?;
+    let pdo = found.pdo as *mut DEVICE_OBJECT;
+    let class = ids::guid_from_text(CLASS).ok_or("the class is not a GUID")?;
+    let expected = format!("\\??\\{}#{CLASS}", found.instance.replace('\\', "#"));
+    let mut wide_link: Vec<u16> = expected.encode_utf16().collect();
+    EXPECTED_LINK.store(&raw mut wide_link, Ordering::Release);
+    for counter in [&ARRIVALS, &REMOVALS, &NOTIFIED_WRONG] {
+        counter.store(0, Ordering::Release);
+    }
+    let mut name = UNICODE_STRING {
+        Length: 0,
+        MaximumLength: 0,
+        Buffer: core::ptr::null_mut(),
+    };
+    let register = |device, name: *mut UNICODE_STRING| {
+        // SAFETY: a live device object, a GUID, no reference string and
+        // a string to write.
+        unsafe { IoRegisterDeviceInterface(device, &raw const class, core::ptr::null(), name) }
+    };
+    if register(bench.function, &raw mut name) != STATUS_INVALID_DEVICE_REQUEST {
+        return Err("an interface was registered for a function device object");
+    }
+    if register(pdo, &raw mut name) != STATUS_SUCCESS {
+        return Err("the interface was not registered");
+    }
+    // SAFETY: the string the registration handed out.
+    let link = String::from_utf16_lossy(&unsafe { crate::rtl::copy_unicode(&raw const name) });
+    let result = (|| {
+        if link != expected {
+            return Err("the link's name is not the device's path and the class");
+        }
+        let mut again = UNICODE_STRING { ..name };
+        if register(pdo, &raw mut again) != STATUS_OBJECT_NAME_EXISTS {
+            return Err("registering again did not say the interface exists");
+        }
+        // SAFETY: the string the second registration handed out.
+        unsafe { crate::rtl::print::RtlFreeUnicodeString(&raw mut again) };
+        let key = format!(
+            "Machine\\System\\CurrentControlSet\\Control\\DeviceClasses\\{CLASS}\\##?#{}#{CLASS}",
+            found.instance.replace('\\', "#")
+        );
+        if registry::string(&key, "DeviceInstance").as_deref() != Some(&found.instance)
+            || registry::string(&format!("{key}\\#"), "SymbolicLink").as_deref()
+                != Some(&expected.replacen("\\??\\", "\\\\?\\", 1))
+        {
+            return Err("the interface is not recorded under DeviceClasses as Windows records it");
+        }
+        let mut handle = core::ptr::null_mut();
+        // SAFETY: a driver object and a callback of the test's, a GUID
+        // and a handle to write.
+        let registered = unsafe {
+            IoRegisterPlugPlayNotification(
+                EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                0,
+                (&raw const class).cast(),
+                bench.drivers[0],
+                notified as *const () as usize,
+                NOTIFY_CONTEXT,
+                &raw mut handle,
+            )
+        };
+        if registered != STATUS_SUCCESS || handle.is_null() {
+            return Err("the notification was not registered");
+        }
+        let switch = |on: bool| {
+            // SAFETY: the name the registration handed out.
+            unsafe { IoSetDeviceInterfaceState(&raw const name, u8::from(on)) }
+        };
+        let seen = || {
+            (
+                ARRIVALS.load(Ordering::Acquire),
+                REMOVALS.load(Ordering::Acquire),
+            )
+        };
+        let linked = || {
+            crate::ob::lookup(None, &wide_link).is_ok_and(|(body, rest)| {
+                // SAFETY: the reference the lookup took for its caller.
+                unsafe { crate::ob::object::dereference(body) };
+                body == pdo.cast() && rest.is_empty()
+            })
+        };
+        let checks = (|| {
+            if switch(false) != STATUS_OBJECT_NAME_NOT_FOUND {
+                return Err("an interface that is not enabled was disabled");
+            }
+            if switch(true) != STATUS_SUCCESS || seen() != (1, 0) || !linked() {
+                return Err("enabling did not make the link and tell the callback");
+            }
+            if registry::dword(&format!("{key}\\#\\Control"), "Linked") != Some(1) {
+                return Err("the registry does not say the interface is linked");
+            }
+            if switch(true) != STATUS_OBJECT_NAME_EXISTS || seen() != (1, 0) {
+                return Err("enabling twice did not say the interface is enabled");
+            }
+            // A second registration that asks for what exists is told
+            // at once.
+            let mut second = core::ptr::null_mut();
+            // SAFETY: as above.
+            let registered = unsafe {
+                IoRegisterPlugPlayNotification(
+                    EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                    PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES,
+                    (&raw const class).cast(),
+                    bench.drivers[0],
+                    notified as *const () as usize,
+                    NOTIFY_CONTEXT,
+                    &raw mut second,
+                )
+            };
+            if registered != STATUS_SUCCESS || seen() != (2, 0) {
+                return Err("a registration for existing interfaces was not told of the one");
+            }
+            // SAFETY: the handle just handed out.
+            if unsafe { IoUnregisterPlugPlayNotificationEx(second) } != STATUS_SUCCESS {
+                return Err("the second registration could not be taken back");
+            }
+            if switch(false) != STATUS_SUCCESS || seen() != (2, 1) || linked() {
+                return Err("disabling did not remove the link and tell the callback once");
+            }
+            // The device's start being undone disables what is enabled.
+            if switch(true) != STATUS_SUCCESS || seen() != (3, 1) {
+                return Err("the interface could not be enabled again");
+            }
+            Ok(())
+        })();
+        // SAFETY: the handle the registration handed out.
+        let back = unsafe { IoUnregisterPlugPlayNotificationEx(handle) };
+        checks?;
+        if back != STATUS_SUCCESS {
+            return Err("the registration could not be taken back");
+        }
+        // Taken back, the callback hears nothing more.
+        if switch(false) != STATUS_SUCCESS || seen() != (3, 1) {
+            return Err("a callback was called after its registration was taken back");
+        }
+        if switch(true) != STATUS_SUCCESS {
+            return Err("the interface could not be left enabled");
+        }
+        if NOTIFIED_WRONG.load(Ordering::Acquire) != 0 {
+            return Err("a callback was not handed the link, the class and its context");
+        }
+        // A category that does not exist is refused.
+        let mut none = core::ptr::null_mut();
+        // SAFETY: as above.
+        let refused = unsafe {
+            IoRegisterPlugPlayNotification(
+                1,
+                0,
+                core::ptr::null(),
+                bench.drivers[0],
+                notified as *const () as usize,
+                0,
+                &raw mut none,
+            )
+        };
+        if refused != STATUS_INVALID_DEVICE_REQUEST {
+            return Err("a reserved event category was accepted");
+        }
+        Ok(())
+    })();
+    // SAFETY: the string the registration handed out.
+    unsafe { crate::rtl::print::RtlFreeUnicodeString(&raw mut name) };
+    EXPECTED_LINK.store(core::ptr::null_mut(), Ordering::Release);
+    result
+}
+
 /// `AddDevice` is called lowest first: the class's lower filter, the
 /// function driver, the class's upper filter. A filter with no image
 /// is left out.
@@ -1101,6 +1317,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
         Ok(())
     });
+    r.check("pnp.interface", || interface(&bench));
     // The first child's driver says the device's state changed, and
     // then that it failed (`PNP_DEVICE_FAILED`): the manager asks, and
     // takes the device down. Its node tells of the NUMA node first.
@@ -1141,6 +1358,15 @@ fn run(r: &mut Report, _: &BootInfo) {
         if !found.raw.is_empty() || !found.vectors.is_empty() {
             return Err("the failed device still holds resources");
         }
+        // Its interface, left enabled, is disabled with it.
+        let link: Vec<u16> = format!("\\??\\{}#{CLASS}", found.instance.replace('\\', "#"))
+            .encode_utf16()
+            .collect();
+        if let Ok((body, _)) = crate::ob::lookup(None, &link) {
+            // SAFETY: the reference the lookup took for its caller.
+            unsafe { crate::ob::object::dereference(body) };
+            return Err("the failed device's interface is still linked");
+        }
         Ok(())
     });
     // The bus loses its children: each is removed, and what it held is
@@ -1150,6 +1376,13 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("pnp.removed", || {
         if child(1).is_some() || child(2).is_some() {
             return Err("the children the bus no longer reports still have nodes");
+        }
+        if !cm::subkeys(&format!(
+            "Machine\\System\\CurrentControlSet\\Control\\DeviceClasses\\{CLASS}"
+        ))
+        .is_empty()
+        {
+            return Err("a removed device's interface is still recorded");
         }
         if CHILDREN
             .iter()

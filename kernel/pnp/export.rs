@@ -114,22 +114,10 @@ fn property(found: &Node, device: *mut DEVICE_OBJECT, which: u32) -> Option<Vec<
         FRIENDLY_NAME => string("FriendlyName"),
         LOCATION_INFORMATION => string("LocationInformation"),
         PHYSICAL_DEVICE_OBJECT_NAME => {
-            // SAFETY: a live device object; its name, if it has one, is
-            // a counted string that stays while the object does.
-            let name = unsafe {
-                let info = crate::ob::object::name_info(device.cast());
-                if info.is_null() {
-                    Vec::new()
-                } else {
-                    crate::rtl::copy_unicode(&raw const (*info).Name)
-                }
-            };
             // A device without a name has an empty one, as on Windows.
-            Some(if name.is_empty() {
-                Vec::new()
-            } else {
-                wide_bytes(&format!("\\Device\\{}", String::from_utf16_lossy(&name)))
-            })
+            // SAFETY: a live device object.
+            let name = unsafe { device_name(device) };
+            Some(name.map(|name| wide_bytes(&name)).unwrap_or_default())
         }
         BUS_TYPE_GUID => found.bus.map(|bus| bus.bus_type.to_vec()),
         LEGACY_BUS_TYPE => found
@@ -484,4 +472,22 @@ pub unsafe extern "C" fn IoGetDevicePropertyData(
         data.copy_from_nonoverlapping(value.as_ptr(), value.len());
     }
     STATUS_SUCCESS
+}
+
+/// The name of the device `device` in the object namespace, if it has
+/// one.
+///
+/// # Safety
+/// `device` is a live device object.
+pub unsafe fn device_name(device: *mut DEVICE_OBJECT) -> Option<String> {
+    // SAFETY: per the contract; a named object's name is a counted
+    // string that stays while the object does.
+    let name = unsafe {
+        let info = crate::ob::object::name_info(device.cast());
+        if info.is_null() {
+            return None;
+        }
+        crate::rtl::copy_unicode(&raw const (*info).Name)
+    };
+    (!name.is_empty()).then(|| format!("\\Device\\{}", String::from_utf16_lossy(&name)))
 }

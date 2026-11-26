@@ -13,7 +13,9 @@
 
 pub mod engine;
 pub mod export;
+pub mod interface;
 pub mod node;
+pub mod notify;
 pub mod query;
 pub mod registry;
 pub mod root;

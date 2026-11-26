@@ -14,7 +14,7 @@
 //! the kernel's symbols, so their offsets are the header's, stated in
 //! the tests below.
 
-use crate::io::{DEVICE_OBJECT, PVOID};
+use crate::io::{DEVICE_OBJECT, PVOID, UNICODE_STRING};
 use core::ffi::c_void;
 
 /// Minor functions of `IRP_MJ_PNP`.
@@ -524,6 +524,40 @@ pub struct DEVPROPKEY {
 const _: () = {
     assert!(size_of::<DEVPROPKEY>() == 20);
     assert!(core::mem::offset_of!(DEVPROPKEY, pid) == 16);
+};
+
+/// `IO_NOTIFICATION_EVENT_CATEGORY`.
+pub const EVENT_CATEGORY_HARDWARE_PROFILE_CHANGE: u32 = 0;
+pub const EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE: u32 = 2;
+pub const EVENT_CATEGORY_TARGET_DEVICE_CHANGE: u32 = 3;
+
+/// `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES`.
+pub const PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES: u32 = 1;
+
+/// `GUID_DEVICE_INTERFACE_ARRIVAL`, `GUID_DEVICE_INTERFACE_REMOVAL`
+/// (`{cb3a4004-46f0-11d0-b08f-00609713053f}` and `...4005...`).
+pub const GUID_DEVICE_INTERFACE_ARRIVAL: [u8; 16] = [
+    0x04, 0x40, 0x3a, 0xcb, 0xf0, 0x46, 0xd0, 0x11, 0xb0, 0x8f, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3f,
+];
+pub const GUID_DEVICE_INTERFACE_REMOVAL: [u8; 16] = [
+    0x05, 0x40, 0x3a, 0xcb, 0xf0, 0x46, 0xd0, 0x11, 0xb0, 0x8f, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3f,
+];
+
+/// [`DEVICE_INTERFACE_CHANGE_NOTIFICATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_device_interface_change_notification):
+/// what a callback registered for interface changes is handed.
+#[repr(C)]
+pub struct DEVICE_INTERFACE_CHANGE_NOTIFICATION {
+    pub Version: u16,
+    pub Size: u16,
+    pub Event: [u8; 16],
+    pub InterfaceClassGuid: [u8; 16],
+    pub SymbolicLinkName: *mut UNICODE_STRING,
+}
+
+const _: () = {
+    assert!(size_of::<DEVICE_INTERFACE_CHANGE_NOTIFICATION>() == 48);
+    assert!(core::mem::offset_of!(DEVICE_INTERFACE_CHANGE_NOTIFICATION, Event) == 4);
+    assert!(core::mem::offset_of!(DEVICE_INTERFACE_CHANGE_NOTIFICATION, SymbolicLinkName) == 40);
 };
 
 #[cfg(test)]

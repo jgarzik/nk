@@ -10,5 +10,10 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, pnp::export::IoInvalidateDeviceRelations),
     export!(Implemented, pnp::export::IoInvalidateDeviceState),
     export!(Implemented, pnp::export::IoOpenDeviceRegistryKey),
+    export!(Implemented, pnp::interface::IoRegisterDeviceInterface),
+    export!(Partial, pnp::notify::IoRegisterPlugPlayNotification),
+    export!(Implemented, pnp::interface::IoSetDeviceInterfaceState),
+    export!(Implemented, pnp::notify::IoUnregisterPlugPlayNotification),
+    export!(Implemented, pnp::notify::IoUnregisterPlugPlayNotificationEx),
     export!(Implemented, pnp::export::IoSetDevicePropertyData),
 ];
