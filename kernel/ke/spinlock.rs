@@ -27,6 +27,9 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
+    /// The device tree and what drivers asked of the Plug and Play
+    /// manager (`pnp`).
+    DeviceTree = 20,
     /// Devices' reference counts, delete-pending marks and attachment
     /// chains (`io::device`).
     IoDatabase = 25,

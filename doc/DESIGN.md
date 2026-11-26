@@ -82,11 +82,11 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `pnp`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
-| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -114,8 +114,10 @@ Firmware starts `nkload`, which loads the kernel and drivers and jumps to
 5. Time, IPIs, DPCs, the other processors, work queues, the object
    namespace, the registry.
 6. A thread at priority 8 and `PASSIVE_LEVEL`, what a driver expects of
-   its caller, prints the export table, starts the services the hive
-   starts at boot, and runs the test groups, which load drivers and send
+   its caller, prints the export table, makes the root of the device
+   tree and the HAL's device (Plug and Play), starts the services the
+   hive starts at boot, bringing up the devices each one serves before
+   the next starts, and runs the test groups, which load drivers and send
    them IRPs; the machine powers off. The boot context becomes processor
    0's idle loop.
 
@@ -1232,6 +1234,7 @@ make that safe.
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| a driver's `AddDevice` (the Plug and Play manager) | base: a system thread |
 | boot driver's reinitialisation routine | base of the system thread: the queue's reference to the driver object is not given back |
 | a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
 | a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
@@ -1792,6 +1795,131 @@ shares the pages of the part of the source's buffer it names, and the
 source's system mapping if there is one; mapped on its own, it keeps
 that mapping until it is freed. A part outside the source's buffer
 stops the system.
+
+## Plug and Play
+
+`kernel/pnp` is the Plug and Play manager; the rules it applies are
+`lib/pnp`, tested on the host. What a driver sees is Windows': the
+requests a device stack is sent and their order, `AddDevice`, the
+resource lists a start carries, the keys under `Enum`. The rest is NK's.
+
+**The tree.** One node per device (`pnp/node.rs`), NK's own structure,
+found by the address of the device's physical device object. Windows'
+`DEVICE_NODE` is private to its kernel; the device extension's
+`DeviceNode` field holds the address of NK's node, so that it is
+non-null for an enumerated device as on Windows, and NK never reads it
+back. The disassembly of `acpi.sys`, `pci.sys`, `storport.sys`,
+`classpnp.sys` and `disk.sys` was searched for reads through that field
+and none was found; that is a search, not a proof. The root is
+`HTREE\ROOT\0`, a device of `\Driver\PnpManager` (`pnp/root.rs`).
+
+**Reported devices.** A driver that detects its own device reports it
+(`pnp::report_detected_device`, Windows' `IoReportDetectedDevice` for a
+report without resources; kernel-internal, no driver NK runs imports
+the export): the device becomes `ROOT\<service>\0000`, a child of the
+root, with a physical device object of the manager's. The reporting
+driver attaches its own device and serves it; the manager adds no
+driver and sends no start. The HAL does this at boot, as on Windows
+(`hal/bus.rs`): `ROOT\ACPI_HAL\0000`, on whose bus the HAL's driver
+`\Driver\ACPI_HAL` enumerates `ACPI_HAL\PNP0C08\0`, the device the ACPI
+driver serves. What those two devices answer is read from the pinned
+kernel's HAL. The interrupts the ACPI device is offered follow Windows'
+rule on x86-64 (`nk_hal::x86::acpi_device_interrupts`); on arm64, where
+no kernel is pinned to read the rule or the hardware identifier from,
+the device has neither. Windows' HAL hands three interfaces out of the
+ACPI device (the standard bus interface, ACPI's CMOS interface, DMA
+cache coherency); NK's hands out none.
+
+**One piece of work at a time.** Everything the manager does to a
+device is done by the thread that holds the engine's mutex
+(`pnp/engine.rs`): the boot thread as it starts drivers, a worker for
+what drivers ask for (`IoInvalidateDeviceRelations` queues and
+returns), a test. `pnp::settle` does all there is to do and returns
+when nothing moves. Windows queues device actions for one worker in the
+same way.
+
+**A new device** is asked, in Windows' order (`PiProcessNewDeviceNode`):
+its device identifier, capabilities, description and location text,
+instance identifier, hardware and compatible identifiers, bus
+information, resource requirements and boot configuration, and is then
+told it has been enumerated. NK does not send the query for the
+extended-address interface Windows sends after the capabilities. The
+instance path, the parent prefix for a bus whose children are not
+unique (`ParentIdPrefix`, `NextParentID.<hash>.<depth>`), and the
+hash behind it are Windows' (`nk_pnp::ids`, held to the reference
+machine's values). The key gets the values the manager writes on
+Windows; a device that cannot be removed is put in the machine's
+container, one that can gets no `ContainerID` (Windows makes one from
+its identifiers). Two devices with one instance path stop Windows; NK
+leaves the second unstarted (problem 42).
+
+**Finding the driver.** Windows installs a device once, from its INF,
+in user mode, and at every later boot uses what installation left in
+the device's key. NK's registry starts without the keys of enumerated
+devices and NK runs no installer, so NK applies the driver database's
+record the first time it sees a device (`pnp/registry.rs`): the first
+hardware identifier, else the first compatible identifier, that has a
+record under `DriverDatabase\DeviceIds` whose configuration does not
+exclude the device, and from it the values installation writes
+(`Service`, `ClassGUID`, `Driver`, `DeviceDesc`, `Mfg`, `ConfigFlags`),
+the driver key under the class, and the configuration's `Device`
+subtree copied into `Device Parameters` (where `pci.sys` looks for
+`MSISupported`). Differences: the text behind the `;` of `DeviceDesc`
+and `Mfg` is the bus's description or empty, because the INF's strings
+are not in the database; the configuration's `Services` subtree is not
+merged into the service key; ranking is by position only (Windows also
+weighs signature and date). A device with a key already (a `ClassGUID`,
+a `Driver`, or for an enumerated device a `Service`) is not installed
+again.
+
+**The stack.** Lower filters of the device, then of its class; the
+service; upper filters of the device, then of its class. Each driver's
+`AddDevice` is called from the base of a system thread. While
+boot-start drivers are being started, a device whose drivers are not
+all running waits and is looked at again after each driver's entry
+(Windows does the same per boot driver); afterwards a driver is loaded
+when a device needs it. A device with no driver is started raw if its
+bus says it may be (`RawDeviceOK`), else left with problem 28.
+A filter whose service has no image is left out of the stack, with a
+line in the log; Windows fails the device (What is absent). A driver
+whose entry failed is not tried again (problem 37); a failed
+`AddDevice` has the devices attached so far removed (problem 31).
+
+**Resources.** The stack filters the requirements
+(`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`, sent as Windows sends it:
+successful, holding the list). NK then chooses itself
+(`nk_pnp::assign`), where Windows asks arbiters: one table of claims
+for the machine; a device's ancestors do not stand in its way; each
+requirement gets its first choice that can be had, at the boot
+configuration if the choice allows it, else at the lowest free place;
+a boot configuration is kept for its device until the device is
+assigned. A line interrupt is given only where the requirement names
+one line or firmware configured one: NK asks no bus driver's arbiter or
+translator interface. Translation: memory, ports and bus numbers are
+what they are; an interrupt gets its vector from the hardware layer
+(`hal::interrupt::translate`, a line by its number, messages by their
+count) and is recorded for `IoConnectInterruptEx`
+(`io::interrupt::assign`); the interrupts of the HAL's own child are
+vectors already and stay as stated, as the reference Windows records
+them. The start carries the raw and the translated list; `Control`
+gets `AllocConfig` and `FilteredConfigVector`, and the service's `Enum`
+key the device.
+
+**After the start** the capabilities are asked again and the device
+state; a device its drivers call failed, disabled or removed is taken
+down (problem 43). A failed start has the stack told the device is
+removed, so that its drivers detach and delete what they attached, and
+what it was given is taken back (problem 10). Then the device is asked
+for its children; new ones get a node and `DO_BUS_ENUMERATED_DEVICE`,
+those no longer reported are told they are gone (surprise removal, then
+removal) with everything below them. That, the removal after a failed
+start, and `pnp::remove_reported_device` are the only removals: there
+is no query-remove, no eject, no stop and no rebalance.
+
+**Held back.** `engine::HELD_BACK` names services whose devices NK does
+not bring up yet because their `AddDevice` or start reaches a routine
+NK lacks: at present `ACPI`, so nothing below the HAL's ACPI device is
+enumerated.
 
 ## The registry
 
@@ -2559,7 +2687,7 @@ transition calls them.
 
 ## What is absent
 
-No APCs, Plug and Play, power management, processes
+No APCs, power management, processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
@@ -2570,6 +2698,17 @@ does not read), and every rule a driver asks the errata manager about
 is reported as defined and not applying, where Windows evaluates the
 rules of that file; so the workarounds for the hardware it lists are
 not made.
+
+**Plug and Play** (the section of that name says what NK does). No
+device installation: a driver-database record is applied when a device
+is first seen. No arbiters or translators of bus drivers are asked: NK
+assigns resources itself. No removal on request, eject, stop,
+rebalance, hot-plug notification or device interface. A filter driver
+that is registered for a device or its class and has no image among
+the boot files is left out of the stack, where Windows fails the
+device: the reference machine registers `EhStorClass` (a KMDF driver
+outside the corpus) and `partmgr` for disks. Devices whose service is
+held back (`pnp::engine::HELD_BACK`) are found and not started.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`

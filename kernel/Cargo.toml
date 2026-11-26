@@ -23,6 +23,7 @@ nk-hal = { path = "../lib/hal" }
 nk-ke = { path = "../lib/ke" }
 nk-mm = { path = "../lib/mm" }
 nk-ntabi = { path = "../lib/ntabi" }
+nk-pnp = { path = "../lib/pnp" }
 nk-ob = { path = "../lib/ob" }
 nk-oracle = { path = "../lib/oracle" }
 nk-pe = { path = "../lib/pe" }
