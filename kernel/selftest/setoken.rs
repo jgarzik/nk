@@ -7,6 +7,7 @@ use crate::mm::pool;
 use crate::ob::object;
 use crate::ps::process;
 use crate::se::access::*;
+use crate::se::audit::*;
 use crate::se::descriptor::*;
 use crate::se::impersonate::*;
 use crate::se::token::*;
@@ -38,6 +39,7 @@ pub static GROUP: Group = Group {
         "se.impersonation",
         "se.client-security",
         "se.anonymous",
+        "se.audit",
     ],
     run,
     manual: false,
@@ -2060,6 +2062,63 @@ fn anonymous_logon() -> Result<(), &'static str> {
     on_a_thread(anonymous_on_thread)
 }
 
+// ---- auditing -------------------------------------------------------------
+
+/// An open to audit, with auditing off: what the routine writes, and
+/// what it leaves.
+fn audit_alarm() -> Result<(), &'static str> {
+    let (mut state, mut aux): (ACCESS_STATE, AUX_ACCESS_DATA) = (dirty(), dirty());
+    let (state, aux) = (&raw mut state, &raw mut aux);
+    let mut descriptor = Absolute::new(Some(&SYSTEM), Some(&SYSTEM), Dacl::List(&ALLOW_ALL));
+    let descriptor = descriptor.pointer();
+    // The three bytes a driver could read afterwards: the caller's
+    // flag, the state's "generate audit", the staging mark.
+    let alarm = |descriptor: *mut c_void, user: bool| {
+        let mut generate = 0xAAu8;
+        // SAFETY: the state was created below and is not deleted yet.
+        unsafe {
+            (&raw mut (*state).GenerateAudit).write(0xAA);
+            (&raw mut (*aux).GenerateStagingEvents).write(0xAA);
+            SeOpenObjectAuditAlarm(
+                core::ptr::null(),
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                descriptor,
+                state,
+                0,
+                1,
+                i8::from(user),
+                &raw mut generate,
+            );
+            (
+                generate,
+                (*state).GenerateAudit,
+                (*aux).GenerateStagingEvents,
+                (*state).GenerateOnClose,
+            )
+        }
+    };
+    // SAFETY: locals that outlive the calls.
+    unsafe {
+        if SeCreateAccessState(state, aux, 1, &FILE_GENERIC_MAPPING) != 0 {
+            return Err("no access state");
+        }
+        let answers = (
+            alarm(descriptor, false),
+            alarm(descriptor, true),
+            alarm(core::ptr::null_mut(), true),
+        );
+        SeDeleteAccessState(state);
+        if answers.0 != (0xAA, 0xAA, 0xAA, 0) {
+            return Err("an open by kernel mode was looked at for auditing");
+        }
+        if answers.1 != (0xAA, 0, 0, 0) || answers.2 != (0xAA, 0, 0xAA, 0) {
+            return Err("with auditing off an open is not left as Windows leaves it");
+        }
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -2074,4 +2133,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.impersonation", impersonation);
     r.check("se.client-security", client_security);
     r.check("se.anonymous", anonymous_logon);
+    r.check("se.audit", audit_alarm);
 }

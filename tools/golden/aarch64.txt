@@ -135,6 +135,7 @@ se.token-handles ok
 se.impersonation ok
 se.client-security ok
 se.anonymous ok
+se.audit ok
 cm.keys ok
 cm.values ok
 cm.delete ok

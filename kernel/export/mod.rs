@@ -372,6 +372,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, se::access::SeFreePrivileges),
     export!(Implemented, se::impersonate::SeImpersonateClientEx),
     export!(Implemented, se::token::SeLockSubjectContext),
+    export!(Implemented, se::audit::SeOpenObjectAuditAlarm),
     export!(Implemented, se::access::SePrivilegeCheck),
     export!(Implemented, se::token::SeQueryInformationToken),
     export!(Implemented, se::descriptor::SeQuerySecurityDescriptorInfo),

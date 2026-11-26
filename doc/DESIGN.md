@@ -1532,7 +1532,13 @@ what that code does beyond them (mandatory integrity labels, restricted
 tokens, object-specific and conditional entries, AppContainers) is not
 done. Generic rights are the caller's to map, as on Windows. A right
 that a privilege granted comes back in a privilege set from the pool,
-which `SeFreePrivileges` frees. Nothing audits.
+which `SeFreePrivileges` frees.
+
+Nothing audits: NK has no audit policy and nobody to report to, which
+is Windows with every audit category off. `SeOpenObjectAuditAlarm`
+does what Windows' does then (`kernel/se/audit.rs`): it clears the
+access state's "generate audit" mark and leaves the caller's
+"generate on close" as it was.
 
 The privilege checks (`SePrivilegeCheck`, `SeSinglePrivilegeCheck`)
 answer for the same subject, and mark in the caller's set the
