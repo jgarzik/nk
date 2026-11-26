@@ -36,6 +36,7 @@ mod service;
 mod setoken;
 mod sioctl;
 mod smp;
+mod storage;
 mod thread;
 mod timer;
 mod wait;
@@ -163,6 +164,7 @@ pub static GROUPS: &[&[&Group]] = &[
     cancel::GROUPS,
     oracle::GROUPS,
     neg::GROUPS,
+    storage::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

@@ -801,3 +801,12 @@ tier = "gate"
 cmdline = "test=oracle.nkc-cross-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(parameter 1 0xffffffffe04e4b41\\)"
+
+# Microsoft's storage stack on the machine's AHCI controller and disk.
+
+[x86_64-storage]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=stor.load"
+disk = "ahci"
+disk_expect = "unchanged"
