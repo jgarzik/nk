@@ -718,6 +718,16 @@ fn mailslot(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     if (seen.desired, seen.remaining) != (0x0012_0089, 0x0012_0089) {
         return Err("a mailslot's create request does not carry the access asked for");
     }
+    // An option that means nothing for a mailslot is refused before the
+    // name is looked at: no driver hears of it.
+    let before = CREATES.load(Ordering::Acquire);
+    let refused = file::open(&OpenRequest {
+        create_options: FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
+        ..request
+    });
+    if refused != Err(STATUS_INVALID_PARAMETER) || CREATES.load(Ordering::Acquire) != before {
+        return Err("a mailslot was created with an option that is not a mailslot's");
+    }
     Ok(1)
 }
 

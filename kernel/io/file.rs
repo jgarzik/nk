@@ -67,6 +67,10 @@ pub enum IoError {
     Refused(NTSTATUS),
 }
 
+/// `FILE_VALID_PIPE_OPTION_FLAGS` and `FILE_VALID_MAILSLOT_OPTION_FLAGS`
+/// (`ntifs.h`): write-through and the two synchronous modes.
+const FILE_VALID_PIPE_OPTION_FLAGS: u32 = 0x32;
+
 /// What is opened.
 #[derive(Clone, Copy)]
 pub enum Kind {
@@ -435,6 +439,14 @@ unsafe fn create_not_completed(device: *mut DEVICE_OBJECT, major: u8, status: NT
 /// (`IoStatus.Information`: `FILE_OPENED`, `FILE_CREATED`, ...), or the
 /// status the open failed with.
 pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
+    // A pipe or a mailslot is created with few options
+    // (`FILE_VALID_PIPE_OPTION_FLAGS`, `FILE_VALID_MAILSLOT_OPTION_FLAGS`
+    // in `ntifs.h`): any other is refused before the name is looked at.
+    if !matches!(request.kind, Kind::File)
+        && request.create_options & !FILE_VALID_PIPE_OPTION_FLAGS != 0
+    {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
     let name: Vec<u16> = request.name.encode_utf16().collect();
     let target = resolve(request.root, &name)?;
     let device = target.device;
