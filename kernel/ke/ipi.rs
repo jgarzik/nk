@@ -128,7 +128,8 @@ fn broadcast(packet: usize) {
             core::hint::spin_loop();
         }
     }
-    // No driver's frame lies beneath the function here.
+    // An exception the function lets out cannot be survived, here as
+    // on Windows, which would be left holding its interprocessor lock.
     let guard = seh::Guard::Base(seh::Unhandled::KernelMode);
     // SAFETY: the driver's function, called as `KeIpiGenericCall`
     // promises: at the interprocessor IRQL, with its context.

@@ -153,7 +153,7 @@ pub struct KTIMER {
 /// [`PROCESSOR_NUMBER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/miniport/ns-miniport-_processor_number):
 /// a processor by its group and its number in the group.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PROCESSOR_NUMBER {
     pub Group: u16,
     pub Number: u8,
@@ -169,8 +169,43 @@ const _: () = {
 /// `DISPATCHER_HEADER.Type`... of a `KDPC` made by
 /// `KeInitializeThreadedDpc`: `ThreadedDpcObject`.
 pub const THREADED_DPC_OBJECT: u8 = 0x1A;
-/// `KDPC_IMPORTANCE`: `HighImportance`, the largest value there is.
+/// `KDPC_IMPORTANCE`: `HighImportance`.
 pub const HIGH_IMPORTANCE: u8 = 2;
+
+/// [`KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_ke_processor_change_notify_context):
+/// what a processor-change callback is told.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT {
+    /// A `KE_PROCESSOR_CHANGE_NOTIFY_STATE`.
+    pub State: u32,
+    pub NtNumber: u32,
+    pub Status: crate::status::NTSTATUS,
+    pub ProcNumber: PROCESSOR_NUMBER,
+}
+
+/// `KE_PROCESSOR_CHANGE_NOTIFY_STATE`.
+pub const KE_PROCESSOR_ADD_START_NOTIFY: u32 = 0;
+pub const KE_PROCESSOR_ADD_COMPLETE_NOTIFY: u32 = 1;
+pub const KE_PROCESSOR_ADD_FAILURE_NOTIFY: u32 = 2;
+/// `KeRegisterProcessorChangeCallback`'s flag: call the routine now for
+/// the processors there are.
+pub const KE_PROCESSOR_CHANGE_ADD_EXISTING: u32 = 1;
+
+/// `PROCESSOR_CALLBACK_FUNCTION`: the context it was registered with,
+/// the change, and a status it may set to refuse a processor.
+pub type PROCESSOR_CALLBACK_FUNCTION = unsafe extern "C" fn(
+    *mut c_void,
+    *mut KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT,
+    *mut crate::status::NTSTATUS,
+);
+
+const _: () = {
+    assert!(core::mem::size_of::<KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT>() == 0x10);
+    assert!(core::mem::offset_of!(KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT, NtNumber) == 0x04);
+    assert!(core::mem::offset_of!(KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT, Status) == 0x08);
+    assert!(core::mem::offset_of!(KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT, ProcNumber) == 0x0C);
+};
 
 /// `KTIMER2` (`wdm.h`): the storage a driver sets aside for a timer of
 /// the `KeInitializeTimer2` family. The fields are Windows' and no
