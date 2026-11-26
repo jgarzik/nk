@@ -81,6 +81,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         ex::sysinfo_ex::NtQuerySystemInformationEx
     ),
     export!(Implemented, ex::license::ZwQueryLicenseValue),
+    export!(Partial, ex::firmware::ZwSetSystemInformation),
     export!(Implemented, ex::shim::KseRegisterShim),
     export!(Implemented, ex::vsl::VslGetSecurePciEnabled),
     export!(Implemented, ex::rundown::ExInitializeRundownProtection),

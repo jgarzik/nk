@@ -1985,6 +1985,14 @@ away a registration its drivers left behind).
 platform's low-power idle state) and a device's flags for that state
 (`PoDirectedDripsSetDeviceFlags`).
 
+**Shutting down.** A driver's request for a shutdown that ends with
+the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button
+and for a critical temperature) powers the machine off at once, by the
+path the kernel ends a run by: there is no user mode to ask and nothing
+to flush. What the pinned kernel refuses outright is refused; every
+other action is its policy manager's, which NK lacks, and stops the
+system naming the action.
+
 **Absent.** Hibernation: `PoSetHiberRange` stops the system with the
 bugcheck the pinned kernel raises when it is called and no hibernation
 is in progress. An ordered shutdown before a bugcheck:
@@ -2751,6 +2759,13 @@ routine: every caller is in kernel mode. It answers the classes the
 binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
 Lengths, and what is reported as the length needed, are the pinned
 kernel's, class by class.
+
+`ZwSetSystemInformation` takes one class, the one `acpi.sys` sets:
+the registration of a firmware table provider (75), kept by the pinned
+kernel's rules with a reference to the provider's driver object
+(`kernel/ex/firmware.rs`, `nk_ex::firmware`). Nothing asks a provider
+for a table: the class that would is not among those answered. Any
+other class set stops the system naming it.
 
 | Class | Answer |
 | --- | --- |

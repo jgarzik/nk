@@ -7,3 +7,4 @@ po.coalescing ok
 po.fx-register ok
 po.fx-active-idle ok
 po.fx-no-extension ok
+po.power-action ok
