@@ -44,6 +44,7 @@ pub static GROUP: Group = Group {
         "pnp.interface",
         "pnp.invalidate-state",
         "pnp.removed",
+        "pnp.re-enumerated",
     ],
     run,
     manual: false,
@@ -1542,6 +1543,33 @@ fn run(r: &mut Report, _: &BootInfo) {
             return Err("the removed child's vector is still given out");
         }
         Ok(())
+    });
+    // The first child comes back: a new device object for a device
+    // whose key is still there from its installation. What it requires
+    // depends on that key, and its bus driver is asked once, before
+    // anything is installed: the device must have its name by then.
+    r.check("pnp.re-enumerated", || {
+        let again = make(bench.drivers[0], Role::Child, 1)?;
+        // SAFETY: the device just made.
+        unsafe { (*again).Flags &= !DO_DEVICE_INITIALIZING };
+        CHILDREN[0].store(again, Ordering::Release);
+        DEVICE_STATE.store(0, Ordering::Release);
+        bench.report(1);
+        pnp::settle();
+        let found = child(1).ok_or("the device that came back has no node")?;
+        let result = if found.requirements != child_requirements(1, true).to_bytes() {
+            Err("its bus driver did not find its key when asked what it requires")
+        } else if found.state != State::Started {
+            Err("the device that came back was not started")
+        } else {
+            Ok(())
+        };
+        bench.report(0);
+        pnp::settle();
+        if child(1).is_some() || !CHILDREN[0].load(Ordering::Acquire).is_null() {
+            return Err("the device that came back was not removed again");
+        }
+        result
     });
     drop(bench);
 }

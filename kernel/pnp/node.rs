@@ -83,8 +83,8 @@ pub struct Node {
     /// (`report_detected_device`): that driver's device is on the stack
     /// already, and nothing is added or started by the manager.
     pub reported: bool,
-    /// The log has said what the device waits for (a driver NK holds
-    /// back, a device it depends on).
+    /// The log has said that the device waits for a device it depends
+    /// on.
     pub held_back: bool,
     /// The device has been asked for its children.
     pub enumerated: bool,

@@ -4,9 +4,14 @@
 //!
 //! One thread at a time does any of this: whoever holds the engine's
 //! mutex ([`serialised`]). Requests that arrive from drivers
-//! (`IoInvalidateDeviceRelations`) are queued and carried out by a
-//! worker thread, which takes the mutex like anyone else; the boot and
-//! the tests call [`settle`] and have everything done when it returns.
+//! (`IoInvalidateDeviceRelations`) are queued and carried out by the
+//! engine's own thread, which takes the mutex like anyone else; the
+//! boot and the tests call [`settle`] and have everything done when it
+//! returns. The engine's thread is not one of the system's worker
+//! threads, as Windows' device-action worker is not: the engine waits
+//! for drivers with its mutex held, and drivers complete what it waits
+//! for from work items, so a work queue's threads must never be found
+//! waiting for the engine.
 //! The mutex is held across requests to device stacks and calls of
 //! `AddDevice`, which may wait; no spin lock is.
 //!
@@ -23,12 +28,10 @@ use crate::ob::object;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
-use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
-use nk_ntabi::ex::WORK_QUEUE_ITEM;
 use nk_ntabi::io::*;
-use nk_ntabi::ke::KMUTANT;
+use nk_ntabi::ke::{KEVENT, KMUTANT};
 use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
 use nk_pnp::assign::{self, Claims};
@@ -39,40 +42,23 @@ use nk_pnp::{database, ids, relations};
 /// `DO_BUS_ENUMERATED_DEVICE`: the device was reported by a bus driver.
 const DO_BUS_ENUMERATED_DEVICE: u32 = 0x1000;
 
-/// `DelayedWorkQueue`.
-const DELAYED_WORK_QUEUE: u32 = 1;
-
-/// What NK does not bring up yet, and why: a service, whose devices
-/// are then found and not given their drivers, or a device identifier,
-/// for a device that is started without a driver. Bringing one up
-/// reaches a routine NK lacks, or does not come to an end. A name
-/// leaves this list in the commit that makes it work
-/// (`doc/DESIGN.md`, What is absent).
-const HELD_BACK: &[(&str, &str)] = &[
-    (
-        "pci",
-        "its start reaches routines NK lacks; a boot with this entry removed names the next",
-    ),
-    (
-        "ACPI\\ACPI0010",
-        "started without a driver, acpi.sys never completes its start request",
-    ),
-];
-
-/// The engine's mutex, and what only its holder touches: which
-/// resources every device holds.
+/// The engine's mutex, the event its thread waits for, and what only
+/// the mutex's holder touches: which resources every device holds.
 struct Engine {
     mutex: UnsafeCell<MaybeUninit<KMUTANT>>,
+    /// Set when a request has been queued: a synchronisation event.
+    wake: UnsafeCell<MaybeUninit<KEVENT>>,
     claims: UnsafeCell<Claims>,
 }
 
-// SAFETY: the mutex is reached through the kernel's mutex routines,
-// which lock for themselves; the claims only by the thread that holds
-// the mutex (`with_claims`).
+// SAFETY: the mutex and the event are reached through the kernel's
+// routines for them, which lock for themselves; the claims only by the
+// thread that holds the mutex (`with_claims`).
 unsafe impl Sync for Engine {}
 
 static ENGINE: Engine = Engine {
     mutex: UnsafeCell::new(MaybeUninit::uninit()),
+    wake: UnsafeCell::new(MaybeUninit::uninit()),
     claims: UnsafeCell::new(Claims::new()),
 };
 
@@ -95,8 +81,6 @@ enum Action {
 
 struct Requests {
     actions: Vec<Action>,
-    /// The work item is on its queue, or its routine has not yet begun.
-    scheduled: bool,
     /// Boot-start services whose driver failed to initialise: a device
     /// that needs one is not started.
     failed: Vec<String>,
@@ -106,30 +90,34 @@ static REQUESTS: SpinLock<Requests> = SpinLock::new(
     Rank::DeviceTree,
     Requests {
         actions: Vec::new(),
-        scheduled: false,
         failed: Vec::new(),
     },
 );
 
-struct Work(UnsafeCell<WORK_QUEUE_ITEM>);
+/// The priority of the engine's thread: that of the system's delayed
+/// worker threads.
+const PRIORITY: u8 = 12;
 
-// SAFETY: reached only through `ExQueueWorkItem`, which locks, and only
-// while `Requests::scheduled` says it is on no queue.
-unsafe impl Sync for Work {}
+/// Make the engine's mutex and start its thread. Once, before anything
+/// else here is used.
+pub fn init() -> Result<(), &'static str> {
+    // SAFETY: the storage of the mutex and of the event, initialised
+    // here before any use: a synchronisation event, not signalled.
+    unsafe {
+        mutex::KeInitializeMutex(ENGINE.mutex.get().cast(), 0);
+        wait::KeInitializeEvent(ENGINE.wake.get().cast(), 1, 0);
+    }
+    crate::ke::thread::create(thread, 0, PRIORITY, crate::ke::thread::ANYWHERE).map(|_| ())
+}
 
-static WORK: Work = Work(UnsafeCell::new(WORK_QUEUE_ITEM {
-    List: LIST_ENTRY {
-        Flink: core::ptr::null_mut(),
-        Blink: core::ptr::null_mut(),
-    },
-    WorkerRoutine: Some(worker),
-    Parameter: core::ptr::null_mut(),
-}));
-
-/// Make the engine's mutex. Once, before anything else here is used.
-pub fn init() {
-    // SAFETY: the mutex's storage, initialised here before any use.
-    unsafe { mutex::KeInitializeMutex(ENGINE.mutex.get().cast(), 0) };
+/// The engine's thread: whenever a request has been queued, do
+/// everything there is to do.
+fn thread(_: usize) {
+    loop {
+        // SAFETY: the engine's event, initialised by `init`.
+        unsafe { wait::wait(Some(ENGINE.wake.get().cast()), None) };
+        settle();
+    }
 }
 
 /// Run `f` as the one piece of Plug and Play work in progress. The
@@ -154,34 +142,23 @@ fn with_claims<R>(f: impl FnOnce(&mut Claims) -> R) -> R {
     f(unsafe { &mut *ENGINE.claims.get() })
 }
 
-/// The work routine: carry out what was asked for.
-///
-/// # Safety
-/// Called as a work routine.
-unsafe extern "C" fn worker(_: *mut c_void) {
-    REQUESTS.lock().scheduled = false;
-    settle();
-}
-
-/// Queue `action` for a worker thread. `false` if there is no memory:
-/// the action is then not done.
+/// Queue `action` for the engine's thread and wake it. `false` if there
+/// is no memory: the action is then not done. Callable at
+/// `DISPATCH_LEVEL`.
 fn request(action: Action) -> bool {
-    let schedule = {
+    {
         let mut requests = REQUESTS.lock();
         if requests.actions.try_reserve(1).is_err() {
             return false;
         }
         requests.actions.push(action);
-        !core::mem::replace(&mut requests.scheduled, true)
-    };
-    if schedule {
-        // SAFETY: the item is on no queue: `scheduled` was clear.
-        unsafe { crate::ex::work::ExQueueWorkItem(WORK.0.get(), DELAYED_WORK_QUEUE) };
     }
+    // SAFETY: the engine's event, initialised by `init`.
+    unsafe { wait::KeSetEvent(ENGINE.wake.get().cast(), 0, 0) };
     true
 }
 
-/// Have the device `pdo` asked for its children again, by a worker
+/// Have the device `pdo` asked for its children again, by the engine's
 /// thread: what `IoInvalidateDeviceRelations` asks for.
 ///
 /// # Safety
@@ -191,7 +168,7 @@ pub unsafe fn enumerate_later(pdo: *mut DEVICE_OBJECT) {
     unsafe { later(pdo, Action::Enumerate(pdo as usize)) }
 }
 
-/// Have the device `pdo` asked for its state again, by a worker
+/// Have the device `pdo` asked for its state again, by the engine's
 /// thread: what `IoInvalidateDeviceState` asks for.
 ///
 /// # Safety
@@ -201,8 +178,8 @@ pub unsafe fn requery_later(pdo: *mut DEVICE_OBJECT) {
     unsafe { later(pdo, Action::Requery(pdo as usize)) }
 }
 
-/// Have a worker look at every device again: a dependency was stated
-/// or resolved.
+/// Have the engine's thread look at every device again: a dependency
+/// was stated or resolved.
 pub fn look_later() {
     request(Action::Look);
 }
@@ -458,6 +435,20 @@ fn identify(pdo: usize) {
                     format_args!("another device has the same instance path"),
                 );
             }
+            // The device has its name from here on, and its key: a bus
+            // driver that is asked for the device's requirements next
+            // may look in the key for what an earlier installation left
+            // there, as it can on Windows, where the instance key is
+            // made before those queries.
+            let named = (found.instance.clone(), found.device_id.clone());
+            node::with(pdo, |node| (node.instance, node.device_id) = named);
+            if crate::cm::write_path(&registry::enum_key(&found.instance), &[]).is_err() {
+                return fail(
+                    pdo,
+                    node::CM_PROB_OUT_OF_MEMORY,
+                    format_args!("its key could not be made"),
+                );
+            }
         }
         // A list with an invalid identifier in it is no list.
         let list = |kind| {
@@ -597,22 +588,6 @@ fn add_drivers(pdo: usize) -> bool {
     }
     let service =
         registry::string(&key, "Service").map(|value| String::from(database::service_name(&value)));
-    let held = HELD_BACK.iter().find(|(held, _)| {
-        held.eq_ignore_ascii_case(&found.device_id)
-            || service
-                .as_deref()
-                .is_some_and(|service| held.eq_ignore_ascii_case(service))
-    });
-    if let Some((held, why)) = held {
-        // Said once: the device is looked at whenever anything moves.
-        if !node::with(pdo, |node| core::mem::replace(&mut node.held_back, true)).unwrap_or(true) {
-            kprintln!(
-                "pnp: {}: not started: {held} is held back ({why})",
-                found.instance
-            );
-        }
-        return false;
-    }
     let Some(service) = service else {
         if found.capabilities & DEVICE_CAPABILITY_RAW_DEVICE_OK != 0 {
             node::with(pdo, |node| node.state = State::Stacked);
@@ -643,6 +618,7 @@ fn add_drivers(pdo: usize) -> bool {
         .chain(filters("UpperFilters"))
         .collect();
     let mut drivers: Vec<(String, *mut DRIVER_OBJECT)> = Vec::new();
+    let mut left_out: Vec<String> = Vec::new();
     for Wanted { name, filter } in wanted {
         let kind = if filter { "filter" } else { "driver" };
         let running = match io::driver::running(&name) {
@@ -677,10 +653,7 @@ fn add_drivers(pdo: usize) -> bool {
                 _ if filter => {
                     // NK's stated difference from Windows, which fails
                     // the device: `doc/DESIGN.md`, What is absent.
-                    kprintln!(
-                        "pnp: {}: filter {name} has no image; the stack is built without it",
-                        found.instance
-                    );
+                    left_out.push(name.clone());
                     None
                 }
                 _ => {
@@ -696,6 +669,12 @@ fn add_drivers(pdo: usize) -> bool {
         if let Some(driver) = running {
             drivers.push((name, driver));
         }
+    }
+    for name in &left_out {
+        kprintln!(
+            "pnp: {}: filter {name} has no image; the stack is built without it",
+            found.instance
+        );
     }
     for (at, (name, driver)) in drivers.iter().enumerate() {
         kprintln!("pnp: {}: AddDevice of {name}", found.instance);
