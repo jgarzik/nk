@@ -21,6 +21,7 @@ pub static GROUP: Group = Group {
         "thread.wake-at-dispatch",
         "work.queue-types",
         "work.driver-object",
+        "ps.thread.no-handle",
     ],
     run,
     manual: false,
@@ -406,8 +407,88 @@ fn driver_object() -> Result<(), &'static str> {
     result
 }
 
+/// What a system thread's routine found: that it ran, and the handle
+/// its creator was to be given.
+static STARTED: AtomicU32 = AtomicU32::new(0);
+static HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+static HANDLE_SEEN: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+/// # Safety
+/// Called as a system thread's start routine.
+unsafe extern "C" fn note_start(_: *mut c_void) {
+    HANDLE_SEEN.store(HANDLE.load(Ordering::Acquire), Ordering::Release);
+    STARTED.fetch_add(1, Ordering::AcqRel);
+}
+
+/// `PsCreateSystemThread` reports failure only for a thread that never
+/// runs: one that cannot be given its handle is not started, and
+/// leaves nothing behind. One that can finds the handle already handed
+/// to its creator when it starts, as on Windows, which readies the
+/// thread last.
+fn thread_without_handle() -> Result<(), &'static str> {
+    const STATUS_INSUFFICIENT_RESOURCES: i32 = 0xC000_009Au32 as i32;
+    let threads = thread::count();
+    STARTED.store(0, Ordering::Release);
+    // SAFETY: the routine takes any context.
+    let status = unsafe {
+        crate::ps::create_system_thread(note_start, core::ptr::null_mut(), |_| {
+            STATUS_INSUFFICIENT_RESOURCES
+        })
+    };
+    if status != STATUS_INSUFFICIENT_RESOURCES {
+        return Err("a thread that got no handle was not reported as the failure it was");
+    }
+    // Long enough for a thread that was started to run.
+    for _ in 0..100 {
+        time::stall(1_000);
+        thread::yield_now();
+    }
+    if STARTED.load(Ordering::Acquire) != 0 {
+        return Err("PsCreateSystemThread failed, and the thread ran all the same");
+    }
+    if thread::count() != threads {
+        return Err("a thread that was never started is still there");
+    }
+
+    HANDLE.store(core::ptr::null_mut(), Ordering::Release);
+    HANDLE_SEEN.store(core::ptr::null_mut(), Ordering::Release);
+    // SAFETY: `HANDLE` is room for a handle; the routine takes any
+    // context.
+    let status = unsafe {
+        crate::ps::PsCreateSystemThread(
+            HANDLE.as_ptr(),
+            0x001F_FFFF,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Some(note_start),
+            core::ptr::null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err("a system thread could not be created");
+    }
+    let handle = HANDLE.load(Ordering::Acquire);
+    let deadline = time::interrupt_time() + 20_000_000;
+    while STARTED.load(Ordering::Acquire) != 1 || thread::count() != threads {
+        if time::interrupt_time() > deadline {
+            crate::ps::ZwClose(handle);
+            return Err("a system thread did not run and end");
+        }
+        thread::yield_now();
+    }
+    if crate::ps::ZwClose(handle) != 0 {
+        return Err("the new thread's handle did not close");
+    }
+    if handle.is_null() || HANDLE_SEEN.load(Ordering::Acquire) != handle {
+        return Err("a system thread ran before its creator had been given its handle");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ob.current-thread", current_thread);
+    r.check("ps.thread.no-handle", thread_without_handle);
     match device_list() {
         Ok(n) => r.ok_with(
             "io.device-list",

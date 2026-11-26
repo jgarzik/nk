@@ -264,6 +264,11 @@ stack. The switch saves what a call preserves on the outgoing stack
 in the thread's `KernelStack`. An exited thread is freed by the thread
 that runs next. The SMP rules are in `doc/LOCKING.md`.
 
+`PsCreateSystemThread` makes the thread, opens the creator's handle and
+writes it out, and only then makes the thread ready, as Windows does.
+A thread that cannot be given its handle is taken back unstarted, so
+the routine reports failure only for a thread that never ran.
+
 ## The System process
 
 There is one process, System, with Windows' id for it (4). Its block has
