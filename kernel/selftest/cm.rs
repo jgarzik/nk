@@ -1291,7 +1291,8 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
 
     // More than four bytes: a buffer whose first word is its size. A
     // positive size wants length and type before the data, a negative
-    // one the data alone; one too small for either is refused.
+    // one the data alone; one too small for either gets nothing, and
+    // that is no failure of the query.
     let mut buffer = [0xEEEE_EEEEu32; 6];
     let sized = [24, -24, 12].map(|size: i32| {
         buffer = [0xEEEE_EEEE; 6];
@@ -1304,14 +1305,15 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         != [
             (0, [8, REG_QWORD, 0x5566_7788, 0x1122_3344, E, E]),
             (0, [0x5566_7788, 0x1122_3344, E, E, E, E]),
-            (TOO_SMALL, [12, E, E, E, E, E]),
+            (0, [12, E, E, E, E, E]),
         ]
     {
         return Err("a value of more than four bytes was not stored in a sized buffer");
     }
 
     // A string: in a new buffer with room for the terminator; in the
-    // caller's, if it has that room.
+    // caller's, if it has that room. If not, nothing is stored and the
+    // query succeeds all the same.
     let mut string = NO_STRING;
     let into = &raw mut string;
     let mut small_buffer = [0xEEEEu16; 4];
@@ -1332,7 +1334,7 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
     let fits = own(6);
     let short = own(4);
     string = NO_STRING;
-    if fits != (0, 4, 6, [0x6E, 0x6B, 0, 0xEEEE]) || short != (TOO_SMALL, 0, 4, [0xEEEE; 4]) {
+    if fits != (0, 4, 6, [0x6E, 0x6B, 0, 0xEEEE]) || short != (0, 0, 4, [0xEEEE; 4]) {
         return Err("a string was not stored in the caller's buffer only if it has room");
     }
 

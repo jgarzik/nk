@@ -335,7 +335,9 @@ fn lend(name: &[u16], data: &[u8]) -> Option<(*mut u8, *mut u16)> {
 /// Store a string in the counted string that is `slot` such structures
 /// past `target`: in its buffer if it has one, which must have room
 /// for the terminator too, or in a new one from the pool, which the
-/// caller frees.
+/// caller frees. Without that room, or for a string longer than a
+/// counted string counts, nothing is stored
+/// (`STATUS_BUFFER_TOO_SMALL`, which does not end the query).
 ///
 /// # Safety
 /// `target` points to at least `slot + 1` counted strings, each
@@ -372,7 +374,9 @@ unsafe fn store_string(target: usize, slot: usize, text: &[u8]) -> Result<(), NT
 
 /// Store data of more than four bytes in the buffer at `target`, whose
 /// first 32 bits say how large it is and whether the data are to be
-/// preceded by their length and type (`query::buffer_data_offset`).
+/// preceded by their length and type (`query::buffer_data_offset`). A
+/// buffer too small is left as it is (`STATUS_BUFFER_TOO_SMALL`, which
+/// does not end the query).
 ///
 /// # Safety
 /// `target` points to a buffer of the size its first 32 bits give,

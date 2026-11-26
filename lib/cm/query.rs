@@ -39,8 +39,9 @@ pub const DELETE: u32 = 0x40;
 pub const TYPECHECK: u32 = 0x100;
 /// `RTL_QUERY_REGISTRY_TYPECHECK_SHIFT`.
 pub const TYPECHECK_SHIFT: u32 = 24;
-/// The status of a routine that a [`Query`] does not take for a
-/// failure.
+/// The status a [`Query`] does not take for a failure when delivering
+/// a value answers it: a routine's own, or the kernel's for a place too
+/// small to store in.
 pub const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023_u32 as i32;
 
 const REG_NONE: u32 = 0;
@@ -155,7 +156,7 @@ pub trait Reader {
 /// buffer, whose first 32 bits are `declared`: its size, negated if
 /// only the data are wanted. Otherwise the data follow their length
 /// and type, 32 bits each. `None` if the buffer is too small
-/// (`STATUS_BUFFER_TOO_SMALL`).
+/// (`STATUS_BUFFER_TOO_SMALL`): nothing is stored.
 pub fn buffer_data_offset(declared: i32, len: usize) -> Option<usize> {
     let header = if declared < 0 { 0 } else { 8 };
     (declared.unsigned_abs() as usize >= header + len).then_some(header)
@@ -289,8 +290,9 @@ pub struct Query {
     data: Vec<u8>,
     default: bool,
     found: bool,
-    /// The action before this one called a routine.
-    called: bool,
+    /// The action before this one delivered a value: called a routine
+    /// or stored where an entry points.
+    delivered: bool,
 }
 
 impl Default for Query {
@@ -313,7 +315,7 @@ impl Query {
             data: Vec::new(),
             default: false,
             found: false,
-            called: false,
+            delivered: false,
         }
     }
 
@@ -325,7 +327,9 @@ impl Query {
     /// before went: the status it failed with, or `Ok` (as before the
     /// first).
     ///
-    /// The query stops at the first entry that fails. An entry with
+    /// The query stops at the first entry that fails; a value that was
+    /// not delivered for want of room ([`STATUS_BUFFER_TOO_SMALL`]) is
+    /// no failure, as on Windows: the table goes on. An entry with
     /// [`DIRECT`] is checked against [`TYPECHECK`] only if it sets
     /// that flag: whether a caller must set it is the kernel's rule.
     pub fn next<'a, T: Table + ?Sized, R: Reader>(
@@ -336,8 +340,9 @@ impl Query {
         done: Result<(), i32>,
     ) -> Result<Option<Action<'a>>, QueryError> {
         match done {
-            // Windows ignores this one status from a routine.
-            Err(STATUS_BUFFER_TOO_SMALL) if self.called => {}
+            // Windows ignores this one status from a routine, and
+            // from its own storing.
+            Err(STATUS_BUFFER_TOO_SMALL) if self.delivered => {}
             Err(status) => return Err(QueryError::Failed(status)),
             Ok(()) => {}
         }
@@ -359,7 +364,7 @@ impl Query {
         environment: &[u16],
         reader: &mut R,
     ) -> Result<Option<Step>, QueryError> {
-        self.called = false;
+        self.delivered = false;
         loop {
             let Some(entry) = table.entry(self.entry) else {
                 return Ok(None);
@@ -401,7 +406,7 @@ impl Query {
                         }
                         None if flags & NOVALUE != 0 => {
                             self.stage = Stage::Done;
-                            self.called = true;
+                            self.delivered = true;
                             return Ok(Some(Step::Bare));
                         }
                         _ => {
@@ -539,8 +544,8 @@ impl Query {
     /// wants them at all: it may have neither a routine nor a place to
     /// store.
     fn piece(&mut self, entry: &Entry<'_>, from: usize, to: usize, slot: usize) -> Option<Step> {
-        self.called = entry.flags & DIRECT == 0;
-        (!self.called || entry.routine).then_some(Step::Piece { from, to, slot })
+        self.delivered = entry.flags & DIRECT != 0 || entry.routine;
+        self.delivered.then_some(Step::Piece { from, to, slot })
     }
 
     /// `step` as the action the kernel is to do.
@@ -1042,11 +1047,18 @@ mod tests {
         };
         let (done, _) = run(&mut fake, &[default]);
         assert_eq!(done, ["small 0 [5, 0, 0, 0]"]);
-        // A failure to store, even for want of room, ends the query.
-        fake.fail = Some((1, STATUS_BUFFER_TOO_SMALL));
+        // A failure to store ends the query; a place too small to
+        // store in does not, and the entries after it are reached.
+        fake.fail = Some((1, STATUS_UNSUCCESSFUL));
         let (done, result) = run(&mut fake, &table);
         assert_eq!(done.len(), 1);
-        assert_eq!(result, Err(QueryError::Failed(STATUS_BUFFER_TOO_SMALL)));
+        assert_eq!(result, Err(QueryError::Failed(STATUS_UNSUCCESSFUL)));
+        for at in [1, 4, 5, 7] {
+            fake.fail = Some((at, STATUS_BUFFER_TOO_SMALL));
+            let (done, result) = run(&mut fake, &table);
+            assert_eq!((done.len(), result), (7, Ok(())), "action {at}");
+        }
+        fake.fail = None;
         // Direct storing takes a name, no routine and no subkey.
         for wrong in [
             entry(true, DIRECT, Some(&names[0])),
@@ -1194,7 +1206,7 @@ mod tests {
         assert_eq!(result, Ok(()));
         assert_eq!(done, ["call 1 V 4 [1]", "delete Sub\\V"]);
         // A status left over from before the first action is a failure
-        // like any other: nothing was called yet.
+        // like any other: nothing was delivered yet.
         let mut query = Query::new();
         assert_eq!(
             query.next(&table[..], &[], &mut fake, Err(STATUS_BUFFER_TOO_SMALL)),

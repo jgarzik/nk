@@ -1209,7 +1209,13 @@ does what the query says. NK's decisions:
 - **A stored string** is the value without the terminator it ends
   with, and a terminator after it: a counted string without a buffer is
   given one from the pool, which the caller frees; one with a buffer
-  must have room for the terminator (`STATUS_BUFFER_TOO_SMALL`).
+  must have room for the terminator.
+- **No room is no failure**: `STATUS_BUFFER_TOO_SMALL` from delivering
+  a value does not end the query, as on Windows, whether a routine
+  answers it or the place an entry points to (a counted string's
+  buffer, a buffer that states its size) is too small. Nothing is
+  stored there, the table goes on, and the call succeeds if nothing
+  else fails.
 - **`RelativeTo`**: `RTL_REGISTRY_OPTIONAL` changes nothing, a key that
   is not there fails the call. `RTL_REGISTRY_USER` is
   `\Registry\User\.Default`: the system is the only user.
