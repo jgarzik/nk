@@ -82,10 +82,10 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, trace-provider bookkeeping (`etw`) |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -994,6 +994,40 @@ file system reads it in line (`kernel/se/token.rs`):
   type being opened maps them), nothing granted yet, and the traverse
   flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
   security descriptor, auxiliary data, privileges and names are empty.
+
+## Tracing
+
+**NK starts no trace session.** Windows starts sessions at boot from
+the registry's `Control\WMI\Autologger` keys and lets programs start
+more ([Event Tracing](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/event-tracing-for-windows--etw-));
+NK ignores those keys and has no program to ask. So no provider is ever
+enabled, and every answer below is the one Windows gives a provider
+nobody listens to: real per its contract, with nothing recorded. NK
+stands for a machine whose autologgers are all disabled.
+
+**Providers** (`kernel/etw`, bookkeeping in `nk_etw`).
+[`EtwRegister`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwregister)
+makes a registration and hands out its handle. The enable callback is
+never called, since nothing enables. An event written
+(`EtwWriteTransfer`) is dropped with success, the event itself not
+looked at, as Windows drops it. `EtwSetInformation` makes Windows'
+checks in Windows' order (traits are set once, and must be well formed)
+and keeps only the fact that traits are set: their content would go
+into events.
+
+A handle is NK's own: it names a slot of a fixed table and carries a
+number no other registration has had, so one that was unregistered
+stays invalid when the slot is taken again. The table is words changed
+by compare-and-swap, with no lock, because events are written at any
+IRQL. Windows' handle is a pointer it does not check: a stale one there
+reads freed memory. NK answers `STATUS_INVALID_HANDLE` to a write or a
+set through one, and stops with `EVENT_TRACING_FATAL_ERROR` (`0x11D`)
+when one is unregistered, the bugcheck Windows has for a registration
+handle that is not one. A full table is `STATUS_NO_MEMORY`, Windows'
+status for a registration it cannot allocate.
+
+The tests `etw.*` call the exports as a driver does; a test group that
+leaves a provider registered fails like any other leak.
 
 ## Questions about the system
 

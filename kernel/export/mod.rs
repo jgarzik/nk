@@ -8,7 +8,7 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
-use crate::{arch, cm, ex, io, ke, ldr, mm, ob, ps, rtl, se};
+use crate::{arch, cm, etw, ex, io, ke, ldr, mm, ob, ps, rtl, se};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -95,6 +95,10 @@ macro_rules! export_entry {
 static EXPORTS: &[Export] = &[
     export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
+    export!(Implemented, etw::EtwRegister),
+    export!(Implemented, etw::EtwSetInformation),
+    export!(Implemented, etw::EtwUnregister),
+    export!(Implemented, etw::EtwWriteTransfer),
     export_variable!(
         Implemented,
         "ExEventObjectType",

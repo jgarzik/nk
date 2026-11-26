@@ -139,6 +139,12 @@ mm.routine-address ok
 ex.pool-quota ok
 rtl.printf ok
 rtl.strings ok
+etw.register ok
+etw.refused ok
+etw.handles ok
+etw.traits ok
+etw.descriptor-type ok
+etw.full ok
 ke.bugcheck.register ok
 ke.bugcheck.order ok
 ex.sysinfo.basic ok

@@ -18,6 +18,7 @@ bench = false
 nk-acpi = { path = "../lib/acpi" }
 nk-bootinfo = { path = "../lib/bootinfo" }
 nk-ex = { path = "../lib/ex" }
+nk-etw = { path = "../lib/etw" }
 nk-hal = { path = "../lib/hal" }
 nk-ke = { path = "../lib/ke" }
 nk-mm = { path = "../lib/mm" }

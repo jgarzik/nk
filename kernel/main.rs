@@ -13,6 +13,7 @@ extern crate alloc;
 mod kd;
 mod arch;
 mod cm;
+mod etw;
 mod ex;
 mod export;
 mod hal;

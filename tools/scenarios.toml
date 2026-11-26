@@ -524,6 +524,23 @@ expect = "bugcheck"
 match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000001001,"
 then = "^NK-STOP-CALLBACK reserved1=2 order=21 triage=1 finished=3 wrong=0 others=0$"
 
+# A trace provider unregistered twice stops the system: the second
+# handle is no registration.
+
+[x86_64-neg-etw-unregister-twice]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.etw-unregister-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
+
+[aarch64-neg-etw-unregister-twice]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.etw-unregister-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
+
 # An exception no handler takes stops the system with Windows' bugcheck
 # for where it was raised: in a system thread, in a system service made
 # for user mode (the exception's code not widened with its sign), in a

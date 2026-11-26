@@ -1,4 +1,5 @@
-//! Tests of what a tracing driver asks of the kernel: the callbacks it
+//! Tests of what a tracing driver asks of the kernel: registering as a
+//! provider and writing events nobody listens to, the callbacks it
 //! leaves for a bugcheck and the stop itself, and its questions about
 //! the system (which modules are loaded, is a debugger there, which
 //! version is this).
@@ -6,6 +7,7 @@
 //! Each test calls the exports as a driver does, through their
 //! `extern "C"` signatures, with records and buffers of its own.
 
+use crate::etw::{EtwRegister, EtwSetInformation, EtwUnregister, EtwWriteTransfer};
 use crate::ex::sysinfo::{
     DbgkWerCaptureLiveKernelDump, MmIsDriverVerifying, NtQuerySystemInformation, PsGetVersion,
     RtlQueryModuleInformation,
@@ -18,6 +20,10 @@ use crate::test::{Group, Report, Slot};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
 use nk_bootinfo::BootInfo;
+use nk_ntabi::etw::{
+    ETW_ENABLE_CALLBACK, EVENT_DATA_DESCRIPTOR, EVENT_DESCRIPTOR, EVENT_PROVIDER_SET_TRAITS,
+    EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, GUID, REGHANDLE,
+};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ke::{
     BUFFER_EMPTY, BUFFER_FINISHED, BUFFER_INSERTED, KB_CALLBACK_RESERVED1,
@@ -837,4 +843,347 @@ fn live_dump() -> Result<(), &'static str> {
         return Err("a live dump asked for at DISPATCH_LEVEL was not refused for the level");
     }
     Ok(())
+}
+
+// ---- trace providers --------------------------------------------------------
+
+pub static PROVIDERS: Group = Group {
+    names: &[
+        "etw.register",
+        "etw.refused",
+        "etw.handles",
+        "etw.traits",
+        "etw.descriptor-type",
+        "etw.full",
+    ],
+    run: providers,
+    manual: false,
+};
+
+fn providers(r: &mut Report, _: &BootInfo) {
+    r.check("etw.register", provider_registers);
+    r.check("etw.refused", registration_refused);
+    r.check("etw.handles", stray_handles);
+    r.check("etw.traits", provider_traits);
+    r.check("etw.descriptor-type", descriptor_type);
+    r.check("etw.full", table_full);
+}
+
+/// A provider of the tests' own, which no session anywhere enables.
+static PROVIDER: GUID = GUID {
+    Data1: 0x4E4B_E701,
+    Data2: 0x41D7,
+    Data3: 0x4E58,
+    Data4: [0xA3, 0x0C, 0x5E, 0x7B, 0x19, 0xD2, 0x64, 0xF1],
+};
+
+/// How often the enable callback was called: never, with no session.
+static ENABLE_CALLS: AtomicU32 = AtomicU32::new(0);
+
+/// # Safety
+/// Callable with anything.
+unsafe extern "C" fn enable(
+    _: *const GUID,
+    _: u32,
+    _: u8,
+    _: u64,
+    _: u64,
+    _: *mut c_void,
+    _: *mut c_void,
+) {
+    ENABLE_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Register the tests' provider: the status and the handle.
+fn etw_register(callback: bool, context: *mut c_void) -> (NTSTATUS, REGHANDLE) {
+    let mut handle = u64::from(FILLED);
+    let callback = callback.then_some(enable as ETW_ENABLE_CALLBACK);
+    // SAFETY: a GUID and a handle of the tests' own.
+    let status = unsafe { EtwRegister(&raw const PROVIDER, callback, context, &raw mut handle) };
+    (status, handle)
+}
+
+/// An event: id 1, level 4 (informational).
+static EVENT: EVENT_DESCRIPTOR = EVENT_DESCRIPTOR {
+    Id: 1,
+    Version: 0,
+    Channel: 0,
+    Level: 4,
+    Opcode: 0,
+    Task: 0,
+    Keyword: 0,
+};
+
+/// Write the event with `data` to `handle`.
+fn etw_write(handle: REGHANDLE, data: &[EVENT_DATA_DESCRIPTOR]) -> NTSTATUS {
+    let pointer = if data.is_empty() {
+        core::ptr::null()
+    } else {
+        data.as_ptr()
+    };
+    EtwWriteTransfer(
+        handle,
+        &raw const EVENT,
+        core::ptr::null(),
+        core::ptr::null(),
+        data.len() as u32,
+        pointer,
+    )
+}
+
+fn etw_set(handle: REGHANDLE, class: u32, information: &[u8]) -> NTSTATUS {
+    // SAFETY: a slice and its length.
+    unsafe {
+        EtwSetInformation(
+            handle,
+            class,
+            information.as_ptr().cast(),
+            information.len() as u32,
+        )
+    }
+}
+
+/// A provider registers, writes to nobody at any IRQL, and unregisters;
+/// its enable callback is never called.
+fn provider_registers() -> Result<(), &'static str> {
+    let before = crate::etw::registered();
+    let (status, handle) = etw_register(true, core::ptr::null_mut());
+    if status != STATUS_SUCCESS || handle == 0 {
+        return Err("a provider was not registered");
+    }
+    // The same provider may register again, and is a registration of
+    // its own; so may one with neither callback nor context.
+    let (status, second) = etw_register(false, core::ptr::null_mut());
+    if status != STATUS_SUCCESS || second == 0 || second == handle {
+        return Err("a second registration was not given a handle of its own");
+    }
+    if crate::etw::registered() != before + 2 {
+        return Err("the registrations are not counted");
+    }
+    let value = 0x4E4Bu32;
+    let data = [EVENT_DATA_DESCRIPTOR {
+        Ptr: (&raw const value).addr() as u64,
+        Size: 4,
+        Reserved: 0,
+    }];
+    if etw_write(handle, &[]) != STATUS_SUCCESS || etw_write(handle, &data) != STATUS_SUCCESS {
+        return Err("an event written to nobody was not taken");
+    }
+    // Events are written from anywhere: a DPC's level, and above.
+    let old = crate::ke::irql::raise(crate::ke::irql::HIGH_LEVEL);
+    let raised = etw_write(handle, &data);
+    crate::ke::irql::lower(old);
+    if raised != STATUS_SUCCESS {
+        return Err("an event written at HIGH_LEVEL was not taken");
+    }
+    if EtwUnregister(handle) != STATUS_SUCCESS || EtwUnregister(second) != STATUS_SUCCESS {
+        return Err("a provider was not unregistered");
+    }
+    if crate::etw::registered() != before {
+        return Err("an unregistered provider is still counted");
+    }
+    if ENABLE_CALLS.load(Ordering::Relaxed) != 0 {
+        return Err("the enable callback was called, and no session exists");
+    }
+    Ok(())
+}
+
+/// The registrations Windows refuses, and the handle left behind.
+fn registration_refused() -> Result<(), &'static str> {
+    let mut context = 0u8;
+    let (status, handle) = etw_register(false, (&raw mut context).cast());
+    if status != STATUS_INVALID_PARAMETER || handle != 0 {
+        return Err("a context without a callback was not refused with a zero handle");
+    }
+    let security = GUID {
+        Data1: 0x5484_9625,
+        Data2: 0x5478,
+        Data3: 0x4994,
+        Data4: [0xA5, 0xBA, 0x3E, 0x3B, 0x03, 0x28, 0xC3, 0x0D],
+    };
+    let mut handle = u64::from(FILLED);
+    // SAFETY: a GUID and a handle of the test's own.
+    let status = unsafe {
+        EtwRegister(
+            &raw const security,
+            Some(enable),
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_ACCESS_DENIED || handle != 0 {
+        return Err("the security auditing provider was not refused");
+    }
+    Ok(())
+}
+
+/// The provider's traits: its name, as nkc-etw gives them.
+const TRAITS: [u8; 9] = [9, 0, b'N', b'k', b'c', b'E', b't', b'w', 0];
+
+/// A handle of zero, and one whose registration has ended, name
+/// nothing.
+fn stray_handles() -> Result<(), &'static str> {
+    if etw_set(0, EVENT_PROVIDER_SET_TRAITS, &TRAITS) != STATUS_INVALID_HANDLE
+        || EtwUnregister(0) != STATUS_INVALID_HANDLE
+        || etw_write(0, &[]) != STATUS_INVALID_HANDLE
+    {
+        return Err("a handle of zero was not refused by all three");
+    }
+    // The handle is looked at before the class.
+    if etw_set(0, 0x7F, &TRAITS) != STATUS_INVALID_HANDLE {
+        return Err("a handle of zero was not refused before the class");
+    }
+    let (_, handle) = etw_register(true, core::ptr::null_mut());
+    if EtwUnregister(handle) != STATUS_SUCCESS {
+        return Err("a provider was not unregistered");
+    }
+    // The slot is taken again by another registration: the old handle
+    // still names nothing.
+    let (_, next) = etw_register(true, core::ptr::null_mut());
+    let stale = [
+        etw_write(handle, &[]),
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS),
+        etw_set(handle, EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, &[1]),
+    ];
+    let live = etw_write(next, &[]);
+    if EtwUnregister(next) != STATUS_SUCCESS {
+        return Err("a provider was not unregistered");
+    }
+    if stale != [STATUS_INVALID_HANDLE; 3] {
+        return Err("a handle whose registration has ended was taken");
+    }
+    if live != STATUS_SUCCESS {
+        return Err("the registration that took the slot was refused");
+    }
+    Ok(())
+}
+
+/// Traits are checked as Windows checks them and set once.
+fn provider_traits() -> Result<(), &'static str> {
+    let (_, handle) = etw_register(true, core::ptr::null_mut());
+    // SAFETY: no buffer, which is looked at before its length.
+    let no_buffer =
+        unsafe { EtwSetInformation(handle, EVENT_PROVIDER_SET_TRAITS, core::ptr::null(), 9) };
+    let answers = [
+        // A class there is not; and the two only user mode may set.
+        etw_set(handle, 0x7F, &TRAITS),
+        etw_set(handle, 0, &TRAITS),
+        etw_set(handle, 1, &TRAITS),
+        // Too short to be traits.
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS[..2]),
+        no_buffer,
+        // Long enough, and wrong: the size is not the length; the name
+        // does not end.
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS[..8]),
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &[5, 0, b'a', b'b', b'c']),
+        // Set, and not a second time, whatever the second blob is.
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS),
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS),
+        etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS[..8]),
+    ];
+    if EtwUnregister(handle) != STATUS_SUCCESS {
+        return Err("a provider was not unregistered");
+    }
+    let expected = [
+        STATUS_INVALID_DEVICE_REQUEST,
+        STATUS_INVALID_DEVICE_REQUEST,
+        STATUS_INVALID_DEVICE_REQUEST,
+        STATUS_INVALID_PARAMETER,
+        STATUS_INVALID_PARAMETER,
+        STATUS_FILE_CORRUPT_ERROR,
+        STATUS_FILE_CORRUPT_ERROR,
+        STATUS_SUCCESS,
+        STATUS_UNSUCCESSFUL,
+        STATUS_UNSUCCESSFUL,
+    ];
+    if answers != expected {
+        return Err("the answers to setting traits are not Windows'");
+    }
+    // A new registration starts without traits.
+    let (_, handle) = etw_register(true, core::ptr::null_mut());
+    let again = etw_set(handle, EVENT_PROVIDER_SET_TRAITS, &TRAITS);
+    if EtwUnregister(handle) != STATUS_SUCCESS || again != STATUS_SUCCESS {
+        return Err("a new registration could not set its traits");
+    }
+    Ok(())
+}
+
+/// The descriptor type is one byte, zero or one.
+fn descriptor_type() -> Result<(), &'static str> {
+    let (_, handle) = etw_register(true, core::ptr::null_mut());
+    let answers = [
+        etw_set(handle, EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, &[1]),
+        etw_set(handle, EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, &[0]),
+        etw_set(handle, EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, &[2]),
+        etw_set(handle, EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, &[1, 0]),
+        etw_set(handle, EVENT_PROVIDER_USE_DESCRIPTOR_TYPE, &[]),
+    ];
+    if EtwUnregister(handle) != STATUS_SUCCESS {
+        return Err("a provider was not unregistered");
+    }
+    let expected = [
+        STATUS_SUCCESS,
+        STATUS_SUCCESS,
+        STATUS_INVALID_PARAMETER,
+        STATUS_INVALID_PARAMETER,
+        STATUS_INVALID_PARAMETER,
+    ];
+    if answers != expected {
+        return Err("the answers to setting the descriptor type are not Windows'");
+    }
+    Ok(())
+}
+
+/// Registrations run out with a status, and come back when given up.
+fn table_full() -> Result<(), &'static str> {
+    let mut handles = alloc::vec::Vec::new();
+    let refusal = loop {
+        let (status, handle) = etw_register(true, core::ptr::null_mut());
+        if status != STATUS_SUCCESS {
+            break (status, handle);
+        }
+        handles.push(handle);
+        if handles.len() > 1 << 16 {
+            break (STATUS_SUCCESS, 0);
+        }
+    };
+    let count = handles.len();
+    let ended = handles
+        .drain(..)
+        .all(|handle| EtwUnregister(handle) == STATUS_SUCCESS);
+    if refusal != (STATUS_NO_MEMORY, 0) {
+        return Err("registrations did not run out with STATUS_NO_MEMORY and a zero handle");
+    }
+    if !ended || count == 0 {
+        return Err("the registrations were not all unregistered");
+    }
+    let (status, handle) = etw_register(true, core::ptr::null_mut());
+    if status != STATUS_SUCCESS || EtwUnregister(handle) != STATUS_SUCCESS {
+        return Err("no registration was possible after all were given up");
+    }
+    Ok(())
+}
+
+/// Unregistering a provider twice must stop the system: the handle is
+/// no registration any more.
+pub static UNREGISTER_TWICE: Group = Group {
+    names: &["neg.etw-unregister-twice"],
+    run: unregister_twice,
+    manual: true,
+};
+
+fn unregister_twice(r: &mut Report, _: &BootInfo) {
+    let (status, handle) = etw_register(true, core::ptr::null_mut());
+    if status != STATUS_SUCCESS || EtwUnregister(handle) != STATUS_SUCCESS {
+        return r.fail(
+            "neg.etw-unregister-twice",
+            format_args!("a provider could not be registered and unregistered"),
+        );
+    }
+    kprintln!("NK-NEG-ARMED neg.etw-unregister-twice");
+    EtwUnregister(handle);
+    r.fail(
+        "neg.etw-unregister-twice",
+        format_args!("a provider was unregistered twice, and nothing happened"),
+    );
 }

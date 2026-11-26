@@ -1,0 +1,6 @@
+# A provider's traits can be set again and again.
+scenario: x86_64
+fails: etw.traits
+file: kernel/etw/mod.rs
+replace:                 Some(true) => return STATUS_UNSUCCESSFUL,
+with:                 Some(true) => {}
