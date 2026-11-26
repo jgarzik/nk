@@ -186,6 +186,7 @@ static DIRECTORY_NAME: [u16; 9] = wide(b"Directory");
 static SYMBOLIC_LINK_NAME: [u16; 12] = wide(b"SymbolicLink");
 static DRIVER_NAME: [u16; 6] = wide(b"Driver");
 static FILE_NAME: [u16; 4] = wide(b"File");
+static JOB_NAME: [u16; 3] = wide(b"Job");
 static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
 static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
@@ -256,8 +257,12 @@ pub static SILO_CONTEXT_NONPAGED_TYPE: ObjectType = ObjectType::new(
     Some(crate::ps::silo::context_deleted),
 );
 
+/// Jobs (`EJOB`). The type is there for drivers to name: no job is
+/// ever made, so no object has it and no handle names one.
+pub static JOB_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 12, &JOB_NAME, None);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 12] = [
+static TYPES: [&ObjectType; 13] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -270,6 +275,7 @@ static TYPES: [&ObjectType; 12] = [
     &FILE_TYPE,
     &SILO_CONTEXT_PAGED_TYPE,
     &SILO_CONTEXT_NONPAGED_TYPE,
+    &JOB_TYPE,
 ];
 
 /// What hides type indices in object headers. Chosen once, before the
@@ -301,6 +307,13 @@ pub static PsThreadType: TypeVariable = TypeVariable(&raw const THREAD_TYPE);
 /// `IoDeviceObjectType` (`wdm.h`): what a driver passes to insist on a
 /// device.
 pub static IoDeviceObjectType: TypeVariable = TypeVariable(&raw const DEVICE_TYPE);
+
+/// [`PsJobType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetjobsilo):
+/// what a driver passes to insist on a job. A file system asks for the
+/// job behind a handle a requestor gave it, to find the job's silo;
+/// with no jobs, every such handle names something else and is refused
+/// as the wrong type.
+pub static PsJobType: TypeVariable = TypeVariable(&raw const JOB_TYPE);
 
 impl TypeVariable {
     /// The address drivers import.
@@ -682,6 +695,7 @@ pub fn type_test() -> Result<(), &'static str> {
         (&ExEventObjectType, "Event", EVENT_TYPE.0.Index),
         (&PsThreadType, "Thread", THREAD_TYPE.0.Index),
         (&IoDeviceObjectType, "Device", DEVICE_TYPE.0.Index),
+        (&PsJobType, "Job", JOB_TYPE.0.Index),
     ] {
         // SAFETY: the variable holds the address of a static type.
         let ty = unsafe { &*variable.value() };
@@ -693,6 +707,12 @@ pub fn type_test() -> Result<(), &'static str> {
         }
         if ty.0.Index != index || index < FIRST_TYPE_INDEX {
             return Err("a type has the wrong index");
+        }
+    }
+    // Every type is known by its index, and no two share one.
+    for (at, ty) in TYPES.iter().enumerate() {
+        if usize::from(ty.0.Index) != usize::from(FIRST_TYPE_INDEX) + at {
+            return Err("a type is not listed under its index");
         }
     }
     // Objects big enough to get pages of their own, so their headers'

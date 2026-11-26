@@ -222,6 +222,7 @@ static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ps::silo::PsInsertPermanentSiloContext),
     export!(Implemented, ps::silo::PsIsHostSilo),
+    export_variable!(Implemented, "PsJobType", ob::object::PsJobType),
     export!(Implemented, ps::process::PsReferencePrimaryToken),
     export!(Implemented, ps::silo::PsRegisterSiloMonitor),
     export!(Implemented, ps::process::PsReturnProcessPagedPoolQuota),

@@ -345,7 +345,10 @@ Windows (`kernel/ps/silo.rs`):
   by the terminate callback) are Windows 10's.
 
 A silo pointer that is not null, or a job, names nothing that exists:
-where Windows would read the job behind it, NK stops by name.
+where Windows would read the job behind it, NK stops by name. The job
+type itself is real (`PsJobType`): a driver that asks for the job
+behind a handle is told the handle names another type of object, which
+is true of every handle there is.
 
 ## Waits
 
@@ -460,8 +463,8 @@ driver object, which has no count to hold it by.
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
 pointer count, handle count, type. Events, threads, the System process,
-tokens, drivers, devices, open files, open registry keys, directories
-and symbolic links are such objects. An object is freed when its last
+tokens, drivers, devices, open files, open registry keys, directories,
+symbolic links and silo contexts are such objects. An object is freed when its last
 reference goes; its type may name a delete procedure that first releases
 what it owns, and a close procedure that is told of every handle closed
 and how many there were. A thread references itself until it has ended

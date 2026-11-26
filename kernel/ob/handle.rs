@@ -524,6 +524,11 @@ pub fn handle_test() -> Result<u32, &'static str> {
         if status != STATUS_OBJECT_TYPE_MISMATCH || !found.is_null() {
             return Err("a handle to an event was accepted as a thread");
         }
+        // Nothing is a job: there are none.
+        let (status, found, _) = by_handle(handle, object::PsJobType.value());
+        if status != STATUS_OBJECT_TYPE_MISMATCH || !found.is_null() {
+            return Err("a handle to an event was accepted as a job");
+        }
         for bogus in [0, handle + 4096, handle & 0xFFFF_FFFF] {
             let (status, found, _) = by_handle(bogus, core::ptr::null());
             if status != STATUS_INVALID_HANDLE || !found.is_null() {
@@ -552,7 +557,7 @@ pub fn handle_test() -> Result<u32, &'static str> {
     if count() != before || blocks() != pool_before {
         return Err("closing the last handle did not free the object");
     }
-    Ok(11)
+    Ok(12)
 }
 
 /// A thread is an object: it can be waited for, it stays valid after it
