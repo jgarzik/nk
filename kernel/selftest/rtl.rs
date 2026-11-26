@@ -1234,6 +1234,10 @@ fn legal_characters() -> Result<(), &'static str> {
     if !test(b'|', false, stream) || !test(1, false, stream) || test(b'/', false, stream) {
         return Err("a stream's name does not take what a file's refuses");
     }
+    // The OLE flag alone: Windows clears it for the period.
+    if test(b'.', false, 16) || !test(b'.', false, fat) || !test(b'-', false, 16) {
+        return Err("the period is legal in an OLE name, or not in a FAT one");
+    }
     let wild = (0..128).filter(|&c| test(c, false, 8)).count();
     if wild != 5 {
         return Err("there are not five wildcard characters");

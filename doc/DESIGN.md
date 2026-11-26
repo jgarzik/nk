@@ -1271,11 +1271,11 @@ whatever the pattern, it allocates nothing, and so it never raises,
 where Windows raises `STATUS_NO_MEMORY`. What matches is what Windows
 matches, the two cases included that the documented wording of the DOS
 wildcards does not cover (stated in `nk_rtl::wildcard`). The name is
-upper-cased by the
-caller's table when one is passed, read from the caller's memory a unit
-at a time. The table of legal characters is built from each file
-system's naming rules (`nk_rtl::legal`): Microsoft publishes the flags
-and the macros that read the table, not its contents.
+upper-cased by the caller's table when one is passed, read from the
+caller's memory a unit at a time. The table of legal characters is
+built from each file system's naming rules (`nk_rtl::legal`) and is
+Windows 10's entry for entry: Microsoft publishes the flags and the
+macros that read the table, not its contents.
 
 ### The prefix table
 
