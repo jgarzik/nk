@@ -30,6 +30,6 @@ pub const TAG: u32 = u32::from_le_bytes(*b"Pnp ");
 /// Make the root of the device tree and the manager's driver. Before
 /// any driver is started.
 pub fn init() -> Result<(), &'static str> {
-    engine::init();
+    engine::init()?;
     root::init()
 }

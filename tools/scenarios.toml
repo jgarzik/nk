@@ -830,7 +830,7 @@ tier = "gate"
 cmdline = "test=stor.load"
 registry = ["storage"]
 disk = "ahci"
-disk_expect = "unchanged"
+disk_expect = "written"
 
 # The same stack above a bus driver of the test's own, which enumerates
 # the controller in place of pci.sys (doc/TESTING.md).
@@ -838,7 +838,7 @@ disk_expect = "unchanged"
 [x86_64-storage-direct]
 arch = "x86_64"
 tier = "gate"
-cmdline = "test=stor.direct"
+cmdline = "test=stor.direct without=pci.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
@@ -850,7 +850,7 @@ disk_expect = "written"
 arch = "x86_64"
 tier = "gate"
 smp = 1
-cmdline = "test=stor.direct"
+cmdline = "test=stor.direct without=pci.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"

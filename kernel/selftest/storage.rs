@@ -58,54 +58,77 @@ fn load() -> Result<(), &'static str> {
 /// A device of the path from the root to the disk, as the reference
 /// Windows has it (`TREE.md` of the recorded trace): its instance path,
 /// its parent's, its first hardware identifier, its service as the
-/// device's key names it, its class, and whether NK starts it yet.
+/// device's key names it, its class, and the drivers of its stack, top
+/// first.
 struct Expected {
     instance: &'static str,
     parent: &'static str,
     hardware_id: &'static str,
     service: &'static str,
     class: &'static str,
-    started: bool,
+    stack: &'static [&'static str],
 }
 
 const COMPUTER: &str = "{4d36e966-e325-11ce-bfc1-08002be10318}";
 const SYSTEM: &str = "{4d36e97d-e325-11ce-bfc1-08002be10318}";
+const HDC: &str = "{4d36e96a-e325-11ce-bfc1-08002be10318}";
+const DISK_DRIVE: &str = "{4d36e967-e325-11ce-bfc1-08002be10318}";
 
-/// The path as far as NK brings it up. A device NK finds and does not
-/// start yet is listed with `started: false`, and the test holds NK to
-/// that too: it is changed in the commit that starts the device.
-const PATH: [Expected; 3] = [
+const ACPI_HAL: &str = "ROOT\\ACPI_HAL\\0000";
+const ACPI: &str = "ACPI_HAL\\PNP0C08\\0";
+const PCI_ROOT: &str = "ACPI\\PNP0A08\\0";
+const AHCI: &str = "PCI\\VEN_8086&DEV_2922&SUBSYS_11001AF4&REV_02\\3&11583659&0&FA";
+const DISK_INSTANCE: &str = "SCSI\\Disk&Ven_QEMU&Prod_HARDDISK\\4&35424867&0&000000";
+
+/// The path. The stacks are Windows' but for the disk's, which on
+/// Windows has `partmgr` on top: NK builds it without the class
+/// filters that have no image (`doc/DESIGN.md`, What is absent).
+const PATH: [Expected; 5] = [
     Expected {
-        instance: "ROOT\\ACPI_HAL\\0000",
+        instance: ACPI_HAL,
         parent: "HTREE\\ROOT\\0",
         hardware_id: "acpiapic",
         service: "\\Driver\\ACPI_HAL",
         class: COMPUTER,
-        started: true,
+        stack: &["ACPI_HAL", "PnpManager"],
     },
     Expected {
-        instance: "ACPI_HAL\\PNP0C08\\0",
-        parent: "ROOT\\ACPI_HAL\\0000",
+        instance: ACPI,
+        parent: ACPI_HAL,
         hardware_id: "ACPI_HAL\\PNP0C08",
         service: "ACPI",
         class: SYSTEM,
-        started: true,
+        stack: &["ACPI", "ACPI_HAL"],
     },
     Expected {
-        instance: "ACPI\\PNP0A08\\0",
-        parent: "ACPI_HAL\\PNP0C08\\0",
+        instance: PCI_ROOT,
+        parent: ACPI,
         hardware_id: "ACPI\\VEN_PNP&DEV_0A08",
         service: "pci",
         class: SYSTEM,
-        started: false,
+        stack: &["pci", "ACPI"],
+    },
+    Expected {
+        instance: AHCI,
+        parent: PCI_ROOT,
+        hardware_id: "PCI\\VEN_8086&DEV_2922&SUBSYS_11001AF4&REV_02",
+        service: "storahci",
+        class: HDC,
+        stack: &["storahci", "ACPI", "pci"],
+    },
+    Expected {
+        instance: DISK_INSTANCE,
+        parent: AHCI,
+        hardware_id: "SCSI\\DiskQEMU____________HARDDISK2.5+",
+        service: "disk",
+        class: DISK_DRIVE,
+        stack: &["disk", "storahci"],
     },
 ];
 
 /// The devices of the path exist where Windows has them, with its
-/// identifiers, services and classes, and are started as far as NK
-/// starts them. Returns how many are started.
-fn enumerate() -> Result<usize, &'static str> {
-    let mut started = 0;
+/// identifiers, services, classes and stacks, each started.
+fn enumerate() -> Result<(), &'static str> {
     for expected in &PATH {
         let found = node::by_instance(expected.instance).and_then(node::get);
         let Some(found) = found else {
@@ -114,6 +137,15 @@ fn enumerate() -> Result<usize, &'static str> {
         };
         let parent = node::get(found.parent).map(|above| above.instance);
         let key = registry::enum_key(expected.instance);
+        // SAFETY: the tree's device.
+        let stack = unsafe {
+            crate::pnp::engine::stack_drivers(found.pdo as *mut nk_ntabi::io::DEVICE_OBJECT)
+        };
+        let wanted: alloc::vec::Vec<String> = expected
+            .stack
+            .iter()
+            .map(|driver| format!("\\Driver\\{driver}"))
+            .collect();
         let wrong = if parent.as_deref() != Some(expected.parent) {
             Some("is not below the device Windows has it below")
         } else if found.hardware_ids.first().map(String::as_str) != Some(expected.hardware_id)
@@ -124,8 +156,15 @@ fn enumerate() -> Result<usize, &'static str> {
             Some("is not given the service Windows gives it")
         } else if registry::string(&key, "ClassGUID").as_deref() != Some(expected.class) {
             Some("is not in the class Windows has it in")
-        } else if (found.state == State::Started) != expected.started {
-            Some("is not as far as this test says NK brings it")
+        } else if found.state != State::Started {
+            Some("is not started")
+        } else if !stack
+            .iter()
+            .map(|name| name.to_ascii_lowercase())
+            .eq(wanted.iter().map(|name| name.to_ascii_lowercase()))
+        {
+            kprintln!("stor: its stack is {stack:?}");
+            Some("does not have the stack Windows gives it")
         } else {
             None
         };
@@ -133,20 +172,88 @@ fn enumerate() -> Result<usize, &'static str> {
             kprintln!("stor: {} {wrong}", expected.instance);
             return Err("a device of the path is not as Windows has it");
         }
-        started += usize::from(found.state == State::Started);
     }
     // What the HAL offers the ACPI device is what Windows' HAL offers:
     // the requirements and the boot configuration the reference
     // machine recorded are 13032 and 8140 bytes, 406 interrupts each.
-    let configuration = format!("{}\\LogConf", registry::enum_key("ACPI_HAL\\PNP0C08\\0"));
+    let configuration = format!("{}\\LogConf", registry::enum_key(ACPI));
     let size = |name: &str| crate::cm::read(&configuration, name).map(|(_, data)| data.len());
     if size("BasicConfigVector") != Ok(13032) || size("BootConfig") != Ok(8140) {
         return Err("the ACPI device's LogConf is not the size Windows recorded");
     }
-    Ok(started)
+    controller_resources()
 }
 
-/// The first disk's device, as `disk.sys` names it; `\??\PhysicalDrive0`
+/// The AHCI controller was given what Windows gives it (`TREE.md`): its
+/// ports and its registers where firmware put them, and one
+/// message-signalled interrupt, which its settings from the driver
+/// database allow.
+fn controller_resources() -> Result<(), &'static str> {
+    use nk_pnp::resources::{ResourceList, TYPE_MEMORY, TYPE_PORT};
+    let found = node::by_instance(AHCI)
+        .and_then(node::get)
+        .ok_or("the controller has no node")?;
+    let settings = format!(
+        "{}\\Device Parameters\\Interrupt Management\\MessageSignaledInterruptProperties",
+        registry::enum_key(AHCI)
+    );
+    if registry::dword(&settings, "MSISupported") != Some(1) {
+        return Err("the controller's key does not say it supports messages");
+    }
+    let (raw, _) = ResourceList::parse(&found.raw).ok_or("the controller has no resources")?;
+    let (translated, _) =
+        ResourceList::parse(&found.translated).ok_or("the controller has no translated list")?;
+    // Its ports and its registers stay where firmware put them, as on
+    // Windows (0x6040 and 0x81010000 on the reference machine, whose
+    // firmware had one device fewer to place).
+    let (boot, _) =
+        ResourceList::parse(&found.boot).ok_or("the controller has no boot configuration")?;
+    let range = |list: &ResourceList, kind: u8| {
+        list.partials()
+            .find(|partial| partial.kind == kind)
+            .and_then(|partial| partial.as_range())
+    };
+    for (kind, length) in [(TYPE_PORT, 0x20), (TYPE_MEMORY, 0x1000)] {
+        let given = range(&raw, kind);
+        if given.is_none_or(|(_, given)| given != length) || given != range(&boot, kind) {
+            kprintln!(
+                "stor: the controller was given {given:x?}; firmware had it at {:x?}",
+                range(&boot, kind)
+            );
+            return Err("the controller is not where firmware put it");
+        }
+    }
+    let interrupt = |list: &ResourceList| {
+        let found: alloc::vec::Vec<_> = list
+            .partials()
+            .filter(|partial| partial.as_interrupt().is_some())
+            .cloned()
+            .collect();
+        found
+    };
+    let (raw, translated) = (interrupt(&raw), interrupt(&translated));
+    let ([raw], [translated]) = (&raw[..], &translated[..]) else {
+        return Err("the controller does not have one interrupt");
+    };
+    // Raw: flags 3 (latched, message), the token, one message.
+    if !raw.is_message() || raw.flags != 3 || raw.as_interrupt() != Some((0, 1, 0xFFFF_FFFE, 0)) {
+        kprintln!("stor: the controller's raw interrupt is {raw:x?}");
+        return Err("the controller's interrupt is not one message, as Windows gave it");
+    }
+    let Some((level, _, vector, affinity)) = translated.as_interrupt() else {
+        return Err("the translated interrupt is not an interrupt");
+    };
+    if !translated.is_message()
+        || crate::hal::interrupt::message(vector).is_none()
+        || u32::from(level) != vector >> 4
+        || affinity == 0
+    {
+        return Err("the translated interrupt is not a message vector the hardware layer gave out");
+    }
+    Ok(())
+}
+
+/// The first disk's device, as `disk.sys` names it; `\\??\\PhysicalDrive0`
 /// is its link.
 pub(super) const DISK: &str = "\\Device\\Harddisk0\\DR0";
 
@@ -170,13 +277,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         return;
     }
     r.check("stor.load", load);
-    match enumerate() {
-        Ok(started) => r.ok_with(
-            "stor.enumerate",
-            format_args!("{started} of {} devices of the path started", PATH.len()),
-        ),
-        Err(why) => r.fail("stor.enumerate", format_args!("{why}")),
-    }
+    r.check("stor.enumerate", enumerate);
     if !exists(DISK) {
         r.skip(
             "stor.io",

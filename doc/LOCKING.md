@@ -62,7 +62,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 10 | `io::driver::BOOT_REINITIALIZE` | the routines boot drivers registered for reinitialisation, and whether they have been run; never held with `DRIVERS` | DISPATCH |
 | 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
-| 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and a worker has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
+| 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and its thread has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
 | 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::depend::DEPENDENCIES` | which device depends on which, and the strings devices are bound by; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::notify::REGISTRATIONS` | the Plug and Play notification registrations and each one's count of callbacks in progress; never held with another lock of this rank, nor across a callback | DISPATCH |
@@ -295,7 +295,9 @@ Everything the Plug and Play manager does to a device (asking it who
 it is, calling `AddDevice`, assigning resources, starting, enumerating,
 removing) is serialised by a kernel mutex, `pnp::engine::ENGINE`, as
 Windows serialises device actions on one worker: requests are sent to
-device stacks and waited for with it held.
+device stacks and waited for with it held. No thread of a work queue
+ever takes it: what drivers ask for is done by the engine's own
+thread.
 
 - It is taken at `PASSIVE_LEVEL` with no spin lock held; whoever holds
   it may take any ranked lock, and holds none across a request or a

@@ -2187,11 +2187,15 @@ cache coherency); NK's hands out none.
 
 **One piece of work at a time.** Everything the manager does to a
 device is done by the thread that holds the engine's mutex
-(`pnp/engine.rs`): the boot thread as it starts drivers, a worker for
-what drivers ask for (`IoInvalidateDeviceRelations` queues and
-returns), a test. `pnp::settle` does all there is to do and returns
-when nothing moves. Windows queues device actions for one worker in the
-same way.
+(`pnp/engine.rs`): the boot thread as it starts drivers, the engine's
+own thread for what drivers ask for (`IoInvalidateDeviceRelations`
+queues, wakes it and returns), a test. `pnp::settle` does all there is
+to do and returns when nothing moves. Windows queues device actions for
+one worker of its own in the same way. The engine's thread is not a
+thread of the system's work queues: the engine waits for drivers with
+its mutex held, and drivers complete what it waits for from work items
+(`acpi.sys` completes a start so), so the work queues' threads must
+never wait for the engine.
 
 **A new device** is asked, in Windows' order (`PiProcessNewDeviceNode`):
 its device identifier, capabilities, description and location text,
@@ -2307,14 +2311,6 @@ again by the worker. Dependencies between devices
 drivers are not added while a device it depends on is unbound or not
 started (problem 51); NK treats the two kinds of dependency alike and
 derives no power relations from them.
-
-**Held back.** `engine::HELD_BACK` names what NK does not bring up
-yet, with the reason beside each name: a service whose `AddDevice` or
-start stops the system over something NK lacks, or a device whose
-start without a driver does not complete. At present `pci`, so the PCI
-root is found and nothing below it is enumerated, and the processor
-container `ACPI\ACPI0010`, whose start `acpi.sys` never completes on
-NK.
 
 ## The registry
 
@@ -3178,8 +3174,7 @@ rebalance, and so none of the notifications that go with them. A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver
-outside the corpus) and `partmgr` for disks. Devices whose service is
-held back (`pnp::engine::HELD_BACK`) are found and not started.
+outside the corpus) and `partmgr` for disks.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
