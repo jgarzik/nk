@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 147,
-  "implemented": 136,
+  "total": 151,
+  "implemented": 140,
   "partial": 6,
   "traps": 0,
   "missing": 0,
@@ -16,6 +16,7 @@
   "names": [
    "IoCreateDeviceSecure",
    "IoValidateDeviceIoControlAccess",
+   "NkcNoSuchRoutine",
    "NoSuchRoutineInAnyKernel",
    "SeConvertStringSecurityDescriptorToSecurityDescriptor",
    "kesetevent"
@@ -2312,6 +2313,130 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsThreadType",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "nkc-etw",
+   "file": "nkc-etw.x64.sys",
+   "sha256": "1399a84fd62c67b5f2adb04b4aedfc24566bcdb55f8acdec617500525a9e16d1",
+   "status": "nk-authored",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmGetSystemRoutineAddress",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetVersion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDeregisterBugCheckReasonCallback",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeRegisterBugCheckReasonCallback",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmIsDriverVerifying",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetCurrentProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIRegistrationControl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIWriteEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIDeviceObjectToProviderId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwRegister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwUnregister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwSetInformation",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwWriteTransfer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQuerySystemInformation",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsInitialSystemProcess",
      "state": "implemented"
     }
    ]

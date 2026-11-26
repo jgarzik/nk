@@ -1,0 +1,15 @@
+# NK conformance driver nkc-etw (trace providers).
+#
+# The first request returns what the driver saw of ETW registration and
+# writes with nobody listening, WMI registration of its device and the
+# requests that brings, bugcheck-reason callbacks and system
+# information; the second, the routines Microsoft's WPP recorder looks
+# up by name. 32 bits each, ending with 0x4E4B4321. What each value
+# means is written beside it in nk-fixtures nkc/nkc-etw.c.
+
+load nkc-etw nkc-etw.sys
+open d \Device\NkcEtw
+ioctl d 00222000 - 16384
+ioctl d 00222004 - 16384
+close d
+unload nkc-etw

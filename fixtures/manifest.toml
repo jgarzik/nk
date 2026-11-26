@@ -533,3 +533,21 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-ob.arm64.
 sha256 = "5778d0132dc80a780ed0dcdabab3866520a3f82d59f9523d068aa0688cbb08fb"
 status = "nk-authored"
 note = "nk-fixtures v8 nkc/nkc-ob.c: object references, references through handles, the security-descriptor store"
+
+[[fixture]]
+name = "nkc-etw"
+arch = "x86_64"
+file = "nkc-etw.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-etw.x64.nkc-etw.sys"
+sha256 = "1399a84fd62c67b5f2adb04b4aedfc24566bcdb55f8acdec617500525a9e16d1"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-etw.c: trace providers, WMI registration, bugcheck callbacks, system information"
+
+[[fixture]]
+name = "nkc-etw"
+arch = "aarch64"
+file = "nkc-etw.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-etw.arm64.nkc-etw.sys"
+sha256 = "2163446ec2ff0c00673c9f040e3109c6c247f33d1a1ed00dbc3a36507164d655"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-etw.c: trace providers, WMI registration, bugcheck callbacks, system information"
