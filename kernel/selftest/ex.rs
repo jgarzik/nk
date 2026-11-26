@@ -2,6 +2,7 @@
 //! driver calls them: through the exports, on memory of the caller's.
 
 use crate::ex::{lookaside, pushlock, resource, slist, timer};
+use crate::mm::pool;
 use crate::test::{Group, Report};
 use core::fmt::Display;
 use nk_bootinfo::BootInfo;
@@ -28,6 +29,7 @@ pub static GROUP: Group = Group {
         "ex.timer.periodic",
         "ex.timer.delete",
         "ex.timer.wait",
+        "ex.pool.raise",
     ],
     run,
     manual: false,
@@ -119,4 +121,45 @@ fn run(r: &mut Report, _: &BootInfo) {
         timer::delete_test(),
     );
     r.check("ex.timer.wait", timer::wait_test);
+    r.check("ex.pool.raise", pool_raise);
+}
+
+/// More than any pool holds.
+const TOO_MUCH: usize = 1 << 46;
+const TAG: u32 = u32::from_le_bytes(*b"NkPr");
+/// `PagedPool`, and the two flag bits that say what failure looks like.
+const PAGED: u32 = 1;
+const QUOTA_FAIL_INSTEAD_OF_RAISE: u32 = 8;
+const RAISE_IF_ALLOCATION_FAILURE: u32 = 16;
+
+/// # Safety
+/// None: a body for `except::raises`.
+unsafe extern "C" fn with_quota(pool_type: usize) {
+    pool::ExAllocatePoolWithQuotaTag(pool_type as u32, TOO_MUCH, TAG);
+}
+
+/// # Safety
+/// None: a body for `except::raises`.
+unsafe extern "C" fn with_tag(pool_type: usize) {
+    pool::ExAllocatePoolWithTag(pool_type as u32, TOO_MUCH, TAG);
+}
+
+/// An allocation that cannot be made raises
+/// `STATUS_INSUFFICIENT_RESOURCES` in its caller where Microsoft says
+/// it does, and returns null where the caller asked for that.
+fn pool_raise() -> Result<(), &'static str> {
+    let no_memory = nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES as u32;
+    super::except::raises(with_quota, PAGED as usize, no_memory)?;
+    super::except::raises(
+        with_tag,
+        (PAGED | RAISE_IF_ALLOCATION_FAILURE) as usize,
+        no_memory,
+    )?;
+    if !pool::ExAllocatePoolWithQuotaTag(PAGED | QUOTA_FAIL_INSTEAD_OF_RAISE, TOO_MUCH, TAG)
+        .is_null()
+        || !pool::ExAllocatePoolWithTag(PAGED, TOO_MUCH, TAG).is_null()
+    {
+        return Err("more memory than there is was allocated");
+    }
+    Ok(())
 }

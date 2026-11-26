@@ -138,6 +138,7 @@ ex.timer.callback ok
 ex.timer.periodic ok
 ex.timer.delete ok
 ex.timer.wait ok
+ex.pool.raise ok
 io.pend-dpc ok
 io.pend-timer ok
 io.pend-work ok

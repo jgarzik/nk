@@ -210,6 +210,14 @@ fn caught(body: Body, argument: usize) -> Result<(), &'static str> {
     caught_as(body, argument, CODE)
 }
 
+/// For the tests of routines documented to raise: run `body(argument)`
+/// inside a `__try` that takes whatever is raised, and require the
+/// exception code `code`.
+pub(super) fn raises(body: Body, argument: usize, code: u32) -> Result<(), &'static str> {
+    arm([ACCEPT, DECLINE]);
+    caught_as(body, argument, code)
+}
+
 /// A raise is offered to the filter with its record, and the handler
 /// gets control with the code and the registers of its function.
 fn raise_test() -> Result<(), &'static str> {

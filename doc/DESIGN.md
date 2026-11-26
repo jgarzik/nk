@@ -151,7 +151,11 @@ which NK enables, restrict only pages marked for user mode.
   contiguous. A paged-pool request gets non-paged memory, always a legal
   answer. A request's priority (`ExAllocatePoolWithTagPriority`) is not
   used: NK refuses only when it has no memory, which every priority
-  allows.
+  allows. A refusal is null, or the exception
+  `STATUS_INSUFFICIENT_RESOURCES` raised in the caller where Microsoft
+  documents one: a quota allocation without
+  `POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`, any allocation with
+  `POOL_RAISE_IF_ALLOCATION_FAILURE`.
 - **Pool checking.** Each block ends in guard bytes checked on free, a
   free of anything but a live block is refused, and live counts are kept;
   leak tests compare them. These are bug detectors, not mitigations.

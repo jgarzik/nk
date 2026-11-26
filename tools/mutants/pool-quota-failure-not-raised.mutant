@@ -1,0 +1,8 @@
+# A pool allocation with quota that cannot be made returns null to a
+# caller that did not ask for null: a driver written to Microsoft's
+# contract goes on to use the block.
+scenario: x86_64
+fails: ex.pool.raise
+file: kernel/mm/pool.rs
+remove:         raise_no_memory();
+occurrence: 2
