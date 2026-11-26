@@ -1341,7 +1341,8 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
 
     // A string to be expanded is refused, as on Windows, and nothing
     // stored; asked for as stored, it is stored. Several strings as
-    // one, or each in the next counted string. A default string whose
+    // one, which counts both terminators the list ends with and is
+    // followed by a third, or each in the next counted string. A default string whose
     // length is left to be measured.
     let mut strings = [NO_STRING; 3];
     let mut one_string = |entry: RTL_QUERY_REGISTRY_TABLE| {
@@ -1367,7 +1368,7 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         != [
             (INVALID_PARAMETER, None),
             (0, string_of("%NKVAR%\\x%NOPE%")),
-            (0, string_of("a\0bc\0")),
+            (0, string_of("a\0bc\0\0")),
             (0, string_of("dflt")),
             (0, string_of("nk")),
         ]
@@ -1532,7 +1533,7 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
             &[[REG_SZ, 6, c('T'), starts("nk"), 0x102]],
         ),
         // Each string of several, as a string; or all of them as they
-        // are stored.
+        // are stored, and one terminator more.
         (
             calling(0, Some(multi), ok(3)),
             0,
@@ -1544,7 +1545,7 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         (
             calling(NOEXPAND, Some(multi), ok(4)),
             0,
-            &[[REG_MULTI_SZ, 12, c('M'), starts("a"), 0x104]],
+            &[[REG_MULTI_SZ, 14, c('M'), starts("a"), 0x104]],
         ),
         // To be expanded: refused, and no call. As stored: a call.
         (calling(0, Some(expand), ok(5)), INVALID_PARAMETER, &[]),

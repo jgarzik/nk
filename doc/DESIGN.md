@@ -1216,6 +1216,11 @@ does what the query says. NK's decisions:
   buffer, a buffer that states its size) is too small. Nothing is
   stored there, the table goes on, and the call succeeds if nothing
   else fails.
+- **Several strings as one** (`REG_MULTI_SZ` with
+  `RTL_QUERY_REGISTRY_NOEXPAND`) are delivered from the registry with
+  one terminator more than the value holds, counted in the length, as
+  Windows delivers them: `a\0bc\0\0`, 12 bytes, reaches a routine as
+  14 and a counted string with a `Length` of 12.
 - **Nothing is expanded**: the environment a caller passes is not
   read. A `REG_EXPAND_SZ`, value or default, asked for without
   `RTL_QUERY_REGISTRY_NOEXPAND` ends the call with

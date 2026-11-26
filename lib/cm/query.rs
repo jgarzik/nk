@@ -270,7 +270,9 @@ impl Query {
     /// (as before the first).
     ///
     /// Nothing is expanded. A `REG_MULTI_SZ` goes out one string at a
-    /// time unless the entry says [`NOEXPAND`]; a `REG_EXPAND_SZ`
+    /// time unless the entry says [`NOEXPAND`], and then whole, a
+    /// value of the registry followed by one more terminator, which
+    /// its length counts; a `REG_EXPAND_SZ`
     /// without that flag ends the query (`InvalidParameter`), value or
     /// default: the kernel of Windows 10 answers so, even given an
     /// environment that has the variable.
@@ -463,6 +465,13 @@ impl Query {
         self.kind = kind;
         self.stage = Stage::Whole;
         if flags & NOEXPAND != 0 {
+            // Windows delivers a list of strings from the registry
+            // with one terminator more than it is stored with, and
+            // counts it.
+            if kind == REG_MULTI_SZ && !self.default {
+                self.data.try_reserve(2).map_err(|_| QueryError::NoMemory)?;
+                self.data.extend([0, 0]);
+            }
             return Ok(());
         }
         if kind == REG_EXPAND_SZ {
@@ -804,7 +813,18 @@ mod tests {
         assert_eq!(result, Ok(()));
         assert_eq!(done, ["call 0 List 1 'one|'", "call 0 List 1 'two|'"]);
         let (done, _) = run(&mut fake, &[entry(true, NOEXPAND, Some(&name))]);
-        assert_eq!(done, ["call 0 List 7 'one|two||three|'"]);
+        // Whole, it is followed by a terminator the registry does
+        // not hold; a default is the caller's and goes as it is.
+        assert_eq!(done, ["call 0 List 7 'one|two||three||'"]);
+        let (absent, ended) = (w("Missing"), wide("d1\0\0"));
+        let whole_default = Entry {
+            flags: NOEXPAND,
+            default_type: REG_MULTI_SZ,
+            default_data: &ended,
+            ..entry(true, 0, Some(&absent))
+        };
+        let (done, _) = run(&mut fake, &[whole_default]);
+        assert_eq!(done, ["call 0 Missing 7 'd1||'"]);
         // A list that is not ended properly is read to its last byte.
         let open = w("Open");
         let (done, _) = run(&mut fake, &[entry(true, 0, Some(&open))]);
@@ -988,7 +1008,7 @@ mod tests {
             &mut fake,
             &[entry(false, DIRECT | NOEXPAND, Some(&names[1]))],
         );
-        assert_eq!(done, ["string 0+0 'a|b||'"]);
+        assert_eq!(done, ["string 0+0 'a|b|||'"]);
         // A default is stored like a value.
         let missing = w("Missing");
         let default = Entry {
@@ -1132,8 +1152,9 @@ mod tests {
     fn a_stored_string_is_its_characters_without_the_terminator() {
         assert_eq!(string_to_store(&wide("nk\0")), wide("nk"));
         // Several strings stored as one keep all terminators but the
-        // last.
+        // last: of a list from the registry, the one that was added.
         assert_eq!(string_to_store(&wide("a\0bc\0\0")), wide("a\0bc\0"));
+        assert_eq!(string_to_store(&wide("a\0bc\0\0\0")), wide("a\0bc\0\0"));
         // A string a driver stored without a terminator, or with half
         // a character at its end, loses no character.
         assert_eq!(string_to_store(&wide("nk")), wide("nk"));
