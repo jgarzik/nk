@@ -61,6 +61,7 @@
 //! - which rotations rebalance a tree, and so the exact shape of the
 //!   links, which no routine returns.
 
+use crate::Text;
 use crate::upcase::upcase_char;
 
 const SEPARATOR: u16 = b'\\' as u16;
@@ -74,23 +75,6 @@ pub const NTC_INTERNAL: i16 = 0x0802;
 /// Of an entry that hangs off one in a tree
 /// (`RTL_NTC_UNICODE_CASE_MATCH`).
 pub const NTC_CASE_MATCH: i16 = 0x0803;
-
-/// A name, where it lies.
-pub trait Text {
-    /// Its length in units.
-    fn length(&self) -> usize;
-    /// The unit at `at`, which is below `length`.
-    fn unit(&self, at: usize) -> u16;
-}
-
-impl Text for [u16] {
-    fn length(&self) -> usize {
-        self.len()
-    }
-    fn unit(&self, at: usize) -> u16 {
-        self[at]
-    }
-}
 
 /// The fields of a table and its entries. A `Node` names the table or
 /// an entry: the table has the first three fields of an entry, where an

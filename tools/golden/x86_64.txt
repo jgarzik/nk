@@ -98,6 +98,8 @@ rtl.app-container ok
 rtl.acl ok
 rtl.owner-group ok
 rtl.prefix-table ok
+rtl.wildcards ok
+rtl.legal-characters ok
 se.well-known ok
 se.descriptor ok
 se.capture ok

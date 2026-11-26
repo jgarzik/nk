@@ -964,6 +964,20 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
 - **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
   fold `A` to `Z` only and do not use that table.
 
+### File names
+
+`FsRtlIsNameInExpression` and `FsRtlLegalAnsiCharacterArray` are
+exported from `kernel/rtl` with the strings they work on. The matcher
+(`nk_rtl::wildcard`) runs the expression as a state machine over the
+name, a bit per expression character in a fixed four kilobytes of the
+caller's stack: its time is bounded by the product of the two lengths
+whatever the pattern, it allocates nothing, and so it never raises,
+where Windows raises `STATUS_NO_MEMORY`. The name is upper-cased by the
+caller's table when one is passed, read from the caller's memory a unit
+at a time. The table of legal characters is built from each file
+system's naming rules (`nk_rtl::legal`): Microsoft publishes the flags
+and the macros that read the table, not its contents.
+
 ### The prefix table
 
 A [prefix table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlinsertunicodeprefix)

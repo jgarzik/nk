@@ -186,6 +186,12 @@ static EXPORTS: &[Export] = &[
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Implemented, ps::ZwClose),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
+    export!(Implemented, rtl::name::FsRtlIsNameInExpression),
+    export_variable!(
+        Implemented,
+        "FsRtlLegalAnsiCharacterArray",
+        rtl::name::FsRtlLegalAnsiCharacterArray
+    ),
     export!(Implemented, rtl::string::RtlCompareMemory),
     export!(Implemented, rtl::prefix::RtlFindUnicodePrefix),
     export!(Implemented, rtl::string::RtlFreeAnsiString),

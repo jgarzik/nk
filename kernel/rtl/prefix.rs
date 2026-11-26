@@ -11,7 +11,8 @@ use super::string::Wide;
 use core::mem::offset_of;
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::rtl::{RTL_SPLAY_LINKS, UNICODE_PREFIX_TABLE, UNICODE_PREFIX_TABLE_ENTRY};
-use nk_rtl::prefix::{self, Nodes, Text};
+use nk_rtl::Text;
+use nk_rtl::prefix::{self, Nodes};
 
 impl Text for Wide {
     fn length(&self) -> usize {

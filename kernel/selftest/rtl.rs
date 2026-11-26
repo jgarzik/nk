@@ -24,6 +24,8 @@ pub static GROUP: Group = Group {
         "rtl.acl",
         "rtl.owner-group",
         "rtl.prefix-table",
+        "rtl.wildcards",
+        "rtl.legal-characters",
     ],
     run,
     manual: false,
@@ -1096,6 +1098,133 @@ fn prefix_table() -> Result<(), &'static str> {
     result
 }
 
+/// `FsRtlIsNameInExpression`, with the system's table of capitals and
+/// with the caller's.
+fn wildcards() -> Result<(), &'static str> {
+    use crate::mm::pool;
+    use crate::rtl::name::FsRtlIsNameInExpression;
+    use crate::rtl::string::RtlUpcaseUnicodeChar;
+    let matches = |expression: &str, name: &str, ignore_case: u8, table: *const u16| {
+        let (mut expression, mut name): (Vec<u16>, Vec<u16>) = (
+            expression.encode_utf16().collect(),
+            name.encode_utf16().collect(),
+        );
+        let (expression, name) = (counted(&mut expression), counted(&mut name));
+        // SAFETY: both name locals; the table is null or the 65536
+        // units allocated below.
+        unsafe {
+            FsRtlIsNameInExpression(&raw const expression, &raw const name, ignore_case, table)
+        }
+    };
+    // `<` is DOS_STAR, `>` DOS_QM and `"` DOS_DOT.
+    let none = core::ptr::null();
+    for (expression, name, ignore_case, expected) in [
+        ("*", "anything", 0, 1),
+        ("*", "", 0, 0),
+        ("", "", 0, 1),
+        ("abc", "ABC", 0, 0),
+        ("ABC", "abc", 1, 1),
+        // The expression is not made capital.
+        ("abc", "ABC", 1, 0),
+        ("*.txt", "file.txt", 0, 1),
+        ("*.txt", "file.txt.bak", 0, 0),
+        ("*.TXT", "file.txt", 1, 1),
+        ("a*b*c", "aXbYc", 0, 1),
+        ("*a*a*a*a", "aaa", 0, 0),
+        ("*.*", "file", 0, 0),
+        ("a?c", "a.c", 0, 1),
+        ("a?", "a", 0, 0),
+        ("<.txt", "a.b.txt", 0, 1),
+        ("<.b", "a.b.c", 0, 0),
+        ("<\"*", "file", 0, 1),
+        ("a>", "a", 0, 1),
+        ("a>c", "ac", 0, 0),
+        (">>>>>>>>\">>>", "abc.de", 0, 1),
+        (">>>>>>>>\">>>", "abc.defg", 0, 0),
+        ("a\"", "a.", 0, 1),
+        ("a\"b", "ab", 0, 0),
+        ("<.TXT", "File.Txt", 1, 1),
+        // The system's table: e acute, and alpha.
+        ("\u{C9}*", "\u{E9}x", 1, 1),
+        ("\u{C9}*", "\u{E9}x", 0, 0),
+        ("\u{391}?", "\u{3B1}\u{3B2}", 1, 1),
+    ] {
+        if matches(expression, name, ignore_case, none) != expected {
+            return Err("a name was matched against a wildcard expression wrongly");
+        }
+    }
+    // The caller's own table of capitals: one that leaves every
+    // character as it is, one that says what the system's says, and
+    // one that makes every character `X`.
+    let table = pool::alloc(0x1_0000 * 2, u32::from_le_bytes(*b"Test")).cast::<u16>();
+    if table.is_null() {
+        return Err("no memory for a table of capitals");
+    }
+    let fill = |capital: &dyn Fn(u16) -> u16| {
+        for c in 0..=u16::MAX {
+            // SAFETY: the block holds 65536 units.
+            unsafe { table.add(usize::from(c)).write(capital(c)) };
+        }
+    };
+    fill(&|c| c);
+    let same = [
+        matches("ABC", "abc", 1, table),
+        matches("abc", "abc", 1, table),
+    ];
+    fill(&|c| RtlUpcaseUnicodeChar(c));
+    let system = [
+        matches("ABC", "abc", 1, table),
+        matches("*.TXT", "file.txt", 1, table),
+        // With case regarded a table is not used.
+        matches("ABC", "abc", 0, table),
+    ];
+    fill(&|_| 0x58);
+    let all_x = matches("X?X", "abc", 1, table);
+    // SAFETY: the block came from the pool and nothing points to it.
+    unsafe { pool::ExFreePoolWithTag(table.cast(), 0) };
+    if same != [0, 1] || system != [1, 1, 0] || all_x != 1 {
+        return Err("the caller's table of capitals was not used for the name");
+    }
+    Ok(())
+}
+
+/// `FsRtlLegalAnsiCharacterArray`, read the way the header's macros
+/// read it: the import is the address of a pointer to the table.
+fn legal_characters() -> Result<(), &'static str> {
+    let import = crate::export::resolve(b"ntoskrnl.exe", b"FsRtlLegalAnsiCharacterArray")
+        .ok_or("FsRtlLegalAnsiCharacterArray is not exported")?
+        as *const *const u8;
+    // `FsRtlTestAnsiCharacter`: any of the flags, or the wildcard flag
+    // if wildcards are let through.
+    let test = |c: u8, wild_ok: bool, flags: u8| {
+        // SAFETY: the export is a pointer to a table of 128 bytes, and
+        // every character asked about is below 0x80.
+        let entry = unsafe { (*import).add(usize::from(c)).read() };
+        entry & (flags | if wild_ok { 8 } else { 0 }) != 0
+    };
+    let (fat, hpfs, ntfs, stream) = (1, 2, 4, 4 | 16);
+    if !test(b'a', false, fat) || !test(b'~', false, fat) || !test(b' ', false, fat) {
+        return Err("a letter is not legal in a FAT name");
+    }
+    if test(b'+', false, fat) || !test(b'+', false, hpfs) || test(b':', false, hpfs) {
+        return Err("FAT's and HPFS's own exclusions are not in the table");
+    }
+    if !test(b':', false, ntfs) || test(b'\\', true, fat | hpfs | ntfs) || test(0x1F, true, ntfs) {
+        return Err("a backslash or a control character is legal in a file's name");
+    }
+    if test(b'*', false, ntfs) || !test(b'*', true, ntfs) || !test(b'<', true, fat) {
+        return Err("a wildcard is not legal exactly when wildcards are let through");
+    }
+    if !test(b'|', false, stream) || !test(1, false, stream) || test(b'/', false, stream) {
+        return Err("a stream's name does not take what a file's refuses");
+    }
+    let wild = (0..128).filter(|&c| test(c, false, 8)).count();
+    if wild != 5 {
+        return Err("there are not five wildcard characters");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.crt", crt);
     r.check("rtl.vsnwprintf", vsnwprintf);
@@ -1110,4 +1239,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.acl", acl);
     r.check("rtl.owner-group", owner_group);
     r.check("rtl.prefix-table", prefix_table);
+    r.check("rtl.wildcards", wildcards);
+    r.check("rtl.legal-characters", legal_characters);
 }
