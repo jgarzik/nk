@@ -14,7 +14,6 @@ trap_list!(
     ZwInitiatePowerAction,
     ZwLoadDriver,
     ZwMakeTemporaryObject,
-    ZwNotifyChangeKey,
     ZwOpenFile,
     ZwQueryWnfStateData,
     ZwSetSystemInformation,

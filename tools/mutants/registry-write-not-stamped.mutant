@@ -3,5 +3,5 @@
 scenario: aarch64
 fails: cm.times
 file: kernel/cm/mod.rs
-replace:     match set.and_then(|()| hive.set_last_write(key, now)) {
-with:     match set {
+replace:     let set = set.and_then(|()| hive.set_last_write(key, now));
+with:     let set = set.and_then(|()| Ok(()));

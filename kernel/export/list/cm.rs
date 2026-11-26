@@ -9,6 +9,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, cm::ZwCreateKey),
     export!(Implemented, cm::ZwDeleteKey),
     export!(Implemented, cm::ZwDeleteValueKey),
+    export!(Partial, cm::notify::ZwNotifyChangeKey),
     export!(Implemented, cm::ZwEnumerateKey),
     export!(Implemented, cm::ZwEnumerateValueKey),
     export!(Implemented, cm::ZwOpenKey),

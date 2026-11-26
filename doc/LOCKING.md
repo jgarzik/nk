@@ -69,6 +69,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
+| 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
@@ -135,6 +136,10 @@ Why this order:
   withdrawal, which allocate from the pool under it. What a provider
   registers is copied out of its memory before the lock is taken, and
   its driver object is referenced and released outside it.
+- The watches on keys are found under the registry's lock, which is
+  what says which keys lie above the one that changed, and taken out
+  of their table there; the watchers are told (a status block written,
+  an event set, a work item queued) after both locks are released.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
   memory is read and written outside it. The key object the handle
