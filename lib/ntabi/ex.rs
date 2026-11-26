@@ -26,6 +26,7 @@ pub struct SLIST_HEADER {
 
 /// `GUID`, which `UUID` is another name for.
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GUID {
     pub Data1: u32,
     pub Data2: u16,

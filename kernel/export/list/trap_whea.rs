@@ -8,12 +8,9 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     WheaAddErrorSource,
-    WheaAddErrorSourceDeviceDriverV1,
     WheaConfigureErrorSource,
-    WheaGetErrorSource,
     WheaInitializeRecordHeader,
     WheaLogInternalEvent,
-    WheaRemoveErrorSource,
     WheaReportFatalHwErrorDeviceDriverEx,
     WheaReportHwError,
     WheaReportHwErrorDeviceDriverEx,

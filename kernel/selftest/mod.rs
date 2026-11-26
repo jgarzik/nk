@@ -50,6 +50,7 @@ mod storage;
 mod thread;
 mod timer;
 mod wait;
+mod whea;
 mod work;
 
 use crate::io::file::{self, OpenRequest};
@@ -161,6 +162,7 @@ pub static GROUPS: &[&[&Group]] = &[
     hal::GROUPS,
     absent::GROUPS,
     po::GROUPS,
+    whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,
     mutex::GROUPS,
@@ -220,9 +222,11 @@ pub fn resources() -> Resources {
     let (table_blocks, table_bytes) = crate::ob::handle::storage();
     // The registry keeps what is written to it.
     let (registry_blocks, registry_bytes) = crate::cm::storage();
+    // Hardware error sources keep their table and what they removed.
+    let (whea_blocks, whea_bytes) = crate::whea::storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes,
+        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks,
+        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),

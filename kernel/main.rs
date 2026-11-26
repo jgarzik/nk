@@ -29,6 +29,7 @@ mod rtl;
 mod se;
 mod selftest;
 mod test;
+mod whea;
 
 use nk_bootinfo::BootInfo;
 

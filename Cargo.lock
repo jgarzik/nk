@@ -98,6 +98,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-whea"
+version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
+
+[[package]]
 name = "nkkrnl"
 version = "0.2.0"
 dependencies = [
@@ -118,6 +125,7 @@ dependencies = [
  "nk-se",
  "nk-selftest",
  "nk-unwind",
+ "nk-whea",
 ]
 
 [[package]]

@@ -33,6 +33,8 @@ pub enum Rank {
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
+    /// The sources of hardware errors (`whea`).
+    Whea = 28,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).

@@ -33,6 +33,7 @@ mod trap_po;
 mod trap_rtl;
 mod trap_whea;
 mod trap_zw;
+mod whea;
 
 /// Every list.
 pub(super) static ALL: &[&[Export]] = &[
@@ -65,4 +66,5 @@ pub(super) static ALL: &[&[Export]] = &[
     trap_rtl::EXPORTS,
     trap_whea::EXPORTS,
     trap_zw::EXPORTS,
+    whea::EXPORTS,
 ];
