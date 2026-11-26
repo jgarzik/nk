@@ -20,7 +20,6 @@ trap_list!(
     HviGetHypervisorFeatures,
     HviIsAnyHypervisorPresent,
     KseRegisterShim,
-    ObReferenceObjectByPointer,
     VfFailDeviceNode,
     VfFailSystemBIOS,
     VfIsVerificationEnabled,

@@ -35,4 +35,13 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::device::IoDetachDevice),
     export!(Implemented, io::device::IoGetAttachedDeviceReference),
     export!(Implemented, io::device::IoGetDeviceAttachmentBaseRef),
+    export!(Implemented, io::irp::IoAcquireCancelSpinLock),
+    export!(Implemented, io::irp::IoCancelIrp),
+    export!(Implemented, io::irp::IoInitializeIrp),
+    export!(Implemented, io::irp::IoReuseIrp),
+    export!(Implemented, io::build::IoBuildDeviceIoControlRequest),
+    export!(Implemented, io::build::IoBuildSynchronousFsdRequest),
+    export!(Implemented, io::build::IoSetMasterIrpStatus),
+    export!(Implemented, io::build::IoSynchronousCallDriver),
+    export!(Implemented, io::mdl::IoBuildPartialMdl),
 ];

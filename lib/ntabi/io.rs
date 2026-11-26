@@ -143,11 +143,16 @@ pub const IRP_MJ_CREATE_NAMED_PIPE: u8 = 0x01;
 pub const IRP_MJ_CLOSE: u8 = 0x02;
 pub const IRP_MJ_READ: u8 = 0x03;
 pub const IRP_MJ_WRITE: u8 = 0x04;
+pub const IRP_MJ_FLUSH_BUFFERS: u8 = 0x09;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
+pub const IRP_MJ_INTERNAL_DEVICE_CONTROL: u8 = 0x0F;
+pub const IRP_MJ_SHUTDOWN: u8 = 0x10;
 pub const IRP_MJ_CLEANUP: u8 = 0x12;
 pub const IRP_MJ_CREATE_MAILSLOT: u8 = 0x13;
+pub const IRP_MJ_POWER: u8 = 0x16;
 pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
+pub const IRP_MJ_PNP: u8 = 0x1B;
 /// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
 /// its registration, the older way and the newer.
 pub const IRP_MN_REGINFO: u8 = 0x08;
@@ -425,6 +430,54 @@ pub const IRP_DEFER_IO_COMPLETION: u32 = 0x0000_0800;
 /// NK never does.
 pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
 
+/// The bits of `IRP.Flags` that carry the I/O priority hint of a
+/// request the I/O manager builds for a driver, and what the pinned
+/// kernel puts there for a thread of normal I/O priority
+/// (`IoPriorityNormal`, 2, plus one). Every thread of NK's is one.
+pub const IRP_PRIORITY_HINT_MASK: u32 = 0x000E_0000;
+pub const IRP_PRIORITY_HINT_NORMAL: u32 = 0x0006_0000;
+
+/// Whether `IoBuildSynchronousFsdRequest` of the pinned kernel builds a
+/// request of this major function with no buffer and no transfer
+/// parameters: a flush, a shutdown, a power or a Plug and Play request.
+/// Every other major function gets the buffer the caller named, passed
+/// the way the device asks for, and the length and offset of a read.
+pub const fn fsd_request_has_no_buffer(major: u32) -> bool {
+    major == IRP_MJ_FLUSH_BUFFERS as u32
+        || major == IRP_MJ_SHUTDOWN as u32
+        || major == IRP_MJ_POWER as u32
+        || major == IRP_MJ_PNP as u32
+}
+
+/// What
+/// [`IoSetMasterIrpStatus`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iosetmasterirpstatus)
+/// makes of a master request's status `current` when a part of it
+/// completes with `status`: the status to store, or `None` to leave the
+/// master's. As the pinned kernel decides it: "verify required" always
+/// wins and is never replaced; "read from the other copy" is replaced
+/// by anything and replaces nothing; otherwise the more severe of the
+/// two (the top two bits) wins, and the first of equals stays.
+pub const fn master_irp_status(current: NTSTATUS, status: NTSTATUS) -> Option<NTSTATUS> {
+    use crate::status::{STATUS_FT_READ_FROM_COPY, STATUS_VERIFY_REQUIRED};
+    if status == STATUS_VERIFY_REQUIRED {
+        return Some(status);
+    }
+    if current == STATUS_VERIFY_REQUIRED {
+        return None;
+    }
+    if current == STATUS_FT_READ_FROM_COPY {
+        return Some(status);
+    }
+    if status == STATUS_FT_READ_FROM_COPY {
+        return None;
+    }
+    if status as u32 >> 30 > current as u32 >> 30 {
+        Some(status)
+    } else {
+        None
+    }
+}
+
 /// `IRP.ApcEnvironment`: the thread was in its own process when the
 /// request was made (`OriginalApcEnvironment`).
 pub const ORIGINAL_APC_ENVIRONMENT: i8 = 0;
@@ -626,6 +679,13 @@ pub const MDL_MAPPED_TO_SYSTEM_VA: i16 = 0x0001;
 pub const MDL_PAGES_LOCKED: i16 = 0x0002;
 pub const MDL_SOURCE_IS_NONPAGED_POOL: i16 = 0x0004;
 pub const MDL_ALLOCATED_FIXED_SIZE: i16 = 0x0008;
+/// The MDL describes part of another's buffer (`IoBuildPartialMdl`).
+pub const MDL_PARTIAL: i16 = 0x0010;
+/// A partial MDL that has a system mapping of its own, to be taken
+/// down when the MDL is freed or reused.
+pub const MDL_PARTIAL_HAS_BEEN_MAPPED: i16 = 0x0020;
+pub const MDL_IO_PAGE_READ: i16 = 0x0040;
+pub const MDL_ALLOCATED_MUST_SUCCEED: i16 = 0x4000;
 
 /// Memory descriptor list header. An array of page frame numbers (one
 /// `u64` per page spanned) follows it in the same allocation.
@@ -652,6 +712,53 @@ pub const fn span_pages(va: usize, len: usize) -> usize {
 /// Bytes `IoAllocateMdl` needs for a buffer: header plus one PFN per page.
 pub const fn mdl_size(va: usize, len: usize) -> usize {
     size_of::<MDL>() + span_pages(va, len) * 8
+}
+
+/// What a partial MDL describes
+/// ([`IoBuildPartialMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildpartialmdl)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartialMdl {
+    /// The first page of the source MDL's page array that the part
+    /// uses, and how many it uses.
+    pub first_page: usize,
+    pub pages: usize,
+    /// The part's `ByteOffset` and `ByteCount`.
+    pub byte_offset: u32,
+    pub byte_count: u32,
+    /// How far into the source's buffer the part starts.
+    pub skipped: usize,
+}
+
+/// The part of a source MDL's buffer that starts at `va` and is
+/// `length` bytes long, or reaches the end of the source's buffer if
+/// `length` is zero. The source's buffer starts at `source_va`
+/// (`StartVa` plus `ByteOffset`) and is `source_count` bytes long.
+/// `None` if the part does not lie within the source's buffer.
+pub const fn partial_mdl(
+    source_va: usize,
+    source_count: u32,
+    va: usize,
+    length: u32,
+) -> Option<PartialMdl> {
+    if va < source_va {
+        return None;
+    }
+    let skipped = va - source_va;
+    if skipped > source_count as usize {
+        return None;
+    }
+    let left = source_count as usize - skipped;
+    let byte_count = if length == 0 { left } else { length as usize };
+    if byte_count > left {
+        return None;
+    }
+    Some(PartialMdl {
+        first_page: (va >> 12) - (source_va >> 12),
+        pages: span_pages(va, byte_count),
+        byte_offset: (va & 0xFFF) as u32,
+        byte_count: byte_count as u32,
+        skipped,
+    })
 }
 
 /// The layouts drivers were compiled against, from the Windows 10 x64
@@ -930,6 +1037,140 @@ mod layout {
         let noisy = SL_INVOKE_ON_ERROR | SL_PENDING_RETURNED;
         assert!(wanted(noisy, STATUS_END_OF_FILE, false));
         assert!(!wanted(noisy, STATUS_SUCCESS, false));
+    }
+
+    #[test]
+    fn a_master_request_keeps_its_most_telling_status() {
+        use crate::status::*;
+        let set = master_irp_status;
+        // The more severe status wins; the first of equals stays.
+        assert_eq!(
+            set(STATUS_SUCCESS, STATUS_END_OF_FILE),
+            Some(STATUS_END_OF_FILE)
+        );
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_SUCCESS), None);
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_ACCESS_DENIED), None);
+        assert_eq!(set(STATUS_SUCCESS, STATUS_SUCCESS), None);
+        assert_eq!(
+            set(STATUS_SUCCESS, STATUS_BUFFER_OVERFLOW),
+            Some(STATUS_BUFFER_OVERFLOW)
+        );
+        assert_eq!(
+            set(STATUS_BUFFER_OVERFLOW, STATUS_END_OF_FILE),
+            Some(STATUS_END_OF_FILE)
+        );
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_BUFFER_OVERFLOW), None);
+        // An informational status outranks a plain success.
+        assert_eq!(
+            set(STATUS_SUCCESS, STATUS_OBJECT_NAME_EXISTS),
+            Some(STATUS_OBJECT_NAME_EXISTS)
+        );
+        // "Verify required" always wins, over an error too, and stays.
+        assert_eq!(
+            set(STATUS_END_OF_FILE, STATUS_VERIFY_REQUIRED),
+            Some(STATUS_VERIFY_REQUIRED)
+        );
+        assert_eq!(
+            set(STATUS_VERIFY_REQUIRED, STATUS_VERIFY_REQUIRED),
+            Some(STATUS_VERIFY_REQUIRED)
+        );
+        assert_eq!(set(STATUS_VERIFY_REQUIRED, STATUS_END_OF_FILE), None);
+        assert_eq!(set(STATUS_VERIFY_REQUIRED, STATUS_FT_READ_FROM_COPY), None);
+        // "Read from the other copy" gives way to anything, a success
+        // included, and replaces nothing.
+        assert_eq!(
+            set(STATUS_FT_READ_FROM_COPY, STATUS_SUCCESS),
+            Some(STATUS_SUCCESS)
+        );
+        assert_eq!(
+            set(STATUS_FT_READ_FROM_COPY, STATUS_FT_READ_FROM_COPY),
+            Some(STATUS_FT_READ_FROM_COPY)
+        );
+        assert_eq!(set(STATUS_SUCCESS, STATUS_FT_READ_FROM_COPY), None);
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_FT_READ_FROM_COPY), None);
+    }
+
+    #[test]
+    fn requests_without_a_transfer_get_no_buffer() {
+        for major in [
+            IRP_MJ_FLUSH_BUFFERS,
+            IRP_MJ_SHUTDOWN,
+            IRP_MJ_POWER,
+            IRP_MJ_PNP,
+        ] {
+            assert!(fsd_request_has_no_buffer(u32::from(major)));
+        }
+        for major in [
+            IRP_MJ_READ,
+            IRP_MJ_WRITE,
+            IRP_MJ_CREATE,
+            IRP_MJ_DEVICE_CONTROL,
+            IRP_MJ_INTERNAL_DEVICE_CONTROL,
+            IRP_MJ_SYSTEM_CONTROL,
+        ] {
+            assert!(!fsd_request_has_no_buffer(u32::from(major)));
+        }
+        assert!(!fsd_request_has_no_buffer(0x109));
+        assert_eq!(IRP_PRIORITY_HINT_NORMAL & !IRP_PRIORITY_HINT_MASK, 0);
+        assert_eq!(IRP_PRIORITY_HINT_NORMAL >> 17, 3);
+    }
+
+    #[test]
+    fn a_partial_mdl_describes_part_of_the_source_buffer() {
+        // The source: three pages' worth starting 0x800 into a page.
+        let (source, count) = (0x10_0800, 0x3000);
+        // The whole of it.
+        assert_eq!(
+            partial_mdl(source, count, source, 0),
+            Some(PartialMdl {
+                first_page: 0,
+                pages: 4,
+                byte_offset: 0x800,
+                byte_count: 0x3000,
+                skipped: 0,
+            })
+        );
+        // A part inside the second page.
+        assert_eq!(
+            partial_mdl(source, count, 0x10_1010, 0x20),
+            Some(PartialMdl {
+                first_page: 1,
+                pages: 1,
+                byte_offset: 0x10,
+                byte_count: 0x20,
+                skipped: 0x810,
+            })
+        );
+        // From the middle to the end: a length of zero.
+        assert_eq!(
+            partial_mdl(source, count, 0x10_2FFF, 0),
+            Some(PartialMdl {
+                first_page: 2,
+                pages: 2,
+                byte_offset: 0xFFF,
+                byte_count: 0x801,
+                skipped: 0x27FF,
+            })
+        );
+        // Up to the last byte, and no further.
+        assert!(partial_mdl(source, count, 0x10_3000, 0x800).is_some());
+        assert_eq!(partial_mdl(source, count, 0x10_3000, 0x801), None);
+        assert_eq!(partial_mdl(source, count, source, 0x3001), None);
+        // Not before the buffer, nor past its end.
+        assert_eq!(partial_mdl(source, count, 0x10_07FF, 1), None);
+        assert_eq!(partial_mdl(source, count, 0x10_3801, 0), None);
+        // At the very end, nothing is left to describe; the page the
+        // end lies in is still spanned, as the WDK's macro spans it.
+        assert_eq!(
+            partial_mdl(source, count, 0x10_3800, 0),
+            Some(PartialMdl {
+                first_page: 3,
+                pages: 1,
+                byte_offset: 0x800,
+                byte_count: 0,
+                skipped: 0x3000,
+            })
+        );
     }
 
     #[test]

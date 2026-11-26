@@ -97,7 +97,23 @@ pub unsafe extern "C" fn IoAllocateMdl(
     mdl
 }
 
-/// `IoFreeMdl`. The pages must have been unlocked first.
+/// Take down the system mapping made of the MDL's pages.
+///
+/// # Safety
+/// `mdl` is a live MDL that `MmMapLockedPagesSpecifyCache` mapped.
+unsafe fn unmap(mdl: *mut MDL) {
+    // SAFETY: per the contract.
+    unsafe {
+        let va = (*mdl).MappedSystemVa as u64 & !(PAGE_SIZE as u64 - 1);
+        map::unmap(va, pages(mdl));
+        map::free_va(va, pages(mdl));
+        (*mdl).MappedSystemVa = core::ptr::null_mut();
+    }
+}
+
+/// `IoFreeMdl`. The pages must have been unlocked first. A partial
+/// MDL's own system mapping goes with it, as Windows' `IoFreeMdl`
+/// prepares the MDL for reuse.
 ///
 /// # Safety
 /// `mdl` must be a live MDL from `IoAllocateMdl`.
@@ -108,6 +124,9 @@ pub unsafe extern "C" fn IoFreeMdl(mdl: *mut MDL) {
             kd::bugcheck(format_args!(
                 "IoFreeMdl: MDL {mdl:p} still has locked pages"
             ));
+        }
+        if (*mdl).MdlFlags & MDL_PARTIAL_HAS_BEEN_MAPPED != 0 {
+            unmap(mdl);
         }
     }
     if let Err(e) = pool::free(mdl.cast()) {
@@ -193,12 +212,66 @@ pub unsafe extern "C" fn MmUnlockPages(mdl: *mut MDL) {
             kd::bugcheck(format_args!("MmUnlockPages: MDL {mdl:p} is not locked"));
         }
         if (*mdl).MdlFlags & MDL_MAPPED_TO_SYSTEM_VA != 0 {
-            let va = (*mdl).MappedSystemVa as u64 & !(PAGE_SIZE as u64 - 1);
-            map::unmap(va, pages(mdl));
-            map::free_va(va, pages(mdl));
-            (*mdl).MappedSystemVa = core::ptr::null_mut();
+            unmap(mdl);
         }
         (*mdl).MdlFlags &= !(MDL_PAGES_LOCKED | MDL_MAPPED_TO_SYSTEM_VA);
+    }
+}
+
+/// [`IoBuildPartialMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildpartialmdl):
+/// make `target` describe the part of `source`'s buffer that starts at
+/// `virtual_address` and is `length` bytes long (to the end of the
+/// buffer, if zero). The part shares the source's pages and, if the
+/// source is mapped, its system mapping; one mapped on its own
+/// (`MmMapLockedPagesSpecifyCache`) keeps that mapping until it is
+/// freed.
+///
+/// A part that does not lie within the source's buffer, or a target too
+/// small for its pages, stops the system: Windows would describe memory
+/// that is not the source's.
+///
+/// # Safety
+/// `source` is a live MDL whose page array is filled in; `target` is an
+/// MDL from `IoAllocateMdl` that describes no pages of its own.
+pub unsafe extern "C" fn IoBuildPartialMdl(
+    source: *mut MDL,
+    target: *mut MDL,
+    virtual_address: *mut c_void,
+    length: u32,
+) {
+    // SAFETY: per the contract; the target's room is checked before
+    // its page array is written.
+    unsafe {
+        let source_va = (*source).StartVa as usize + (*source).ByteOffset as usize;
+        let va = virtual_address as usize;
+        let Some(part) = partial_mdl(source_va, (*source).ByteCount, va, length) else {
+            kd::bugcheck(format_args!(
+                "IoBuildPartialMdl: {length:#x} bytes at {va:#x} are not within the buffer of \
+                 MDL {source:p}"
+            ));
+        };
+        let room = ((*target).Size as usize).saturating_sub(size_of::<MDL>()) / 8;
+        if part.pages > room {
+            kd::bugcheck(format_args!(
+                "IoBuildPartialMdl: MDL {target:p} has room for {room} pages, not {}",
+                part.pages
+            ));
+        }
+        let kept = (*target).MdlFlags & (MDL_ALLOCATED_FIXED_SIZE | MDL_ALLOCATED_MUST_SUCCEED);
+        let inherited = (*source).MdlFlags
+            & (MDL_SOURCE_IS_NONPAGED_POOL | MDL_MAPPED_TO_SYSTEM_VA | MDL_IO_PAGE_READ);
+        (*target).MdlFlags = kept | inherited | MDL_PARTIAL;
+        (*target).Process = (*source).Process;
+        (*target).StartVa = (va & !(PAGE_SIZE - 1)) as PVOID;
+        (*target).ByteOffset = part.byte_offset;
+        (*target).ByteCount = part.byte_count;
+        // Meaningful only where the source is mapped, as on Windows.
+        (*target).MappedSystemVa = (*source)
+            .MappedSystemVa
+            .cast::<u8>()
+            .wrapping_add(part.skipped)
+            .cast();
+        core::ptr::copy_nonoverlapping(pfns(source).add(part.first_page), pfns(target), part.pages);
     }
 }
 
@@ -206,7 +279,8 @@ pub unsafe extern "C" fn MmUnlockPages(mdl: *mut MDL) {
 /// and return the address of the buffer's first byte there, or null.
 ///
 /// # Safety
-/// `mdl` must be a live MDL with locked pages.
+/// `mdl` must be a live MDL with locked pages, or a part of one
+/// (`IoBuildPartialMdl`).
 pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
     mdl: *mut MDL,
     access_mode: i8,
@@ -217,7 +291,7 @@ pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
 ) -> *mut c_void {
     // SAFETY: per the contract.
     unsafe {
-        if (*mdl).MdlFlags & MDL_PAGES_LOCKED == 0 {
+        if (*mdl).MdlFlags & (MDL_PAGES_LOCKED | MDL_PARTIAL) == 0 {
             kd::bugcheck(format_args!(
                 "MmMapLockedPagesSpecifyCache: MDL {mdl:p} is not locked"
             ));
@@ -252,6 +326,10 @@ pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
         };
         (*mdl).MappedSystemVa = (va + u64::from((*mdl).ByteOffset)) as PVOID;
         (*mdl).MdlFlags |= MDL_MAPPED_TO_SYSTEM_VA;
+        if (*mdl).MdlFlags & MDL_PARTIAL != 0 {
+            // Its own mapping, which goes when the MDL is freed.
+            (*mdl).MdlFlags |= MDL_PARTIAL_HAS_BEEN_MAPPED;
+        }
         (*mdl).MappedSystemVa
     }
 }

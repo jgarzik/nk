@@ -48,16 +48,38 @@ pub(super) const FILTER: u32 = 2;
 
 /// What a control code asks of the stack: its function number.
 /// Completed by the bus driver at once: the input comes back reversed.
-const ECHO: u32 = 0x900;
+pub(super) const ECHO: u32 = 0x900;
 /// Pended by the bus driver and completed from a DPC.
-const PEND: u32 = 0x901;
+pub(super) const PEND: u32 = 0x901;
 /// As `PEND`, and the function driver takes the request back in its
 /// completion routine and completes it again from a work item.
 const PEND_AND_HOLD: u32 = 0x902;
+/// Held by the bus driver, cancellable, until it is cancelled.
+pub(super) const HOLD: u32 = 0x903;
 
 const fn code(function: u32) -> u32 {
     ctl_code(0x22, function, METHOD_BUFFERED, 0)
 }
+
+/// The function number of the control code in a control request's
+/// parameters.
+const fn function_of(parameters: [u64; 4]) -> u32 {
+    (parameters[2] as u32 >> 2) & 0xFFF
+}
+
+/// A read or a write at this byte offset is pended by the bus driver
+/// and completed from a DPC.
+pub(super) const PENDED_OFFSET: i64 = 0x7000;
+
+/// What a read returns: byte `i` of a read at `offset`.
+pub(super) const fn read_pattern(offset: i64, i: usize) -> u8 {
+    (offset as usize + i * 3 + 1) as u8
+}
+
+/// What the bus driver made of the last write: the sum of its bytes,
+/// and its byte offset.
+pub(super) static WRITTEN: AtomicU32 = AtomicU32::new(0);
+pub(super) static WRITTEN_AT: AtomicUsize = AtomicUsize::new(0);
 
 /// What a device of the stack keeps in its extension.
 #[repr(C)]
@@ -106,6 +128,16 @@ fn logged() -> Vec<u32> {
         .collect()
 }
 
+/// The major function of the last request that reached the bus driver
+/// since the log was cleared.
+pub(super) fn arrived_at_the_bottom() -> Option<u8> {
+    logged()
+        .iter()
+        .rev()
+        .find(|event| **event >> 8 == ARRIVED << 8 | PDO)
+        .map(|event| *event as u8)
+}
+
 /// The request the bus driver holds, its DPC, and the request the
 /// function driver took back, with its work item.
 static HELD: AtomicPtr<IRP> = AtomicPtr::new(core::ptr::null_mut());
@@ -132,21 +164,126 @@ unsafe extern "C" fn complete_held(_: *mut KDPC, _: *mut c_void, _: *mut c_void,
     }
 }
 
-/// Complete a buffered control request: the input comes back reversed.
+/// Where a read's or a write's data is, the way the device asked for
+/// it: `MmGetSystemAddressForMdlSafe` for direct I/O.
 ///
 /// # Safety
-/// `irp` is a control request the caller owns, at its own location.
-unsafe fn finish(irp: *mut IRP) {
-    // SAFETY: per the contract; a buffered request's system buffer
-    // holds the larger of input and output.
+/// `irp` is a transfer request at the bus driver's location.
+unsafe fn transfer_buffer(irp: *mut IRP) -> *mut u8 {
+    // SAFETY: per the contract.
     unsafe {
-        let parameters = (*(*irp).CurrentStackLocation).Parameters;
-        let n = (parameters[0] as usize).min(parameters[1] as usize);
-        if n != 0 {
-            core::slice::from_raw_parts_mut((*irp).SystemBuffer.cast::<u8>(), n).reverse();
+        let flags = (*(*(*irp).CurrentStackLocation).DeviceObject).Flags;
+        if flags & DO_BUFFERED_IO != 0 {
+            (*irp).SystemBuffer.cast()
+        } else if flags & DO_DIRECT_IO != 0 {
+            mapped((*irp).MdlAddress)
+        } else {
+            (*irp).UserBuffer.cast()
         }
+    }
+}
+
+/// `MmGetSystemAddressForMdlSafe`.
+///
+/// # Safety
+/// `described` is an MDL whose pages are locked, or a part of one.
+pub(super) unsafe fn mapped(described: *mut MDL) -> *mut u8 {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*described).MdlFlags & (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL) != 0 {
+            (*described).MappedSystemVa.cast()
+        } else {
+            crate::io::mdl::MmMapLockedPagesSpecifyCache(
+                described,
+                KERNEL_MODE,
+                1,
+                core::ptr::null_mut(),
+                0,
+                16,
+            )
+            .cast()
+        }
+    }
+}
+
+/// Copy `n` bytes from `from` to `to`, last byte first.
+///
+/// # Safety
+/// Both are valid for `n` bytes; they may be the same buffer.
+unsafe fn reversed(from: *const u8, to: *mut u8, n: usize) {
+    // SAFETY: per the contract; the bytes are read before any is
+    // written.
+    unsafe {
+        let bytes: Vec<u8> = core::slice::from_raw_parts(from, n).to_vec();
+        for (i, byte) in bytes.iter().rev().enumerate() {
+            to.add(i).write(*byte);
+        }
+    }
+}
+
+/// The bus driver does what a request asks and completes it: a read
+/// returns a pattern, a write is summed, a control request's input
+/// comes back reversed, by whichever method its code names.
+///
+/// # Safety
+/// `irp` is a request the bus driver owns, at its own location.
+unsafe fn finish(irp: *mut IRP) {
+    // SAFETY: per the contract; the buffers are as the I/O manager, or
+    // the driver that built the request, set them up.
+    unsafe {
+        let location = (*irp).CurrentStackLocation;
+        let parameters = (*location).Parameters;
+        let returned = match (*location).MajorFunction {
+            IRP_MJ_READ => {
+                let (len, offset) = (parameters[0] as u32 as usize, parameters[2] as i64);
+                let buffer = transfer_buffer(irp);
+                for i in 0..len {
+                    buffer.add(i).write(read_pattern(offset, i));
+                }
+                len
+            }
+            IRP_MJ_WRITE => {
+                let len = parameters[0] as u32 as usize;
+                let bytes = core::slice::from_raw_parts(transfer_buffer(irp), len);
+                WRITTEN.store(bytes.iter().map(|b| u32::from(*b)).sum(), Ordering::Release);
+                WRITTEN_AT.store(parameters[2] as usize, Ordering::Release);
+                len
+            }
+            IRP_MJ_DEVICE_CONTROL | IRP_MJ_INTERNAL_DEVICE_CONTROL => {
+                let n = (parameters[0] as usize).min(parameters[1] as usize);
+                let system = (*irp).SystemBuffer.cast::<u8>();
+                if n != 0 {
+                    match parameters[2] as u32 & 3 {
+                        METHOD_BUFFERED => reversed(system, system, n),
+                        METHOD_NEITHER => {
+                            reversed(parameters[3] as *const u8, (*irp).UserBuffer.cast(), n);
+                        }
+                        _ => reversed(system, mapped((*irp).MdlAddress), n),
+                    }
+                }
+                n
+            }
+            _ => 0,
+        };
         (*irp).IoStatus.Status = STATUS_SUCCESS;
-        (*irp).IoStatus.Information = n;
+        (*irp).IoStatus.Information = returned;
+        irp::IofCompleteRequest(irp, 0);
+    }
+}
+
+/// The bus driver's cancel routine: complete the held request as
+/// cancelled.
+///
+/// # Safety
+/// Called as a cancel routine, holding the cancel spin lock.
+unsafe extern "C" fn bus_cancel(_: *mut DEVICE_OBJECT, irp: *mut IRP) {
+    // SAFETY: per the contract: whoever took the cancel routine out
+    // completes the request, and that was `IoCancelIrp`.
+    unsafe {
+        irp::IoReleaseCancelSpinLock((*irp).CancelIrql);
+        HELD.store(core::ptr::null_mut(), Ordering::Release);
+        (*irp).IoStatus.Status = STATUS_CANCELLED;
+        (*irp).IoStatus.Information = 0;
         irp::IofCompleteRequest(irp, 0);
     }
 }
@@ -160,25 +297,49 @@ unsafe extern "C" fn bus_dispatch(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> 
     unsafe {
         let location = (*irp).CurrentStackLocation;
         let major = (*location).MajorFunction;
+        let parameters = (*location).Parameters;
         log(ARRIVED, (*layer(device)).level, major);
         STACK_COUNT.store((*irp).StackCount as u32, Ordering::Release);
         if (*location).DeviceObject != device {
             WRONG.fetch_add(1, Ordering::AcqRel);
         }
-        if major != IRP_MJ_DEVICE_CONTROL {
-            (*irp).IoStatus.Status = STATUS_SUCCESS;
-            (*irp).IoStatus.Information = 0;
-            irp::IofCompleteRequest(irp, 0);
-            return STATUS_SUCCESS;
-        }
-        if (*location).Parameters[2] as u32 == code(ECHO) {
+        let control = matches!(
+            major,
+            IRP_MJ_DEVICE_CONTROL | IRP_MJ_INTERNAL_DEVICE_CONTROL
+        );
+        let transfer = matches!(major, IRP_MJ_READ | IRP_MJ_WRITE);
+        let function = if control {
+            function_of(parameters)
+        } else {
+            ECHO
+        };
+        let pended =
+            (control && function != ECHO) || (transfer && parameters[2] as i64 == PENDED_OFFSET);
+        if !pended {
             finish(irp);
             return STATUS_SUCCESS;
         }
         // `IoMarkIrpPending`.
         (*location).Control |= SL_PENDING_RETURNED;
         HELD.store(irp, Ordering::Release);
-        dpc::KeInsertQueueDpc(DPC.ptr(), core::ptr::null_mut(), core::ptr::null_mut());
+        if function == HOLD {
+            // `IoSetCancelRoutine`, then look whether the request was
+            // cancelled before there was a routine to call.
+            let routine = AtomicPtr::from_ptr(&raw mut (*irp).CancelRoutine);
+            routine.store(bus_cancel as *mut c_void, Ordering::SeqCst);
+            if irp::cancel_flag(irp).load(Ordering::SeqCst) != 0
+                && !routine
+                    .swap(core::ptr::null_mut(), Ordering::SeqCst)
+                    .is_null()
+            {
+                HELD.store(core::ptr::null_mut(), Ordering::Release);
+                (*irp).IoStatus.Status = STATUS_CANCELLED;
+                (*irp).IoStatus.Information = 0;
+                irp::IofCompleteRequest(irp, 0);
+            }
+        } else {
+            dpc::KeInsertQueueDpc(DPC.ptr(), core::ptr::null_mut(), core::ptr::null_mut());
+        }
         STATUS_PENDING
     }
 }
@@ -223,8 +384,8 @@ unsafe extern "C" fn passed_back(
         let location = (*irp).CurrentStackLocation;
         let major = (*location).MajorFunction;
         log(COMPLETED, level, major);
-        let held = major == IRP_MJ_DEVICE_CONTROL
-            && (*location).Parameters[2] as u32 == code(PEND_AND_HOLD);
+        let held =
+            major == IRP_MJ_DEVICE_CONTROL && function_of((*location).Parameters) == PEND_AND_HOLD;
         if level == FDO && held {
             // The dispatch routine marked the request pending and
             // returned so.
@@ -271,8 +432,8 @@ unsafe extern "C" fn pass_down(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTS
         (*next).CompletionRoutine = Some(passed_back);
         (*next).Context = own.cast();
         (*next).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
-        let held = major == IRP_MJ_DEVICE_CONTROL
-            && (*location).Parameters[2] as u32 == code(PEND_AND_HOLD);
+        let held =
+            major == IRP_MJ_DEVICE_CONTROL && function_of((*location).Parameters) == PEND_AND_HOLD;
         if (*own).level == FDO && held {
             // Its completion routine will take the request back: the
             // request is pending whatever the driver below returns.

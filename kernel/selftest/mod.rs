@@ -26,6 +26,7 @@ mod ob;
 mod open;
 mod oracle;
 mod pend;
+mod request;
 mod requestor;
 mod review;
 mod rtl;
@@ -151,6 +152,7 @@ pub static GROUPS: &[&[&Group]] = &[
     open::GROUPS,
     requestor::GROUPS,
     stack::GROUPS,
+    request::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

@@ -237,6 +237,7 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         ke::wait::KeInitializeEvent(&raw mut waiting.done, 0, 0);
         (*irp).UserIosb = &raw mut waiting.iosb;
         (*irp).UserEvent = &raw mut waiting.done;
+        irp::requestor_keeps(irp);
         (*irp).RequestorMode = mode;
         (*irp).Thread = ke::pcr::current_thread().cast();
         (*irp).OriginalFileObject = file;
@@ -984,7 +985,7 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
                 if major == IRP_MJ_READ {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = buffer.ptr().cast();
-                    irp::requestor_room(irp).write(len);
+                    irp::set_requestor_room(irp, len);
                 } else {
                     copy_in(system, buffer, mode)?;
                 }
@@ -1188,7 +1189,7 @@ unsafe fn control(
                 if output.len != 0 {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = output.ptr().cast();
-                    irp::requestor_room(irp).write(output.len);
+                    irp::set_requestor_room(irp, output.len);
                 }
             }
             METHOD_IN_DIRECT | METHOD_OUT_DIRECT => {
