@@ -21,6 +21,7 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::ex::WORK_QUEUE_ITEM;
 use nk_ntabi::io::*;
 use nk_ntabi::ke::KDPC;
+use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
@@ -31,6 +32,7 @@ pub static GROUP: Group = Group {
         "io.stack.detach-then-delete",
         "io.stack.delete-then-detach",
         "io.stack.fast-io-detach",
+        "io.stack.send-synchronous",
     ],
     run,
     manual: false,
@@ -104,6 +106,15 @@ static STACK_COUNT: AtomicU32 = AtomicU32::new(0);
 static MINOR: AtomicU32 = AtomicU32::new(0);
 static PARAMETERS: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
 
+/// The status the last request had when it reached the bus driver.
+static ARRIVED_STATUS: AtomicU32 = AtomicU32::new(0);
+/// What the bus driver answers a query for its device's identifier
+/// with, and what it adds to the relation type asked for to answer a
+/// query for device relations, which it pends: stand-ins for the
+/// pointers a bus driver returns.
+const INSTANCE_ID: usize = 0x1234_5678_9ABC;
+const RELATIONS: usize = 0x100;
+
 /// The minor function and the parameters of the last request that
 /// reached the bus driver.
 pub(super) fn arrived_with() -> (u8, [u64; 4]) {
@@ -171,7 +182,9 @@ unsafe extern "C" fn complete_held(_: *mut KDPC, _: *mut c_void, _: *mut c_void,
     let irp = HELD.swap(core::ptr::null_mut(), Ordering::AcqRel);
     if !irp.is_null() {
         // SAFETY: the bus driver pended `irp` and has not completed it.
-        unsafe { finish(irp) };
+        unsafe {
+            finish(irp);
+        }
     }
 }
 
@@ -234,11 +247,12 @@ unsafe fn reversed(from: *const u8, to: *mut u8, n: usize) {
 
 /// The bus driver does what a request asks and completes it: a read
 /// returns a pattern, a write is summed, a control request's input
-/// comes back reversed, by whichever method its code names.
+/// comes back reversed, by whichever method its code names. Returns the
+/// status it completed the request with.
 ///
 /// # Safety
 /// `irp` is a request the bus driver owns, at its own location.
-unsafe fn finish(irp: *mut IRP) {
+unsafe fn finish(irp: *mut IRP) -> NTSTATUS {
     // SAFETY: per the contract; the buffers are as the I/O manager, or
     // the driver that built the request, set them up.
     unsafe {
@@ -274,12 +288,24 @@ unsafe fn finish(irp: *mut IRP) {
                 }
                 n
             }
+            // What a bus driver answers for its device; a Plug and
+            // Play request it does not know it completes as it came.
+            IRP_MJ_PNP => match (*location).MinorFunction {
+                IRP_MN_QUERY_ID => INSTANCE_ID,
+                IRP_MN_QUERY_DEVICE_RELATIONS => parameters[0] as usize + RELATIONS,
+                _ => {
+                    let status = (*irp).IoStatus.Status;
+                    irp::IofCompleteRequest(irp, 0);
+                    return status;
+                }
+            },
             _ => 0,
         };
         (*irp).IoStatus.Status = STATUS_SUCCESS;
         (*irp).IoStatus.Information = returned;
         irp::IofCompleteRequest(irp, 0);
     }
+    STATUS_SUCCESS
 }
 
 /// The bus driver's cancel routine: complete the held request as
@@ -328,11 +354,12 @@ unsafe extern "C" fn bus_dispatch(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> 
         } else {
             ECHO
         };
-        let pended =
-            (control && function != ECHO) || (transfer && parameters[2] as i64 == PENDED_OFFSET);
+        ARRIVED_STATUS.store((*irp).IoStatus.Status as u32, Ordering::Release);
+        let pended = (control && function != ECHO)
+            || (transfer && parameters[2] as i64 == PENDED_OFFSET)
+            || (major == IRP_MJ_PNP && (*location).MinorFunction == IRP_MN_QUERY_DEVICE_RELATIONS);
         if !pended {
-            finish(irp);
-            return STATUS_SUCCESS;
+            return finish(irp);
         }
         // `IoMarkIrpPending`.
         (*location).Control |= SL_PENDING_RETURNED;
@@ -1048,6 +1075,113 @@ fn fast_io_detach_test() -> Result<u32, &'static str> {
     Ok(4)
 }
 
+/// The kernel's own synchronous request (`io::stack::send_synchronous`)
+/// goes to the top of the stack of the device named, in an IRP with a
+/// location for each device, and comes back with the status and the
+/// information it completed with, pended or not. A Plug and Play or a
+/// power request starts out as not supported, and comes back so if no
+/// driver handles it; a driver with no dispatch routine of its own for
+/// it fails it as invalid, as on Windows. Returns the facts checked.
+fn send_synchronous() -> Result<u32, &'static str> {
+    use crate::io::stack::send_synchronous as send;
+    let stack = Stack::build()?;
+    let blocks = crate::mm::pool::usage().blocks;
+    let through = |major: u8| {
+        alloc::vec![
+            event(ARRIVED, FILTER, major),
+            event(ARRIVED, FDO, major),
+            event(ARRIVED, PDO, major),
+            event(COMPLETED, FDO, major),
+            event(COMPLETED, FILTER, major),
+        ]
+    };
+    let not_supported = STATUS_NOT_SUPPORTED as u32;
+    // (major, minor, parameters, the answer, the status it starts with)
+    let requests = [
+        (
+            IRP_MJ_PNP,
+            IRP_MN_QUERY_ID,
+            query_id_parameters(BUS_QUERY_INSTANCE_ID),
+            (STATUS_SUCCESS, INSTANCE_ID),
+            not_supported,
+        ),
+        // Pended at the bottom.
+        (
+            IRP_MJ_PNP,
+            IRP_MN_QUERY_DEVICE_RELATIONS,
+            query_device_relations_parameters(TARGET_DEVICE_RELATION),
+            (STATUS_SUCCESS, RELATIONS + TARGET_DEVICE_RELATION as usize),
+            not_supported,
+        ),
+        // Handled by nobody.
+        (
+            IRP_MJ_PNP,
+            IRP_MN_QUERY_CAPABILITIES,
+            device_capabilities_parameters(0x1000),
+            (STATUS_NOT_SUPPORTED, 0),
+            not_supported,
+        ),
+        (
+            IRP_MJ_POWER,
+            IRP_MN_QUERY_POWER,
+            power_parameters(
+                0,
+                POWER_STATE_TYPE_DEVICE,
+                POWER_DEVICE_D3,
+                POWER_ACTION_NONE,
+            ),
+            (STATUS_SUCCESS, 0),
+            not_supported,
+        ),
+        (IRP_MJ_FLUSH_BUFFERS, 0, [0; 4], (STATUS_SUCCESS, 0), 0),
+    ];
+    for (major, minor, parameters, answer, initial) in requests {
+        clear_log();
+        // SAFETY: a live device of the test's; the parameters name
+        // nothing.
+        let came_back = unsafe { send(stack.pdo(), major, minor, parameters) };
+        if came_back != answer {
+            return Err("a synchronous request did not come back with its status and information");
+        }
+        if logged() != through(major)
+            || arrived_with() != (minor, parameters)
+            || STACK_COUNT.load(Ordering::Acquire) != 3
+        {
+            return Err("a synchronous request did not go down from the top as it was built");
+        }
+        if ARRIVED_STATUS.load(Ordering::Acquire) != initial {
+            return Err("a synchronous request did not start out with the status Windows requires");
+        }
+        if WRONG.load(Ordering::Acquire) != 0 {
+            return Err("a routine of the stack was handed the wrong device");
+        }
+    }
+    // A driver whose dispatch table is as the I/O manager made it.
+    let plain = make_driver(irp::invalid_device_request)?;
+    let result = make_device(plain, PDO, None).map(|alone| {
+        // SAFETY: a live device of the test's.
+        unsafe {
+            let came_back = send(
+                alone,
+                IRP_MJ_PNP,
+                IRP_MN_QUERY_ID,
+                query_id_parameters(BUS_QUERY_DEVICE_ID),
+            );
+            device::IoDeleteDevice(alone);
+            came_back
+        }
+    });
+    // SAFETY: its device is gone.
+    unsafe { free_driver(plain) };
+    if result? != (STATUS_INVALID_DEVICE_REQUEST, 0) {
+        return Err("a driver's default dispatch routine did not fail a Plug and Play request");
+    }
+    if crate::mm::pool::usage().blocks != blocks {
+        return Err("a synchronous request was not freed");
+    }
+    Ok(requests.len() as u32 * 4 + 2)
+}
+
 fn run(report: &mut Report, _: &BootInfo) {
     let mut numbered = |name: &str, result: Result<u32, &'static str>| match result {
         Ok(n) => report.ok_with(name, format_args!("{n} checked")),
@@ -1059,4 +1193,5 @@ fn run(report: &mut Report, _: &BootInfo) {
     numbered("io.stack.detach-then-delete", detach_then_delete());
     numbered("io.stack.delete-then-detach", delete_then_detach());
     numbered("io.stack.fast-io-detach", fast_io_detach_test());
+    numbered("io.stack.send-synchronous", send_synchronous());
 }
