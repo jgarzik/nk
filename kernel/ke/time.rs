@@ -148,6 +148,27 @@ pub extern "C" fn KeQueryTimeIncrement() -> u32 {
     TIME_INCREMENT as u32
 }
 
+/// [`ExQueryTimerResolution`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exquerytimerresolution):
+/// the longest and the shortest clock tick the system can run with, and
+/// the one it runs with, in 100 ns units. NK's clock has one rate, so
+/// the three are the same.
+///
+/// # Safety
+/// The three are writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ExQueryTimerResolution(
+    maximum_time: *mut u32,
+    minimum_time: *mut u32,
+    current_time: *mut u32,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        for time in [maximum_time, minimum_time, current_time] {
+            time.write_unaligned(TIME_INCREMENT as u32);
+        }
+    }
+}
+
 /// [`KeQueryPerformanceCounter`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryperformancecounter).
 ///
 /// # Safety

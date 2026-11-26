@@ -18,6 +18,7 @@ mod driver_api;
 mod etw;
 mod ex;
 pub mod except;
+mod exlock;
 mod fsd;
 mod hal;
 mod iosupport;
@@ -170,6 +171,7 @@ pub static GROUPS: &[&[&Group]] = &[
     mutex::GROUPS,
     work::GROUPS,
     ex::GROUPS,
+    exlock::GROUPS,
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,

@@ -275,6 +275,14 @@ pub extern "C" fn ExAllocatePoolWithTag(
     block.cast()
 }
 
+/// [`ExAllocatePool`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool):
+/// `ExAllocatePoolWithTag` under the tag Windows gives a caller that
+/// names none, `None`.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePool(pool_type: u32, number_of_bytes: usize) -> *mut core::ffi::c_void {
+    ExAllocatePoolWithTag(pool_type, number_of_bytes, u32::from_le_bytes(*b"None"))
+}
+
 /// [`ExAllocatePoolWithQuotaTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithquotatag).
 /// NK charges no quotas: there is one process. When memory is exhausted
 /// it raises `STATUS_INSUFFICIENT_RESOURCES`, unless the caller asked

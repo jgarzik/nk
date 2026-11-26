@@ -55,4 +55,61 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::license::ZwQueryLicenseValue),
     export!(Implemented, ex::shim::KseRegisterShim),
     export!(Implemented, ex::vsl::VslGetSecurePciEnabled),
+    export!(Implemented, ex::rundown::ExInitializeRundownProtection),
+    export!(Implemented, ex::rundown::ExAcquireRundownProtection),
+    export!(Implemented, ex::rundown::ExReleaseRundownProtection),
+    export!(Implemented, ex::rundown::ExWaitForRundownProtectionRelease),
+    export!(
+        Implemented,
+        ex::rundown::ExAllocateCacheAwareRundownProtection
+    ),
+    export!(Implemented, ex::rundown::ExFreeCacheAwareRundownProtection),
+    export!(
+        Implemented,
+        ex::rundown::ExSizeOfRundownProtectionCacheAware
+    ),
+    export!(
+        Implemented,
+        ex::rundown::ExInitializeRundownProtectionCacheAware
+    ),
+    export!(
+        Implemented,
+        ex::rundown::ExReInitializeRundownProtectionCacheAware
+    ),
+    export!(
+        Implemented,
+        ex::rundown::ExAcquireRundownProtectionCacheAware
+    ),
+    export!(
+        Implemented,
+        ex::rundown::ExReleaseRundownProtectionCacheAware
+    ),
+    export!(
+        Implemented,
+        ex::rundown::ExWaitForRundownProtectionReleaseCacheAware
+    ),
+    export!(Implemented, ex::spinlock::ExAcquireSpinLockExclusive),
+    export!(Implemented, ex::spinlock::ExAcquireSpinLockShared),
+    export!(
+        Implemented,
+        ex::spinlock::ExAcquireSpinLockExclusiveAtDpcLevel
+    ),
+    export!(Implemented, ex::spinlock::ExAcquireSpinLockSharedAtDpcLevel),
+    export!(Implemented, ex::spinlock::ExReleaseSpinLockExclusive),
+    export!(Implemented, ex::spinlock::ExReleaseSpinLockShared),
+    export!(
+        Implemented,
+        ex::spinlock::ExReleaseSpinLockExclusiveFromDpcLevel
+    ),
+    export!(
+        Implemented,
+        ex::spinlock::ExReleaseSpinLockSharedFromDpcLevel
+    ),
+    export!(Implemented, ex::spinlock::ExInterlockedInsertHeadList),
+    export!(Implemented, ex::spinlock::ExInterlockedInsertTailList),
+    export!(Implemented, ex::spinlock::ExInterlockedRemoveHeadList),
+    export!(Implemented, ex::spinlock::ExInterlockedPopEntryList),
+    export!(Implemented, ex::spinlock::ExInterlockedPushEntryList),
+    export!(Implemented, ex::slist::FirstEntrySList),
+    export!(Implemented, ex::work::ExTryQueueWorkItem),
 ];

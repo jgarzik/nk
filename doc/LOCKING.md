@@ -473,7 +473,19 @@ none of its ranked locks while holding it, except through what the
 driver's routine calls; the cancel routine of a cancel-safe queue
 releases it before it takes the queue's lock.
 
+A reader/writer spin lock (`EX_SPIN_LOCK`, `kernel/ex/spinlock.rs`) is
+a driver's lock of the same kind: a `LONG` with Windows' bits, changed
+only by single atomic operations, held at `DISPATCH_LEVEL`, not ranked
+or recorded, and with no queue. The interlocked list routines of the
+same file hold the driver's `KSPIN_LOCK` at `HIGH_LEVEL` for the few
+instructions that relink a list, and take nothing inside it.
+
 ### Locks a driver's thread sleeps on
+
+Run-down protection (`kernel/ex/rundown.rs`) is not a lock: taking and
+giving back a hold never wait, at any IRQL. Only the thread that runs
+the object down sleeps, below `DISPATCH_LEVEL`, on an event in its own
+stack frame that the last release sets; no lock of NK's is involved.
 
 A push lock (`kernel/ex/pushlock.rs`) is one word the driver owns, with
 Windows' bits; NK changes it only by compare-and-swap through the

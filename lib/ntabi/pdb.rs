@@ -1338,3 +1338,33 @@ fn hal_private_dispatch_table_matches_the_kernel() {
         );
     }
 }
+
+#[test]
+fn cache_aware_rundown_matches_the_kernel() {
+    use crate::ex::EX_RUNDOWN_REF_CACHE_AWARE;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let ty = "_EX_RUNDOWN_REF_CACHE_AWARE";
+    let layout = types.layout(ty).expect(ty);
+    let field = |name| offset(&layout, ty, name);
+    assert_eq!(
+        size_of::<EX_RUNDOWN_REF_CACHE_AWARE>(),
+        layout.size as usize
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefs),
+        field("RunRefs")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, PoolToFree),
+        field("PoolToFree")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefSize),
+        field("RunRefSize")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, Number),
+        field("Number")
+    );
+}
