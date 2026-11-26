@@ -1537,8 +1537,18 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   character database and leaves alone some units that maps (the micro
   sign, dotless i, long s, final sigma, Georgian). The string
   comparisons, the object namespace and the registry all use it.
-- **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
-  fold `A` to `Z` only and do not use that table.
+- **The C runtime's comparisons** (`_stricmp`, `_strnicmp`, `_wcsicmp`,
+  `_wcsnicmp`) fold `A` to `Z` only and do not use that table; `_strupr`
+  and `isspace` are the C locale's too. `RtlCompareString` does use it,
+  through the ANSI page: a byte's upper case is the byte of its unit's.
+- **The C runtime has no invalid-parameter handler.** A bounded copy
+  (`strncpy_s`) given a bad argument empties its destination and returns
+  the error number. `rand` has one seed for the whole system.
+- **Length rules read from Windows.** When a routine stores a length
+  before it knows the text fits, when it writes a terminator, and what
+  it makes of a string too long to count are stated in
+  `nk_rtl::counted`, `nk_rtl::codepage` and `nk_rtl::convert`, with what
+  is still NK's inference marked there.
 
 ### File names
 
@@ -1573,6 +1583,30 @@ allocates, so none can fail for want of memory. Which rotations balance
 a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
+
+### Bitmaps
+
+An [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap)
+header and its buffer are the driver's memory, and NK keeps nothing
+beside them. The rules are `nk_rtl::bitmap`, written against a buffer
+read and written a byte or a `ULONG` at a time: the kernel's is the
+driver's buffer behind a raw pointer, the host tests' a vector checked
+against the same bits held one by one. A routine that changes a run
+writes the bytes that hold the run and no others, as Windows does, so
+two locks may guard two parts of one bitmap. What Microsoft's pages
+leave open (where a search with a hint starts and wraps, what a search
+stores when it finds nothing, how many bits a copy moves) is read from
+the kernel NK follows and stated in `nk_rtl::bitmap`. The interlocked
+routines change one `ULONG` at a time through an atomic.
+
+### Resource descriptors
+
+The encodings of a port or memory range's length in a
+[resource descriptor](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_cm_partial_resource_descriptor),
+large memory included, are `nk_rtl::resource`; the exports in
+`kernel/rtl` read and write a driver's descriptor field by field. The
+layouts are `nk_ntabi::resource`, with the views of each union the
+kernel itself uses.
 
 ## Security descriptors
 

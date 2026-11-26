@@ -7,9 +7,11 @@
 
 mod absent;
 mod base;
+mod bitmap;
 mod cancel;
 mod clock;
 mod cm;
+mod counted;
 mod csq;
 mod dpc;
 mod driver_api;
@@ -30,6 +32,7 @@ mod oracle;
 mod pend;
 mod po;
 mod requestor;
+mod resource;
 mod review;
 mod rtl;
 mod se;
@@ -142,6 +145,9 @@ pub static GROUPS: &[&[&Group]] = &[
     wait::GROUPS,
     ob::GROUPS,
     rtl::GROUPS,
+    bitmap::GROUPS,
+    counted::GROUPS,
+    resource::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,
