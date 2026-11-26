@@ -10,10 +10,16 @@ use crate::mm::stack::Stack;
 use crate::{arch, mm};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ke::topology;
+use nk_ke::topology::{self, Record};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
 use nk_ntabi::ke::PROCESSOR_NUMBER;
-use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
+use nk_ntabi::status::{
+    NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER, STATUS_SUCCESS,
+    STATUS_UNSUCCESSFUL,
+};
+use nk_ntabi::sysinfo::{
+    GROUP_RELATIONSHIP_ENTRY, NUMA_NODE_RELATIONSHIP_ENTRY, PROCESSOR_RELATIONSHIP_ENTRY,
+};
 
 /// Bit `n` is set once processor `n` is running. The boot processor is.
 static ONLINE: AtomicU64 = AtomicU64::new(1);
@@ -271,6 +277,56 @@ pub unsafe extern "C" fn KeQueryNodeActiveAffinity(
     }
 }
 
+/// [`KeQueryLogicalProcessorRelationship`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerylogicalprocessorrelationship):
+/// the records of a relationship, for one processor or all
+/// (`topology::relationships`). `length` is that of the buffer on
+/// entry, and what the records take on return; a processor number
+/// that names no processor is `STATUS_INVALID_PARAMETER` and leaves it.
+///
+/// # Safety
+/// `number` is null or readable; `length` is readable and writable;
+/// `information` is writable for `*length` bytes.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeQueryLogicalProcessorRelationship(
+    number: *const PROCESSOR_NUMBER,
+    relationship: u32,
+    information: *mut u8,
+    length: *mut u32,
+) -> NTSTATUS {
+    // SAFETY: per the contract; each record written lies within the
+    // caller's `*length` bytes, and is written whole through the raw
+    // pointer.
+    unsafe {
+        let given = length.read_unaligned();
+        let processor = if number.is_null() {
+            None
+        } else {
+            let index = KeGetProcessorIndexFromNumber(number);
+            if index == topology::INVALID_INDEX {
+                return STATUS_INVALID_PARAMETER;
+            }
+            Some(index)
+        };
+        let (status, needed) =
+            topology::relationships(processor, relationship, online(), given, |at, record| {
+                let to = information.byte_add(at as usize);
+                match *record {
+                    Record::Processor(entry) => to
+                        .cast::<PROCESSOR_RELATIONSHIP_ENTRY>()
+                        .write_unaligned(entry),
+                    Record::NumaNode(entry) => to
+                        .cast::<NUMA_NODE_RELATIONSHIP_ENTRY>()
+                        .write_unaligned(entry),
+                    Record::Group(entry) => {
+                        to.cast::<GROUP_RELATIONSHIP_ENTRY>().write_unaligned(entry)
+                    }
+                }
+            });
+        length.write_unaligned(needed);
+        status
+    }
+}
+
 /// [`KeGetRecommendedSharedDataAlignment`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetrecommendedshareddataalignment):
 /// the bytes of a cache line.
 #[allow(non_snake_case)]
@@ -308,6 +364,100 @@ pub unsafe extern "C" fn KeFlushIoBuffers(
 #[allow(non_snake_case)]
 pub extern "C" fn KeFlushWriteBuffer() {
     core::sync::atomic::fence(Ordering::SeqCst);
+}
+
+/// `KeQueryLogicalProcessorRelationship` tells the length first, then
+/// writes a package and a core for each processor, the node and the
+/// group, and nothing past the length.
+fn relationships_test(processors: u32) -> Result<(), &'static str> {
+    const ALL: u32 = nk_ntabi::sysinfo::RELATION_ALL;
+    const GUARD: u8 = 0xA5;
+    // A package and a core for each of up to 64 processors, a node, a
+    // group, and a byte that must stay as it is.
+    let mut buffer = [GUARD; 64 * 0x60 + 0x80 + 1];
+    let information = (&raw mut buffer).cast::<u8>();
+    let expected = processors * 0x60 + 0x80;
+    let mut length = 0u32;
+    // SAFETY: the pointers are to locals; the buffer has the length
+    // given, and each record read lies within what was written.
+    unsafe {
+        let null = core::ptr::null();
+        let status = KeQueryLogicalProcessorRelationship(null, ALL, information, &raw mut length);
+        if status != STATUS_INFO_LENGTH_MISMATCH || length != expected {
+            return Err("the records' length was not told to a caller with no buffer");
+        }
+        let status = KeQueryLogicalProcessorRelationship(null, ALL, information, &raw mut length);
+        if status != STATUS_SUCCESS || length != expected {
+            return Err("the records were not written into a buffer of their length");
+        }
+        for processor in 0..processors as usize {
+            let package = information
+                .add(processor * 0x60)
+                .cast::<PROCESSOR_RELATIONSHIP_ENTRY>()
+                .read_unaligned();
+            let core = information
+                .add(processor * 0x60 + 0x30)
+                .cast::<PROCESSOR_RELATIONSHIP_ENTRY>()
+                .read_unaligned();
+            let own = 1usize << processor;
+            if (package.Relationship, package.Size, package.GroupMask.Mask) != (3, 0x30, own)
+                || (core.Relationship, core.Size, core.GroupMask.Mask) != (0, 0x30, own)
+                || (core.GroupCount, core.Flags) != (1, 0)
+            {
+                return Err("a processor is not a core of its own in a package of its own");
+            }
+        }
+        let node = information
+            .add(processors as usize * 0x60)
+            .cast::<NUMA_NODE_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        let group = information
+            .add(processors as usize * 0x60 + 0x30)
+            .cast::<GROUP_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        if (node.Relationship, node.Size, node.NodeNumber) != (1, 0x30, 0)
+            || node.GroupMask.Mask as u64 != online()
+            || (group.Relationship, group.Size) != (4, 0x50)
+            || u32::from(group.ActiveProcessorCount) != processors
+            || group.ActiveProcessorMask as u64 != online()
+        {
+            return Err("the node and the group records are not of every running processor");
+        }
+        if buffer[expected as usize..].iter().any(|&b| b != GUARD) {
+            return Err("the records were written past their length");
+        }
+        // One processor: its core alone; a processor there is not.
+        let mut number = PROCESSOR_NUMBER {
+            Group: 0,
+            Number: (processors - 1) as u8,
+            Reserved: 0,
+        };
+        length = 0x30;
+        let status =
+            KeQueryLogicalProcessorRelationship(&raw const number, 0, information, &raw mut length);
+        let core = information
+            .cast::<PROCESSOR_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        if status != STATUS_SUCCESS
+            || length != 0x30
+            || core.GroupMask.Mask != 1 << (processors - 1)
+        {
+            return Err("the core of one processor was not its own record");
+        }
+        number.Number = processors as u8;
+        length = 0x1234;
+        let status =
+            KeQueryLogicalProcessorRelationship(&raw const number, 0, information, &raw mut length);
+        if status != STATUS_INVALID_PARAMETER || length != 0x1234 {
+            return Err("a processor there is not has relationships");
+        }
+        // Caches: none is known.
+        let status = KeQueryLogicalProcessorRelationship(null, 2, information, &raw mut length);
+        if status != STATUS_UNSUCCESSFUL || length != 0 {
+            return Err("a relationship with no record did not fail");
+        }
+    }
+    Ok(())
 }
 
 /// The processor queries answer for one group and one node holding
@@ -375,6 +525,7 @@ pub fn queries_test() -> Result<u32, &'static str> {
     {
         return Err("the groups, nodes or cache line are not NK's one of each");
     }
+    relationships_test(processors)?;
     // A buffer flushed for a device still holds what was written.
     let mut buffer = [0x5Au8; 200];
     // SAFETY: a zeroed MDL is a valid one to fill in; it describes the

@@ -41,6 +41,9 @@ dependencies = [
 [[package]]
 name = "nk-ke"
 version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
 
 [[package]]
 name = "nk-mm"

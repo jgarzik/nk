@@ -650,6 +650,10 @@ never delayed.
 Drivers that ask about processors by group or NUMA node are told of
 one group and one node, numbers 0, holding every running processor
 (`nk_ke::topology`); a processor's index is its number in the group.
+NK reads no topology from the processors or the firmware, so
+`KeQueryLogicalProcessorRelationship` states each logical processor as
+a core of its own in a package of its own, and no cache; its records
+come in Windows' order from `nk_ke::topology::relationships`.
 `KeFlushIoBuffers` does nothing on x86-64 and, on arm64, writes the
 buffer's cache lines back and drops them.
 
