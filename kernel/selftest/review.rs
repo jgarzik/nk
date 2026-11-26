@@ -2,6 +2,8 @@
 //! it: each failed before its fix.
 
 use crate::io::device::{IoCreateDevice, IoDeleteDevice};
+use crate::io::mdl::{IoAllocateMdl, IoFreeMdl, MmUnlockPages};
+use crate::ke::seh::STATUS_ACCESS_VIOLATION;
 use crate::ke::{irql, smp, thread, time, wait};
 use crate::mm::pool;
 use crate::ob::handle::{self, ObReferenceObjectByHandle};
@@ -10,7 +12,10 @@ use crate::test::{Group, Report, Slot};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT};
+use nk_ntabi::io::{
+    DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT, IO_MODIFY_ACCESS, IO_READ_ACCESS,
+    IO_WRITE_ACCESS, KERNEL_MODE, MDL, MDL_PAGES_LOCKED,
+};
 use nk_ntabi::ke::KEVENT;
 
 pub static GROUP: Group = Group {
@@ -23,6 +28,7 @@ pub static GROUP: Group = Group {
         "work.driver-object",
         "ps.thread.no-handle",
         "ob.handle.open-close-race",
+        "mm.probe-and-lock.read-only",
     ],
     run,
     manual: false,
@@ -581,8 +587,87 @@ fn open_close_race() -> Result<(u32, u32), &'static str> {
 /// How long the race is run: 300 ms.
 const RACE_TIME: u64 = 3_000_000;
 
+/// The MDL [`probe_for`] probes.
+static PROBED: AtomicPtr<MDL> = AtomicPtr::new(core::ptr::null_mut());
+
+/// `MmProbeAndLockPages(Mdl, KernelMode, operation)`, as a driver calls
+/// it.
+extern "C" fn probe_for(operation: usize) {
+    // SAFETY: the test's MDL, whose pages are not locked.
+    unsafe {
+        crate::arch::seh::nk_entry_MmProbeAndLockPages(
+            PROBED.load(Ordering::Acquire).cast(),
+            KERNEL_MODE,
+            operation as u32,
+        );
+    }
+}
+
+/// `MmProbeAndLockPages` looks at the operation its caller means to
+/// do: pages that cannot be written are locked for `IoReadAccess` and
+/// refused for `IoWriteAccess` and `IoModifyAccess` with the access
+/// violation Windows raises. Pages that can be written are locked for
+/// all three. Returns the probes made.
+fn read_only_probe() -> Result<u32, &'static str> {
+    use crate::mm::{self, map};
+    use nk_mm::pt::Prot;
+    let frame = mm::alloc_frames(1).ok_or("no frames")?;
+    let Some(va) = map::alloc_va(1) else {
+        mm::free_frames(frame, 1);
+        return Err("no address space");
+    };
+    let mut probes = 0;
+    let mut check = |prot: Prot, writable: bool| -> Result<(), &'static str> {
+        map::map(va, frame, 1, prot).map_err(|_| "map failed")?;
+        // SAFETY: a page mapped just above, and the MDL made for it
+        // here, which is unlocked before it is freed.
+        let verdict = unsafe {
+            let mdl = IoAllocateMdl((va + 0x10) as *mut c_void, 32, 0, 0, core::ptr::null_mut());
+            if mdl.is_null() {
+                Err("no memory for an MDL")
+            } else {
+                PROBED.store(mdl, Ordering::Release);
+                let mut verdict = Ok(());
+                for operation in [IO_READ_ACCESS, IO_WRITE_ACCESS, IO_MODIFY_ACCESS] {
+                    let raised = super::except::raises(
+                        probe_for,
+                        operation as usize,
+                        STATUS_ACCESS_VIOLATION,
+                    )
+                    .is_ok();
+                    let locked = (*mdl).MdlFlags & MDL_PAGES_LOCKED != 0;
+                    if locked {
+                        MmUnlockPages(mdl);
+                    }
+                    probes += 1;
+                    let allowed = writable || operation == IO_READ_ACCESS;
+                    if raised == allowed || locked != allowed {
+                        verdict = Err(if allowed {
+                            "pages were not locked for an access their mapping allows"
+                        } else {
+                            "read-only pages were locked for writing"
+                        });
+                    }
+                }
+                IoFreeMdl(mdl);
+                verdict
+            }
+        };
+        map::unmap(va, 1);
+        verdict
+    };
+    let verdict = check(Prot::RO, false).and_then(|()| check(Prot::RW, true));
+    map::free_va(va, 1);
+    mm::free_frames(frame, 1);
+    verdict.map(|()| probes)
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ob.current-thread", current_thread);
+    match read_only_probe() {
+        Ok(n) => r.ok_with("mm.probe-and-lock.read-only", format_args!("probes: {n}")),
+        Err(why) => r.fail("mm.probe-and-lock.read-only", format_args!("{why}")),
+    }
     match open_close_race() {
         Ok((opened, stolen)) => r.ok_with(
             "ob.handle.open-close-race",

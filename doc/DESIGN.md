@@ -764,7 +764,8 @@ parameters), by a write probe with the one `ExRaiseAccessViolation`
 raises (none). A write probe then reads and writes back a byte of each
 page, through the copy above; a read probe touches nothing.
 `MmProbeAndLockPages` raises `STATUS_ACCESS_VIOLATION` for a page that
-is not mapped, and for user mode a page outside the user range.
+is not mapped, for user mode a page outside the user range, and for
+`IoWriteAccess` or `IoModifyAccess` a page whose mapping is read-only.
 Firmware's runtime regions lie in the low half, mapped and writable, and
 are outside the user range to every probe, the I/O manager's own
 included: a requestor cannot name them as a buffer.

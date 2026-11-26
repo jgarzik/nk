@@ -511,6 +511,12 @@ pub const fn may_write(granted: u32, file_flags: u32) -> bool {
     granted & (FILE_WRITE_DATA | append) != 0
 }
 
+/// `LOCK_OPERATION`: what the caller of `MmProbeAndLockPages` means to
+/// do with the pages.
+pub const IO_READ_ACCESS: u32 = 0;
+pub const IO_WRITE_ACCESS: u32 = 1;
+pub const IO_MODIFY_ACCESS: u32 = 2;
+
 /// `MDL.MdlFlags`
 pub const MDL_MAPPED_TO_SYSTEM_VA: i16 = 0x0001;
 pub const MDL_PAGES_LOCKED: i16 = 0x0002;

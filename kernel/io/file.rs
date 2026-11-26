@@ -67,10 +67,6 @@ pub enum IoError {
     Refused(NTSTATUS),
 }
 
-/// `LOCK_OPERATION` values for `MmProbeAndLockPages`.
-const IO_READ_ACCESS: u32 = 0;
-const IO_WRITE_ACCESS: u32 = 1;
-
 /// What is opened.
 #[derive(Clone, Copy)]
 pub enum Kind {

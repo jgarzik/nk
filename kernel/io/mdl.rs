@@ -6,6 +6,11 @@
 //! `STATUS_ACCESS_VIOLATION` in its caller for a buffer that is not all
 //! there, as Windows does.
 //!
+//! `MmProbeAndLockPages` holds its caller to the operation it names:
+//! pages mapped read-only are not locked for writing. The system
+//! mapping `MmMapLockedPagesSpecifyCache` makes of locked pages can be
+//! written whatever they were locked for, as on Windows.
+//!
 //! Limits:
 //! - Nothing is ever paged out, so "locking" pages records their frame
 //!   numbers and marks the MDL; there is no pin count to take, and
@@ -110,19 +115,24 @@ pub unsafe extern "C" fn IoFreeMdl(mdl: *mut MDL) {
     }
 }
 
-/// Check that the MDL's buffer is all there for `access_mode` and
+/// Check that the MDL's buffer is all there for `access_mode` and for
+/// `operation` (`IoReadAccess`, `IoWriteAccess`, `IoModifyAccess`), and
 /// record the physical pages behind it: `MmProbeAndLockPages` without
 /// the exception. A user-mode buffer must lie in the user range. `Err`
-/// is the status Windows raises: a page is not mapped, or the range is
-/// not the mode's to name.
+/// is the status Windows raises: a page is not mapped, the range is not
+/// the mode's to name, or the caller means to write pages whose mapping
+/// is read-only.
 ///
 /// # Safety
 /// `mdl` must be a live MDL whose pages are not already locked.
 pub unsafe fn probe_and_lock(
     mdl: *mut MDL,
     access_mode: i8,
-    _operation: u32,
+    operation: u32,
 ) -> Result<(), NTSTATUS> {
+    // Reading asks nothing of the mapping; writing and modifying ask
+    // that it can be written.
+    let allowed = |writable: bool| writable || operation == IO_READ_ACCESS;
     // SAFETY: per the contract.
     unsafe {
         if (*mdl).MdlFlags & MDL_PAGES_LOCKED != 0 {
@@ -134,12 +144,12 @@ pub unsafe fn probe_and_lock(
         for i in 0..pages(mdl) {
             let va = start + (i * PAGE_SIZE) as u64;
             // User mode can name only pages of the user range.
-            let frame = if access_mode == KERNEL_MODE {
-                map::translate(va)
+            let found = if access_mode == KERNEL_MODE || user::frame_of(va).is_some() {
+                map::lookup(va)
             } else {
-                user::frame_of(va)
+                None
             };
-            let Some(pa) = frame else {
+            let Some((pa, _)) = found.filter(|(_, writable)| allowed(*writable)) else {
                 return Err(STATUS_ACCESS_VIOLATION);
             };
             pfns(mdl).add(i).write(pa / PAGE_SIZE as u64);
