@@ -385,6 +385,24 @@ pub unsafe extern "C" fn KeSetTimerEx(
     }
 }
 
+/// [`KeSetCoalescableTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetcoalescabletimer):
+/// `KeSetTimerEx` for a timer that may expire up to `tolerable_delay`
+/// milliseconds late so that Windows can expire several together. NK
+/// never delays one, which every tolerance allows.
+///
+/// # Safety
+/// As `KeSetTimerEx`.
+pub unsafe extern "C" fn KeSetCoalescableTimer(
+    timer: *mut KTIMER,
+    due_time: i64,
+    period: u32,
+    _tolerable_delay: u32,
+    timer_dpc: *mut KDPC,
+) -> u8 {
+    // SAFETY: per the contract.
+    unsafe { KeSetTimerEx(timer, due_time, period as i32, timer_dpc) }
+}
+
 /// [`KeSetTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettimer).
 ///
 /// # Safety

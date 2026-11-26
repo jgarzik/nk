@@ -25,6 +25,7 @@ mod fsd;
 mod hal;
 mod interrupt;
 mod iosupport;
+mod keutil;
 mod library;
 mod loader;
 mod mmio;
@@ -158,6 +159,7 @@ pub static GROUPS: &[&[&Group]] = &[
     dpc::GROUPS,
     timer::GROUPS,
     timer2::GROUPS,
+    keutil::GROUPS,
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,

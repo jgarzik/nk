@@ -10,6 +10,10 @@ use crate::mm::stack::Stack;
 use crate::{arch, mm};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
+use nk_ke::topology;
+use nk_ntabi::interrupt::GROUP_AFFINITY;
+use nk_ntabi::ke::PROCESSOR_NUMBER;
+use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
 
 /// Bit `n` is set once processor `n` is running. The boot processor is.
 static ONLINE: AtomicU64 = AtomicU64::new(1);
@@ -133,4 +137,261 @@ pub fn self_test() -> Result<usize, &'static str> {
         }
     }
     Ok(cpus)
+}
+
+/// [`KeGetCurrentProcessorNumberEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetcurrentprocessornumberex):
+/// the index of the processor running the caller, and its group and
+/// number if asked for.
+///
+/// # Safety
+/// `number` is null or writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeGetCurrentProcessorNumberEx(number: *mut PROCESSOR_NUMBER) -> u32 {
+    let index = super::pcr::current_processor();
+    if !number.is_null() {
+        // SAFETY: per the contract.
+        unsafe {
+            number.write_unaligned(PROCESSOR_NUMBER {
+                Group: 0,
+                Number: index as u8,
+                Reserved: 0,
+            });
+        }
+    }
+    index
+}
+
+/// [`KeGetProcessorIndexFromNumber`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetprocessorindexfromnumber).
+///
+/// # Safety
+/// `number` is readable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeGetProcessorIndexFromNumber(number: *const PROCESSOR_NUMBER) -> u32 {
+    // SAFETY: per the contract.
+    let number = unsafe { number.read_unaligned() };
+    topology::index_from_number(
+        number.Group,
+        number.Number,
+        number.Reserved,
+        online_count() as u32,
+    )
+}
+
+/// [`KeGetProcessorNumberFromIndex`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetprocessornumberfromindex).
+///
+/// # Safety
+/// `number` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeGetProcessorNumberFromIndex(
+    index: u32,
+    number: *mut PROCESSOR_NUMBER,
+) -> NTSTATUS {
+    let Some((group, in_group)) = topology::number_from_index(index, online_count() as u32) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    // SAFETY: per the contract.
+    unsafe {
+        number.write_unaligned(PROCESSOR_NUMBER {
+            Group: group,
+            Number: in_group,
+            Reserved: 0,
+        });
+    }
+    STATUS_SUCCESS
+}
+
+/// [`KeQueryMaximumProcessorCountEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerymaximumprocessorcountex):
+/// the most processors a group can have, which is what it has: none is
+/// added while the system runs.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryMaximumProcessorCountEx(group: u16) -> u32 {
+    topology::count_in_group(group, online_count() as u32)
+}
+
+/// [`KeQueryActiveGroupCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryactivegroupcount):
+/// one.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryActiveGroupCount() -> u16 {
+    1
+}
+
+/// [`KeQueryMaximumGroupCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerymaximumgroupcount):
+/// one.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryMaximumGroupCount() -> u16 {
+    1
+}
+
+/// [`KeQueryGroupAffinity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerygroupaffinity):
+/// the running processors of a group, as a mask.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryGroupAffinity(group: u16) -> usize {
+    topology::group_affinity(group, online()) as usize
+}
+
+/// [`KeGetCurrentNodeNumber`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetcurrentnodenumber):
+/// the NUMA node of the processor running the caller. There is one
+/// node.
+#[allow(non_snake_case)]
+pub extern "C" fn KeGetCurrentNodeNumber() -> u16 {
+    0
+}
+
+/// [`KeQueryHighestNodeNumber`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryhighestnodenumber).
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryHighestNodeNumber() -> u16 {
+    0
+}
+
+/// [`KeQueryNodeActiveAffinity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerynodeactiveaffinity):
+/// the running processors of a NUMA node and how many they are. A node
+/// there is not has none.
+///
+/// # Safety
+/// Each of `affinity` and `count` is null or writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeQueryNodeActiveAffinity(
+    node: u16,
+    affinity: *mut GROUP_AFFINITY,
+    count: *mut u16,
+) {
+    let (mask, processors) = topology::node_affinity(node, online());
+    // SAFETY: per the contract.
+    unsafe {
+        if !affinity.is_null() {
+            affinity.write_unaligned(GROUP_AFFINITY {
+                Mask: mask as usize,
+                Group: 0,
+                Reserved: [0; 3],
+            });
+        }
+        if !count.is_null() {
+            count.write_unaligned(processors);
+        }
+    }
+}
+
+/// [`KeGetRecommendedSharedDataAlignment`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetrecommendedshareddataalignment):
+/// the bytes of a cache line.
+#[allow(non_snake_case)]
+pub extern "C" fn KeGetRecommendedSharedDataAlignment() -> u32 {
+    crate::ex::rundown::CACHE_LINE
+}
+
+/// [`KeFlushIoBuffers`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keflushiobuffers):
+/// make the caches and memory agree about the buffer an MDL describes,
+/// before or after a device reads or writes it. Nothing on x86-64,
+/// whose caches a device's access goes through; on arm64 the buffer's
+/// lines are written back and dropped.
+///
+/// # Safety
+/// `mdl` describes a buffer mapped in the address space.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeFlushIoBuffers(
+    mdl: *const nk_ntabi::io::MDL,
+    _read_operation: u8,
+    _dma_operation: u8,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        let start = (&raw const (*mdl).StartVa)
+            .read()
+            .cast::<u8>()
+            .wrapping_add((&raw const (*mdl).ByteOffset).read() as usize);
+        arch::sync_dcache(start, (&raw const (*mdl).ByteCount).read() as usize);
+    }
+}
+
+/// [`KeFlushWriteBuffer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-keflushwritebuffer):
+/// have every store this processor has made reach memory before
+/// anything after is done.
+#[allow(non_snake_case)]
+pub extern "C" fn KeFlushWriteBuffer() {
+    core::sync::atomic::fence(Ordering::SeqCst);
+}
+
+/// The processor queries answer for one group and one node holding
+/// every running processor. Returns the processors.
+pub fn queries_test() -> Result<u32, &'static str> {
+    let processors = online_count() as u32;
+    let mut number = PROCESSOR_NUMBER {
+        Group: 9,
+        Number: 9,
+        Reserved: 9,
+    };
+    let mut affinity = GROUP_AFFINITY {
+        Mask: 0,
+        Group: 9,
+        Reserved: [9; 3],
+    };
+    let mut count = 0u16;
+    // SAFETY: the pointers are to locals.
+    unsafe {
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let here = super::pcr::current_processor();
+        let index = KeGetCurrentProcessorNumberEx(&raw mut number);
+        let null = KeGetCurrentProcessorNumberEx(core::ptr::null_mut());
+        irql::lower(old);
+        if (index, null) != (here, here) || (number.Group, u32::from(number.Number)) != (0, here) {
+            return Err("KeGetCurrentProcessorNumberEx is not this processor in group 0");
+        }
+        if KeGetProcessorIndexFromNumber(&raw const number) != here {
+            return Err("a processor's number did not lead back to its index");
+        }
+        number.Group = 1;
+        if KeGetProcessorIndexFromNumber(&raw const number) != topology::INVALID_INDEX {
+            return Err("a processor of group 1 has an index");
+        }
+        if KeGetProcessorNumberFromIndex(processors - 1, &raw mut number) != STATUS_SUCCESS
+            || (number.Group, u32::from(number.Number), number.Reserved) != (0, processors - 1, 0)
+            || KeGetProcessorNumberFromIndex(processors, &raw mut number)
+                != STATUS_INVALID_PARAMETER
+        {
+            return Err("KeGetProcessorNumberFromIndex did not name the last processor only");
+        }
+        KeQueryNodeActiveAffinity(0, &raw mut affinity, &raw mut count);
+        if (affinity.Mask as u64, affinity.Group, u32::from(count)) != (online(), 0, processors) {
+            return Err("node 0 does not have every running processor");
+        }
+        KeQueryNodeActiveAffinity(1, &raw mut affinity, core::ptr::null_mut());
+        if affinity.Mask != 0 {
+            return Err("a node there is not has processors");
+        }
+    }
+    let counts = (
+        KeQueryMaximumProcessorCountEx(0),
+        KeQueryMaximumProcessorCountEx(0xFFFF),
+        KeQueryMaximumProcessorCountEx(1),
+        KeQueryActiveProcessorCountEx(0),
+    );
+    if counts != (processors, processors, 0, processors) {
+        return Err("the processor counts of group 0 are not the running processors");
+    }
+    if (KeQueryActiveGroupCount(), KeQueryMaximumGroupCount()) != (1, 1)
+        || (KeGetCurrentNodeNumber(), KeQueryHighestNodeNumber()) != (0, 0)
+        || KeQueryGroupAffinity(0) as u64 != online()
+        || KeQueryGroupAffinity(1) != 0
+        || KeGetRecommendedSharedDataAlignment() != 64
+    {
+        return Err("the groups, nodes or cache line are not NK's one of each");
+    }
+    // A buffer flushed for a device still holds what was written.
+    let mut buffer = [0x5Au8; 200];
+    // SAFETY: a zeroed MDL is a valid one to fill in; it describes the
+    // local buffer.
+    unsafe {
+        let mut mdl = core::mem::zeroed::<nk_ntabi::io::MDL>();
+        let page = (&raw mut buffer)
+            .cast::<u8>()
+            .map_addr(|address| address & !0xFFF);
+        mdl.StartVa = page.cast();
+        mdl.ByteOffset = ((&raw mut buffer).addr() & 0xFFF) as u32;
+        mdl.ByteCount = buffer.len() as u32;
+        KeFlushIoBuffers(&raw const mdl, 1, 1);
+    }
+    KeFlushWriteBuffer();
+    if buffer != [0x5A; 200] {
+        return Err("flushing a buffer for a device changed it");
+    }
+    Ok(processors)
 }
