@@ -8,3 +8,8 @@ hal.pci.write ok
 hal.pci.contract ok
 hal.pci.ports ok
 hal.interrupt.translate ok
+hal.dma.adapter ok
+hal.dma.common-buffer ok
+hal.dma.scatter-gather ok
+hal.dma.bounce ok
+hal.dma.map-registers ok

@@ -15,5 +15,4 @@ trap_list!(
     HalGetMessageRoutingInfo,
     HalGetProcessorIdByNtNumber,
     HalSetEnvironmentVariableEx,
-    HalTranslateBusAddress,
 );

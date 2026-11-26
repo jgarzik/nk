@@ -357,6 +357,64 @@ the same IRQL and lock. An object reported inactive
 Disconnecting waits for the chain's walkers (`doc/LOCKING.md`), so no
 routine of a disconnected object is running when it is freed.
 
+### DMA
+
+`kernel/hal/dma.rs`; the arithmetic is `nk_hal::dma`. The machines NK
+runs on have no I/O memory management unit and devices that see what
+the processor wrote, so a bus address is a physical address and nothing
+needs flushing. What an adapter is for is the device that cannot drive
+every address bit.
+
+`IoGetDmaAdapter` makes an adapter for a bus master, for a
+`DEVICE_DESCRIPTION` of version 0 to 3: the device reaches 64 bits of
+address, or 32, or 24, by its two flags, or what version 3's
+`DmaAddressWidth` states. It asks no bus driver, since every bus's
+addresses are physical addresses here, and it makes none for a device
+that is not a bus master: that needs a system DMA controller. The
+number of map registers reported is the pages of the device's longest
+transfer, plus one. `hal::dma::get_adapter(&Description)` is the same
+for the kernel's own callers.
+
+The driver calls through the adapter's table, the pinned build's
+`DMA_OPERATIONS`, every slot filled:
+
+- **Common buffers** (`AllocateCommonBuffer`, `...Ex`,
+  `...WithBounds`) are contiguous memory within the device's reach and
+  the caller's bounds; the logical address is the physical address.
+- **Scatter/gather lists** (`GetScatterGatherList`,
+  `BuildScatterGatherList`, `CalculateScatterGatherList`,
+  `PutScatterGatherList`) name the transfer's own memory, adjacent
+  pages joined into one element. A piece the device cannot reach is
+  replaced by a bounce page it can, never joined to its neighbours:
+  the data is copied there before the device reads it, and from there,
+  when the list is put back, after the device wrote it. The buffer a
+  list is built in holds the list and, after it, NK's record of the
+  bounces, which the list's `Reserved` word points to.
+- **Map registers** (`AllocateAdapterChannel`, `MapTransfer`,
+  `FlushAdapterBuffers`, `FreeMapRegisters`, `FreeAdapterChannel`) are
+  the same bounce pages, one per page of the transfer, allocated with
+  the channel when some memory is beyond the device's reach.
+  `MapTransfer` returns the memory's own address for as far as it runs
+  contiguously within reach, else the page's register.
+- Execution routines run at `DISPATCH_LEVEL` before the routine that
+  was asked returns: nothing waits for registers. An adapter channel
+  the routine keeps makes the next allocation fail with
+  `STATUS_INSUFFICIENT_RESOURCES` until it is freed, where Windows
+  would queue it.
+- `BuildMdlFromScatterGatherList` returns the original MDL for a
+  transfer nothing bounced, as documented, and stops the system for
+  one that bounced. `FlushDmaBuffer` has nothing to do.
+- **Traps**, each naming its slot (`DMA_OPERATIONS.<name>`): the
+  operations of a system DMA controller's device (`ReadDmaCounter`,
+  `ConfigureAdapterChannel`), the version 3 forms that take a transfer
+  context (`InitializeDmaTransferContext`, the `...Ex` channel, map,
+  list and flush routines, the two cancels, `GetDmaTransferInfo`,
+  `FreeAdapterObject`), DMA domains and common-buffer vectors.
+
+`HalTranslateBusAddress` answers a memory address with itself; an I/O
+port address too where the processor has ports, and with failure on
+arm64, where NK knows no window through which a bus's ports appear.
+
 ## Time
 
 One free-running counter is the source of all time: the TSC on x86-64,
@@ -1149,6 +1207,7 @@ make that safe.
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
 | interrupt service routine, a message's included | base: kernel mode |
+| a DMA execution routine (adapter channel, scatter/gather list) | undo: the IRQL, if NK raised it to `DISPATCH_LEVEL` for the call |
 | the routine of `KeSynchronizeExecution` | undo: release the interrupt's lock and restore the IRQL |
 | an executive timer's callback, and a `KTIMER2`'s (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |

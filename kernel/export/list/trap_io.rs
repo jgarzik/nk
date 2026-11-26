@@ -17,7 +17,6 @@ trap_list!(
     IoGetDeviceNumaNode,
     IoGetDeviceProperty,
     IoGetDevicePropertyData,
-    IoGetDmaAdapter,
     IoGetGenericIrpExtension,
     IoGetIoAttributionHandle,
     IoGetIoPriorityHint,
