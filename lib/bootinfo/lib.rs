@@ -11,14 +11,19 @@
 #![cfg_attr(not(test), no_std)]
 
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
 pub const HHDM_BASE: u64 = 0xFFFF_8000_0000_0000;
 pub const KERNEL_BASE: u64 = 0xFFFF_F800_0000_0000;
 
-pub const MAX_MODULES: usize = 64;
+/// How many boot files the loader can hand over. The table is part of
+/// [`BootInfo`], which the loader allocates by its size: an entry costs
+/// its 48 bytes and nothing else.
+pub const MAX_MODULES: usize = 128;
+/// Room for a boot file's name. A longer name is cut short, and the
+/// kernel then finds no file of the full name.
 pub const MODULE_NAME_LEN: usize = 32;
 /// The name of the module that is the SYSTEM registry hive.
 pub const HIVE_MODULE: &str = "SYSTEM";
