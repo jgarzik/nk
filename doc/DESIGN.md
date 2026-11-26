@@ -1252,6 +1252,12 @@ a list through its header (`NextToFree`) and deleted by a worker
 thread, as on Windows. Other types' objects are deleted where their last
 reference goes.
 
+A file object's `Flags` have no lock. The open marks the file as having
+had a handle (`FO_HANDLE_CREATED`, which spares it a cleanup request
+when it is deleted) before the handle is in the table, and takes the
+mark back if no handle is made: once the handle is there, another
+thread may close it, and the flags are that close's to write.
+
 **Pending.** A driver may return `STATUS_PENDING` and complete later from
 a DPC, timer or worker; the requestor waits on an event completion sets.
 The requestor owns the IRP and frees it after seeing completion, so

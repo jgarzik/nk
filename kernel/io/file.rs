@@ -578,10 +578,16 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
             // to what the handle was granted.
             unsafe {
                 let kernel = request.requestor_mode == KERNEL_MODE;
+                // Marked as having had a handle before it has one: the
+                // handle's number can be guessed, and from the moment
+                // it is in the table another thread may close it and
+                // write the flags (`cleanup`). Nothing else can reach
+                // the file yet, nor if no handle is made.
+                (*file).Flags |= FO_HANDLE_CREATED;
                 let handle =
                     handle::open_with(body, granted, nk_ob::handles::Attributes::default(), kernel);
-                if handle.is_ok() {
-                    (*file).Flags |= FO_HANDLE_CREATED;
+                if handle.is_err() {
+                    (*file).Flags &= !FO_HANDLE_CREATED;
                 }
                 object::dereference(body);
                 return handle.map(|handle| (handle, r.information));

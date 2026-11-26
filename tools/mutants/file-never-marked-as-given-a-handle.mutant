@@ -1,0 +1,7 @@
+# A file object is not marked as having had a handle: when its last
+# reference goes, the driver is sent a second cleanup request for a
+# file it has cleaned up already.
+scenario: x86_64
+fails: io.open.closed-at-once
+file: kernel/io/file.rs
+remove:                 (*file).Flags |= FO_HANDLE_CREATED;
