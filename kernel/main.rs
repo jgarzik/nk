@@ -22,12 +22,14 @@ mod ke;
 mod ldr;
 mod mm;
 mod ob;
+mod po;
 mod ps;
 mod rt;
 mod rtl;
 mod se;
 mod selftest;
 mod test;
+mod whea;
 
 use nk_bootinfo::BootInfo;
 

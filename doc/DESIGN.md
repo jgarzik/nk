@@ -82,11 +82,11 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
-| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -828,6 +828,10 @@ documents. A type's generic rights are Windows' for files and registry
 keys; the other types have none recorded, and a generic right asked of
 them grants nothing. `NtCurrentThread()` (-2) names the caller and
 `NtCurrentProcess()` (-1) its process, with every access.
+`ObReferenceObjectByPointer` takes a reference to an object the caller
+already has, if it is of the type named (`STATUS_OBJECT_TYPE_MISMATCH`
+otherwise, for either mode); with no type named it does so for kernel
+mode only, as the pinned kernel decides it.
 
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index
@@ -1080,10 +1084,11 @@ make that safe.
 | Call into a driver | Guard |
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
-| dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
+| dispatch routine, for a request a driver sends (`IoCallDriver`, `IoSynchronousCallDriver`) | nothing: the request, and for `IoSynchronousCallDriver` the event in the sender's frame that its completion routine sets, are left to the driver that raised |
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
 | silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
@@ -1096,6 +1101,8 @@ make that safe.
 | a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
+| a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
+| a hardware error source's `Uninitialize` (`WheaRemoveErrorSource`) | nothing: the source stays pending removal, closed to calls |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
@@ -1138,10 +1145,46 @@ through the boot log, the ledger, so the ledger cannot drift from what
 the kernel exports. An import with no entry rejects the driver and names
 the symbol.
 
+Two more spellings reach the same table (`kernel/export/mod.rs`). An
+import from the kernel by number is bound through a short list of the
+numbers Microsoft's binaries use, each with the name Microsoft's public
+symbols give the routine: NK's table has names, not Microsoft's
+numbering.
+
+An import from an extension API set (`ext-ms-*`: `acpi.sys` and
+`pci.sys` import `ext-ms-win-ntos-ksr`) is left as the image has it.
+Such a set may have no module on a given Windows, so the linker puts
+in each import's slot a routine of the importing image itself, which
+answers "not supported"; Windows' loader overwrites the slot only when
+its API-set schema names a host. NK hosts no extension set: the slot
+stays, checked to hold an address inside the image (`nk_pe::Bind::Own`).
+
 A driver can also ask for a routine by name while it runs
 (`MmGetSystemRoutineAddress`) and do without it when the answer is
 null. No import table shows such a name, so each one not found is
 printed in the boot log and the ledger lists them (`looked_up_absent`).
+
+### Exported variables
+
+Some imports are variables: the driver reads, and sometimes writes,
+through the address its import is bound to. No trap can stand in for
+one, so a variable is exported only when it is real.
+
+`HalDispatchTable` and `HalPrivateDispatchTable` (`kernel/hal/dispatch.rs`,
+slots listed in `nk_ntabi::hal`) are the tables Microsoft's bus drivers
+call the HAL through and store their own routines into. They have
+Windows' versions, sizes and slot order; the private table is in no
+header, and its slots are checked against the pinned kernel's symbols.
+A slot NK has no routine for holds a trap that stops the system naming
+the table and the slot. NK reads a slot atomically each time it uses
+one, since a driver may have replaced it.
+
+The start-up state drivers read (`kernel/kd/variables.rs`):
+`KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
+speaking no Windows debugger protocol; `KdComPortInUse` names the I/O
+port of NK's own console, as Windows names its debugger's, so that
+`acpi.sys` and `serial.sys` leave the port alone; `InitSafeBootMode` is
+0; `Mm64BitPhysicalAddress` is true.
 
 ### Drivers that export to drivers
 
@@ -1189,9 +1232,7 @@ the status alone.
 
 Not handled:
 
-- imports by ordinal from the kernel itself: NK's table has no
-  ordinals;
-- kernel-mode API-set names (`ext-ms-*`);
+- API sets that must have a host (`api-ms-*`);
 - importing from an image that runs as a driver (started from its
   service key) rather than as a library: refused;
 - images that import from each other in a circle: refused, at eight
@@ -1280,11 +1321,44 @@ Other services start when something asks: the tests make a key the way
 
 Driver, device and file objects are object-manager objects of exactly
 their Windows size, and IRPs pool allocations of theirs; all are reached
-by raw pointer. An IRP's allocation ends, past its stack locations, with
-one word of NK's: the room in the requestor's buffer. A device object is
-followed by the driver's extension, then a private NK block. A device's
+by raw pointer. An IRP that NK allocates ends, past its stack locations, with
+a block of NK's: the room in the requestor's buffer, and whether NK's
+own requestor keeps the IRP when it completes. The pool tells such an
+IRP from one a driver laid out in its own memory, which has no such
+block. A device object is
+followed by the driver's extension, then the I/O manager's own
+(`DEVOBJ_EXTENSION`, which `DeviceObjectExtension` points to), laid out
+as the pinned kernel's and with nothing of NK's after it: what NK keeps
+about a device it keeps in the fields Windows keeps it in (deletion
+pending is `DOE_DELETE_PENDING` in `ExtensionFlags`). A device's
 own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes.
+
+**Stacks.** Devices are stacked as on Windows
+([`IoAttachDeviceToDeviceStack`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioattachdevicetodevicestack),
+`IoDetachDevice`): the chain up is `AttachedDevice`, the chain down the
+extension's `AttachedTo`, and a device's `StackSize` is one more than
+that of the device it was attached to. Attaching goes to the top of the
+stack the target is in and looks at that device only: it is refused
+while the top is still initialising, is going away, or has a stack as
+deep as the pinned kernel allows (`MAXIMUM_ATTACH_STACK_SIZE`).
+`IoGetAttachedDeviceReference` and `IoGetDeviceAttachmentBaseRef` hand
+out the top and the bottom with a pointer reference.
+
+A request for a device is a request for its stack: an open sends the
+create to the top of the stack the named device is in, in an IRP with a
+location for every device of it, and so does every later request on the
+file (`file::related_device`, Windows' `IoGetRelatedDeviceObject`). The
+file stays counted on the device that was named, and
+`IoGetDeviceObjectPointer` hands out the top. How a read's or a write's
+buffer travels is the top device's choice (`DO_BUFFERED_IO`).
+
+A deleted device with another still attached to it stays, deletion
+pending, until that one detaches. The driver of the attached device is
+told at once if it has a `FastIoDetachDevice` routine, as the pinned
+kernel tells it. A device deleted while it is itself still attached to
+the one below would leave that one pointing at freed memory, as it does
+on Windows: NK stops, naming both.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
 (`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),
@@ -1317,6 +1391,36 @@ NK opens the device for kernel mode and closes the handle again, so the
 device's driver is sent a create and a cleanup at once and a close when
 the caller gives up the file object's reference it is handed.
 
+A driver also has the I/O manager build a request for it
+([`IoBuildSynchronousFsdRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildsynchronousfsdrequest),
+[`IoBuildDeviceIoControlRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuilddeviceiocontrolrequest),
+`kernel/io/build.rs`): the request names the calling thread, carries
+the I/O priority hint of a normal thread in its flags as the pinned
+kernel's does, and has its buffers set up the way the device or the
+control code asks for. Such a request is the I/O manager's. When it has
+completed all the way up, final completion copies the results out,
+writes the caller's status block, frees the IRP with its system buffer
+and MDL, and sets the caller's event; the caller never frees it. A
+flush, a shutdown, a power and a Plug and Play request are built with
+no buffer, as the pinned kernel builds them.
+
+[`IoSynchronousCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosynchronouscalldriver)
+sends a driver's own IRP with a completion routine of the I/O manager's
+that keeps it, and waits if the request was pended: the IRP comes back
+uncompleted. `IoReuseIrp` and `IoInitializeIrp` clear an IRP for
+another use, in the pool or in the driver's own memory. A driver that
+splits a request folds the parts' statuses into the master's with
+`IoSetMasterIrpStatus`, by the pinned kernel's rule
+(`nk_ntabi::io::master_irp_status`).
+
+A driver keeps what it needs per driver object in extensions it
+allocates and finds again by an address of its choosing
+([`IoAllocateDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatedriverobjectextension),
+`IoGetDriverObjectExtension`). They hang off the driver extension's
+`ClientDriverExtension`, as on Windows, each behind an
+`IO_CLIENT_EXTENSION`, and are freed by the driver type's delete
+procedure when the driver object goes.
+
 A driver counts the requests in progress on a device with a
 [remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
 (`kernel/io/remlock.rs`): the lock is the driver's memory in the
@@ -1338,7 +1442,9 @@ is a named pipe; for a control request the access its code names (bits
 
 Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
-copy results to the requestor and signal its event. A buffered request's
+copy results to the requestor, free the IRP and signal the requestor's
+event. NK's own requestor keeps its IRP instead, and frees it once it
+has seen the completion. A buffered request's
 results are copied only as far as the requestor asked; a driver that
 reports more stops the system. A driver that returns other than
 `STATUS_PENDING` without completing, or a status different from the one
@@ -1449,7 +1555,12 @@ up as the two drivers' code sets them up; the
 **Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
 user range, is described by its physical pages, and a system address is
 a fresh mapping of them, so the driver works through its own view.
-Limits are at the top of `kernel/io/mdl.rs`.
+Limits are at the top of `kernel/io/mdl.rs`. A partial MDL
+([`IoBuildPartialMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildpartialmdl))
+shares the pages of the part of the source's buffer it names, and the
+source's system mapping if there is one; mapped on its own, it keeps
+that mapping until it is freed. A part outside the source's buffer
+stops the system.
 
 ## The registry
 
@@ -1642,8 +1753,18 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   character database and leaves alone some units that maps (the micro
   sign, dotless i, long s, final sigma, Georgian). The string
   comparisons, the object namespace and the registry all use it.
-- **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
-  fold `A` to `Z` only and do not use that table.
+- **The C runtime's comparisons** (`_stricmp`, `_strnicmp`, `_wcsicmp`,
+  `_wcsnicmp`) fold `A` to `Z` only and do not use that table; `_strupr`
+  and `isspace` are the C locale's too. `RtlCompareString` does use it,
+  through the ANSI page: a byte's upper case is the byte of its unit's.
+- **The C runtime has no invalid-parameter handler.** A bounded copy
+  (`strncpy_s`) given a bad argument empties its destination and returns
+  the error number. `rand` has one seed for the whole system.
+- **Length rules read from Windows.** When a routine stores a length
+  before it knows the text fits, when it writes a terminator, and what
+  it makes of a string too long to count are stated in
+  `nk_rtl::counted`, `nk_rtl::codepage` and `nk_rtl::convert`, with what
+  is still NK's inference marked there.
 
 ### File names
 
@@ -1678,6 +1799,30 @@ allocates, so none can fail for want of memory. Which rotations balance
 a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
+
+### Bitmaps
+
+An [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap)
+header and its buffer are the driver's memory, and NK keeps nothing
+beside them. The rules are `nk_rtl::bitmap`, written against a buffer
+read and written a byte or a `ULONG` at a time: the kernel's is the
+driver's buffer behind a raw pointer, the host tests' a vector checked
+against the same bits held one by one. A routine that changes a run
+writes the bytes that hold the run and no others, as Windows does, so
+two locks may guard two parts of one bitmap. What Microsoft's pages
+leave open (where a search with a hint starts and wraps, what a search
+stores when it finds nothing, how many bits a copy moves) is read from
+the kernel NK follows and stated in `nk_rtl::bitmap`. The interlocked
+routines change one `ULONG` at a time through an atomic.
+
+### Resource descriptors
+
+The encodings of a port or memory range's length in a
+[resource descriptor](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_cm_partial_resource_descriptor),
+large memory included, are `nk_rtl::resource`; the exports in
+`kernel/rtl` read and write a driver's descriptor field by field. The
+layouts are `nk_ntabi::resource`, with the views of each union the
+kernel itself uses.
 
 ## Security descriptors
 
@@ -1982,6 +2127,35 @@ is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers
 `STATUS_DEVICE_NOT_READY`, Windows' answer before its live-dump support
 has started.
 
+## Hardware errors
+
+WHEA is Windows' path for hardware errors: a *source* reports them, the
+kernel makes a record of each. NK keeps the sources (`kernel/whea`;
+the rules and sizes are `lib/whea`, taken from the pinned kernel's
+code).
+
+- A driver registers as a source with
+  `WheaAddErrorSourceDeviceDriverV1`. NK builds the descriptor Windows
+  builds (type 16, version 11, the kernel's two sections added to the
+  driver's, the report packets preallocated), gives the source the next
+  id, counting from zero, marks it started and calls the driver's
+  `Initialize(Context, ErrorSourceId)` before returning, at the
+  caller's IRQL with no lock held. The status of `Initialize` is the
+  routine's.
+- A source whose `Initialize` fails is left by Windows stopped, in a
+  table nothing looks stopped sources up in. NK frees it; its id is not
+  used again.
+- A descriptor is a pool block of exactly the descriptor's size, which
+  `WheaGetErrorSource` hands out for a started source. What NK decides
+  by (state, calls in progress, context) is in its own table; the state
+  in the descriptor is a copy for drivers to read.
+- `WheaRemoveErrorSource` waits for the calls into the source to end,
+  calls `Uninitialize(Context)` and leaves the descriptor allocated in
+  the removed state, as Windows does. A device driver source's packets
+  are freed there.
+- NK has no firmware or platform sources: the first source a driver
+  adds has id 0.
+
 ## Stopping the system
 
 Every fatal error ends in one place (`kd::bugcheck`): the first
@@ -2052,23 +2226,35 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 No APCs, Plug and Play, power management, processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
-rate; NK enforces no security descriptor on its own opens; the loader
-binds no import from the kernel by ordinal or from an API set. Microsoft
+rate; NK enforces no security descriptor on its own opens. Microsoft
 publishes no arm64 binaries NK may use, so its own drivers run on x86-64
 alone. NK has run on no physical machine.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
-(`kernel/export/trap.rs`, which names them): the import binds, so the
+(`kernel/export/trap.rs` and `kernel/export/list/trap_*.rs`, which
+name them): the import binds, so the
 binary loads, and a call stops the system with `BUGCHECK: <name>: NK
 does not implement this routine`. One macro makes every such routine,
 so none can return. The ledger lists them in the state `traps`, apart
 from `implemented`.
 
+**Services NK does not have.** Where Windows' own routine has an
+answer for a service that is absent, off or empty, NK gives that
+answer, found in the pinned kernel: no feature configuration
+(`kernel/rtl/feature.rs`: every feature unconfigured, change
+notifications registered and never made), no product policy
+(`kernel/ex/license.rs`: every licence value unknown, each name asked
+for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
+when Windows' engine is not running). A routine with many sub-functions
+answers those a binary reaches and stops the system naming any other
+(`kernel/po/mod.rs`, `ZwPowerInformation`).
+
 | Territory | Imported by | Why |
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
 | I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
+| What the storage stack imports and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
 
 The `*-neg-trap` scenarios call one through the address its name
 resolves to and require the stop that names it.

@@ -175,6 +175,46 @@ pub unsafe extern "C" fn _vsnwprintf(
     }
 }
 
+/// [`_vsnprintf`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/vsnprintf-vsnprintf-vsnprintf-l-vsnwprintf-vsnwprintf-l):
+/// [`_vsnwprintf`] into a buffer of bytes, from a format of bytes. A
+/// wide character or string among the arguments is written in the ANSI
+/// code page.
+///
+/// # Safety
+/// `buffer` is writable for `count` characters, `format` is
+/// NUL-terminated, and `arguments` is a `va_list` of at least the
+/// arguments the format names.
+pub unsafe extern "C" fn _vsnprintf(
+    buffer: *mut u8,
+    count: usize,
+    format_string: *const u8,
+    arguments: *const u64,
+) -> i32 {
+    // SAFETY: per the contract.
+    unsafe {
+        let mut passed = Passed(arguments);
+        let mut produced = 0;
+        format(
+            &mut characters(format_string),
+            false,
+            &mut passed,
+            &mut |c| {
+                if produced < count {
+                    buffer
+                        .add(produced)
+                        .write(nk_rtl::codepage::ANSI_1252.from_unicode(c));
+                }
+                produced += 1;
+            },
+        );
+        // A terminator only if there is room for one.
+        if produced < count {
+            buffer.add(produced).write(0);
+        }
+        snprintf_result(produced, count)
+    }
+}
+
 /// [`wcschr`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strchr-wcschr-mbschr-mbschr-l):
 /// the first `character` in `string`, or null. The terminator counts as
 /// part of the string.

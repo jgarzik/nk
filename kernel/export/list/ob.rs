@@ -28,5 +28,11 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         ob::object::IoDeviceObjectType
     ),
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
+    export_variable!(
+        Implemented,
+        "IoFileObjectType",
+        ob::object::IoFileObjectType
+    ),
+    export!(Implemented, ob::object::ObReferenceObjectByPointer),
     export!(Partial, ob::event::ZwWaitForSingleObject),
 ];

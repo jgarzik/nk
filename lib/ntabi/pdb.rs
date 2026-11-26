@@ -1170,6 +1170,87 @@ fn create_requests_match_the_kernel() {
 }
 
 #[test]
+fn device_object_extension_matches_the_kernel() {
+    use crate::io::DEVOBJ_EXTENSION;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DEVOBJ_EXTENSION,
+        "_DEVOBJ_EXTENSION",
+        [
+            Type,
+            Size,
+            DeviceObject,
+            PowerFlags,
+            Dope,
+            ExtensionFlags,
+            DeviceNode,
+            AttachedTo,
+            StartIoCount,
+            StartIoKey,
+            StartIoFlags,
+            Vpb,
+            DependencyNode,
+            InterruptContext,
+            InterruptCount,
+            VerifierContext,
+        ]
+    );
+}
+
+#[test]
+fn driver_extension_matches_the_kernel() {
+    use crate::io::{DRIVER_EXTENSION, IO_CLIENT_EXTENSION};
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DRIVER_EXTENSION,
+        "_DRIVER_EXTENSION",
+        [
+            DriverObject,
+            AddDevice,
+            Count,
+            ServiceKeyName,
+            ClientDriverExtension,
+            FsFilterCallbacks,
+            KseCallbacks,
+            DvCallbacks,
+            VerifierContext,
+        ]
+    );
+    same_layout!(
+        types,
+        IO_CLIENT_EXTENSION,
+        "_IO_CLIENT_EXTENSION",
+        [NextExtension, ClientIdentificationAddress]
+    );
+}
+
+#[test]
+fn fast_io_dispatch_matches_the_kernel() {
+    use crate::io::{FAST_IO_DETACH_DEVICE, FAST_IO_DISPATCH, FAST_IO_ROUTINES};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("_FAST_IO_DISPATCH")
+        .expect("_FAST_IO_DISPATCH");
+    let field = |name| offset(&table, "_FAST_IO_DISPATCH", name);
+    let routine = |index: usize| offset_of!(FAST_IO_DISPATCH, Routines) + index * 8;
+    assert_eq!(size_of::<FAST_IO_DISPATCH>(), table.size as usize);
+    assert_eq!(
+        offset_of!(FAST_IO_DISPATCH, SizeOfFastIoDispatch),
+        field("SizeOfFastIoDispatch")
+    );
+    assert_eq!(routine(0), field("FastIoCheckIfPossible"));
+    assert_eq!(routine(FAST_IO_DETACH_DEVICE), field("FastIoDetachDevice"));
+    assert_eq!(
+        routine(FAST_IO_ROUTINES - 1),
+        field("ReleaseForCcFlush"),
+        "the last routine"
+    );
+}
+
+#[test]
 fn object_attributes_match_the_kernel() {
     use crate::ob::OBJECT_ATTRIBUTES;
     use core::mem::{offset_of, size_of};
@@ -1286,4 +1367,25 @@ fn fcb_header_matches_the_kernel() {
     assert_eq!(bits("Reserved"), (0, 4));
     assert_eq!(bits("Version"), (4, 4));
     assert_eq!(with_fcb_header_version(0, 0xF), 0xF0);
+}
+
+#[test]
+fn hal_private_dispatch_table_matches_the_kernel() {
+    use crate::hal::{FIRST_SLOT, HAL_PRIVATE_DISPATCH_SLOTS};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("HAL_PRIVATE_DISPATCH")
+        .expect("HAL_PRIVATE_DISPATCH");
+    assert_eq!(
+        FIRST_SLOT + HAL_PRIVATE_DISPATCH_SLOTS.len() * 8,
+        table.size as usize
+    );
+    assert_eq!(offset(&table, "HAL_PRIVATE_DISPATCH", "Version"), 0);
+    for (i, name) in HAL_PRIVATE_DISPATCH_SLOTS.iter().enumerate() {
+        assert_eq!(
+            offset(&table, "HAL_PRIVATE_DISPATCH", name),
+            FIRST_SLOT + i * 8,
+            "{name}"
+        );
+    }
 }

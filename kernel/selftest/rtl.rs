@@ -26,6 +26,7 @@ pub static GROUP: Group = Group {
         "rtl.prefix-table",
         "rtl.wildcards",
         "rtl.legal-characters",
+        "rtl.feature-configuration",
     ],
     run,
     manual: false,
@@ -1277,6 +1278,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.prefix-table", prefix_table);
     r.check("rtl.wildcards", wildcards);
     r.check("rtl.legal-characters", legal_characters);
+    r.check("rtl.feature-configuration", crate::rtl::feature::test);
 }
 
 /// This file's test groups, in the order they run.

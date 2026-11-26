@@ -140,9 +140,52 @@ gate tier has, for each architecture:
   whose DPC routine raises over a thread inside a `__try`;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
+- `x86_64-disk-present`: a boot with a data disk attached passes, and
+  the disk is afterwards as it was made.
+- `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,
+  `pshed.dll`, `storport.sys`, `storahci.sys`, `classpnp.sys`,
+  `disk.sys`) on the machine's AHCI controller and data disk, as far as
+  NK runs it (`kernel/selftest/storage.rs`): today its libraries that
+  initialise, `pshed.dll` and `classpnp.sys`. The group is selected by
+  name and leaves the stack running, so the leak comparison is waived
+  for it (`test::keeps_what_it_started`).
+
 All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
 way is not taken for the one intended.
+
+### The data disk
+
+A scenario with `disk = "ahci"` boots a machine that has a disk on an
+AHCI controller: the ICH9 controller q35 has, and the same controller
+added as a PCIe device to arm64's `virt`. The disk is the raw file
+`data.img` in the scenario's directory, made for each boot, 64 MiB
+unless `disk_size` says otherwise, and written in place: after the
+boot the harness reads what the kernel left there.
+
+Its content is one a kernel test can compute (`tools/datadisk.py`).
+Seen as 64-bit little-endian words, word `k` of the disk, the 8 bytes
+at byte offset `8 * k`, holds `seed ^ k`; sector `n` (512 bytes) is
+words `64 * n` to `64 * n + 63`.
+
+| Name | Value | Meaning |
+| --- | --- | --- |
+| `ORIGINAL` | `0x4E4B_4F52_0000_0000` | the seed of every sector before the boot |
+| `WRITTEN` | `0x4E4B_5752_0000_0000` | the seed a kernel test writes with |
+| `WRITE_FIRST`, `WRITE_END` | 2048, 2304 | the write range: sectors `[2048, 2304)`, the only ones a kernel test may write |
+
+A written sector holds `WRITTEN ^ k` with the same `k`, its place on
+the disk, so a sector written to the wrong address is as wrong as one
+not written. The scenario's `disk_expect` names what the harness
+requires of the file after the boot:
+
+- `unchanged`: every sector holds its original pattern;
+- `written`: every sector of the write range holds its written
+  pattern, and every other sector its original one.
+
+A sector that differs is a problem of the boot like any other, named
+with what it holds instead; the image is then kept beside the logs.
+`tools/test_datadisk.py` holds the check to that without booting.
 
 ### Soak
 
@@ -171,6 +214,11 @@ the path. The main scenario's logs stay as
 reaches the timeout is a hang: the harness saves every CPU's registers
 to `hang-registers.txt` and, on x86-64, sends an NMI so the kernel
 prints its own state.
+
+A tier prints its boots in the order they are listed, a line for each
+that passed and everything a failed one said. When the boots fail,
+`make gate` shows the failed ones and the tier's last line
+(`tools/boot_test.py --failures <log>`), not the end of the output.
 
 Knobs: `BOOT_TEST_TIMEOUT` (seconds), `QEMU_SMP`, `QEMU_MEM`,
 `NO_KVM=1`, `JOBS` (boots at once), `KEEP=1` (keep every scenario
@@ -209,9 +257,13 @@ They are identified by hash and never patched or rebuilt to suit NK.
 The manifest pins what no boot loads as well: the layout tables the
 WDK's compiler recorded and the kernel's symbol file, which the host
 tests compare `lib/ntabi` with (`doc/ABI.md`).
-`fixtures/registry-overlay.txt` is the one fixture kept in this
-repository: registry content, as text, that the next release of the
-hive takes over (`doc/DESIGN.md`, The registry).
+`fixtures/registry-overlay.txt` is a fixture kept in this repository:
+registry content, as text, that the next release of the hive takes
+over (`doc/DESIGN.md`, The registry). `fixtures/registry-<name>.txt`
+are more of the same, laid over the hive after it only in the boots
+whose scenario names them (`registry`): `registry-storage.txt` holds
+what Microsoft's storage stack and the enumeration of its devices read,
+copied from the reference Windows installation.
 
 ## The Windows oracle
 

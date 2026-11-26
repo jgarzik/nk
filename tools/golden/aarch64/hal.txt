@@ -1,4 +1,5 @@
 hal.cpus ok
+hal.dispatch-tables ok
 hal.pci.bridge ok
 hal.pci.ahci skip
 hal.pci.write ok

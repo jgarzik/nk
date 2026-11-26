@@ -5,10 +5,13 @@
 //! not there (its fixture was not downloaded, or does not exist for this
 //! architecture) makes its tests SKIP.
 
+mod absent;
 mod base;
+mod bitmap;
 mod cancel;
 mod clock;
 mod cm;
+mod counted;
 mod csq;
 mod dpc;
 mod driver_api;
@@ -16,7 +19,9 @@ mod etw;
 mod ex;
 pub mod except;
 mod fsd;
+mod hal;
 mod interrupt;
+mod iosupport;
 mod library;
 mod loader;
 mod mmio;
@@ -29,7 +34,10 @@ mod open;
 mod oracle;
 mod pci;
 mod pend;
+mod po;
+mod request;
 mod requestor;
+mod resource;
 mod review;
 mod rtl;
 mod se;
@@ -38,9 +46,12 @@ mod service;
 mod setoken;
 mod sioctl;
 mod smp;
+mod stack;
+mod storage;
 mod thread;
 mod timer;
 mod wait;
+mod whea;
 mod work;
 
 use crate::io::file::{self, OpenRequest};
@@ -144,9 +155,16 @@ pub static GROUPS: &[&[&Group]] = &[
     wait::GROUPS,
     ob::GROUPS,
     rtl::GROUPS,
+    bitmap::GROUPS,
+    counted::GROUPS,
+    resource::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,
+    hal::GROUPS,
+    absent::GROUPS,
+    po::GROUPS,
+    whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,
     mutex::GROUPS,
@@ -155,6 +173,9 @@ pub static GROUPS: &[&[&Group]] = &[
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,
+    stack::GROUPS,
+    request::GROUPS,
+    iosupport::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,
@@ -167,6 +188,7 @@ pub static GROUPS: &[&[&Group]] = &[
     cancel::GROUPS,
     oracle::GROUPS,
     neg::GROUPS,
+    storage::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
@@ -202,9 +224,11 @@ pub fn resources() -> Resources {
     let (table_blocks, table_bytes) = crate::ob::handle::storage();
     // The registry keeps what is written to it.
     let (registry_blocks, registry_bytes) = crate::cm::storage();
+    // Hardware error sources keep their table and what they removed.
+    let (whea_blocks, whea_bytes) = crate::whea::storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes,
+        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks,
+        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),

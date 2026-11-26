@@ -2,12 +2,14 @@
 //! `io::service` decides which image and when; nothing else loads a
 //! driver.
 
-use super::irp;
+use super::{device, irp};
 use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{Rank, SpinLock, irql};
 use crate::ldr::{self, Image, LoadError};
+use crate::mm::pool;
 use crate::ob;
 use alloc::vec::Vec;
+use core::ffi::c_void;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
@@ -208,6 +210,111 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     }
     free(record.object, &record.image);
     Ok(())
+}
+
+/// Pool tag of driver-object extensions, as Windows spells it.
+const TAG_EXTENSION: u32 = u32::from_le_bytes(*b"Driv");
+
+/// [`IoAllocateDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatedriverobjectextension):
+/// give a driver object `size` zeroed bytes that the driver finds again
+/// by `id`, and that go when the driver object does. A second
+/// extension by the same `id` is refused
+/// (`STATUS_OBJECT_NAME_COLLISION`).
+///
+/// # Safety
+/// `driver` is a live driver object with its extension; `extension` is
+/// writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoAllocateDriverObjectExtension(
+    driver: *mut DRIVER_OBJECT,
+    id: *mut c_void,
+    size: u32,
+    extension: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract. The list belongs to the database lock;
+    // the block is made before the lock is taken and freed after it is
+    // dropped.
+    unsafe {
+        extension.write(core::ptr::null_mut());
+        if size > MAXIMUM_DRIVER_OBJECT_EXTENSION {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        let total = size_of::<IO_CLIENT_EXTENSION>() + size as usize;
+        let new = pool::alloc_zeroed(total, TAG_EXTENSION).cast::<IO_CLIENT_EXTENSION>();
+        if new.is_null() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        (*new).ClientIdentificationAddress = id;
+        let taken = {
+            let _database = device::database();
+            let head = &raw mut (*(*driver).DriverExtension).ClientDriverExtension;
+            let mut other = head.read();
+            while !other.is_null() && (*other).ClientIdentificationAddress != id {
+                other = (*other).NextExtension;
+            }
+            if other.is_null() {
+                (*new).NextExtension = head.read();
+                head.write(new);
+            }
+            !other.is_null()
+        };
+        if taken {
+            let _ = pool::free(new.cast());
+            return STATUS_OBJECT_NAME_COLLISION;
+        }
+        extension.write(new.add(1).cast());
+    }
+    STATUS_SUCCESS
+}
+
+/// [`IoGetDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdriverobjectextension):
+/// the extension the driver allocated by `id`, or null.
+///
+/// # Safety
+/// `driver` is a live driver object with its extension.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoGetDriverObjectExtension(
+    driver: *mut DRIVER_OBJECT,
+    id: *mut c_void,
+) -> *mut c_void {
+    // SAFETY: per the contract; the list belongs to the database lock,
+    // and an extension stays until the driver object goes.
+    unsafe {
+        let _database = device::database();
+        let mut found = (*(*driver).DriverExtension).ClientDriverExtension;
+        while !found.is_null() && (*found).ClientIdentificationAddress != id {
+            found = (*found).NextExtension;
+        }
+        if found.is_null() {
+            core::ptr::null_mut()
+        } else {
+            found.add(1).cast()
+        }
+    }
+}
+
+/// The object manager's call when the last pointer to a driver object
+/// has gone: free the extensions the driver allocated for it.
+///
+/// # Safety
+/// `body` is a driver object nothing refers to any more.
+pub unsafe extern "C" fn deleted(body: *mut c_void) {
+    // SAFETY: per the contract; each block came from
+    // `IoAllocateDriverObjectExtension`. A driver object made without
+    // an extension has none.
+    unsafe {
+        let extension = (*body.cast::<DRIVER_OBJECT>()).DriverExtension;
+        if extension.is_null() {
+            return;
+        }
+        let mut next = (*extension).ClientDriverExtension;
+        (*extension).ClientDriverExtension = core::ptr::null_mut();
+        while !next.is_null() {
+            let this = next;
+            next = (*this).NextExtension;
+            let _ = pool::free(this.cast());
+        }
+    }
 }
 
 impl DriverError {

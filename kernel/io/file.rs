@@ -7,7 +7,9 @@
 //! An open resolves its name in the object namespace. The look-up stops
 //! at a device; what is left of the path is the device's to parse, so
 //! it goes to the driver in a create request as the new file object's
-//! name. The file object is an object-manager object and the open
+//! name. The create, and every later request on the file, is sent to
+//! the top of the stack that device is in, in an IRP with a location
+//! for each device of the stack ([`related_device`]). The file object is an object-manager object and the open
 //! returns a handle to it. The handle's closing, when it is the last,
 //! sends the driver a cleanup request; the last reference's going
 //! sends the close request and lets go of the device.
@@ -215,9 +217,9 @@ unsafe fn leave_critical_region(_: *mut c_void) {
 /// points to, are left where they are.
 ///
 /// # Safety
-/// `irp` must be a fresh IRP whose next stack location is set up for
-/// `file`'s device. Whatever buffers it names stay valid until the
-/// returned request has been waited for.
+/// `irp` must be a fresh IRP from [`request`] whose next stack location
+/// is set up. Whatever buffers it names stay valid until the returned
+/// request has been waited for.
 unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
     // SAFETY: an all-zero event is a valid value (integers and null
     // pointers); it is initialised properly just below.
@@ -235,14 +237,16 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         ke::wait::KeInitializeEvent(&raw mut waiting.done, 0, 0);
         (*irp).UserIosb = &raw mut waiting.iosb;
         (*irp).UserEvent = &raw mut waiting.done;
+        irp::requestor_keeps(irp);
         (*irp).RequestorMode = mode;
         (*irp).Thread = ke::pcr::current_thread().cast();
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
         // Windows calls the driver for a synchronous request with kernel
         // APCs off, in a critical region; a driver can ask, and
-        // nkc-mutex does (oracle/nkc-mutex.txt).
-        let device_object = (*file).DeviceObject;
+        // nkc-mutex does (oracle/nkc-mutex.txt). The request goes to
+        // the device it was sized for (`request`).
+        let device_object = (*irp::next_location(irp)).DeviceObject;
         let guard = Guard::Undo {
             undo: leave_critical_region,
             context: core::ptr::null_mut(),
@@ -267,7 +271,23 @@ unsafe fn submit(file: *mut FILE_OBJECT, irp: *mut IRP) -> Result<IoResult, IoEr
     unsafe { start(file, irp, KERNEL_MODE) }.wait()
 }
 
-/// A new IRP for `file`'s device with its next location's function set.
+/// The device a request on `file` is sent to: the top of the stack the
+/// file's device is in
+/// ([`IoGetRelatedDeviceObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetrelateddeviceobject)).
+/// The file stays counted on the device that was named.
+///
+/// # Safety
+/// `file` must be an open file object.
+pub unsafe fn related_device(file: *mut FILE_OBJECT) -> *mut DEVICE_OBJECT {
+    // SAFETY: per the contract: an open file holds its device.
+    unsafe { device::top((*file).DeviceObject) }
+}
+
+/// A new IRP for a request on `file`, with its next location's function
+/// set: sized for the whole stack the file's device is in, and with the
+/// top of that stack, where [`start`] sends it, in its next location.
+/// The top is found once: a device attached between sizing the IRP and
+/// sending it does not get an IRP too small for it.
 ///
 /// # Safety
 /// `file` must be a live file object.
@@ -278,13 +298,15 @@ unsafe fn request(
 ) -> Result<*mut IRP, IoError> {
     // SAFETY: per the contract.
     unsafe {
-        let irp = irp::alloc((*(*file).DeviceObject).StackSize);
+        let top = related_device(file);
+        let irp = irp::alloc((*top).StackSize);
         if irp.is_null() {
             return Err(IoError::NoMemory);
         }
         let location = irp::next_location(irp);
         (*location).MajorFunction = major;
         (*location).Parameters = parameters;
+        (*location).DeviceObject = top;
         Ok(irp)
     }
 }
@@ -545,7 +567,7 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
                 (*irp).Flags = IRP_CREATE_OPERATION | IRP_SYNCHRONOUS_API | IRP_DEFER_IO_COMPLETION;
                 match start(file, irp, request.requestor_mode).wait() {
                     Err(IoError::NotCompleted { dispatch_status }) => {
-                        create_not_completed(device, major, dispatch_status)
+                        create_not_completed(related_device(file), major, dispatch_status)
                     }
                     result => result,
                 }
@@ -693,7 +715,8 @@ pub unsafe extern "C" fn deleted(object: *mut c_void) {
 
 /// [`IoGetDeviceObjectPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdeviceobjectpointer):
 /// open the named device for kernel mode and hand the caller the file
-/// object, with a reference, and the device the file's requests go to.
+/// object, with a reference, and the device the file's requests go to:
+/// the top of the stack the named device is in.
 /// The handle of the open is closed again, so the device's driver is
 /// sent a create and a cleanup now, and a close when the caller gives
 /// the file object's reference up.
@@ -733,7 +756,7 @@ pub unsafe extern "C" fn IoGetDeviceObjectPointer(
     // object, whose device is set for as long as it is open.
     unsafe {
         file_object.write(file);
-        device_object.write((*file).DeviceObject);
+        device_object.write(related_device(file));
     }
     STATUS_SUCCESS
 }
@@ -940,7 +963,7 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
     let parameters =
         |file: *mut FILE_OBJECT| unsafe { rw_parameters(len as u32, (*file).CurrentByteOffset) };
     // SAFETY: per the contract; `irp` is fresh.
-    let build = |file: *mut FILE_OBJECT, irp: *mut IRP| unsafe {
+    let build = |_, irp: *mut IRP| unsafe {
         if mode != KERNEL_MODE {
             if major == IRP_MJ_READ {
                 probe_write(buffer)?;
@@ -948,7 +971,9 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
                 probe_read(buffer)?;
             }
         }
-        let flags = (*(*file).DeviceObject).Flags;
+        // How the buffer travels is the choice of the device the
+        // request is sent to, the top of the stack.
+        let flags = (*(*irp::next_location(irp)).DeviceObject).Flags;
         if flags & DO_BUFFERED_IO != 0 {
             if len != 0 {
                 let system = pool::alloc(len, TAG_IO_BUFFER);
@@ -960,7 +985,7 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
                 if major == IRP_MJ_READ {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = buffer.ptr().cast();
-                    irp::requestor_room(irp).write(len);
+                    irp::set_requestor_room(irp, len);
                 } else {
                     copy_in(system, buffer, mode)?;
                 }
@@ -1164,7 +1189,7 @@ unsafe fn control(
                 if output.len != 0 {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = output.ptr().cast();
-                    irp::requestor_room(irp).write(output.len);
+                    irp::set_requestor_room(irp, output.len);
                 }
             }
             METHOD_IN_DIRECT | METHOD_OUT_DIRECT => {

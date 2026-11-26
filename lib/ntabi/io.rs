@@ -143,11 +143,16 @@ pub const IRP_MJ_CREATE_NAMED_PIPE: u8 = 0x01;
 pub const IRP_MJ_CLOSE: u8 = 0x02;
 pub const IRP_MJ_READ: u8 = 0x03;
 pub const IRP_MJ_WRITE: u8 = 0x04;
+pub const IRP_MJ_FLUSH_BUFFERS: u8 = 0x09;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
+pub const IRP_MJ_INTERNAL_DEVICE_CONTROL: u8 = 0x0F;
+pub const IRP_MJ_SHUTDOWN: u8 = 0x10;
 pub const IRP_MJ_CLEANUP: u8 = 0x12;
 pub const IRP_MJ_CREATE_MAILSLOT: u8 = 0x13;
+pub const IRP_MJ_POWER: u8 = 0x16;
 pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
+pub const IRP_MJ_PNP: u8 = 0x1B;
 /// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
 /// its registration, the older way and the newer.
 pub const IRP_MN_REGINFO: u8 = 0x08;
@@ -159,13 +164,35 @@ pub const IO_TYPE_DRIVER: i16 = 4;
 pub const IO_TYPE_FILE: i16 = 5;
 pub const IO_TYPE_IRP: i16 = 6;
 
+/// `DRIVER_OBJECT.DriverExtension`. The WDK declares it as far as
+/// `ServiceKeyName`; the rest is the I/O manager's own, laid out as the
+/// pinned kernel's.
 #[repr(C)]
 pub struct DRIVER_EXTENSION {
     pub DriverObject: *mut DRIVER_OBJECT,
     pub AddDevice: PVOID,
     pub Count: u32,
     pub ServiceKeyName: UNICODE_STRING,
+    /// The extensions the driver allocated for its driver object
+    /// (`IoAllocateDriverObjectExtension`), newest first.
+    pub ClientDriverExtension: *mut IO_CLIENT_EXTENSION,
+    pub FsFilterCallbacks: PVOID,
+    pub KseCallbacks: PVOID,
+    pub DvCallbacks: PVOID,
+    pub VerifierContext: PVOID,
 }
+
+/// What precedes each extension a driver allocates for its driver
+/// object: the next one, and the address the driver knows it by.
+#[repr(C)]
+pub struct IO_CLIENT_EXTENSION {
+    pub NextExtension: *mut IO_CLIENT_EXTENSION,
+    pub ClientIdentificationAddress: PVOID,
+}
+
+/// The largest extension `IoAllocateDriverObjectExtension` of the
+/// pinned kernel allocates: its header must still fit a 32-bit size.
+pub const MAXIMUM_DRIVER_OBJECT_EXTENSION: u32 = 0xFFFF_FFEF;
 
 #[repr(C)]
 pub struct DRIVER_OBJECT {
@@ -193,6 +220,45 @@ pub const DO_EXCLUSIVE: u32 = 0x0000_0008;
 pub const DO_DIRECT_IO: u32 = 0x0000_0010;
 pub const DO_DEVICE_HAS_NAME: u32 = 0x0000_0040;
 pub const DO_DEVICE_INITIALIZING: u32 = 0x0000_0080;
+/// Passed up a stack: a device attached to one that has it gets it.
+pub const DO_DEVICE_IRP_REQUIRES_EXTENSION: u32 = 0x0800_0000;
+
+/// The deepest stack another device can still be attached to: the
+/// pinned kernel refuses to attach to a device whose `StackSize` has
+/// reached this.
+pub const MAXIMUM_ATTACH_STACK_SIZE: i8 = 0x7D;
+
+/// How many routines a `FAST_IO_DISPATCH` holds.
+pub const FAST_IO_ROUTINES: usize = 27;
+/// Which of them is `FastIoDetachDevice`.
+pub const FAST_IO_DETACH_DEVICE: usize = 12;
+
+/// [`FAST_IO_DISPATCH`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_fast_io_dispatch):
+/// what `DRIVER_OBJECT.FastIoDispatch` points to. The driver says how
+/// much of it there is; a routine past that size is not there.
+#[repr(C)]
+pub struct FAST_IO_DISPATCH {
+    pub SizeOfFastIoDispatch: u32,
+    pub Routines: [PVOID; FAST_IO_ROUTINES],
+}
+
+/// `FastIoDetachDevice`: the device `target`, which `source` is
+/// attached to, is being deleted.
+pub type FAST_IO_DETACH_DEVICE_ROUTINE =
+    unsafe extern "C" fn(source: *mut DEVICE_OBJECT, target: *mut DEVICE_OBJECT);
+
+/// Where in a driver's `FAST_IO_DISPATCH` the routine numbered `index`
+/// is, if a table of `size` bytes (`SizeOfFastIoDispatch`) reaches it:
+/// the pinned kernel calls `FastIoDetachDevice` only from a table
+/// larger than the routine's offset.
+pub const fn fast_io_routine_offset(size: u32, index: usize) -> Option<usize> {
+    let offset = core::mem::offset_of!(FAST_IO_DISPATCH, Routines) + index * size_of::<PVOID>();
+    if index < FAST_IO_ROUTINES && size as usize > offset {
+        Some(offset)
+    } else {
+        None
+    }
+}
 
 /// `DEVICE_OBJECT.Queue`: a device-queue wait block, 0x48 bytes.
 #[repr(C)]
@@ -233,8 +299,45 @@ pub struct DEVICE_OBJECT {
     pub DeviceLock: KEVENT,
     pub SectorSize: u16,
     pub Spare1: u16,
-    pub DeviceObjectExtension: PVOID,
+    pub DeviceObjectExtension: *mut DEVOBJ_EXTENSION,
     pub Reserved: PVOID,
+}
+
+/// `DEVOBJ_EXTENSION.Type` (`IO_TYPE_DEVICE_OBJECT_EXTENSION`).
+pub const IO_TYPE_DEVICE_OBJECT_EXTENSION: i16 = 0x0D;
+
+/// `DEVOBJ_EXTENSION.ExtensionFlags`: what is pending for the device.
+/// The names are those of the WDK's debugger extensions; the values are
+/// the ones the pinned kernel tests.
+pub const DOE_UNLOAD_PENDING: u32 = 0x01;
+pub const DOE_DELETE_PENDING: u32 = 0x02;
+pub const DOE_REMOVE_PENDING: u32 = 0x04;
+pub const DOE_REMOVE_PROCESSED: u32 = 0x08;
+pub const DOE_START_PENDING: u32 = 0x10;
+
+/// What `DEVICE_OBJECT.DeviceObjectExtension` points to: the I/O
+/// manager's own record of a device, which the WDK declares only the
+/// head of. Microsoft's drivers read it in line (the device node, the
+/// device attached to), so it is laid out as the pinned kernel's.
+#[repr(C)]
+pub struct DEVOBJ_EXTENSION {
+    pub Type: i16,
+    pub Size: u16,
+    pub DeviceObject: *mut DEVICE_OBJECT,
+    pub PowerFlags: u32,
+    pub Dope: PVOID,
+    pub ExtensionFlags: u32,
+    pub DeviceNode: PVOID,
+    /// The device this one is attached to, the next lower of its stack.
+    pub AttachedTo: *mut DEVICE_OBJECT,
+    pub StartIoCount: i32,
+    pub StartIoKey: i32,
+    pub StartIoFlags: u32,
+    pub Vpb: PVOID,
+    pub DependencyNode: PVOID,
+    pub InterruptContext: PVOID,
+    pub InterruptCount: i32,
+    pub VerifierContext: PVOID,
 }
 
 /// `FILE_OBJECT.Flags`
@@ -348,6 +451,54 @@ pub const IRP_DEFER_IO_COMPLETION: u32 = 0x0000_0800;
 /// I/O manager sets it for a request a user-mode driver's host makes;
 /// NK never does.
 pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
+
+/// The bits of `IRP.Flags` that carry the I/O priority hint of a
+/// request the I/O manager builds for a driver, and what the pinned
+/// kernel puts there for a thread of normal I/O priority
+/// (`IoPriorityNormal`, 2, plus one). Every thread of NK's is one.
+pub const IRP_PRIORITY_HINT_MASK: u32 = 0x000E_0000;
+pub const IRP_PRIORITY_HINT_NORMAL: u32 = 0x0006_0000;
+
+/// Whether `IoBuildSynchronousFsdRequest` of the pinned kernel builds a
+/// request of this major function with no buffer and no transfer
+/// parameters: a flush, a shutdown, a power or a Plug and Play request.
+/// Every other major function gets the buffer the caller named, passed
+/// the way the device asks for, and the length and offset of a read.
+pub const fn fsd_request_has_no_buffer(major: u32) -> bool {
+    major == IRP_MJ_FLUSH_BUFFERS as u32
+        || major == IRP_MJ_SHUTDOWN as u32
+        || major == IRP_MJ_POWER as u32
+        || major == IRP_MJ_PNP as u32
+}
+
+/// What
+/// [`IoSetMasterIrpStatus`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iosetmasterirpstatus)
+/// makes of a master request's status `current` when a part of it
+/// completes with `status`: the status to store, or `None` to leave the
+/// master's. As the pinned kernel decides it: "verify required" always
+/// wins and is never replaced; "read from the other copy" is replaced
+/// by anything and replaces nothing; otherwise the more severe of the
+/// two (the top two bits) wins, and the first of equals stays.
+pub const fn master_irp_status(current: NTSTATUS, status: NTSTATUS) -> Option<NTSTATUS> {
+    use crate::status::{STATUS_FT_READ_FROM_COPY, STATUS_VERIFY_REQUIRED};
+    if status == STATUS_VERIFY_REQUIRED {
+        return Some(status);
+    }
+    if current == STATUS_VERIFY_REQUIRED {
+        return None;
+    }
+    if current == STATUS_FT_READ_FROM_COPY {
+        return Some(status);
+    }
+    if status == STATUS_FT_READ_FROM_COPY {
+        return None;
+    }
+    if status as u32 >> 30 > current as u32 >> 30 {
+        Some(status)
+    } else {
+        None
+    }
+}
 
 /// `IRP.ApcEnvironment`: the thread was in its own process when the
 /// request was made (`OriginalApcEnvironment`).
@@ -550,6 +701,13 @@ pub const MDL_MAPPED_TO_SYSTEM_VA: i16 = 0x0001;
 pub const MDL_PAGES_LOCKED: i16 = 0x0002;
 pub const MDL_SOURCE_IS_NONPAGED_POOL: i16 = 0x0004;
 pub const MDL_ALLOCATED_FIXED_SIZE: i16 = 0x0008;
+/// The MDL describes part of another's buffer (`IoBuildPartialMdl`).
+pub const MDL_PARTIAL: i16 = 0x0010;
+/// A partial MDL that has a system mapping of its own, to be taken
+/// down when the MDL is freed or reused.
+pub const MDL_PARTIAL_HAS_BEEN_MAPPED: i16 = 0x0020;
+pub const MDL_IO_PAGE_READ: i16 = 0x0040;
+pub const MDL_ALLOCATED_MUST_SUCCEED: i16 = 0x4000;
 
 /// Memory descriptor list header. An array of page frame numbers (one
 /// `u64` per page spanned) follows it in the same allocation.
@@ -578,6 +736,53 @@ pub const fn mdl_size(va: usize, len: usize) -> usize {
     size_of::<MDL>() + span_pages(va, len) * 8
 }
 
+/// What a partial MDL describes
+/// ([`IoBuildPartialMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildpartialmdl)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PartialMdl {
+    /// The first page of the source MDL's page array that the part
+    /// uses, and how many it uses.
+    pub first_page: usize,
+    pub pages: usize,
+    /// The part's `ByteOffset` and `ByteCount`.
+    pub byte_offset: u32,
+    pub byte_count: u32,
+    /// How far into the source's buffer the part starts.
+    pub skipped: usize,
+}
+
+/// The part of a source MDL's buffer that starts at `va` and is
+/// `length` bytes long, or reaches the end of the source's buffer if
+/// `length` is zero. The source's buffer starts at `source_va`
+/// (`StartVa` plus `ByteOffset`) and is `source_count` bytes long.
+/// `None` if the part does not lie within the source's buffer.
+pub const fn partial_mdl(
+    source_va: usize,
+    source_count: u32,
+    va: usize,
+    length: u32,
+) -> Option<PartialMdl> {
+    if va < source_va {
+        return None;
+    }
+    let skipped = va - source_va;
+    if skipped > source_count as usize {
+        return None;
+    }
+    let left = source_count as usize - skipped;
+    let byte_count = if length == 0 { left } else { length as usize };
+    if byte_count > left {
+        return None;
+    }
+    Some(PartialMdl {
+        first_page: (va >> 12) - (source_va >> 12),
+        pages: span_pages(va, byte_count),
+        byte_offset: (va & 0xFFF) as u32,
+        byte_count: byte_count as u32,
+        skipped,
+    })
+}
+
 /// The layouts drivers were compiled against, from the Windows 10 x64
 /// public symbols; arm64 is identical. Checked when this crate is built,
 /// for every target, so a definition that drifts cannot reach a driver.
@@ -592,7 +797,12 @@ const _: () = {
     assert!(size_of::<KDEVICE_QUEUE>() == 0x28);
     assert!(size_of::<KDPC>() == 0x40);
     assert!(size_of::<WAIT_CONTEXT_BLOCK>() == 0x48);
-    assert!(size_of::<DRIVER_EXTENSION>() == 0x28);
+    assert!(size_of::<DRIVER_EXTENSION>() == 0x50);
+    assert!(offset_of!(DRIVER_EXTENSION, ServiceKeyName) == 0x18);
+    assert!(offset_of!(DRIVER_EXTENSION, ClientDriverExtension) == 0x28);
+    assert!(offset_of!(DRIVER_EXTENSION, VerifierContext) == 0x48);
+    assert!(size_of::<IO_CLIENT_EXTENSION>() == 0x10);
+    assert!(offset_of!(IO_CLIENT_EXTENSION, ClientIdentificationAddress) == 0x08);
     assert!(size_of::<DRIVER_OBJECT>() == 0x150);
     assert!(size_of::<DEVICE_OBJECT>() == 0x150);
     assert!(align_of::<DEVICE_OBJECT>() == 16);
@@ -627,6 +837,25 @@ const _: () = {
     assert!(offset_of!(DEVICE_OBJECT, SectorSize) == 0x130);
     assert!(offset_of!(DEVICE_OBJECT, DeviceObjectExtension) == 0x138);
     assert!(offset_of!(DEVICE_OBJECT, Reserved) == 0x140);
+    assert!(size_of::<FAST_IO_DISPATCH>() == 0xE0);
+    assert!(offset_of!(FAST_IO_DISPATCH, Routines) == 0x08);
+    assert!(offset_of!(DEVICE_OBJECT, Spare1) == 0x132);
+    assert!(size_of::<DEVOBJ_EXTENSION>() == 0x70);
+    assert!(offset_of!(DEVOBJ_EXTENSION, Size) == 0x02);
+    assert!(offset_of!(DEVOBJ_EXTENSION, DeviceObject) == 0x08);
+    assert!(offset_of!(DEVOBJ_EXTENSION, PowerFlags) == 0x10);
+    assert!(offset_of!(DEVOBJ_EXTENSION, Dope) == 0x18);
+    assert!(offset_of!(DEVOBJ_EXTENSION, ExtensionFlags) == 0x20);
+    assert!(offset_of!(DEVOBJ_EXTENSION, DeviceNode) == 0x28);
+    assert!(offset_of!(DEVOBJ_EXTENSION, AttachedTo) == 0x30);
+    assert!(offset_of!(DEVOBJ_EXTENSION, StartIoCount) == 0x38);
+    assert!(offset_of!(DEVOBJ_EXTENSION, StartIoKey) == 0x3C);
+    assert!(offset_of!(DEVOBJ_EXTENSION, StartIoFlags) == 0x40);
+    assert!(offset_of!(DEVOBJ_EXTENSION, Vpb) == 0x48);
+    assert!(offset_of!(DEVOBJ_EXTENSION, DependencyNode) == 0x50);
+    assert!(offset_of!(DEVOBJ_EXTENSION, InterruptContext) == 0x58);
+    assert!(offset_of!(DEVOBJ_EXTENSION, InterruptCount) == 0x60);
+    assert!(offset_of!(DEVOBJ_EXTENSION, VerifierContext) == 0x68);
     assert!(offset_of!(FILE_OBJECT, DeviceObject) == 0x08);
     assert!(offset_of!(FILE_OBJECT, FsContext) == 0x18);
     assert!(offset_of!(FILE_OBJECT, PrivateCacheMap) == 0x30);
@@ -757,6 +986,28 @@ mod layout {
     }
 
     #[test]
+    fn a_fast_io_routine_is_there_only_in_a_table_that_reaches_it() {
+        // `FastIoDetachDevice` is at 0x68, and the kernel asks for a
+        // table larger than that.
+        assert_eq!(
+            fast_io_routine_offset(0xE0, FAST_IO_DETACH_DEVICE),
+            Some(0x68)
+        );
+        assert_eq!(
+            fast_io_routine_offset(0x69, FAST_IO_DETACH_DEVICE),
+            Some(0x68)
+        );
+        assert_eq!(fast_io_routine_offset(0x68, FAST_IO_DETACH_DEVICE), None);
+        assert_eq!(fast_io_routine_offset(0, FAST_IO_DETACH_DEVICE), None);
+        assert_eq!(fast_io_routine_offset(0xE0, 0), Some(0x08));
+        assert_eq!(
+            fast_io_routine_offset(0xE0, FAST_IO_ROUTINES - 1),
+            Some(0xD8)
+        );
+        assert_eq!(fast_io_routine_offset(u32::MAX, FAST_IO_ROUTINES), None);
+    }
+
+    #[test]
     fn an_irp_has_at_least_one_stack_location() {
         // 0xD0 for the IRP and 0x48 for each location, on 64-bit Windows.
         assert_eq!(irp_size(1), (1, 0xD0 + 0x48));
@@ -813,6 +1064,140 @@ mod layout {
         let noisy = SL_INVOKE_ON_ERROR | SL_PENDING_RETURNED;
         assert!(wanted(noisy, STATUS_END_OF_FILE, false));
         assert!(!wanted(noisy, STATUS_SUCCESS, false));
+    }
+
+    #[test]
+    fn a_master_request_keeps_its_most_telling_status() {
+        use crate::status::*;
+        let set = master_irp_status;
+        // The more severe status wins; the first of equals stays.
+        assert_eq!(
+            set(STATUS_SUCCESS, STATUS_END_OF_FILE),
+            Some(STATUS_END_OF_FILE)
+        );
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_SUCCESS), None);
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_ACCESS_DENIED), None);
+        assert_eq!(set(STATUS_SUCCESS, STATUS_SUCCESS), None);
+        assert_eq!(
+            set(STATUS_SUCCESS, STATUS_BUFFER_OVERFLOW),
+            Some(STATUS_BUFFER_OVERFLOW)
+        );
+        assert_eq!(
+            set(STATUS_BUFFER_OVERFLOW, STATUS_END_OF_FILE),
+            Some(STATUS_END_OF_FILE)
+        );
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_BUFFER_OVERFLOW), None);
+        // An informational status outranks a plain success.
+        assert_eq!(
+            set(STATUS_SUCCESS, STATUS_OBJECT_NAME_EXISTS),
+            Some(STATUS_OBJECT_NAME_EXISTS)
+        );
+        // "Verify required" always wins, over an error too, and stays.
+        assert_eq!(
+            set(STATUS_END_OF_FILE, STATUS_VERIFY_REQUIRED),
+            Some(STATUS_VERIFY_REQUIRED)
+        );
+        assert_eq!(
+            set(STATUS_VERIFY_REQUIRED, STATUS_VERIFY_REQUIRED),
+            Some(STATUS_VERIFY_REQUIRED)
+        );
+        assert_eq!(set(STATUS_VERIFY_REQUIRED, STATUS_END_OF_FILE), None);
+        assert_eq!(set(STATUS_VERIFY_REQUIRED, STATUS_FT_READ_FROM_COPY), None);
+        // "Read from the other copy" gives way to anything, a success
+        // included, and replaces nothing.
+        assert_eq!(
+            set(STATUS_FT_READ_FROM_COPY, STATUS_SUCCESS),
+            Some(STATUS_SUCCESS)
+        );
+        assert_eq!(
+            set(STATUS_FT_READ_FROM_COPY, STATUS_FT_READ_FROM_COPY),
+            Some(STATUS_FT_READ_FROM_COPY)
+        );
+        assert_eq!(set(STATUS_SUCCESS, STATUS_FT_READ_FROM_COPY), None);
+        assert_eq!(set(STATUS_END_OF_FILE, STATUS_FT_READ_FROM_COPY), None);
+    }
+
+    #[test]
+    fn requests_without_a_transfer_get_no_buffer() {
+        for major in [
+            IRP_MJ_FLUSH_BUFFERS,
+            IRP_MJ_SHUTDOWN,
+            IRP_MJ_POWER,
+            IRP_MJ_PNP,
+        ] {
+            assert!(fsd_request_has_no_buffer(u32::from(major)));
+        }
+        for major in [
+            IRP_MJ_READ,
+            IRP_MJ_WRITE,
+            IRP_MJ_CREATE,
+            IRP_MJ_DEVICE_CONTROL,
+            IRP_MJ_INTERNAL_DEVICE_CONTROL,
+            IRP_MJ_SYSTEM_CONTROL,
+        ] {
+            assert!(!fsd_request_has_no_buffer(u32::from(major)));
+        }
+        assert!(!fsd_request_has_no_buffer(0x109));
+        assert_eq!(IRP_PRIORITY_HINT_NORMAL & !IRP_PRIORITY_HINT_MASK, 0);
+        assert_eq!(IRP_PRIORITY_HINT_NORMAL >> 17, 3);
+    }
+
+    #[test]
+    fn a_partial_mdl_describes_part_of_the_source_buffer() {
+        // The source: three pages' worth starting 0x800 into a page.
+        let (source, count) = (0x10_0800, 0x3000);
+        // The whole of it.
+        assert_eq!(
+            partial_mdl(source, count, source, 0),
+            Some(PartialMdl {
+                first_page: 0,
+                pages: 4,
+                byte_offset: 0x800,
+                byte_count: 0x3000,
+                skipped: 0,
+            })
+        );
+        // A part inside the second page.
+        assert_eq!(
+            partial_mdl(source, count, 0x10_1010, 0x20),
+            Some(PartialMdl {
+                first_page: 1,
+                pages: 1,
+                byte_offset: 0x10,
+                byte_count: 0x20,
+                skipped: 0x810,
+            })
+        );
+        // From the middle to the end: a length of zero.
+        assert_eq!(
+            partial_mdl(source, count, 0x10_2FFF, 0),
+            Some(PartialMdl {
+                first_page: 2,
+                pages: 2,
+                byte_offset: 0xFFF,
+                byte_count: 0x801,
+                skipped: 0x27FF,
+            })
+        );
+        // Up to the last byte, and no further.
+        assert!(partial_mdl(source, count, 0x10_3000, 0x800).is_some());
+        assert_eq!(partial_mdl(source, count, 0x10_3000, 0x801), None);
+        assert_eq!(partial_mdl(source, count, source, 0x3001), None);
+        // Not before the buffer, nor past its end.
+        assert_eq!(partial_mdl(source, count, 0x10_07FF, 1), None);
+        assert_eq!(partial_mdl(source, count, 0x10_3801, 0), None);
+        // At the very end, nothing is left to describe; the page the
+        // end lies in is still spanned, as the WDK's macro spans it.
+        assert_eq!(
+            partial_mdl(source, count, 0x10_3800, 0),
+            Some(PartialMdl {
+                first_page: 3,
+                pages: 1,
+                byte_offset: 0x800,
+                byte_count: 0,
+                skipped: 0x3000,
+            })
+        );
     }
 
     #[test]

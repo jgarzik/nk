@@ -27,13 +27,16 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
-    /// Devices' reference counts and delete-pending marks (`io::device`).
+    /// Devices' reference counts, delete-pending marks and attachment
+    /// chains (`io::device`).
     IoDatabase = 25,
-    /// Which interrupts each device has been given (`io::interrupt`).
-    DeviceInterrupts = 28,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
+    /// The sources of hardware errors (`whea`).
+    Whea = 28,
+    /// Which interrupts each device has been given (`io::interrupt`).
+    DeviceInterrupts = 29,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).

@@ -29,6 +29,16 @@ static PASS: AtomicU32 = AtomicU32::new(0);
 static FAIL: AtomicU32 = AtomicU32::new(0);
 static SKIP: AtomicU32 = AtomicU32::new(0);
 
+/// Set by a group that leaves running what it started.
+static KEEPS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Said by a group that brings up something meant to stay (a device
+/// stack): what it holds when it returns is not a leak, and is not
+/// compared.
+pub fn keeps_what_it_started() {
+    KEEPS.store(true, Ordering::Relaxed);
+}
+
 /// Tests that share set-up, with the names of all their verdicts.
 pub struct Group {
     /// Every verdict the group reports. At most 64.
@@ -146,6 +156,9 @@ pub fn run_all(groups: &[&[&Group]], info: &BootInfo) -> ! {
         // A thread that has ended is buried by whatever runs next on
         // its processor: give a group's last threads, whose end nothing
         // waited for, that moment before counting.
+        if KEEPS.swap(false, Ordering::Relaxed) {
+            continue;
+        }
         let mut after = resources();
         for _ in 0..200 {
             if after == before {

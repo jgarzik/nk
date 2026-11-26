@@ -33,7 +33,7 @@ use nk_ntabi::ke::KMUTANT;
 use nk_ntabi::status::*;
 use nk_pe::exports::{Export, Exports, forward_target};
 use nk_pe::modules::{Module, Modules};
-use nk_pe::{Pe, PeError, Symbol};
+use nk_pe::{Bind, Pe, PeError, Symbol};
 
 /// The loader's hand-off block, for the files it read from the boot
 /// volume.
@@ -327,7 +327,7 @@ fn export_address(
             {
                 return match symbol {
                     Symbol::Name(name) => export::resolve(KERNEL_NAME, name),
-                    Symbol::Ordinal(_) => None,
+                    Symbol::Ordinal(ordinal) => export::resolve_ordinal(KERNEL_NAME, ordinal),
                 };
             }
             let next = MODULES.lock().with_stem(stem).filter(|m| m.library)?;
@@ -530,18 +530,22 @@ fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Im
             if export::is_kernel(module) {
                 return match sym {
                     Symbol::Name(name) => export::resolve(module, name),
-                    Symbol::Ordinal(_) => None,
-                };
+                    Symbol::Ordinal(ordinal) => export::resolve_ordinal(module, ordinal),
+                }
+                .map(Bind::Address);
+            }
+            if export::is_extension_api_set(module) {
+                return Some(Bind::Own);
             }
             match self::library(module, depth, held) {
-                Ok(library) => export_address(&library, sym, held, 0),
+                Ok(library) => export_address(&library, sym, held, 0).map(Bind::Address),
                 Err(error) => {
                     unusable.get_or_insert(error);
                     None
                 }
             }
         };
-        let bound = nk_pe::bind_imports(mem, &h, resolver);
+        let bound = nk_pe::bind_imports(mem, &h, base, resolver);
         bound.map_err(|e| match (e, unusable) {
             (PeError::Unresolved { .. }, Some(unusable)) => unusable,
             (
