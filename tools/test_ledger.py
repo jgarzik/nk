@@ -127,19 +127,43 @@ class LookedUp(unittest.TestCase):
 
 class Missing(unittest.TestCase):
     def test_names_by_area_for_the_binaries_asked(self):
-        areas, seen = ledger.missing(EXPORTS, LISTS, {"a.sys", "nosuch.sys"})
+        areas, seen, others = ledger.missing(EXPORTS, LISTS, {"a.sys", "nosuch.sys"})
         self.assertEqual(seen, ["a.sys"])
+        self.assertEqual(others, ["wmilib.sys"])
         # Implemented names are left out; a partial or trapping one says so.
         self.assertEqual(areas, {"Ke": ["KeSetEvent"], "Zw": ["ZwClose(traps)"],
                                  "other": ["#4"]})
 
     def test_the_union_of_several_binaries(self):
-        areas, seen = ledger.missing(EXPORTS, LISTS, {"a.sys", "b.sys", "c.sys"})
-        self.assertEqual(seen, ["a.sys", "b.sys"])
+        areas, seen, others = ledger.missing(EXPORTS, LISTS, {"a.sys", "b.sys", "c.sys"})
+        self.assertEqual(seen, ["a.sys", "b.sys", "c.sys"])
+        self.assertEqual(others, ["storport.sys", "wmilib.sys"])
         self.assertEqual(areas["Probe"], ["ProbeForRead(partial)"])
         # A fast-call form belongs to its area.
-        areas, _ = ledger.missing({}, "x.sys 1 ntoskrnl.exe: ObfReferenceObject\n", {"x.sys"})
+        areas, _, _ = ledger.missing({}, "x.sys 1 ntoskrnl.exe: ObfReferenceObject\n", {"x.sys"})
         self.assertEqual(areas, {"Ob": ["ObfReferenceObject"]})
+
+    def test_a_binary_that_imports_nothing_from_the_kernel_is_in_the_corpus(self):
+        # c.sys imports from its port driver only; d.sys imports nothing.
+        self.assertEqual(ledger.missing(EXPORTS, LISTS, {"c.sys"}),
+                         ({}, ["c.sys"], ["storport.sys"]))
+        self.assertEqual(ledger.missing(EXPORTS, LISTS, {"d.sys"}), ({}, ["d.sys"], []))
+        self.assertEqual(ledger.missing_report(EXPORTS, LISTS, ["C.SYS"]), [
+            "c.sys: 0 kernel names not implemented",
+            "  imports from other modules: storport.sys",
+        ])
+
+    def test_the_report_names_what_the_corpus_lacks(self):
+        self.assertEqual(ledger.missing_report(EXPORTS, LISTS, ["nosuch.sys"]),
+                         ["ledger: nosuch.sys is not in the corpus"])
+        self.assertEqual(ledger.missing_report(EXPORTS, LISTS, ["nosuch.sys", "a.sys"]), [
+            "ledger: nosuch.sys is not in the corpus",
+            "a.sys: 3 kernel names not implemented",
+            "  Ke (1): KeSetEvent",
+            "  Zw (1): ZwClose(traps)",
+            "  other (1): #4",
+            "  imports from other modules: wmilib.sys",
+        ])
 
 
 if __name__ == "__main__":

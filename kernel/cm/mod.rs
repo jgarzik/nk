@@ -5,8 +5,10 @@
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
 //! keys every system has and, laid over `Machine\System`, the SYSTEM
-//! hive the loader read, if it read one; it holds what drivers put in
-//! it until the machine stops. Nothing is written back to a hive file.
+//! hive the loader read, if it read one, and over that the registry
+//! overlay, keys and values as text, if it read one; it holds what
+//! drivers put in it until the machine stops. Nothing is written back
+//! to a hive file.
 //! `CurrentControlSet` is a symbolic link to the control set the hive
 //! selects. A key handle is a handle to a small object naming the key.
 //!
@@ -26,6 +28,7 @@ use crate::ob::{handle, object};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use nk_cm::manifest::Op;
 use nk_cm::regf::{Regf, RegfError};
 use nk_cm::services::OrderError;
 use nk_cm::{Error, Fit, Hive, ImportError, KeyId};
@@ -124,10 +127,11 @@ fn refusal(error: ImportError) -> &'static str {
 }
 
 /// Build the registry in `hive`: the keys every system has, the SYSTEM
-/// hive `file` laid over `Machine\System` if there is one, and
-/// `CurrentControlSet`, a symbolic link to the control set
-/// `Select\Current` names, as on Windows. Returns the root.
-fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
+/// hive `file` laid over `Machine\System` if there is one, the
+/// operations `overlay` carried out there, and `CurrentControlSet`, a
+/// symbolic link to the control set `Select\Current` names, as on
+/// Windows. Returns the root.
+fn build(hive: &mut Hive, file: Option<&[u8]>, overlay: &[Op]) -> Result<KeyId, &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
     let now = now();
     // Make a key if it is not there, stamped as made now.
@@ -155,6 +159,10 @@ fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
         let regf = Regf::parse(file).map_err(|e| refusal(e.into()))?;
         nk_cm::import(hive, system, &regf).map_err(refusal)?;
     }
+    // Before anything is read, the control set's number included: the
+    // overlay stands for content of the hive.
+    nk_cm::manifest::apply(hive, system, overlay, now)
+        .map_err(|_| "no memory for the registry overlay")?;
     let current = match hive.value(select, &wide("Current")) {
         Ok((_, REG_DWORD, &[a, b, c, d])) => u32::from_le_bytes([a, b, c, d]),
         _ => return Err("Select\\Current does not name a control set"),
@@ -172,15 +180,30 @@ fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
     Ok(root)
 }
 
-/// Make the registry, from the SYSTEM hive the loader read if it read
-/// one (`doc/BOOT.md`), and name its root `\Registry`. A hive that
-/// cannot be used fails the boot.
+/// The operations the registry overlay `text` describes. The overlay
+/// is NK's own file (`fixtures/registry-overlay.txt`): one that cannot
+/// be read is not used in part, and the line at fault is printed.
+fn overlay(text: &[u8]) -> Result<Vec<Op>, &'static str> {
+    nk_cm::manifest::parse(text).map_err(|error| {
+        kprintln!("cm: registry overlay, {error}");
+        "the registry overlay is malformed"
+    })
+}
+
+/// Make the registry, from the SYSTEM hive and the registry overlay
+/// the loader read, where it read one (`doc/BOOT.md`), and name its
+/// root `\Registry`. A hive or an overlay that cannot be used fails
+/// the boot.
 pub fn init() -> Result<(), &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
     let file = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE);
+    let laid = match crate::ldr::boot_file(nk_bootinfo::OVERLAY_MODULE) {
+        Some(text) => overlay(text)?,
+        None => Vec::new(),
+    };
     let root = {
         let mut hive = HIVE.lock();
-        let root = build(&mut hive, file)?;
+        let root = build(&mut hive, file, &laid)?;
         // The key object made below counts as an open of the root.
         hive.opened(root);
         root
@@ -192,6 +215,9 @@ pub fn init() -> Result<(), &'static str> {
             None => "without a hive".into(),
         }
     );
+    if !laid.is_empty() {
+        kprintln!("cm: registry overlay of {} keys and values", laid.len());
+    }
     let path: Vec<u16> = "\\Registry".encode_utf16().collect();
     let body = object::create_named(
         &object::KEY_TYPE,
@@ -920,7 +946,7 @@ pub fn refused_test(file: &[u8]) -> Result<(), &'static str> {
     copy.try_reserve_exact(file.len())
         .map_err(|_| "no memory")?;
     copy.extend_from_slice(file);
-    let verdict = |file: &[u8]| build(&mut Hive::new(), Some(file)).map(|_| ());
+    let verdict = |file: &[u8]| build(&mut Hive::new(), Some(file), &[]).map(|_| ());
     if verdict(&copy).is_err() {
         return Err("the hive the kernel booted with was refused the second time");
     }
@@ -948,4 +974,21 @@ pub fn refused_test(file: &[u8]) -> Result<(), &'static str> {
         return Err("a hive cut short was not refused");
     }
     Ok(())
+}
+
+/// An overlay with a line that cannot be read is refused whole, and an
+/// overlay is carried out before the control set is chosen: one that
+/// sets `Select\Current` decides what `CurrentControlSet` leads to.
+pub fn overlay_test() -> Result<(), &'static str> {
+    if overlay(b"key Select\nvalue Current dword\n").is_ok() {
+        return Err("an overlay with a value that has no data was not refused");
+    }
+    let laid = overlay(b"key Select\nvalue Current dword 2\nkey ControlSet002\\NkOverlay\n")?;
+    let mut hive = Hive::new();
+    let root = build(&mut hive, None, &laid)?;
+    let path = wide("Machine\\System\\CurrentControlSet\\NkOverlay");
+    match hive.open(root, &path) {
+        Ok(_) => Ok(()),
+        Err(_) => Err("an overlay's control set is not the current one"),
+    }
 }

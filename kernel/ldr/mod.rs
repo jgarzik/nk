@@ -327,7 +327,7 @@ fn export_address(
             {
                 return match symbol {
                     Symbol::Name(name) => export::resolve(KERNEL_NAME, name),
-                    Symbol::Ordinal(_) => None,
+                    Symbol::Ordinal(ordinal) => export::resolve_ordinal(KERNEL_NAME, ordinal),
                 };
             }
             let next = MODULES.lock().with_stem(stem).filter(|m| m.library)?;
@@ -530,7 +530,7 @@ fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Im
             if export::is_kernel(module) {
                 return match sym {
                     Symbol::Name(name) => export::resolve(module, name),
-                    Symbol::Ordinal(_) => None,
+                    Symbol::Ordinal(ordinal) => export::resolve_ordinal(module, ordinal),
                 };
             }
             match self::library(module, depth, held) {

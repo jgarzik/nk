@@ -37,6 +37,7 @@ pub static GROUP: Group = Group {
         "cm.hive.values",
         "cm.hive.names",
         "cm.hive.refused",
+        "cm.overlay",
     ],
     run,
     manual: false,
@@ -2243,6 +2244,25 @@ fn hive_names() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// What the registry overlay holds (`fixtures/registry-overlay.txt`)
+/// is in the registry: a key the hive does not have, and a value of
+/// the overlay's in place of the hive's of that name, the key's other
+/// values staying.
+fn overlay() -> Result<(), &'static str> {
+    let marker = value_of(&alloc::format!("{NK_TEST}\\Overlay"), "Marker");
+    if marker != Ok((1, utf16("laid over the hive\0"))) {
+        return Err("a key of the overlay is not in the registry");
+    }
+    let types = alloc::format!("{NK_TEST}\\Types");
+    if value_of(&types, "String") != Ok((1, utf16("overlaid\0"))) {
+        return Err("a value of the overlay did not take the place of the hive's");
+    }
+    if value_of(&types, "EmptyString") != Ok((1, utf16("\0"))) {
+        return Err("a value of the hive is gone from a key the overlay names");
+    }
+    crate::cm::overlay_test()
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
@@ -2275,6 +2295,10 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.hive.values", hive_values);
     r.check("cm.hive.names", hive_names);
     r.check("cm.hive.refused", || crate::cm::refused_test(hive));
+    if crate::ldr::boot_file(nk_bootinfo::OVERLAY_MODULE).is_none() {
+        return r.skip_rest(format_args!("no registry overlay provided"));
+    }
+    r.check("cm.overlay", overlay);
 }
 
 /// This file's test groups, in the order they run.
