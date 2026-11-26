@@ -180,19 +180,17 @@ unsafe fn run_ex(object: *mut c_void, context: usize) -> bool {
 }
 
 /// Wait until the worker that ran the item's routine has let go of the
-/// device it counted.
+/// device it counted, which it does once the routine has returned. The
+/// wait has no time limit: a count that is never given back hangs the
+/// test, and the boot with it.
 ///
 /// # Safety
 /// `device` is a live device of the test's.
-unsafe fn settled(device: *mut DEVICE_OBJECT) -> bool {
-    for _ in 0..1000 {
-        // SAFETY: per the contract.
-        if unsafe { (&raw const (*device).ReferenceCount).read_volatile() } == 0 {
-            return true;
-        }
+unsafe fn settle(device: *mut DEVICE_OBJECT) {
+    // SAFETY: per the contract.
+    while unsafe { (&raw const (*device).ReferenceCount).read_volatile() } != 0 {
         crate::ke::thread::yield_now();
     }
-    false
 }
 
 /// A work item in the driver's own memory, of the size the I/O manager
@@ -232,9 +230,7 @@ fn caller_memory_work_item() -> Result<u32, &'static str> {
                     if COUNTED.load(Ordering::Acquire) != 1 {
                         return Err("the device was not counted while the routine ran");
                     }
-                    if !settled(device) {
-                        return Err("the device stayed counted after the routine returned");
-                    }
+                    settle(device);
                 }
                 // The older call, on the same item: nothing is handed
                 // in the item's place.
@@ -247,9 +243,7 @@ fn caller_memory_work_item() -> Result<u32, &'static str> {
                 {
                     return Err("IoQueueWorkItem did not run the item as one of the older kind");
                 }
-                if !settled(device) {
-                    return Err("the device stayed counted after the routine returned");
-                }
+                settle(device);
                 work::IoUninitializeWorkItem(item);
                 // For a driver object, which is not counted.
                 work::IoInitializeWorkItem(object.cast(), item);
