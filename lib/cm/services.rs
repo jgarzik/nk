@@ -8,6 +8,7 @@
 //! (`DependOnService`) or on a group (`DependOnGroup`) starts after it.
 //! See [`Services` registry tree](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree).
 
+use crate::{Hive, KeyId};
 use alloc::vec::Vec;
 
 /// `SERVICE_BOOT_START` and `SERVICE_SYSTEM_START`.
@@ -120,6 +121,184 @@ pub fn start_order(
         }
     }
     Ok(order)
+}
+
+/// Registry value types.
+const REG_SZ: u32 = 1;
+const REG_EXPAND_SZ: u32 = 2;
+const REG_DWORD: u32 = 4;
+const REG_MULTI_SZ: u32 = 7;
+/// `SERVICE_DRIVER`: the `Type` bits of a kernel, file-system or
+/// recogniser driver.
+const SERVICE_DRIVER: u32 = 0xB;
+
+const fn ascii<const N: usize>(text: &[u8; N]) -> [u16; N] {
+    let mut out = [0; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = text[i] as u16;
+        i += 1;
+    }
+    out
+}
+
+fn push<T>(list: &mut Vec<T>, item: T) -> Result<(), OrderError> {
+    list.try_reserve(1).map_err(|_| OrderError::NoMemory)?;
+    list.push(item);
+    Ok(())
+}
+
+/// The number in the `REG_DWORD` value `name` of `key`.
+fn number(hive: &Hive, key: KeyId, name: &[u16]) -> Option<u32> {
+    match hive.value(key, name) {
+        Ok((_, REG_DWORD, &[a, b, c, d])) => Some(u32::from_le_bytes([a, b, c, d])),
+        _ => None,
+    }
+}
+
+/// The strings in the value `name` of `key`: the one of a `REG_SZ`,
+/// each of a `REG_MULTI_SZ`, without their terminators. None if there
+/// is no such value.
+fn strings(hive: &Hive, key: KeyId, name: &[u16]) -> Result<Vec<Vec<u16>>, OrderError> {
+    let mut found = Vec::new();
+    let Ok((_, REG_SZ | REG_EXPAND_SZ | REG_MULTI_SZ, data)) = hive.value(key, name) else {
+        return Ok(found);
+    };
+    let (units, _) = data.as_chunks::<2>();
+    for text in units.split(|&unit| unit == [0, 0]) {
+        // The empty string ends the list.
+        if text.is_empty() {
+            break;
+        }
+        let mut string = Vec::new();
+        string
+            .try_reserve_exact(text.len())
+            .map_err(|_| OrderError::NoMemory)?;
+        string.extend(text.iter().map(|&unit| u16::from_le_bytes(unit)));
+        push(&mut found, string)?;
+    }
+    Ok(found)
+}
+
+/// The tags of a `GroupOrderList` value, in order: the value is a
+/// count followed by that many tags, 32 bits each.
+fn tag_list(data: &[u8]) -> Result<Vec<u32>, OrderError> {
+    let (words, _) = data.as_chunks::<4>();
+    let mut words = words.iter().map(|&word| u32::from_le_bytes(word));
+    let count = words.next().unwrap_or(0) as usize;
+    let mut tags = Vec::new();
+    for tag in words.take(count) {
+        push(&mut tags, tag)?;
+    }
+    Ok(tags)
+}
+
+/// What a service key says about when its driver starts.
+struct Found {
+    key: KeyId,
+    start: u32,
+    group: Vec<u16>,
+    tag: Option<u32>,
+    after_services: Vec<Vec<u16>>,
+    after_groups: Vec<Vec<u16>>,
+}
+
+/// One list of names per service, as the slices [`Service`] takes.
+fn slices<'a>(
+    found: &'a [Found],
+    list: impl Fn(&'a Found) -> &'a [Vec<u16>],
+) -> Result<Vec<Vec<&'a [u16]>>, OrderError> {
+    let mut all = Vec::new();
+    for service in found {
+        let mut names = Vec::new();
+        for name in list(service) {
+            push(&mut names, &name[..])?;
+        }
+        push(&mut all, names)?;
+    }
+    Ok(all)
+}
+
+/// The driver services of the control set `control_set` that start at
+/// boot, as their keys under `Services`, in the order they start
+/// ([`start_order`]): from each key's `Type`, `Start`, `Group`, `Tag`,
+/// `DependOnService` and `DependOnGroup`, and from
+/// `Control\ServiceGroupOrder` (`List`) and `Control\GroupOrderList`.
+/// A key that is no driver's (`Type`) is left out; a control set with
+/// no `Services` key starts nothing.
+pub fn boot_start(hive: &Hive, control_set: KeyId) -> Result<Vec<KeyId>, OrderError> {
+    const SERVICES: [u16; 8] = ascii(b"Services");
+    const GROUP_ORDER: [u16; 25] = ascii(b"Control\\ServiceGroupOrder");
+    const TAG_ORDER: [u16; 22] = ascii(b"Control\\GroupOrderList");
+    let Ok(services) = hive.open(control_set, &SERVICES) else {
+        return Ok(Vec::new());
+    };
+    let mut found = Vec::new();
+    for key in (0..).map_while(|index| hive.subkey(services, index).ok().flatten()) {
+        let (Some(kind), Some(start)) = (
+            number(hive, key, &ascii(b"Type")),
+            number(hive, key, &ascii(b"Start")),
+        ) else {
+            continue;
+        };
+        if kind & SERVICE_DRIVER == 0 {
+            continue;
+        }
+        let group = strings(hive, key, &ascii(b"Group"))?
+            .pop()
+            .unwrap_or_default();
+        push(
+            &mut found,
+            Found {
+                key,
+                start,
+                group,
+                tag: number(hive, key, &ascii(b"Tag")),
+                after_services: strings(hive, key, &ascii(b"DependOnService"))?,
+                after_groups: strings(hive, key, &ascii(b"DependOnGroup"))?,
+            },
+        )?;
+    }
+    let group_order = match hive.open(control_set, &GROUP_ORDER) {
+        Ok(key) => strings(hive, key, &ascii(b"List"))?,
+        Err(_) => Vec::new(),
+    };
+    // Each group's tag list is a value of one key, named for the group.
+    let mut tag_lists = Vec::new();
+    if let Ok(key) = hive.open(control_set, &TAG_ORDER) {
+        for (group, _, data) in (0..).map_while(|index| hive.value_at(key, index).ok().flatten()) {
+            push(&mut tag_lists, (group, tag_list(data)?))?;
+        }
+    }
+    let after_services = slices(&found, |service| &service.after_services)?;
+    let after_groups = slices(&found, |service| &service.after_groups)?;
+    let mut described = Vec::new();
+    for (index, service) in found.iter().enumerate() {
+        push(
+            &mut described,
+            Service {
+                name: hive.info(service.key).map_or(&[][..], |info| info.name),
+                start: service.start,
+                group: &service.group,
+                tag: service.tag,
+                depend_on_service: &after_services[index],
+                depend_on_group: &after_groups[index],
+            },
+        )?;
+    }
+    let mut groups: Vec<&[u16]> = Vec::new();
+    for group in &group_order {
+        push(&mut groups, &group[..])?;
+    }
+    let mut tags: Vec<(&[u16], &[u32])> = Vec::new();
+    for (group, list) in &tag_lists {
+        push(&mut tags, (*group, &list[..]))?;
+    }
+    let mut keys = Vec::new();
+    for index in start_order(&described, &groups, &tags)? {
+        push(&mut keys, found[index].key)?;
+    }
+    Ok(keys)
 }
 
 #[cfg(test)]
@@ -309,5 +488,109 @@ mod tests {
             "a 0 - - - -",
         ];
         assert_eq!(order(&lines, &[], &[]).unwrap(), "self a b c d");
+    }
+
+    /// A control set whose service keys are `lines`, written as for
+    /// [`order`] with the key's `Type` in front; the names of the
+    /// services [`boot_start`] finds, in order.
+    fn from_keys(lines: &[&str], groups: &[&str], tags: &[(&str, &[u32])]) -> String {
+        let mut hive = Hive::new();
+        let root = hive.root().unwrap();
+        let (set, _) = hive.create(root, &w("Set")).unwrap();
+        hive.create(set, &w("Control")).unwrap();
+        let (services, _) = hive.create(set, &w("Services")).unwrap();
+        let multi = |names: &[&str]| -> Vec<u8> {
+            let mut text: String = names.iter().map(|name| format!("{name}\0")).collect();
+            text.push('\0');
+            crate::writer::wide(&text)
+        };
+        for line in lines {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let (key, _) = hive.create(services, &w(fields[1])).unwrap();
+            for (name, field) in [
+                ("Type", fields[0]),
+                ("Start", fields[2]),
+                ("Tag", fields[4]),
+            ] {
+                if let Ok(number) = field.parse::<u32>() {
+                    hive.set_value(key, &w(name), 4, &number.to_le_bytes())
+                        .unwrap();
+                }
+            }
+            if fields[3] != "-" {
+                let group = crate::writer::wide(&format!("{}\0", fields[3]));
+                hive.set_value(key, &w("Group"), 1, &group).unwrap();
+            }
+            for (name, field) in [("DependOnService", fields[5]), ("DependOnGroup", fields[6])] {
+                if field != "-" {
+                    let names: Vec<&str> = field.split(',').collect();
+                    hive.set_value(key, &w(name), 7, &multi(&names)).unwrap();
+                }
+            }
+        }
+        if !groups.is_empty() {
+            let (key, _) = hive.create(set, &w("Control\\ServiceGroupOrder")).unwrap();
+            hive.set_value(key, &w("List"), 7, &multi(groups)).unwrap();
+        }
+        if !tags.is_empty() {
+            let (key, _) = hive.create(set, &w("Control\\GroupOrderList")).unwrap();
+            for (group, list) in tags {
+                let data: Vec<u8> = core::iter::once(list.len() as u32)
+                    .chain(list.iter().copied())
+                    .flat_map(u32::to_le_bytes)
+                    .collect();
+                hive.set_value(key, &w(group), 3, &data).unwrap();
+            }
+        }
+        let names: Vec<String> = boot_start(&hive, set)
+            .unwrap()
+            .into_iter()
+            .map(|key| String::from_utf16(hive.info(key).unwrap().name).unwrap())
+            .collect();
+        names.join(" ")
+    }
+
+    #[test]
+    fn the_service_keys_say_what_starts_at_boot_and_in_what_order() {
+        let lines = [
+            "1 Late 1 - - - -",
+            "2 Fs 1 FS - - -",
+            "1 Demand 3 Bus - - -",
+            "16 Win32 0 Bus - - -",
+            "- NoType 0 Bus - - -",
+            "1 NoStart - Bus - - -",
+            "1 Disk9 0 Disk 9 - -",
+            "1 Disk2 0 Disk 2 - -",
+            "1 Bus 0 Bus - - -",
+            "8 Recogniser 1 Disk - Late -",
+            "1 After 1 Bus - - fs",
+        ];
+        // Drivers only, boot start then system start; groups in the
+        // listed order; tags as the group's list says; dependencies.
+        // The keys come in the order of their names.
+        assert_eq!(
+            from_keys(&lines, GROUPS, &[("disk", &[9, 2])]),
+            "Bus Disk9 Disk2 Fs After Late Recogniser"
+        );
+        // No group list and no tag lists: the order of the names, but
+        // for what waits for another.
+        assert_eq!(
+            from_keys(&lines, &[], &[]),
+            "Bus Disk2 Disk9 Fs After Late Recogniser"
+        );
+        assert_eq!(
+            from_keys(&lines[..8], &["Disk", "Bus"], &[]),
+            "Disk2 Disk9 Fs Late"
+        );
+        // A tag list that claims more tags than it holds, or is empty.
+        assert_eq!(tag_list(&[5, 0, 0, 0, 7, 0, 0, 0]).unwrap(), [7]);
+        assert!(tag_list(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_control_set_without_services_starts_nothing() {
+        let mut hive = Hive::new();
+        let root = hive.root().unwrap();
+        assert_eq!(boot_start(&hive, root), Ok(Vec::new()));
     }
 }

@@ -10,13 +10,14 @@
 
 use crate::io::file::{self, IoError, IoResult, Kind, OpenRequest};
 use crate::io::{device, irp};
+use crate::ke::{irql, thread, time, wait};
 use crate::mm::pool;
 use crate::ob::{self, handle, object};
 use crate::test::{Group, Report, Slot};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -30,6 +31,7 @@ pub static GROUP: Group = Group {
         "io.open.named-pipe",
         "io.fs-control",
         "io.close.cleanup-then-close",
+        "io.close.deferred",
     ],
     run,
     manual: false,
@@ -95,6 +97,10 @@ static CLOSED: AtomicPtr<FILE_OBJECT> = AtomicPtr::new(core::ptr::null_mut());
 static STEP: AtomicU32 = AtomicU32::new(0);
 static CLEANUP_AT: AtomicU32 = AtomicU32::new(0);
 static CLOSE_AT: AtomicU32 = AtomicU32::new(0);
+/// The IRQL the last close request arrived at, and the thread it
+/// arrived in.
+static CLOSE_IRQL: AtomicU32 = AtomicU32::new(0);
+static CLOSE_THREAD: AtomicUsize = AtomicUsize::new(0);
 /// The last control request: its major and minor function and its
 /// parameters.
 static CONTROL: Slot<(u8, u8, [u64; 4])> = Slot::new();
@@ -181,6 +187,8 @@ unsafe extern "C" fn cleanup_or_close(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> N
             CLEANED.store(file, Ordering::Release);
             CLEANUP_AT.store(step, Ordering::Release);
         } else {
+            CLOSE_IRQL.store(u32::from(irql::current()), Ordering::Release);
+            CLOSE_THREAD.store(thread::current().addr(), Ordering::Release);
             CLOSES.fetch_add(1, Ordering::AcqRel);
             CLOSED.store(file, Ordering::Release);
             CLOSE_AT.store(step, Ordering::Release);
@@ -806,6 +814,50 @@ fn cleanup_then_close(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     Ok(2)
 }
 
+/// A file whose last reference goes at `DISPATCH_LEVEL` is closed
+/// later, by a worker thread at `PASSIVE_LEVEL`, and then freed.
+/// Returns the files closed that way.
+fn deferred_close(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
+    let closes = CLOSES.load(Ordering::Acquire);
+    let blocks = pool::usage().blocks;
+    let only = open("\\Device\\NkOpen\\late").map_err(|_| "the open failed")?;
+    let file = last().file;
+    let Ok(held) = handle::reference(only, Some(&raw const object::FILE_TYPE)) else {
+        file::close(only);
+        return Err("an open file's handle did not give its object");
+    };
+    let closed = file::close(only);
+    let old = irql::raise(irql::DISPATCH_LEVEL);
+    // SAFETY: the reference taken above, given up: the last one.
+    unsafe { object::dereference(held) };
+    let at_dispatch = CLOSES.load(Ordering::Acquire);
+    irql::lower(old);
+    if closed != STATUS_SUCCESS || at_dispatch != closes {
+        return Err("the driver was sent a close request at DISPATCH_LEVEL");
+    }
+    // The close arrives, and after it the file object and the file's
+    // hold on its device go.
+    let deadline = time::interrupt_time() + 50_000_000;
+    // SAFETY: a device this test's driver made; a read of one field.
+    let pending = || unsafe { (*device).ReferenceCount } != 0 || pool::usage().blocks != blocks;
+    while pending() && time::interrupt_time() < deadline {
+        // SAFETY: no object is involved.
+        unsafe { wait::wait(None, Some(-10_000)) };
+    }
+    if CLOSES.load(Ordering::Acquire) != closes + 1 || CLOSED.load(Ordering::Acquire) != file {
+        return Err("the close request of a file let go at DISPATCH_LEVEL never arrived");
+    }
+    if CLOSE_IRQL.load(Ordering::Acquire) != u32::from(irql::PASSIVE_LEVEL)
+        || CLOSE_THREAD.load(Ordering::Acquire) == thread::current().addr()
+    {
+        return Err("the deferred close did not arrive in a worker thread at PASSIVE_LEVEL");
+    }
+    if pending() {
+        return Err("a file closed by a worker thread was not freed");
+    }
+    Ok(1)
+}
+
 fn counted(r: &mut Report, name: &str, what: &str, result: Result<u32, &'static str>) {
     match result {
         Ok(n) => r.ok_with(name, format_args!("{what} {n}")),
@@ -835,5 +887,11 @@ fn run(r: &mut Report, _: &BootInfo) {
         "io.close.cleanup-then-close",
         "files:",
         with_driver(cleanup_then_close),
+    );
+    counted(
+        r,
+        "io.close.deferred",
+        "files:",
+        with_driver(deferred_close),
     );
 }

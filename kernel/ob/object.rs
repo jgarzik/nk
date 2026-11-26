@@ -19,9 +19,12 @@
 
 #![allow(non_snake_case, non_upper_case_globals)]
 
+use crate::ke::irql;
 use crate::mm::pool;
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicI64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU8, Ordering};
+use nk_ntabi::ex::{CRITICAL_WORK_QUEUE, WORK_QUEUE_ITEM};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ke::LIST_ENTRY;
 use nk_ntabi::ob::{
@@ -142,6 +145,12 @@ impl ObjectType {
                 all: mapping.GenericAll,
             },
         )
+    }
+
+    /// Whether the type's delete procedure must run at `PASSIVE_LEVEL`:
+    /// a file's sends its driver the close request.
+    fn deletes_at_passive(&self) -> bool {
+        core::ptr::eq(self, &raw const FILE_TYPE)
     }
 
     /// The type's name.
@@ -433,8 +442,105 @@ pub unsafe fn reference(body: *mut u8) -> i64 {
     unsafe { pointer_count(body) }.fetch_add(1, Ordering::AcqRel) + 1
 }
 
+/// Delete an object: its type's procedure releases what it owns, then
+/// its memory goes.
+///
+/// # Safety
+/// `body` is an object from [`create`] that nothing refers to any more.
+unsafe fn delete(body: *mut u8) {
+    // SAFETY: per the contract; the type's procedure is given the body
+    // the object was created with.
+    unsafe {
+        if let Some(delete) = type_of(body).0.TypeInfo.DeleteProcedure {
+            delete(body.cast());
+        }
+        super::security::object_freed(body);
+    }
+    // SAFETY: still the object's memory; its block is found before it
+    // is given back.
+    let freed = pool::free(unsafe { block(body) });
+    debug_assert!(freed.is_ok());
+}
+
+/// The objects waiting to be deleted by a worker thread, newest first,
+/// linked through their headers as Windows links them: `NextToFree`
+/// shares its place with the handle count, which no longer counts
+/// anything.
+static DEFERRED: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The work item that deletes them: queued by whoever makes the list
+/// non-empty. A worker takes an item off its queue before running it,
+/// and the routine takes the whole list, so the next object deferred
+/// finds the list empty and the item free to be queued again.
+struct DeferredWork(UnsafeCell<WORK_QUEUE_ITEM>);
+
+// SAFETY: reached only through `ExQueueWorkItem`, which locks.
+unsafe impl Sync for DeferredWork {}
+
+static DEFERRED_WORK: DeferredWork = DeferredWork(UnsafeCell::new(WORK_QUEUE_ITEM {
+    List: LIST_ENTRY {
+        Flink: core::ptr::null_mut(),
+        Blink: core::ptr::null_mut(),
+    },
+    WorkerRoutine: Some(delete_deferred),
+    Parameter: core::ptr::null_mut(),
+}));
+
+/// Where an object waiting to be deleted names the next one.
+fn next_to_free(body: *mut u8) -> *mut *mut u8 {
+    // `NextToFree` is a union with `HandleCount`.
+    header(body)
+        .wrapping_byte_add(core::mem::offset_of!(OBJECT_HEADER, HandleCount))
+        .cast()
+}
+
+/// Leave an object's deletion to a worker thread, which runs at
+/// `PASSIVE_LEVEL`. Windows does this for an object whose last
+/// reference goes where its delete procedure cannot run.
+///
+/// # Safety
+/// `body` is an object from [`create`] that nothing refers to any more;
+/// the IRQL is at most `DISPATCH_LEVEL`.
+unsafe fn defer(body: *mut u8) {
+    let mut head = DEFERRED.load(Ordering::Acquire);
+    loop {
+        // SAFETY: per the contract: the header is this function's alone
+        // until the object is on the list.
+        unsafe { next_to_free(body).write(head) };
+        match DEFERRED.compare_exchange_weak(head, body, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => break,
+            Err(now) => head = now,
+        }
+    }
+    if head.is_null() {
+        // SAFETY: the item is on no queue: see `DeferredWork`.
+        unsafe { crate::ex::work::ExQueueWorkItem(DEFERRED_WORK.0.get(), CRITICAL_WORK_QUEUE) };
+    }
+}
+
+/// The work routine: delete every object left for a worker thread.
+///
+/// # Safety
+/// Called as a work routine.
+unsafe extern "C" fn delete_deferred(_: *mut c_void) {
+    let mut body = DEFERRED.swap(core::ptr::null_mut(), Ordering::AcqRel);
+    while !body.is_null() {
+        // SAFETY: `defer` put the object there, unreferenced, and wrote
+        // the link, which is read before the object is freed.
+        unsafe {
+            let next = next_to_free(body).read();
+            delete(body);
+            body = next;
+        }
+    }
+}
+
 /// Drop a reference; the last one frees the object. Returns the new
 /// count.
+///
+/// An object whose delete procedure calls a driver (an open file) is
+/// deleted at `PASSIVE_LEVEL`: if its last reference goes above that,
+/// a worker thread deletes it later.
 ///
 /// # Safety
 /// `body` is a live object from [`create`] and the caller owns one of
@@ -443,18 +549,14 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
     // SAFETY: per the contract.
     let left = unsafe { pointer_count(body) }.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
-        // SAFETY: nothing refers to the object any more; its type's
-        // procedure is given the body it was created with.
+        // SAFETY: nothing refers to the object any more.
         unsafe {
-            if let Some(delete) = type_of(body).0.TypeInfo.DeleteProcedure {
-                delete(body.cast());
+            if type_of(body).deletes_at_passive() && irql::current() != irql::PASSIVE_LEVEL {
+                defer(body);
+            } else {
+                delete(body);
             }
-            super::security::object_freed(body);
         }
-        // SAFETY: still the object's memory; its block is found before
-        // it is given back.
-        let freed = pool::free(unsafe { block(body) });
-        debug_assert!(freed.is_ok());
     } else if left < 0 {
         crate::kd::bugcheck(format_args!(
             "0x00000018 REFERENCE_BY_POINTER: an object was dereferenced more often than referenced"

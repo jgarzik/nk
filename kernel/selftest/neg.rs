@@ -228,3 +228,18 @@ fn breakpoint(r: &mut Report, _: &BootInfo) {
     // then getting here is right, and the scenario expects it.
     r.ok("neg.breakpoint");
 }
+
+/// Kernel code closing a kernel handle that is protected from close
+/// must stop the system, as on Windows; user mode is only refused.
+pub static PROTECTED_CLOSE: Group = Group {
+    names: &["neg.protected-close"],
+    run: protected_close,
+    manual: true,
+};
+
+fn protected_close(r: &mut Report, _: &BootInfo) {
+    let why = crate::ob::handle::protected_close_test(|| {
+        kprintln!("NK-NEG-ARMED neg.protected-close");
+    });
+    r.fail("neg.protected-close", format_args!("{why}"));
+}

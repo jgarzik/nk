@@ -11,6 +11,9 @@ the state the kernel reports for it:
 - `traps`: bound so the driver loads, but stops the machine with a named
   bugcheck if ever called. Never counts as implemented.
 - `missing`: no such export. A driver that imports it is rejected.
+- `library`: the import is from another fixture, an export driver, which
+  exports it: the loader binds it to that image. Only an import from a
+  module that is itself a fixture can have this state.
 
 `summary` counts the distinct imports of the fixtures the kernel loads at
 boot. Fixtures with `loaded_at_boot: false` are listed to show what they
@@ -18,6 +21,14 @@ will need.
 
 Export states come from what the booted kernel prints, so the ledger
 describes the kernel that ran, not a hand-kept list.
+
+`looked_up_absent` lists the names `MmGetSystemRoutineAddress` was
+asked for during the boot test that the kernel does not export. A
+driver that asks this way goes on without the routine, so no import
+table shows the name and nothing rejects the driver: the list is the
+only place such a gap appears. The kernel's own test of the routine
+asks for names that exist nowhere (`NoSuchRoutineInAnyKernel`); they
+are listed too.
 
 ## The corpus
 

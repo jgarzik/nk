@@ -6,13 +6,14 @@ Layout, mirroring where Windows keeps its boot files:
     \\EFI\\BOOT\\BOOT{X64,AA64}.EFI   nkload (the path firmware boots by default)
     \\NK\\nkkrnl.exe                  the kernel
     \\NK\\drivers\\<name>.sys         boot drivers, from the fixture cache
+    \\NK\\SYSTEM                      the SYSTEM registry hive, from the fixture cache
     \\NK\\cmdline.txt                 the kernel command line, if any
 
 The image is a bare FAT filesystem made with mtools: no root, no loop device.
 
 Usage: mkesp.py <x86_64|aarch64> <output.img> [--no-drivers]
 
-`--no-drivers` leaves the fixture drivers out. Such an image contains only
+`--no-drivers` leaves the fixture drivers and the hive out. Such an image contains only
 NK's own code and can be redistributed; the kernel boots and reports the
 driver tests as skipped.
 """
@@ -39,10 +40,11 @@ def boot_drivers(arch):
     the kernel uses on this arch. A fixture that is not downloaded is left
     out and named in the second list; the kernel skips its tests.
 
-    Besides the drivers it loads, the kernel is given two real binaries it
+    Besides the drivers it loads, the kernel is given real binaries it
     must refuse:
       wrongarch.sys   the WDM sample built for the other architecture
       unresolved.sys  the KMDF sample, whose framework imports NK lacks
+      nkc-libbad.sys  imports a name the library nkc-lib.sys does not export
     """
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     drivers, missing = [], []
@@ -59,7 +61,18 @@ def boot_drivers(arch):
             drivers.append(("wrongarch.sys", path))
         elif fx["arch"] == arch and fx["name"] == "kmdf-echo":
             drivers.append(("unresolved.sys", path))
+        elif fx["arch"] == arch and fx["name"] == "nkc-libbad":
+            drivers.append(("nkc-libbad.sys", path))
     return drivers, missing
+
+
+def hive():
+    """(path, missing file name or None) of the registry hive fixture: the
+    one fixture of kind "hive", the same for every architecture."""
+    manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
+    [fx] = [fx for fx in manifest if fx.get("kind") == "hive"]
+    path = FIXTURES / fx["file"]
+    return (path, None) if path.exists() else (None, fx["file"])
 
 
 def build(arch, image, drivers=True, cmdline=""):
@@ -86,6 +99,12 @@ def build(arch, image, drivers=True, cmdline=""):
     found, missing = boot_drivers(arch) if drivers else ([], ["(no drivers)"])
     for name, path in found:
         mtools("mcopy", "-i", image, path, f"::/NK/drivers/{name}")
+    if drivers:
+        path, absent = hive()
+        if path:
+            mtools("mcopy", "-i", image, path, "::/NK/SYSTEM")
+        else:
+            missing.append(absent)
     if cmdline:
         text = image.with_suffix(".cmdline")
         text.write_text(cmdline + "\n")

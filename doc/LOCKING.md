@@ -70,8 +70,9 @@ already held has a lower rank; two locks of one rank never nest.
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
+| 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
-| 245 | `ldr::MODULES` | which image an address is in | HIGH |
+| 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
 Why this order:
@@ -119,6 +120,13 @@ Why this order:
   the timer's DPC. No two tables are held together: a timer moves from
   one processor's table to another's by leaving the first under its lock
   and entering the second under its own.
+- An object's header lock is the `Lock` word of its `OBJECT_HEADER`,
+  where Windows has it, not a `SpinLock`: its holder spins on the word,
+  and the hold is ranked and recorded all the same (`ke::Ranked`). It
+  ranks above every other lock held at `DISPATCH_LEVEL`, so it may be
+  taken with any of them held and none of them inside it: not the
+  pool's (a replaced descriptor is freed after the lock is dropped),
+  not a second object's.
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.
@@ -149,6 +157,26 @@ never looser.
 `force_lock` takes a lock regardless, without bookkeeping. Only the
 path that stops the system uses it, on the console and on the table of
 loaded images, and never returns.
+
+### The loader's mutex
+
+Loading and unloading an image are serialised by a kernel mutex
+(`KMUTANT`), `ldr::LOADER`, not by a spin lock: a load calls a library's
+`DllInitialize` and an unload its `DllUnload`, either of which may
+wait, and a library is loaded from inside the load of the image that
+imports from it, by the same thread (a mutex may be taken again by its
+owner).
+
+- It is taken at `PASSIVE_LEVEL` with no spin lock held, since taking
+  it may sleep; whoever holds it may take any ranked lock.
+- It covers the list of libraries and the order of events: an image is
+  entered in the table of images, bound to its libraries and counted as
+  their importer, or none of it, without another load or unload in
+  between. The counts themselves are in the table of images, under its
+  own lock.
+- A library's `DllInitialize` and `DllUnload` run with it held, as on
+  Windows, where the system's load lock is held around them. A driver's
+  entry point and unload routine run without it.
 
 ### Per-processor state
 
@@ -212,16 +240,11 @@ thread) has a lock of
 its own, bit 7 of its header's type byte, as on Windows. It covers the
 object's signal state, its list of wait blocks, and the blocks linked
 there. It is taken at `DISPATCH_LEVEL`, before any ranked lock. These
-locks are in the driver's memory and are not ranked or recorded. Nothing
+locks are in the driver's memory and are not ranked or recorded. (The
+lock in an object's header is another matter: rank 235 above.) Nothing
 holds two, with one exception: a wait for all of several objects holds
 all their locks at once while it looks and takes, locking in order of
 address and unlocking in reverse.
-
-Every object-manager object has another lock of its own, the `Lock`
-word of its header, which covers the header's security descriptor
-pointer (`ob::security`). It is held at `DISPATCH_LEVEL` for a pointer
-read or swap and a count, takes nothing inside, and is not ranked or
-recorded; a replaced descriptor is freed after it is dropped.
 
 For a timer the lock also serialises setting and cancelling. Expiry
 takes the timer out under the table's lock, lets go, and only then takes

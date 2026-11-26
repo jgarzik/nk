@@ -115,7 +115,7 @@ pub fn checksum(base: &[u8]) -> u32 {
 pub fn lh_hash(name: impl Iterator<Item = u16>) -> u32 {
     name.fold(0u32, |hash, unit| {
         hash.wrapping_mul(37)
-            .wrapping_add(u32::from(nk_rtl::upcase(unit)))
+            .wrapping_add(u32::from(nk_rtl::upcase_char(unit)))
     })
 }
 

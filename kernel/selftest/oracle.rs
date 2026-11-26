@@ -50,9 +50,20 @@ impl<'a> Replay<'a> {
                 "ok"
             }
             Err(e) => {
-                kprintln!("oracle: load {service}: {e:?}");
+                kprintln!("oracle: load {service}: status {:#010x}: {e:?}", e.status());
                 "failed"
             }
+        }
+    }
+
+    /// A library put where the loader looks for what a driver imports
+    /// from. On NK that place is the boot files, which cannot be added
+    /// to: the step succeeds if the file is among them.
+    fn install(file: &str) -> &'static str {
+        if ldr::boot_file(file).is_some() {
+            "ok"
+        } else {
+            "failed"
         }
     }
 
@@ -101,7 +112,8 @@ impl<'a> Replay<'a> {
             Step::Load { service, file } => self.load(service, file).into(),
             Step::Use { service } => self.use_service(service).into(),
             Step::Unload { service } => self.unload(service).into(),
-            Step::Install { .. } | Step::IoctlAt { .. } => {
+            Step::Install { file } => Self::install(file).into(),
+            Step::IoctlAt { .. } => {
                 return Err("not yet supported on NK".into());
             }
             Step::Open { handle, path, args } => {
@@ -290,6 +302,9 @@ pub static GROUP: Group = Group {
         "oracle.nkc-se",
         "oracle.nkc-reg",
         "oracle.cancel",
+        "oracle.nkc-lib",
+        "oracle.nkc-lib-twice",
+        "oracle.nkc-libbad",
     ],
     run,
     manual: false,
@@ -393,6 +408,27 @@ fn run(r: &mut Report, _: &BootInfo) {
         "cancel.sys",
         include_str!("../../oracle/cancel.script"),
         include_str!("../../oracle/cancel.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-lib",
+        "nkc-libuser.sys",
+        include_str!("../../oracle/nkc-lib.script"),
+        include_str!("../../oracle/nkc-lib.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-lib-twice",
+        "nkc-libuser.sys",
+        include_str!("../../oracle/nkc-lib-twice.script"),
+        include_str!("../../oracle/nkc-lib-twice.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-libbad",
+        "nkc-libbad.sys",
+        include_str!("../../oracle/nkc-libbad.script"),
+        include_str!("../../oracle/nkc-libbad.txt"),
     );
 }
 

@@ -80,6 +80,10 @@ cm.keys ok
 cm.values ok
 cm.delete ok
 cm.namespace ok
+cm.control-set ok
+cm.hive.values ok
+cm.hive.names ok
+cm.hive.refused ok
 io.csq ok
 io.csq-cancel ok
 io.csq-race ok
@@ -111,6 +115,9 @@ io.open.create-request ok
 io.open.named-pipe ok
 io.fs-control ok
 io.close.cleanup-then-close ok
+io.close.deferred ok
+io.service.default-image ok
+io.service.boot-start ok
 io.remove-lock ok
 rtl.version ok
 mm.routine-address ok
@@ -121,6 +128,12 @@ ldr.module.kernel ok
 ldr.module.driver ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok
+ldr.lib.absent ok
+ldr.lib.forwarder ok
+ldr.lib.bind ok
+ldr.lib.counts ok
+ldr.lib.refused ok
+ldr.lib.as-service ok
 null.load skip
 null.device skip
 null.open skip
@@ -158,3 +171,6 @@ oracle.nkc-work ok
 oracle.nkc-se ok
 oracle.nkc-reg ok
 oracle.cancel ok
+oracle.nkc-lib ok
+oracle.nkc-lib-twice ok
+oracle.nkc-libbad ok

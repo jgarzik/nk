@@ -230,10 +230,22 @@ pub fn resolve(module: &[u8], name: &[u8]) -> Option<u64> {
         .map(|e| e.addr as u64)
 }
 
+/// Whether `module` is a name the kernel's own exports go by: an
+/// import from any other module is from a driver that exports.
+pub fn is_kernel(module: &[u8]) -> bool {
+    [NT, "hal.dll"]
+        .iter()
+        .any(|name| name.as_bytes().eq_ignore_ascii_case(module))
+}
+
 /// [`MmGetSystemRoutineAddress`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemroutineaddress):
 /// the address of a routine the kernel or the HAL exports, by name, or
 /// null if there is none of that name. It is how a driver asks whether a
 /// routine exists before relying on it.
+///
+/// A name that is not found is printed, `NK-LOOKUP <name> absent`: the
+/// driver takes another path without it and no import table shows the
+/// name, so the ledger lists these from the boot log.
 ///
 /// # Safety
 /// `name` points to a valid counted string.
@@ -245,14 +257,25 @@ pub unsafe extern "C" fn MmGetSystemRoutineAddress(
     let wide = unsafe { rtl::copy_unicode(name) };
     // Export names are ASCII; a name that is not cannot match one.
     let mut ascii = [0u8; 128];
-    if wide.len() > ascii.len() || wide.iter().any(|&unit| unit > 0x7F) {
-        return core::ptr::null_mut();
+    let found = if wide.len() > ascii.len() || wide.iter().any(|&unit| unit > 0x7F) {
+        None
+    } else {
+        for (byte, &unit) in ascii.iter_mut().zip(&wide) {
+            *byte = unit as u8;
+        }
+        resolve(NT.as_bytes(), &ascii[..wide.len()])
+    };
+    match found {
+        Some(addr) => addr as *mut core::ffi::c_void,
+        None => {
+            // One word, whatever the driver passed.
+            let name: alloc::string::String = char::decode_utf16(wide.iter().copied())
+                .map(|c| c.ok().filter(|c| c.is_ascii_graphic()).unwrap_or('?'))
+                .collect();
+            kprintln!("NK-LOOKUP {name} absent");
+            core::ptr::null_mut()
+        }
     }
-    for (byte, &unit) in ascii.iter_mut().zip(&wide) {
-        *byte = unit as u8;
-    }
-    resolve(NT.as_bytes(), &ascii[..wide.len()])
-        .map_or(core::ptr::null_mut(), |addr| addr as *mut core::ffi::c_void)
 }
 
 /// Print the table for the ledger: `NK-EXPORT <module> <name> <state>`.

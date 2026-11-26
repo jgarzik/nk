@@ -25,7 +25,6 @@ unsafe impl Send for Record {}
 static DRIVERS: SpinLock<Vec<Record>> = SpinLock::new(Rank::Drivers, Vec::new());
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "fields are read through Debug in test reports")]
 pub enum DriverError {
     Load(LoadError),
     NoMemory,
@@ -136,7 +135,11 @@ pub(super) fn load(
             device = (*device).NextDevice;
         }
     }
-    DRIVERS.lock().push(Record {
+    let mut drivers = DRIVERS.lock();
+    // Room for exactly one more, as unloading leaves exactly enough: the
+    // table's memory then depends only on how many drivers are loaded.
+    drivers.reserve_exact(1);
+    drivers.push(Record {
         object,
         image,
         _driver_name: driver_name,
@@ -189,4 +192,15 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     }
     free(record.object, &record.image);
     Ok(())
+}
+
+impl DriverError {
+    /// The status Windows' `ZwLoadDriver` gives for it.
+    pub fn status(&self) -> NTSTATUS {
+        match self {
+            Self::Load(error) => error.status(),
+            Self::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            Self::Name(status) | Self::EntryFailed(status) => *status,
+        }
+    }
 }

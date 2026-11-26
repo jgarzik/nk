@@ -35,23 +35,11 @@ pub fn init_unicode_lengths(chars: usize) -> (u16, u16) {
     (len as u16, (len + 2) as u16)
 }
 
-/// Uppercase one UTF-16 unit for case-insensitive name comparison.
-///
-/// Covers ASCII and Latin-1. Windows uses a full upcase table; names
-/// outside these ranges compare case-sensitively here, which can only
-/// make NK stricter, never match two names Windows keeps apart.
-/// [`upcase_char`] is the full table.
-pub fn upcase(c: u16) -> u16 {
-    match c {
-        0x61..=0x7A => c - 0x20,
-        0xE0..=0xFE if c != 0xF7 => c - 0x20,
-        _ => c,
-    }
-}
-
-/// Compare two names the way the object manager does: case-insensitively.
+/// Compare two names the way the object manager and the registry do:
+/// without regard to case, by the full upper-case table
+/// ([`upcase_char`]).
 pub fn names_equal(a: &[u16], b: &[u16]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| upcase(x) == upcase(y))
+    upcase::equal_unicode_string(a, b, true)
 }
 
 /// The file an image path names: what follows its last backslash, up to
@@ -135,9 +123,12 @@ mod tests {
         assert!(names_equal(&w("\\Device\\Null"), &w("\\DEVICE\\null")));
         assert!(!names_equal(&w("\\Device\\Null"), &w("\\Device\\Nul")));
         assert!(!names_equal(&w("\\Device\\Null"), &w("\\Device\\Nulls")));
-        assert_eq!(upcase(0xE9), 0xC9, "e-acute");
-        assert_eq!(upcase(0xF7), 0xF7, "division sign has no upper case");
-        assert_eq!(upcase(u16::from(b'[')), u16::from(b'['));
+        assert!(names_equal(&w("caf\u{e9}"), &w("CAF\u{c9}")), "Latin-1");
+        assert!(
+            names_equal(&w("\u{3b1}\u{3b2}\u{3b3}"), &w("\u{391}\u{392}\u{393}")),
+            "beyond Latin-1"
+        );
+        assert!(!names_equal(&w("\u{f7}"), &w("\u{d7}")), "no letters");
     }
 
     #[test]

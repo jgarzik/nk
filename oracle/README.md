@@ -49,8 +49,15 @@ running is left running. Windows cannot stop some drivers once they run
 (a file system, for one): those stay. On NK a service with no key in the
 registry is given one that names `<service>.sys` among the boot files.
 
-NK's replayer does not carry out `install` or `ioctlat`: its line for
-such a step says so, and the comparison fails there.
+On NK the boot files stand for the driver directory and nothing can be
+added to them, so `install` puts nothing anywhere: it answers `ok` if
+the file is among the boot files and `failed` if it is not. A script
+whose point is that a library is absent cannot be replayed on NK when
+the image carries that library; `ldr.lib.absent` covers the case with a
+name no file has.
+
+NK's replayer does not carry out `ioctlat`: its line for such a step
+says so, and the comparison fails there.
 
 ### Options
 

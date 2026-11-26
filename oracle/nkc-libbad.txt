@@ -1,0 +1,9 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 b9ce4b3592485cf1ded3a6a339a9ec6a56b455021c661c0e102fcfdc354274ab
+# driver nkc-lib.sys sha256 3701eb7dd37708ce6bbcc9ca332a9b8463c254262898395d6973200363956b5f
+# driver nkc-libbad.sys sha256 d94c2a5209e96e441ad8baba00e3b2dbb64940519bc6de2454da0fd393cce64b
+install nkc-lib.sys: ok
+load nkc-libbad: failed
+open d \Device\NkcLibBad: c0000034
+unload nkc-libbad: failed
+end

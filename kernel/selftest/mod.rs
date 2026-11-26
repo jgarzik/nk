@@ -12,6 +12,7 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+mod library;
 mod loader;
 mod mutex;
 mod neg;
@@ -23,6 +24,7 @@ mod pend;
 mod review;
 mod se;
 mod seh;
+mod service;
 mod sioctl;
 mod smp;
 mod thread;
@@ -60,8 +62,10 @@ pub static GROUPS: &[&Group] = &[
     &work::GROUP,
     &pend::GROUP,
     &open::GROUP,
+    &service::GROUP,
     &driver_api::GROUP,
     &loader::GROUP,
+    &library::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
     &cancel::GROUP,
@@ -87,6 +91,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::EXIT_HOLDING,
     &work::BAD_RETURN,
     &pend::OVERSTATED,
+    &neg::PROTECTED_CLOSE,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

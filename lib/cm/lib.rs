@@ -1,7 +1,8 @@
 //! The registry: a tree of named keys, each holding named values.
 //!
 //! Pure and in memory. Names of keys and values are compared without
-//! regard to case, as Windows compares them. A key is known by a
+//! regard to case, as Windows compares them: upper case against upper
+//! case, by the full table (`nk_rtl::upcase_char`). A key is known by a
 //! [`KeyId`]; the root is what Windows calls `\Registry`. A key's
 //! subkeys are kept, and enumerated, in the order of their upper-cased
 //! names; its values in the order they were first set.
@@ -104,21 +105,35 @@ pub struct Hive {
     keys: Vec<Key>,
 }
 
+/// The value a symbolic link keeps its target in, `SymbolicLinkValue`,
+/// and that value's type: as on Windows.
+const LINK_VALUE: &[u16] = &{
+    let ascii = *b"SymbolicLinkValue";
+    let mut name = [0u16; 17];
+    let mut i = 0;
+    while i < name.len() {
+        name[i] = ascii[i] as u16;
+        i += 1;
+    }
+    name
+};
+pub const REG_LINK: u32 = 6;
+
+/// How many symbolic links one look-up follows. NK's own bound: what
+/// matters is that a link to itself ends.
+const MAX_LINKS: u32 = 32;
+
 /// The name of the root, as paths spell it.
 const ROOT: &[u16] = &[0x52, 0x45, 0x47, 0x49, 0x53, 0x54, 0x52, 0x59];
 
 fn same(a: &[u16], b: &[u16]) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b)
-            .all(|(&x, &y)| nk_rtl::upcase(x) == nk_rtl::upcase(y))
+    nk_rtl::names_equal(a, b)
 }
 
 /// The order Windows keeps and enumerates subkeys in: by upper-cased
 /// name, a name before any longer one it starts.
 fn order(a: &[u16], b: &[u16]) -> Ordering {
-    let upper = |&c: &u16| nk_rtl::upcase(c);
-    a.iter().map(upper).cmp(b.iter().map(upper))
+    nk_rtl::upcase::order_unicode_string(a, b, true)
 }
 
 /// The parts of a path between backslashes.
@@ -236,42 +251,103 @@ impl Hive {
             .find(|&child| same(&self.keys[child].name, name))
     }
 
+    /// The key `key` leads to: itself, or for a symbolic link the key
+    /// its target names, a full path from the root (`\Registry\...`)
+    /// kept in the link's [`LINK_VALUE`]. A link whose target is not
+    /// there leads nowhere (`NotFound`), as does one with no usable
+    /// target and a look-up that has used up its `links`.
+    fn target(&self, key: usize, links: &mut u32) -> Result<usize, Error> {
+        if !self.keys[key].link {
+            return Ok(key);
+        }
+        *links = links.checked_sub(1).ok_or(Error::NotFound)?;
+        let (_, kind, data) = self.value(KeyId(key), LINK_VALUE)?;
+        if kind != REG_LINK {
+            return Err(Error::NotFound);
+        }
+        let mut path = Vec::new();
+        path.try_reserve_exact(data.len() / 2)
+            .map_err(|_| Error::NoMemory)?;
+        path.extend(
+            data.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c)),
+        );
+        let mut parts = components(&path);
+        if !parts.next().is_some_and(|root| same(root, ROOT)) {
+            return Err(Error::NotFound);
+        }
+        self.walk(0, parts, links)
+    }
+
+    /// The key the names `parts` lead to from `key`, one below
+    /// another, through every symbolic link on the way and at the end.
+    fn walk<'a>(
+        &self,
+        key: usize,
+        mut parts: impl Iterator<Item = &'a [u16]>,
+        links: &mut u32,
+    ) -> Result<usize, Error> {
+        parts.try_fold(key, |key, name| {
+            let child = self.child(key, name).ok_or(Error::NotFound)?;
+            self.target(child, links)
+        })
+    }
+
     /// The key `path` names, starting from `start`. An empty path names
-    /// `start` itself.
+    /// `start` itself. A symbolic link anywhere on the path, its end
+    /// included, is followed to the key it names.
     pub fn open(&self, start: KeyId, path: &[u16]) -> Result<KeyId, Error> {
-        components(path)
-            .try_fold(self.live(start)?, |key, name| self.child(key, name))
+        let mut links = MAX_LINKS;
+        self.walk(self.live(start)?, components(path), &mut links)
             .map(KeyId)
-            .ok_or(Error::NotFound)
     }
 
     /// Open the key `path` names, creating it if it is not there. Only
     /// the last part of the path is created: the keys above it must
-    /// exist. Says whether the key is new.
+    /// exist. Says whether the key is new. Symbolic links are followed
+    /// as [`Hive::open`] follows them, so a key made below a link is
+    /// made below the link's target.
     pub fn create(&mut self, start: KeyId, path: &[u16]) -> Result<(KeyId, bool), Error> {
+        let mut links = MAX_LINKS;
         let mut key = self.live(start)?;
         let mut parts = components(path).peekable();
         while let Some(name) = parts.next() {
             key = match self.child(key, name) {
-                Some(child) => child,
+                Some(child) => self.target(child, &mut links)?,
                 None if parts.peek().is_some() => return Err(Error::NotFound),
-                None => {
-                    // Room in the parent first, so that a failure
-                    // leaves no key behind that nothing leads to.
-                    self.keys[key]
-                        .children
-                        .try_reserve_exact(1)
-                        .map_err(|_| Error::NoMemory)?;
-                    let new = self.add(name, key)?;
-                    let at = self.keys[key]
-                        .children
-                        .partition_point(|&child| order(&self.keys[child].name, name).is_lt());
-                    self.keys[key].children.insert(at, new);
-                    return Ok((KeyId(new), true));
-                }
+                None => return Ok((KeyId(self.add_child(key, name)?), true)),
             };
         }
         Ok((KeyId(key), false))
+    }
+
+    /// Make the subkey `name` of `key`, which has none of that name.
+    fn add_child(&mut self, key: usize, name: &[u16]) -> Result<usize, Error> {
+        // Room in the parent first, so that a failure leaves no key
+        // behind that nothing leads to.
+        self.keys[key]
+            .children
+            .try_reserve_exact(1)
+            .map_err(|_| Error::NoMemory)?;
+        let new = self.add(name, key)?;
+        let at = self.keys[key]
+            .children
+            .partition_point(|&child| order(&self.keys[child].name, name).is_lt());
+        self.keys[key].children.insert(at, new);
+        Ok(new)
+    }
+
+    /// The subkey `name` of `key` itself, made if it is not there: a
+    /// symbolic link is not followed. What copying a hive file needs,
+    /// where a link is a key like any other.
+    pub(crate) fn subkey_or_new(&mut self, key: KeyId, name: &[u16]) -> Result<KeyId, Error> {
+        let key = self.live(key)?;
+        match self.child(key, name) {
+            Some(child) => Ok(KeyId(child)),
+            None => self.add_child(key, name).map(KeyId),
+        }
     }
 
     /// Give `key` a value, replacing one of the same name.
@@ -455,6 +531,118 @@ mod tests {
         assert_eq!(hive.open(system, &w("System")), Err(Error::NotFound));
         assert_eq!(Hive::default().root(), Ok(KeyId::from_index(0)));
         assert_eq!(system.index(), 2);
+    }
+
+    #[test]
+    fn a_symbolic_link_leads_to_the_key_it_names() {
+        let (mut hive, system) = hive();
+        let (set, _) = hive.create(system, &w("ControlSet001")).unwrap();
+        let (services, _) = hive.create(set, &w("Services")).unwrap();
+        let (link, _) = hive.create(system, &w("CurrentControlSet")).unwrap();
+        hive.link_to(link, &w("\\REGISTRY\\machine\\System\\ControlSet001"))
+            .unwrap();
+        assert_eq!(hive.is_link(link), Ok(true));
+        // At the end of a path and in the middle of one.
+        assert_eq!(hive.open(system, &w("currentcontrolset")), Ok(set));
+        assert_eq!(
+            hive.open(system, &w("CurrentControlSet\\Services")),
+            Ok(services)
+        );
+        // A key made below the link is made below its target, and one
+        // made where the link is is the target, not new.
+        let (null, new) = hive
+            .create(system, &w("CurrentControlSet\\Services\\Null"))
+            .unwrap();
+        assert!(new);
+        assert_eq!(hive.open(set, &w("Services\\Null")), Ok(null));
+        assert_eq!(
+            hive.create(system, &w("CurrentControlSet")),
+            Ok((set, false))
+        );
+        // A link to a link.
+        let (second, _) = hive.create(system, &w("Second")).unwrap();
+        hive.link_to(
+            second,
+            &w("\\Registry\\Machine\\System\\CurrentControlSet\\Services"),
+        )
+        .unwrap();
+        assert_eq!(hive.open(system, &w("Second\\Null")), Ok(null));
+    }
+
+    #[test]
+    fn a_link_that_leads_nowhere_is_not_found() {
+        let (mut hive, system) = hive();
+        fn link(hive: &mut Hive, system: KeyId, name: &str, target: &str) -> KeyId {
+            let (key, _) = hive.create(system, &w(name)).unwrap();
+            hive.link_to(key, &w(target)).unwrap();
+            key
+        }
+        // No such key; not a path from the root; itself; a pair that
+        // name each other.
+        link(
+            &mut hive,
+            system,
+            "Dangling",
+            "\\Registry\\Machine\\Nowhere",
+        );
+        link(&mut hive, system, "Relative", "Machine\\System");
+        link(
+            &mut hive,
+            system,
+            "Self",
+            "\\Registry\\Machine\\System\\Self",
+        );
+        link(
+            &mut hive,
+            system,
+            "Ping",
+            "\\Registry\\Machine\\System\\Pong",
+        );
+        let pong = link(
+            &mut hive,
+            system,
+            "Pong",
+            "\\Registry\\Machine\\System\\Ping",
+        );
+        for name in ["Dangling", "Relative", "Self", "Ping", "Pong\\Below"] {
+            assert_eq!(hive.open(system, &w(name)), Err(Error::NotFound), "{name}");
+            assert_eq!(
+                hive.create(system, &w(&format!("{name}\\New"))),
+                Err(Error::NotFound),
+                "{name}"
+            );
+        }
+        // A key marked as a link whose target value is missing, or of
+        // another type.
+        let (bare, _) = hive.create(system, &w("Bare")).unwrap();
+        hive.set_link(bare, true).unwrap();
+        assert_eq!(hive.open(system, &w("Bare")), Err(Error::NotFound));
+        hive.set_value(pong, LINK_VALUE, 1, &[b'x', 0]).unwrap();
+        assert_eq!(hive.open(system, &w("Pong")), Err(Error::NotFound));
+        // The root can be the target.
+        let root = hive.root().unwrap();
+        link(&mut hive, system, "Top", "\\Registry");
+        assert_eq!(
+            hive.open(system, &w("Top\\Machine")),
+            hive.open(root, &w("Machine"))
+        );
+    }
+
+    #[test]
+    fn names_beyond_latin_1_are_found_whatever_the_letter_case() {
+        let (mut hive, system) = hive();
+        let (greek, _) = hive.create(system, &w("\u{3b1}\u{3b2}\u{3b3}")).unwrap();
+        hive.set_value(greek, &w("\u{43a}\u{43b}\u{44e}\u{447}"), 4, &[1, 0, 0, 0])
+            .unwrap();
+        assert_eq!(hive.open(system, &w("\u{391}\u{392}\u{393}")), Ok(greek));
+        assert!(
+            hive.value(greek, &w("\u{41a}\u{41b}\u{42e}\u{427}"))
+                .is_ok()
+        );
+        assert_eq!(
+            hive.create(system, &w("\u{391}\u{392}\u{393}")),
+            Ok((greek, false))
+        );
     }
 
     #[test]

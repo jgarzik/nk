@@ -964,12 +964,13 @@ mod tests {
         check(&tree, EXACT, &[("\\Device\\Null", ok("obj:1", ""))]);
         // Ignoring case, the older name is the one found.
         check(&tree, ANY_CASE, &[("\\Device\\NULL", ok("obj:1", ""))]);
-        // Latin-1 letters fold as well; others do not.
+        // Every letter folds, within Latin-1 and beyond it.
         object(&mut tree, "\\Device\\caf\u{e9}", 6);
         object(&mut tree, "\\Device\\\u{3b1}", 7);
         check(&tree, ANY_CASE, &[("\\Device\\CAF\u{c9}", ok("obj:6", ""))]);
+        check(&tree, ANY_CASE, &[("\\Device\\\u{391}", ok("obj:7", ""))]);
         let greek = [("\\Device\\\u{391}", Err(Error::NameNotFound))];
-        check(&tree, ANY_CASE, &greek);
+        check(&tree, EXACT, &greek);
     }
 
     #[test]

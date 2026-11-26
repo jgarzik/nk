@@ -1,0 +1,7 @@
+# A library is unloaded as soon as any one of its importers goes, not
+# when the last does: the importers left call into memory that is gone.
+scenario: x86_64
+fails: ldr.lib.counts
+file: kernel/ldr/mod.rs
+replace:     if MODULES.lock().count_importer(base, -1) != Some(0) {
+with:     if MODULES.lock().count_importer(base, -1).is_none() {

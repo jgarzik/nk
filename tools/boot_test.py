@@ -302,6 +302,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             shutil.copyfile(directory / "serial.log", OUT / f"serial-{arch}.log")
             if log.exports():
                 (OUT / f"exports-{arch}.txt").write_text("\n".join(log.exports()) + "\n")
+                (OUT / f"lookups-{arch}.txt").write_text("".join(f"{l}\n" for l in log.lookups()))
 
         for test, verdict, detail in log.tests:
             if verdict != "OK":

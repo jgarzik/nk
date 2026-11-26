@@ -172,17 +172,33 @@ pub fn reference_for(
     Ok((*body, information))
 }
 
-/// Close a handle: it stops naming its object, the object's type is
-/// told (with the number of handles there were, this one included),
-/// and the handle's reference is given up. What `NtClose` returns. A
-/// handle protected from close stays open.
+/// Close a handle on the kernel's own behalf: what `ZwClose` returns.
+/// See [`close_for`].
 pub fn close(handle: u64) -> NTSTATUS {
+    close_for(handle, Mode::Kernel)
+}
+
+/// Close a handle on behalf of `mode`: it stops naming its object, the
+/// object's type is told (with the number of handles there were, this
+/// one included), and the handle's reference is given up. What
+/// `NtClose` returns.
+///
+/// A handle protected from close stays open. User mode is told so
+/// (`STATUS_HANDLE_NOT_CLOSABLE`); kernel code that closes a protected
+/// kernel handle has a bug, and the system stops as Windows does:
+/// [`INVALID_KERNEL_HANDLE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x93--invalid-kernel-handle),
+/// whose parameters are the handle, then zeros.
+pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
     let Some(index) = kernel_handle_index(handle) else {
         return STATUS_INVALID_HANDLE;
     };
     let closed = TABLE.lock().close(index);
     let body = match closed {
         Ok(Entry(body)) => body,
+        Err(HandleError::Protected) if mode == Mode::Kernel => crate::kd::bugcheck(format_args!(
+            "0x00000093 INVALID_KERNEL_HANDLE: kernel mode closed a handle protected \
+                 from close (parameters {handle:#x}, 0, 0, 0)"
+        )),
         Err(error) => return status(error),
     };
     // SAFETY: the entry held a reference, which this gives up, outside
@@ -609,4 +625,45 @@ pub fn access_test() -> Result<u32, &'static str> {
         return Err("handles or memory were left behind");
     }
     Ok(looked)
+}
+
+/// A handle protected from close: user mode is refused and the handle
+/// stays good; then kernel mode closes it, which must stop the system.
+/// `armed` is called just before that. Returns only if something went
+/// wrong, saying what.
+pub fn protected_close_test(armed: impl FnOnce()) -> &'static str {
+    let Ok(body) = new_event() else {
+        return "no memory";
+    };
+    let mut handle = core::ptr::null_mut();
+    // SAFETY: a live object this test holds a reference to; the handle
+    // is a local.
+    let status = unsafe {
+        ObOpenObjectByPointer(
+            body.cast(),
+            OBJ_PROTECT_CLOSE,
+            core::ptr::null_mut(),
+            0,
+            object::ExEventObjectType.value(),
+            nk_ntabi::io::KERNEL_MODE,
+            &raw mut handle,
+        )
+    };
+    let handle = handle as u64;
+    if status != STATUS_SUCCESS {
+        return "a protected handle could not be opened";
+    }
+    if close_for(handle, Mode::User) != STATUS_HANDLE_NOT_CLOSABLE {
+        return "user mode was not told that a protected handle cannot be closed";
+    }
+    match reference(handle, None) {
+        // SAFETY: the reference the look-up took.
+        Ok(found) if found == body => unsafe {
+            object::dereference(found);
+        },
+        _ => return "a protected handle user mode tried to close no longer names its object",
+    }
+    armed();
+    close(handle);
+    "kernel mode closed a protected kernel handle and the system went on"
 }
