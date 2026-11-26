@@ -1459,7 +1459,10 @@ HAL's secondary interrupt services, which NK lacks (no interrupt
 controller behind another interrupt, such as a GPIO controller, is
 served) and reports as Windows' HAL does while it has none, a failure;
 and the limit of message-signalled interrupts for one device, where NK
-keeps Windows' value, 2048, which is no limit. For the same reason
+keeps Windows' value, 2048, which is no limit. `pci.sys` asks, for
+each device it reports, what memory an IOMMU reserves for it: NK
+drives no IOMMU and answers as Windows' HAL does when it finds none
+for the device, `STATUS_NOT_FOUND`. For the same reason
 the private table's `HalIsInterruptTypeSecondary`, which the arbiter
 asks of every line it gives out, says no for every interrupt.
 

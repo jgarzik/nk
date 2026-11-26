@@ -12,7 +12,7 @@ use super::dispatch::{HalDispatchTable, public_slot};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_ntabi::status::{
-    NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
+    NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_NOT_FOUND, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
 };
 
 /// `HalQueryDebuggerInformation`: the devices the kernel debugger uses.
@@ -32,6 +32,11 @@ const SECONDARY_INTERRUPT_SIZE: u32 = 0x38;
 /// The class `acpi.sys` asks for how many message-signalled interrupts
 /// one device may have: a `USHORT`.
 const PER_DEVICE_MESSAGE_LIMIT: u32 = 50;
+
+/// The class `pci.sys` asks, for each device it reports, for the
+/// memory an IOMMU reserves for the device: a device object in, a
+/// `BOOLEAN` out, 0x10 bytes.
+const IOMMU_RESERVED_REGIONS: u32 = 40;
 
 /// The pinned kernel's limit, which NK keeps: 2048, the most MSI-X
 /// gives a device, so no limit of the HAL's own.
@@ -177,6 +182,15 @@ pub unsafe extern "C" fn HalQuerySystemInformation(
             give(SECONDARY_INTERRUPT_SIZE);
             STATUS_UNSUCCESSFUL
         }
+        // NK drives no IOMMU. Windows' HAL looks for the device's
+        // among those it has and, having none, fails with this status;
+        // `pci.sys` then takes the device to have no reserved memory.
+        IOMMU_RESERVED_REGIONS => {
+            if size < 0x10 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            STATUS_NOT_FOUND
+        }
         PER_DEVICE_MESSAGE_LIMIT => {
             if size < 2 {
                 return STATUS_INFO_LENGTH_MISMATCH;
@@ -290,6 +304,12 @@ pub fn test() -> Result<(), &'static str> {
         || returned != 2
     {
         return Err("the limit of messages for a device was not given");
+    }
+    if ask(IOMMU_RESERVED_REGIONS, 8, &mut returned) != STATUS_INFO_LENGTH_MISMATCH
+        || ask(IOMMU_RESERVED_REGIONS, 0x10, &mut returned) != STATUS_NOT_FOUND
+        || returned != 0
+    {
+        return Err("memory reserved by an IOMMU was answered on a machine without one");
     }
     if services[..2] != MESSAGE_LIMIT.to_le_bytes() || services[2..].iter().any(|&b| b != 0) {
         return Err("the answers were not written as Windows writes them");
