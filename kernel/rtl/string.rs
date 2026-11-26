@@ -148,7 +148,9 @@ pub unsafe extern "C" fn RtlUpcaseUnicodeString(
 }
 
 /// [`RtlMultiByteToUnicodeN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlmultibytetounicoden):
-/// ANSI bytes to UTF-16, as many as fit; no terminator.
+/// ANSI bytes to UTF-16, as many as fit; no terminator. Bytes that do
+/// not fit are left out without a word: the status is `STATUS_SUCCESS`,
+/// as on Windows, and the count stored tells how many were converted.
 ///
 /// # Safety
 /// `unicode` is writable for `max_bytes` bytes, `multibyte` readable for
@@ -160,7 +162,7 @@ pub unsafe extern "C" fn RtlMultiByteToUnicodeN(
     multibyte: *const u8,
     bytes: u32,
 ) -> NTSTATUS {
-    let (chars, all) = codepage::multibyte_to_unicode_chars(max_bytes, bytes);
+    let chars = codepage::multibyte_to_unicode_chars(max_bytes, bytes);
     // SAFETY: per the contract; `chars` fit both blocks.
     unsafe {
         for at in 0..chars as usize {
@@ -172,11 +174,7 @@ pub unsafe extern "C" fn RtlMultiByteToUnicodeN(
             converted.write_unaligned(chars * 2);
         }
     }
-    if all {
-        STATUS_SUCCESS
-    } else {
-        STATUS_BUFFER_OVERFLOW
-    }
+    STATUS_SUCCESS
 }
 
 /// [`RtlUnicodeToMultiByteN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlunicodetomultibyten):

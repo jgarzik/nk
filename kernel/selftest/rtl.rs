@@ -447,12 +447,14 @@ fn multibyte() -> Result<(), &'static str> {
     }
     room = [0xEEEE; 16];
     // Room for two characters; then five bytes, whose odd one is none.
-    if to_wide(&mut room, 4, 3) != (0x8000_0005, 4)
+    // What does not fit is left out, and the status is success all the
+    // same, as on Windows.
+    if to_wide(&mut room, 4, 3) != (0, 4)
         || room[..3] != [0x61, 0x62, 0xEEEE]
-        || to_wide(&mut room, 5, 3) != (0x8000_0005, 4)
+        || to_wide(&mut room, 5, 3) != (0, 4)
         || room[2] != 0xEEEE
     {
-        return Err("bytes that do not fit were not cut off with a warning");
+        return Err("bytes that do not fit were not cut off, or not without a word");
     }
     // SAFETY: as above; the count may be left out.
     let status = unsafe {
