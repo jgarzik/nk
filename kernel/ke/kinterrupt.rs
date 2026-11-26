@@ -240,6 +240,38 @@ pub fn unclaimed(vector: u32) -> u32 {
         .map_or(0, |c| c.unclaimed.load(Ordering::Relaxed))
 }
 
+/// How many interrupt objects are connected to `vector`, and how many
+/// times their service routines have been called between them
+/// (`DispatchCount`).
+pub fn served(vector: u32) -> (u32, u32) {
+    let Some(chain) = CHAINS.get(vector as usize) else {
+        return (0, 0);
+    };
+    chain.walking(|first| {
+        let (mut objects, mut calls) = (0, 0u32);
+        if first.is_null() {
+            return (objects, calls);
+        }
+        let mut interrupt = first;
+        loop {
+            objects += 1;
+            // SAFETY: the chain is being walked, so its objects are
+            // linked and live; the counter is read through a pointer,
+            // other processors counting in it meanwhile.
+            unsafe {
+                calls = calls.wrapping_add(
+                    AtomicU32::from_ptr(&raw mut (*interrupt).DispatchCount)
+                        .load(Ordering::Relaxed),
+                );
+                interrupt = next(interrupt);
+            }
+            if interrupt == first {
+                return (objects, calls);
+            }
+        }
+    })
+}
+
 /// What a connection's service routine is.
 #[derive(Clone, Copy)]
 pub enum Routine {

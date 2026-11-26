@@ -842,3 +842,15 @@ cmdline = "test=stor.direct"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
+
+# And on one processor: the interrupt, its DPC and the threads that
+# wait for them share it.
+
+[x86_64-storage-direct-smp1]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+cmdline = "test=stor.direct"
+registry = ["storage"]
+disk = "ahci"
+disk_expect = "written"
