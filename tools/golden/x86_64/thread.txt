@@ -13,6 +13,7 @@ thread.quantum ok
 thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
+thread.system-affinity ok
 thread.steal-behind ok
 thread.identity ok
 thread.wake-at-dispatch ok

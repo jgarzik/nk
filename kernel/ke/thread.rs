@@ -52,6 +52,7 @@ use crate::ob;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use nk_ke::sched::{self, Leaving};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
+use nk_ntabi::interrupt::GROUP_AFFINITY;
 use nk_ntabi::ke::{DISPATCHER_HEADER, KTIMER, KWAIT_BLOCK};
 use nk_ntabi::pcr::NATIVE as PCR;
 use nk_ntabi::thread as layout;
@@ -397,7 +398,9 @@ fn new_thread(
         (&raw mut (*thread).argument).write(argument);
         field::<u64>(thread, layout::START_ADDRESS).write(entry as usize as u64);
         field::<u64>(thread, layout::AFFINITY).write(allowed);
+        field::<u64>(thread, layout::USER_AFFINITY).write(allowed);
         field::<u32>(thread, layout::IDEAL_PROCESSOR).write(ideal as u32);
+        field::<u32>(thread, layout::USER_IDEAL_PROCESSOR).write(ideal as u32);
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
     }
     THREADS.fetch_add(1, Ordering::AcqRel);
@@ -627,6 +630,13 @@ fn dispatch(leaving: Leaving) {
     let dispatcher = arch::percpu().dispatcher();
     // SAFETY: `me` is the running thread.
     let (idle_thread, my_priority) = unsafe { ((*me).idle, priority(me)) };
+    let here = pcr::current_processor() as usize;
+    // A thread that changed its affinity (`set_affinity`) may be on a
+    // processor it no longer allows: whatever brought it here, it moves.
+    // SAFETY: `me` is the running thread, which alone writes its
+    // affinity.
+    let allows = unsafe { field::<u64>(me, layout::AFFINITY).read() } & 1 << here != 0;
+    let leaving = leaving.or_move(idle_thread, allows);
     if leaving == Leaving::Wait {
         // From the commit on, a waker may make this thread ready and
         // another processor may want it: `swap_busy` first. If a waker
@@ -650,7 +660,6 @@ fn dispatch(leaving: Leaving) {
             // Whether or not anyone is waiting, a new turn begins.
             quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
         }
-        let here = pcr::current_processor() as usize;
         // SAFETY: queued threads are live.
         let taken = unsafe { dequeue(&mut ready, floor) };
         let busy = taken.is_some_and(|thread| {
@@ -666,7 +675,7 @@ fn dispatch(leaving: Leaving) {
                 dispatcher.idle.load(Ordering::Acquire)
             }
             Some(thread) => thread,
-            None if leaving.stops() => dispatcher.idle.load(Ordering::Acquire),
+            None if leaving.vacates() => dispatcher.idle.load(Ordering::Acquire),
             None if idle_thread => {
                 drop(ready);
                 match steal() {
@@ -691,6 +700,8 @@ fn dispatch(leaving: Leaving) {
             match leaving {
                 Leaving::Exit => set_state(me, layout::state::TERMINATED),
                 Leaving::Wait => set_state(me, layout::state::WAITING),
+                // Queued once this processor's queue is let go.
+                Leaving::Move => {}
                 _ if idle_thread => set_state(me, layout::state::READY),
                 _ => {
                     set_state(me, layout::state::READY);
@@ -708,11 +719,15 @@ fn dispatch(leaving: Leaving) {
         }
         next
     };
-    if !leaving.stops() && !idle_thread {
+    if leaving == Leaving::Move {
+        // SAFETY: `me` is on no queue and about to stop: `swap_busy` is
+        // set, so the processor that takes it waits for the switch.
+        unsafe { make_ready(me) };
+    } else if !leaving.stops() && !idle_thread {
         // This thread is waiting now; a processor with nothing to do
         // may take it.
-        // SAFETY: `me` is still on this processor; its affinity changes
-        // only at creation.
+        // SAFETY: `me` is still on this processor, and alone writes its
+        // affinity.
         wake_an_idle(unsafe { field::<u64>(me, layout::AFFINITY).read() });
     }
     switch_to(me, next);
@@ -838,6 +853,167 @@ pub fn yield_now() {
     let old = irql::raise(irql::DISPATCH_LEVEL);
     dispatch(Leaving::Yield);
     irql::lower(old);
+}
+
+/// The calling thread's `MiscFlags`, which another thread may change
+/// (an alert), so only ever as a whole.
+fn misc_flags<'a>(me: *mut Thread) -> &'a AtomicU32 {
+    // SAFETY: an aligned field of the running thread's block.
+    unsafe { AtomicU32::from_ptr(field(me, layout::MISC_FLAGS)) }
+}
+
+/// The IRQL a thread changes its affinity at: `DISPATCH_LEVEL`, so that
+/// it stays on one processor meanwhile. Returns the caller's.
+fn hold_processor(what: &str) -> u8 {
+    let old = irql::current();
+    if old > irql::DISPATCH_LEVEL {
+        crate::kd::bugcheck(format_args!(
+            "0x0000000A IRQL_NOT_LESS_OR_EQUAL: {what} at IRQL {old}"
+        ));
+    }
+    // SAFETY: the running thread exists.
+    if unsafe { (*current()).idle } {
+        crate::kd::bugcheck(format_args!("{what} on a processor's idle thread"));
+    }
+    arch::set_irql(irql::DISPATCH_LEVEL);
+    old
+}
+
+/// Give the calling thread the affinity `affinity`, of running
+/// processors and not empty, and `ideal` as its ideal processor, or one
+/// its affinity allows if `None`; then go back to IRQL `old`. Called at
+/// `DISPATCH_LEVEL`.
+///
+/// If the thread is on a processor the affinity does not allow, it
+/// moves: before this returns if `old` is below `DISPATCH_LEVEL`,
+/// otherwise as soon as its IRQL falls below that, as on Windows.
+fn set_affinity(affinity: u64, ideal: Option<u32>, old: u8) {
+    let me = current();
+    // SAFETY: `me` is the running thread, which alone writes its
+    // affinity and ideal processor; nothing reads them while it runs.
+    unsafe {
+        let ideal_field = field::<u32>(me, layout::IDEAL_PROCESSOR);
+        let ideal = ideal
+            .unwrap_or_else(|| sched::ideal_within(affinity, ideal_field.read() as usize) as u32);
+        field::<u64>(me, layout::AFFINITY).write(affinity);
+        ideal_field.write(ideal);
+    }
+    if affinity & 1 << pcr::current_processor() == 0 {
+        if old < irql::DISPATCH_LEVEL {
+            dispatch(Leaving::Yield);
+        } else {
+            // At the end of the DISPATCH-level interrupt, which arrives
+            // when the IRQL allows.
+            arch::percpu()
+                .dispatcher()
+                .switch_wanted
+                .store(true, Ordering::Release);
+            arch::self_interrupt(arch::DPC.0);
+        }
+    }
+    arch::set_irql(old);
+}
+
+/// [`KeSetSystemGroupAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemgroupaffinitythread):
+/// have the calling thread run on the processors of `affinity` only,
+/// and say what system affinity it had before: none, a mask of zero,
+/// if it was running with its own.
+///
+/// As the pinned kernel does it: the caller's mask is cut down to the
+/// running processors; an affinity that names none, another group or
+/// has a reserved field set changes no affinity, but the thread still
+/// counts as in system affinity afterwards.
+///
+/// # Safety
+/// `affinity` is readable and writable; `previous` is null or
+/// writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeSetSystemGroupAffinityThread(
+    affinity: *mut GROUP_AFFINITY,
+    previous: *mut GROUP_AFFINITY,
+) {
+    // SAFETY: per the contract.
+    let given = unsafe { affinity.read_unaligned() };
+    let new = sched::system_affinity(
+        given.Mask as u64,
+        given.Group,
+        given.Reserved,
+        super::smp::online(),
+    );
+    if let Some(mask) = new {
+        // SAFETY: per the contract.
+        unsafe { (&raw mut (*affinity).Mask).write_unaligned(mask as usize) };
+    }
+    let old = hold_processor("KeSetSystemGroupAffinityThread");
+    let me = current();
+    let was_active = misc_flags(me)
+        .fetch_or(layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE, Ordering::AcqRel)
+        & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE
+        != 0;
+    let before = GROUP_AFFINITY {
+        Mask: if was_active {
+            // SAFETY: the running thread's own field.
+            unsafe { field::<u64>(me, layout::AFFINITY).read() as usize }
+        } else {
+            0
+        },
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    match new {
+        Some(mask) => set_affinity(mask, None, old),
+        None => arch::set_irql(old),
+    }
+    if !previous.is_null() {
+        // SAFETY: per the contract.
+        unsafe { previous.write_unaligned(before) };
+    }
+}
+
+/// [`KeRevertToUserGroupAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereverttousergroupaffinitythread):
+/// put the calling thread's affinity back to what
+/// `KeSetSystemGroupAffinityThread` said it was before: its own, for a
+/// mask of zero, or that system affinity (`sched::revert_affinity`).
+///
+/// # Safety
+/// `previous` is readable and writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeRevertToUserGroupAffinityThread(previous: *mut GROUP_AFFINITY) {
+    let me = current();
+    let active =
+        misc_flags(me).load(Ordering::Acquire) & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE != 0;
+    // SAFETY: per the contract.
+    let given = unsafe { previous.read_unaligned() };
+    let revert = sched::revert_affinity(
+        active,
+        given.Mask as u64,
+        given.Group,
+        given.Reserved,
+        super::smp::online(),
+    );
+    match revert {
+        sched::Revert::Nothing => {}
+        sched::Revert::ToUser => {
+            let old = hold_processor("KeRevertToUserGroupAffinityThread");
+            misc_flags(me).fetch_and(!layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE, Ordering::AcqRel);
+            // SAFETY: the running thread's own fields, written at its
+            // creation.
+            let (own, ideal) = unsafe {
+                (
+                    field::<u64>(me, layout::USER_AFFINITY).read(),
+                    field::<u32>(me, layout::USER_IDEAL_PROCESSOR).read(),
+                )
+            };
+            set_affinity(own, Some(ideal), old);
+        }
+        sched::Revert::To(mask) => {
+            // SAFETY: per the contract: as Windows cuts the caller's
+            // mask down to the running processors.
+            unsafe { (&raw mut (*previous).Mask).write_unaligned(mask as usize) };
+            let old = hold_processor("KeRevertToUserGroupAffinityThread");
+            set_affinity(mask, None, old);
+        }
+    }
 }
 
 /// End the calling thread.
@@ -1859,6 +2035,133 @@ pub fn affinity_test() -> Result<u64, &'static str> {
         return Err("a thread ran on a processor outside its affinity");
     }
     Ok(SPINS[0].load(Ordering::Relaxed))
+}
+
+/// A thread that sets its system affinity is on a processor of it when
+/// the call returns, for every processor, and stays there; the call
+/// says what system affinity it had; at `DISPATCH_LEVEL` the move waits
+/// for the IRQL to come down; reverting goes back by the same steps to
+/// the thread's own affinity; an affinity of no processor changes
+/// none. Returns the processors the thread was moved to.
+pub fn system_affinity_test() -> Result<u32, &'static str> {
+    fn group_0(mask: u64) -> GROUP_AFFINITY {
+        GROUP_AFFINITY {
+            Mask: mask as usize,
+            Group: 0,
+            Reserved: [0; 3],
+        }
+    }
+    /// Set the calling thread's system affinity to `mask`: what the
+    /// call left in the caller's mask, and the previous affinity.
+    fn set(mask: u64) -> (u64, GROUP_AFFINITY) {
+        let mut affinity = group_0(mask);
+        let mut previous = GROUP_AFFINITY {
+            Mask: 0x5A5A,
+            Group: 9,
+            Reserved: [9; 3],
+        };
+        // SAFETY: both are locals.
+        unsafe { KeSetSystemGroupAffinityThread(&raw mut affinity, &raw mut previous) };
+        (affinity.Mask as u64, previous)
+    }
+    fn revert(mut previous: GROUP_AFFINITY) {
+        // SAFETY: a local.
+        unsafe { KeRevertToUserGroupAffinityThread(&raw mut previous) };
+    }
+    let me = current();
+    // SAFETY: the running thread's own fields.
+    let affinity = || unsafe { field::<u64>(me, layout::AFFINITY).read() };
+    let active =
+        || misc_flags(me).load(Ordering::Acquire) & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE != 0;
+    let processors = super::smp::online_count() as u32;
+    let online = super::smp::online();
+    let own = affinity();
+    if active() {
+        return Err("the thread is in system affinity before it set one");
+    }
+
+    for target in 0..processors {
+        // With a processor that does not run, which is cut from the
+        // caller's mask.
+        let absent = !online & 1 << 63;
+        let (left, previous) = set(1 << target | absent);
+        if pcr::current_processor() != target {
+            return Err(
+                "a thread was not on a processor of its new affinity when the call returned",
+            );
+        }
+        if left != 1 << target || affinity() != 1 << target || !active() {
+            return Err("the affinity set is not the running processors asked for");
+        }
+        let expected = if target == 0 { 0 } else { 1 << (target - 1) };
+        if previous != group_0(expected) {
+            return Err("the previous affinity is not the system affinity the thread had");
+        }
+        yield_now();
+        if pcr::current_processor() != target {
+            return Err("a thread left the processor of its system affinity");
+        }
+    }
+    let last = processors - 1;
+
+    // No such processors: nothing changes.
+    let mut refused = group_0(1);
+    refused.Group = 1;
+    let mut previous = group_0(0);
+    // SAFETY: both are locals.
+    unsafe { KeSetSystemGroupAffinityThread(&raw mut refused, &raw mut previous) };
+    let (_, none) = if online == u64::MAX {
+        (0, group_0(1 << last))
+    } else {
+        set(!online)
+    };
+    if previous != group_0(1 << last)
+        || none != group_0(1 << last)
+        || affinity() != 1 << last
+        || pcr::current_processor() != last
+    {
+        return Err("an affinity of no running processor of group 0 changed the thread's");
+    }
+
+    if processors > 1 {
+        // At DISPATCH_LEVEL the thread stays where it is until the IRQL
+        // comes down.
+        let other = last - 1;
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let _ = set(1 << other);
+        let during = pcr::current_processor();
+        irql::lower(old);
+        // The move is made by an interrupt this lowering lets in.
+        while pcr::current_processor() == last {
+            core::hint::spin_loop();
+        }
+        if during != last || pcr::current_processor() != other {
+            return Err("a move asked for at DISPATCH_LEVEL was not made when the IRQL came down");
+        }
+        // Back to the system affinity before that one.
+        revert(group_0(1 << last));
+        if pcr::current_processor() != last || affinity() != 1 << last || !active() {
+            return Err("reverting to a system affinity did not move the thread to it");
+        }
+    }
+
+    // A reserved field: nothing. Then the thread's own affinity.
+    let mut bad = group_0(0);
+    bad.Reserved[2] = 1;
+    revert(bad);
+    if affinity() != 1 << last || !active() {
+        return Err("a revert with a reserved field set changed the affinity");
+    }
+    revert(group_0(0));
+    if affinity() != own || active() || own & 1 << pcr::current_processor() == 0 {
+        return Err("reverting did not put the thread back on its own affinity");
+    }
+    // Not in system affinity: a revert changes nothing.
+    revert(group_0(online));
+    if affinity() != own || active() {
+        return Err("a revert changed the affinity of a thread not in system affinity");
+    }
+    Ok(processors)
 }
 
 /// A processor with nothing to run takes a thread it may run from
