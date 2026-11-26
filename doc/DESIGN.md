@@ -1207,7 +1207,10 @@ it completed with, fails the request's test. A request made through a
 handle holds the file object until it has been waited for.
 
 **Open.** The name is looked up in the namespace, from the root or from
-a directory a root handle names. The look-up ends at a device, and what
+a directory a root handle names. The root handle is referenced on
+behalf of the open's requestor, with no access asked of it, as Windows
+references it: a kernel handle is no root for user mode
+(`STATUS_INVALID_HANDLE`). The look-up ends at a device, and what
 is left of the path is the device's to parse (Windows' `IopParseDevice`):
 it becomes the new file object's `FileName`, backslash first, in a pool
 block of the I/O manager's. A name relative to an open file goes to that

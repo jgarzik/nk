@@ -27,6 +27,7 @@ pub static GROUP: Group = Group {
         "io.user.firmware-buffer",
         "io.user.copy-out-fault",
         "io.open.pended",
+        "io.open.user-root",
     ],
     run,
     manual: false,
@@ -70,7 +71,8 @@ static DPC: Slot<KDPC> = Slot::new();
 /// The access the held create asked for, as its security context and
 /// access state said when the request was completed.
 static ASKED_AT_COMPLETION: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
-/// Cleanup and close requests the driver was sent.
+/// Create, cleanup and close requests the driver was sent.
+static CREATES: AtomicU32 = AtomicU32::new(0);
 static CLEANUPS: AtomicU32 = AtomicU32::new(0);
 static CLOSES: AtomicU32 = AtomicU32::new(0);
 
@@ -118,6 +120,7 @@ unsafe extern "C" fn open_or_close(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTST
         let location = (*irp).CurrentStackLocation;
         let file = (*location).FileObject;
         match (*location).MajorFunction {
+            IRP_MJ_CREATE => drop(CREATES.fetch_add(1, Ordering::AcqRel)),
             IRP_MJ_CLEANUP => drop(CLEANUPS.fetch_add(1, Ordering::AcqRel)),
             IRP_MJ_CLOSE => drop(CLOSES.fetch_add(1, Ordering::AcqRel)),
             _ => {}
@@ -477,6 +480,54 @@ fn pended_open() -> Result<u32, &'static str> {
     Ok(2)
 }
 
+/// An open names its root by handle, and the handle is the requestor's:
+/// Windows references it on behalf of the open's mode and asks no
+/// access of it (`ObpLookupObjectName`). So a kernel handle is no root
+/// for an open made for user mode, and no driver hears of that open;
+/// the same entry by the name user mode has for it is one. Returns the
+/// opens made.
+fn user_root() -> Result<u32, &'static str> {
+    // Granted nothing: no access is asked of a root.
+    let request = OpenRequest {
+        desired_access: 0,
+        ..OpenRequest::new(DEVICE)
+    };
+    let kernel = file::open(&request)
+        .map(|(handle, _)| handle)
+        .map_err(|_| "the device did not open")?;
+    let relative = |root, mode| {
+        CREATES.store(0, Ordering::Release);
+        let request = OpenRequest {
+            root: Some(root),
+            requestor_mode: mode,
+            ..OpenRequest::new("below")
+        };
+        let opened = file::open(&request).map(|(handle, _)| file::close(handle));
+        (opened, CREATES.load(Ordering::Acquire))
+    };
+    let own = kernel & !nk_ntabi::ob::KERNEL_HANDLE;
+    let opens = [
+        relative(kernel, USER_MODE),
+        relative(own, USER_MODE),
+        relative(kernel, KERNEL_MODE),
+        relative(own, KERNEL_MODE),
+    ];
+    file::close(kernel);
+    if opens[0].0.is_ok() {
+        return Err("an open for user mode was resolved from a kernel handle as its root");
+    }
+    if opens[0] != (Err(STATUS_INVALID_HANDLE), 0) {
+        return Err("an open for user mode from a kernel handle was not an invalid handle");
+    }
+    if opens[1..]
+        .iter()
+        .any(|open| *open != (Ok(STATUS_SUCCESS), 1))
+    {
+        return Err("an open relative to a handle its requestor may use was refused");
+    }
+    Ok(opens.len() as u32)
+}
+
 /// A dispatch routine that returns success for a create request it has
 /// not completed breaks the driver's contract, and the driver may still
 /// hold the IRP, which points at the opener's stack. The system stops,
@@ -512,4 +563,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted("io.user.firmware-buffer", with_driver(firmware_buffer));
     counted("io.user.copy-out-fault", with_driver(copy_out_fault));
     counted("io.open.pended", with_driver(pended_open));
+    counted("io.open.user-root", with_driver(user_root));
 }

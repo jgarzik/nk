@@ -314,7 +314,11 @@ impl Drop for Target {
 /// the handle `root` names: a directory, where the look-up starts, or
 /// an open file, whose device parses the whole name. The look-up ends
 /// at a device; whatever else it ends at is no file.
-fn resolve(root: Option<u64>, name: &[u16]) -> Result<Target, NTSTATUS> {
+///
+/// The root handle is the requestor's, referenced on behalf of `mode`
+/// with no access asked of it, as Windows' `ObpLookupObjectName` does:
+/// a kernel handle is no root for user mode.
+fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
     let is = |body: *mut u8, ty: &'static object::ObjectType| {
         // SAFETY: called with objects this function holds a reference to.
         core::ptr::eq(unsafe { object::type_of(body) }, ty)
@@ -322,7 +326,7 @@ fn resolve(root: Option<u64>, name: &[u16]) -> Result<Target, NTSTATUS> {
     let found = match root {
         None => ob::lookup(None, name),
         Some(root) => {
-            let root = handle::reference(root, None)?;
+            let (root, _) = handle::reference_for(root, None, 0, mode)?;
             if is(root, &object::FILE_TYPE) {
                 // Relative to an open file: the name as given is the
                 // driver's to read, and is not absolute.
@@ -448,7 +452,11 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         return Err(STATUS_INVALID_PARAMETER);
     }
     let name: Vec<u16> = request.name.encode_utf16().collect();
-    let target = resolve(request.root, &name)?;
+    let mode = match request.requestor_mode {
+        KERNEL_MODE => Mode::Kernel,
+        _ => Mode::User,
+    };
+    let target = resolve(request.root, &name, mode)?;
     let device = target.device;
     // Finding the device and counting the open are two steps, and the
     // device may be deleted between them: its memory is held (by the

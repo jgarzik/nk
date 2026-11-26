@@ -1,0 +1,8 @@
+# An open's root handle is referenced as kernel mode's whoever the open
+# is for: user mode names a kernel handle as its root and the open is
+# resolved from it.
+scenario: x86_64
+fails: io.open.user-root
+file: kernel/io/file.rs
+replace:             let (root, _) = handle::reference_for(root, None, 0, mode)?;
+with:             let (root, _) = handle::reference_for(root, None, 0, Mode::Kernel)?;
