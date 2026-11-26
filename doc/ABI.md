@@ -108,8 +108,8 @@ exception (`doc/DESIGN.md`, "Exceptions"):
 | --- | --- | --- |
 | A language handler's arguments | rcx record, rdx frame, r8 context, r9 dispatcher context | x0-x3, likewise |
 | The frame it is given | the function's stack pointer after its prologue, or its frame register less the offset its unwind record states | the stack pointer the function was entered with |
-| A filter's arguments | rcx `EXCEPTION_POINTERS`, rdx the frame | x0, x1 |
-| A `__finally` block's arguments | cl whether the termination is abnormal, rdx the frame | w0, x1 |
+| A filter's arguments | rcx `EXCEPTION_POINTERS`, rdx the frame | x0 `EXCEPTION_POINTERS`, x1 the function's frame pointer (x29), not the frame its handler is given: a compiled filter begins `mov x29, x1` |
+| A `__finally` block's arguments | cl whether the termination is abnormal, rdx the frame | w0 likewise, x1 the function's frame pointer |
 | At an `__except` block | rax the exception's code; rbx, rbp, rsi, rdi, r12-r15, xmm6-xmm15 and the stack pointer as the function had them | x0 the code; x19-x30, the low halves of v8-v15 and the stack pointer |
 | A frame's program counter, for looking its function and scopes up | the return address as it is | the instruction before the return address, when the frame was left by a call (`ControlPcIsUnwound`) |
 

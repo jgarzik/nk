@@ -626,10 +626,11 @@ pub unsafe extern "C" fn __C_specific_handler(
                     ExceptionRecord: record,
                     ContextRecord: context.cast(),
                 };
-                // SAFETY: the scope's filter, by the table's format.
+                // SAFETY: the scope's filter, by the table's format, and
+                // the dispatcher context this handler was called with.
                 let value = unsafe {
                     let filter: Filter = core::mem::transmute(base + u64::from(filter));
-                    filter(&raw mut pointers, frame)
+                    filter(&raw mut pointers, cpu::block_frame(&given, frame))
                 };
                 match after_filter(value) {
                     FilterResult::ContinueExecution => return EXCEPTION_CONTINUE_EXECUTION,
@@ -646,7 +647,7 @@ pub unsafe extern "C" fn __C_specific_handler(
                 unsafe {
                     (&raw mut (*dispatcher).ScopeIndex).write(index);
                     let finally: Termination = core::mem::transmute(base + u64::from(handler));
-                    finally(1, frame);
+                    finally(1, cpu::block_frame(&given, frame));
                 }
                 None
             }

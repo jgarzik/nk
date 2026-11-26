@@ -3,4 +3,4 @@
 scenario: x86_64
 fails: seh.finally
 file: kernel/ke/seh.rs
-remove:                     finally(1, frame);
+remove:                     finally(1, cpu::block_frame(&given, frame));

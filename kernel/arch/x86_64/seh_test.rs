@@ -342,6 +342,10 @@ nk_seh_no_unwind:
 /// a call-preserved register changed.
 pub const REGISTERS_LOST: u32 = 0xBAD0_BAD0;
 
+/// Where `nk_seh_try` keeps its seed, from the frame its filter is
+/// given: the stack pointer after the prologue.
+pub const SEED_SLOT: u64 = 0x30;
+
 /// The body the test routines call.
 pub type Body = unsafe extern "C" fn(usize);
 

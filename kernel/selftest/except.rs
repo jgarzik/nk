@@ -14,8 +14,8 @@
 
 use crate::arch;
 use crate::arch::seh_test::{
-    Body, FAULTS, REGISTERS_LOST, nk_seh_call, nk_seh_clobber, nk_seh_edge, nk_seh_finally,
-    nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try, nk_seh_write,
+    Body, FAULTS, REGISTERS_LOST, SEED_SLOT, nk_seh_call, nk_seh_clobber, nk_seh_edge,
+    nk_seh_finally, nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try, nk_seh_write,
 };
 use crate::ke::dpc::{KeInitializeDpc, KeInsertQueueDpc};
 use crate::ke::seh::{self, Guard, system_service};
@@ -74,6 +74,9 @@ static ASKED: AtomicUsize = AtomicUsize::new(0);
 static SEEN_CODE: AtomicU32 = AtomicU32::new(0);
 static SEEN_PARAMETERS: AtomicU32 = AtomicU32::new(0);
 static SEEN_INFORMATION: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// What the filter last found where `nk_seh_try` keeps its seed, going
+/// by the frame it was given.
+static SEEN_SEED: AtomicU64 = AtomicU64::new(0);
 
 fn note(event: u32) {
     let at = EVENTS.fetch_add(1, Ordering::Relaxed);
@@ -105,7 +108,11 @@ fn happened(expected: &[u32]) -> bool {
 ///
 /// # Safety
 /// Called by `__C_specific_handler` as a filter.
-pub unsafe extern "C" fn filter(pointers: *mut EXCEPTION_POINTERS, _frame: u64) -> i32 {
+pub unsafe extern "C" fn filter(pointers: *mut EXCEPTION_POINTERS, frame: u64) -> i32 {
+    // SAFETY: a filter's second argument is the frame of its function,
+    // which is on the stack beneath and keeps its seed there.
+    let seed = unsafe { ((frame + SEED_SLOT) as *const u64).read() };
+    SEEN_SEED.store(seed, Ordering::Relaxed);
     // SAFETY: a filter's argument names the exception's record.
     let (code, flags, parameters, information) = unsafe {
         let record = (*pointers).ExceptionRecord;
@@ -183,12 +190,15 @@ extern "C" fn inner_try(code: usize) {
     unsafe { nk_seh_try(raise, code, 0x1111) };
 }
 
+/// The seed of the `__try` that [`caught_as`] makes.
+const SEED: usize = 0x4E4B_0000;
+
 /// Run `body(argument)` inside a `__try` and require that its `__except`
 /// block got control with the exception code `code` and every preserved
 /// register.
 fn caught_as(body: Body, argument: usize, code: u32) -> Result<(), &'static str> {
     // SAFETY: the bodies of this file take any argument.
-    match unsafe { nk_seh_try(body, argument, 0x4E4B_0000) } as u32 {
+    match unsafe { nk_seh_try(body, argument, SEED) } as u32 {
         0 => Err("the body returned: nothing was raised, or the raise was swallowed"),
         REGISTERS_LOST => Err("the handler got control with a call-preserved register changed"),
         got if got == code => Ok(()),
@@ -214,6 +224,9 @@ fn raise_test() -> Result<(), &'static str> {
     }
     if SEEN_CODE.load(Ordering::Relaxed) != CODE || SEEN_PARAMETERS.load(Ordering::Relaxed) != 0 {
         return Err("the filter was shown another record");
+    }
+    if SEEN_SEED.load(Ordering::Relaxed) != SEED as u64 {
+        return Err("the filter was not given the frame its function keeps its variables by");
     }
     // The two routines that raise a status of their own: no parameters,
     // unlike the memory fault one of them is named after.

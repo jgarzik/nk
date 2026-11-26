@@ -535,6 +535,21 @@ pub fn unwound_to_call(dispatcher: &DispatcherContext) -> bool {
     dispatcher.ControlPcIsUnwound != 0
 }
 
+/// The frame a filter or a `__finally` block is given: on arm64 not the
+/// frame its language handler was given (the stack pointer the function
+/// was entered with) but the function's frame pointer, which compiled
+/// blocks take as their own (`mov x29, x1`) to reach the function's
+/// variables. It is among the registers the dispatcher context points
+/// to.
+///
+/// # Safety
+/// `dispatcher` is the context a language handler was called with.
+pub unsafe fn block_frame(dispatcher: &DispatcherContext, _frame: u64) -> u64 {
+    // SAFETY: per the contract, it points to the frame's preserved
+    // registers, x19 first, so x29 is the eleventh.
+    unsafe { dispatcher.NonVolatileRegisters.cast::<u64>().add(10).read() }
+}
+
 /// The program counter a handler looks its scopes up by: the call
 /// instruction when the frame's own is a return address, which may be
 /// the first instruction after the guarded range.

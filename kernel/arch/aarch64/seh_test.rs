@@ -33,8 +33,10 @@ nk_seh_try:
     .seh_save_regp x27, 80
     stp d8, d9, [sp, #96]
     .seh_save_fregp d8, 96
+    mov x29, sp
+    .seh_set_fp
     .seh_endprologue
-    str x2, [sp, #112]
+    str x2, [x29, #112]
     add x19, x2, #1
     add x20, x2, #2
     add x21, x2, #3
@@ -345,6 +347,11 @@ nk_seh_no_unwind:
 /// What `nk_seh_try` returns when its `__except` block was entered with
 /// a call-preserved register changed.
 pub const REGISTERS_LOST: u32 = 0xBAD0_BAD0;
+
+/// Where `nk_seh_try` keeps its seed, from the frame its filter is
+/// given: the frame pointer, as compiled code reaches a function's
+/// variables from a filter.
+pub const SEED_SLOT: u64 = 112;
 
 /// The body the test routines call.
 pub type Body = unsafe extern "C" fn(usize);

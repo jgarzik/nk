@@ -553,6 +553,15 @@ pub fn unwound_to_call(_: &DispatcherContext) -> bool {
     false
 }
 
+/// The frame a filter or a `__finally` block of the function at `frame`
+/// is given: on x86-64 the one its language handler was given.
+///
+/// # Safety
+/// `dispatcher` is the context a language handler was called with.
+pub unsafe fn block_frame(_: &DispatcherContext, frame: u64) -> u64 {
+    frame
+}
+
 /// The program counter a handler looks its scopes up by: on x86-64 the
 /// frame's own, return address or not.
 pub fn scope_pc(dispatcher: &DispatcherContext) -> u64 {
