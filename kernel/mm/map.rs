@@ -43,18 +43,16 @@ impl TableMem for Tables {
 
     fn read(&self, table: u64, index: usize) -> u64 {
         // SAFETY: `table` is a page-table frame reachable through the
-        // direct map; `index` is below 512. Edits hold `NEXT_VA`.
-        unsafe { phys_to_virt(table).cast::<u64>().add(index).read_volatile() }
+        // direct map; `index` is below 512. Edits hold `NEXT_VA`; a read
+        // may be made without it (`physical`), so entries are atomics.
+        unsafe { AtomicU64::from_ptr(phys_to_virt(table).cast::<u64>().add(index)) }
+            .load(Ordering::Relaxed)
     }
 
     fn write(&mut self, table: u64, index: usize, entry: u64) {
         // SAFETY: as in `read`.
-        unsafe {
-            phys_to_virt(table)
-                .cast::<u64>()
-                .add(index)
-                .write_volatile(entry)
-        }
+        unsafe { AtomicU64::from_ptr(phys_to_virt(table).cast::<u64>().add(index)) }
+            .store(entry, Ordering::Relaxed);
     }
 }
 
@@ -131,6 +129,44 @@ pub fn unmap(va: u64, pages: usize) {
             arch::flush_tlb_page(page);
         }
     }
+}
+
+/// Give each of the `pages` pages at `va` the protection `prot`, page
+/// `i` mapped to the frame at physical address `frame(i)`; `None` leaves
+/// them unmapped. Whatever was mapped there before is replaced, and
+/// every processor's translation dropped.
+pub fn remap(
+    va: u64,
+    pages: usize,
+    frame: impl Fn(usize) -> u64,
+    prot: Option<Prot>,
+) -> Result<(), MapError> {
+    let _guard = NEXT_VA.lock();
+    let (root, arch_pt) = (arch::pt_root_of(va), arch::pt_arch());
+    for i in 0..pages {
+        let page = va + (i * PAGE_SIZE) as u64;
+        if pt::unmap(&mut Tables, &arch_pt, root, page).is_some() {
+            arch::flush_tlb_page(page);
+        }
+        if let Some(prot) = prot {
+            pt::map(&mut Tables, &arch_pt, root, page, frame(i), 0, prot)?;
+        }
+    }
+    arch::mapping_sync();
+    Ok(())
+}
+
+/// The physical address `va` maps to, found without a lock, so at any
+/// IRQL: by arithmetic for an address in the map of all RAM, else by
+/// reading the page tables as the processor reads them. Tables are
+/// never freed, so the walk is over tables whatever is being mapped or
+/// unmapped meanwhile; its answer is then the old one or the new.
+pub fn physical(va: u64) -> Option<u64> {
+    let direct = phys_to_virt(0) as u64;
+    if (direct..direct + super::direct_map_bytes()).contains(&va) {
+        return Some(va - direct);
+    }
+    pt::translate(&Tables, &arch::pt_arch(), arch::pt_root_of(va), va)
 }
 
 /// The physical address `va` maps to in the kernel address space.

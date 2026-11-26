@@ -17,16 +17,23 @@
 //!   nothing keeps a user page mapped while it is locked.
 //! - System mappings are always non-executable, whatever the caller's
 //!   priority flags say.
+//! - `MmAllocatePagesForMdlEx` gives all the pages asked for or none,
+//!   where Windows may give some.
 
 #![allow(non_snake_case)]
 
 use crate::kd;
 use crate::ke::seh;
-use crate::mm::{PAGE_SIZE, map, pool, user};
+use crate::mm::{self, PAGE_SIZE, map, pool, user};
 use core::ffi::c_void;
+use nk_mm::frames::Within;
+use nk_mm::protect;
 use nk_mm::pt::Prot;
 use nk_ntabi::io::*;
-use nk_ntabi::status::{NTSTATUS, STATUS_ACCESS_VIOLATION};
+use nk_ntabi::status::{
+    NTSTATUS, STATUS_ACCESS_VIOLATION, STATUS_INSUFFICIENT_RESOURCES,
+    STATUS_INVALID_PAGE_PROTECTION, STATUS_NOT_MAPPED_VIEW, STATUS_SUCCESS,
+};
 
 const TAG_MDL: u32 = u32::from_le_bytes(*b"Mdl ");
 /// Largest buffer one MDL can describe: its `Size` field is 16 bits.
@@ -203,10 +210,13 @@ pub unsafe extern "C" fn MmUnlockPages(mdl: *mut MDL) {
 }
 
 /// `MmMapLockedPagesSpecifyCache`: map the MDL's pages into system space
-/// and return the address of the buffer's first byte there, or null.
+/// and return the address of the buffer's first byte there, or null. An
+/// MDL built over non-paged memory (`MmBuildMdlForNonPagedPool`) is in
+/// system space already: the address it has there is returned.
 ///
 /// # Safety
-/// `mdl` must be a live MDL with locked pages.
+/// `mdl` must be a live MDL with locked pages, or one built over
+/// non-paged memory.
 pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
     mdl: *mut MDL,
     access_mode: i8,
@@ -217,6 +227,9 @@ pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
 ) -> *mut c_void {
     // SAFETY: per the contract.
     unsafe {
+        if (*mdl).MdlFlags & MDL_SOURCE_IS_NONPAGED_POOL != 0 {
+            return (*mdl).MappedSystemVa;
+        }
         if (*mdl).MdlFlags & MDL_PAGES_LOCKED == 0 {
             kd::bugcheck(format_args!(
                 "MmMapLockedPagesSpecifyCache: MDL {mdl:p} is not locked"
@@ -253,6 +266,190 @@ pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
         (*mdl).MappedSystemVa = (va + u64::from((*mdl).ByteOffset)) as PVOID;
         (*mdl).MdlFlags |= MDL_MAPPED_TO_SYSTEM_VA;
         (*mdl).MappedSystemVa
+    }
+}
+
+/// [`MmUnmapLockedPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunmaplockedpages):
+/// remove the system mapping `MmMapLockedPagesSpecifyCache` made of the
+/// MDL's pages. For an MDL built over non-paged memory there is none to
+/// remove. Unmapping what is not the MDL's mapping stops the system.
+///
+/// # Safety
+/// `mdl` must be a live MDL.
+pub unsafe extern "C" fn MmUnmapLockedPages(base_address: *mut c_void, mdl: *mut MDL) {
+    // SAFETY: per the contract.
+    unsafe {
+        let flags = (*mdl).MdlFlags;
+        if flags & MDL_MAPPED_TO_SYSTEM_VA != 0 && (*mdl).MappedSystemVa == base_address {
+            let va = base_address as u64 & !(PAGE_SIZE as u64 - 1);
+            map::unmap(va, pages(mdl));
+            map::free_va(va, pages(mdl));
+            (*mdl).MappedSystemVa = core::ptr::null_mut();
+            (*mdl).MdlFlags &= !MDL_MAPPED_TO_SYSTEM_VA;
+        } else if flags & MDL_SOURCE_IS_NONPAGED_POOL == 0 {
+            kd::bugcheck(format_args!(
+                "MmUnmapLockedPages: {base_address:p} is not where MDL {mdl:p} is mapped"
+            ));
+        }
+    }
+}
+
+/// [`MmBuildMdlForNonPagedPool`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmbuildmdlfornonpagedpool):
+/// fill in the pages of an MDL whose buffer is system memory that is
+/// never paged: pool, contiguous memory, a mapping of device memory.
+/// The buffer's own address is its system address. A buffer that is not
+/// all mapped stops the system.
+///
+/// # Safety
+/// `mdl` must be a live MDL from `IoAllocateMdl`, not locked or mapped.
+pub unsafe extern "C" fn MmBuildMdlForNonPagedPool(mdl: *mut MDL) {
+    // SAFETY: per the contract.
+    unsafe {
+        let start = (*mdl).StartVa as u64;
+        for i in 0..pages(mdl) {
+            let Some(pa) = map::physical(start + (i * PAGE_SIZE) as u64) else {
+                kd::bugcheck(format_args!(
+                    "MmBuildMdlForNonPagedPool: MDL {mdl:p} describes memory that is not mapped"
+                ));
+            };
+            pfns(mdl).add(i).write(pa / PAGE_SIZE as u64);
+        }
+        (*mdl).MappedSystemVa = (start + u64::from((*mdl).ByteOffset)) as PVOID;
+        (*mdl).Process = core::ptr::null_mut();
+        (*mdl).MdlFlags |= MDL_SOURCE_IS_NONPAGED_POOL;
+    }
+}
+
+/// `MM_ALLOCATE_REQUIRE_CONTIGUOUS_CHUNKS` and the flags NK has nothing
+/// to do for: memory is always zeroed, there is one node, nothing waits.
+const MM_ALLOCATE_REQUIRE_CONTIGUOUS_CHUNKS: u32 = 0x20;
+
+/// [`MmAllocatePagesForMdlEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmallocatepagesformdlex):
+/// allocate zeroed physical pages in a range of physical addresses,
+/// mapped nowhere, and an MDL describing them. With a `skip_bytes`, the
+/// pages come in runs of that many bytes, each beginning at a multiple
+/// of it.
+///
+/// All of `total_bytes` or null: where Windows may return an MDL for
+/// fewer pages than asked, NK returns none. The caching type is checked
+/// and otherwise unused: it describes a mapping, and none is made here.
+///
+/// # Safety
+/// None beyond being called as a driver calls it; unsafe because it
+/// hands out memory the caller must give back with `MmFreePagesFromMdl`.
+pub unsafe extern "C" fn MmAllocatePagesForMdlEx(
+    low_address: i64,
+    high_address: i64,
+    skip_bytes: i64,
+    total_bytes: usize,
+    cache_type: u32,
+    flags: u32,
+) -> *mut MDL {
+    let page = PAGE_SIZE as u64;
+    let (skip, total) = (skip_bytes as u64, total_bytes.div_ceil(PAGE_SIZE));
+    let run = if skip == 0 { 1 } else { (skip / page) as usize };
+    let within = Within::bytes(low_address as u64, high_address as u64, 0, skip.max(page));
+    let (Some(within), Some(_)) = (within, protect::uncached(cache_type)) else {
+        return core::ptr::null_mut();
+    };
+    if total == 0 || u32::try_from(total * PAGE_SIZE).is_err() {
+        return core::ptr::null_mut();
+    }
+    // A power of two is what the chunks flag is documented to require.
+    if flags & MM_ALLOCATE_REQUIRE_CONTIGUOUS_CHUNKS != 0 && !skip.is_power_of_two() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: an MDL for a buffer at no address, attached to no IRP.
+    let mdl = unsafe {
+        IoAllocateMdl(
+            core::ptr::null_mut(),
+            (total * PAGE_SIZE) as u32,
+            0,
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+    if mdl.is_null() {
+        return mdl;
+    }
+    let mut done = 0;
+    while done < total {
+        let count = run.min(total - done);
+        let Some(pa) = mm::alloc_frames_within(count, &within) else {
+            // SAFETY: the first `done` entries were written below, and
+            // the MDL is the one just allocated.
+            unsafe {
+                for i in 0..done {
+                    mm::free_frames(pfns(mdl).add(i).read() * page, 1);
+                }
+                IoFreeMdl(mdl);
+            }
+            return core::ptr::null_mut();
+        };
+        for i in 0..count {
+            // SAFETY: the MDL has room for `total` frame numbers.
+            unsafe { pfns(mdl).add(done + i).write(pa / page + i as u64) };
+        }
+        done += count;
+    }
+    // SAFETY: the MDL just allocated.
+    unsafe { (*mdl).MdlFlags |= MDL_PAGES_LOCKED };
+    mdl
+}
+
+/// [`MmFreePagesFromMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmfreepagesfrommdl):
+/// give back the pages `MmAllocatePagesForMdlEx` allocated. The MDL
+/// itself is the caller's to free, with `ExFreePool`. Pages still
+/// mapped stop the system.
+///
+/// # Safety
+/// `mdl` came from `MmAllocatePagesForMdlEx` and its pages are not used
+/// afterwards.
+pub unsafe extern "C" fn MmFreePagesFromMdl(mdl: *mut MDL) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*mdl).MdlFlags & MDL_MAPPED_TO_SYSTEM_VA != 0 {
+            kd::bugcheck(format_args!(
+                "MmFreePagesFromMdl: the pages of MDL {mdl:p} are still mapped"
+            ));
+        }
+        for i in 0..pages(mdl) {
+            mm::free_frames(pfns(mdl).add(i).read() * PAGE_SIZE as u64, 1);
+        }
+        (*mdl).MdlFlags &= !MDL_PAGES_LOCKED;
+        (*mdl).ByteCount = 0;
+    }
+}
+
+/// [`MmProtectMdlSystemAddress`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprotectmdlsystemaddress):
+/// change the protection of the system mapping
+/// `MmMapLockedPagesSpecifyCache` made of the MDL's pages.
+/// `STATUS_NOT_MAPPED_VIEW` for an MDL with no such mapping (one built
+/// over non-paged memory has none of its own);
+/// `STATUS_INVALID_PAGE_PROTECTION` for a protection that is not one.
+///
+/// # Safety
+/// `mdl` must be a live MDL.
+pub unsafe extern "C" fn MmProtectMdlSystemAddress(mdl: *mut MDL, new_protect: u32) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*mdl).MdlFlags & MDL_MAPPED_TO_SYSTEM_VA == 0 {
+            return STATUS_NOT_MAPPED_VIEW;
+        }
+        let Some(protection) = protect::protection(new_protect) else {
+            return STATUS_INVALID_PAGE_PROTECTION;
+        };
+        let prot = protection.access.then_some(Prot {
+            write: protection.write,
+            exec: protection.exec,
+            device: protection.uncached,
+        });
+        let va = (*mdl).MappedSystemVa as u64 & !(PAGE_SIZE as u64 - 1);
+        let frame = |i: usize| pfns(mdl).add(i).read() * PAGE_SIZE as u64;
+        match map::remap(va, pages(mdl), frame, prot) {
+            Ok(()) => STATUS_SUCCESS,
+            Err(_) => STATUS_INSUFFICIENT_RESOURCES,
+        }
     }
 }
 

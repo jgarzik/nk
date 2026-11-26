@@ -18,6 +18,7 @@ pub mod except;
 mod fsd;
 mod library;
 mod loader;
+mod mmio;
 mod mslib;
 mod mutex;
 mod neg;
@@ -130,6 +131,7 @@ impl Drop for UserMemory {
 pub static GROUPS: &[&[&Group]] = &[
     base::GROUPS,
     pci::GROUPS,
+    mmio::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,

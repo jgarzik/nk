@@ -260,6 +260,41 @@ written at any IRQL, as Windows allows.
   for a machine with several segments, the documented one for a machine
   with one.
 
+### Device memory and physical memory
+
+- **Mapping device memory** (`kernel/mm/io.rs`,
+  [`MmMapIoSpaceEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospaceex)):
+  4 KiB pages in the dynamic region, with the protection asked for.
+  Memory that firmware's map does not call RAM is mapped as device
+  memory whatever caching is named: uncached on x86-64 (the page
+  attribute table's "uncacheable" entry), the device attribute of
+  firmware's `MAIR_EL1` on arm64, the strictest it offers. RAM is
+  mapped cached unless the protection says otherwise. Write combining
+  is mapped as uncached: it makes a run of writes cheaper and changes
+  nothing a driver reads.
+- **Physical addresses.** `MmGetPhysicalAddress` takes no lock, so it
+  is callable at any IRQL: arithmetic for the map of all RAM, else a
+  walk of the page tables, which are never freed and whose entries are
+  read and written as atomics. `MmGetVirtualForPhysical` answers with
+  the address in the map of all RAM, which for pool and contiguous
+  memory is the address the memory was handed out at; for an address
+  that is not RAM it stops the system.
+- **Contiguous memory** (`kernel/mm/contig.rs`) is a pool block of whole
+  pages whose frames are one run inside the caller's range of physical
+  addresses and across no multiple of its boundary
+  (`nk_mm::frames::Within`): counted, checked and freed as pool is. It
+  is zeroed, cached and not executable; a caching type is accepted and
+  changes nothing, a request for executable memory is refused.
+- **MDLs over system memory** (`kernel/io/mdl.rs`).
+  `MmBuildMdlForNonPagedPool` reads the buffer's pages from the page
+  tables and makes the buffer's own address the MDL's system address;
+  mapping such an MDL returns that address and unmapping it does
+  nothing. `MmAllocatePagesForMdlEx` takes frames one by one, or in
+  aligned runs of `SkipBytes`, from the range asked for, all or none;
+  they are mapped nowhere until the driver maps them.
+  `MmProtectMdlSystemAddress` rewrites the entries of the MDL's own
+  mapping.
+
 ## Time
 
 One free-running counter is the source of all time: the TSC on x86-64,
