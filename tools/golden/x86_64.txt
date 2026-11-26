@@ -49,6 +49,14 @@ thread.identity ok
 seh.walk.thread ok
 seh.walk.dpc ok
 seh.walk.interrupt ok
+seh.raise ok
+seh.decline ok
+seh.edge ok
+seh.finally ok
+seh.cross.region ok
+seh.cross.irql ok
+seh.cross.reference ok
+seh.cross.nested ok
 wait.notification ok
 wait.synchronization ok
 wait.timeout ok

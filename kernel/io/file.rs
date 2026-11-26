@@ -24,6 +24,7 @@
 //! completed or not.
 
 use super::{TAG_FILE_NAME, TAG_IO_BUFFER, device, irp, mdl};
+use crate::ke::seh::Guard;
 use crate::mm::pool;
 use crate::ob::{handle, object};
 use crate::{ke, ob, se};
@@ -175,8 +176,21 @@ impl Pending {
     }
 }
 
+/// What [`start`] owes if the dispatch routine is unwound: the critical
+/// region it called the routine in.
+///
+/// # Safety
+/// The thread is in that critical region.
+unsafe fn leave_critical_region(_: *mut c_void) {
+    ke::mutex::KeLeaveCriticalRegion();
+}
+
 /// Fill in the common requestor fields and send the IRP on behalf of
 /// `mode`.
+///
+/// If an exception unwinds the dispatch routine, the request is still
+/// its driver's: the IRP, and the block of results and event the IRP
+/// points to, are left where they are.
 ///
 /// # Safety
 /// `irp` must be a fresh IRP whose next stack location is set up for
@@ -207,8 +221,12 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         // APCs off, in a critical region; a driver can ask, and
         // nkc-mutex does (oracle/nkc-mutex.txt).
         let device_object = (*file).DeviceObject;
+        let guard = Guard::Undo {
+            undo: leave_critical_region,
+            context: core::ptr::null_mut(),
+        };
         let dispatch_status =
-            ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp));
+            ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp, &guard));
         Pending {
             irp,
             waiting,

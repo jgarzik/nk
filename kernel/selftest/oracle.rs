@@ -5,9 +5,15 @@
 //! same script runs against the same driver binary on NK, and each line NK
 //! produces must be the line Windows produced. `oracle/README.md` defines
 //! the formats.
+//!
+//! On Windows the requests are system services made by a user-mode
+//! program. Here each is made as one ([`system_service`]): an exception
+//! that nothing handles while it is served stops the system as it does
+//! there.
 
 use crate::io::file::{self, IoResult, Kind, OpenRequest};
 use crate::io::service::{self, ServiceError};
+use crate::ke::seh::system_service;
 use crate::ldr;
 use crate::test::{Group, Report};
 use alloc::format;
@@ -109,7 +115,7 @@ impl<'a> Replay<'a> {
                     Some(root) => Some(self.file(root)?),
                     None => None,
                 };
-                let opened = file::open(&OpenRequest {
+                let request = OpenRequest {
                     name: path,
                     root,
                     desired_access: args.access,
@@ -118,7 +124,8 @@ impl<'a> Replay<'a> {
                     disposition: FILE_OPEN,
                     kind: Kind::File,
                     requestor_mode: KERNEL_MODE,
-                });
+                };
+                let opened = system_service(|| file::open(&request));
                 match opened {
                     Ok((file, _)) => {
                         self.files.push((handle, file));
@@ -128,7 +135,7 @@ impl<'a> Replay<'a> {
                 }
             }
             Step::Pipe { handle, path, args } => {
-                let opened = file::open(&OpenRequest {
+                let request = OpenRequest {
                     name: path,
                     root: None,
                     desired_access: args.access,
@@ -147,7 +154,8 @@ impl<'a> Replay<'a> {
                         TimeoutSpecified: 1,
                     }),
                     requestor_mode: KERNEL_MODE,
-                });
+                };
+                let opened = system_service(|| file::open(&request));
                 let (status, information) = match opened {
                     Ok((file, information)) => {
                         self.files.push((handle, file));
@@ -166,7 +174,7 @@ impl<'a> Replay<'a> {
             Step::Close { handle } => {
                 let file = self.file(handle)?;
                 self.files.retain(|(h, _)| *h != handle);
-                format!("{:08x}", file::close(file) as u32)
+                format!("{:08x}", system_service(|| file::close(file)) as u32)
             }
             Step::Ioctl {
                 handle,
@@ -176,7 +184,8 @@ impl<'a> Replay<'a> {
             } => {
                 let input: Vec<u8> = input.bytes().collect();
                 let mut output = vec![FILL; output_len];
-                let r = file::device_control(self.file(handle)?, code, &input, &mut output)
+                let file = self.file(handle)?;
+                let r = system_service(|| file::device_control(file, code, &input, &mut output))
                     .map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&output))
             }
@@ -188,19 +197,23 @@ impl<'a> Replay<'a> {
             } => {
                 let input: Vec<u8> = input.bytes().collect();
                 let mut output = vec![FILL; output_len];
-                let r = file::fs_control(self.file(handle)?, code, &input, &mut output)
+                let file = self.file(handle)?;
+                let r = system_service(|| file::fs_control(file, code, &input, &mut output))
                     .map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&output))
             }
             Step::Read { handle, len } => {
                 let mut buffer = vec![FILL; len];
-                let r =
-                    file::read(self.file(handle)?, &mut buffer).map_err(|e| format!("{e:?}"))?;
+                let file = self.file(handle)?;
+                let r = system_service(|| file::read(file, &mut buffer))
+                    .map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&buffer))
             }
             Step::Write { handle, data } => {
                 let data: Vec<u8> = data.bytes().collect();
-                let r = file::write(self.file(handle)?, &data).map_err(|e| format!("{e:?}"))?;
+                let file = self.file(handle)?;
+                let r =
+                    system_service(|| file::write(file, &data)).map_err(|e| format!("{e:?}"))?;
                 format!("{}", outcome(r))
             }
         })

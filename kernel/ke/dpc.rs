@@ -24,6 +24,7 @@
 
 #![allow(non_snake_case)]
 
+use super::seh::{self, Guard, Unhandled};
 use super::{Rank, SpinLock, interrupt, irql, time};
 use crate::arch;
 use crate::mm::stack::{self, Stack};
@@ -163,8 +164,22 @@ extern "C" fn drain(queue: usize) {
             .running_since
             .store(time::interrupt_time().max(1), Ordering::Relaxed);
         // SAFETY: calling the routine the driver registered, at
-        // DISPATCH_LEVEL, with the arguments it queued.
-        unsafe { routine(dpc, context, argument1, argument2) };
+        // DISPATCH_LEVEL, with the arguments it queued. An exception
+        // it lets out is unhandled: the search for a handler ends
+        // here, and does not go on into whatever this processor was
+        // doing when the queue was run.
+        unsafe {
+            seh::call(
+                routine as usize,
+                [
+                    dpc.addr(),
+                    context.addr(),
+                    argument1.addr(),
+                    argument2.addr(),
+                ],
+                &Guard::Base(Unhandled::KernelMode),
+            )
+        };
         queue.running_since.store(0, Ordering::Relaxed);
         let level = irql::current();
         if level != irql::DISPATCH_LEVEL {

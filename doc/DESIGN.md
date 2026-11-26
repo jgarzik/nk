@@ -85,7 +85,7 @@ into memory a driver can write.
 | `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables and unwinding (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -519,6 +519,92 @@ page shows zeros. Nothing can change a byte of it and no offset into it
 faults, so the unwinder can be handed the whole image as one slice
 while the image's own data keeps changing.
 
+## Exceptions
+
+Structured exception handling as Windows defines it
+([x64](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64),
+[arm64](https://learn.microsoft.com/en-us/cpp/build/arm64-exception-handling),
+[in drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/handling-exceptions)):
+`kernel/ke/seh.rs`, over the frame-by-frame unwinder and the decisions
+of `nk_unwind` (`scope`, `dispatch`), with a few assembly routines per
+architecture (`kernel/arch/*/seh.rs`).
+
+**Raising.** A routine that raises is entered through assembly that
+records its caller's `CONTEXT` as it will be when the call has
+returned. The exception is raised there: its address is the return
+address in the driver, and no frame of NK's lies between the driver and
+its exception.
+
+**Finding a handler.** The dispatcher walks the stack from that context
+and calls the language handler of each function that names one,
+innermost first, with the `EXCEPTION_RECORD`, the `CONTEXT` and a
+`DISPATCHER_CONTEXT` filled in as Windows fills it: a driver's own
+handler (the stack-cookie check) reads the function entry, the image
+base and the handler data from it. `__C_specific_handler` asks the
+filters of the scopes around the frame's program counter. An exception
+raised inside a handler is searched for in turn; handlers between it
+and the frame the first search had reached are told so
+(`EXCEPTION_NESTED_CALL`).
+
+**Unwinding.** A filter that accepts unwinds: the same frames are
+walked again and their handlers called a second time, which runs the
+`__finally` blocks, innermost first; then the accepting function goes
+on at its `__except` block with the registers a call preserves as it
+had them and the exception's code where a call's result would be.
+`_local_unwind` is the same walk without an exception. An unwind that
+begins inside a `__finally` block run by another takes that one over
+where it stood (a collided unwind), so no block runs twice.
+
+**NK's own frames.** They are walked like a driver's, by their unwind
+tables, and an unwind discards them: no destructor runs. Three rules
+make that safe.
+
+- Every call into a driver is `ke::seh::call`: an assembly frame with a
+  language handler of NK's own, holding a guard record the caller
+  passes. Nothing else lies between NK's Rust and the driver's routine,
+  so no frame without an unwind entry can.
+- A guard says what the caller owes if the routine does not return.
+  `Undo`: a function to call, once, when an unwind passes the frame
+  (leave a critical region, lower the IRQL, drop a reference).
+  `Nothing`: nothing is owed. `Base`: no driver's frame can lie beneath
+  this call, so no handler can; an exception that reaches it is
+  unhandled, the system stops there, and nothing is ever unwound
+  through it.
+- Between a call into a driver and the driver's frame beneath (if any),
+  an NK frame keeps nothing that only a destructor would give back: no
+  lock guard, and no IRQL, critical region or reference that is not in
+  a guard. What belongs to the request being abandoned (its IRP, the
+  block its results go to, its hold on the file object) is left as it
+  is, on purpose: the driver that raised may still hold the IRP.
+  Windows has no handlers on these paths either.
+
+| Call into a driver | Guard |
+| --- | --- |
+| dispatch routine | undo: leave the critical region the request is sent in |
+| completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
+| I/O work item's routine | undo: the device's reference |
+| work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine | base: a system thread |
+| DPC routine, a timer's included | base: kernel mode |
+| a system service made for user mode (the oracle's requests) | base: a system service |
+
+**Nothing handles it.** The system stops with Windows' bugcheck for
+where the exception was raised:
+
+| Where | Bugcheck | First parameter |
+| --- | --- | --- |
+| a system service made for user mode | `0x3B SYSTEM_SERVICE_EXCEPTION` | the exception's code |
+| a system thread: a worker, a driver's thread, `DriverEntry` | `0x7E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED` | the code, sign-extended |
+| a DPC routine; a stack that cannot be searched | `0x1E KMODE_EXCEPTION_NOT_HANDLED` | the code, sign-extended |
+
+The search does not go on from a DPC routine into whatever the DPC
+interrupted. It stops, naming the place, at a function that is waiting
+for a call to return and has no unwind entry, and at a frame that is
+not on the stack: never a guess.
+
+The tests `seh.*` stack assembly routines shaped like a driver's
+compiled C (`kernel/arch/*/seh_test.rs`) around NK frames of each kind
+and check what ran, in which order, and what state came back.
+
 ## Exports
 
 Drivers import from `ntoskrnl.exe` and `HAL.dll` by name; both names
@@ -739,11 +825,11 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 
 ## What is absent
 
-No SEH, APCs, device interrupts, PnP, power management, user processes
-or user mode. Where a fixture imports something in that territory but never
+No APCs, device interrupts, PnP, power management, user processes or
+user mode. Where a fixture imports something in that territory but never
 reaches it on the tested path, the export is `Traps`.
 
-SEH is the sharpest edge (`kernel/ke/seh.rs`). `ProbeForRead` performs
-Windows' checks, but where Windows raises NK bugchecks, as does
-`MmProbeAndLockPages` on an inaccessible buffer. A driver's `__try`
-protects nothing.
+A processor fault is not an exception: one inside a driver's `__try` is
+a bugcheck. `ProbeForRead` performs Windows' checks, but where Windows
+raises NK bugchecks, as does `MmProbeAndLockPages` on an inaccessible
+buffer.

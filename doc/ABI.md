@@ -95,6 +95,30 @@ width, precision, the Microsoft size prefixes (`I64`, `w`, `h`), `%p` as
 sixteen upper-case digits, strings of either width, counted strings.
 No floating point.
 
+## Exception handling
+
+What a driver's compiled code and its handlers can observe of an
+exception (`doc/DESIGN.md`, "Exceptions"):
+
+| | x86-64 | arm64 |
+| --- | --- | --- |
+| A language handler's arguments | rcx record, rdx frame, r8 context, r9 dispatcher context | x0-x3, likewise |
+| The frame it is given | the function's stack pointer after its prologue, or its frame register less the offset its unwind record states | the stack pointer the function was entered with |
+| A filter's arguments | rcx `EXCEPTION_POINTERS`, rdx the frame | x0, x1 |
+| A `__finally` block's arguments | cl whether the termination is abnormal, rdx the frame | w0, x1 |
+| At an `__except` block | rax the exception's code; rbx, rbp, rsi, rdi, r12-r15, xmm6-xmm15 and the stack pointer as the function had them | x0 the code; x19-x30, the low halves of v8-v15 and the stack pointer |
+| A frame's program counter, for looking its function and scopes up | the return address as it is | the instruction before the return address, when the frame was left by a call (`ControlPcIsUnwound`) |
+
+The other registers at an `__except` block are whatever the dispatcher
+left: compiled code expects nothing of them. The context a routine that
+raises records for its caller marks its program counter as a return
+address the way Windows does on arm64, with `CONTEXT_UNWOUND_TO_CALL`
+in the context's flags.
+
+`EXCEPTION_RECORD`, `CONTEXT` and `DISPATCHER_CONTEXT` are in
+`lib/ntabi/seh.rs`, checked against the WDK's table on both
+architectures and against the kernel's symbols on x86-64.
+
 ## What the fixture binaries show
 
 - Drivers reach the current IRP stack location at `IRP+0xB8` and the

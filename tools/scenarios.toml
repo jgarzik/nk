@@ -468,3 +468,68 @@ cmdline = "test=oracle.event-debug debug=on"
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=oracle.event-debug debug=on"
+
+# An exception no handler takes stops the system with Windows' bugcheck
+# for where it was raised: in a system thread, in a system service made
+# for user mode (the exception's code not widened with its sign), in a
+# DPC routine, whose exception is not offered to the code the DPC
+# interrupted.
+
+[x86_64-neg-seh-thread]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
+
+[x86_64-neg-seh-service]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-service"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
+
+[x86_64-neg-seh-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
+
+[aarch64-neg-seh-thread]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
+
+[aarch64-neg-seh-service]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-service"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
+
+[aarch64-neg-seh-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
+
+# A function with no unwind entry between a raise and a willing handler
+# stops the system, named: never a guess at its frame.
+
+[x86_64-neg-seh-no-entry]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-no-entry"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"
+
+[aarch64-neg-seh-no-entry]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-no-entry"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"

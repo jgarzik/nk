@@ -18,6 +18,10 @@ pub enum State {
     /// the function.
     Partial,
     /// Present so the driver loads; bugchecks by name if ever called.
+    #[allow(
+        dead_code,
+        reason = "the ledger's vocabulary; nothing is bound this way at present"
+    )]
     Traps,
 }
 
@@ -143,7 +147,7 @@ static EXPORTS: &[Export] = &[
     export!(Partial, ke::seh::ProbeForRead),
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
-    export!(Traps, ke::seh::__C_specific_handler),
+    export!(Implemented, ke::seh::__C_specific_handler),
     export!(Implemented, ke::mutex::ExAcquireFastMutex),
     export!(Implemented, ke::mutex::ExAcquireFastMutexUnsafe),
     export!(Implemented, ex::work::ExQueueWorkItem),

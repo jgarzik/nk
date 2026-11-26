@@ -12,6 +12,7 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+pub mod except;
 mod loader;
 mod mutex;
 mod neg;
@@ -50,6 +51,7 @@ pub static GROUPS: &[&Group] = &[
     &timer::GROUP,
     &thread::GROUP,
     &seh::GROUP,
+    &except::GROUP,
     &wait::GROUP,
     &ob::GROUP,
     &se::GROUP,
@@ -77,6 +79,10 @@ pub static GROUPS: &[&Group] = &[
     &neg::IRQL_LOWER,
     &neg::META_FAIL,
     &neg::BREAKPOINT,
+    &except::THREAD,
+    &except::SERVICE,
+    &except::DPC,
+    &except::NO_ENTRY,
     &oracle::EVENT,
     &oracle::EVENT_DEBUG,
     &smp::STUCK,

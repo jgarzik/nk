@@ -84,11 +84,23 @@ pub fn lookup(
     dir_size: u32,
     rva: u32,
 ) -> Result<Option<FunctionEntry>, UnwindError> {
+    Ok(locate(image, dir_rva, dir_size, rva)?.map(|(_, f)| f))
+}
+
+/// As [`lookup`], with the RVA of the entry itself: what a language
+/// handler is handed as `DISPATCHER_CONTEXT.FunctionEntry`.
+pub fn locate(
+    image: &[u8],
+    dir_rva: u32,
+    dir_size: u32,
+    rva: u32,
+) -> Result<Option<(u32, FunctionEntry)>, UnwindError> {
     let Some(index) = last_at_or_below(image, dir_rva, dir_size, ENTRY_SIZE, rva)? else {
         return Ok(None);
     };
     let f = entry(image, dir_rva, index)?;
-    Ok((rva - f.begin < f.len).then_some(f))
+    let at = (index * ENTRY_SIZE) as u32 + dir_rva;
+    Ok((rva - f.begin < f.len).then_some((at, f)))
 }
 
 /// A register an unwind code saves.
