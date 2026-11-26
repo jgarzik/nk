@@ -21,3 +21,4 @@ rtl.bitmap ok
 rtl.counted ok
 rtl.crt-strings ok
 rtl.resource ok
+rtl.range-list ok
