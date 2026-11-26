@@ -119,7 +119,14 @@ Why this order:
   the database lock, sending a driver the create request) happens
   outside it.
 - No object's last reference is dropped under the namespace lock: a
-  removed symbolic link's object is released after it.
+  removed symbolic link's object is released after it, and so is the
+  reference a named object holds on its directory, and a directory's
+  name on the directory. A directory's delete procedure takes the lock
+  itself, to have the tree forget it.
+- Whether a directory is permanent (its header's flag) is read and
+  written under the namespace lock, with its handle count read there
+  too: a temporary directory's name goes under the lock when the count
+  is seen to be zero.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
