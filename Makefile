@@ -7,13 +7,14 @@ CARGO ?= cargo
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST := target/dist
 
-.PHONY: help dist build build-arm check check-arm boot-gate run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check unwind-check corpus oracle soak mutants coverage gate clean
+.PHONY: help dist build build-arm check check-arm boot-fast boot-gate boot-full run run-arm test clippy clippy-arm fmt fmt-check fixtures ledger ledger-check unwind-check unwind-check-arm corpus oracle soak mutants coverage gate-fast gate gate-full clean
 
 help:
 	@echo "NK make targets:"
 	@echo "  build      loader + kernel for x86-64      (build-arm: arm64)"
 	@echo "  check      boot test under QEMU, x86-64    (check-arm: arm64)"
-	@echo "  boot-gate  every boot scenario a commit must pass, in parallel"
+	@echo "  boot-fast  the boots of the fast gate: x86-64, the main scenario and those the change selects"
+	@echo "  boot-gate  the boots of the batch gate: x86-64 (boot-full: every gate scenario, both architectures)"
 	@echo "  run        boot with a serial console      (run-arm: arm64)"
 	@echo "  dist       release boot images for both architectures (target/dist/)"
 	@echo "  test       host unit tests (library crates and the test harness)"
@@ -23,13 +24,15 @@ help:
 	@echo "  fixtures   download and verify the driver fixtures (target/fixtures/)"
 	@echo "  ledger     regenerate the compatibility ledger (ledger/)"
 	@echo "  ledger-check  the committed ledger is what the last boots printed"
-	@echo "  unwind-check  kernel code without unwind entries is on the allow-list"
+	@echo "  unwind-check  x86-64 kernel code without unwind entries is on the allow-list (unwind-check-arm: arm64)"
 	@echo "  corpus     download Microsoft's inbox binaries and check their committed import lists (network)"
 	@echo "  oracle     replay the oracle scripts on real Windows (KVM; not in the gate)"
 	@echo "  soak       the whole test list, many times, on an overloaded host"
 	@echo "  mutants    break the kernel on purpose; each break must fail a test"
 	@echo "  coverage   unit-test coverage of lib/, with a floor (needs cargo-llvm-cov)"
-	@echo "  gate       everything a commit must pass; prints GATE-OK"
+	@echo "  gate-fast  what every commit must pass; prints GATE-FAST-OK"
+	@echo "  gate       what the merged tip of updates must pass; prints GATE-OK"
+	@echo "  gate-full  both architectures, every scenario (nightly, milestones); prints GATE-FULL-OK"
 	@echo "  clean      remove all build and test output"
 
 X86 := x86_64-unknown-uefi
@@ -58,11 +61,21 @@ check: build fixtures
 check-arm: build-arm fixtures
 	@tools/boot_test.py aarch64
 
-# Every scenario of the gate tier (tools/scenarios.toml): the main boot of
-# each architecture, plus the boots that must end in a bugcheck or a
-# reported failure.
-boot-gate: build build-arm fixtures
-	@tools/boot_test.py --tier gate
+# The boots of the three gates, each a selection of the gate tier
+# (tools/scenarios.toml; tools/boot_test.py says which). boot-fast: the
+# main x86-64 scenario and the x86-64 scenarios whose `paths` the branch
+# changed. boot-gate: every x86-64 scenario that must pass, and those
+# that must end in a bugcheck or a reported failure whose `paths` changed
+# since this gate last passed. boot-full: all of them, on both
+# architectures.
+boot-fast: build fixtures
+	@tools/boot_test.py --gate fast
+
+boot-gate: build fixtures
+	@tools/boot_test.py --gate batch
+
+boot-full: build build-arm fixtures
+	@tools/boot_test.py --gate full
 
 run: build fixtures
 	@tools/boot_test.py x86_64 --run
@@ -111,10 +124,13 @@ ledger: fixtures
 ledger-check: fixtures
 	@tools/ledger.py --check
 
-# The code of each kernel image that has no unwind entry is prebuilt
+# The code of the kernel image that has no unwind entry is prebuilt
 # library code, a leaf, or a symbol listed in tools/unwind/.
-unwind-check: build build-arm
-	@tools/unwind_coverage.py
+unwind-check: build
+	@tools/unwind_coverage.py x86_64
+
+unwind-check-arm: build-arm
+	@tools/unwind_coverage.py aarch64
 
 # Downloads the binaries of fixtures/corpus.toml and checks that the
 # committed import lists, which the ledger counts, are what they import.
@@ -144,8 +160,17 @@ mutants: fixtures
 coverage: fixtures
 	@tools/coverage.py
 
+# The three gates (doc/TESTING.md): every commit passes the fast one, the
+# merged tip of `updates` the batch one, and the full one runs nightly
+# and at milestones.
+gate-fast:
+	@tools/gate.sh fast
+
 gate:
-	@tools/gate.sh
+	@tools/gate.sh batch
+
+gate-full:
+	@tools/gate.sh full
 
 clean:
 	$(CARGO) clean

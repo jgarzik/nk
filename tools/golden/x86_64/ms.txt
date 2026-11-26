@@ -1,0 +1,3 @@
+ms.wpprecorder ok
+ms.wmilib ok
+ms.msrpc ok

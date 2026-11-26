@@ -44,7 +44,6 @@ fn ioctl(file: u64, code: u32, input: &[u8], output: &mut [u8]) -> Result<IoResu
         IoError::NotCompleted { .. } => "the driver did not complete the request",
         IoError::StatusMismatch { .. } => "dispatch status differs from completion status",
         IoError::NoMemory => "out of memory",
-        IoError::UnsupportedMethod => "buffer method not supported by the kernel",
         IoError::Refused(_) => "the I/O manager refused a kernel buffer",
     })
 }
@@ -389,3 +388,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
     }
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

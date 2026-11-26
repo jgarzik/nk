@@ -1,0 +1,87 @@
+//! `ZwSetSystemInformation`: the one class a driver NK runs sets, the
+//! registration of a firmware table provider.
+
+#![allow(non_snake_case)]
+
+use crate::ke::spinlock::{Rank, SpinLock};
+use crate::ob::object;
+use core::ffi::c_void;
+use nk_ex::firmware::{Changed, Provider, Providers};
+use nk_ntabi::status::*;
+use nk_ntabi::sysinfo::{
+    SYSTEM_FIRMWARE_TABLE_HANDLER, SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS,
+};
+
+/// The firmware table providers drivers have registered.
+static PROVIDERS: SpinLock<Providers> = SpinLock::new(Rank::FirmwareTables, Providers::new());
+
+/// `ZwSetSystemInformation` (exported, not documented for drivers):
+/// set system information of one class.
+///
+/// `SystemRegisterFirmwareTableInformationHandler` is implemented, as
+/// the pinned kernel's `ExpRegisterFirmwareTableInformationHandler`:
+/// `acpi.sys` registers the routine that serves the `'ACPI'` tables,
+/// and takes it back when it unloads. The provider and a reference to
+/// its driver object are kept (`nk_ex::firmware`). Nothing on NK asks a
+/// provider for a table yet: `ZwQuerySystemInformation` does not answer
+/// the class that would.
+///
+/// Any other class stops the system naming it.
+///
+/// # Safety
+/// `information` is null or readable for `length` bytes; for the
+/// class above it names a routine and a live driver object.
+pub unsafe extern "C" fn ZwSetSystemInformation(
+    class: u32,
+    information: *mut c_void,
+    length: u32,
+) -> NTSTATUS {
+    if class != SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS {
+        crate::kd::bugcheck(format_args!(
+            "ZwSetSystemInformation: NK does not implement information class {class}"
+        ));
+    }
+    if information.is_null() || (length as usize) < size_of::<SYSTEM_FIRMWARE_TABLE_HANDLER>() {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    // SAFETY: per the contract: the caller's buffer, long enough.
+    let request = unsafe {
+        information
+            .cast::<SYSTEM_FIRMWARE_TABLE_HANDLER>()
+            .read_unaligned()
+    };
+    let provider = Provider {
+        signature: request.ProviderSignature,
+        handler: request.FirmwareTableHandler.addr(),
+        driver: request.DriverObject.addr(),
+    };
+    let changed = {
+        let mut providers = PROVIDERS.lock();
+        let changed = providers.change(provider, request.Register != 0);
+        if changed == Ok(Changed::Registered) {
+            // Under the lock: the provider is never listed without
+            // its reference.
+            // SAFETY: per the contract, a live driver object.
+            unsafe { object::reference(request.DriverObject.cast()) };
+        }
+        changed
+    };
+    match changed {
+        Ok(Changed::Registered) => STATUS_SUCCESS,
+        Ok(Changed::Unregistered) => {
+            // SAFETY: the reference taken when it was registered.
+            unsafe { object::dereference(request.DriverObject.cast()) };
+            STATUS_SUCCESS
+        }
+        Err(status) => status,
+    }
+}
+
+/// For the self-tests: the routine and the driver object registered
+/// for `signature`.
+pub fn test_provider(signature: u32) -> Option<(usize, usize)> {
+    PROVIDERS
+        .lock()
+        .find(signature)
+        .map(|provider| (provider.handler, provider.driver))
+}

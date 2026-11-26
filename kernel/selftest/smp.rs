@@ -10,6 +10,7 @@ pub static GROUP: Group = Group {
         "smp.running",
         "smp.each",
         "smp.calls",
+        "smp.generic-call",
         "smp.counter",
         "smp.tlb",
         "smp.lock-interrupted",
@@ -44,6 +45,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         "calls, each delivered once",
         ipi::count_test(),
     );
+    counted(
+        r,
+        "smp.generic-call",
+        "processors ran the function together",
+        ipi::generic_call_test(),
+    );
     counted(r, "smp.counter", "readings in order", ipi::counter_test());
     counted(r, "smp.tlb", "processors saw the new page", ipi::tlb_test());
     counted(
@@ -72,3 +79,6 @@ fn stuck(r: &mut Report, _: &BootInfo) {
         format_args!("a call to a stuck processor returned"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &STUCK];

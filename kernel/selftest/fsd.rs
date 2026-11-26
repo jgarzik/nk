@@ -712,3 +712,6 @@ fn broken_list(r: &mut Report, _: &BootInfo) {
         format_args!("a broken list was torn down: {freed} contexts freed"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&REQUESTOR, &STREAM_CONTEXTS, &DRIVER_PAGING, &BROKEN_LIST];

@@ -15,7 +15,8 @@ mod efi;
 
 use nk_bootinfo::{
     BootInfo, FirmwareUse, HHDM_BASE, HIVE_MODULE, KERNEL_BASE, KERNEL_STACK_SIZE, MAX_MODULES,
-    MODULE_NAME_LEN, Module, Serial, has_ram, ram_top, regions, stack_top_in, windows_time,
+    MODULE_NAME_LEN, Module, OVERLAY_MODULE, Serial, has_ram, ram_top, regions, stack_top_in,
+    windows_time,
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
@@ -24,6 +25,7 @@ const KERNEL_PATH: &str = "\\NK\\nkkrnl.exe";
 const DRIVER_DIR: &str = "\\NK\\drivers";
 /// Optional: the SYSTEM registry hive, handed over as one more module.
 const HIVE_PATH: &str = "\\NK\\SYSTEM";
+const OVERLAY_PATH: &str = "\\NK\\OVERLAY";
 /// Optional: one line of `key=value` words for the kernel.
 const CMDLINE_PATH: &str = "\\NK\\cmdline.txt";
 /// Room for one kernel stack at the alignment the kernel requires.
@@ -92,12 +94,16 @@ fn add_module(info: &mut BootInfo, name: &str, data: &[u8]) -> Result<(), &'stat
 }
 
 /// Read every file in the driver directory as a boot module, and the
-/// registry hive if there is one. The hive is not looked into here: the
-/// kernel checks it.
+/// registry hive and the registry overlay where there is one. Neither
+/// is looked into here: the kernel checks them.
 fn load_modules(root: &efi::File, info: &mut BootInfo) -> Result<(), &'static str> {
-    if let Some(file) = root.open(HIVE_PATH) {
-        let data = file.read_all().ok_or("cannot read \\NK\\SYSTEM")?;
-        add_module(info, HIVE_MODULE, data)?;
+    for (path, module, unread) in [
+        (HIVE_PATH, HIVE_MODULE, "cannot read \\NK\\SYSTEM"),
+        (OVERLAY_PATH, OVERLAY_MODULE, "cannot read \\NK\\OVERLAY"),
+    ] {
+        if let Some(file) = root.open(path) {
+            add_module(info, module, file.read_all().ok_or(unread)?)?;
+        }
     }
     let Some(dir) = root.open(DRIVER_DIR) else {
         return Ok(()); // no drivers is a valid configuration

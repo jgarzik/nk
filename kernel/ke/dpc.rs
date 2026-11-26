@@ -2,12 +2,13 @@
 //!
 //! A DPC is work a driver wants done soon, at `DISPATCH_LEVEL`, usually
 //! on behalf of an interrupt handler that must not do it itself. Each
-//! processor has a queue. Queueing a DPC puts it on the queue of the
-//! processor that queued it and asks that processor's interrupt
-//! controller for an interrupt at `DISPATCH_LEVEL`; the interrupt arrives
-//! as soon as the IRQL is below that, however the IRQL came down (code
-//! built with the WDK lowers it in line on x86-64, without a call), and
-//! its handler runs the queue.
+//! processor has a queue. Queueing a DPC puts it on the queue of its
+//! target processor (`KeSetTargetProcessorDpcEx`), or of the processor
+//! that queued it if it has none, and has that processor interrupted at
+//! `DISPATCH_LEVEL`; the interrupt arrives there as soon as the IRQL is
+//! below that, however the IRQL came down (code built with the WDK
+//! lowers it in line on x86-64, without a call), and its handler runs
+//! the queue.
 //!
 //! The driver owns the `KDPC`. NK reads and writes its fields through the
 //! driver's pointer, under the queue's lock, and keeps no reference to
@@ -34,8 +35,11 @@ use core::ffi::c_void;
 use core::mem::{MaybeUninit, offset_of};
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ke::{DPC_TIME_LIMIT_TICKS, Fifo, Link, TIME_INCREMENT};
-use nk_ntabi::ke::{DPC_OBJECT, KDEFERRED_ROUTINE, KDPC, MEDIUM_IMPORTANCE};
+use nk_ke::{DPC_TIME_LIMIT_TICKS, Fifo, Link, TIME_INCREMENT, topology};
+use nk_ntabi::ke::{
+    DPC_OBJECT, HIGH_IMPORTANCE, KDEFERRED_ROUTINE, KDPC, MEDIUM_IMPORTANCE, PROCESSOR_NUMBER,
+};
+use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
 
 /// One processor's queue of DPCs. Queued from any IRQL, so its lock is
 /// held at `HIGH_LEVEL`.
@@ -237,8 +241,78 @@ pub unsafe extern "C" fn KeInitializeDpc(
     }
 }
 
+/// [`KeInitializeThreadedDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializethreadeddpc):
+/// a DPC that Windows may run in a thread at `PASSIVE_LEVEL` and, with
+/// threaded DPCs turned off, runs as an ordinary one. NK always runs it
+/// as an ordinary DPC, at `DISPATCH_LEVEL`, which a threaded DPC's
+/// routine must be written for.
+///
+/// # Safety
+/// `dpc` points to writable storage for a `KDPC`.
+pub unsafe extern "C" fn KeInitializeThreadedDpc(
+    dpc: *mut KDPC,
+    deferred_routine: Option<KDEFERRED_ROUTINE>,
+    deferred_context: *mut c_void,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        KeInitializeDpc(dpc, deferred_routine, deferred_context);
+        (&raw mut (*dpc).Type).write(nk_ntabi::ke::THREADED_DPC_OBJECT);
+    }
+}
+
+/// [`KeSetImportanceDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetimportancedpc):
+/// record how soon the DPC is to run once queued, in the `KDPC`, where
+/// Windows keeps it. A DPC of high importance is queued in front of
+/// the others (`KeInsertQueueDpc`). The rest of what importance decides
+/// on Windows is when the processor is interrupted to run its queue;
+/// NK interrupts it at once for every DPC, which is as soon as Windows
+/// runs any.
+///
+/// # Safety
+/// `dpc` points to a `KDPC` set up by `KeInitializeDpc`.
+pub unsafe extern "C" fn KeSetImportanceDpc(dpc: *mut KDPC, importance: u32) {
+    // SAFETY: per the contract.
+    unsafe { (&raw mut (*dpc).Importance).write(importance as u8) };
+}
+
+/// [`KeFlushQueuedDpcs`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keflushqueueddpcs):
+/// return once every DPC queued on any processor before the call has
+/// run. For below `DISPATCH_LEVEL`.
+pub extern "C" fn KeFlushQueuedDpcs() {
+    flush();
+}
+
+/// [`KeSetTargetProcessorDpcEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettargetprocessordpcex):
+/// have the DPC run on the processor `number` names, whichever
+/// processor queues it. `STATUS_INVALID_PARAMETER` if it names none.
+/// As on Windows, a DPC that is queued keeps the target it has, and the
+/// call still succeeds.
+///
+/// # Safety
+/// `dpc` points to a `KDPC` set up by `KeInitializeDpc`; `number` is
+/// readable.
+pub unsafe extern "C" fn KeSetTargetProcessorDpcEx(
+    dpc: *mut KDPC,
+    number: *const PROCESSOR_NUMBER,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        let index = super::smp::KeGetProcessorIndexFromNumber(number);
+        let Some(target) = topology::dpc_number(index) else {
+            return STATUS_INVALID_PARAMETER;
+        };
+        if queue_word(dpc).load(Ordering::Acquire).is_null() {
+            (&raw mut (*dpc).Number).write(target);
+        }
+    }
+    STATUS_SUCCESS
+}
+
 /// [`KeInsertQueueDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinsertqueuedpc):
-/// queue a DPC on this processor. `FALSE` if it is already queued.
+/// queue a DPC on its target processor, or on this one if it has none,
+/// and interrupt that processor to run it. `FALSE` if it is already
+/// queued. A DPC of high importance goes to the front of the queue.
 ///
 /// # Safety
 /// `dpc` points to a `KDPC` set up by `KeInitializeDpc` that stays valid
@@ -254,7 +328,15 @@ pub unsafe extern "C" fn KeInsertQueueDpc(
     if old < irql::DISPATCH_LEVEL {
         arch::set_irql(irql::DISPATCH_LEVEL);
     }
-    let queue = arch::percpu().dpcs();
+    let here = super::pcr::current_processor();
+    // SAFETY: per the contract.
+    let number = unsafe { (&raw const (*dpc).Number).read() };
+    let target = topology::dpc_target(number).unwrap_or(here);
+    let Some(queue) = arch::percpu_of(target as usize).map(|p| p.dpcs()) else {
+        crate::kd::bugcheck(format_args!(
+            "a DPC was queued for processor {target}, which is not running"
+        ));
+    };
     let queued = {
         let mut list = queue.list.lock();
         // SAFETY: per the contract.
@@ -272,13 +354,29 @@ pub unsafe extern "C" fn KeInsertQueueDpc(
             unsafe {
                 (&raw mut (*dpc).SystemArgument1).write(system_argument1);
                 (&raw mut (*dpc).SystemArgument2).write(system_argument2);
-                list.push(link_of(dpc));
+                if topology::dpc_target(number).is_none() {
+                    // Where Windows notes the processor that queued it.
+                    (&raw mut (*dpc).Number).write(here as u16);
+                }
+                let history = &raw mut (*dpc).ProcessorHistory;
+                history.write(history.read() | 1 << target);
+                if (&raw const (*dpc).Importance).read() == HIGH_IMPORTANCE {
+                    list.push_front(link_of(dpc));
+                } else {
+                    list.push(link_of(dpc));
+                }
             }
         }
         free
     };
     if queued {
-        arch::self_interrupt(arch::DPC.0);
+        if target == here {
+            arch::self_interrupt(arch::DPC.0);
+        } else {
+            // It takes the interrupt when its IRQL allows; halted with
+            // nothing to do, it wakes for it.
+            arch::interrupt_processor(target as usize, arch::DPC.0);
+        }
     }
     // If this lowers the IRQL below DISPATCH_LEVEL the DPC runs here.
     arch::set_irql(old);
@@ -610,6 +708,167 @@ pub fn other_cpu_test() -> Result<u32, &'static str> {
         return Err("the routine did not run at DISPATCH_LEVEL");
     }
     Ok(target)
+}
+
+/// Give test DPC `n` the processor at `index` as its target.
+fn aim(n: usize, index: u32) -> NTSTATUS {
+    let number = PROCESSOR_NUMBER {
+        Group: 0,
+        Number: index as u8,
+        Reserved: 0,
+    };
+    // SAFETY: the test DPCs are static and initialised; the number is a
+    // local.
+    unsafe { KeSetTargetProcessorDpcEx(DPCS[n].ptr(), &raw const number) }
+}
+
+fn number_of(n: usize) -> u16 {
+    // SAFETY: the test DPCs are static and initialised.
+    unsafe { (&raw const (*DPCS[n].ptr()).Number).read() }
+}
+
+/// Set while the DPC that holds a processor is to go on holding it.
+static HOLD: AtomicU32 = AtomicU32::new(0);
+/// Set once that DPC runs.
+static HELD: AtomicU32 = AtomicU32::new(0);
+
+/// Keep this processor in its DPC queue run until told to let go.
+///
+/// # Safety
+/// Called as a DPC routine; it dereferences none of its arguments.
+unsafe extern "C" fn hold(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
+    HELD.store(1, Ordering::Release);
+    while HOLD.load(Ordering::Acquire) != 0 {
+        core::hint::spin_loop();
+    }
+}
+
+/// A DPC with a target processor runs there, whoever queues it, for
+/// every processor; a target that is no processor is refused; a queued
+/// DPC keeps its target; a DPC without one notes where it was queued;
+/// a DPC waiting on another processor's queue can be removed from here.
+/// Returns the processors targeted.
+pub fn target_test() -> Result<u32, &'static str> {
+    let processors = super::smp::online_count() as u32;
+    for target in 0..processors {
+        prepare();
+        if aim(0, target) != STATUS_SUCCESS || number_of(0) != 0x500 + target as u16 {
+            return Err("KeSetTargetProcessorDpcEx did not record a processor as the target");
+        }
+        if !insert(0) {
+            return Err("a fresh DPC with a target was refused");
+        }
+        // Whatever was queued anywhere has run once this returns.
+        flush();
+        if RUNS.load(Ordering::Acquire) != 1 {
+            return Err("a DPC with a target did not run once");
+        }
+        if SEEN_CPU.load(Ordering::Relaxed) != target {
+            return Err("a DPC did not run on its target processor");
+        }
+        if SEEN_IRQL.load(Ordering::Relaxed) != u32::from(irql::DISPATCH_LEVEL)
+            || SEEN_ARGUMENTS.load(Ordering::Relaxed) != 1
+        {
+            return Err("a DPC with a target did not run at DISPATCH_LEVEL with its arguments");
+        }
+        // SAFETY: the test DPCs are static and initialised.
+        let history = unsafe { (&raw const (*DPCS[0].ptr()).ProcessorHistory).read() };
+        if number_of(0) != 0x500 + target as u16 || history != 1 << target {
+            return Err("a DPC that ran on its target does not say so");
+        }
+    }
+
+    prepare();
+    let group_1 = PROCESSOR_NUMBER {
+        Group: 1,
+        Number: 0,
+        Reserved: 0,
+    };
+    // SAFETY: the test DPCs are static and initialised; the number is a
+    // local.
+    let refused = unsafe { KeSetTargetProcessorDpcEx(DPCS[0].ptr(), &raw const group_1) };
+    if aim(0, processors) != STATUS_INVALID_PARAMETER
+        || refused != STATUS_INVALID_PARAMETER
+        || number_of(0) != 0
+    {
+        return Err("a processor there is not was taken as a DPC's target");
+    }
+
+    // Queued, on this processor: its target stays, and so does where an
+    // untargeted one was queued.
+    let old = irql::raise(irql::DISPATCH_LEVEL);
+    let here = super::pcr::current_processor();
+    let other = (here + 1) % processors;
+    let aimed = aim(0, here);
+    let queued = insert(0) && insert(1);
+    let again = aim(0, other);
+    let numbers = (number_of(0), number_of(1));
+    irql::lower(old);
+    flush();
+    if aimed != STATUS_SUCCESS || !queued || again != STATUS_SUCCESS {
+        return Err("a DPC was not queued for its own processor, or its target was refused");
+    }
+    if numbers != (0x500 + here as u16, here as u16) {
+        return Err("a queued DPC's number is not its target or the processor that queued it");
+    }
+    if RUNS.load(Ordering::Acquire) != 2 || TRACE.load(Ordering::Relaxed) != 0x12 {
+        return Err("DPCs queued for this processor did not run in order");
+    }
+
+    if processors > 1 {
+        // The other processor is kept in a DPC; one more waits behind
+        // it on its queue, and is taken off from here.
+        prepare();
+        HELD.store(0, Ordering::Release);
+        HOLD.store(1, Ordering::Release);
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let other = (super::pcr::current_processor() + 1) % processors;
+        // SAFETY: static storage for a `KDPC`, not queued.
+        unsafe { KeInitializeDpc(DPCS[2].ptr(), Some(hold), core::ptr::null_mut()) };
+        let aimed = aim(2, other) == STATUS_SUCCESS && aim(0, other) == STATUS_SUCCESS;
+        let holding = insert(2);
+        irql::lower(old);
+        while holding && HELD.load(Ordering::Acquire) == 0 {
+            core::hint::spin_loop();
+        }
+        let queued = insert(0);
+        // SAFETY: the test DPCs are static and initialised.
+        let removed = unsafe {
+            (
+                KeRemoveQueueDpc(DPCS[0].ptr()),
+                KeRemoveQueueDpc(DPCS[0].ptr()),
+            )
+        };
+        HOLD.store(0, Ordering::Release);
+        flush();
+        if !aimed || !holding || !queued {
+            return Err("DPCs could not be queued for another processor");
+        }
+        if removed != (1, 0) || RUNS.load(Ordering::Acquire) != 0 {
+            return Err("a DPC waiting on another processor's queue was not removed once");
+        }
+    }
+    Ok(processors)
+}
+
+/// A DPC of high importance is queued in front of the others. Returns
+/// the number run.
+pub fn importance_test() -> Result<u32, &'static str> {
+    prepare();
+    // SAFETY: the test DPCs are static and initialised.
+    unsafe { KeSetImportanceDpc(DPCS[2].ptr(), u32::from(HIGH_IMPORTANCE)) };
+    let old = irql::raise(irql::DISPATCH_LEVEL);
+    let accepted = insert(0) && insert(1) && insert(2);
+    irql::lower(old);
+    flush();
+    if !accepted || RUNS.load(Ordering::Acquire) != 3 {
+        return Err("three queued DPCs did not each run once");
+    }
+    // Contexts are 1, 2, 3; the third is the important one.
+    if TRACE.load(Ordering::Relaxed) != 0x312 {
+        return Err("a DPC of high importance did not run before those queued earlier");
+    }
+    Ok(3)
 }
 
 /// An address in the frame of the stack tests' routine, when it last ran.

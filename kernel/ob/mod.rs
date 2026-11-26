@@ -6,12 +6,20 @@
 //! Names compare case-insensitively, whatever the caller asks: Windows
 //! does the same unless it is configured otherwise.
 //!
-//! An entry does not keep its object alive, except a symbolic link's,
-//! which nothing else holds. Whoever names an object takes the name
-//! away again ([`remove`]) before giving up the reference it made the
-//! object with, so under the namespace's lock a name leads to a live
-//! object. Directories are made at boot and never removed.
+//! An entry does not keep its object alive, except a symbolic link's
+//! and a directory's, which nothing else holds. Whoever names an
+//! object takes the name away again ([`remove`]) before giving up the
+//! reference it made the object with, so under the namespace's lock a
+//! name leads to a live object.
+//!
+//! A directory is permanent or temporary, as on Windows. A temporary
+//! one loses its name when its last handle closes; a permanent one
+//! keeps it until it is made temporary ([`make_temporary`]). The boot
+//! directories are permanent. What is in a directory holds a reference
+//! to it, so a directory that lost its name lives on, reachable by
+//! handle alone, until it is empty.
 
+pub mod directory;
 pub mod event;
 pub mod handle;
 pub mod object;
@@ -58,13 +66,14 @@ const THE_LINK: Options = Options {
 };
 
 /// The directories in the root, as on Windows.
-const DIRECTORIES: [&str; 6] = [
+const DIRECTORIES: [&str; 7] = [
     "Device",
     "Driver",
     "FileSystem",
     "GLOBAL??",
     "BaseNamedObjects",
     "KernelObjects",
+    "Callback",
 ];
 
 fn status(error: Error) -> NTSTATUS {
@@ -105,11 +114,35 @@ fn directory(ns: &Namespace, dir: DirId) -> *mut u8 {
         .map_or(core::ptr::null_mut(), |(_, object)| object.0)
 }
 
+/// The directory the object `object` is, if it is one of the tree's.
+fn dir_of(ns: &Namespace, object: *mut u8) -> Option<DirId> {
+    if object == ns.root.0 {
+        return Some(DirId::ROOT);
+    }
+    ns.directories
+        .iter()
+        .find(|(_, directory)| directory.0 == object)
+        .map(|(id, _)| *id)
+}
+
+/// Record that the object `body` is directory `dir`. The table holds
+/// what it needs and no more, so that a directory made and removed
+/// leaves the memory in use as it was. `false` without memory.
+fn record(ns: &mut Namespace, dir: DirId, body: *mut u8) -> bool {
+    if ns.directories.try_reserve_exact(1).is_err() {
+        return false;
+    }
+    ns.directories.push((dir, Entry(body)));
+    true
+}
+
 /// Make the root directory, the directories in it, and `\DosDevices`,
 /// a link to `\??` (which is `\GLOBAL??`: there is one session).
 pub fn init() -> Result<(), &'static str> {
     const NO_MEMORY: &str = "no memory for the object namespace";
     let root = object::create(&object::DIRECTORY_TYPE, OBJECT_DIRECTORY_SIZE).ok_or(NO_MEMORY)?;
+    // SAFETY: the object just made.
+    unsafe { object::set_permanent(root, true) };
     NAMESPACE.lock().root = Entry(root);
     for name in DIRECTORIES {
         let name = wide(name);
@@ -123,9 +156,15 @@ pub fn init() -> Result<(), &'static str> {
             .tree
             .create_directory(None, &path, OPTIONS)
             .map_err(|_| NO_MEMORY)?;
-        ns.directories.push((dir, Entry(body)));
-        // SAFETY: a named object made above; the root holds its name.
-        unsafe { object::entered(body, root) };
+        if !record(&mut ns, dir, body) {
+            return Err(NO_MEMORY);
+        }
+        // SAFETY: a named object made above; the root holds its name,
+        // and the name the reference the object was made with.
+        unsafe {
+            object::set_permanent(body, true);
+            object::entered(body, root);
+        }
     }
     match insert_link(&wide("\\DosDevices"), &wide("\\??")) {
         STATUS_SUCCESS => Ok(()),
@@ -158,11 +197,17 @@ pub unsafe fn insert(path: &[u16], body: *mut u8) -> NTSTATUS {
 /// # Safety
 /// `body` is an object the caller holds a reference to.
 pub unsafe fn remove(body: *mut u8) {
-    let mut ns = NAMESPACE.lock();
-    if ns.tree.remove_object(&Entry(body)) != 0 {
+    let directory = {
+        let mut ns = NAMESPACE.lock();
+        if ns.tree.remove_object(&Entry(body)) == 0 {
+            return;
+        }
         // SAFETY: only an object from `create_named` is given a name.
-        unsafe { object::left(body) };
-    }
+        unsafe { object::left(body) }
+    };
+    // SAFETY: the reference the object held on its directory, given
+    // up with the lock released.
+    unsafe { object::dereference(directory) };
 }
 
 /// A symbolic-link object called `name` that leads to `target`: the
@@ -217,7 +262,7 @@ pub fn insert_link(path: &[u16], target: &[u16]) -> NTSTATUS {
 /// Remove the symbolic link called `path`. Anything else of that name
 /// stays, and the caller is told it is no link.
 pub fn remove_link(path: &[u16]) -> NTSTATUS {
-    let link = {
+    let (link, directory) = {
         let mut ns = NAMESPACE.lock();
         match ns.tree.lookup(None, path, THE_LINK) {
             Ok(outcome) if matches!(outcome.found, Found::SymbolicLink(..)) => {}
@@ -228,15 +273,18 @@ pub fn remove_link(path: &[u16]) -> NTSTATUS {
             Ok(Removed::SymbolicLink(_, Entry(link))) => {
                 // SAFETY: a link object, still held by the reference
                 // its entry had.
-                unsafe { object::left(link) };
-                link
+                (link, unsafe { object::left(link) })
             }
             Ok(_) => return STATUS_OBJECT_TYPE_MISMATCH,
             Err(error) => return status(error),
         }
     };
-    // SAFETY: the reference the entry held, given up outside the lock.
-    unsafe { object::dereference(link) };
+    // SAFETY: the reference the entry held and the one the link held
+    // on its directory, given up outside the lock.
+    unsafe {
+        object::dereference(link);
+        object::dereference(directory);
+    }
     STATUS_SUCCESS
 }
 
@@ -252,14 +300,7 @@ pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(*mut u8, Vec<u16>
     let ns = NAMESPACE.lock();
     let start = match start {
         None => None,
-        Some(object) if object == ns.root.0 => Some(DirId::ROOT),
-        Some(object) => Some(
-            ns.directories
-                .iter()
-                .find(|(_, directory)| directory.0 == object)
-                .map(|(id, _)| *id)
-                .ok_or(STATUS_OBJECT_TYPE_MISMATCH)?,
-        ),
+        Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
     };
     let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
     let body = match outcome.found {
@@ -268,9 +309,187 @@ pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(*mut u8, Vec<u16>
     };
     // SAFETY: an object loses its names, under this lock, before it
     // gives up the reference it was made with; so one that still has a
-    // name is alive. Directories live for ever.
+    // name is alive. A directory's name holds a reference to it, and
+    // the directory a look-up starts at is the caller's to hold.
     unsafe { object::reference(body) };
     Ok((body, outcome.remainder))
+}
+
+/// Make a directory object: called `path` (absolute, or relative to
+/// the directory object `start`), or without a name if `path` is
+/// empty. `permanent` is `OBJ_PERMANENT`. If the name is taken the
+/// creation fails, unless `open_if` (`OBJ_OPENIF`) and a directory
+/// has it: that directory is then the result. Returns the directory
+/// with a reference for the caller, and whether it existed already.
+pub fn create_directory(
+    start: Option<*mut u8>,
+    path: &[u16],
+    permanent: bool,
+    open_if: bool,
+) -> Result<(*mut u8, bool), NTSTATUS> {
+    let body = if path.is_empty() {
+        object::create(&object::DIRECTORY_TYPE, OBJECT_DIRECTORY_SIZE)
+    } else {
+        object::create_named(&object::DIRECTORY_TYPE, OBJECT_DIRECTORY_SIZE, leaf(path))
+    }
+    .ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    let made = (|| {
+        let mut ns = NAMESPACE.lock();
+        if path.is_empty() {
+            let dir = ns.tree.new_directory().map_err(status)?;
+            if !record(&mut ns, dir, body) {
+                let _ = ns.tree.release(dir);
+                return Err(STATUS_INSUFFICIENT_RESOURCES);
+            }
+            // SAFETY: the object made above.
+            unsafe { object::set_permanent(body, permanent) };
+            return Ok((body, false));
+        }
+        let start = match start {
+            None => None,
+            Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
+        };
+        match ns.tree.create_directory(start, path, OPTIONS) {
+            Ok(dir) => {
+                if !record(&mut ns, dir, body) {
+                    ns.tree.detach(dir);
+                    let _ = ns.tree.release(dir);
+                    return Err(STATUS_INSUFFICIENT_RESOURCES);
+                }
+                let parent = ns
+                    .tree
+                    .parent(dir)
+                    .map_or(core::ptr::null_mut(), |parent| directory(&ns, parent));
+                // SAFETY: the object made above, named now: the name
+                // holds a reference to it, and it one to the directory
+                // it is in.
+                unsafe {
+                    object::set_permanent(body, permanent);
+                    object::reference(body);
+                    object::entered(body, parent);
+                }
+                Ok((body, false))
+            }
+            Err(Error::Collision) if open_if => {
+                let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
+                match outcome.found {
+                    Found::Directory(dir) if outcome.remainder.is_empty() => {
+                        let existing = directory(&ns, dir);
+                        // SAFETY: a directory that has a name, or is
+                        // the root, is alive under this lock.
+                        unsafe { object::reference(existing) };
+                        Ok((existing, true))
+                    }
+                    _ => Err(STATUS_OBJECT_TYPE_MISMATCH),
+                }
+            }
+            Err(error) => Err(status(error)),
+        }
+    })();
+    match made {
+        Ok((made, false)) => Ok((made, false)),
+        other => {
+            // SAFETY: the new object was not used: its only reference,
+            // given up with the lock released.
+            unsafe { object::dereference(body) };
+            other
+        }
+    }
+}
+
+/// A temporary directory with no handle open loses its name: no path
+/// leads to it any more, and the name's reference goes. What is in it
+/// stays in it.
+///
+/// # Safety
+/// `body` is a directory object the caller holds a reference to.
+unsafe fn delete_name_check(body: *mut u8) {
+    let parent = {
+        let mut ns = NAMESPACE.lock();
+        // SAFETY: per the contract.
+        let keeps = unsafe {
+            object::permanent(body)
+                || object::handle_count(body).load(core::sync::atomic::Ordering::Acquire) != 0
+        };
+        if keeps {
+            return;
+        }
+        let Some(dir) = dir_of(&ns, body) else {
+            return;
+        };
+        if !ns.tree.detach(dir) {
+            // It has no name: never had one, or lost it already.
+            return;
+        }
+        // SAFETY: a directory that had a name was made with one.
+        unsafe { object::left(body) }
+    };
+    // SAFETY: the reference the directory held on the one it was in,
+    // and the name's on the directory, with the lock released; the
+    // caller's own keeps `body` meanwhile.
+    unsafe {
+        object::dereference(parent);
+        object::dereference(body);
+    }
+}
+
+/// What `ObMakeTemporaryObject` does to a directory: it is no longer
+/// permanent, and loses its name now if no handle is open to it, or
+/// else when the last one closes.
+///
+/// # Safety
+/// `body` is a directory object the caller holds a reference to.
+pub unsafe fn make_temporary(body: *mut u8) {
+    {
+        let _ns = NAMESPACE.lock();
+        // SAFETY: per the contract; the flag is the namespace's.
+        unsafe { object::set_permanent(body, false) };
+    }
+    // SAFETY: per the contract.
+    unsafe { delete_name_check(body) };
+}
+
+/// The directory type's close procedure: a handle to a directory has
+/// been closed. When it was the last, a temporary directory loses its
+/// name.
+///
+/// # Safety
+/// `object` is a directory object the caller holds a reference to.
+pub unsafe extern "C" fn directory_handle_closed(
+    _process: *mut core::ffi::c_void,
+    object: *mut core::ffi::c_void,
+    _process_handle_count: usize,
+    system_handle_count: usize,
+) {
+    if system_handle_count == 1 {
+        // SAFETY: per the contract.
+        unsafe { delete_name_check(object.cast()) };
+    }
+}
+
+/// The directory type's delete procedure: the last reference to a
+/// directory has gone, so it has no name (which held one) and nothing
+/// in it (each entry held one). The tree forgets it.
+///
+/// # Safety
+/// `object` is a directory object nothing refers to any more.
+pub unsafe extern "C" fn directory_deleted(object: *mut core::ffi::c_void) {
+    let mut ns = NAMESPACE.lock();
+    let Some(at) = ns
+        .directories
+        .iter()
+        .position(|(_, directory)| directory.0 == object.cast())
+    else {
+        // It never became a directory of the tree.
+        return;
+    };
+    let (dir, _) = ns.directories.swap_remove(at);
+    ns.directories.shrink_to_fit();
+    if ns.tree.release(dir).is_err() {
+        crate::kd::bugcheck(format_args!(
+            "a directory object was deleted while it had a name or entries"
+        ));
+    }
 }
 
 /// Number of entries in the namespace, the boot directories included

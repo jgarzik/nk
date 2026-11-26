@@ -10,6 +10,7 @@ lock changes this file in the same commit.
 | `PASSIVE_LEVEL` | 0 | | | threads: driver entry, dispatch routines, work items, the tests |
 | `APC_LEVEL` | 1 | | | a thread holding a fast mutex |
 | `DISPATCH_LEVEL` | 2 | `0x2F` | SGI 3 | DPCs, the dispatcher, code holding a spin lock |
+| device levels | 3 to 11 | `0x30` to `0xBF` | shared peripheral interrupts | interrupt service routines, at their object's `SynchronizeIrql`; code holding an interrupt's spin lock |
 | clock | 13 | `0xD1` | virtual timer PPI | the clock tick |
 | interprocessor | 14 | `0xE1` | SGI 1 | `ke::ipi` routines |
 | `HIGH_LEVEL` | 15 | | | the locks of the highest ranks (the DPC queues, the console and those beside them in the table below); the bugcheck path |
@@ -59,24 +60,42 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
-| 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
+| 10 | `io::driver::BOOT_REINITIALIZE` | the routines boot drivers registered for reinitialisation, and whether they have been run; never held with `DRIVERS` | DISPATCH |
+| 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
+| 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and its thread has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
+| 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |
+| 20 | `pnp::depend::DEPENDENCIES` | which device depends on which, and the strings devices are bound by; never held with another lock of this rank | DISPATCH |
+| 20 | `pnp::notify::REGISTRATIONS` | the Plug and Play notification registrations and each one's count of callbacks in progress; never held with another lock of this rank, nor across a callback | DISPATCH |
+| 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
+| 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
+| 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
+| 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
+| 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
+| 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
+| 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing; the devices registered with the runtime power framework, their components' counts and conditions, and which are owed callbacks from a worker | DISPATCH |
+| 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |
+| 39 | `hal::variables::FIRMWARE` | the firmware's variable services: one call into them at a time, held across the call and nothing else | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
+| 212 | `ke::kinterrupt::CONNECT` | which interrupt objects are connected: each object's `Connected` mark, and each vector's chain together with whether its line is unmasked | DISPATCH |
 | 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
 | 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
+| 218 | `hal::interrupt::STATE` | which vector each device interrupt has, and the routing registers of the I/O APICs and the GIC distributor | DISPATCH |
+| 219 | `ex::callback::LOCK` | every callback object's list of registrations, and each registration's count of calls under way and its mark of being unregistered | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links and state, and the priority each is queued at | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
 | 233 | `ps::silo::HOST` | which silo context slots are allocated, and the context the host silo holds in each | DISPATCH |
 | 234 | `se::impersonate::IMPERSONATION` | what every thread impersonates: `ETHREAD.ClientSecurity` and the two flags that go with it | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
+| 238 | `hal::pci::CONFIG` | PCI configuration space: the configuration ports' address register, and the registers of one request as a group | HIGH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 242 | `ke::bugcheck::RECORDS` | the list of bugcheck callback records drivers registered, and each record's links and state | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
@@ -88,6 +107,15 @@ Why this order:
   under the I/O database lock, so "the last reference went" and "the
   device was deleted" are seen together by whichever comes second. That
   one frees the device, after dropping the lock.
+- The attachment chain of every stack is under the same lock, as
+  Windows keeps it under its one database lock: a device is attached,
+  detached, and the top or bottom of its stack found and referenced,
+  with the lock held, so a walk of the chain never meets a device that
+  is being unlinked. "Nothing is attached any more" joins the two
+  conditions above: the last of the three to come true, seen under the
+  lock, frees the device after dropping it. A driver's
+  `FastIoDetachDevice` is called with the lock dropped and the deleted
+  device counted.
 - The namespace is one lock: every directory, every entry. An object
   found by name is given a pointer reference under it, and whoever named
   an object takes the name away under it before giving up the reference
@@ -97,7 +125,14 @@ Why this order:
   the database lock, sending a driver the create request) happens
   outside it.
 - No object's last reference is dropped under the namespace lock: a
-  removed symbolic link's object is released after it.
+  removed symbolic link's object is released after it, and so is the
+  reference a named object holds on its directory, and a directory's
+  name on the directory. A directory's delete procedure takes the lock
+  itself, to have the tree forget it.
+- Whether a directory is permanent (its header's flag) is read and
+  written under the namespace lock, with its handle count read there
+  too: a temporary directory's name goes under the lock when the count
+  is seen to be zero.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
@@ -107,6 +142,20 @@ Why this order:
   is queued after the lock is dropped, and a driver is sent its
   registration request with no lock held. Like the tables above the
   pool, the lists allocate from it under the lock.
+- The table of hardware error sources is locked only around a look-up
+  or a change of one entry, and allocates from the pool under the lock
+  when it grows. A source's routines (`Initialize`, `Uninitialize`) are
+  the driver's and are called with the lock dropped: the entry counts
+  the calls in progress instead, and a removal waits for the count to
+  reach zero.
+- The errata database is locked around one registration or its
+  withdrawal, which allocate from the pool under it. What a provider
+  registers is copied out of its memory before the lock is taken, and
+  its driver object is referenced and released outside it.
+- The watches on keys are found under the registry's lock, which is
+  what says which keys lie above the one that changed, and taken out
+  of their table there; the watchers are told (a status block written,
+  an event set, a work item queued) after both locks are released.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
   memory is read and written outside it. The key object the handle
@@ -137,6 +186,16 @@ Why this order:
   the interprocessor interrupt, so a processor waiting for it still
   answers the call in progress. A routine run by a call takes no lock
   below rank 200: its caller may hold any of them.
+- The list of devices' interrupts is read into a copy under its lock
+  and used outside it; like the tables above the pool it allocates
+  under the lock.
+- Connecting and disconnecting interrupt objects is serialised by one
+  lock, so that a vector's first connection and last disconnection
+  turn its line on and off in order. Inside it are the routing lock
+  and, at `HIGH_LEVEL`, the chain's gate (below); the object is
+  allocated before and freed after. No service routine runs under it.
+- The routing lock is held around a search of the vector table and a
+  few register writes; nothing is taken inside it.
 - A work queue's lock covers only linking and unlinking items. The
   semaphore that wakes a worker is released after the lock is dropped,
   and no work routine runs with it held.
@@ -171,6 +230,9 @@ Why this order:
   taken with any of them held and none of them inside it: not the
   pool's (a replaced descriptor is freed after the lock is dropped),
   not a second object's.
+- PCI configuration space is read and written at any IRQL, so its lock
+  is held at `HIGH_LEVEL`, around register accesses and nothing else:
+  the caller's buffer is copied under it, no lock is taken inside it.
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.
@@ -226,6 +288,27 @@ owner).
 - A library's `DllInitialize` and `DllUnload` run with it held, as on
   Windows, where the system's load lock is held around them. A driver's
   entry point and unload routine run without it.
+
+### The Plug and Play engine's mutex
+
+Everything the Plug and Play manager does to a device (asking it who
+it is, calling `AddDevice`, assigning resources, starting, enumerating,
+removing) is serialised by a kernel mutex, `pnp::engine::ENGINE`, as
+Windows serialises device actions on one worker: requests are sent to
+device stacks and waited for with it held. No thread of a work queue
+ever takes it: what drivers ask for is done by the engine's own
+thread.
+
+- It is taken at `PASSIVE_LEVEL` with no spin lock held; whoever holds
+  it may take any ranked lock, and holds none across a request or a
+  call into a driver.
+- It covers the order of events on the tree and the table of resource
+  claims, which only its holder touches. Nodes are written only by its
+  holder, under the tree's spin lock, which is what other threads read
+  them under.
+- A driver called with it held must not wait for Plug and Play work:
+  `IoInvalidateDeviceRelations` only queues. Loading a driver for a
+  device takes the loader's mutex inside it, never the other way round.
 
 ### The silo monitors' mutex
 
@@ -433,6 +516,19 @@ IRQL or because Windows defines it as one word changed atomically:
   queues of threads behind them are under ranked locks (the table
   above).
 
+- A vector's chain of interrupt objects (`kernel/ke/kinterrupt.rs`).
+  A service routine cannot run under a ranked lock, and the chain it
+  is found through must not change under it. Each chain has a gate
+  word: a count of the processors walking the chain, and a bit set by
+  a processor changing it. A walker waits while the bit is set, then
+  counts itself in. A changer raises to `HIGH_LEVEL`, so the vector's
+  own interrupt cannot arrive on its processor and wait for it, sets
+  the bit, waits for the count to reach zero, edits, and clears the
+  word. Changers are serialised by the connect lock (rank 212). A
+  routine that disconnects its own interrupt object would wait for
+  itself; Windows forbids that too (`IoDisconnectInterruptEx` is for
+  `PASSIVE_LEVEL`).
+
 ## What drivers get
 
 Drivers use Windows' routines, not `ke::SpinLock`
@@ -440,10 +536,19 @@ Drivers use Windows' routines, not `ke::SpinLock`
 when free; NK touches it only with single atomic operations through the
 driver's pointer and keeps no state of its own about it. The acquire
 routines raise the IRQL to `DISPATCH_LEVEL` and return the old level; the
-`AtDpcLevel` ones leave it alone. A queued spin lock fills in the
-driver's handle as Windows does but does not queue its waiters, so the
-arrival order Windows guarantees is absent; the ledger marks that export
-partial.
+`AtDpcLevel` ones leave it alone. A queued spin lock is a queue as on
+Windows: the lock's word names the handle of the last to come, each
+handle the one behind it, and a release hands the lock to the next in
+line, so waiters get it in the order they came. A lock taken that way
+is never taken with the plain routines, as Windows requires. A guarded
+mutex is a fast mutex under another name, as in the Windows NK follows.
+
+An interrupt object's spin lock (`KINTERRUPT.ActualLock`: the object's
+own word or the driver's) is a `KSPIN_LOCK` held at the object's
+`SynchronizeIrql`: by the kernel around the service routine, and by
+`KeSynchronizeExecution` and `KeAcquireInterruptSpinLock` for the
+driver. It has no rank; NK holds none of its ranked locks when it takes
+it.
 
 The cancel spin lock (`IoAcquireCancelSpinLock`, `io::irp::CANCEL_LOCK`)
 is a driver's kind of lock too: one for the whole system, taken by
@@ -453,7 +558,19 @@ none of its ranked locks while holding it, except through what the
 driver's routine calls; the cancel routine of a cancel-safe queue
 releases it before it takes the queue's lock.
 
+A reader/writer spin lock (`EX_SPIN_LOCK`, `kernel/ex/spinlock.rs`) is
+a driver's lock of the same kind: a `LONG` with Windows' bits, changed
+only by single atomic operations, held at `DISPATCH_LEVEL`, not ranked
+or recorded, and with no queue. The interlocked list routines of the
+same file hold the driver's `KSPIN_LOCK` at `HIGH_LEVEL` for the few
+instructions that relink a list, and take nothing inside it.
+
 ### Locks a driver's thread sleeps on
+
+Run-down protection (`kernel/ex/rundown.rs`) is not a lock: taking and
+giving back a hold never wait, at any IRQL. Only the thread that runs
+the object down sleeps, below `DISPATCH_LEVEL`, on an event in its own
+stack frame that the last release sets; no lock of NK's is involved.
 
 A push lock (`kernel/ex/pushlock.rs`) is one word the driver owns, with
 Windows' bits; NK changes it only by compare-and-swap through the
@@ -487,6 +604,15 @@ IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
 itself stops the system (freeing memory that is not a pool block, say),
 so does NK, with the same bugcheck code.
+
+### A device's queue
+
+A device queue's lock (`KDEVICE_QUEUE.Lock`, `io::startio`) is a
+driver's kind of spin lock, in the driver's device object: a driver's
+cancel routine takes a waiting request out under it. NK takes it only
+around linking and unlinking an entry, inside the cancel spin lock when
+the driver's requests are cancellable and never the other way round,
+and calls nothing while it is held.
 
 ## How it is tested
 

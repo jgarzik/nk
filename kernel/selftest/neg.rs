@@ -284,3 +284,34 @@ fn trap(r: &mut Report, _: &BootInfo) {
         format_args!("a trap returned {status:#x} and handle {port:p}"),
     );
 }
+
+/// This file's test groups, in the order they run.
+/// A fatal hardware error reported to the HAL must stop the system as
+/// Windows stops for one.
+pub static HARDWARE_ERROR: Group = Group {
+    names: &["neg.hardware-error"],
+    run: hardware_error,
+    manual: true,
+};
+
+fn hardware_error(_: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.hardware-error");
+    crate::hal::fatal::stop_test()
+}
+
+pub static GROUPS: &[&Group] = &[
+    &PANIC,
+    &HARDWARE_ERROR,
+    &FAULT,
+    &NULL,
+    &LOW_MEMORY,
+    &STACK_OVERFLOW,
+    &DPC_STACK_OVERFLOW,
+    &LOCK_ORDER,
+    &LOCK_TWICE,
+    &IRQL_LOWER,
+    &META_FAIL,
+    &BREAKPOINT,
+    &PROTECTED_CLOSE,
+    &TRAP,
+];

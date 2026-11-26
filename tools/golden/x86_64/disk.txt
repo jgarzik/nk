@@ -1,0 +1,5 @@
+disk.io.requestor ok
+disk.io.answers ok
+disk.io.proof ok
+disk.io.image ok
+disk.io.detects ok

@@ -1492,6 +1492,8 @@ pub static WMI: Group = Group {
         "wmi.pdo",
         "wmi.deregister-waits",
         "wmi.event",
+        "wmi.open-block",
+        "wmi.stack",
     ],
     run: wmi,
     manual: false,
@@ -1507,6 +1509,82 @@ fn wmi(r: &mut Report, _: &BootInfo) {
         with_wmi_device(wmi_deregister_waits)
     });
     r.check("wmi.event", wmi_event);
+    r.check("wmi.open-block", wmi_open_block);
+    r.check("wmi.stack", || with_wmi_device(wmi_stack));
+}
+
+/// The registration request of a device with another attached above
+/// it goes to the one above, the top of the stack, and names the
+/// device that registered.
+fn wmi_stack(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
+    use crate::io::device::{
+        IoAttachDeviceToDeviceStack, IoCreateDevice, IoDeleteDevice, IoDetachDevice,
+    };
+    let mut upper = core::ptr::null_mut();
+    // SAFETY: the test's own driver object and devices; the upper one
+    // is detached and deleted before the lower one goes.
+    unsafe {
+        let driver = (*device).DriverObject;
+        if IoCreateDevice(driver, 0, core::ptr::null(), 0x22, 0, 0, &raw mut upper)
+            != STATUS_SUCCESS
+        {
+            return Err("could not create a second device object");
+        }
+        (*device).Flags &= !nk_ntabi::io::DO_DEVICE_INITIALIZING;
+        (*upper).Flags &= !nk_ntabi::io::DO_DEVICE_INITIALIZING;
+        let below = IoAttachDeviceToDeviceStack(upper, device);
+        let verdict = (|| {
+            if below != device {
+                return Err("a device could not be attached above another");
+            }
+            DISPATCHED_TO.store(core::ptr::null_mut(), Ordering::Release);
+            if wmi_control(device, 1) != STATUS_SUCCESS {
+                return Err("a device was not registered");
+            }
+            let seen = requests(1);
+            // Sent to the device above, with the device below as its
+            // provider id.
+            let expected = Seen {
+                for_device: false,
+                ..first(IRP_MN_REGINFO_EX)
+            };
+            if seen != [expected] || DISPATCHED_TO.load(Ordering::Acquire) != upper {
+                return Err("the registration request did not go to the top of the stack");
+            }
+            if wmi_control(device, 2) != STATUS_SUCCESS {
+                return Err("a registered device was not deregistered");
+            }
+            Ok(())
+        })();
+        if !below.is_null() {
+            IoDetachDevice(device);
+        }
+        IoDeleteDevice(upper);
+        verdict
+    }
+}
+
+/// The device the last registration request was dispatched to.
+static DISPATCHED_TO: core::sync::atomic::AtomicPtr<DEVICE_OBJECT> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+/// A data block no device registers is not found, and nothing is
+/// handed out for it.
+fn wmi_open_block() -> Result<(), &'static str> {
+    let guid = GUID {
+        Data1: 0x4E4B_0001,
+        Data2: 0x4E4B,
+        Data3: 0x4E4B,
+        Data4: *b"NoBlock!",
+    };
+    let mut object = core::ptr::without_provenance_mut::<c_void>(0x5A5A);
+    // WMIGUID_QUERY | WMIGUID_EXECUTE, as acpi.sys asks.
+    // SAFETY: locals that outlive the call.
+    let status = unsafe { crate::io::wmi::IoWMIOpenBlock(&raw const guid, 0x11, &raw mut object) };
+    if status != STATUS_WMI_GUID_NOT_FOUND || object.addr() != 0x5A5A {
+        return Err("a WMI data block nobody registered was opened, or not reported as unknown");
+    }
+    Ok(())
 }
 
 /// One registration request, as the test driver saw it arrive.
@@ -1607,6 +1685,7 @@ unsafe extern "C" fn system_control(device: *mut DEVICE_OBJECT, irp: *mut IRP) -
         let location = (*irp).CurrentStackLocation;
         let [provider, data_path, buffer_size, buffer] = (*location).Parameters;
         let minor = (*location).MinorFunction;
+        DISPATCHED_TO.store(device, Ordering::Release);
         let seen = Seen {
             minor,
             irql: crate::ke::irql::current(),
@@ -1983,3 +2062,15 @@ fn wmi_event() -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[
+    &PROVIDERS,
+    &CLASSIC,
+    &WMI,
+    &GROUP,
+    &SYSTEM,
+    &BUGCHECK_EX,
+    &BUGCHECK_CALLBACK,
+    &UNREGISTER_TWICE,
+];

@@ -29,6 +29,7 @@ pub static GROUP: Group = Group {
         "ex.timer.periodic",
         "ex.timer.delete",
         "ex.timer.wait",
+        "ex.timer.internal",
         "ex.pool.raise",
         "ex.uuid.fields",
         "ex.uuid.unique",
@@ -116,6 +117,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "ex.timer.callback", "callbacks:", timer::callback_test());
     counted(r, "ex.timer.periodic", "callbacks:", timer::periodic_test());
+    r.check("ex.timer.internal", timer::internal_test);
     counted(
         r,
         "ex.timer.delete",
@@ -167,3 +169,6 @@ fn pool_raise() -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

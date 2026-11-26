@@ -1,6 +1,7 @@
 //! The drivers that start at boot: the order the registry gives, and
 //! what became of each before the tests began. And the image of a
-//! service whose key does not name one.
+//! service whose key does not name one. And a driver starting a
+//! service by its key (`ZwLoadDriver`).
 
 use super::resources;
 use crate::io::service;
@@ -9,9 +10,16 @@ use crate::{cm, ldr};
 use alloc::string::String;
 use core::fmt::Write;
 use nk_bootinfo::BootInfo;
+use nk_ntabi::io::UNICODE_STRING;
+use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["io.service.boot-start", "io.service.default-image"],
+    names: &[
+        "io.service.boot-start",
+        "io.service.default-image",
+        "io.service.zw-load-missing",
+        "io.service.zw-load",
+    ],
     run,
     manual: false,
 };
@@ -81,10 +89,78 @@ fn default_image() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// `ZwLoadDriver` for the key `path`.
+fn zw_load(path: &str) -> NTSTATUS {
+    let mut text: alloc::vec::Vec<u16> = path.encode_utf16().collect();
+    let name = UNICODE_STRING {
+        Length: (text.len() * 2) as u16,
+        MaximumLength: (text.len() * 2) as u16,
+        Buffer: text.as_mut_ptr(),
+    };
+    // SAFETY: a counted string over a local.
+    unsafe { service::ZwLoadDriver(&raw const name) }
+}
+
+/// A service key that is not there, as `acpi.sys` asks for `acpiex`:
+/// the status of opening the key.
+fn zw_load_missing() -> Result<(), &'static str> {
+    let missing = [
+        (
+            "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\acpiex",
+            STATUS_OBJECT_NAME_NOT_FOUND,
+        ),
+        (
+            "\\REGISTRY\\MACHINE\\SYSTEM\\CURRENTCONTROLSET\\SERVICES\\NkNone",
+            STATUS_OBJECT_NAME_NOT_FOUND,
+        ),
+        (
+            "\\Registry\\Machine\\NkNone\\Services\\x",
+            STATUS_OBJECT_NAME_NOT_FOUND,
+        ),
+        ("\\NkNoDirectory\\x", STATUS_OBJECT_PATH_NOT_FOUND),
+        ("\\Device", STATUS_OBJECT_TYPE_MISMATCH),
+        ("acpiex", STATUS_OBJECT_PATH_SYNTAX_BAD),
+        ("", STATUS_OBJECT_PATH_SYNTAX_BAD),
+    ];
+    for (path, expected) in missing {
+        if zw_load(path) != expected {
+            return Err("a service key that is not there was not reported as the open reports it");
+        }
+    }
+    Ok(())
+}
+
+/// A driver starts a service by its key, in any letter case; a second
+/// start says the image is loaded already.
+fn zw_load_starts() -> Result<(), &'static str> {
+    service::create(PLAIN, "nkc-irql.sys").map_err(|_| "the key could not be made")?;
+    let path = alloc::format!("\\registry\\MACHINE\\System\\CurrentControlSet\\Services\\{PLAIN}");
+    let before = resources();
+    if zw_load(&path) != STATUS_SUCCESS {
+        return Err("ZwLoadDriver did not start the service");
+    }
+    let ran = service::running(PLAIN);
+    let again = zw_load(&path);
+    service::stop(PLAIN)?;
+    if !ran || again != STATUS_IMAGE_ALREADY_LOADED {
+        return Err("the driver is not running, or was started twice");
+    }
+    if resources() != before {
+        return Err("starting and stopping the service left something behind");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
+    r.check("io.service.zw-load-missing", zw_load_missing);
     if ldr::boot_file("nkc-irql.sys").is_some() {
         r.check("io.service.default-image", default_image);
+        r.check("io.service.zw-load", zw_load_starts);
     } else {
+        r.skip(
+            "io.service.zw-load",
+            format_args!("module nkc-irql.sys not provided"),
+        );
         r.skip(
             "io.service.default-image",
             format_args!("module nkc-irql.sys not provided"),
@@ -101,3 +177,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("io.service.boot-start", format_args!("{why}")),
     }
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

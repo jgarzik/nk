@@ -47,3 +47,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         timer::other_cpu_test(),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

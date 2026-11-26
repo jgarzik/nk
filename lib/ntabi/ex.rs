@@ -8,6 +8,31 @@ use core::ffi::c_void;
 /// free. Its bits are `nk_ex::pushlock`'s.
 pub type EX_PUSH_LOCK = usize;
 
+/// `EX_RUNDOWN_REF`: one word the driver owns, zero when new. Its bits
+/// are `nk_ex::rundown`'s.
+pub type EX_RUNDOWN_REF = usize;
+
+/// `EX_SPIN_LOCK`: a `LONG` the driver owns, zero when free. Its bits
+/// are `nk_ex::spinlock`'s.
+pub type EX_SPIN_LOCK = i32;
+
+/// `EX_RUNDOWN_REF_CACHE_AWARE`: run-down protection with a word a
+/// processor. Drivers hold it by pointer; the layout is the kernel's
+/// own (its public symbols give it), which a driver that sets the
+/// memory aside itself depends on only through
+/// `ExSizeOfRundownProtectionCacheAware`.
+#[repr(C)]
+pub struct EX_RUNDOWN_REF_CACHE_AWARE {
+    /// The first processor's word.
+    pub RunRefs: *mut EX_RUNDOWN_REF,
+    /// The block the words are in, when the kernel allocated them.
+    pub PoolToFree: *mut c_void,
+    /// Bytes from one processor's word to the next.
+    pub RunRefSize: u32,
+    /// How many words.
+    pub Number: u32,
+}
+
 /// `SLIST_ENTRY`: an entry of a sequenced list; 16-byte aligned, which
 /// is what leaves the header four bits to spare.
 #[repr(C, align(16))]
@@ -26,6 +51,7 @@ pub struct SLIST_HEADER {
 
 /// `GUID`, which `UUID` is another name for.
 #[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GUID {
     pub Data1: u32,
     pub Data2: u16,
@@ -193,6 +219,12 @@ const _: () = {
     assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteContext) == 0x10);
 
     assert!(size_of::<EX_PUSH_LOCK>() == 8);
+    assert!(size_of::<EX_RUNDOWN_REF>() == 8);
+    assert!(size_of::<EX_SPIN_LOCK>() == 4);
+    assert!(size_of::<EX_RUNDOWN_REF_CACHE_AWARE>() == 0x18);
+    assert!(offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, PoolToFree) == 0x08);
+    assert!(offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefSize) == 0x10);
+    assert!(offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, Number) == 0x14);
     assert!(size_of::<SLIST_ENTRY>() == 0x10);
     assert!(size_of::<SLIST_HEADER>() == 0x10);
     assert!(align_of::<SLIST_HEADER>() == 0x10);

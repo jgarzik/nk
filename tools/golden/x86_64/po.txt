@@ -1,0 +1,10 @@
+po.information ok
+po.request-power-irp ok
+po.power-state ok
+po.setting-callback ok
+po.setting-unregister ok
+po.coalescing ok
+po.fx-register ok
+po.fx-active-idle ok
+po.fx-no-extension ok
+po.power-action ok

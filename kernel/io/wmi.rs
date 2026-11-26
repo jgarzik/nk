@@ -134,12 +134,15 @@ unsafe fn ask(device: *mut DEVICE_OBJECT, update: bool) {
             && let Some(pdos) = rules::registration_pdos(&reply, minor == IRP_MN_REGINFO_EX)
         {
             // The driver referenced each physical device object for
-            // WMI, which keeps nothing of the registration: the
+            // WMI, which keeps only the names of the data blocks: the
             // references go back.
             for pdo in pdos {
                 // SAFETY: an object the driver referenced on WMI's
                 // behalf.
                 unsafe { ob::object::dereference(pdo as *mut u8) };
+            }
+            if let Some(guids) = rules::registration_guids(&reply) {
+                WMI.lock().set_guids(device.addr(), guids);
             }
         }
         return;
@@ -168,8 +171,9 @@ unsafe extern "C" fn completed(
 /// The IRP is built as Windows builds it: a stack location of WMI's own
 /// above the driver's, the buffer as the system buffer, the status
 /// preset to `STATUS_NOT_SUPPORTED`, a completion routine that takes
-/// the IRP back. NK has no device stacks yet, so the request goes to
-/// the device itself, where Windows sends it to the top of its stack.
+/// the IRP back. The request goes to the top of the stack the device
+/// is in, sized for that stack, and still names the device that
+/// registered as its provider: a filter above passes it down.
 ///
 /// # Safety
 /// `device` is a live device object; `buffer` is `size` bytes of pool.
@@ -182,8 +186,11 @@ unsafe fn send(
 ) -> (NTSTATUS, usize) {
     // SAFETY: per the contract.
     unsafe {
-        let request = irp::alloc((*device).StackSize.saturating_add(1));
+        // Held while the request is with the stack.
+        let top = device::IoGetAttachedDeviceReference(device);
+        let request = irp::alloc((*top).StackSize.saturating_add(1));
         if request.is_null() {
+            ob::object::dereference(top.cast());
             return (STATUS_INSUFFICIENT_RESOURCES, 0);
         }
         // An all-zero event is a valid value; it is initialised just
@@ -211,7 +218,7 @@ unsafe fn send(
         (*location).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
         // Nothing is owed if the routine does not return: beneath it is
         // the worker, where an exception is unhandled.
-        let returned = irp::call_driver(device, request, &Guard::Nothing);
+        let returned = irp::call_driver(top, request, &Guard::Nothing);
         if returned != STATUS_PENDING && wait::KeReadStateEvent(&raw mut done) == 0 {
             // The driver neither completed the request nor said it
             // would. It may still hold the IRP: leave it be.
@@ -224,6 +231,7 @@ unsafe fn send(
         wait::wait(Some((&raw mut done).cast()), None);
         let result = ((*request).IoStatus.Status, (*request).IoStatus.Information);
         irp::free(request);
+        ob::object::dereference(top.cast());
         result
     }
 }
@@ -332,6 +340,47 @@ pub unsafe extern "C" fn IoWMIRegistrationControl(device: *mut c_void, action: u
         }
         _ => STATUS_INVALID_PARAMETER,
     }
+}
+
+/// `WMIGUID_NOTIFICATION`, and the access that asks for a trace
+/// provider's block: opens that are for events, not for data.
+const WMIGUID_NOTIFICATION: u32 = 0x4;
+const TRACELOG_REGISTER_GUIDS: u32 = 0x0004_0000;
+
+/// [`IoWMIOpenBlock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiopenblock):
+/// open a WMI data block, by its GUID, to query it, set it or run its
+/// methods. A block no registered device's registration names is not
+/// there: `STATUS_WMI_GUID_NOT_FOUND`, as the pinned kernel answers
+/// such an open (`WmipOpenBlock`), and nothing is written.
+///
+/// NK is no WMI consumer: it keeps the names of the blocks devices
+/// register and never asks a device for one. Opening a block that is
+/// registered, or opening one for its events (which Windows allows
+/// before anyone registers it), stops the system by name: the
+/// ledger's "partial".
+///
+/// # Safety
+/// `guid` is readable; `data_block_object` is writable.
+pub unsafe extern "C" fn IoWMIOpenBlock(
+    guid: *const GUID,
+    desired_access: u32,
+    _data_block_object: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract: a GUID is sixteen bytes.
+    let name = unsafe { guid.cast::<[u8; 16]>().read_unaligned() };
+    if desired_access & (WMIGUID_NOTIFICATION | TRACELOG_REGISTER_GUIDS) != 0 {
+        kd::bugcheck(format_args!(
+            "IoWMIOpenBlock: opening the WMI block {name:02x?} for its events (access \
+             {desired_access:#x}) is not implemented"
+        ));
+    }
+    if !WMI.lock().registers(&name) {
+        return STATUS_WMI_GUID_NOT_FOUND;
+    }
+    kd::bugcheck(format_args!(
+        "IoWMIOpenBlock: the WMI data block {name:02x?} is registered by a driver, and querying \
+         a registered block is not implemented"
+    ))
 }
 
 /// [`IoWMIDeviceObjectToProviderId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmideviceobjecttoproviderid):

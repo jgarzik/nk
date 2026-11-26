@@ -1,7 +1,20 @@
 //! Platform services below the kernel proper: firmware runtime calls and
 //! the description of the machine.
 
+pub mod acpi;
+pub mod bus;
+pub mod description;
+pub mod dispatch;
+pub mod dma;
+pub mod fatal;
+pub mod interrupt;
+pub mod pci;
 pub mod platform;
+pub mod pm;
+pub mod query;
+pub mod sysinfo;
+pub mod target;
+pub mod variables;
 
 use crate::arch;
 use core::ffi::c_void;
@@ -20,6 +33,10 @@ type ResetSystem = unsafe extern "efiapi" fn(u32, usize, usize, *const c_void) -
 
 pub fn init(info: &BootInfo) {
     EFI_RUNTIME.store(info.efi_runtime, Ordering::Relaxed);
+    acpi::init();
+    interrupt::init();
+    pci::provide();
+    sysinfo::init();
 }
 
 /// Run `call`, which calls into firmware's runtime code. Every such call

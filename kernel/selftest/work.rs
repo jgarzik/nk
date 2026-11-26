@@ -110,3 +110,6 @@ fn bad_return(r: &mut Report, _: &BootInfo) {
         format_args!("a work routine returned at a raised IRQL, and nothing happened"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &BAD_RETURN];

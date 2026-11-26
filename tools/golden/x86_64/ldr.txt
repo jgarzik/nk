@@ -1,0 +1,12 @@
+ldr.module.kernel ok
+ldr.import.kernel-names ok
+ldr.module.driver ok
+ldr.reject.wrong-machine ok
+ldr.reject.unresolved-import ok
+ldr.lib.absent ok
+ldr.lib.forwarder ok
+ldr.lib.bind ok
+ldr.lib.counts ok
+ldr.lib.refused ok
+ldr.lib.as-service ok
+ldr.lib.no-memory ok

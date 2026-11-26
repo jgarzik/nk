@@ -10,6 +10,8 @@ pub static GROUP: Group = Group {
         "dpc.order",
         "dpc.remove",
         "dpc.other-cpu",
+        "dpc.target",
+        "dpc.importance",
         "dpc.stack",
         "dpc.flush",
     ],
@@ -29,6 +31,8 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "dpc.order", "in order:", dpc::order_test());
     counted(r, "dpc.remove", "positions removed:", dpc::remove_test());
     counted(r, "dpc.other-cpu", "on processor", dpc::other_cpu_test());
+    counted(r, "dpc.target", "processors targeted:", dpc::target_test());
+    counted(r, "dpc.importance", "in order:", dpc::importance_test());
     counted(r, "dpc.stack", "also on processor", dpc::stack_test());
     counted(r, "dpc.flush", "DPCs waited for:", dpc::flush_test());
 }
@@ -48,3 +52,6 @@ fn watchdog(r: &mut Report, _: &BootInfo) {
         format_args!("a DPC that never returns returned"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &WATCHDOG];

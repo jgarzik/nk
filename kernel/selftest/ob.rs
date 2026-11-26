@@ -25,6 +25,7 @@ pub static GROUP: Group = Group {
         "ob.namespace.name-info",
         "ob.handle-access",
         "ob.event-handle",
+        "ob.directory-handle",
         "ob.security",
         "ob.security-store",
         "ob.security-store-smp",
@@ -110,6 +111,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         "waits by handle:",
         crate::ob::event::self_test(),
     );
+    counted(
+        r,
+        "ob.directory-handle",
+        "directories:",
+        crate::ob::directory::directory_test(),
+    );
     r.check("ob.security", crate::ob::security::self_test);
     counted(
         r,
@@ -124,3 +131,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         crate::ob::security::store_smp_test(),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

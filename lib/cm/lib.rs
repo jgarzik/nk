@@ -8,7 +8,8 @@
 //! names; its values in the order they were first set.
 //!
 //! [`regf`] reads a hive file in place; [`import`] copies one into the
-//! tree. [`query`] works through the query tables of
+//! tree. [`manifest`] reads registry content written as text and lays
+//! it over the tree. [`query`] works through the query tables of
 //! `RtlQueryRegistryValues`; [`services`] orders the drivers the
 //! service keys name.
 //!
@@ -26,6 +27,10 @@ use core::cmp::Ordering;
 mod fixture_tests;
 mod import;
 mod info;
+pub mod manifest;
+#[cfg(test)]
+mod manifest_tests;
+pub mod notify;
 pub mod query;
 pub mod regf;
 #[cfg(test)]

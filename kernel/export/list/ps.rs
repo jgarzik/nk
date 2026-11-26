@@ -1,0 +1,49 @@
+//! Exports implemented in `kernel/ps`.
+
+use super::super::{Export, NT, State};
+use crate::ps;
+
+pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, ps::KeGetCurrentThread),
+    export!(Implemented, ps::process::IoGetCurrentProcess),
+    export!(Implemented, ps::PsCreateSystemThread),
+    export!(Implemented, ps::silo::PsAllocSiloContextSlot),
+    export!(Implemented, ps::silo::PsAttachSiloToCurrentThread),
+    export!(Implemented, ps::process::PsChargeProcessPagedPoolQuota),
+    export!(Implemented, ps::silo::PsCreateSiloContext),
+    export!(Implemented, ps::process::PsDereferencePrimaryToken),
+    export!(Implemented, ps::silo::PsDereferenceSiloContext),
+    export!(Implemented, ps::silo::PsDetachSiloFromCurrentThread),
+    export!(Implemented, ps::silo::PsFreeSiloContextSlot),
+    export!(Implemented, ps::process::PsGetCurrentProcess),
+    export!(Implemented, ps::process::PsGetCurrentProcessId),
+    export!(Implemented, ps::silo::PsGetCurrentServerSilo),
+    export!(Implemented, ps::silo::PsGetCurrentSilo),
+    export!(Implemented, ps::process::PsGetCurrentThreadId),
+    export!(Implemented, ps::silo::PsGetJobSilo),
+    export!(Implemented, ps::silo::PsGetPermanentSiloContext),
+    export!(Implemented, ps::process::PsGetProcessId),
+    export!(Implemented, ps::process::PsGetProcessSessionId),
+    export!(Implemented, ps::silo::PsGetSiloMonitorContextSlot),
+    export!(Implemented, ps::process::PsGetThreadProcessId),
+    export!(Implemented, ps::process::PsGetThreadSessionId),
+    export_variable!(
+        Implemented,
+        "PsInitialSystemProcess",
+        ps::process::PsInitialSystemProcess
+    ),
+    export!(Implemented, ps::silo::PsInsertPermanentSiloContext),
+    export!(Implemented, ps::silo::PsIsHostSilo),
+    export!(Implemented, ps::process::PsReferencePrimaryToken),
+    export!(Implemented, ps::silo::PsRegisterSiloMonitor),
+    export!(Implemented, ps::process::PsReturnProcessPagedPoolQuota),
+    export!(Implemented, ps::silo::PsStartSiloMonitor),
+    export!(Implemented, ps::PsTerminateSystemThread),
+    export!(Implemented, ps::silo::PsUnregisterSiloMonitor),
+    export!(Implemented, ps::ZwAlertThread),
+    export!(Implemented, ps::ZwClose),
+    export!(Partial, ps::ZwSetInformationThread),
+    export!(Implemented, ps::process::KeStackAttachProcess),
+    export!(Implemented, ps::process::KeUnstackDetachProcess),
+    export_entry!(Implemented, "NtClose", ps::ZwClose),
+];

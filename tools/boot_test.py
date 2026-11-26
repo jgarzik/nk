@@ -4,6 +4,9 @@
 Usage:
   boot_test.py <scenario>            run one scenario from tools/scenarios.toml
   boot_test.py --tier <tier>         run every scenario of a tier, in parallel
+  boot_test.py --gate fast|batch|full
+                                     run the gate tier's scenarios that this
+                                     gate selects (below), in parallel
   boot_test.py <scenario> --run      serial console on this terminal, no verdict
   boot_test.py <scenario> --image <esp.img>
                                      boot an existing image (e.g. from `make
@@ -13,9 +16,29 @@ Usage:
                                      an overloaded host (`make soak`)
   boot_test.py <scenario> --bless    rewrite the scenario's golden list from
                                      this run
+  boot_test.py --failures <log>      from the saved output of a tier, print
+                                     what the boots that failed said, and
+                                     the tier's last line; status 1 if the
+                                     log names no failed boot
 
 What passing means is the scenario's `expect` (see tools/judge.py). A hung
 boot is killed at the timeout, after every CPU's registers are saved.
+
+The three gates (`make gate-fast`, `gate`, `gate-full`) each boot a
+selection of the gate tier (`select`):
+
+  fast   the scenario `x86_64`, and the x86-64 scenarios whose `paths`
+         name a file changed since the merge base with the branch
+         `updates` ($GATE_BASE names another commit to compare with)
+  batch  every x86-64 scenario that must pass (`expect = "ok"`); those
+         that must end in a bugcheck or a failed test only when their
+         `paths` name a file changed since the commit the batch gate last
+         passed at (target/gate-passed, written by tools/gate.sh)
+  full   every scenario of the tier, on both architectures
+
+A file is changed if it differs between that commit and the working tree,
+or is not yet tracked. Where the commit is not known (no branch `updates`,
+no target/gate-passed, as in CI) every file counts as changed.
 
 Each scenario works in target/qemu/<scenario>/. QEMU runs in its own
 session, is killed on every exit path (success, failure, timeout, Ctrl-C,
@@ -24,9 +47,14 @@ outright. A passing run deletes its directory; a failing run keeps the
 logs and says where. The logs of the scenarios marked `canonical` are also
 kept as target/qemu/serial-<arch>.log and exports-<arch>.txt.
 
+A scenario with `disk` gets a data disk, data.img in its directory, made
+before the boot and compared after it with what the scenario's
+`disk_expect` allows (tools/datadisk.py).
+
 Environment: BOOT_TEST_TIMEOUT (seconds, default 120), QEMU_SMP, QEMU_MEM,
 NO_KVM=1 (emulate x86-64 too), JOBS (parallel boots in a tier), KEEP=1
-(keep every scenario directory), QEMU_LOG_DIR (default target/qemu).
+(keep every scenario directory), QEMU_LOG_DIR (default target/qemu),
+GATE_BASE (above).
 """
 
 import concurrent.futures
@@ -44,6 +72,7 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import datadisk  # noqa: E402
 import judge  # noqa: E402
 import mkesp  # noqa: E402
 
@@ -54,6 +83,8 @@ TIMEOUT = int(os.environ.get("BOOT_TEST_TIMEOUT", "120"))
 SMP = os.environ.get("QEMU_SMP", "4")
 MEM = os.environ.get("QEMU_MEM", "512M")
 KEEP = bool(os.environ.get("KEEP"))
+# The commit the batch gate last passed at (tools/gate.sh writes it).
+GATE_PASSED = ROOT / "target" / "gate-passed"
 
 FIRMWARE = {
     "x86_64": ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
@@ -74,14 +105,21 @@ def load_scenarios():
     return tomllib.loads((TOOLS / "scenarios.toml").read_text())
 
 
-def golden_path(name):
-    return TOOLS / "golden" / f"{name}.txt"
+def golden_dir(name):
+    return TOOLS / "golden" / name
+
+
+def golden_file(test):
+    """The file of a golden list a test is in: the first word of its name."""
+    return test.split(".")[0] + ".txt"
 
 
 def load_golden(name):
-    """{test name: "ok"|"skip"} from tools/golden/<name>.txt."""
+    """{test name: "ok"|"skip"} from the files of tools/golden/<name>/."""
     golden = {}
-    for line in golden_path(name).read_text().splitlines():
+    lines = [line for path in sorted(golden_dir(name).glob("*.txt"))
+             for line in path.read_text().splitlines()]
+    for line in lines:
         if line and not line.startswith("#"):
             test, verdict = line.split()
             golden[test] = verdict
@@ -106,7 +144,23 @@ def kernel_cmdline(sc):
     return " ".join(words)
 
 
-def qemu_command(arch, smp, interactive):
+def disk_devices(arch, disk):
+    """QEMU's arguments for the scenario's data disk (`disk`: "ahci" or
+    None): data.img on the machine's AHCI controller. Not a snapshot:
+    what the guest writes has to be in the file after the boot."""
+    if disk is None:
+        return []
+    if disk != "ahci":
+        raise ValueError(f"unknown disk {disk!r}")
+    drive = ["-drive", "if=none,id=nkdata,format=raw,file=data.img"]
+    if arch == "x86_64":
+        # q35 has an ICH9 AHCI controller; its ports are the bus `ide`.
+        return drive + ["-device", "ide-hd,drive=nkdata,bus=ide.0"]
+    # `virt` has none: the same controller, as a PCIe device.
+    return drive + ["-device", "ich9-ahci,id=ahci", "-device", "ide-hd,drive=nkdata,bus=ahci.0"]
+
+
+def qemu_command(arch, smp, interactive, disk=None):
     """The command line. Paths are relative to the scenario directory, where
     QEMU is started, so the QMP socket path stays short."""
     code, _ = FIRMWARE[arch]
@@ -125,6 +179,7 @@ def qemu_command(arch, smp, interactive):
         "-device", "virtio-blk-pci,drive=esp,bootindex=0",
         "-nic", "none", "-display", "none", "-no-reboot",
     ]
+    cmd += disk_devices(arch, disk)
     if interactive:
         return cmd + ["-serial", "mon:stdio"]
     return cmd + [
@@ -194,21 +249,22 @@ def kill_stale(directory):
             pass
 
 
-def boot(arch, smp, directory, interactive):
-    """Run QEMU in `directory` (which holds esp.img and vars.fd). Returns
+def boot(arch, smp, directory, interactive, disk=None):
+    """Run QEMU in `directory` (which holds esp.img, vars.fd and, for a
+    scenario with a disk, data.img). Returns
     the timeout in seconds if it had to be killed (else 0), and the host
     times at which the kernel's clock marks arrived. The serial output
     goes to serial.log there."""
     proc, timed_out, marks = None, 0, []
     try:
         if interactive:
-            proc = subprocess.Popen(qemu_command(arch, smp, True), cwd=directory)
+            proc = subprocess.Popen(qemu_command(arch, smp, True, disk), cwd=directory)
             proc.wait()
             return 0, marks
         with open(directory / "serial.log", "wb") as log, \
                 open(directory / "qemu.err", "wb") as err:
             proc = subprocess.Popen(
-                qemu_command(arch, smp, False), cwd=directory,
+                qemu_command(arch, smp, False, disk), cwd=directory,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
                 start_new_session=True, preexec_fn=die_with_parent,
             )
@@ -265,16 +321,21 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
     esp = directory / "esp.img"
-    passed = False
+    disk, data = sc.get("disk"), directory / "data.img"
+    disk_mib = sc.get("disk_size", datadisk.DEFAULT_MIB)
+    passed, disk_wrong = False, False
     try:
         if image:
             # Booted as a snapshot, never written; a link keeps it in place.
             esp.symlink_to(image.resolve())
             missing = ["(prebuilt image)"]
         else:
-            missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc))
+            missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc),
+                                  registry=sc.get("registry", ()))
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
-        timed_out, marks = boot(arch, smp_of(sc), directory, interactive)
+        if disk:
+            datadisk.create(data, disk_mib)
+        timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
         if interactive:
             passed = True
             return 0
@@ -289,7 +350,9 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
                 if (directory / kept).exists():
                     (directory / kept).rename(directory / f"firmware-hang.{kept}")
             shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
-            timed_out, marks = boot(arch, smp_of(sc), directory, interactive)
+            if disk:
+                datadisk.create(data, disk_mib)
+            timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
             text = (directory / "serial.log").read_text(errors="replace")
         log = judge.Log(text)
         golden = load_golden(sc["golden"]) if "golden" in sc and not bless else None
@@ -299,6 +362,12 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             must_fail=sc.get("must_fail", ()),
             timed_out=timed_out, marks=marks,
         )
+        if disk:
+            # QEMU has exited, or been killed: either way what it wrote
+            # is in the file.
+            wrong = datadisk.verify(data, sc["disk_expect"], disk_mib)
+            disk_wrong = bool(wrong)
+            problems += wrong
         if sc.get("canonical") and not image:
             shutil.copyfile(directory / "serial.log", OUT / f"serial-{arch}.log")
             if log.exports():
@@ -314,14 +383,23 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             print(f"boot test {name}: FAILED")
             for p in problems:
                 print(f"  {p}")
+            if disk_wrong:
+                print(f"  the data disk is kept: {data}")
             print(f"  last serial lines ({directory / 'serial.log'}):")
             for line in log.tail():
                 print(f"    {line}")
             return 1
         if bless and "golden" in sc:
-            lines = [f"{t} {v.lower()}" for t, v, _ in log.tests]
-            golden_path(sc["golden"]).write_text("\n".join(lines) + "\n")
-            print(f"  wrote {golden_path(sc['golden']).relative_to(ROOT)}")
+            files = {}
+            for test, verdict, _ in log.tests:
+                files.setdefault(golden_file(test), []).append(f"{test} {verdict.lower()}")
+            directory = golden_dir(sc["golden"])
+            directory.mkdir(exist_ok=True)
+            for stale in set(p.name for p in directory.glob("*.txt")) - set(files):
+                (directory / stale).unlink()
+            for file, lines in files.items():
+                (directory / file).write_text("\n".join(lines) + "\n")
+            print(f"  wrote {directory.relative_to(ROOT)}/")
         expect = sc.get("expect", "ok")
         counts = log.completes[0] if log.completes else (0, 0, 0)
         detail = f"pass={counts[0]} skip={counts[2]}" if expect == "ok" else f"expected {expect}"
@@ -333,14 +411,98 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         # never help a diagnosis; the logs stay unless the run passed.
         for scratch in ("esp.img", "vars.fd", "qmp.sock", "qemu.pid"):
             (directory / scratch).unlink(missing_ok=True)
+        # The disk is the evidence when it is what was wrong.
+        if not disk_wrong:
+            data.unlink(missing_ok=True)
         if passed and not KEEP:
             shutil.rmtree(directory, ignore_errors=True)
 
 
-def run_tier(tier, scenarios, repeat=1):
-    """Run every scenario of `tier`, `repeat` times each, several at a
-    time, each in its own process so that one cannot disturb another."""
-    names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
+def matches(paths, changed):
+    """Does a scenario's `paths` name one of the changed files? Each path
+    is a file, or a directory ending in `/`: a prefix of what it names.
+    `changed` None is "everything changed"."""
+    if changed is None:
+        return True
+    return any(file.startswith(path) for path in paths for file in changed)
+
+
+def select(scenarios, gate, changed):
+    """The names of the gate tier's scenarios that `gate` ("fast", "batch"
+    or "full") boots, given the changed files (None: all of them)."""
+    names = []
+    for name, sc in scenarios.items():
+        if sc.get("tier") != "gate":
+            continue
+        selected = "paths" in sc and matches(sc["paths"], changed)
+        if gate == "fast":
+            run = sc["arch"] == "x86_64" and (name == "x86_64" or selected)
+        elif gate == "batch":
+            run = sc["arch"] == "x86_64" and (
+                sc.get("expect", "ok") == "ok" or changed is None or selected)
+        else:
+            run = True
+        if run:
+            names.append(name)
+    return names
+
+
+def git(*args):
+    """The output of a git command in the tree, or None if it failed."""
+    done = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True)
+    return done.stdout if done.returncode == 0 else None
+
+
+def gate_base(gate):
+    """The commit a gate compares the tree with, or None if there is none:
+    the fast gate's is where the branch left `updates`, the batch gate's
+    is where that gate last passed."""
+    if gate == "fast":
+        base = os.environ.get("GATE_BASE") or (git("merge-base", "HEAD", "updates") or "").strip()
+    else:
+        try:
+            base = GATE_PASSED.read_text().strip()
+        except OSError:
+            base = ""
+    if base and git("cat-file", "-e", f"{base}^{{commit}}") is not None:
+        return base
+    return None
+
+
+def changed_files(base):
+    """The files that differ between the commit `base` and the working
+    tree, and those not tracked; None (everything) if `base` is None or
+    git cannot say."""
+    if base is None:
+        return None
+    differing = git("diff", "--name-only", base)
+    untracked = git("ls-files", "--others", "--exclude-standard")
+    if differing is None or untracked is None:
+        return None
+    return sorted(set((differing + untracked).split("\n")) - {""})
+
+
+def run_gate(gate, scenarios):
+    """Run what `gate` selects of the gate tier, and say what that was."""
+    if gate == "full":
+        return run_tier("gate", scenarios)
+    total = sum(sc.get("tier") == "gate" for sc in scenarios.values())
+    base = gate_base(gate)
+    changed = changed_files(base)
+    names = select(scenarios, gate, changed)
+    since = "every file taken as changed" if changed is None \
+        else f"{len(changed)} files changed since {base[:12]}"
+    print(f"{gate} gate: {len(names)} of the gate tier's {total} scenarios ({since})")
+    return run_tier("gate", scenarios, label=f"tier gate ({gate})", names=names)
+
+
+def run_tier(tier, scenarios, repeat=1, label=None, names=None):
+    """Run every scenario of `tier` (or those of it in `names`), `repeat`
+    times each, several at a time, each in its own process so that one
+    cannot disturb another."""
+    label = label or f"tier {tier}"
+    if names is None:
+        names = [n for n, sc in scenarios.items() if sc.get("tier") == tier]
     if not names:
         sys.exit(f"boot_test: no scenario in tier {tier!r}")
     # Each boot runs up to its `smp` guest CPUs flat out. The gate keeps
@@ -384,6 +546,10 @@ def run_tier(tier, scenarios, repeat=1):
             else:
                 failed.append(name)
                 print(out.rstrip())
+                # A boot that died without a verdict still gets the line
+                # `failures` finds it by.
+                if not any(is_failed_line(line) for line in out.splitlines()):
+                    print(f"boot test {name}: FAILED (exit status {status}, no verdict)")
     finally:
         # Reached on Ctrl-C or SIGTERM too: each child then cleans up its
         # own QEMU and files.
@@ -393,13 +559,38 @@ def run_tier(tier, scenarios, repeat=1):
                     proc.terminate()
         pool.shutdown(wait=True, cancel_futures=True)
     if failed:
-        print(f"tier {tier}: FAILED {len(failed)} of {len(runs)} boots ({', '.join(failed)})")
+        print(f"{label}: FAILED {len(failed)} of {len(runs)} boots ({', '.join(failed)})")
         return 1
     if repeat == 1:
-        print(f"tier {tier}: {len(names)} scenarios passed")
+        print(f"{label}: {len(names)} scenarios passed")
     else:
-        print(f"tier {tier}: {len(runs)} boots passed ({len(names)} scenarios, {repeat} times each)")
+        print(f"{label}: {len(runs)} boots passed ({len(names)} scenarios, {repeat} times each)")
     return 0
+
+
+def is_failed_line(line):
+    return line.startswith("boot test ") and ": FAILED" in line
+
+
+def failures(text):
+    """From the output of a tier, the lines of the boots that failed: each
+    one's `boot test <name>: FAILED` line and what follows it, up to the
+    next boot's line; then the tier's own last line and anything after
+    it. Empty if no boot is reported as failed: the output is then of
+    something else that went wrong (a build, say).
+
+    The boots of a tier are printed in the order they were listed, so the
+    one that failed can be far from the end of a long output."""
+    kept, showing, any_failed = [], False, False
+    for line in text.splitlines():
+        if line.startswith("boot test "):
+            showing = is_failed_line(line)
+            any_failed |= showing
+        elif line.startswith("tier "):
+            showing = True
+        if showing:
+            kept.append(line)
+    return kept if any_failed else []
 
 
 def main():
@@ -415,7 +606,15 @@ def main():
         del argv[i:i + 2]
         return value
 
-    image, tier = option("--image"), option("--tier")
+    log = option("--failures")
+    if log:
+        if argv:
+            sys.exit(__doc__)
+        lines = failures(Path(log).read_text(errors="replace"))
+        for line in lines:
+            print(line)
+        return 0 if lines else 1
+    image, tier, gate = option("--image"), option("--tier"), option("--gate")
     repeat, instance = int(option("--repeat") or 1), option("--instance")
     flags = {a for a in argv if a.startswith("--")}
     args = [a for a in argv if not a.startswith("--")]
@@ -426,6 +625,10 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda n, _: sys.exit(128 + n))
     OUT.mkdir(parents=True, exist_ok=True)
+    if gate:
+        if args or flags or image or tier or repeat != 1 or gate not in ("fast", "batch", "full"):
+            sys.exit(__doc__)
+        return run_gate(gate, scenarios)
     if tier:
         if args or flags or image:
             sys.exit(__doc__)

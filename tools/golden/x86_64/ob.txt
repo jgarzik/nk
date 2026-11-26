@@ -1,0 +1,17 @@
+ob.types ok
+ob.references ok
+ob.references-smp ok
+ob.handles ok
+ob.thread ok
+ob.namespace.paths ok
+ob.namespace.links ok
+ob.namespace.name-info ok
+ob.handle-access ok
+ob.event-handle ok
+ob.security ok
+ob.security-store ok
+ob.security-store-smp ok
+ob.current-thread ok
+ob.handle.open-close-race ok
+ob.reference-by-pointer ok
+ob.directory-handle ok

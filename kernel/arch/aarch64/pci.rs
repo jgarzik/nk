@@ -1,0 +1,39 @@
+//! PCI configuration ports: arm64 has no I/O ports, so there are none,
+//! and configuration space is reached through memory alone.
+
+/// The configuration ports, of which there are none: a type with no
+/// values.
+#[derive(Clone, Copy)]
+pub enum PciPorts {}
+
+pub const PCI_PORTS: Option<PciPorts> = None;
+
+impl PciPorts {
+    pub fn read(self, _address: u32, _lane: u32, _width: u8) -> u32 {
+        match self {}
+    }
+
+    pub fn write(self, _address: u32, _lane: u32, _width: u8, _value: u32) {
+        match self {}
+    }
+}
+
+/// The I/O ports firmware's AML code must not touch: this machine has
+/// no I/O ports.
+pub const AML_FORBIDDEN_PORTS: &[(u32, u32, u32, bool)] = &[];
+
+/// Read an I/O port: this machine has none.
+///
+/// # Safety
+/// None is needed: nothing is read.
+pub unsafe fn port_read(_port: u16, _bytes: u32) -> Option<u32> {
+    None
+}
+
+/// Write an I/O port: this machine has none.
+///
+/// # Safety
+/// None is needed: nothing is written.
+pub unsafe fn port_write(_port: u16, _bytes: u32, _value: u32) -> bool {
+    false
+}

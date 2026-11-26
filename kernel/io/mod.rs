@@ -5,17 +5,26 @@
 //! Windows size and reached through raw pointers only. A request may be
 //! pended and completed later, and cancelled; `doc/DESIGN.md` says how.
 
+pub mod build;
 pub mod csq;
 pub mod device;
 pub mod driver;
+pub mod errlog;
 pub mod file;
 pub mod fsrtl;
+pub mod interrupt;
 pub mod irp;
+pub mod irpext;
+pub mod irpinfo;
 pub mod mdl;
+pub mod priority;
 pub mod remlock;
 pub mod service;
+pub mod stack;
+pub mod startio;
 pub mod symlink;
 pub mod wmi;
+pub mod zwfile;
 
 // Pool tags, as Windows spells its own.
 

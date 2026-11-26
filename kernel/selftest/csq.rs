@@ -400,3 +400,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     }
     r.check("io.wdm-version", wdm_version);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

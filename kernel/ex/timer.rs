@@ -238,6 +238,64 @@ pub unsafe extern "C" fn ExAllocateTimer(
     timer
 }
 
+/// The attribute only `ExAllocateTimerInternal2` takes: an
+/// idle-resilient timer, which comes with parameters.
+const IDLE_RESILIENT: u32 = 2;
+
+/// `ExAllocateTimerInternal2` (exported by number alone, 4, which
+/// `acpi.sys` imports): `ExAllocateTimer` with one more argument, the
+/// parameters of an idle-resilient timer, which the attribute
+/// `IDLE_RESILIENT` announces. As in Windows' routine, the attribute
+/// without parameters or parameters without the attribute stop the
+/// system; `ExAllocateTimer` is this routine without either.
+///
+/// Partial: idle resilience is about processors in deep idle states,
+/// which NK never enters, so the parameters are not read and the timer
+/// is an ordinary one of the other attributes.
+///
+/// # Safety
+/// As [`ExAllocateTimer`].
+pub unsafe extern "C" fn ExAllocateTimerInternal2(
+    callback: Option<ExtCallback>,
+    context: *mut c_void,
+    parameters: *const c_void,
+    attributes: u32,
+) -> *mut ExTimer {
+    if (attributes & IDLE_RESILIENT != 0) != !parameters.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "ExAllocateTimerInternal2: the idle-resilient attribute and its parameters do not \
+             go together (attributes {attributes:#x}, parameters {parameters:p})"
+        ));
+    }
+    // SAFETY: the caller's.
+    unsafe { ExAllocateTimer(callback, context, attributes & !IDLE_RESILIENT) }
+}
+
+/// For the self-tests: an idle-resilient timer is allocated and
+/// deleted as any timer.
+pub fn internal_test() -> Result<(), &'static str> {
+    let parameters = [0u16; 2];
+    // SAFETY: no callback; the timer is deleted before returning.
+    unsafe {
+        let timer = ExAllocateTimerInternal2(
+            None,
+            core::ptr::null_mut(),
+            parameters.as_ptr().cast(),
+            IDLE_RESILIENT | nk_ex::timer::HIGH_RESOLUTION,
+        );
+        if timer.is_null() {
+            return Err("an idle-resilient timer was not allocated");
+        }
+        ExDeleteTimer(timer, 1, 1, core::ptr::null_mut());
+        let plain = ExAllocateTimerInternal2(None, core::ptr::null_mut(), core::ptr::null(), 0);
+        if plain.is_null() {
+            return Err("a timer without the attribute was not allocated");
+        }
+        ExDeleteTimer(plain, 1, 1, core::ptr::null_mut());
+    }
+    Ok(())
+}
+
 /// [`ExSetTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exsettimer):
 /// set the timer to expire at `due_time` (negative: that long from now,
 /// in 100 ns units; otherwise a system time) and, with a `period`, every

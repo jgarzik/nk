@@ -3,5 +3,5 @@
 scenario: x86_64-neg-trap
 fails: scenario
 file: kernel/export/trap.rs
-replace:                     stringify!($name),
-with:                     "a routine",
+replace:                         stringify!($name),
+with:                         "a routine",

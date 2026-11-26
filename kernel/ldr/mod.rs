@@ -33,7 +33,7 @@ use nk_ntabi::ke::KMUTANT;
 use nk_ntabi::status::*;
 use nk_pe::exports::{Export, Exports, forward_target};
 use nk_pe::modules::{Module, Modules};
-use nk_pe::{Pe, PeError, Symbol};
+use nk_pe::{Bind, Pe, PeError, Symbol};
 
 /// The loader's hand-off block, for the files it read from the boot
 /// volume.
@@ -129,10 +129,20 @@ pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
 /// The contents of the boot file called `name` (`sioctl.sys`), if the
 /// loader read one of that name from `\NK\drivers`. This is NK's
 /// `System32\drivers` until there is a file system to read.
+///
+/// The command-line word `without=<file>` takes one file out of that
+/// directory for the boot: a scenario that shares its image with
+/// others boots as if the file had not been provided.
 pub fn boot_file(name: &str) -> Option<&'static [u8]> {
     // SAFETY: null, or the hand-off block `init` was given, which lives
     // for ever and is never written.
     let info = unsafe { BOOT.load(Ordering::Acquire).as_ref() }?;
+    if info
+        .option("without")
+        .is_some_and(|without| without.eq_ignore_ascii_case(name))
+    {
+        return None;
+    }
     let m = info
         .modules()
         .iter()
@@ -327,7 +337,7 @@ fn export_address(
             {
                 return match symbol {
                     Symbol::Name(name) => export::resolve(KERNEL_NAME, name),
-                    Symbol::Ordinal(_) => None,
+                    Symbol::Ordinal(ordinal) => export::resolve_ordinal(KERNEL_NAME, ordinal),
                 };
             }
             let next = MODULES.lock().with_stem(stem).filter(|m| m.library)?;
@@ -530,18 +540,22 @@ fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Im
             if export::is_kernel(module) {
                 return match sym {
                     Symbol::Name(name) => export::resolve(module, name),
-                    Symbol::Ordinal(_) => None,
-                };
+                    Symbol::Ordinal(ordinal) => export::resolve_ordinal(module, ordinal),
+                }
+                .map(Bind::Address);
+            }
+            if export::is_extension_api_set(module) {
+                return Some(Bind::Own);
             }
             match self::library(module, depth, held) {
-                Ok(library) => export_address(&library, sym, held, 0),
+                Ok(library) => export_address(&library, sym, held, 0).map(Bind::Address),
                 Err(error) => {
                     unusable.get_or_insert(error);
                     None
                 }
             }
         };
-        let bound = nk_pe::bind_imports(mem, &h, resolver);
+        let bound = nk_pe::bind_imports(mem, &h, base, resolver);
         bound.map_err(|e| match (e, unusable) {
             (PeError::Unresolved { .. }, Some(unusable)) => unusable,
             (
@@ -787,6 +801,35 @@ impl Drop for TestImporter {
             }
         });
     }
+}
+
+/// Run `f` with a test's own image in the table of images: one that
+/// exists only as `image`, laid out as in memory, standing there as
+/// `name` at `base` for as long as `f` takes. `None` if the table has
+/// no room.
+///
+/// # Safety
+/// `base` is the start of `image.len()` bytes of address space that are
+/// nothing else's.
+pub unsafe fn with_image_for_test<R>(
+    name: &str,
+    base: u64,
+    image: &[u8],
+    f: impl FnOnce() -> R,
+) -> Option<R> {
+    let module = Module::new(
+        name.as_bytes(),
+        base,
+        image.len() as u64,
+        nk_pe::DataDir::default(),
+        image.as_ptr() as u64,
+    )?;
+    serialised(|| {
+        MODULES.lock().insert(module).ok()?;
+        let result = f();
+        MODULES.lock().remove(base);
+        Some(result)
+    })
 }
 
 /// What an import of `symbol` from an image is bound to, for a test's

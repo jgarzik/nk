@@ -5,8 +5,10 @@
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
 //! keys every system has and, laid over `Machine\System`, the SYSTEM
-//! hive the loader read, if it read one; it holds what drivers put in
-//! it until the machine stops. Nothing is written back to a hive file.
+//! hive the loader read, if it read one, and over that the registry
+//! overlay, keys and values as text, if it read one; it holds what
+//! drivers put in it until the machine stops. Nothing is written back
+//! to a hive file.
 //! `CurrentControlSet` is a symbolic link to the control set the hive
 //! selects. A key handle is a handle to a small object naming the key.
 //!
@@ -17,8 +19,13 @@
 
 #![allow(non_snake_case)]
 
+mod helper;
+pub mod notify;
 mod table;
 
+pub use helper::{
+    RtlCheckRegistryKey, RtlCreateRegistryKey, RtlDeleteRegistryValue, RtlWriteRegistryValue,
+};
 pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
 use crate::ke::{Rank, SpinLock};
@@ -26,6 +33,8 @@ use crate::ob::{handle, object};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use nk_cm::manifest::Op;
+use nk_cm::notify::{CHANGE_LAST_SET, CHANGE_NAME};
 use nk_cm::regf::{Regf, RegfError};
 use nk_cm::services::OrderError;
 use nk_cm::{Error, Fit, Hive, ImportError, KeyId};
@@ -72,6 +81,8 @@ const REG_DWORD: u32 = 4;
 const SKELETON: &[&str] = &[
     "MACHINE",
     "MACHINE\\HARDWARE",
+    "MACHINE\\HARDWARE\\DEVICEMAP",
+    "MACHINE\\HARDWARE\\RESOURCEMAP",
     "MACHINE\\SYSTEM",
     "MACHINE\\SYSTEM\\Select",
     "USER",
@@ -124,10 +135,11 @@ fn refusal(error: ImportError) -> &'static str {
 }
 
 /// Build the registry in `hive`: the keys every system has, the SYSTEM
-/// hive `file` laid over `Machine\System` if there is one, and
-/// `CurrentControlSet`, a symbolic link to the control set
-/// `Select\Current` names, as on Windows. Returns the root.
-fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
+/// hive `file` laid over `Machine\System` if there is one, the
+/// operations `overlay` carried out there, and `CurrentControlSet`, a
+/// symbolic link to the control set `Select\Current` names, as on
+/// Windows. Returns the root.
+fn build(hive: &mut Hive, file: Option<&[u8]>, overlay: &[Op]) -> Result<KeyId, &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
     let now = now();
     // Make a key if it is not there, stamped as made now.
@@ -155,6 +167,10 @@ fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
         let regf = Regf::parse(file).map_err(|e| refusal(e.into()))?;
         nk_cm::import(hive, system, &regf).map_err(refusal)?;
     }
+    // Before anything is read, the control set's number included: the
+    // overlay stands for content of the hive.
+    nk_cm::manifest::apply(hive, system, overlay, now)
+        .map_err(|_| "no memory for the registry overlay")?;
     let current = match hive.value(select, &wide("Current")) {
         Ok((_, REG_DWORD, &[a, b, c, d])) => u32::from_le_bytes([a, b, c, d]),
         _ => return Err("Select\\Current does not name a control set"),
@@ -172,15 +188,30 @@ fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
     Ok(root)
 }
 
-/// Make the registry, from the SYSTEM hive the loader read if it read
-/// one (`doc/BOOT.md`), and name its root `\Registry`. A hive that
-/// cannot be used fails the boot.
+/// The operations the registry overlay `text` describes. The overlay
+/// is NK's own file (`fixtures/registry-overlay.txt`): one that cannot
+/// be read is not used in part, and the line at fault is printed.
+fn overlay(text: &[u8]) -> Result<Vec<Op>, &'static str> {
+    nk_cm::manifest::parse(text).map_err(|error| {
+        kprintln!("cm: registry overlay, {error}");
+        "the registry overlay is malformed"
+    })
+}
+
+/// Make the registry, from the SYSTEM hive and the registry overlay
+/// the loader read, where it read one (`doc/BOOT.md`), and name its
+/// root `\Registry`. A hive or an overlay that cannot be used fails
+/// the boot.
 pub fn init() -> Result<(), &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
     let file = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE);
+    let laid = match crate::ldr::boot_file(nk_bootinfo::OVERLAY_MODULE) {
+        Some(text) => overlay(text)?,
+        None => Vec::new(),
+    };
     let root = {
         let mut hive = HIVE.lock();
-        let root = build(&mut hive, file)?;
+        let root = build(&mut hive, file, &laid)?;
         // The key object made below counts as an open of the root.
         hive.opened(root);
         root
@@ -192,6 +223,9 @@ pub fn init() -> Result<(), &'static str> {
             None => "without a hive".into(),
         }
     );
+    if !laid.is_empty() {
+        kprintln!("cm: registry overlay of {} keys and values", laid.len());
+    }
     let path: Vec<u16> = "\\Registry".encode_utf16().collect();
     let body = object::create_named(
         &object::KEY_TYPE,
@@ -371,6 +405,8 @@ fn open(key: KeyId, access: u32) -> Result<*mut c_void, NTSTATUS> {
 /// # Safety
 /// `body` is a key object nothing refers to any more.
 pub unsafe extern "C" fn closed(body: *mut c_void) {
+    // The watches made through this object end with it.
+    notify::closed(body);
     // SAFETY: per the contract: the body is the key's number.
     let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
     HIVE.lock().closed(key);
@@ -385,15 +421,37 @@ pub fn write(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> 
     let mut hive = HIVE.lock();
     let root = hive.root().map_err(status)?;
     let (key, new) = hive.create(root, &path).map_err(status)?;
+    let mut made = None;
     if new {
         stamp_new(&mut hive, key, now).map_err(status)?;
+        made = Some(new_key_seen(&hive, key));
     }
+    let mut written = Ok(());
     for (name, kind, data) in values {
         let name: Vec<u16> = name.encode_utf16().collect();
-        hive.set_value(key, &name, *kind, data).map_err(status)?;
-        hive.set_last_write(key, now).map_err(status)?;
+        written = hive
+            .set_value(key, &name, *kind, data)
+            .and_then(|()| hive.set_last_write(key, now))
+            .map_err(status);
+        if written.is_err() {
+            break;
+        }
     }
-    Ok(())
+    let set = (!values.is_empty()).then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    for met in [made, set].into_iter().flatten() {
+        met.tell();
+    }
+    written
+}
+
+/// The watches met by `key` having just been made: a change of name at
+/// the key it was made under. Called with the registry's lock held.
+fn new_key_seen(hive: &Hive, key: KeyId) -> notify::Met {
+    match hive.parent(key) {
+        Ok(parent) => notify::changed(hive, parent, CHANGE_NAME),
+        Err(_) => notify::changed(hive, key, 0),
+    }
 }
 
 /// The type and data of the value `name` of the key at `path` (from
@@ -461,6 +519,106 @@ pub fn exists(path: &str) -> bool {
     hive.root().is_ok_and(|root| hive.open(root, &path).is_ok())
 }
 
+/// As [`write`], making every key of `path` that is not there, not
+/// only the last: an instance path is several keys deep, and the first
+/// device of a kind brings all of them. For the kernel's own use.
+pub fn write_path(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> {
+    for (at, _) in path.match_indices('\\') {
+        write(&path[..at], &[])?;
+    }
+    write(path, values)
+}
+
+/// The names of the subkeys of the key at `path` (from the registry's
+/// root), in the order Windows enumerates them; none if there is no
+/// such key. For the kernel's own use.
+pub fn subkeys(path: &str) -> Vec<String> {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    while let Ok(Some(child)) = hive.subkey(key, names.len()) {
+        let name = hive.info(child).map_or(&[][..], |info| info.name);
+        names.push(String::from_utf16_lossy(name));
+    }
+    names
+}
+
+/// A value: its name, type and data.
+pub type Value = (String, u32, Vec<u8>);
+
+/// The values of the key at `path` (from the registry's root), in the
+/// order they were first set; none if there is no such key. For the
+/// kernel's own use.
+pub fn values(path: &str) -> Vec<Value> {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    while let Ok(Some((name, kind, data))) = hive.value_at(key, values.len()) {
+        values.push((String::from_utf16_lossy(name), kind, data.to_vec()));
+    }
+    values
+}
+
+/// Copy the key at `from`, with its values and everything below it,
+/// over the key at `to` (both from the registry's root), making what
+/// is not there: values of the same name are replaced, others stay.
+/// For the kernel's own use: what installing a device copies from the
+/// driver database into the device's key.
+pub fn copy_tree(from: &str, to: &str) -> Result<(), NTSTATUS> {
+    let found = values(from);
+    let list: Vec<(&str, u32, &[u8])> = found
+        .iter()
+        .map(|(name, kind, data)| (name.as_str(), *kind, &data[..]))
+        .collect();
+    write_path(to, &list)?;
+    for child in subkeys(from) {
+        copy_tree(
+            &alloc::format!("{from}\\{child}"),
+            &alloc::format!("{to}\\{child}"),
+        )?;
+    }
+    Ok(())
+}
+
+/// Delete the key at `path` (from the registry's root) and everything
+/// below it. A key that is not there is not an error. For the kernel's
+/// own use.
+pub fn delete_tree(path: &str) -> Result<(), NTSTATUS> {
+    for child in subkeys(path) {
+        delete_tree(&alloc::format!("{path}\\{child}"))?;
+    }
+    let wide = wide(path);
+    let now = now();
+    let mut hive = HIVE.lock();
+    let Ok(key) = hive.root().and_then(|root| hive.open(root, &wide)) else {
+        return Ok(());
+    };
+    hive.parent(key)
+        .and_then(|parent| {
+            hive.delete(key)?;
+            hive.set_last_write(parent, now)
+        })
+        .map_err(status)
+}
+
+/// Delete the value `name` of the key at `path` (from the registry's
+/// root). Neither a missing key nor a missing value is an error. For
+/// the kernel's own use.
+pub fn delete_value(path: &str, name: &str) {
+    let path = wide(path);
+    let name = wide(name);
+    let mut hive = HIVE.lock();
+    if let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) {
+        let _ = hive.delete_value(key, &name);
+    }
+}
+
 /// [`ZwDeleteKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletekey):
 /// delete an open key that has no subkeys. It is gone by name at once;
 /// handles still open to it, this one included, are good only for
@@ -477,10 +635,18 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
     // The key it was a subkey of has changed with it.
     let deleted = hive.parent(key).and_then(|parent| {
         hive.delete(key)?;
-        hive.set_last_write(parent, now)
+        hive.set_last_write(parent, now)?;
+        Ok(parent)
     });
+    let met = deleted
+        .ok()
+        .map(|parent| notify::changed(&hive, parent, CHANGE_NAME));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
     match deleted {
-        Ok(()) => STATUS_SUCCESS,
+        Ok(_) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
 }
@@ -497,22 +663,34 @@ pub unsafe extern "C" fn ZwOpenKey(
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
+    let mut asked = Vec::new();
     // SAFETY: per the contract.
     let found = unsafe { named(attributes) }.and_then(|(start, path)| {
+        if crate::kd::trace_registry() {
+            asked.clone_from(&path);
+        }
         // `start` outlives the lock: a parameter goes after the locals.
         let mut hive = HIVE.lock();
         let key = hive.open(start.key(), &path).map_err(status)?;
         hive.opened(key);
         Ok(key)
     });
-    match found.and_then(|key| open(key, desired_access)) {
+    let status = match found.and_then(|key| open(key, desired_access)) {
         Ok(handle) => {
             // SAFETY: per the contract.
             unsafe { key_handle.write_unaligned(handle) };
             STATUS_SUCCESS
         }
         Err(status) => status,
+    };
+    if crate::kd::trace_registry() {
+        kprintln!(
+            "cm: open key {}: {:#x}",
+            alloc::string::String::from_utf16_lossy(&asked),
+            status as u32
+        );
     }
+    status
 }
 
 /// The bytes of the counted string `class`; none if it is null.
@@ -530,6 +708,73 @@ unsafe fn class_of(class: *const UNICODE_STRING) -> Option<Vec<u8>> {
         let buffer = (&raw const (*class).Buffer).read_unaligned();
         let length = (&raw const (*class).Length).read_unaligned();
         crate::se::copied(buffer.cast(), usize::from(length))
+    }
+}
+
+/// Open the key `path` below `start`, making it, with `class`, if it
+/// is not there: the key, counted as open (`Hive::opened`), and
+/// whether it is new. Whoever watches the key it was made under is
+/// told.
+fn create_below(start: &Held, path: &[u16], class: &[u8]) -> Result<(KeyId, bool), NTSTATUS> {
+    let now = now();
+    // `start` is the caller's to let go of, after the lock.
+    let mut hive = HIVE.lock();
+    let (key, new) = hive.create(start.key(), path).map_err(status)?;
+    if new {
+        let classed = hive.set_class(key, class);
+        if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
+            // Without its class it is not the key that was asked
+            // for: nothing has seen it yet, and it has no subkeys.
+            let _ = hive.delete(key);
+            return Err(status(error));
+        }
+    }
+    hive.opened(key);
+    let met = new.then(|| new_key_seen(&hive, key));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    Ok((key, new))
+}
+
+/// Set the value `name` of `key`, stamp the key, and tell whoever
+/// watches it.
+fn set_value(key: KeyId, name: &[u16], kind: u32, data: &[u8]) -> NTSTATUS {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let set = hive.set_value(key, name, kind, data);
+    let set = set.and_then(|()| hive.set_last_write(key, now));
+    let met = set
+        .is_ok()
+        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    match set {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
+    }
+}
+
+/// Take the value `name` away from `key`, stamp the key, and tell
+/// whoever watches it.
+fn delete_value_of(key: KeyId, name: &[u16]) -> NTSTATUS {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let deleted = hive.delete_value(key, name);
+    let deleted = deleted.and_then(|()| hive.set_last_write(key, now));
+    let met = deleted
+        .is_ok()
+        .then(|| notify::changed(&hive, key, CHANGE_LAST_SET));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    match deleted {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
     }
 }
 
@@ -557,23 +802,8 @@ pub unsafe extern "C" fn ZwCreateKey(
         return STATUS_INSUFFICIENT_RESOURCES;
     };
     // SAFETY: per the contract.
-    let made = unsafe { named(attributes) }.and_then(|(start, path)| {
-        let now = now();
-        // `start` outlives the lock: a parameter goes after the locals.
-        let mut hive = HIVE.lock();
-        let (key, new) = hive.create(start.key(), &path).map_err(status)?;
-        if new {
-            let classed = hive.set_class(key, &class);
-            if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
-                // Without its class it is not the key that was asked
-                // for: nothing has seen it yet, and it has no subkeys.
-                let _ = hive.delete(key);
-                return Err(status(error));
-            }
-        }
-        hive.opened(key);
-        Ok((key, new))
-    });
+    let made =
+        unsafe { named(attributes) }.and_then(|(start, path)| create_below(&start, &path, &class));
     match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
         Ok((handle, new)) => {
             // SAFETY: per the contract.
@@ -616,13 +846,7 @@ pub unsafe extern "C" fn ZwSetValueKey(
         };
         (crate::rtl::copy_unicode(value_name), data)
     };
-    let now = now();
-    let mut hive = HIVE.lock();
-    let set = hive.set_value(key, &name, kind, &data);
-    match set.and_then(|()| hive.set_last_write(key, now)) {
-        Ok(()) => STATUS_SUCCESS,
-        Err(error) => status(error),
-    }
+    set_value(key, &name, kind, &data)
 }
 
 /// [`ZwDeleteValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletevaluekey):
@@ -645,13 +869,7 @@ pub unsafe extern "C" fn ZwDeleteValueKey(
     // SAFETY: per the contract. The name is the driver's memory: the
     // registry is given a copy.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
-    let now = now();
-    let mut hive = HIVE.lock();
-    let deleted = hive.delete_value(key, &name);
-    match deleted.and_then(|()| hive.set_last_write(key, now)) {
-        Ok(()) => STATUS_SUCCESS,
-        Err(error) => status(error),
-    }
+    delete_value_of(key, &name)
 }
 
 /// Answer a query for an information structure. `format` writes the
@@ -907,7 +1125,15 @@ pub unsafe extern "C" fn ZwQueryValueKey(
         Ok(value_information(class, stored_name, kind, data, out))
     };
     // SAFETY: per the contract.
-    unsafe { inform(information, length, result_length, format) }
+    let status = unsafe { inform(information, length, result_length, format) };
+    if crate::kd::trace_registry() {
+        kprintln!(
+            "cm: query value {}: {:#x}",
+            alloc::string::String::from_utf16_lossy(&name),
+            status as u32
+        );
+    }
+    status
 }
 
 // ---- tests --------------------------------------------------------------
@@ -920,7 +1146,7 @@ pub fn refused_test(file: &[u8]) -> Result<(), &'static str> {
     copy.try_reserve_exact(file.len())
         .map_err(|_| "no memory")?;
     copy.extend_from_slice(file);
-    let verdict = |file: &[u8]| build(&mut Hive::new(), Some(file)).map(|_| ());
+    let verdict = |file: &[u8]| build(&mut Hive::new(), Some(file), &[]).map(|_| ());
     if verdict(&copy).is_err() {
         return Err("the hive the kernel booted with was refused the second time");
     }
@@ -948,4 +1174,21 @@ pub fn refused_test(file: &[u8]) -> Result<(), &'static str> {
         return Err("a hive cut short was not refused");
     }
     Ok(())
+}
+
+/// An overlay with a line that cannot be read is refused whole, and an
+/// overlay is carried out before the control set is chosen: one that
+/// sets `Select\Current` decides what `CurrentControlSet` leads to.
+pub fn overlay_test() -> Result<(), &'static str> {
+    if overlay(b"key Select\nvalue Current dword\n").is_ok() {
+        return Err("an overlay with a value that has no data was not refused");
+    }
+    let laid = overlay(b"key Select\nvalue Current dword 2\nkey ControlSet002\\NkOverlay\n")?;
+    let mut hive = Hive::new();
+    let root = build(&mut hive, None, &laid)?;
+    let path = wide("Machine\\System\\CurrentControlSet\\NkOverlay");
+    match hive.open(root, &path) {
+        Ok(_) => Ok(()),
+        Err(_) => Err("an overlay's control set is not the current one"),
+    }
 }

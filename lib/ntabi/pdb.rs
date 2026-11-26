@@ -131,6 +131,144 @@ fn dpc_matches_the_kernel() {
 }
 
 #[test]
+fn interrupt_object_matches_the_kernel() {
+    use crate::interrupt::KINTERRUPT;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let interrupt = types.layout("_KINTERRUPT").expect("_KINTERRUPT");
+    let field = |name| offset(&interrupt, "_KINTERRUPT", name);
+    assert_eq!(size_of::<KINTERRUPT>(), interrupt.size as usize);
+    macro_rules! same {
+        ($($name:ident),*) => {
+            $(assert_eq!(offset_of!(KINTERRUPT, $name), field(stringify!($name)));)*
+        };
+    }
+    same!(
+        Type,
+        Size,
+        InterruptListEntry,
+        ServiceRoutine,
+        MessageServiceRoutine,
+        MessageIndex,
+        ServiceContext,
+        SpinLock,
+        TickCount,
+        ActualLock,
+        DispatchAddress,
+        Vector,
+        Irql,
+        SynchronizeIrql,
+        FloatingSave,
+        Connected,
+        Number,
+        ShareVector,
+        EmulateActiveBoth,
+        ActiveCount,
+        InternalState,
+        Mode,
+        Polarity,
+        ServiceCount,
+        DispatchCount,
+        PassiveEvent,
+        TrapFrame,
+        DisconnectData,
+        ServiceThread,
+        ConnectionData,
+        IntTrackEntry,
+        IsrDpcStats,
+        RedirectObject,
+        PhysicalDeviceObject
+    );
+}
+
+#[test]
+fn dma_structures_match_the_kernel() {
+    use crate::dma::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    // Every field of a structure, by name.
+    macro_rules! same {
+        ($ty:ident, $name:literal: $($field:ident),* $(,)?) => {{
+            let layout = types.layout($name).expect($name);
+            assert_eq!(size_of::<$ty>(), layout.size as usize, $name);
+            $(assert_eq!(
+                offset_of!($ty, $field),
+                offset(&layout, $name, stringify!($field)),
+                concat!($name, ".", stringify!($field))
+            );)*
+        }};
+    }
+    same!(DEVICE_DESCRIPTION, "_DEVICE_DESCRIPTION":
+        Version, Master, ScatterGather, DemandMode, AutoInitialize, Dma32BitAddresses,
+        IgnoreCount, Reserved1, Dma64BitAddresses, BusNumber, DmaChannel, InterfaceType,
+        DmaWidth, DmaSpeed, MaximumLength, DmaPort, DmaAddressWidth, DmaControllerInstance,
+        DmaRequestLine, DeviceAddress);
+    same!(DMA_ADAPTER, "_DMA_ADAPTER": Version, Size, DmaOperations);
+    same!(DMA_OPERATIONS, "_DMA_OPERATIONS":
+        Size, PutDmaAdapter, AllocateCommonBuffer, FreeCommonBuffer, AllocateAdapterChannel,
+        FlushAdapterBuffers, FreeAdapterChannel, FreeMapRegisters, MapTransfer,
+        GetDmaAlignment, ReadDmaCounter, GetScatterGatherList, PutScatterGatherList,
+        CalculateScatterGatherList, BuildScatterGatherList, BuildMdlFromScatterGatherList,
+        GetDmaAdapterInfo, GetDmaTransferInfo, InitializeDmaTransferContext,
+        AllocateCommonBufferEx, AllocateAdapterChannelEx, ConfigureAdapterChannel,
+        CancelAdapterChannel, MapTransferEx, GetScatterGatherListEx,
+        BuildScatterGatherListEx, FlushAdapterBuffersEx, FreeAdapterObject,
+        CancelMappedTransfer, AllocateDomainCommonBuffer, FlushDmaBuffer, JoinDmaDomain,
+        LeaveDmaDomain, GetDmaDomain, AllocateCommonBufferWithBounds,
+        AllocateCommonBufferVector, GetCommonBufferFromVectorByIndex,
+        FreeCommonBufferFromVector, FreeCommonBufferVector);
+    same!(SCATTER_GATHER_LIST, "_SCATTER_GATHER_LIST": NumberOfElements, Reserved, Elements);
+    same!(SCATTER_GATHER_ELEMENT, "_SCATTER_GATHER_ELEMENT": Address, Length, Reserved);
+    // The two info structures are a version and a union; NK declares
+    // the union's largest member in line.
+    let info = types
+        .layout("_DMA_ADAPTER_INFO")
+        .expect("_DMA_ADAPTER_INFO");
+    let v1 = types
+        .layout("_DMA_ADAPTER_INFO_V1")
+        .expect("_DMA_ADAPTER_INFO_V1");
+    let at = offset(&info, "_DMA_ADAPTER_INFO", "V1");
+    assert_eq!(size_of::<DMA_ADAPTER_INFO>(), info.size as usize);
+    for (field, mine) in [
+        (
+            "ReadDmaCounterAvailable",
+            offset_of!(DMA_ADAPTER_INFO, ReadDmaCounterAvailable),
+        ),
+        (
+            "ScatterGatherLimit",
+            offset_of!(DMA_ADAPTER_INFO, ScatterGatherLimit),
+        ),
+        (
+            "DmaAddressWidth",
+            offset_of!(DMA_ADAPTER_INFO, DmaAddressWidth),
+        ),
+        ("Flags", offset_of!(DMA_ADAPTER_INFO, Flags)),
+        (
+            "MinimumTransferUnit",
+            offset_of!(DMA_ADAPTER_INFO, MinimumTransferUnit),
+        ),
+    ] {
+        assert_eq!(
+            mine,
+            at + offset(&v1, "_DMA_ADAPTER_INFO_V1", field),
+            "{field}"
+        );
+    }
+    let transfer = types
+        .layout("_DMA_TRANSFER_INFO")
+        .expect("_DMA_TRANSFER_INFO");
+    let v2 = types
+        .layout("_DMA_TRANSFER_INFO_V2")
+        .expect("_DMA_TRANSFER_INFO_V2");
+    let at = offset(&transfer, "_DMA_TRANSFER_INFO", "V2");
+    assert_eq!(size_of::<DMA_TRANSFER_INFO>(), transfer.size as usize);
+    assert_eq!(
+        offset_of!(DMA_TRANSFER_INFO, LogicalPageCount),
+        at + offset(&v2, "_DMA_TRANSFER_INFO_V2", "LogicalPageCount")
+    );
+}
+
+#[test]
 fn timer_matches_the_kernel() {
     use crate::ke::{DISPATCHER_HEADER, KTIMER, TIMER_INSERTED};
     use core::mem::{offset_of, size_of};
@@ -245,6 +383,16 @@ fn thread_matches_the_kernel() {
         );
     }
     assert_eq!(IDEAL_PROCESSOR, field("IdealProcessor"));
+    assert_eq!(USER_AFFINITY, field("UserAffinity"));
+    assert_eq!(USER_IDEAL_PROCESSOR, field("UserIdealProcessor"));
+    let system_affinity = kthread
+        .member("SystemAffinityActive")
+        .expect("_KTHREAD.SystemAffinityActive");
+    assert_eq!(system_affinity.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        system_affinity.bits,
+        Some((MISC_FLAG_SYSTEM_AFFINITY_ACTIVE.trailing_zeros() as u8, 1))
+    );
     let affinity = types.layout("_GROUP_AFFINITY").expect("_GROUP_AFFINITY");
     assert_eq!(offset(&affinity, "_GROUP_AFFINITY", "Mask"), 0);
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
@@ -276,6 +424,12 @@ fn thread_matches_the_kernel() {
     );
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
     assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
+    assert_eq!(
+        DEVICE_TO_VERIFY,
+        offset(&ethread, "_ETHREAD", "DeviceToVerify")
+    );
+    assert_eq!(IO_BOOST_COUNT, offset(&ethread, "_ETHREAD", "IoBoostCount"));
+    assert_eq!(ACTIVITY_ID, offset(&ethread, "_ETHREAD", "ActivityId"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueThread"), 8);
@@ -660,6 +814,41 @@ fn work_items_match_the_kernel() {
     assert_eq!(offset_of!(IO_WORKITEM, Context), field("Context"));
     assert_eq!(offset_of!(IO_WORKITEM, Type), field("Type"));
     assert_eq!(offset_of!(IO_WORKITEM, ActivityId), field("ActivityId"));
+}
+
+#[test]
+fn irp_extension_matches_the_kernel() {
+    use crate::io::IOP_IRP_EXTENSION;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let extension = types
+        .layout("_IOP_IRP_EXTENSION")
+        .expect("_IOP_IRP_EXTENSION");
+    let field = |name| offset(&extension, "_IOP_IRP_EXTENSION", name);
+    assert_eq!(size_of::<IOP_IRP_EXTENSION>(), extension.size as usize);
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, TypesAllocated),
+        field("TypesAllocated")
+    );
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, GenericExtension),
+        field("GenericExtension")
+    );
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, DiskIoAttributionHandle),
+        field("DiskIoAttributionHandle")
+    );
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, ActivityId),
+        field("ActivityId")
+    );
+    for name in ["Timestamp", "FsTrackOffsetBlob", "AdapterCryptoParameters"] {
+        assert_eq!(offset_of!(IOP_IRP_EXTENSION, Parameters), field(name));
+    }
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, DriverFlags),
+        field("DriverFlags")
+    );
 }
 
 #[test]
@@ -1119,6 +1308,228 @@ fn create_requests_match_the_kernel() {
 }
 
 #[test]
+fn device_object_extension_matches_the_kernel() {
+    use crate::io::DEVOBJ_EXTENSION;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DEVOBJ_EXTENSION,
+        "_DEVOBJ_EXTENSION",
+        [
+            Type,
+            Size,
+            DeviceObject,
+            PowerFlags,
+            Dope,
+            ExtensionFlags,
+            DeviceNode,
+            AttachedTo,
+            StartIoCount,
+            StartIoKey,
+            StartIoFlags,
+            Vpb,
+            DependencyNode,
+            InterruptContext,
+            InterruptCount,
+            VerifierContext,
+        ]
+    );
+}
+
+#[test]
+fn driver_extension_matches_the_kernel() {
+    use crate::io::{DRIVER_EXTENSION, IO_CLIENT_EXTENSION};
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DRIVER_EXTENSION,
+        "_DRIVER_EXTENSION",
+        [
+            DriverObject,
+            AddDevice,
+            Count,
+            ServiceKeyName,
+            ClientDriverExtension,
+            FsFilterCallbacks,
+            KseCallbacks,
+            DvCallbacks,
+            VerifierContext,
+        ]
+    );
+    same_layout!(
+        types,
+        IO_CLIENT_EXTENSION,
+        "_IO_CLIENT_EXTENSION",
+        [NextExtension, ClientIdentificationAddress]
+    );
+}
+
+#[test]
+fn device_queue_matches_the_kernel() {
+    use crate::io::{IRP_DEVICE_QUEUE_ENTRY, KDEVICE_QUEUE, KDEVICE_QUEUE_ENTRY};
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        KDEVICE_QUEUE,
+        "_KDEVICE_QUEUE",
+        [Type, Size, DeviceListHead, Lock, Busy]
+    );
+    same_layout!(
+        types,
+        KDEVICE_QUEUE_ENTRY,
+        "_KDEVICE_QUEUE_ENTRY",
+        [DeviceListEntry, SortKey, Inserted]
+    );
+    // The entry in an IRP: `Tail.Overlay.DeviceQueueEntry`.
+    let irp = types.layout("_IRP").expect("_IRP");
+    assert_eq!(IRP_DEVICE_QUEUE_ENTRY, offset(&irp, "_IRP", "Tail"));
+}
+
+#[test]
+fn plug_and_play_structures_match_the_kernel() {
+    use crate::pnp::*;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DEVICE_RELATIONS,
+        "_DEVICE_RELATIONS",
+        [Count, Objects]
+    );
+    same_layout!(
+        types,
+        DEVICE_CAPABILITIES,
+        "_DEVICE_CAPABILITIES",
+        [
+            Size,
+            Version,
+            Address,
+            UINumber,
+            DeviceState,
+            SystemWake,
+            DeviceWake,
+            D1Latency,
+            D2Latency,
+            D3Latency,
+        ]
+    );
+    // The capability bits share the word after `Version`.
+    let capabilities = types
+        .layout("_DEVICE_CAPABILITIES")
+        .expect("_DEVICE_CAPABILITIES");
+    for (name, bit) in [
+        ("DeviceD1", DEVICE_CAPABILITY_DEVICE_D1),
+        ("Removable", DEVICE_CAPABILITY_REMOVABLE),
+        ("UniqueID", DEVICE_CAPABILITY_UNIQUE_ID),
+        ("RawDeviceOK", DEVICE_CAPABILITY_RAW_DEVICE_OK),
+        ("SurpriseRemovalOK", DEVICE_CAPABILITY_SURPRISE_REMOVAL_OK),
+        ("WakeFromD3", DEVICE_CAPABILITY_WAKE_FROM_D3),
+        ("HardwareDisabled", DEVICE_CAPABILITY_HARDWARE_DISABLED),
+        ("NoDisplayInUI", DEVICE_CAPABILITY_NO_DISPLAY_IN_UI),
+    ] {
+        let member = capabilities.member(name).expect(name);
+        assert_eq!(
+            member.offset as usize,
+            core::mem::offset_of!(DEVICE_CAPABILITIES, Flags),
+            "{name}"
+        );
+        assert_eq!(member.bits, Some((bit.trailing_zeros() as u8, 1)), "{name}");
+    }
+    same_layout!(
+        types,
+        POWER_STATE,
+        "_POWER_STATE",
+        [SystemState, DeviceState]
+    );
+    same_layout!(
+        types,
+        POWER_SEQUENCE,
+        "_POWER_SEQUENCE",
+        [SequenceD1, SequenceD2, SequenceD3]
+    );
+    same_layout!(
+        types,
+        INTERFACE,
+        "_INTERFACE",
+        [
+            Size,
+            Version,
+            Context,
+            InterfaceReference,
+            InterfaceDereference
+        ]
+    );
+    same_layout!(
+        types,
+        CM_PARTIAL_RESOURCE_DESCRIPTOR,
+        "_CM_PARTIAL_RESOURCE_DESCRIPTOR",
+        [Type, ShareDisposition, Flags, u]
+    );
+    same_layout!(
+        types,
+        CM_PARTIAL_RESOURCE_LIST,
+        "_CM_PARTIAL_RESOURCE_LIST",
+        [Version, Revision, Count, PartialDescriptors]
+    );
+    same_layout!(
+        types,
+        CM_FULL_RESOURCE_DESCRIPTOR,
+        "_CM_FULL_RESOURCE_DESCRIPTOR",
+        [InterfaceType, BusNumber, PartialResourceList]
+    );
+    same_layout!(types, CM_RESOURCE_LIST, "_CM_RESOURCE_LIST", [Count, List]);
+    same_layout!(
+        types,
+        IO_RESOURCE_DESCRIPTOR,
+        "_IO_RESOURCE_DESCRIPTOR",
+        [Option, Type, ShareDisposition, Spare1, Flags, Spare2, u]
+    );
+    same_layout!(
+        types,
+        IO_RESOURCE_LIST,
+        "_IO_RESOURCE_LIST",
+        [Version, Revision, Count, Descriptors]
+    );
+    same_layout!(
+        types,
+        IO_RESOURCE_REQUIREMENTS_LIST,
+        "_IO_RESOURCE_REQUIREMENTS_LIST",
+        [
+            ListSize,
+            InterfaceType,
+            BusNumber,
+            SlotNumber,
+            Reserved,
+            AlternativeLists,
+            List,
+        ]
+    );
+}
+
+#[test]
+fn fast_io_dispatch_matches_the_kernel() {
+    use crate::io::{FAST_IO_DETACH_DEVICE, FAST_IO_DISPATCH, FAST_IO_ROUTINES};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("_FAST_IO_DISPATCH")
+        .expect("_FAST_IO_DISPATCH");
+    let field = |name| offset(&table, "_FAST_IO_DISPATCH", name);
+    let routine = |index: usize| offset_of!(FAST_IO_DISPATCH, Routines) + index * 8;
+    assert_eq!(size_of::<FAST_IO_DISPATCH>(), table.size as usize);
+    assert_eq!(
+        offset_of!(FAST_IO_DISPATCH, SizeOfFastIoDispatch),
+        field("SizeOfFastIoDispatch")
+    );
+    assert_eq!(routine(0), field("FastIoCheckIfPossible"));
+    assert_eq!(routine(FAST_IO_DETACH_DEVICE), field("FastIoDetachDevice"));
+    assert_eq!(
+        routine(FAST_IO_ROUTINES - 1),
+        field("ReleaseForCcFlush"),
+        "the last routine"
+    );
+}
+
+#[test]
 fn object_attributes_match_the_kernel() {
     use crate::ob::OBJECT_ATTRIBUTES;
     use core::mem::{offset_of, size_of};
@@ -1235,4 +1646,83 @@ fn fcb_header_matches_the_kernel() {
     assert_eq!(bits("Reserved"), (0, 4));
     assert_eq!(bits("Version"), (4, 4));
     assert_eq!(with_fcb_header_version(0, 0xF), 0xF0);
+}
+
+#[test]
+fn hal_private_dispatch_table_matches_the_kernel() {
+    use crate::hal::{FIRST_SLOT, HAL_PRIVATE_DISPATCH_SLOTS};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("HAL_PRIVATE_DISPATCH")
+        .expect("HAL_PRIVATE_DISPATCH");
+    assert_eq!(
+        FIRST_SLOT + HAL_PRIVATE_DISPATCH_SLOTS.len() * 8,
+        table.size as usize
+    );
+    assert_eq!(offset(&table, "HAL_PRIVATE_DISPATCH", "Version"), 0);
+    for (i, name) in HAL_PRIVATE_DISPATCH_SLOTS.iter().enumerate() {
+        assert_eq!(
+            offset(&table, "HAL_PRIVATE_DISPATCH", name),
+            FIRST_SLOT + i * 8,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn cache_aware_rundown_matches_the_kernel() {
+    use crate::ex::EX_RUNDOWN_REF_CACHE_AWARE;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let ty = "_EX_RUNDOWN_REF_CACHE_AWARE";
+    let layout = types.layout(ty).expect(ty);
+    let field = |name| offset(&layout, ty, name);
+    assert_eq!(
+        size_of::<EX_RUNDOWN_REF_CACHE_AWARE>(),
+        layout.size as usize
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefs),
+        field("RunRefs")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, PoolToFree),
+        field("PoolToFree")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefSize),
+        field("RunRefSize")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, Number),
+        field("Number")
+    );
+}
+
+#[test]
+fn timer2_matches_the_kernel() {
+    use crate::ke::KTIMER2;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let layout = types.layout("_KTIMER2").expect("_KTIMER2");
+    let field = |name| offset(&layout, "_KTIMER2", name);
+    assert_eq!(size_of::<KTIMER2>(), layout.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(KTIMER2, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        Header,
+        RbNodes,
+        DueTime,
+        Period,
+        Callback,
+        CallbackContext,
+        DisableCallback,
+        DisableContext,
+        AbsoluteSystemTime,
+        TypeFlags,
+        CollectionIndex
+    );
 }

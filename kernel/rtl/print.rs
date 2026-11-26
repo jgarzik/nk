@@ -1,5 +1,5 @@
-//! Formatted output for drivers: `DbgPrint`, `_snwprintf`,
-//! `_vsnwprintf`.
+//! Formatted output for drivers: `DbgPrint` and its filtered forms,
+//! `_snwprintf`, `_vsnwprintf`.
 //!
 //! `DbgPrint` and `_snwprintf` take a variable number of arguments. Each
 //! is entered through an assembly stub (`arch::variadic`) that passes
@@ -11,11 +11,16 @@
 #![allow(non_snake_case)]
 
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicU32, Ordering};
+use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
+use nk_rtl::dbgfilter;
 use nk_rtl::format::{Arguments, format, snprintf_result};
 
 unsafe extern "C" {
     /// [`DbgPrint`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgprint).
     pub fn nk_variadic_DbgPrint(format: *const u8, ...) -> u32;
+    /// [`DbgPrintEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgprintex).
+    pub fn nk_variadic_DbgPrintEx(component: u32, level: u32, format: *const u8, ...) -> u32;
     /// [`_snwprintf`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/snprintf-snprintf-snprintf-l-snwprintf-snwprintf-l).
     pub fn nk_variadic__snwprintf(buffer: *mut u16, count: usize, format: *const u16, ...) -> i32;
 }
@@ -75,7 +80,7 @@ impl Arguments for Passed {
 ///
 /// # Safety
 /// `text` points to a NUL-terminated string of `T`.
-pub(super) unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
+pub(crate) unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
     text: *const T,
 ) -> impl Iterator<Item = u16> {
     (0..)
@@ -85,36 +90,139 @@ pub(super) unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
         .map(Into::into)
 }
 
+/// Put a debug message on the console: `prefix`, if there is one, then
+/// `format_string` with its arguments.
+///
+/// # Safety
+/// `prefix` is null or NUL-terminated; `format_string` is
+/// NUL-terminated; `arguments` holds what the format names.
+unsafe fn debug_message(prefix: *const u8, format_string: *const u8, arguments: *const u64) {
+    // What Windows hands a debugger, NK puts on the console, a line's
+    // worth at a time so that it does not mingle with other output.
+    let mut line = [0u8; 256];
+    let mut len = 0;
+    let mut put = |c: u16| {
+        if len < line.len() {
+            // Console output is ASCII; anything else shows as `?`.
+            line[len] = u8::try_from(c).ok().filter(u8::is_ascii).unwrap_or(b'?');
+            len += 1;
+        }
+    };
+    // SAFETY: per the contract.
+    unsafe {
+        if !prefix.is_null() {
+            characters(prefix).for_each(&mut put);
+        }
+        let mut passed = Passed(arguments);
+        format(&mut characters(format_string), false, &mut passed, &mut put);
+    }
+    let text = core::str::from_utf8(&line[..len]).unwrap_or("?");
+    crate::kd::print(format_args!("DbgPrint: {}\n", text.trim_end_matches('\n')));
+}
+
 /// `DbgPrint`, entered from its stub: `args[0]` is the format.
 ///
 /// # Safety
 /// `args` is the argument array of a `DbgPrint` call.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn nk_dbg_print(args: *const u64) -> u32 {
-    // What Windows hands a debugger, NK puts on the console, a line's
-    // worth at a time so that it does not mingle with other output.
-    let mut line = [0u8; 256];
-    let mut len = 0;
     // SAFETY: per the contract.
-    unsafe {
-        let mut passed = Passed(args.add(1));
-        format(
-            &mut characters(args.read() as *const u8),
-            false,
-            &mut passed,
-            &mut |c| {
-                if len < line.len() {
-                    // Console output is ASCII; anything else shows as `?`.
-                    line[len] = u8::try_from(c).ok().filter(u8::is_ascii).unwrap_or(b'?');
-                    len += 1;
-                }
-            },
-        );
-    }
-    let text = core::str::from_utf8(&line[..len]).unwrap_or("?");
-    crate::kd::print(format_args!("DbgPrint: {}\n", text.trim_end_matches('\n')));
+    unsafe { debug_message(core::ptr::null(), args.read() as *const u8, args.add(1)) };
     0
 }
+
+/// The filter masks of the components (`nk_rtl::dbgfilter`), and the
+/// one that applies to all of them.
+static COMPONENT_MASKS: [AtomicU32; dbgfilter::COMPONENTS] =
+    [const { AtomicU32::new(0) }; dbgfilter::COMPONENTS];
+static WIN2000_MASK: AtomicU32 = AtomicU32::new(dbgfilter::WIN2000_AT_BOOT);
+
+/// Whether a message of `component` at `level` is let through.
+pub fn debug_filter_passes(component: u32, level: u32) -> bool {
+    let (decides, wanted) = dbgfilter::message(component, level);
+    dbgfilter::passes(
+        wanted,
+        COMPONENT_MASKS[decides].load(Ordering::Relaxed),
+        WIN2000_MASK.load(Ordering::Relaxed),
+    )
+}
+
+/// `DbgPrintEx`, entered from its stub: component, level, format, then
+/// the format's arguments. A message the filter stops is dropped; one
+/// it lets through goes where `DbgPrint`'s go.
+///
+/// # Safety
+/// `args` is the argument array of a `DbgPrintEx` call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn nk_dbg_print_ex(args: *const u64) -> u32 {
+    // SAFETY: per the contract: three named arguments, then the
+    // format's.
+    unsafe {
+        if debug_filter_passes(args.read() as u32, args.add(1).read() as u32) {
+            debug_message(
+                core::ptr::null(),
+                args.add(2).read() as *const u8,
+                args.add(3),
+            );
+        }
+    }
+    0
+}
+
+/// [`vDbgPrintExWithPrefix`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-vdbgprintexwithprefix):
+/// `DbgPrintEx` with a prefix before the message and the format's
+/// arguments in a `va_list`.
+///
+/// # Safety
+/// `prefix` and `format_string` are NUL-terminated; `arguments` is a
+/// `va_list` of at least the arguments the format names.
+pub unsafe extern "C" fn vDbgPrintExWithPrefix(
+    prefix: *const u8,
+    component: u32,
+    level: u32,
+    format_string: *const u8,
+    arguments: *const u64,
+) -> u32 {
+    if debug_filter_passes(component, level) {
+        // SAFETY: per the contract.
+        unsafe { debug_message(prefix, format_string, arguments) };
+    }
+    0
+}
+
+/// [`DbgSetDebugFilterState`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgsetdebugfilterstate):
+/// turn `level` on or off in a component's filter mask. A component
+/// number of -1 names the mask that applies to every component; any
+/// other number past the table names the default component's.
+pub extern "C" fn DbgSetDebugFilterState(component: u32, level: u32, state: u8) -> NTSTATUS {
+    let mask = match dbgfilter::slot(component) {
+        dbgfilter::Slot::Component(index) => &COMPONENT_MASKS[index],
+        dbgfilter::Slot::Win2000 => &WIN2000_MASK,
+    };
+    if state != 0 {
+        mask.fetch_or(dbgfilter::mask(level), Ordering::Relaxed);
+    } else {
+        mask.fetch_and(!dbgfilter::mask(level), Ordering::Relaxed);
+    }
+    STATUS_SUCCESS
+}
+
+/// [`DbgPrompt`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgprompt):
+/// ask whoever is at the debugger for a line. The request is a
+/// breakpoint the debugger answers. With no debugger Windows' stub
+/// passes over print and command requests but not this one, which is
+/// then an exception, `0x80000003`, like any breakpoint
+/// (`doc/DESIGN.md`, "Breakpoints and the debugger"); NK's debugger
+/// that always says go has nobody to type, and the response is empty.
+pub extern "C" fn DbgPrompt(_prompt: *const u8, _response: *mut u8, _length: u32) -> u32 {
+    crate::arch::driver_breakpoint();
+    0
+}
+
+/// `DbgCommandString` (undocumented): hand the debugger a command to
+/// run. With no debugger Windows' stub passes over the request, and
+/// nothing is done.
+pub extern "C" fn DbgCommandString(_name: *const u8, _command: *const u8) {}
 
 /// `_snwprintf`, entered from its stub: buffer, count, format, then the
 /// format's arguments.
@@ -170,6 +278,46 @@ pub unsafe extern "C" fn _vsnwprintf(
         // A terminator only if there is room for one.
         if produced < count {
             buffer.add(produced).write_unaligned(0);
+        }
+        snprintf_result(produced, count)
+    }
+}
+
+/// [`_vsnprintf`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/vsnprintf-vsnprintf-vsnprintf-l-vsnwprintf-vsnwprintf-l):
+/// [`_vsnwprintf`] into a buffer of bytes, from a format of bytes. A
+/// wide character or string among the arguments is written in the ANSI
+/// code page.
+///
+/// # Safety
+/// `buffer` is writable for `count` characters, `format` is
+/// NUL-terminated, and `arguments` is a `va_list` of at least the
+/// arguments the format names.
+pub unsafe extern "C" fn _vsnprintf(
+    buffer: *mut u8,
+    count: usize,
+    format_string: *const u8,
+    arguments: *const u64,
+) -> i32 {
+    // SAFETY: per the contract.
+    unsafe {
+        let mut passed = Passed(arguments);
+        let mut produced = 0;
+        format(
+            &mut characters(format_string),
+            false,
+            &mut passed,
+            &mut |c| {
+                if produced < count {
+                    buffer
+                        .add(produced)
+                        .write(nk_rtl::codepage::ANSI_1252.from_unicode(c));
+                }
+                produced += 1;
+            },
+        );
+        // A terminator only if there is room for one.
+        if produced < count {
+            buffer.add(produced).write(0);
         }
         snprintf_result(produced, count)
     }

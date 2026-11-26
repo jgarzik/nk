@@ -12,6 +12,7 @@
 
 pub mod exports;
 pub mod modules;
+pub mod resources;
 
 /// `IMAGE_FILE_MACHINE_AMD64`
 pub const MACHINE_AMD64: u16 = 0x8664;
@@ -447,14 +448,29 @@ pub fn for_each_import(
     Ok(())
 }
 
-/// Fill the import address table of a mapped image. `resolve(dll, symbol)`
-/// returns the address to bind, or `None`; the first `None` aborts with
-/// [`PeError::Unresolved`] naming the symbol. Nothing is bound unless
-/// everything resolves.
+/// What an import is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bind {
+    /// This address.
+    Address(u64),
+    /// What the image itself put in the slot: a routine of its own,
+    /// which the linker left there for a module that may not exist (an
+    /// extension API set no module hosts). The slot must hold an address
+    /// inside the image, not the import's name.
+    Own,
+}
+
+/// Fill the import address table of a mapped image that has been
+/// relocated to `loaded_base`. `resolve(dll, symbol)` says what to bind,
+/// or `None`; the first `None` aborts with [`PeError::Unresolved`]
+/// naming the symbol, and so does [`Bind::Own`] for a slot in which the
+/// image left no routine of its own. Nothing is bound unless everything
+/// resolves.
 pub fn bind_imports(
     image: &mut [u8],
     h: &Headers,
-    mut resolve: impl FnMut(&[u8], Symbol<'_>) -> Option<u64>,
+    loaded_base: u64,
+    mut resolve: impl FnMut(&[u8], Symbol<'_>) -> Option<Bind>,
 ) -> Result<(), PeError> {
     // Pass 1 checks every symbol, pass 2 writes: no half-bound image.
     for bind in [false, true] {
@@ -464,9 +480,21 @@ pub fn bind_imports(
         while let Some(imp) = cur.next(image)? {
             let dll = cstr_at(image, imp.dll_rva)?;
             let sym = symbol(image, imp.thunk)?;
-            let addr = resolve(dll, sym).ok_or_else(|| unresolved(image, dll, sym))?;
-            if bind {
-                put_u64(image, imp.slot as usize, addr)?;
+            match resolve(dll, sym).ok_or_else(|| unresolved(image, dll, sym))? {
+                Bind::Address(addr) => {
+                    if bind {
+                        put_u64(image, imp.slot as usize, addr)?;
+                    }
+                }
+                Bind::Own => {
+                    let own = u64_at(image, imp.slot as usize)?;
+                    let inside = own
+                        .checked_sub(loaded_base)
+                        .is_some_and(|rva| rva < u64::from(h.size_of_image));
+                    if own == imp.thunk || !inside {
+                        return Err(unresolved(image, dll, sym));
+                    }
+                }
             }
         }
     }

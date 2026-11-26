@@ -25,6 +25,7 @@ pub fn name(code: u32) -> Option<&'static str> {
         0x50 => "PAGE_FAULT_IN_NONPAGED_AREA",
         0x7E => "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED",
         0x7F => "UNEXPECTED_KERNEL_MODE_TRAP",
+        0x80 => "NMI_HARDWARE_FAILURE",
         0x8E => "KERNEL_MODE_EXCEPTION_NOT_HANDLED",
         0x93 => "INVALID_KERNEL_HANDLE",
         0xB8 => "ATTEMPTED_SWITCH_FROM_DPC",
@@ -35,6 +36,8 @@ pub fn name(code: u32) -> Option<&'static str> {
         0xE2 => "MANUALLY_INITIATED_CRASH",
         0xE4 => "WORKER_INVALID",
         0x11D => "EVENT_TRACING_FATAL_ERROR",
+        0x122 => "WHEA_INTERNAL_ERROR",
+        0x124 => "WHEA_UNCORRECTABLE_ERROR",
         0x133 => "DPC_WATCHDOG_VIOLATION",
         0x139 => "KERNEL_SECURITY_CHECK_FAILURE",
         0x189 => "BAD_OBJECT_HEADER",
@@ -157,7 +160,7 @@ mod tests {
 
     /// Every code that has a name, with Microsoft's name for it (the
     /// bug check code reference).
-    const NAMED: [(u32, &str); 27] = [
+    const NAMED: [(u32, &str); 30] = [
         (0x09, "IRQL_NOT_GREATER_OR_EQUAL"),
         (0x0A, "IRQL_NOT_LESS_OR_EQUAL"),
         (0x0C, "MAXIMUM_WAIT_OBJECTS_EXCEEDED"),
@@ -172,6 +175,7 @@ mod tests {
         (0x50, "PAGE_FAULT_IN_NONPAGED_AREA"),
         (0x7E, "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED"),
         (0x7F, "UNEXPECTED_KERNEL_MODE_TRAP"),
+        (0x80, "NMI_HARDWARE_FAILURE"),
         (0x8E, "KERNEL_MODE_EXCEPTION_NOT_HANDLED"),
         (0x93, "INVALID_KERNEL_HANDLE"),
         (0xB8, "ATTEMPTED_SWITCH_FROM_DPC"),
@@ -182,6 +186,8 @@ mod tests {
         (0xE2, "MANUALLY_INITIATED_CRASH"),
         (0xE4, "WORKER_INVALID"),
         (0x11D, "EVENT_TRACING_FATAL_ERROR"),
+        (0x122, "WHEA_INTERNAL_ERROR"),
+        (0x124, "WHEA_UNCORRECTABLE_ERROR"),
         (0x133, "DPC_WATCHDOG_VIOLATION"),
         (0x139, "KERNEL_SECURITY_CHECK_FAILURE"),
         (0x189, "BAD_OBJECT_HEADER"),

@@ -30,7 +30,7 @@ If unsure whether something qualifies, ask before writing it.
   with a test that reproduces the bug.
 - **Stay honest at the driver boundary.** No export reports success for
   work it did not do. An incomplete routine is `Partial` or `Traps` in
-  `kernel/export/mod.rs`, with the gap in its doc comment.
+  its list under `kernel/export/list/`, with the gap in its doc comment.
 - **Be driven by a real driver.** An export is added because a binary in
   the pinned corpus or a pinned fixture imports it.
 - **Build for both architectures.** CPU-specific code lives in

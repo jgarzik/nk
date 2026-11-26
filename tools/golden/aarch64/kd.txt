@@ -1,0 +1,2 @@
+kd.variables ok
+kd.no-debugger ok

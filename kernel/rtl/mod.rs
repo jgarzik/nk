@@ -2,10 +2,17 @@
 
 #![allow(non_snake_case)]
 
+pub mod bitmap;
+pub mod counted;
 pub mod crt;
+pub mod feature;
+pub mod image;
 pub mod name;
+pub mod once;
 pub mod prefix;
 pub mod print;
+pub mod range;
+pub mod resource;
 pub mod string;
 
 use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};

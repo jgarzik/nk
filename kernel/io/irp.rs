@@ -10,46 +10,115 @@ use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
+/// What NK keeps about an IRP it allocated itself, behind the stack
+/// locations and outside what Windows lays out: the locations are
+/// cleared as the request completes, and an IRP in a driver's own
+/// memory (`IoInitializeIrp`) has no such block.
+#[repr(C)]
+struct Private {
+    /// How many bytes the requestor's own buffer (`UserBuffer`) holds,
+    /// for a buffered request whose results are copied to it on
+    /// completion ([`ROOM_KNOWN`]).
+    room: usize,
+    flags: usize,
+}
+
+/// `Private.flags`: `room` has been set.
+const ROOM_KNOWN: usize = 1;
+/// `Private.flags`: the requestor keeps the IRP when it completes, and
+/// frees it itself.
+const REQUESTOR_KEEPS: usize = 2;
+
+/// Make `packet_size` bytes at `irp` an IRP with `locations` stack
+/// locations, positioned one past the first of them, so that the
+/// sender fills in the "next" location and `call_driver` steps onto
+/// it.
+///
+/// # Safety
+/// `irp` is writable for `packet_size` bytes, which hold an IRP and
+/// that many locations, and nothing else uses them.
+unsafe fn init(irp: *mut IRP, packet_size: u16, locations: i8) {
+    // SAFETY: per the contract.
+    unsafe {
+        core::ptr::write_bytes(irp.cast::<u8>(), 0, usize::from(packet_size));
+        (*irp).Type = IO_TYPE_IRP;
+        (*irp).Size = packet_size;
+        (*irp).StackCount = locations;
+        (*irp).CurrentLocation = locations + 1;
+        (*irp).ApcEnvironment = ORIGINAL_APC_ENVIRONMENT;
+        (*irp).CurrentStackLocation = irp
+            .add(1)
+            .cast::<IO_STACK_LOCATION>()
+            .add(locations as usize);
+        let head = &raw mut (*irp).ThreadListEntry;
+        (*head).Flink = head;
+        (*head).Blink = head;
+    }
+}
+
 /// Allocate an IRP with `stack_size` stack locations, as `IoAllocateIrp`
-/// does: positioned one past the first location, so the caller fills in
-/// the "next" location and `call_driver` steps onto it.
+/// does.
 pub fn alloc(stack_size: i8) -> *mut IRP {
     // The IRP and its stack locations, as large as Windows makes them,
-    // then a word of NK's own (`requestor_room`).
+    // then NK's own block.
     let (locations, size) = irp_size(stack_size);
-    let irp = pool::alloc_zeroed(size + size_of::<usize>(), TAG_IRP).cast::<IRP>();
+    let irp = pool::alloc_zeroed(size + size_of::<Private>(), TAG_IRP).cast::<IRP>();
     if irp.is_null() {
         return irp;
     }
     // SAFETY: `irp` is a fresh zeroed block large enough for the IRP and
     // its stack locations, which follow it directly.
-    unsafe {
-        (*irp).Type = IO_TYPE_IRP;
-        (*irp).Size = size as u16;
-        (*irp).StackCount = locations as i8;
-        (*irp).CurrentLocation = locations as i8 + 1;
-        (*irp).CurrentStackLocation = irp.add(1).cast::<IO_STACK_LOCATION>().add(locations);
-        let head = &raw mut (*irp).ThreadListEntry;
-        (*head).Flink = head;
-        (*head).Blink = head;
-    }
+    unsafe { init(irp, size as u16, locations as i8) };
     irp
 }
 
-/// How many bytes the requestor's own buffer (`UserBuffer`) holds, for
-/// a buffered request whose results are copied to it on completion. It
-/// is kept after the stack locations, outside what Windows lays out,
-/// because the locations are cleared as the request completes.
+/// NK's block behind `irp`, if `irp` is an IRP NK allocated that is
+/// still the size it was allocated with: the pool knows.
 ///
 /// # Safety
-/// `irp` came from [`alloc`].
-pub unsafe fn requestor_room(irp: *mut IRP) -> *mut usize {
-    // SAFETY: per the contract: `alloc` left room for it there.
+/// `irp` is a live IRP.
+unsafe fn private(irp: *mut IRP) -> Option<*mut Private> {
+    // SAFETY: per the contract.
+    let size = usize::from(unsafe { (*irp).Size });
+    match pool::info(irp.cast()) {
+        Some((block, TAG_IRP)) if block == size + size_of::<Private>() => {
+            // SAFETY: the block is that long, so NK's part follows the
+            // IRP and its locations.
+            Some(unsafe { irp.cast::<u8>().add(size).cast() })
+        }
+        _ => None,
+    }
+}
+
+/// Say how many bytes the requestor's own buffer (`UserBuffer`) holds:
+/// a driver that reports more than that as returned stops the system
+/// instead of overrunning the buffer.
+///
+/// # Safety
+/// `irp` came from [`alloc`] and has not been sent.
+pub unsafe fn set_requestor_room(irp: *mut IRP, room: usize) {
+    // SAFETY: per the contract: the block is there.
     unsafe {
-        irp.add(1)
-            .cast::<IO_STACK_LOCATION>()
-            .add((*irp).StackCount as usize)
-            .cast()
+        let Some(private) = private(irp) else {
+            kd::bugcheck(format_args!("IRP {irp:p} is not one NK allocated"));
+        };
+        (*private).room = room;
+        (*private).flags |= ROOM_KNOWN;
+    }
+}
+
+/// Have final completion leave `irp` allocated: the requestor frees it
+/// once it has seen the completion, which the request's event tells it.
+///
+/// # Safety
+/// `irp` came from [`alloc`] and has not been sent.
+pub unsafe fn requestor_keeps(irp: *mut IRP) {
+    // SAFETY: per the contract: the block is there.
+    unsafe {
+        let Some(private) = private(irp) else {
+            kd::bugcheck(format_args!("IRP {irp:p} is not one NK allocated"));
+        };
+        (*private).flags |= REQUESTOR_KEEPS;
     }
 }
 
@@ -97,7 +166,10 @@ pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP, guard: &Gua
 }
 
 /// The dispatch routine every driver starts with for every request type:
-/// fail the request as invalid for the device.
+/// fail the request as invalid for the device. Plug and Play and power
+/// requests are no exception: the pinned kernel fills a new driver
+/// object's whole table with one routine, which completes the request
+/// with this status whatever its major function.
 ///
 /// # Safety
 /// `irp` must be a live IRP being dispatched.
@@ -177,12 +249,13 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
     }
 }
 
-/// Final completion: hand the results to the requestor and tell it. A
-/// requestor that left an event to be told by owns the IRP and frees it
-/// when it has seen the completion; an IRP nobody waits for is freed
-/// here. Windows does this part in the requesting thread, by an APC; NK
-/// does it wherever the request was completed, which is at
-/// `DISPATCH_LEVEL` or below.
+/// Final completion: hand the results to the requestor, tell it by its
+/// event if it left one, and free the IRP, as Windows' I/O manager frees
+/// a request that completes all the way up. NK's own requestor
+/// (`io::file`) keeps its IRPs instead ([`requestor_keeps`]) and frees
+/// them when it has seen the completion. Windows does this part in the
+/// requesting thread, by an APC; NK does it wherever the request was
+/// completed, which is at `DISPATCH_LEVEL` or below.
 ///
 /// The requestor's status block gets the request's final status, which
 /// is the fault if the results could not be copied to a user-mode
@@ -197,6 +270,14 @@ unsafe fn finish(irp: *mut IRP) {
         let mut result = (*irp).IoStatus;
         let status = result.Status;
         let flags = (*irp).Flags;
+        // Read before the requestor is told: it may free the IRP then.
+        let (room, keeps) = match private(irp) {
+            Some(private) => (
+                ((*private).flags & ROOM_KNOWN != 0).then_some((*private).room),
+                (*private).flags & REQUESTOR_KEEPS != 0,
+            ),
+            None => (None, false),
+        };
         if flags & IRP_BUFFERED_IO != 0 {
             let buffer = (*irp).SystemBuffer.cast::<u8>();
             // Results are copied out unless the request failed outright
@@ -215,8 +296,9 @@ unsafe fn finish(irp: *mut IRP) {
                 // for: the system buffer is as large as the larger of
                 // input and output, the requestor's buffer only as
                 // large as the output.
-                let room = requestor_room(irp).read();
-                if count > room {
+                if let Some(room) = room
+                    && count > room
+                {
                     kd::bugcheck(format_args!(
                         "a driver completed a buffered request with Information={count:#x}, more than the {room:#x} bytes its requestor has room for"
                     ));
@@ -243,11 +325,14 @@ unsafe fn finish(irp: *mut IRP) {
         if !(*irp).UserIosb.is_null() {
             (*irp).UserIosb.write(result);
         }
-        if (*irp).UserEvent.is_null() {
+        let event = (*irp).UserEvent;
+        if !keeps {
             free(irp);
-        } else {
-            // Last: from here the requestor may free the IRP.
-            ke::wait::KeSetEvent((*irp).UserEvent, 0, 0);
+        }
+        if !event.is_null() {
+            // Last: from here a requestor that keeps its IRP may free
+            // it, and one that does not may let go of the event.
+            ke::wait::KeSetEvent(event, 0, 0);
         }
     }
 }
@@ -258,8 +343,12 @@ unsafe fn finish(irp: *mut IRP) {
 /// `irp` must be a live IRP that no driver still holds.
 pub unsafe fn free(irp: *mut IRP) {
     // SAFETY: per the contract; clearing Type makes a stale pointer fail
-    // the check in `IofCompleteRequest`.
-    unsafe { (*irp).Type = 0 };
+    // the check in `IofCompleteRequest`. The IRP's extension block, if
+    // it has one, goes with it.
+    unsafe {
+        super::irpext::freed(irp);
+        (*irp).Type = 0;
+    }
     if let Err(e) = pool::free(irp.cast()) {
         kd::bugcheck(format_args!("freeing IRP {irp:p}: {e:?}"));
     }
@@ -288,6 +377,71 @@ pub unsafe extern "C" fn IoFreeIrp(irp: *mut IRP) {
         free(irp);
     }
 }
+
+/// [`IoInitializeIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinitializeirp):
+/// make `packet_size` bytes of the caller's an IRP with `stack_size`
+/// stack locations. Everything in them is cleared, the allocation
+/// flags included, as on Windows.
+///
+/// # Safety
+/// `irp` is writable for `packet_size` bytes, which no request uses.
+pub unsafe extern "C" fn IoInitializeIrp(irp: *mut IRP, packet_size: u16, stack_size: i8) {
+    let (_, needed) = irp_size(stack_size);
+    if stack_size < 1 || usize::from(packet_size) < needed {
+        kd::bugcheck(format_args!(
+            "IoInitializeIrp: {packet_size:#x} bytes do not hold an IRP with {stack_size} \
+             stack locations"
+        ));
+    }
+    // SAFETY: per the contract. An IRP NK allocated has NK's block
+    // behind it, which is cleared with the request it described.
+    unsafe {
+        let own = matches!(
+            pool::info(irp.cast()),
+            Some((block, TAG_IRP)) if block == usize::from(packet_size) + size_of::<Private>()
+        );
+        init(irp, packet_size, stack_size);
+        if own {
+            irp.cast::<u8>()
+                .add(usize::from(packet_size))
+                .cast::<Private>()
+                .write(Private { room: 0, flags: 0 });
+        }
+    }
+}
+
+/// [`IoReuseIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreuseirp):
+/// make an IRP of the caller's ready to be sent again, with `status` as
+/// its status. It keeps its size, its stack locations, the
+/// allocation flags the pinned kernel keeps ([`REUSE_KEEPS`]), and of
+/// its extensions the block and the activity id (`irpext`).
+///
+/// # Safety
+/// `irp` is an IRP of the caller's that no driver holds.
+pub unsafe extern "C" fn IoReuseIrp(irp: *mut IRP, status: NTSTATUS) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*irp).Type != IO_TYPE_IRP {
+            kd::bugcheck(format_args!("IoReuseIrp: {irp:p} is not an IRP"));
+        }
+        if !(*irp).CancelRoutine.is_null() {
+            kd::bugcheck(format_args!(
+                "IoReuseIrp: IRP {irp:p} still has a cancel routine"
+            ));
+        }
+        let kept = (*irp).AllocationFlags & REUSE_KEEPS;
+        let extension = super::irpext::before_reuse(irp);
+        IoInitializeIrp(irp, (*irp).Size, (*irp).StackCount);
+        (*irp).AllocationFlags = kept;
+        super::irpext::after_reuse(irp, extension);
+        (*irp).IoStatus.Status = status;
+    }
+}
+
+/// The bits of `IRP.AllocationFlags` that `IoReuseIrp` of the pinned
+/// kernel carries over. NK sets one of them: that the IRP has an
+/// extension block.
+const REUSE_KEEPS: u8 = 0x6D;
 
 /// [`IoGetRequestorProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetrequestorprocess):
 /// the process of the thread that made the request, or null for a
@@ -340,6 +494,24 @@ pub unsafe extern "C" fn IofCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP
     // SAFETY: per the contract.
     unsafe { call_driver(device, irp, &Guard::Nothing) }
 }
+
+/// [`PoCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pocalldriver):
+/// send a power request to the next driver. Since Windows Vista a power
+/// request is sent as any other; the pinned kernel's `PoCallDriver` is
+/// a call of `IofCallDriver` and nothing more.
+///
+/// # Safety
+/// As [`IofCallDriver`].
+pub unsafe extern "C" fn PoCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { IofCallDriver(device, irp) }
+}
+
+/// [`PoStartNextPowerIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-postartnextpowerirp):
+/// nothing, since Windows Vista: the power manager no longer holds the
+/// next power request back until a driver calls this. The pinned
+/// kernel's returns at once.
+pub extern "C" fn PoStartNextPowerIrp(_irp: *mut IRP) {}
 
 /// The cancel spin lock: one lock for the whole system, which a driver's
 /// cancel routine is entered holding and must release. It is a driver's

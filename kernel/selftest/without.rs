@@ -1,0 +1,567 @@
+//! Parts of Windows NK runs without, the debug message filter and the
+//! stack probe, through the routines drivers import.
+
+use crate::ex::{absent, vsl};
+use crate::rtl::print;
+use crate::test::{Group, Report};
+use core::sync::atomic::{AtomicU32, Ordering};
+use nk_bootinfo::BootInfo;
+use nk_ntabi::status::{
+    STATUS_DEBUGGER_INACTIVE, STATUS_DEVICE_NOT_CONNECTED, STATUS_INFO_LENGTH_MISMATCH,
+    STATUS_INVALID_PARAMETER, STATUS_NOT_FOUND, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
+};
+
+pub static GROUP: Group = Group {
+    names: &[
+        "ex.verifier-off",
+        "ex.headless-off",
+        "ex.secure-devices",
+        "ex.hypervisor",
+        "io.no-paging-file",
+        "rtl.debug-filter",
+        "cpu.stack-probe",
+        "kd.no-debugger",
+        "ex.sysinfo.with-input",
+        "ex.sysinfo.firmware-provider",
+        "etw.nobody-listens",
+        "ex.no-notification-states",
+    ],
+    run,
+    manual: false,
+};
+
+fn verifier_off() -> Result<(), &'static str> {
+    let object = 0u64;
+    if absent::VfIsVerificationEnabled(1, (&raw const object).cast()) != 0 {
+        return Err("the driver verifier was reported as running");
+    }
+    // Reports to a verifier that is not running go nowhere.
+    absent::VfFailDeviceNode((&raw const object).cast(), 0xC4, 1);
+    absent::VfFailSystemBIOS(0xC4, 1);
+    Ok(())
+}
+
+fn headless_off() -> Result<(), &'static str> {
+    let none = core::ptr::null();
+    let mut answer = [0xFFu8; 8];
+    let mut size = 6usize;
+    // SAFETY: a buffer and its length in locals, or neither.
+    unsafe {
+        if absent::HeadlessDispatch(1, none, 0, core::ptr::null_mut(), core::ptr::null_mut())
+            != STATUS_UNSUCCESSFUL
+            || absent::HeadlessDispatch(0x15, none, 0, core::ptr::null_mut(), core::ptr::null_mut())
+                != STATUS_UNSUCCESSFUL
+        {
+            return Err("a terminal that is not there was enabled or took data");
+        }
+        // A question: zeros, for the length given and no further.
+        if absent::HeadlessDispatch(2, none, 0, answer.as_mut_ptr().cast(), &raw mut size)
+            != STATUS_SUCCESS
+            || answer != [0, 0, 0, 0, 0, 0, 0xFF, 0xFF]
+        {
+            return Err("a question was not answered with zeros");
+        }
+        if absent::HeadlessDispatch(2, none, 0, core::ptr::null_mut(), &raw mut size)
+            != STATUS_INVALID_PARAMETER
+        {
+            return Err("a question with nowhere to answer was not refused");
+        }
+        // Output: nowhere to go, and no failure.
+        if absent::HeadlessDispatch(
+            3,
+            c"text".as_ptr().cast(),
+            5,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        ) != STATUS_SUCCESS
+        {
+            return Err("output to no terminal failed");
+        }
+    }
+    Ok(())
+}
+
+fn secure_devices() -> Result<(), &'static str> {
+    if vsl::VslGetSecurePciDeviceAlternateFunctionNumberForVtl0Dma(0, 0, 0x1F, 2) != 0xFF {
+        return Err("a secure kernel that is not there named a function number");
+    }
+    let device = [0u8; 12];
+    let mut answer = [0xFFu8; 16];
+    // SAFETY: locals of the sizes the routine reads and writes.
+    let status = unsafe { vsl::VslQuerySecureDevice(device.as_ptr().cast(), &raw mut answer) };
+    if status != STATUS_DEVICE_NOT_CONNECTED || answer != [0; 16] {
+        return Err("a device was known to a secure kernel that is not there");
+    }
+    Ok(())
+}
+
+fn hypervisor() -> Result<(), &'static str> {
+    let mut features = [0xFFFF_FFFFu32; 4];
+    // SAFETY: a local of four words.
+    unsafe { absent::HviGetHypervisorFeatures(&raw mut features) };
+    if features != crate::arch::platform::hypervisor_features() {
+        return Err("the hypervisor's features are not what the processor reports");
+    }
+    // Features only come from a hypervisor that is there.
+    if absent::HviIsAnyHypervisorPresent() == 0 && features != [0; 4] {
+        return Err("features were reported with no hypervisor");
+    }
+    Ok(())
+}
+
+fn no_paging_file() -> Result<(), &'static str> {
+    let file = 0u64;
+    if crate::io::fsrtl::FsRtlIsSystemPagingFile((&raw const file).cast()) != 0 {
+        return Err("a file was taken for a paging file");
+    }
+    Ok(())
+}
+
+/// `DPFLTR_IHVDRIVER_ID`, and the levels.
+const COMPONENT: u32 = 77;
+const ERROR: u32 = 0;
+const INFO: u32 = 3;
+
+fn debug_filter() -> Result<(), &'static str> {
+    if !print::debug_filter_passes(COMPONENT, ERROR) || print::debug_filter_passes(COMPONENT, INFO)
+    {
+        return Err("at boot the filter does not pass errors alone");
+    }
+    if print::DbgSetDebugFilterState(COMPONENT, INFO, 1) != STATUS_SUCCESS
+        || !print::debug_filter_passes(COMPONENT, INFO)
+        || print::debug_filter_passes(COMPONENT + 1, INFO)
+    {
+        return Err("a level turned on for a component does not pass for it alone");
+    }
+    let arguments = [7u64];
+    // SAFETY: formats that name one integer, which is passed.
+    unsafe {
+        print::nk_variadic_DbgPrintEx(
+            COMPONENT,
+            INFO,
+            c"filtered message %d\n".as_ptr().cast(),
+            7u32,
+        );
+        print::vDbgPrintExWithPrefix(
+            c"prefix: ".as_ptr().cast(),
+            COMPONENT,
+            INFO,
+            c"message %d\n".as_ptr().cast(),
+            arguments.as_ptr(),
+        );
+    }
+    if print::DbgSetDebugFilterState(COMPONENT, INFO, 0) != STATUS_SUCCESS
+        || print::debug_filter_passes(COMPONENT, INFO)
+    {
+        return Err("a level turned off still passes");
+    }
+    // The mask of every component.
+    print::DbgSetDebugFilterState(u32::MAX, INFO, 1);
+    let all = print::debug_filter_passes(COMPONENT + 1, INFO);
+    print::DbgSetDebugFilterState(u32::MAX, INFO, 0);
+    if !all || print::debug_filter_passes(COMPONENT + 1, INFO) {
+        return Err("the mask of every component was not turned on and off");
+    }
+    // No debugger takes a command: nothing happens.
+    print::DbgCommandString(c"name".as_ptr().cast(), c"command".as_ptr().cast());
+    Ok(())
+}
+
+extern "C" fn power_handler() {
+    POWER_HANDLER_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+static POWER_HANDLER_CALLS: AtomicU32 = AtomicU32::new(0);
+
+fn no_debugger() -> Result<(), &'static str> {
+    use crate::kd::debugger;
+    use crate::ke::irql;
+    // The debugger's lock is a real one.
+    let before = irql::current();
+    let mut old = 0xFFu8;
+    // SAFETY: a local for the IRQL; released with what was given.
+    unsafe {
+        debugger::KdAcquireDebuggerLock(&raw mut old);
+        let held_at = irql::current();
+        debugger::KdReleaseDebuggerLock(old);
+        if old != before || held_at != irql::DISPATCH_LEVEL || irql::current() != before {
+            return Err("the debugger's lock was not held at DISPATCH_LEVEL and given back");
+        }
+    }
+    if debugger::KdDisableDebugger() != STATUS_DEBUGGER_INACTIVE
+        || debugger::KdEnableDebugger() != STATUS_DEBUGGER_INACTIVE
+    {
+        return Err("a debugger that is not there was turned off or on");
+    }
+    // A power handler registers; with no debugger nothing calls it.
+    let mut handle = core::ptr::null_mut();
+    // SAFETY: a local for the handle.
+    let status = unsafe {
+        debugger::KdRegisterPowerHandler(
+            power_handler as *mut core::ffi::c_void,
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_SUCCESS || handle.is_null() {
+        return Err("a power handler was not registered");
+    }
+    if debugger::KdPowerTransitionEx(5, 0) != STATUS_SUCCESS
+        || POWER_HANDLER_CALLS.load(Ordering::Relaxed) != 0
+    {
+        return Err("a power transition did not succeed without calling handlers");
+    }
+    if debugger::KdDeregisterPowerHandler(handle) != STATUS_SUCCESS
+        || debugger::KdDeregisterPowerHandler(handle) != STATUS_NOT_FOUND
+    {
+        return Err("a power handler was not deregistered once");
+    }
+    Ok(())
+}
+
+fn sysinfo_with_input() -> Result<(), &'static str> {
+    use crate::ex::sysinfo_ex::NtQuerySystemInformationEx as query;
+    use nk_ntabi::interrupt::GROUP_AFFINITY;
+    use nk_ntabi::status::STATUS_INFO_LENGTH_MISMATCH;
+    use nk_ntabi::sysinfo::{
+        GROUP_RELATIONSHIP_ENTRY, NUMA_NODE_RELATIONSHIP_ENTRY,
+        SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT,
+    };
+    let online = crate::ke::smp::online();
+    let mut length = 0u32;
+    let numa = 1u32;
+    let group = 4u32;
+    let mut entry = [0u8; 0x50];
+    // SAFETY: inputs, outputs and lengths in locals, of the sizes
+    // given.
+    unsafe {
+        // As pci.sys asks: the length first, then the entry.
+        if query(
+            107,
+            (&raw const numa).cast(),
+            4,
+            core::ptr::null_mut(),
+            0,
+            &raw mut length,
+        ) != STATUS_INFO_LENGTH_MISMATCH
+            || length != 0x30
+        {
+            return Err("the length of the NUMA node's entry was not reported");
+        }
+        if query(
+            107,
+            (&raw const numa).cast(),
+            4,
+            entry.as_mut_ptr().cast(),
+            0x30,
+            &raw mut length,
+        ) != STATUS_SUCCESS
+        {
+            return Err("the NUMA node was not reported");
+        }
+        let node = entry
+            .as_ptr()
+            .cast::<NUMA_NODE_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        if (node.Relationship, node.Size, node.NodeNumber) != (1, 0x30, 0)
+            || node.GroupMask.Mask as u64 != online
+            || node.GroupMask.Group != 0
+        {
+            return Err("the NUMA node is not the one node of every running processor");
+        }
+        if query(
+            107,
+            (&raw const group).cast(),
+            4,
+            entry.as_mut_ptr().cast(),
+            0x50,
+            &raw mut length,
+        ) != STATUS_SUCCESS
+            || length != 0x50
+        {
+            return Err("the processor group was not reported");
+        }
+        let groups = entry
+            .as_ptr()
+            .cast::<GROUP_RELATIONSHIP_ENTRY>()
+            .read_unaligned();
+        if (groups.ActiveGroupCount, groups.MaximumGroupCount) != (1, 1)
+            || u32::from(groups.ActiveProcessorCount) != online.count_ones()
+            || groups.ActiveProcessorMask as u64 != online
+        {
+            return Err("the group is not the one group of every running processor");
+        }
+        if query(
+            107,
+            core::ptr::null(),
+            4,
+            entry.as_mut_ptr().cast(),
+            0x50,
+            &raw mut length,
+        ) != STATUS_INVALID_PARAMETER
+            || query(
+                107,
+                (&raw const numa).cast(),
+                0,
+                entry.as_mut_ptr().cast(),
+                0x50,
+                &raw mut length,
+            ) != STATUS_INVALID_PARAMETER
+        {
+            return Err("a question without its input was not refused");
+        }
+        // Interrupt steering, as pci.sys asks about it.
+        let question = SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT {
+            Gsiv: u32::MAX,
+            ControllerInterrupt: 1,
+            EdgeInterrupt: 0,
+            IsPrimaryInterrupt: 0,
+            TargetAffinity: GROUP_AFFINITY {
+                Mask: 0,
+                Group: 0,
+                Reserved: [0; 3],
+            },
+        };
+        let mut steered = 0xFFFF_FFFFu32;
+        if query(
+            180,
+            (&raw const question).cast(),
+            0x18,
+            (&raw mut steered).cast(),
+            4,
+            core::ptr::null_mut(),
+        ) != STATUS_SUCCESS
+            || steered != 0
+        {
+            return Err("interrupts were not reported as not steered");
+        }
+        if query(
+            180,
+            (&raw const question).cast(),
+            0x10,
+            (&raw mut steered).cast(),
+            4,
+            &raw mut length,
+        ) != STATUS_INFO_LENGTH_MISMATCH
+        {
+            return Err("a steering question of the wrong length was not refused");
+        }
+    }
+    Ok(())
+}
+
+fn etw_nobody_listens() -> Result<(), &'static str> {
+    use crate::etw;
+    use nk_ntabi::etw::{EVENT_DESCRIPTOR, GUID};
+    use nk_ntabi::status::{STATUS_INVALID_HANDLE, STATUS_NOT_SUPPORTED};
+    let provider = GUID {
+        Data1: 0x4E4B_0E01,
+        Data2: 2,
+        Data3: 3,
+        Data4: [4; 8],
+    };
+    // SAFETY: an all-zero descriptor is a valid value of this plain
+    // data.
+    let event: EVENT_DESCRIPTOR = unsafe { core::mem::zeroed() };
+    let mut handle = 0u64;
+    // SAFETY: a GUID and a place for the handle in locals; no callback.
+    let status = unsafe {
+        etw::EtwRegister(
+            &raw const provider,
+            None,
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_SUCCESS {
+        return Err("a provider was not registered");
+    }
+    let written = etw::EtwWrite(
+        handle,
+        &raw const event,
+        core::ptr::null(),
+        0,
+        core::ptr::null(),
+    );
+    let enabled = etw::EtwEventEnabled(handle, &raw const event);
+    let unregistered = etw::EtwUnregister(handle);
+    if written != STATUS_SUCCESS || enabled != 0 || unregistered != STATUS_SUCCESS {
+        return Err("an event nobody listens for was not dropped with success");
+    }
+    if etw::EtwWrite(
+        handle,
+        &raw const event,
+        core::ptr::null(),
+        0,
+        core::ptr::null(),
+    ) != STATUS_INVALID_HANDLE
+        || etw::EtwEventEnabled(0, &raw const event) != 0
+    {
+        return Err("a handle that names no provider was written through");
+    }
+    if etw::WmiTraceMessageVa(1, 0, &raw const provider, 10, core::ptr::null())
+        != STATUS_INVALID_HANDLE
+    {
+        return Err("a message was traced to a session that does not exist");
+    }
+    // Activity ids: made, each different; a system thread has none of
+    // its own.
+    let mut first = provider;
+    let mut second = provider;
+    // SAFETY: GUIDs in locals.
+    unsafe {
+        if etw::EtwActivityIdControl(3, &raw mut first) != STATUS_SUCCESS
+            || etw::EtwActivityIdControl(3, &raw mut second) != STATUS_SUCCESS
+            || first == second
+            || first == provider
+        {
+            return Err("activity ids were not made, each its own");
+        }
+        let kept = second;
+        for code in [1, 2, 4, 5, 0] {
+            if etw::EtwActivityIdControl(code, &raw mut second) != STATUS_NOT_SUPPORTED {
+                return Err("a system thread was given an activity id of its own");
+            }
+        }
+        if second != kept {
+            return Err("a refused control changed the caller's id");
+        }
+    }
+    Ok(())
+}
+
+fn no_notification_states() -> Result<(), &'static str> {
+    use crate::ex::wnf;
+    use nk_ntabi::status::STATUS_OBJECT_NAME_NOT_FOUND;
+    // A well-known name NK's registry does not list, and a temporary
+    // one, which no registry lists.
+    let well_known = 0x0D83_063E_A3BE_0075u64;
+    let temporary = well_known ^ 0x30;
+    let mut stamp = 0x55u32;
+    let mut size = 8u32;
+    let mut data = [0xAAu8; 8];
+    let mut subscription = core::ptr::null_mut();
+    // SAFETY: names, and room for what is never written, in locals.
+    unsafe {
+        for name in [well_known, temporary] {
+            if wnf::ZwQueryWnfStateData(
+                &raw const name,
+                core::ptr::null(),
+                core::ptr::null(),
+                &raw mut stamp,
+                data.as_mut_ptr().cast(),
+                &raw mut size,
+            ) != STATUS_OBJECT_NAME_NOT_FOUND
+                || wnf::ExSubscribeWnfStateChange(
+                    &raw mut subscription,
+                    &raw const name,
+                    1,
+                    0,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                ) != STATUS_OBJECT_NAME_NOT_FOUND
+            {
+                return Err("a notification state that does not exist was found");
+            }
+        }
+    }
+    if (stamp, size, data) != (0x55, 8, [0xAA; 8]) || !subscription.is_null() {
+        return Err("something was written for a state that does not exist");
+    }
+    wnf::ExUnsubscribeWnfStateChange(core::ptr::null_mut());
+    Ok(())
+}
+
+/// A driver registers the routine that serves a provider's firmware
+/// tables, as `acpi.sys` does, and takes it back: once per signature,
+/// by its own driver object, which is referenced meanwhile.
+fn firmware_provider() -> Result<(), &'static str> {
+    use crate::ex::firmware::{ZwSetSystemInformation, test_provider};
+    use crate::ob::object;
+    use nk_ntabi::sysinfo::{
+        SYSTEM_FIRMWARE_TABLE_HANDLER, SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS,
+    };
+    const SIGNATURE: u32 = u32::from_le_bytes(*b"TSKN");
+    const CLASS: u32 = SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS;
+    let driver = super::stack::make_driver(crate::io::irp::invalid_device_request)?;
+    let other = match super::stack::make_driver(crate::io::irp::invalid_device_request) {
+        Ok(other) => other,
+        Err(why) => {
+            // SAFETY: the driver object made above.
+            unsafe { super::stack::free_driver(driver) };
+            return Err(why);
+        }
+    };
+    // SAFETY: driver objects of the test's.
+    let references = || unsafe {
+        let count = object::reference(driver.cast());
+        object::dereference(driver.cast());
+        count
+    };
+    let before = references();
+    let set = |register: bool, by: *mut nk_ntabi::io::DRIVER_OBJECT, length: u32| {
+        let mut request = SYSTEM_FIRMWARE_TABLE_HANDLER {
+            ProviderSignature: SIGNATURE,
+            Register: u8::from(register),
+            FirmwareTableHandler: core::ptr::without_provenance_mut(0x5000),
+            DriverObject: by.cast(),
+        };
+        // SAFETY: a request in a local, of the length said or longer.
+        unsafe { ZwSetSystemInformation(CLASS, (&raw mut request).cast(), length) }
+    };
+    let result = (|| {
+        // SAFETY: no buffer.
+        if unsafe { ZwSetSystemInformation(CLASS, core::ptr::null_mut(), 0x18) }
+            != STATUS_INFO_LENGTH_MISMATCH
+            || set(true, driver, 0x17) != STATUS_INFO_LENGTH_MISMATCH
+        {
+            return Err("a request too short to be one was not refused");
+        }
+        if set(false, driver, 0x18) != STATUS_INVALID_PARAMETER {
+            return Err("a provider that was never registered was taken back");
+        }
+        if set(true, driver, 0x18) != STATUS_SUCCESS
+            || test_provider(SIGNATURE) != Some((0x5000, driver.addr()))
+            || references() != before + 1
+        {
+            return Err("a provider was not registered with a reference to its driver");
+        }
+        if set(true, other, 0x18) != nk_ntabi::status::STATUS_OBJECT_NAME_EXISTS
+            || set(false, other, 0x18) != STATUS_INVALID_PARAMETER
+            || test_provider(SIGNATURE) != Some((0x5000, driver.addr()))
+        {
+            return Err("another driver could replace or take back a provider");
+        }
+        if set(false, driver, 0x18) != STATUS_SUCCESS
+            || test_provider(SIGNATURE).is_some()
+            || references() != before
+        {
+            return Err("a provider was not taken back by its driver");
+        }
+        Ok(())
+    })();
+    // SAFETY: the driver objects made above, which have no devices.
+    unsafe {
+        super::stack::free_driver(other);
+        super::stack::free_driver(driver);
+    }
+    result
+}
+
+fn run(r: &mut Report, _: &BootInfo) {
+    r.check("ex.verifier-off", verifier_off);
+    r.check("ex.headless-off", headless_off);
+    r.check("ex.secure-devices", secure_devices);
+    r.check("ex.hypervisor", hypervisor);
+    r.check("io.no-paging-file", no_paging_file);
+    r.check("rtl.debug-filter", debug_filter);
+    r.check("cpu.stack-probe", crate::arch::chkstk_test);
+    r.check("kd.no-debugger", no_debugger);
+    r.check("ex.sysinfo.with-input", sysinfo_with_input);
+    r.check("ex.sysinfo.firmware-provider", firmware_provider);
+    r.check("etw.nobody-listens", etw_nobody_listens);
+    r.check("ex.no-notification-states", no_notification_states);
+}
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

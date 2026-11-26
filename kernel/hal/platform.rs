@@ -14,6 +14,9 @@ use nk_bootinfo::{BootInfo, described};
 /// One processor group, as on Windows: at most 64 logical processors.
 pub const MAX_CPUS: usize = 64;
 
+/// How many stretches of memory-mapped PCI configuration space are kept.
+pub const MAX_ECAM: usize = 16;
+
 pub use nk_acpi::Cpu;
 
 pub struct Platform {
@@ -22,6 +25,8 @@ pub struct Platform {
     pub controllers: Controllers,
     /// What else firmware says that this architecture needs.
     pub firmware: arch_platform::Firmware,
+    /// Memory-mapped PCI configuration space, from the ACPI MCFG.
+    ecam: [Option<nk_acpi::Ecam>; MAX_ECAM],
 }
 
 impl Platform {
@@ -29,9 +34,79 @@ impl Platform {
     pub fn cpus(&self) -> &[Cpu] {
         &self.cpus[..self.ncpus]
     }
+
+    /// The stretches of memory-mapped PCI configuration space.
+    pub fn ecam(&self) -> impl Iterator<Item = (usize, nk_acpi::Ecam)> + '_ {
+        self.ecam
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| Some((i, (*e)?)))
+    }
 }
 
 static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The loader's hand-off block, which says where the firmware's tables
+/// are and which memory is firmware's.
+static BOOT: AtomicPtr<BootInfo> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The loader's hand-off block, once [`init`] has it.
+pub fn boot_info() -> Option<&'static BootInfo> {
+    // SAFETY: null, or the hand-off block `init` was given, which lives
+    // for ever and is never written.
+    unsafe { BOOT.load(Ordering::Acquire).as_ref() }
+}
+
+/// `length` bytes of memory the firmware described, at the physical
+/// address `at`, in the kernel's map of physical memory.
+pub fn firmware_memory(at: u64, length: usize) -> Option<&'static [u8]> {
+    let memory = DirectMap(boot_info()?);
+    let bytes = memory.bytes(at, length)?;
+    // SAFETY: as in `acpi_table`: firmware memory in the direct map.
+    Some(unsafe { core::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) })
+}
+
+/// The physical address of the firmware's root ACPI table.
+pub fn acpi_root() -> Option<u64> {
+    let info = boot_info()?;
+    nk_acpi::root_address(&DirectMap(info), info.rsdp)
+}
+
+/// Every ACPI table a HAL hands an ACPI driver that asks for all of
+/// them (`nk_acpi::all_tables`), each the firmware's own memory.
+pub fn acpi_tables() -> impl Iterator<Item = &'static [u8]> {
+    boot_info().into_iter().flat_map(|info| {
+        // The tables are collected while the map of physical memory is
+        // borrowed, and outlive it: firmware memory in the direct map.
+        let memory = DirectMap(info);
+        let tables: alloc::vec::Vec<(*const u8, usize)> = nk_acpi::all_tables(&memory, info.rsdp)
+            .map(|table| (table.as_ptr(), table.len()))
+            .collect();
+        tables.into_iter().map(|(at, length)| {
+            // SAFETY: as in `acpi_table`.
+            unsafe { core::slice::from_raw_parts(at, length) }
+        })
+    })
+}
+
+/// The firmware's ACPI table of the signature `signature`, as a HAL
+/// answers an ACPI driver's request for it (`nk_acpi::lookup`). The
+/// table is the firmware's own memory, which nothing reuses.
+pub fn acpi_table(
+    signature: &[u8; 4],
+    oem_id: Option<&[u8; 6]>,
+    oem_table_id: Option<&[u8; 8]>,
+) -> Option<&'static [u8]> {
+    // SAFETY: null, or the hand-off block `init` was given, which lives
+    // for ever and is never written.
+    let info: &'static BootInfo = unsafe { BOOT.load(Ordering::Acquire).as_ref() }?;
+    let memory = DirectMap(info);
+    let table = nk_acpi::lookup(&memory, info.rsdp, signature, oem_id, oem_table_id)?;
+    // SAFETY: `DirectMap` hands out firmware memory in the direct map,
+    // mapped and unchanged for the life of the kernel; the slice's
+    // lifetime was tied to the local `DirectMap` only.
+    Some(unsafe { core::slice::from_raw_parts(table.as_ptr(), table.len()) })
+}
 
 /// The platform description. Panics before [`init`].
 pub fn get() -> &'static Platform {
@@ -65,7 +140,8 @@ impl PhysMem for DirectMap<'_> {
 }
 
 /// Read the MADT and record the processors and interrupt controllers.
-pub fn init(info: &BootInfo) -> Result<(), &'static str> {
+pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
+    BOOT.store(core::ptr::from_ref(info).cast_mut(), Ordering::Release);
     let mem = DirectMap(info);
     let table = nk_acpi::find_table(&mem, info.rsdp, b"APIC").ok_or("no ACPI MADT")?;
     let madt = nk_acpi::madt(table).ok_or("the ACPI MADT is malformed")?;
@@ -82,6 +158,12 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     if more {
         kprintln!("hal: more than {MAX_CPUS} processors; the rest stay off");
     }
+    let mut ecam = [None; MAX_ECAM];
+    if let Some(table) = nk_acpi::find_table(&mem, info.rsdp, b"MCFG") {
+        for (slot, entry) in ecam.iter_mut().zip(nk_acpi::mcfg(table)) {
+            *slot = Some(entry);
+        }
+    }
     let platform = Box::leak(Box::new(Platform {
         cpus,
         ncpus: n,
@@ -89,9 +171,11 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
         firmware: arch_platform::firmware(|signature| {
             nk_acpi::find_table(&mem, info.rsdp, signature)
         }),
+        ecam,
     }));
     kprintln!("hal: {n} processors; {}", platform.controllers);
     PLATFORM.store(platform, Ordering::Release);
+    super::pm::init();
     Ok(())
 }
 

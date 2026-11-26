@@ -11,6 +11,8 @@
 use crate::ke::bugcheck::KeBugCheckEx;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicU64, Ordering};
+use nk_etw::activity;
 use nk_etw::logger::{self, Input, Output, Query};
 use nk_etw::provider::{Kind, Registrations, TraitsError};
 use nk_etw::traits;
@@ -261,6 +263,71 @@ pub extern "C" fn WmiTraceMessage(
     _number: u16,
 ) -> NTSTATUS {
     STATUS_INVALID_HANDLE
+}
+
+/// [`WmiTraceMessageVa`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-wmitracemessageva):
+/// `WmiTraceMessage` with its pairs in a `va_list`. No session exists,
+/// so the answer is the same, and nothing is read:
+/// `STATUS_INVALID_HANDLE`.
+pub extern "C" fn WmiTraceMessageVa(
+    _logger: u64,
+    _flags: u32,
+    _guid: *const GUID,
+    _number: u16,
+    _arguments: *const u64,
+) -> NTSTATUS {
+    STATUS_INVALID_HANDLE
+}
+
+/// [`EtwWrite`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwwrite):
+/// write an event: `EtwWriteTransfer` with no related activity.
+pub extern "C" fn EtwWrite(
+    handle: REGHANDLE,
+    descriptor: *const EVENT_DESCRIPTOR,
+    activity: *const GUID,
+    data_count: u32,
+    data: *const EVENT_DATA_DESCRIPTOR,
+) -> NTSTATUS {
+    EtwWriteTransfer(
+        handle,
+        descriptor,
+        activity,
+        core::ptr::null(),
+        data_count,
+        data,
+    )
+}
+
+/// [`EtwEventEnabled`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etweventenabled):
+/// whether a session would take the event. No session has any
+/// provider enabled: false, which is also Windows' answer for no
+/// handle.
+pub extern "C" fn EtwEventEnabled(_handle: REGHANDLE, _descriptor: *const EVENT_DESCRIPTOR) -> u8 {
+    0
+}
+
+/// The count of the last activity id made.
+static ACTIVITY_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// [`EtwActivityIdControl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwactivityidcontrol):
+/// read, set or make an activity id. Making one
+/// (`EVENT_ACTIVITY_CTRL_CREATE_ID`) is real: the id is this boot's
+/// base and a count no other id has. The other codes work on the
+/// calling thread's id, which Windows keeps in the thread's TEB; a
+/// system thread has none, and every thread of NK is one:
+/// `STATUS_NOT_SUPPORTED`, as on Windows.
+///
+/// # Safety
+/// `activity_id` points to room for a GUID.
+pub unsafe extern "C" fn EtwActivityIdControl(code: u32, activity_id: *mut GUID) -> NTSTATUS {
+    if code != activity::CREATE_ID {
+        return activity::without_teb(code);
+    }
+    let count = ACTIVITY_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let id = activity::create(crate::ke::time::boot_time(), count);
+    // SAFETY: per the contract.
+    unsafe { activity_id.write_unaligned(id) };
+    STATUS_SUCCESS
 }
 
 /// [`WmiQueryTraceInformation`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-wmiquerytraceinformation):

@@ -1,9 +1,12 @@
 //! arm64.
 
 mod atomic;
+mod chkstk;
 mod clock;
 mod cpu;
+mod device;
 mod gic;
+mod pci;
 pub mod platform;
 pub mod seh;
 pub mod seh_test;
@@ -14,6 +17,12 @@ pub mod unwind;
 mod variadic;
 
 pub use atomic::swap_pair;
+pub use chkstk::{chkstk_test, nk_chkstk};
+pub use device::{
+    InterruptVectors, TestSource as InterruptTestSource, acpi_device_interrupts, hal_hardware_id,
+    interrupt_message, isa_line, level_line_polarity, line_enable, line_route, line_set,
+};
+pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 
 pub use gic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
@@ -23,6 +32,10 @@ pub use gic::{
 /// `(interrupt id, IRQL)` of the interrupt a processor sends itself to
 /// run its deferred procedure calls: DISPATCH_LEVEL.
 pub const DPC: (u32, u8) = (3, 2);
+
+/// The interrupt model Windows' HAL reports to `acpi.sys`, which hands
+/// it to the firmware's `_PIC` method: a version 3 GIC.
+pub const INTERRUPT_MODEL: u32 = 3;
 
 /// `(interrupt id, IRQL)` of the interprocessor interrupt.
 pub const IPI: (u32, u8) = (1, 14);
@@ -283,4 +296,22 @@ pub fn sync_icache(start: *const u8, len: usize) {
     }
     // SAFETY: as above.
     unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
+}
+
+/// Make memory hold what the data cache holds of a range, and drop
+/// the cached lines, for a device that reads or writes the range
+/// behind the processor's back.
+pub fn sync_dcache(start: *const u8, len: usize) {
+    // The smallest cache line the architecture allows.
+    const LINE: usize = 16;
+    let end = start as usize + len;
+    let mut addr = start as usize & !(LINE - 1);
+    while addr < end {
+        // SAFETY: cache maintenance on a mapped address has no
+        // memory-safety effect.
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) addr, options(nostack)) };
+        addr += LINE;
+    }
+    // SAFETY: as above.
+    unsafe { core::arch::asm!("dsb ish", options(nostack)) };
 }

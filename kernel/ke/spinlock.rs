@@ -27,17 +27,39 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
-    /// Devices' reference counts and delete-pending marks (`io::device`).
+    /// The device tree and what drivers asked of the Plug and Play
+    /// manager (`pnp`).
+    DeviceTree = 20,
+    /// Devices' reference counts, delete-pending marks and attachment
+    /// chains (`io::device`).
     IoDatabase = 25,
+    /// The errata manager's database (`ex::em`).
+    Errata = 26,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
+    /// The sources of hardware errors (`whea`).
+    Whea = 28,
+    /// Which interrupts each device has been given (`io::interrupt`).
+    DeviceInterrupts = 29,
     /// The object namespace (`ob`).
     Namespace = 30,
+    /// The routines registered with the kernel debugger for power
+    /// transitions (`kd::debugger`).
+    KdPower = 31,
     /// The registry (`cm`).
     Registry = 33,
+    /// The watches on registry keys (`cm::notify`).
+    RegistryWatches = 34,
     /// The kernel handle table (`ob::handle`).
     Handles = 35,
+    /// The power manager's records (`po`).
+    Power = 37,
+    /// The firmware table providers drivers registered (`ex::firmware`).
+    FirmwareTables = 38,
+    /// The firmware's variable services, entered one call at a time
+    /// (`hal::variables`).
+    FirmwareVariables = 39,
     /// The executive pool (`mm::pool`).
     Pool = 40,
     /// Kernel address space and page tables (`mm::map`).
@@ -48,10 +70,17 @@ pub enum Rank {
     Ipi = 200,
     /// A queue of work items (`ex::work`).
     WorkQueue = 210,
+    /// Connecting and disconnecting interrupt objects (`ke::kinterrupt`).
+    InterruptConnect = 212,
     /// A queue of threads waiting for push locks (`ex::pushlock`).
     PushLock = 215,
     /// What a boot's UUIDs share (`ex::uuid`).
     Uuid = 217,
+    /// Which vector each device interrupt has, and the interrupt
+    /// controllers' routing registers (`hal::interrupt`).
+    InterruptRouting = 218,
+    /// The registrations of every callback object (`ex::callback`).
+    Callbacks = 219,
     /// A processor's ready queues (`ke::thread`).
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).
@@ -65,6 +94,9 @@ pub enum Rank {
     /// An object's own lock, a word of its header (`ob::security`):
     /// innermost of the locks held at `DISPATCH_LEVEL`.
     ObjectHeader = 235,
+    /// PCI configuration space (`hal::pci`): read and written from any
+    /// context.
+    PciConfig = 238,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
     /// The bugcheck callback records drivers registered (`ke::bugcheck`):
@@ -81,9 +113,11 @@ impl Rank {
     const fn level(self) -> u8 {
         match self {
             // Usable from any context, an interrupt included.
-            Rank::Console | Rank::Modules | Rank::BugCheckCallbacks | Rank::DpcQueue => {
-                irql::HIGH_LEVEL
-            }
+            Rank::Console
+            | Rank::Modules
+            | Rank::BugCheckCallbacks
+            | Rank::DpcQueue
+            | Rank::PciConfig => irql::HIGH_LEVEL,
             _ => irql::DISPATCH_LEVEL,
         }
     }

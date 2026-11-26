@@ -291,3 +291,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     walked(r, "seh.walk.dpc", dpc_walk());
     walked(r, "seh.walk.interrupt", interrupt_walk());
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

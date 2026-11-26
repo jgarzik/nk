@@ -825,3 +825,14 @@ fn fault_at_dispatch(r: &mut Report, _: &BootInfo) {
         format_args!("a fault at DISPATCH_LEVEL was survived: the __try returned {code:#x}"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[
+    &GROUP,
+    &THREAD,
+    &SERVICE,
+    &DPC,
+    &NO_ENTRY,
+    &KERNEL_FAULT,
+    &FAULT_AT_DISPATCH,
+];

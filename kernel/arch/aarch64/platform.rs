@@ -16,6 +16,18 @@ pub fn current_cpu_id() -> u64 {
     mpidr & MPIDR_AFFINITY
 }
 
+/// Whether the processor says it runs under a hypervisor. arm64 has no
+/// CPUID to say so, and NK asks no hypervisor: none.
+pub fn hypervisor_present() -> bool {
+    false
+}
+
+/// The feature words of a hypervisor that offers Microsoft's
+/// interface: none is asked, so zeros.
+pub fn hypervisor_features() -> [u32; 4] {
+    [0; 4]
+}
+
 /// What else firmware says that arm64 needs.
 pub struct Firmware {
     /// The interrupt of the generic timer's virtual timer, where firmware
@@ -23,6 +35,10 @@ pub struct Firmware {
     pub virtual_timer: Option<u32>,
     /// How to ask firmware to start a processor.
     pub psci: Option<nk_acpi::Psci>,
+    /// The console UART, where firmware says it is a PL011 in memory
+    /// with an interrupt: the physical address of its registers, and
+    /// the interrupt.
+    pub console: Option<(u64, u32)>,
 }
 
 /// Read it from the ACPI tables `find` returns.
@@ -30,5 +46,11 @@ pub fn firmware<'a>(find: impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> Firmware {
     Firmware {
         virtual_timer: find(b"GTDT").and_then(nk_acpi::virtual_timer_interrupt),
         psci: find(b"FACP").and_then(nk_acpi::psci),
+        console: find(b"SPCR").and_then(|table| {
+            /// SPCR interface type: ARM PL011.
+            const PL011: u8 = 3;
+            let uart = nk_acpi::spcr(table).filter(|s| s.mmio && s.interface == PL011)?;
+            Some((uart.address, nk_acpi::spcr_interrupt(table)?))
+        }),
     }
 }

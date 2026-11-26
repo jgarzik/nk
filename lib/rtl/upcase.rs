@@ -204,14 +204,34 @@ fn fold(c: u16, ignore_case: bool) -> u16 {
 /// The value is the difference of the first two units that differ, or
 /// of the lengths in bytes.
 pub fn compare_unicode_string(a: &[u16], b: &[u16], ignore_case: bool) -> i32 {
-    for (&x, &y) in a.iter().zip(b) {
+    compare_units(a.iter().copied(), b.iter().copied(), ignore_case)
+}
+
+/// The same for strings given as their units in order, which are read
+/// no further than the first two that differ.
+pub fn compare_units(
+    a: impl ExactSizeIterator<Item = u16>,
+    b: impl ExactSizeIterator<Item = u16>,
+    ignore_case: bool,
+) -> i32 {
+    // A counted string is under 2^16 bytes long.
+    let lengths = (a.len() as i32 - b.len() as i32) * 2;
+    for (x, y) in a.zip(b) {
         let (x, y) = (fold(x, ignore_case), fold(y, ignore_case));
         if x != y {
             return i32::from(x) - i32::from(y);
         }
     }
-    // A counted string is under 2^16 bytes long.
-    (a.len() as i32 - b.len() as i32) * 2
+    lengths
+}
+
+/// `RtlEqualUnicodeString` for strings given as their units in order.
+pub fn equal_units(
+    a: impl ExactSizeIterator<Item = u16>,
+    b: impl ExactSizeIterator<Item = u16>,
+    ignore_case: bool,
+) -> bool {
+    a.len() == b.len() && prefix_units(a, b, ignore_case)
 }
 
 /// The same comparison as an [`Ordering`].

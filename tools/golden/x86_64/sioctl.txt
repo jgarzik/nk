@@ -1,0 +1,12 @@
+sioctl.load ok
+sioctl.open ok
+sioctl.buffered ok
+sioctl.out-direct ok
+sioctl.in-direct ok
+sioctl.bad-requests ok
+sioctl.neither ok
+sioctl.user-buffers ok
+sioctl.close ok
+sioctl.unload ok
+sioctl.no-leak ok
+sioctl.cycles ok

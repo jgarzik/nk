@@ -1,7 +1,11 @@
 # Boot scenarios: one QEMU run each, judged by tools/judge.py.
 #
 #   arch      x86_64 | aarch64
-#   tier      which runs include it: "gate" (every commit) or "soak"
+#   tier      which runs include it: "gate" (the three gates, each a
+#             selection of the tier, below) or "soak"
+#   paths     list of files, and of directories ending in `/`, whose
+#             change selects the scenario (x86-64, tier "gate"): the code
+#             the scenario is there to prove. Each must exist
 #   smp       guest CPUs (default: $QEMU_SMP, else 4). The harness adds
 #             `cpus=<smp>` to the command line unless the scenario sets it,
 #             and the kernel checks it found that many
@@ -14,12 +18,34 @@
 #   must_fail expect = "fail": exactly these tests fail
 #   accel     "tcg": emulate the processor even where the host could run
 #             it directly (x86-64 only; arm64 is always emulated)
-#   golden    file in tools/golden/ listing every test and its verdict
+#   disk      "ahci": the machine has a data disk on an AHCI controller
+#             (the one q35 has; one added to arm64's `virt`). It is a raw
+#             file made for each boot, every sector holding a pattern the
+#             kernel can compute (tools/datadisk.py, doc/TESTING.md)
+#   disk_size the disk's size in MiB (default 64)
+#   disk_expect  with `disk`, what the disk must hold after the boot:
+#             "unchanged": every sector its original pattern;
+#             "written": the sectors of the write range the written
+#             pattern, every other sector its original one
+#   registry  list of names: fixtures/registry-<name>.txt is laid over the
+#             hive too, after registry-overlay.txt
+#   golden    directory in tools/golden/ listing every test and its verdict
 #   canonical true: this run's log and export list are kept as
 #             target/qemu/serial-<arch>.log and exports-<arch>.txt (the
 #             ledger is generated from the latter)
 #
 # `make check` / `check-arm` run the scenario named after the architecture.
+#
+# What each gate boots of the tier "gate" (tools/boot_test.py, `select`):
+#
+#   make gate-fast  `x86_64`, and each x86-64 scenario with `paths` that
+#                   name a file changed since the branch left `updates`.
+#                   A scenario without `paths` is not in this gate
+#   make gate       every x86-64 scenario with expect = "ok"; one that
+#                   expects a bugcheck or a failure only when its `paths`
+#                   name a file changed since this gate last passed, or
+#                   when that is not known (CI): then all of x86-64
+#   make gate-full  every scenario, both architectures
 
 [x86_64]
 arch = "x86_64"
@@ -38,6 +64,7 @@ canonical = true
 [x86_64-smp1]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ke/", "kernel/arch/x86_64/", "kernel/hal/", "lib/ke/"]
 smp = 1
 golden = "x86_64"
 
@@ -46,6 +73,19 @@ arch = "aarch64"
 tier = "gate"
 smp = 1
 golden = "aarch64"
+
+# A data disk on the machine changes nothing for a kernel that does not
+# write it: the boot passes, and the disk is as it was made. This is the
+# harness's own proof that the disk is attached, kept and compared.
+
+[x86_64-disk-present]
+arch = "x86_64"
+tier = "gate"
+paths = ["tools/"]
+smp = 1
+cmdline = "test=mm.frames"
+disk = "ahci"
+disk_expect = "unchanged"
 
 # The soak tier (`make soak`): the whole test list again and again, with
 # other numbers of processors and both ways of running x86-64, on a host
@@ -130,6 +170,13 @@ golden = "x86_64"
 [x86_64-neg-panic]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/kd/",
+    "kernel/ke/bugcheck.rs",
+    "lib/ke/bugcheck.rs",
+    "kernel/selftest/neg.rs",
+    "tools/",
+]
 cmdline = "test=neg.panic"
 expect = "bugcheck"
 match = "KERNEL PANIC: panicked at kernel/selftest/neg\\.rs"
@@ -144,6 +191,13 @@ match = "KERNEL PANIC: panicked at kernel/selftest/neg\\.rs"
 [x86_64-neg-fault]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/arch/x86_64/",
+    "kernel/mm/",
+    "kernel/ke/bugcheck.rs",
+    "lib/ke/bugcheck.rs",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
@@ -155,6 +209,30 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
+# A fatal hardware error handed to the HAL (`HalBugCheckSystem`) stops
+# the system with Windows' code for it, the error's source, its record
+# and the machine check's status.
+
+[x86_64-neg-hardware-error]
+arch = "x86_64"
+tier = "gate"
+paths = [
+    "kernel/whea/",
+    "kernel/hal/",
+    "lib/whea/",
+    "kernel/selftest/neg.rs",
+]
+cmdline = "test=neg.hardware-error"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000124 WHEA_UNCORRECTABLE_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004, parameter 2 0x[0-9a-f]{16}, parameter 3 0x00000000deadbeef, parameter 4 0x0000000012345678\\)"
+
+[aarch64-neg-hardware-error]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.hardware-error"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000124 WHEA_UNCORRECTABLE_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004, parameter 2 0x[0-9a-f]{16}, parameter 3 0x00000000deadbeef, parameter 4 0x0000000012345678\\)"
+
 # The low half of the address space is NK's own on both architectures:
 # a null pointer faults, and so does ordinary memory at its physical
 # address, which firmware's map of the low half made readable. One
@@ -164,6 +242,12 @@ match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 [x86_64-neg-low-memory]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/arch/x86_64/",
+    "kernel/mm/",
+    "kernel/ke/seh.rs",
+    "kernel/selftest/neg.rs",
+]
 smp = 1
 cmdline = "test=neg.low-memory"
 expect = "bugcheck"
@@ -180,6 +264,12 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 [x86_64-neg-null]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/arch/x86_64/",
+    "kernel/mm/",
+    "kernel/ke/seh.rs",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.null"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
@@ -196,6 +286,12 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 [x86_64-neg-stack-overflow]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/arch/x86_64/",
+    "kernel/mm/stack.rs",
+    "kernel/ke/thread.rs",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.stack-overflow"
 expect = "bugcheck"
 match = "BUGCHECK: kernel stack overflow"
@@ -212,6 +308,12 @@ match = "BUGCHECK: kernel stack overflow"
 [x86_64-neg-dpc-stack-overflow]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/arch/x86_64/",
+    "kernel/mm/stack.rs",
+    "kernel/ke/dpc.rs",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.dpc-stack-overflow"
 expect = "bugcheck"
 match = "BUGCHECK: kernel stack overflow"
@@ -229,6 +331,12 @@ match = "BUGCHECK: kernel stack overflow"
 [x86_64-neg-lock-order]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/spinlock.rs",
+    "kernel/ke/kspin.rs",
+    "lib/ke/",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.lock-order"
 expect = "bugcheck"
 match = "BUGCHECK: lock order violation"
@@ -236,6 +344,12 @@ match = "BUGCHECK: lock order violation"
 [x86_64-neg-lock-twice]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/spinlock.rs",
+    "kernel/ke/kspin.rs",
+    "lib/ke/",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.lock-twice"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000000F SPIN_LOCK_ALREADY_OWNED"
@@ -243,6 +357,11 @@ match = "BUGCHECK: 0x0000000F SPIN_LOCK_ALREADY_OWNED"
 [x86_64-neg-irql-lower]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/irql.rs",
+    "kernel/arch/x86_64/",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.irql-lower"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL"
@@ -273,6 +392,12 @@ match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL"
 [x86_64-known-bad]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/test.rs",
+    "lib/selftest/",
+    "kernel/selftest/neg.rs",
+    "tools/",
+]
 cmdline = "test=meta.fail"
 expect = "fail"
 must_fail = ["meta.fail"]
@@ -290,6 +415,13 @@ must_fail = ["meta.fail"]
 [x86_64-wrong-cpus]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/hal/",
+    "kernel/ke/smp.rs",
+    "lib/hal/",
+    "lib/ke/topology.rs",
+    "tools/",
+]
 smp = 4
 cmdline = "test=hal.cpus cpus=3"
 expect = "fail"
@@ -306,6 +438,12 @@ must_fail = ["hal.cpus"]
 [x86_64-neg-cpu-stuck]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/smp.rs",
+    "kernel/ke/ipi.rs",
+    "kernel/ke/time.rs",
+    "kernel/arch/x86_64/",
+]
 cmdline = "test=neg.cpu-stuck"
 expect = "bugcheck"
 match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"
@@ -320,6 +458,7 @@ match = "BUGCHECK: processor 1 did not answer an interprocessor interrupt"
 [x86_64-neg-dpc-watchdog]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ke/dpc.rs", "kernel/ke/time.rs"]
 cmdline = "test=neg.dpc-watchdog dpc-limit=32"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000133 DPC_WATCHDOG_VIOLATION"
@@ -334,6 +473,12 @@ match = "BUGCHECK: 0x00000133 DPC_WATCHDOG_VIOLATION"
 [x86_64-neg-wait-at-dispatch]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/wait.rs",
+    "kernel/ke/thread.rs",
+    "kernel/ke/dpc.rs",
+    "lib/ke/",
+]
 cmdline = "test=neg.wait-at-dispatch"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: a wait that must block at IRQL 2"
@@ -341,6 +486,12 @@ match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: a wait that must block at 
 [x86_64-neg-wait-in-dpc]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/wait.rs",
+    "kernel/ke/thread.rs",
+    "kernel/ke/dpc.rs",
+    "lib/ke/",
+]
 cmdline = "test=neg.wait-in-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a DPC routine waited"
@@ -365,6 +516,12 @@ match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a DPC routine waited"
 [x86_64-neg-switch-in-dpc]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/wait.rs",
+    "kernel/ke/thread.rs",
+    "kernel/ke/dpc.rs",
+    "lib/ke/",
+]
 cmdline = "test=neg.switch-in-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch"
@@ -379,6 +536,7 @@ match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch"
 [x86_64-neg-mutex-held-at-exit]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ke/mutex.rs", "kernel/ke/thread.rs", "kernel/ps/"]
 cmdline = "test=neg.mutex-held-at-exit"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"
@@ -393,6 +551,7 @@ match = "BUGCHECK: 0x0000004E THREAD_TERMINATE_HELD_MUTEX"
 [x86_64-neg-work-bad-irql]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ex/work.rs"]
 cmdline = "test=neg.work-bad-irql"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
@@ -407,6 +566,7 @@ match = "BUGCHECK: 0x000000E1 WORKER_THREAD_RETURNED_AT_BAD_IRQL"
 [x86_64-neg-information-overstated]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/io/"]
 cmdline = "test=neg.information-overstated"
 expect = "bugcheck"
 match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
@@ -424,6 +584,7 @@ match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
 [x86_64-neg-create-not-completed]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/io/"]
 cmdline = "test=neg.create-not-completed"
 expect = "bugcheck"
 match = "BUGCHECK: a driver's dispatch routine at ntoskrnl.exe\\+0x[0-9a-f]+ returned 0x0 for a create request it had not completed"
@@ -438,6 +599,12 @@ match = "BUGCHECK: a driver's dispatch routine at ntoskrnl.exe\\+0x[0-9a-f]+ ret
 [x86_64-neg-breakpoint]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/kd/",
+    "kernel/ke/seh.rs",
+    "kernel/arch/x86_64/",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.breakpoint"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
@@ -445,6 +612,12 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
 [x86_64-debugger-breakpoint]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/kd/",
+    "kernel/ke/seh.rs",
+    "kernel/arch/x86_64/",
+    "kernel/selftest/neg.rs",
+]
 cmdline = "test=neg.breakpoint debug=on"
 
 [aarch64-neg-breakpoint]
@@ -466,6 +639,13 @@ cmdline = "test=neg.breakpoint debug=on"
 [x86_64-oracle-event]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/kd/",
+    "kernel/ke/seh.rs",
+    "kernel/arch/x86_64/",
+    "lib/oracle/",
+    "oracle/",
+]
 cmdline = "test=oracle.event"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
@@ -483,6 +663,13 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0x80000003"
 [x86_64-oracle-event-debug]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/kd/",
+    "kernel/ke/seh.rs",
+    "kernel/arch/x86_64/",
+    "lib/oracle/",
+    "oracle/",
+]
 cmdline = "test=oracle.event-debug debug=on"
 
 [aarch64-oracle-event-debug]
@@ -496,6 +683,7 @@ cmdline = "test=oracle.event-debug debug=on"
 [x86_64-neg-protected-close]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ob/", "lib/ob/", "kernel/selftest/neg.rs"]
 cmdline = "test=neg.protected-close"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
@@ -513,6 +701,7 @@ match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
 [x86_64-neg-trap]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/export/", "kernel/selftest/neg.rs"]
 cmdline = "test=neg.trap"
 expect = "bugcheck"
 match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
@@ -530,6 +719,7 @@ match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
 [x86_64-neg-stream-context-list]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/io/fsrtl.rs"]
 cmdline = "test=neg.stream-context-list"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"
@@ -548,6 +738,7 @@ match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts
 [x86_64-neg-bugcheck-ex]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ke/bugcheck.rs", "lib/ke/bugcheck.rs"]
 cmdline = "test=neg.bugcheck-ex"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000000011, parameter 2 0x0000000000000022, parameter 3 0x0000000000000033, parameter 4 0xfffff88000000044\\)"
@@ -562,6 +753,7 @@ match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(paramete
 [x86_64-neg-bugcheck-callback]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/ke/bugcheck.rs", "lib/ke/bugcheck.rs"]
 cmdline = "test=neg.bugcheck-callback"
 expect = "bugcheck"
 match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000001001,"
@@ -581,6 +773,7 @@ then = "^NK-STOP-CALLBACK reserved1=2 order=21 triage=1 finished=3 wrong=0 other
 [x86_64-neg-etw-unregister-twice]
 arch = "x86_64"
 tier = "gate"
+paths = ["kernel/etw/", "lib/etw/"]
 cmdline = "test=neg.etw-unregister-twice"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
@@ -601,6 +794,12 @@ match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(paramet
 [x86_64-neg-seh-thread]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+]
 cmdline = "test=neg.seh-thread"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
@@ -608,6 +807,12 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\
 [x86_64-neg-seh-service]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+]
 cmdline = "test=neg.seh-service"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
@@ -615,6 +820,12 @@ match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 
 [x86_64-neg-seh-dpc]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+]
 cmdline = "test=neg.seh-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
@@ -646,6 +857,12 @@ match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(paramet
 [x86_64-neg-seh-no-entry]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+]
 cmdline = "test=neg.seh-no-entry"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"
@@ -663,6 +880,12 @@ match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stac
 [x86_64-neg-seh-kernel-fault]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+]
 cmdline = "test=neg.seh-kernel-fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x[0-9A-F]{8} \\(parameter 1 0xfffff88[0-9a-f]{9}, parameter 2 0x0\\)"
@@ -670,6 +893,12 @@ match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x[0-9A-F]{8} \\(para
 [x86_64-neg-seh-fault-at-dispatch]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+]
 cmdline = "test=neg.seh-fault-at-dispatch"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"
@@ -696,6 +925,13 @@ match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"
 [x86_64-oracle-nkc-seh-fatal-dispatch]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+    "oracle/",
+]
 cmdline = "test=oracle.nkc-seh-fatal-dispatch"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B11 \\(parameter 1 0x00000000e04e4b11\\)"
@@ -710,6 +946,13 @@ match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B11 \\(parameter 
 [x86_64-oracle-nkc-seh-fatal-work]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+    "oracle/",
+]
 cmdline = "test=oracle.nkc-seh-fatal-work"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B12 \\(parameter 1 0xffffffffe04e4b12\\)"
@@ -724,6 +967,13 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B12 \\
 [x86_64-oracle-nkc-seh-fatal-dpc]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+    "oracle/",
+]
 cmdline = "test=oracle.nkc-seh-fatal-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B13 \\(parameter 1 0xffffffffe04e4b13\\)"
@@ -738,6 +988,13 @@ match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B13 \\(paramet
 [x86_64-oracle-nkc-seh-fatal-kernel-read]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+    "oracle/",
+]
 cmdline = "test=oracle.nkc-seh-fatal-kernel-read"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x4E4B0000 \\(parameter 1 0xfffff7804e4b0000, parameter 2 0x0\\)"
@@ -752,6 +1009,13 @@ match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x4E4B0000 \\(paramet
 [x86_64-oracle-nkc-seh-fatal-thread]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+    "oracle/",
+]
 cmdline = "test=oracle.nkc-seh-fatal-thread"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B15 \\(parameter 1 0xffffffffe04e4b15\\)"
@@ -770,6 +1034,14 @@ match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B15 \\
 [x86_64-oracle-nkc-cross-dpc]
 arch = "x86_64"
 tier = "gate"
+paths = [
+    "kernel/ke/seh.rs",
+    "kernel/ke/unwind.rs",
+    "kernel/arch/x86_64/",
+    "lib/unwind/",
+    "kernel/ke/dpc.rs",
+    "oracle/",
+]
 cmdline = "test=oracle.nkc-cross-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(parameter 1 0xffffffffe04e4b41\\)"
@@ -780,3 +1052,38 @@ tier = "gate"
 cmdline = "test=oracle.nkc-cross-dpc"
 expect = "bugcheck"
 match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(parameter 1 0xffffffffe04e4b41\\)"
+
+# Microsoft's storage stack on the machine's AHCI controller and disk.
+
+[x86_64-storage]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=stor.load"
+registry = ["storage"]
+disk = "ahci"
+disk_expect = "written"
+
+# The same stack above a bus driver of the test's own, which enumerates
+# the controller in place of pci.sys (doc/TESTING.md).
+
+[x86_64-storage-direct]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=stor.direct without=pci.sys"
+registry = ["storage"]
+disk = "ahci"
+disk_expect = "written"
+
+# And on one processor: the interrupt, its DPC and the threads that
+# wait for them share it.
+
+[x86_64-storage-direct-smp1]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+cmdline = "test=stor.direct without=pci.sys"
+registry = ["storage"]
+disk = "ahci"
+disk_expect = "written"

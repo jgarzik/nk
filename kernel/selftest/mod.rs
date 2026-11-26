@@ -5,19 +5,34 @@
 //! not there (its fixture was not downloaded, or does not exist for this
 //! architecture) makes its tests SKIP.
 
+mod absent;
+mod ahcibus;
 mod base;
+mod bitmap;
+mod callback;
 mod cancel;
 mod clock;
 mod cm;
+mod cmnotify;
+mod counted;
 mod csq;
+mod diskio;
+mod dma;
 mod dpc;
 mod driver_api;
+mod em;
 mod etw;
 mod ex;
 pub mod except;
+mod exlock;
 mod fsd;
+mod hal;
+mod interrupt;
+mod iosupport;
+mod keutil;
 mod library;
 mod loader;
+mod mmio;
 mod mslib;
 mod mutex;
 mod neg;
@@ -25,8 +40,15 @@ mod null;
 mod ob;
 mod open;
 mod oracle;
+mod pci;
 mod pend;
+mod pnp;
+mod po;
+mod pofx;
+mod range;
+mod request;
 mod requestor;
+mod resource;
 mod review;
 mod rtl;
 mod se;
@@ -35,9 +57,17 @@ mod service;
 mod setoken;
 mod sioctl;
 mod smp;
+mod stack;
+mod startio;
+mod storage;
+mod stordirect;
+mod testdisk;
 mod thread;
 mod timer;
+mod timer2;
 mod wait;
+mod whea;
+mod without;
 mod work;
 
 use crate::io::file::{self, OpenRequest};
@@ -124,87 +154,71 @@ impl Drop for UserMemory {
     }
 }
 
-/// Every test group. `test=` on the command line selects among them.
-pub static GROUPS: &[&Group] = &[
-    &base::GROUP,
-    &clock::GROUP,
-    &smp::GROUP,
-    &dpc::GROUP,
-    &timer::GROUP,
-    &thread::GROUP,
-    &seh::GROUP,
-    &except::GROUP,
-    &wait::GROUP,
-    &ob::GROUP,
-    &rtl::GROUP,
-    &se::GROUP,
-    &setoken::GROUP,
-    &cm::GROUP,
-    &csq::GROUP,
-    &review::GROUP,
-    &mutex::GROUP,
-    &work::GROUP,
-    &ex::GROUP,
-    &pend::GROUP,
-    &open::GROUP,
-    &requestor::GROUP,
-    &service::GROUP,
-    &driver_api::GROUP,
-    &etw::PROVIDERS,
-    &etw::CLASSIC,
-    &etw::WMI,
-    &etw::GROUP,
-    &etw::SYSTEM,
-    &loader::GROUP,
-    &library::GROUP,
-    &fsd::REQUESTOR,
-    &fsd::STREAM_CONTEXTS,
-    &fsd::DRIVER_PAGING,
-    &null::GROUP,
-    &mslib::GROUP,
-    &sioctl::GROUP,
-    &cancel::GROUP,
-    &oracle::GROUP,
-    &neg::PANIC,
-    &neg::FAULT,
-    &neg::NULL,
-    &neg::LOW_MEMORY,
-    &neg::STACK_OVERFLOW,
-    &neg::DPC_STACK_OVERFLOW,
-    &neg::LOCK_ORDER,
-    &neg::LOCK_TWICE,
-    &neg::IRQL_LOWER,
-    &neg::META_FAIL,
-    &neg::BREAKPOINT,
-    &etw::BUGCHECK_EX,
-    &etw::BUGCHECK_CALLBACK,
-    &etw::UNREGISTER_TWICE,
-    &except::THREAD,
-    &except::SERVICE,
-    &except::DPC,
-    &except::NO_ENTRY,
-    &except::KERNEL_FAULT,
-    &except::FAULT_AT_DISPATCH,
-    &oracle::EVENT,
-    &oracle::EVENT_DEBUG,
-    &oracle::FATAL_DISPATCH,
-    &oracle::FATAL_WORK,
-    &oracle::FATAL_DPC,
-    &oracle::FATAL_KERNEL_READ,
-    &oracle::FATAL_THREAD,
-    &oracle::CROSS_DPC,
-    &smp::STUCK,
-    &dpc::WATCHDOG,
-    &wait::AT_DISPATCH,
-    &wait::IN_DPC,
-    &wait::SWITCH_IN_DPC,
-    &mutex::EXIT_HOLDING,
-    &work::BAD_RETURN,
-    &pend::OVERSTATED,
-    &requestor::CREATE_NOT_COMPLETED,
-    &neg::PROTECTED_CLOSE,
-    &neg::TRAP,
-    &fsd::BROKEN_LIST,
+/// Every test group, file by file. `test=` on the command line selects
+/// among them. A file lists its own groups.
+pub static GROUPS: &[&[&Group]] = &[
+    base::GROUPS,
+    pci::GROUPS,
+    mmio::GROUPS,
+    interrupt::GROUPS,
+    dma::GROUPS,
+    clock::GROUPS,
+    smp::GROUPS,
+    dpc::GROUPS,
+    timer::GROUPS,
+    timer2::GROUPS,
+    keutil::GROUPS,
+    thread::GROUPS,
+    seh::GROUPS,
+    except::GROUPS,
+    wait::GROUPS,
+    ob::GROUPS,
+    rtl::GROUPS,
+    bitmap::GROUPS,
+    counted::GROUPS,
+    range::GROUPS,
+    resource::GROUPS,
+    se::GROUPS,
+    setoken::GROUPS,
+    cm::GROUPS,
+    cmnotify::GROUPS,
+    hal::GROUPS,
+    absent::GROUPS,
+    po::GROUPS,
+    pofx::GROUPS,
+    em::GROUPS,
+    without::GROUPS,
+    whea::GROUPS,
+    csq::GROUPS,
+    review::GROUPS,
+    mutex::GROUPS,
+    work::GROUPS,
+    ex::GROUPS,
+    exlock::GROUPS,
+    callback::GROUPS,
+    pend::GROUPS,
+    open::GROUPS,
+    requestor::GROUPS,
+    stack::GROUPS,
+    pnp::GROUPS,
+    request::GROUPS,
+    iosupport::GROUPS,
+    startio::GROUPS,
+    diskio::GROUPS,
+    service::GROUPS,
+    driver_api::GROUPS,
+    etw::GROUPS,
+    loader::GROUPS,
+    library::GROUPS,
+    fsd::GROUPS,
+    null::GROUPS,
+    mslib::GROUPS,
+    sioctl::GROUPS,
+    cancel::GROUPS,
+    oracle::GROUPS,
+    neg::GROUPS,
+    storage::GROUPS,
+    stordirect::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
@@ -240,9 +254,13 @@ pub fn resources() -> Resources {
     let (table_blocks, table_bytes) = crate::ob::handle::storage();
     // The registry keeps what is written to it.
     let (registry_blocks, registry_bytes) = crate::cm::storage();
+    // Hardware error sources keep their table and what they removed.
+    let (whea_blocks, whea_bytes) = crate::whea::storage();
+    // The HAL keeps the list of firmware tables it once made.
+    let (hal_blocks, hal_bytes) = crate::hal::acpi::storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes,
+        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks - hal_blocks,
+        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes - hal_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),

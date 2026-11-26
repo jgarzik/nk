@@ -3,4 +3,4 @@
 scenario: x86_64
 fails: scenario
 file: kernel/io/irp.rs
-remove:             ke::wait::KeSetEvent((*irp).UserEvent, 0, 0);
+remove:             ke::wait::KeSetEvent(event, 0, 0);

@@ -1,0 +1,27 @@
+# Registry content laid over the SYSTEM hive at boot.
+#
+# The hive NK boots from (`system.hiv` in manifest.toml) is written by
+# Windows from nk-fixtures' `hive/system.hive.txt`, so a change to it
+# takes a release of the fixtures. What a phase of work needs in the
+# registry before that release is listed here instead. The file goes
+# into the boot image as `\NK\OVERLAY`, and the kernel applies it to
+# `\Registry\Machine\System` right after it has copied the hive, before
+# anything reads the registry (doc/DESIGN.md, The registry). A key that
+# is not there is made; a value here takes the place of the hive's value
+# of the same name.
+#
+# The format is that of `hive/system.hive.txt`, defined in the comment
+# at its top: `key`, `keys` and `value` lines, paths relative to the
+# root of the hive. lib/cm/manifest.rs reads it. A line the kernel
+# cannot read stops the boot, naming the line.
+#
+# Everything below belongs in the Windows-written hive: at the next
+# release of the fixtures it moves to `hive/system.hive.txt`, and this
+# file keeps its comment alone.
+
+# What the boot test `cm.overlay` reads: a key the hive does not have,
+# and a value the hive has as "nk".
+key ControlSet001\Control\NkTest\Overlay
+value Marker sz "laid over the hive"
+key ControlSet001\Control\NkTest\Types
+value String sz overlaid

@@ -1,0 +1,3 @@
+ms.wpprecorder skip
+ms.wmilib skip
+ms.msrpc skip

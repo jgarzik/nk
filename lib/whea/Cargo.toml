@@ -1,0 +1,17 @@
+[package]
+name = "nk-whea"
+description = "Hardware error sources: the descriptor of a source, its table and its record sizes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+nk-ntabi = { path = "../ntabi" }
+
+[lints]
+workspace = true

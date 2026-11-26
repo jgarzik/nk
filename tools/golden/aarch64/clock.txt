@@ -1,0 +1,4 @@
+clock.monotonic ok
+clock.tick ok
+clock.shared-page ok
+clock.host-mark ok

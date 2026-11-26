@@ -2,8 +2,11 @@
 
 mod apic;
 mod atomic;
+mod chkstk;
 mod clock;
 mod cpu;
+mod ioapic;
+mod pci;
 pub mod platform;
 pub mod seh;
 pub mod seh_test;
@@ -14,6 +17,12 @@ pub mod unwind;
 mod variadic;
 
 pub use atomic::swap_pair;
+pub use chkstk::{chkstk_test, nk_chkstk};
+pub use ioapic::{
+    InterruptVectors, TestSource as InterruptTestSource, acpi_device_interrupts, hal_hardware_id,
+    interrupt_message, isa_line, level_line_polarity, line_enable, line_route, line_set,
+};
+pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 
 pub use apic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
@@ -125,6 +134,10 @@ pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
 /// deferred procedure calls: DISPATCH_LEVEL.
 pub const DPC: (u32, u8) = (0x2F, 2);
 
+/// The interrupt model Windows' HAL reports to `acpi.sys`, which hands
+/// it to the firmware's `_PIC` method: the APIC.
+pub const INTERRUPT_MODEL: u32 = 1;
+
 /// `(vector, IRQL)` of the interprocessor interrupt: Windows' IPI_LEVEL.
 pub const IPI: (u32, u8) = (0xE1, 14);
 
@@ -219,3 +232,8 @@ pub fn counter() -> u64 {
 /// Make freshly written code executable. x86 keeps instruction and data
 /// caches coherent by itself.
 pub fn sync_icache(_start: *const u8, _len: usize) {}
+
+/// Make memory hold what the data cache holds of a range, for a
+/// device that reads or writes it behind the processor's back. A
+/// device's access on this architecture goes through the caches.
+pub fn sync_dcache(_start: *const u8, _len: usize) {}

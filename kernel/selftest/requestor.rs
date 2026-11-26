@@ -650,3 +650,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted("io.open.user-root", with_driver(user_root));
     counted("io.open.closed-at-once", with_driver(closed_at_once));
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &CREATE_NOT_COMPLETED];

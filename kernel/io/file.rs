@@ -1,13 +1,16 @@
-//! The requestor side of I/O: open a name, read, write, send control
-//! codes, close. This is what the system services `NtCreateFile`,
-//! `NtCreateNamedPipeFile`, `NtCreateMailslotFile`, `NtReadFile`,
+//! The requestor side of I/O: open a name, read, write, flush, send
+//! control codes, close. This is what the system services
+//! `NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`,
+//! `NtReadFile`, `NtWriteFile`, `NtFlushBuffersFile`,
 //! `NtDeviceIoControlFile`, `NtFsControlFile` and `NtClose` do on
 //! Windows; the kernel's self-tests are the only caller so far.
 //!
 //! An open resolves its name in the object namespace. The look-up stops
 //! at a device; what is left of the path is the device's to parse, so
 //! it goes to the driver in a create request as the new file object's
-//! name. The file object is an object-manager object and the open
+//! name. The create, and every later request on the file, is sent to
+//! the top of the stack that device is in, in an IRP with a location
+//! for each device of the stack ([`related_device`]). The file object is an object-manager object and the open
 //! returns a handle to it. The handle's closing, when it is the last,
 //! sends the driver a cleanup request; the last reference's going
 //! sends the close request and lets go of the device.
@@ -60,8 +63,6 @@ pub enum IoError {
         dispatch_status: NTSTATUS,
         completed: NTSTATUS,
     },
-    /// The device asks for a buffer method not implemented yet.
-    UnsupportedMethod,
     /// The I/O manager cannot use a buffer of the request: no driver
     /// saw it, and it fails with this status.
     Refused(NTSTATUS),
@@ -215,9 +216,9 @@ unsafe fn leave_critical_region(_: *mut c_void) {
 /// points to, are left where they are.
 ///
 /// # Safety
-/// `irp` must be a fresh IRP whose next stack location is set up for
-/// `file`'s device. Whatever buffers it names stay valid until the
-/// returned request has been waited for.
+/// `irp` must be a fresh IRP from [`request`] whose next stack location
+/// is set up. Whatever buffers it names stay valid until the returned
+/// request has been waited for.
 unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
     // SAFETY: an all-zero event is a valid value (integers and null
     // pointers); it is initialised properly just below.
@@ -235,14 +236,16 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         ke::wait::KeInitializeEvent(&raw mut waiting.done, 0, 0);
         (*irp).UserIosb = &raw mut waiting.iosb;
         (*irp).UserEvent = &raw mut waiting.done;
+        irp::requestor_keeps(irp);
         (*irp).RequestorMode = mode;
         (*irp).Thread = ke::pcr::current_thread().cast();
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
         // Windows calls the driver for a synchronous request with kernel
         // APCs off, in a critical region; a driver can ask, and
-        // nkc-mutex does (oracle/nkc-mutex.txt).
-        let device_object = (*file).DeviceObject;
+        // nkc-mutex does (oracle/nkc-mutex.txt). The request goes to
+        // the device it was sized for (`request`).
+        let device_object = (*irp::next_location(irp)).DeviceObject;
         let guard = Guard::Undo {
             undo: leave_critical_region,
             context: core::ptr::null_mut(),
@@ -267,7 +270,23 @@ unsafe fn submit(file: *mut FILE_OBJECT, irp: *mut IRP) -> Result<IoResult, IoEr
     unsafe { start(file, irp, KERNEL_MODE) }.wait()
 }
 
-/// A new IRP for `file`'s device with its next location's function set.
+/// The device a request on `file` is sent to: the top of the stack the
+/// file's device is in
+/// ([`IoGetRelatedDeviceObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetrelateddeviceobject)).
+/// The file stays counted on the device that was named.
+///
+/// # Safety
+/// `file` must be an open file object.
+pub unsafe fn related_device(file: *mut FILE_OBJECT) -> *mut DEVICE_OBJECT {
+    // SAFETY: per the contract: an open file holds its device.
+    unsafe { device::top((*file).DeviceObject) }
+}
+
+/// A new IRP for a request on `file`, with its next location's function
+/// set: sized for the whole stack the file's device is in, and with the
+/// top of that stack, where [`start`] sends it, in its next location.
+/// The top is found once: a device attached between sizing the IRP and
+/// sending it does not get an IRP too small for it.
 ///
 /// # Safety
 /// `file` must be a live file object.
@@ -278,13 +297,15 @@ unsafe fn request(
 ) -> Result<*mut IRP, IoError> {
     // SAFETY: per the contract.
     unsafe {
-        let irp = irp::alloc((*(*file).DeviceObject).StackSize);
+        let top = related_device(file);
+        let irp = irp::alloc((*top).StackSize);
         if irp.is_null() {
             return Err(IoError::NoMemory);
         }
         let location = irp::next_location(irp);
         (*location).MajorFunction = major;
         (*location).Parameters = parameters;
+        (*location).DeviceObject = top;
         Ok(irp)
     }
 }
@@ -443,6 +464,36 @@ unsafe fn create_not_completed(device: *mut DEVICE_OBJECT, major: u8, status: NT
 /// (`IoStatus.Information`: `FILE_OPENED`, `FILE_CREATED`, ...), or the
 /// status the open failed with.
 pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
+    let name: Vec<u16> = request.name.encode_utf16().collect();
+    open_as(request, &name, &Extra::default()).map(|(handle, result)| (handle, result.information))
+}
+
+/// What `ZwCreateFile` takes beyond an [`OpenRequest`].
+#[derive(Default)]
+pub struct Extra {
+    /// `Parameters.Create.FileAttributes`.
+    pub file_attributes: u16,
+    /// `Irp->Overlay.AllocationSize`.
+    pub allocation_size: i64,
+    /// The create's stack location flags (`SL_CASE_SENSITIVE`,
+    /// `SL_FORCE_ACCESS_CHECK`).
+    pub location_flags: u8,
+    /// The handle is inherited by child processes (`OBJ_INHERIT`).
+    pub inherit: bool,
+    /// An open for kernel mode gives the System process's own name for
+    /// the handle, not the kernel handle (no `OBJ_KERNEL_HANDLE`).
+    pub process_handle: bool,
+}
+
+/// As [`open`], with the name as the counted string it was given in
+/// (`request.name` is not looked at) and with `extra`. Returns the
+/// handle and what the create completed with: a success status and
+/// the driver's `IoStatus.Information`.
+pub fn open_as(
+    request: &OpenRequest<'_>,
+    name: &[u16],
+    extra: &Extra,
+) -> Result<(u64, IoResult), NTSTATUS> {
     // A pipe or a mailslot is created with few options
     // (`FILE_VALID_PIPE_OPTION_FLAGS`, `FILE_VALID_MAILSLOT_OPTION_FLAGS`
     // in `ntifs.h`): any other is refused before the name is looked at.
@@ -451,12 +502,11 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
     {
         return Err(STATUS_INVALID_PARAMETER);
     }
-    let name: Vec<u16> = request.name.encode_utf16().collect();
     let mode = match request.requestor_mode {
         KERNEL_MODE => Mode::Kernel,
         _ => Mode::User,
     };
-    let target = resolve(request.root, &name, mode)?;
+    let target = resolve(request.root, name, mode)?;
     let device = target.device;
     // Finding the device and counting the open are two steps, and the
     // device may be deleted between them: its memory is held (by the
@@ -517,7 +567,7 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         ),
         Kind::File => (
             IRP_MJ_CREATE,
-            create_parameters(context, options, 0, share, 0),
+            create_parameters(context, options, extra.file_attributes, share, 0),
         ),
     };
     // SAFETY: `device` is counted, so it is live; `file` is a fresh
@@ -543,9 +593,11 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         let result = if named {
             self::request(file, major, parameters).and_then(|irp| {
                 (*irp).Flags = IRP_CREATE_OPERATION | IRP_SYNCHRONOUS_API | IRP_DEFER_IO_COMPLETION;
+                (*irp).Overlay[0] = extra.allocation_size as u64;
+                (*irp::next_location(irp)).Flags = extra.location_flags;
                 match start(file, irp, request.requestor_mode).wait() {
                     Err(IoError::NotCompleted { dispatch_status }) => {
-                        create_not_completed(device, major, dispatch_status)
+                        create_not_completed(related_device(file), major, dispatch_status)
                     }
                     result => result,
                 }
@@ -577,20 +629,23 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
             // entry, by which that requestor's later requests are held
             // to what the handle was granted.
             unsafe {
-                let kernel = request.requestor_mode == KERNEL_MODE;
+                let kernel = request.requestor_mode == KERNEL_MODE && !extra.process_handle;
                 // Marked as having had a handle before it has one: the
                 // handle's number can be guessed, and from the moment
                 // it is in the table another thread may close it and
                 // write the flags (`cleanup`). Nothing else can reach
                 // the file yet, nor if no handle is made.
                 (*file).Flags |= FO_HANDLE_CREATED;
-                let handle =
-                    handle::open_with(body, granted, nk_ob::handles::Attributes::default(), kernel);
+                let attributes = nk_ob::handles::Attributes {
+                    inherit: extra.inherit,
+                    protect_from_close: false,
+                };
+                let handle = handle::open_with(body, granted, attributes, kernel);
                 if handle.is_err() {
                     (*file).Flags &= !FO_HANDLE_CREATED;
                 }
                 object::dereference(body);
-                return handle.map(|handle| (handle, r.information));
+                return handle.map(|handle| (handle, r));
             }
         }
         Ok((r, _)) => r.status,
@@ -693,7 +748,8 @@ pub unsafe extern "C" fn deleted(object: *mut c_void) {
 
 /// [`IoGetDeviceObjectPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdeviceobjectpointer):
 /// open the named device for kernel mode and hand the caller the file
-/// object, with a reference, and the device the file's requests go to.
+/// object, with a reference, and the device the file's requests go to:
+/// the top of the stack the named device is in.
 /// The handle of the open is closed again, so the device's driver is
 /// sent a create and a cleanup now, and a close when the caller gives
 /// the file object's reference up.
@@ -733,7 +789,7 @@ pub unsafe extern "C" fn IoGetDeviceObjectPointer(
     // object, whose device is set for as long as it is open.
     unsafe {
         file_object.write(file);
-        device_object.write((*file).DeviceObject);
+        device_object.write(related_device(file));
     }
     STATUS_SUCCESS
 }
@@ -930,17 +986,32 @@ fn refused(result: Result<IoResult, IoError>) -> Result<IoResult, IoError> {
 }
 
 /// Read or write. `buffer` is filled by a read and sent by a write.
+/// The transfer is at byte `offset` of the file, or without one where
+/// the file object says its position is (`CurrentByteOffset`).
+///
+/// How the buffer reaches the driver is the choice of the device the
+/// request is sent to, as on Windows: copied through a system buffer
+/// (`DO_BUFFERED_IO`), described by an MDL with its pages locked
+/// (`DO_DIRECT_IO`), or as the address it is. A transfer of no bytes
+/// has neither system buffer nor MDL.
 ///
 /// # Safety
 /// A kernel-mode `buffer` must be valid for its length (writable for a
 /// read) until the returned request has been waited for.
-unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<Pending, IoError> {
+unsafe fn transfer(
+    handle: u64,
+    major: u8,
+    buffer: Buffer,
+    offset: Option<i64>,
+    mode: i8,
+) -> Result<Pending, IoError> {
     let len = buffer.len;
     // SAFETY: `file` is an open file, referenced.
-    let parameters =
-        |file: *mut FILE_OBJECT| unsafe { rw_parameters(len as u32, (*file).CurrentByteOffset) };
+    let parameters = |file: *mut FILE_OBJECT| unsafe {
+        rw_parameters(len as u32, offset.unwrap_or((*file).CurrentByteOffset))
+    };
     // SAFETY: per the contract; `irp` is fresh.
-    let build = |file: *mut FILE_OBJECT, irp: *mut IRP| unsafe {
+    let build = |_, irp: *mut IRP| unsafe {
         if mode != KERNEL_MODE {
             if major == IRP_MJ_READ {
                 probe_write(buffer)?;
@@ -948,7 +1019,9 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
                 probe_read(buffer)?;
             }
         }
-        let flags = (*(*file).DeviceObject).Flags;
+        // How the buffer travels is the choice of the device the
+        // request is sent to, the top of the stack.
+        let flags = (*(*irp::next_location(irp)).DeviceObject).Flags;
         if flags & DO_BUFFERED_IO != 0 {
             if len != 0 {
                 let system = pool::alloc(len, TAG_IO_BUFFER);
@@ -960,13 +1033,27 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
                 if major == IRP_MJ_READ {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = buffer.ptr().cast();
-                    irp::requestor_room(irp).write(len);
+                    irp::set_requestor_room(irp, len);
                 } else {
                     copy_in(system, buffer, mode)?;
                 }
             }
         } else if flags & DO_DIRECT_IO != 0 {
-            return Err(IoError::UnsupportedMethod);
+            if len != 0 {
+                // The MDL is the request's from here: final completion
+                // unlocks and frees it, as does giving the request up.
+                let described = mdl::IoAllocateMdl(buffer.ptr().cast(), len as u32, 0, 0, irp);
+                if described.is_null() {
+                    return Err(IoError::NoMemory);
+                }
+                // A read writes the pages; a write reads them.
+                let operation = if major == IRP_MJ_READ {
+                    IO_WRITE_ACCESS
+                } else {
+                    IO_READ_ACCESS
+                };
+                mdl::probe_and_lock(described, mode, operation).map_err(IoError::Refused)?;
+            }
         } else {
             // Neither: the driver gets the caller's buffer as it is.
             (*irp).UserBuffer = buffer.ptr().cast();
@@ -989,6 +1076,44 @@ pub fn read(handle: u64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
     unsafe { read_start(handle, buffer) }?.wait()
 }
 
+/// Read up to `buffer.len()` bytes at byte `offset` of the file, as
+/// `NtReadFile` does when it is given a `ByteOffset`.
+pub fn read_at(handle: u64, offset: i64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
+    let buffer = Buffer::of(buffer);
+    // SAFETY: a valid writable slice, borrowed until the request has
+    // been waited for, here.
+    unsafe { transfer(handle, IRP_MJ_READ, buffer, Some(offset), KERNEL_MODE) }?.wait()
+}
+
+/// Write `buffer` at byte `offset` of the file, as `NtWriteFile` does
+/// when it is given a `ByteOffset`.
+pub fn write_at(handle: u64, offset: i64, buffer: &[u8]) -> Result<IoResult, IoError> {
+    let buffer = Buffer::of(buffer);
+    // SAFETY: a write only reads the buffer, which is borrowed until
+    // the request has been waited for, here.
+    unsafe { transfer(handle, IRP_MJ_WRITE, buffer, Some(offset), KERNEL_MODE) }?.wait()
+}
+
+/// Have the file's device write out what it holds back
+/// (`IRP_MJ_FLUSH_BUFFERS`, what `NtFlushBuffersFile` sends): a request
+/// with no buffer and no parameters. User mode's handle must have been
+/// granted the access to write or append; kernel mode's is asked for
+/// nothing.
+pub fn flush(handle: u64) -> Result<IoResult, IoError> {
+    // SAFETY: the request names no buffer.
+    unsafe {
+        send(
+            handle,
+            IRP_MJ_FLUSH_BUFFERS,
+            |_| [0; 4],
+            KERNEL_MODE,
+            Needs::Write,
+            |_, _| Ok(()),
+        )
+    }?
+    .wait()
+}
+
 /// Send a read without waiting for it.
 ///
 /// # Safety
@@ -997,14 +1122,14 @@ pub fn read(handle: u64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
 pub unsafe fn read_start(handle: u64, buffer: &mut [u8]) -> Result<Pending, IoError> {
     // SAFETY: `buffer` is a valid writable slice; the rest per the
     // contract.
-    unsafe { transfer(handle, IRP_MJ_READ, Buffer::of(buffer), KERNEL_MODE) }
+    unsafe { transfer(handle, IRP_MJ_READ, Buffer::of(buffer), None, KERNEL_MODE) }
 }
 
 /// Write `buffer`.
 pub fn write(handle: u64, buffer: &[u8]) -> Result<IoResult, IoError> {
     // SAFETY: a write only reads the buffer, which is borrowed until
     // the request has been waited for, here.
-    unsafe { transfer(handle, IRP_MJ_WRITE, Buffer::of(buffer), KERNEL_MODE) }?.wait()
+    unsafe { transfer(handle, IRP_MJ_WRITE, Buffer::of(buffer), None, KERNEL_MODE) }?.wait()
 }
 
 /// Read or write (`major`) on behalf of user mode, as `NtReadFile` and
@@ -1014,7 +1139,7 @@ pub fn write(handle: u64, buffer: &[u8]) -> Result<IoResult, IoError> {
 /// append.
 pub fn user_transfer(handle: u64, major: u8, buffer: Buffer) -> Result<IoResult, IoError> {
     // SAFETY: a user-mode buffer is only used through checks.
-    let pending = unsafe { transfer(handle, major, buffer, USER_MODE) };
+    let pending = unsafe { transfer(handle, major, buffer, None, USER_MODE) };
     refused(pending.and_then(Pending::wait))
 }
 
@@ -1164,7 +1289,7 @@ unsafe fn control(
                 if output.len != 0 {
                     (*irp).Flags |= IRP_INPUT_OPERATION;
                     (*irp).UserBuffer = output.ptr().cast();
-                    irp::requestor_room(irp).write(output.len);
+                    irp::set_requestor_room(irp, output.len);
                 }
             }
             METHOD_IN_DIRECT | METHOD_OUT_DIRECT => {

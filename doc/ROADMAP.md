@@ -76,40 +76,41 @@ each. What NK has of each part is in `doc/DESIGN.md`.
 
 ## Phases
 
-In order. 3 and 5 (hardware) and 4, 6, 7, 8 (toward user mode) depend
-only on what NK has and on their own predecessors, so work can
-alternate; 9 and 10 need both lines.
+In order. Phase 4 mounts FAT on the disk phase 3 delivers, so hardware
+and file systems are one line up to there. After it, 5 (more hardware)
+and 6, 7, 8 (toward user mode) depend only on their own predecessors, so
+work can alternate; 9 and 10 need both. QEMU proves a phase first; the
+OptiPlex follows.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts; imports by ordinal and from API sets | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
-| 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting; APCs | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
-| 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond phase 3 | KMDF echo sample; `usbxhci` + hub + HID keyboard on the OptiPlex; `serial.sys` |
-| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens; `ksecdd.sys` and `cng.sys` | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
+| 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts; imports by ordinal and from API sets | `acpi.sys` and `pci.sys` enumerate QEMU's q35 machine; sectors read and written on its AHCI controller through `storport` + `storahci` + `disk`, and checked in the disk image afterwards |
+| 4 | Volumes, memory, cache, FAT | partition and volume discovery; the libraries `fastfat.sys` imports from (`ksecdd.sys`, `msrpc.sys`, API sets); sections, fault path, paging I/O, cache manager, FsRtl, mounting; APCs | `partmgr.sys`, `volmgr.sys` and `mountmgr.sys` find the volume on phase 3's disk; `fastfat.sys` mounts it; files read and written; the image checked afterwards by host tools |
+| 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond phase 3 | KMDF echo sample; first boot on the OptiPlex: its disk through `stornvme`, `usbxhci` + hub + HID keyboard; `serial.sys` |
+| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens; `cng.sys` | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
 | 7 | Session manager | ALPC, writable registry, known DLLs, sessions, process creation as `smss.exe` drives it | `smss.exe` runs from a real hive up to starting the Windows subsystem |
 | 8 | Win32 base | what `csrss.exe`, its server DLLs, `kernelbase.dll` and `kernel32.dll` ask: the first Win32 processes | `cmd.exe /c ver` with its output redirected to a file |
 | 9 | Window system and console | session space, user-mode callbacks, the second system-call table, display through `dxgkrnl.sys` and `BasicDisplay.sys`, `condrv.sys` and `conhost.exe` | `win32k` loads; an interactive `cmd.exe` in its console window |
 | 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services) | the Destination above |
 
-After the rescue disk, unordered: networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
+After the rescue disk, unordered: `ntfs.sys`; networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
 logon.
 
 ## Next step: phase 3
 
-Phase 3 takes NK onto hardware: Microsoft's `acpi.sys` and `pci.sys`
-enumerate the machine, and sectors are read and written through
-`storport.sys`, with `storahci.sys` or `stornvme.sys` beneath it and
-`disk.sys` above, under QEMU and then on the OptiPlex.
+Phase 3 takes NK onto hardware, under QEMU: Microsoft's `acpi.sys` and
+`pci.sys` enumerate the q35 machine, and sectors of a disk on its AHCI
+controller are read and written through `storport.sys`, with
+`storahci.sys` beneath it and `disk.sys` above. Finding partitions and
+volumes on that disk opens phase 4.
 
 Its scope follows what its proof binaries import
 (`tools/ledger.py --missing acpi.sys pci.sys storport.sys classpnp.sys disk.sys`):
 
 - Plug and Play builds the device tree and device stacks and sends the
   start and enumeration requests these drivers expect
-  (`IoInvalidateDeviceRelations`); the power manager answers the power
-  requests they send (`PoRequestPowerIrp`, `PoCallDriver`) for a machine
-  that stays on.
+  (`IoInvalidateDeviceRelations`).
 - Device interrupts are connected (`IoConnectInterruptEx`) through the
   controllers NK drives; DMA goes through the HAL's adapter interface
   (`IoGetDmaAdapter`).
@@ -124,7 +125,7 @@ Its scope follows what its proof binaries import
 - No phase-3 binary queues an APC or imports a cache or section routine;
   those wait for phase 4.
 - arm64 has no Microsoft binaries: its share is the same managers,
-  proven with WDK-built drivers.
+  proven with NK's own test drivers inside the kernel.
 
 What NK lacks is listed in `doc/DESIGN.md` ("What is absent").
 

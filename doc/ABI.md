@@ -186,6 +186,12 @@ it on the fields they share.
 0x180, `KPRCB.CurrentThread` 0x8, `Number` 0x24, `LegacyNumber` 0x4 and
 the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
 `gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number.
+The DMA structures (`lib/ntabi/dma.rs`: `DEVICE_DESCRIPTION`,
+`DMA_ADAPTER`, the 38 slots of `DMA_OPERATIONS`, scatter/gather lists,
+the adapter and transfer information) agree in every field.
+The interrupt object (`KINTERRUPT`, `lib/ntabi/interrupt.rs`) agrees in every
+field; the structures a driver passes to connect an interrupt are not in
+the symbols or the WDK table and stand on their const asserts alone.
 Security descriptors (absolute and self-relative), ACL and SID headers
 agree too. So do the fields of the thread and process blocks that NK
 keeps (`lib/ntabi/thread.rs`, `process.rs`): among them a thread's
@@ -202,6 +208,20 @@ the kernel's code reads it. Microsoft's
 `npfs.sys`, `msfs.sys` and `msrpc.sys` read none of the current
 thread's fields in line: they go through exports. A structure is added
 to the comparison by the commit that starts using it.
+
+The I/O manager's own records agree as well: what
+`DeviceObjectExtension` points to (`DEVOBJ_EXTENSION`), the whole of
+`DRIVER_EXTENSION` with the `IO_CLIENT_EXTENSION` in front of each
+driver-object extension, `FAST_IO_DISPATCH`, the device queue and its
+entry in an IRP, and the Plug and Play structures of
+`lib/ntabi/pnp.rs` (device relations and capabilities, the resource
+lists and requirements, `INTERFACE`, `POWER_STATE`). The parameters of
+each Plug and Play and power request are anonymous structures in the
+symbols: their offsets are `wdm.h`'s, stated in that file's tests.
+`IO_ERROR_LOG_PACKET` is the header's; what the I/O manager keeps in
+front of a packet (`ERROR_LOG_ENTRY`) is in neither the headers nor
+the symbols, and is laid out as the pinned kernel's
+`IoAllocateErrorLogEntry` and `IoWriteErrorLogEntry` fill it in.
 
 A thread's impersonation is kept in `ETHREAD.ClientSecurity` (0x4A8)
 and bits 3 and 8 of `CrossThreadFlags` (0x510), as that kernel lays

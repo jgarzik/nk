@@ -9,7 +9,8 @@ covers, and holds them to tools/unwind/<arch>.txt:
     lib <name>      <why>   a library whose code may be uncovered
     sym <name>      <why>   one symbol of NK's own that may be
 
-Usage: unwind_coverage.py [arch...]   (default: both; `make unwind-check`)
+Usage: unwind_coverage.py [arch...]   (default: both; `make unwind-check`,
+`unwind-check-arm`)
 
 An uncovered symbol passes if it is
 

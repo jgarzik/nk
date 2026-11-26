@@ -1,0 +1,9 @@
+wmi.register ok
+wmi.refused ok
+wmi.too-small ok
+wmi.update ok
+wmi.pdo ok
+wmi.deregister-waits ok
+wmi.event ok
+wmi.open-block ok
+wmi.stack ok
