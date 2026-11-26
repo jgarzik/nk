@@ -1,0 +1,8 @@
+# A new handle has its reference and its handle count before the
+# table's lock is released: its number can be guessed, and a close that
+# got in between would give back a reference not yet taken.
+scenario: x86_64
+fails: scenario
+file: kernel/ob/handle.rs
+replace:         object::reference(body);
+with:         drop(table); object::reference(body);

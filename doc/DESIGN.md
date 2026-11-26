@@ -549,7 +549,11 @@ and been reaped, so an unreferenced thread frees itself and a referenced
 one stays a valid, signalled object.
 
 Kernel handles are entries in one table, the System process's, with
-Windows' kernel-handle bits; a handle holds a reference until closed. No
+Windows' kernel-handle bits; a handle holds a reference until closed. A
+handle's number is predictable (the lowest free slot), so it can be
+closed the instant it is in the table: it is given its reference and
+its place in the object's handle count under the table's lock, which a
+close takes to remove it. No
 per-process tables. Each handle has the access it was granted and its
 attributes (inherit, protect from close). A handle protected from close
 stays open: user mode closing it is refused

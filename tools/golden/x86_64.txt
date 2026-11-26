@@ -132,6 +132,7 @@ io.csq-cancel ok
 io.csq-race ok
 io.wdm-version ok
 ob.current-thread ok
+ob.handle.open-close-race ok
 ps.thread.no-handle ok
 io.device-list ok
 io.open-delete ok

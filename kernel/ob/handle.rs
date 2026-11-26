@@ -87,12 +87,15 @@ pub unsafe fn open(body: *mut u8, access: u32) -> Result<u64, NTSTATUS> {
 unsafe fn open_with(body: *mut u8, access: u32, attributes: Attributes) -> Result<u64, NTSTATUS> {
     // SAFETY: per the contract.
     let granted = unsafe { object::type_of(body) }.map_generic(access);
-    let index = TABLE
-        .lock()
+    let mut table = TABLE.lock();
+    let index = table
         .insert(Entry(body), granted, attributes)
         .map_err(status)?;
-    // SAFETY: per the contract. The handle is in the table before it
-    // has its reference, but nobody knows its number yet.
+    // SAFETY: per the contract. The handle gets its reference and its
+    // place in the object's handle count before the table's lock is
+    // released, at the end: its number is the lowest free slot's, which
+    // anyone can guess, and a close takes the entry out under the same
+    // lock before it gives either back.
     unsafe {
         object::reference(body);
         object::handle_count(body).fetch_add(1, Ordering::AcqRel);
