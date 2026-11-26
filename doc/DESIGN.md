@@ -940,6 +940,23 @@ that key, which walks the rest of the path in the registry's own tree. A
 name relative to an open key starts at that key. A key is no file:
 opening one through the I/O manager is `STATUS_OBJECT_TYPE_MISMATCH`.
 
+Subkeys are enumerated in the order of their upper-cased names, values
+in the order they were first set, as on Windows
+([`ZwEnumerateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratekey),
+[`ZwEnumerateValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratevaluekey)).
+A key or value is described in Microsoft's information structures
+(`lib/cm` writes them; the classes are those of
+[`KEY_INFORMATION_CLASS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_information_class)
+and
+[`KEY_VALUE_INFORMATION_CLASS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ne-wdm-_key_value_information_class)).
+A buffer with room for a structure's fixed part and not all of the rest
+gets what fits and `STATUS_BUFFER_OVERFLOW`; one with less gets nothing
+and `STATUS_BUFFER_TOO_SMALL`; both are told the length that holds
+everything. Where a class or a value's data is aligned after a name,
+the bytes between are the caller's, untouched. A value's data start at
+a multiple of eight bytes in the full form, aligned or not, as Windows
+10 x64 places them.
+
 A key remembers the longest subkey name, subkey class, value name and
 value data it has held, which is what it reports as the longest it
 holds: as on Windows, the numbers only grow while the key has subkeys

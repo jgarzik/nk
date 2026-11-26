@@ -219,6 +219,8 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, se::ZwSetSecurityObject),
     export!(Implemented, cm::ZwCreateKey),
     export!(Implemented, cm::ZwDeleteKey),
+    export!(Implemented, cm::ZwEnumerateKey),
+    export!(Implemented, cm::ZwEnumerateValueKey),
     export!(Implemented, cm::ZwOpenKey),
     export!(Implemented, cm::ZwQueryValueKey),
     export!(Implemented, cm::ZwSetValueKey),

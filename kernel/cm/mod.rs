@@ -1,4 +1,5 @@
 //! The registry, as drivers reach it: `ZwCreateKey`, `ZwOpenKey`,
+//! `ZwDeleteKey`, `ZwEnumerateKey`, `ZwEnumerateValueKey`,
 //! `ZwQueryValueKey`, `ZwSetValueKey`.
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
@@ -32,9 +33,16 @@ static HIVE: SpinLock<Hive> = SpinLock::new(Rank::Registry, Hive::new());
 /// `REG_CREATED_NEW_KEY`, `REG_OPENED_EXISTING_KEY`.
 const CREATED: u32 = 1;
 const OPENED: u32 = 2;
-/// `KeyValueFullInformation`, `KeyValuePartialInformation`.
+/// `KEY_INFORMATION_CLASS`: the forms a key is described in.
+const KEY_BASIC: u32 = 0;
+const KEY_NODE: u32 = 1;
+const KEY_FULL: u32 = 2;
+/// `KEY_VALUE_INFORMATION_CLASS`: the forms a value is described in.
+const VALUE_BASIC: u32 = 0;
 const FULL: u32 = 1;
 const PARTIAL: u32 = 2;
+const VALUE_FULL_ALIGN64: u32 = 3;
+const VALUE_PARTIAL_ALIGN64: u32 = 4;
 
 /// `REG_DWORD`.
 const REG_DWORD: u32 = 4;
@@ -388,27 +396,57 @@ pub unsafe extern "C" fn ZwOpenKey(
     }
 }
 
+/// The bytes of the counted string `class`; none if it is null.
+/// `None` without memory for them.
+///
+/// # Safety
+/// `class` is null or points to a counted string.
+unsafe fn class_of(class: *const UNICODE_STRING) -> Option<Vec<u8>> {
+    if class.is_null() {
+        return Some(Vec::new());
+    }
+    // SAFETY: per the contract; the structure is the driver's, read
+    // field by field.
+    unsafe {
+        let buffer = (&raw const (*class).Buffer).read_unaligned();
+        let length = (&raw const (*class).Length).read_unaligned();
+        crate::se::copied(buffer.cast(), usize::from(length))
+    }
+}
+
 /// [`ZwCreateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatekey):
-/// open a key, making it if it is not there. Every key lives in memory,
-/// so the options (volatile or not) change nothing; the class is not
-/// kept.
+/// open a key, making it if it is not there. A new key is given the
+/// class; one that exists keeps its own. Every key lives in memory, so
+/// the options (volatile or not) change nothing.
 ///
 /// # Safety
 /// `key_handle` is writable; `attributes` points to an
-/// `OBJECT_ATTRIBUTES`; `disposition` is null or writable.
+/// `OBJECT_ATTRIBUTES`; `class` is null or a counted string;
+/// `disposition` is null or writable.
 pub unsafe extern "C" fn ZwCreateKey(
     key_handle: *mut *mut c_void,
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
     _title_index: u32,
-    _class: *const UNICODE_STRING,
+    class: *const UNICODE_STRING,
     _create_options: u32,
     disposition: *mut u32,
 ) -> NTSTATUS {
+    // SAFETY: per the contract. The class is the driver's memory: the
+    // registry is given a copy, made before its lock is taken.
+    let Some(class) = (unsafe { class_of(class) }) else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
     // SAFETY: per the contract.
     let made = unsafe { named(attributes) }.and_then(|(start, path)| {
         let mut hive = HIVE.lock();
         let (key, new) = hive.create(start, &path).map_err(status)?;
+        if new && let Err(error) = hive.set_class(key, &class) {
+            // Without its class it is not the key that was asked for:
+            // nothing has seen it yet, and it has no subkeys.
+            let _ = hive.delete(key);
+            return Err(status(error));
+        }
         hive.opened(key);
         Ok((key, new))
     });
@@ -456,6 +494,161 @@ pub unsafe extern "C" fn ZwSetValueKey(
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
+}
+
+/// Answer a query for an information structure. `format` writes the
+/// structure into the buffer it is given, holding the registry's lock
+/// while it does, and says how much fitted and how long the whole is;
+/// or it fails, and the caller's memory is left as it was.
+///
+/// The structure is laid over a copy of what the caller's buffer holds
+/// and the copy is written back: the bytes a structure leaves alone
+/// (between a name and what is aligned after it) keep the caller's
+/// values, as on Windows. The caller's memory is read and written with
+/// the lock released, so the structure is formatted again if the
+/// registry changed its length meanwhile.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+unsafe fn inform(
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+    mut format: impl FnMut(&mut [u8]) -> Result<(Fit, usize), NTSTATUS>,
+) -> NTSTATUS {
+    let mut out = Vec::new();
+    let (fit, needed) = loop {
+        let (fit, needed) = match format(&mut out) {
+            Ok(answer) => answer,
+            Err(status) => return status,
+        };
+        let room = (length as usize).min(needed);
+        if out.len() == room {
+            break (fit, needed);
+        }
+        out.clear();
+        if out.try_reserve_exact(room).is_err() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        // SAFETY: per the contract; `room` is at most `length`.
+        out.extend((0..room).map(|i| unsafe { information.add(i).read() }));
+    };
+    // SAFETY: per the contract; `out` is no longer than `length`.
+    unsafe {
+        result_length.write_unaligned(needed as u32);
+        if fit != Fit::Nothing {
+            for (i, &byte) in out.iter().enumerate() {
+                information.add(i).write(byte);
+            }
+        }
+    }
+    match fit {
+        Fit::All => STATUS_SUCCESS,
+        Fit::Part => STATUS_BUFFER_OVERFLOW,
+        Fit::Nothing => STATUS_BUFFER_TOO_SMALL,
+    }
+}
+
+/// Write a key in the form `class`, one of [`KEY_BASIC`], [`KEY_NODE`]
+/// and [`KEY_FULL`].
+fn key_information(class: u32, key: &nk_cm::KeyInfo<'_>, out: &mut [u8]) -> (Fit, usize) {
+    match class {
+        KEY_BASIC => nk_cm::key_basic_information(key, out),
+        KEY_NODE => nk_cm::key_node_information(key, out),
+        _ => nk_cm::key_full_information(key, out),
+    }
+}
+
+/// Write a value in the form `class`, one of the five up to
+/// [`VALUE_PARTIAL_ALIGN64`]. The full form's data start at a multiple
+/// of eight bytes in either of its classes.
+fn value_information(
+    class: u32,
+    name: &[u16],
+    kind: u32,
+    data: &[u8],
+    out: &mut [u8],
+) -> (Fit, usize) {
+    match class {
+        VALUE_BASIC => nk_cm::value_basic_information(name, kind, out),
+        FULL | VALUE_FULL_ALIGN64 => nk_cm::full_information(name, kind, data, out),
+        PARTIAL => nk_cm::partial_information(kind, data, out),
+        _ => nk_cm::partial_align64_information(kind, data, out),
+    }
+}
+
+/// [`ZwEnumerateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratekey):
+/// describe subkey `index` of a key, counting in the order of the
+/// subkeys' names, letter case disregarded. A subkey is described in
+/// the basic, node and full forms only, as on Windows; past the last,
+/// `STATUS_NO_MORE_ENTRIES`, whatever the buffer.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+pub unsafe extern "C" fn ZwEnumerateKey(
+    key_handle: *mut c_void,
+    index: u32,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    if class > KEY_FULL {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let key = match key_of(key_handle) {
+        Ok(key) => key,
+        Err(status) => return status,
+    };
+    let format = |out: &mut [u8]| {
+        let hive = HIVE.lock();
+        let subkey = hive
+            .subkey(key, index as usize)
+            .map_err(status)?
+            .ok_or(STATUS_NO_MORE_ENTRIES)?;
+        let info = hive.info(subkey).map_err(status)?;
+        Ok(key_information(class, &info, out))
+    };
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
+}
+
+/// [`ZwEnumerateValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratevaluekey):
+/// describe value `index` of a key, counting in the order the values
+/// were first set. Past the last, `STATUS_NO_MORE_ENTRIES`, whatever
+/// the buffer. There are no layered keys, and a value is not described
+/// as part of one (`KeyValueLayerInformation`).
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+pub unsafe extern "C" fn ZwEnumerateValueKey(
+    key_handle: *mut c_void,
+    index: u32,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    if class > VALUE_PARTIAL_ALIGN64 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let key = match key_of(key_handle) {
+        Ok(key) => key,
+        Err(status) => return status,
+    };
+    let format = |out: &mut [u8]| {
+        let hive = HIVE.lock();
+        let (name, kind, data) = hive
+            .value_at(key, index as usize)
+            .map_err(status)?
+            .ok_or(STATUS_NO_MORE_ENTRIES)?;
+        Ok(value_information(class, name, kind, data, out))
+    };
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
 }
 
 /// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey),

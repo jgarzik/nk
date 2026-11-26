@@ -1,6 +1,9 @@
 //! Tests of the registry, through the routines drivers call.
 
-use crate::cm::{ZwCreateKey, ZwDeleteKey, ZwOpenKey, ZwQueryValueKey, ZwSetValueKey};
+use crate::cm::{
+    ZwCreateKey, ZwDeleteKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey, ZwQueryValueKey,
+    ZwSetValueKey,
+};
 use crate::ps::ZwClose;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
@@ -14,6 +17,8 @@ pub static GROUP: Group = Group {
         "cm.keys",
         "cm.values",
         "cm.delete",
+        "cm.enumerate.keys",
+        "cm.enumerate.values",
         "cm.namespace",
         "cm.control-set",
         "cm.hive.values",
@@ -325,6 +330,404 @@ fn delete() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Create or open the key `name` under `parent` (from the top if that
+/// is null), with a class if one is given: the status and the handle.
+fn child(parent: *mut c_void, name: &str, class: Option<&str>) -> (u32, *mut c_void) {
+    let text: Vec<u16> = name.encode_utf16().collect();
+    let name = counted(&text);
+    let class: Option<Vec<u16>> = class.map(|class| class.encode_utf16().collect());
+    let class = class.as_deref().map(counted);
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: parent,
+        ObjectName: &raw const name,
+        Attributes: 0x240,
+        SecurityDescriptor: core::ptr::null_mut(),
+        SecurityQualityOfService: core::ptr::null_mut(),
+    };
+    let mut handle = core::ptr::null_mut();
+    // SAFETY: locals that outlive the call.
+    let status = unsafe {
+        ZwCreateKey(
+            &raw mut handle,
+            0xF003F,
+            &raw const attributes,
+            0,
+            class
+                .as_ref()
+                .map_or(core::ptr::null(), core::ptr::from_ref),
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+    (status as u32, handle)
+}
+
+/// The key the enumeration and query tests work on, made as the
+/// conformance driver `nkc-reg` makes its own, so that the numbers
+/// here are the ones its source predicts:
+///
+/// ```text
+/// NkcTest, class "Cls"
+///   values, in the order set: Number (REG_DWORD 0x12345678), Text
+///     (REG_SZ "nk"), Odd (REG_BINARY, 3 bytes), the unnamed value
+///     (REG_SZ "d"), Multi (REG_MULTI_SZ "a", "bc")
+///   subkeys, in the order created: Beta (class "BC"; one value, Val,
+///     REG_BINARY of 5 bytes; one subkey, Sub), alpha, Gamma9
+/// ```
+fn build() -> Result<*mut c_void, &'static str> {
+    let (status, key) = child(
+        core::ptr::null_mut(),
+        &alloc::format!("{SERVICES}\\NkcTest"),
+        Some("Cls"),
+    );
+    if status != 0 {
+        return Err("the key to describe could not be made");
+    }
+    let number = 0x1234_5678u32.to_le_bytes();
+    let (beta, sub) = {
+        let (made, beta) = child(key, "Beta", Some("BC"));
+        let (deeper, sub) = child(beta, "Sub", None);
+        ZwClose(sub);
+        (beta, made | deeper)
+    };
+    let made = [
+        set(key, "Number", 4, &number),
+        set(key, "Text", 1, &utf16("nk\0")),
+        set(key, "Odd", 3, &number[..3]),
+        set(key, "", 1, &utf16("d\0")),
+        set(key, "Multi", 7, &utf16("a\0bc\0\0")),
+        sub,
+        set(beta, "Val", 3, &[1, 2, 3, 4, 5]),
+        ZwClose(beta) as u32,
+    ];
+    for name in ["alpha", "Gamma9"] {
+        let (status, handle) = child(key, name, None);
+        ZwClose(handle);
+        if status != 0 {
+            return Err("a subkey to describe could not be made");
+        }
+    }
+    if made != [0; 8] {
+        return Err("the values and subkeys to describe could not be made");
+    }
+    Ok(key)
+}
+
+/// Delete the subkey `name` of `parent`, which has no subkeys.
+fn remove(parent: *mut c_void, name: &str) -> bool {
+    let (status, handle) = child(parent, name, None);
+    let deleted = ZwDeleteKey(handle);
+    ZwClose(handle);
+    (status, deleted) == (0, 0)
+}
+
+/// Run `test` on the key [`build`] makes, and delete the key.
+fn with_key(
+    test: impl FnOnce(*mut c_void) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    let key = build()?;
+    let result = test(key);
+    let (_, beta) = child(key, "Beta", None);
+    let mut gone = remove(beta, "Sub");
+    ZwClose(beta);
+    for name in ["Beta", "alpha", "Gamma9"] {
+        gone &= remove(key, name);
+    }
+    gone &= ZwDeleteKey(key) == 0;
+    ZwClose(key);
+    result?;
+    if !gone {
+        return Err("the key that was described could not be deleted again");
+    }
+    Ok(())
+}
+
+/// How many bytes an answer may have.
+const ROOM: usize = 192;
+/// What nothing wrote: the buffer's bytes and the length reported.
+const UNTOUCHED: u8 = 0xEE;
+const NO_LENGTH: u32 = 0xEEEE_EEEE;
+const TOO_SMALL: u32 = 0xC000_0023;
+const OVERFLOW: u32 = 0x8000_0005;
+const NO_MORE: u32 = 0x8000_001A;
+const INVALID_PARAMETER: u32 = 0xC000_000D;
+
+/// What a query answered into a buffer of [`UNTOUCHED`] bytes: its
+/// status, the length it reported, the buffer.
+struct Answer {
+    status: u32,
+    length: u32,
+    bytes: [u8; ROOM],
+}
+
+/// Make the query `ask`, giving it a buffer, how many bytes of it to
+/// use, and where to report the length.
+fn answer(room: usize, ask: impl FnOnce(*mut u8, u32, *mut u32) -> i32) -> Answer {
+    let mut bytes = [UNTOUCHED; ROOM];
+    let mut length = NO_LENGTH;
+    let status = ask(bytes.as_mut_ptr(), room.min(ROOM) as u32, &raw mut length) as u32;
+    Answer {
+        status,
+        length,
+        bytes,
+    }
+}
+
+impl Answer {
+    /// Whether the query failed with `status` and touched nothing.
+    fn refused(&self, status: u32) -> bool {
+        (self.status, self.length) == (status, NO_LENGTH) && self.bytes == [UNTOUCHED; ROOM]
+    }
+
+    /// Whether, with `room` bytes to use, the query answered as it must
+    /// for a structure that is `whole` when all of it fits and whose
+    /// fixed part is `fixed` bytes: the status for how much fitted, the
+    /// whole length reported, as much of the structure as there was
+    /// room for unless not even the fixed part fitted, and not a byte
+    /// more. `whole` has [`UNTOUCHED`] where the structure leaves bytes
+    /// alone. The first `skip` bytes are a time, which is not compared.
+    fn is(&self, room: usize, whole: &[u8], fixed: usize, skip: usize) -> bool {
+        let (status, written) = match room {
+            _ if room < fixed => (TOO_SMALL, 0),
+            _ if room < whole.len() => (OVERFLOW, room),
+            _ => (0, whole.len()),
+        };
+        (self.status, self.length) == (status, whole.len() as u32)
+            && (written <= skip || self.bytes[skip..written] == whole[skip..written])
+            && self.bytes[written..].iter().all(|&byte| byte == UNTOUCHED)
+    }
+}
+
+/// Whether the query `ask(room)` answers as it must ([`Answer::is`])
+/// with room for none of the structure, for a byte less than its fixed
+/// part, for the fixed part alone, for a byte less than all of it, for
+/// all, and for more.
+fn at_every_room(whole: &[u8], fixed: usize, skip: usize, ask: impl Fn(usize) -> Answer) -> bool {
+    let all = whole.len();
+    [0, fixed - 1, fixed, all - 1, all, all + 8]
+        .into_iter()
+        .all(|room| ask(room).is(room, whole, fixed, skip))
+}
+
+/// 32-bit fields as bytes.
+fn fields(fields: &[u32]) -> Vec<u8> {
+    fields
+        .iter()
+        .flat_map(|field| field.to_le_bytes())
+        .collect()
+}
+
+/// The parts of a structure, one after another.
+fn joined(parts: &[&[u8]]) -> Vec<u8> {
+    parts.concat()
+}
+
+/// Sizes of the fixed parts of the key and value structures.
+const KEY_BASIC: usize = 16;
+const KEY_NODE: usize = 24;
+const KEY_FULL: usize = 44;
+const VALUE_BASIC: usize = 12;
+const VALUE_FULL: usize = 20;
+const VALUE_PARTIAL: usize = 12;
+const VALUE_PARTIAL_ALIGN64: usize = 8;
+/// A last write time, where a structure starts with one.
+const TIME: [u8; 8] = [0; 8];
+
+fn enumerate_key(key: *mut c_void, index: u32, class: u32, room: usize) -> Answer {
+    // SAFETY: the buffer is `ROOM` bytes and the room no more.
+    answer(room, |out, room, length| unsafe {
+        ZwEnumerateKey(key, index, class, out, room, length)
+    })
+}
+
+/// Subkeys come by index in the order of their names, letter case
+/// disregarded, in the basic, node and full forms, each with Windows'
+/// status and length for a buffer of any size.
+fn enumerate_keys(key: *mut c_void) -> Result<(), &'static str> {
+    // Created as Beta, alpha, Gamma9.
+    for (index, name) in ["alpha", "Beta", "Gamma9"].into_iter().enumerate() {
+        let name = utf16(name);
+        let whole = joined(&[&TIME, &fields(&[0, name.len() as u32]), &name]);
+        let ask = |room| enumerate_key(key, index as u32, 0, room);
+        if !at_every_room(&whole, KEY_BASIC, 8, ask) {
+            return Err("a subkey's basic form is not its name, in the order of the names");
+        }
+    }
+    // The class follows the name; a key without one says so.
+    let beta = joined(&[&TIME, &fields(&[0, 32, 4, 8]), &utf16("BetaBC")]);
+    let alpha = joined(&[&TIME, &fields(&[0, u32::MAX, 0, 10]), &utf16("alpha")]);
+    if !at_every_room(&beta, KEY_NODE, 8, |room| enumerate_key(key, 1, 1, room))
+        || !at_every_room(&alpha, KEY_NODE, 8, |room| enumerate_key(key, 0, 1, room))
+    {
+        return Err("a subkey's node form is not its name and class");
+    }
+    // Beta: one subkey (Sub), one value (Val, of five bytes).
+    let beta = joined(&[&TIME, &fields(&[0, 44, 4, 1, 6, 0, 1, 6, 5]), &utf16("BC")]);
+    let gamma = joined(&[&TIME, &fields(&[0, u32::MAX, 0, 0, 0, 0, 0, 0, 0])]);
+    if !at_every_room(&beta, KEY_FULL, 8, |room| enumerate_key(key, 1, 2, room))
+        || !at_every_room(&gamma, KEY_FULL, 8, |room| enumerate_key(key, 2, 2, room))
+    {
+        return Err("a subkey's full form does not count what it holds");
+    }
+    // Past the last: whatever the room. The forms that describe only
+    // an open key: not a subkey, whether or not there is one.
+    for (index, class, room, status) in [
+        (3, 0, ROOM, NO_MORE),
+        (3, 0, 0, NO_MORE),
+        (u32::MAX, 2, ROOM, NO_MORE),
+        (0, 3, ROOM, INVALID_PARAMETER),
+        (0, 4, ROOM, INVALID_PARAMETER),
+        (3, 9, ROOM, INVALID_PARAMETER),
+    ] {
+        if !enumerate_key(key, index, class, room).refused(status) {
+            return Err(
+                "a subkey that is not there, or a form that is not a subkey's, was answered",
+            );
+        }
+    }
+    // Not a key's handle; a key that has been deleted.
+    let (_, gone) = child(key, "Gone", None);
+    let refused = [
+        enumerate_key(0x1234 as *mut c_void, 0, 0, ROOM).refused(0xC000_0008),
+        ZwDeleteKey(gone) == 0,
+        enumerate_key(gone, 0, 0, ROOM).refused(0xC000_017C),
+        ZwClose(gone) == 0,
+    ];
+    if refused != [true; 4] {
+        return Err("subkeys were enumerated through no handle, or of a deleted key");
+    }
+    Ok(())
+}
+
+fn enumerate_value(key: *mut c_void, index: u32, class: u32, room: usize) -> Answer {
+    // SAFETY: the buffer is `ROOM` bytes and the room no more.
+    answer(room, |out, room, length| unsafe {
+        ZwEnumerateValueKey(key, index, class, out, room, length)
+    })
+}
+
+/// The values of [`build`]'s key in each form, as (index, class, fixed
+/// part, the whole structure): what `ZwEnumerateValueKey` answers by
+/// index and `ZwQueryValueKey` by name.
+fn value_forms() -> Vec<(u32, u32, usize, Vec<u8>)> {
+    let gap = |bytes: usize| alloc::vec![UNTOUCHED; bytes];
+    let number = 0x1234_5678u32.to_le_bytes();
+    let basic = |index, kind, name: &str| {
+        let name = utf16(name);
+        let whole = joined(&[&fields(&[0, kind, name.len() as u32]), &name]);
+        (index, 0, VALUE_BASIC, whole)
+    };
+    alloc::vec![
+        // In the order they were first set.
+        basic(0, 4, "Number"),
+        basic(1, 1, "Text"),
+        basic(2, 3, "Odd"),
+        basic(3, 1, ""),
+        basic(4, 7, "Multi"),
+        // The data of the full forms start at a multiple of eight; the
+        // bytes between name and data are left alone.
+        (
+            0,
+            1,
+            VALUE_FULL,
+            joined(&[&fields(&[0, 4, 32, 4, 12]), &utf16("Number"), &number]),
+        ),
+        (
+            1,
+            1,
+            VALUE_FULL,
+            joined(&[
+                &fields(&[0, 1, 32, 6, 8]),
+                &utf16("Text"),
+                &gap(4),
+                &utf16("nk\0"),
+            ]),
+        ),
+        (
+            3,
+            1,
+            VALUE_FULL,
+            joined(&[&fields(&[0, 1, 24, 4, 0]), &gap(4), &utf16("d\0")]),
+        ),
+        (
+            2,
+            2,
+            VALUE_PARTIAL,
+            joined(&[&fields(&[0, 3, 3]), &number[..3]]),
+        ),
+        (
+            4,
+            2,
+            VALUE_PARTIAL,
+            joined(&[&fields(&[0, 7, 12]), &utf16("a\0bc\0\0")]),
+        ),
+        (
+            2,
+            3,
+            VALUE_FULL,
+            joined(&[
+                &fields(&[0, 3, 32, 3, 6]),
+                &utf16("Odd"),
+                &gap(6),
+                &number[..3],
+            ]),
+        ),
+        // No title index in this one.
+        (
+            1,
+            4,
+            VALUE_PARTIAL_ALIGN64,
+            joined(&[&fields(&[1, 6]), &utf16("nk\0")]),
+        ),
+        (
+            0,
+            4,
+            VALUE_PARTIAL_ALIGN64,
+            joined(&[&fields(&[4, 4]), &number]),
+        ),
+    ]
+}
+
+/// Values come by index in the order they were first set, in every
+/// form, each with Windows' status and length for a buffer of any size.
+fn enumerate_values(key: *mut c_void) -> Result<(), &'static str> {
+    for (index, class, fixed, whole) in value_forms() {
+        let ask = |room| enumerate_value(key, index, class, room);
+        if !at_every_room(&whole, fixed, 0, ask) {
+            crate::kd::print(format_args!(
+                "cm.enumerate.values: value {index}, class {class}\n"
+            ));
+            return Err("a value was not described as Windows describes it");
+        }
+    }
+    // Past the last: whatever the room. The form of a layered key's
+    // value, and a form there is none of.
+    for (index, class, room, status) in [
+        (5, 0, ROOM, NO_MORE),
+        (5, 1, 0, NO_MORE),
+        (u32::MAX, 2, ROOM, NO_MORE),
+        (0, 5, ROOM, INVALID_PARAMETER),
+        (0, 6, ROOM, INVALID_PARAMETER),
+        (5, 6, ROOM, INVALID_PARAMETER),
+    ] {
+        if !enumerate_value(key, index, class, room).refused(status) {
+            return Err("a value that is not there, or a form there is none of, was answered");
+        }
+    }
+    let (_, gone) = child(key, "Gone", None);
+    let refused = [
+        enumerate_value(0x1234 as *mut c_void, 0, 0, ROOM).refused(0xC000_0008),
+        ZwDeleteKey(gone) == 0,
+        enumerate_value(gone, 0, 0, ROOM).refused(0xC000_017C),
+        ZwClose(gone) == 0,
+    ];
+    if refused != [true; 4] {
+        return Err("values were enumerated through no handle, or of a deleted key");
+    }
+    Ok(())
+}
+
 /// A registry name is a path in the object namespace: it is looked up
 /// there, through symbolic links and from a directory if one is given,
 /// and must lead to the registry's root key, which walks the rest.
@@ -582,6 +985,8 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
     r.check("cm.delete", delete);
+    r.check("cm.enumerate.keys", || with_key(enumerate_keys));
+    r.check("cm.enumerate.values", || with_key(enumerate_values));
     r.check("cm.namespace", namespace);
     r.check("cm.control-set", control_set);
     let Some(hive) = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE) else {

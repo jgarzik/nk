@@ -1,0 +1,7 @@
+# ZwCreateKey makes the key and drops the class it was given: nothing
+# fails, and the key reports no class for ever after.
+scenario: x86_64
+fails: cm.enumerate.keys
+file: kernel/cm/mod.rs
+replace:         if new && let Err(error) = hive.set_class(key, &class) {
+with:         if false && let Err(error) = hive.set_class(key, &class) {

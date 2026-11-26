@@ -94,6 +94,8 @@ se.access-state ok
 cm.keys ok
 cm.values ok
 cm.delete ok
+cm.enumerate.keys ok
+cm.enumerate.values ok
 cm.namespace ok
 cm.control-set ok
 cm.hive.values ok
