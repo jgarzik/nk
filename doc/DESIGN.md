@@ -2600,7 +2600,12 @@ callbacks), no
 driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
 reported to it goes nowhere), no headless terminal (the same file:
 it cannot be enabled, questions are answered with zeros, output
-succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no paging
+succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no
+notification states (`kernel/ex/wnf.rs`: a WNF state name is unknown,
+`STATUS_OBJECT_NAME_NOT_FOUND`, as Windows answers for a name that has
+no instance and that its registry does not list; a name NK's registry
+does list stops the system, since Windows would have a state for it),
+no paging
 file, and a hypervisor only as far as the processor's CPUID names one
 (`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
 none). A routine with many sub-functions

@@ -23,6 +23,7 @@ pub static GROUP: Group = Group {
         "kd.no-debugger",
         "ex.sysinfo.with-input",
         "etw.nobody-listens",
+        "ex.no-notification-states",
     ],
     run,
     manual: false,
@@ -428,6 +429,48 @@ fn etw_nobody_listens() -> Result<(), &'static str> {
     Ok(())
 }
 
+fn no_notification_states() -> Result<(), &'static str> {
+    use crate::ex::wnf;
+    use nk_ntabi::status::STATUS_OBJECT_NAME_NOT_FOUND;
+    // A well-known name NK's registry does not list, and a temporary
+    // one, which no registry lists.
+    let well_known = 0x0D83_063E_A3BE_0075u64;
+    let temporary = well_known ^ 0x30;
+    let mut stamp = 0x55u32;
+    let mut size = 8u32;
+    let mut data = [0xAAu8; 8];
+    let mut subscription = core::ptr::null_mut();
+    // SAFETY: names, and room for what is never written, in locals.
+    unsafe {
+        for name in [well_known, temporary] {
+            if wnf::ZwQueryWnfStateData(
+                &raw const name,
+                core::ptr::null(),
+                core::ptr::null(),
+                &raw mut stamp,
+                data.as_mut_ptr().cast(),
+                &raw mut size,
+            ) != STATUS_OBJECT_NAME_NOT_FOUND
+                || wnf::ExSubscribeWnfStateChange(
+                    &raw mut subscription,
+                    &raw const name,
+                    1,
+                    0,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                ) != STATUS_OBJECT_NAME_NOT_FOUND
+            {
+                return Err("a notification state that does not exist was found");
+            }
+        }
+    }
+    if (stamp, size, data) != (0x55, 8, [0xAA; 8]) || !subscription.is_null() {
+        return Err("something was written for a state that does not exist");
+    }
+    wnf::ExUnsubscribeWnfStateChange(core::ptr::null_mut());
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ex.verifier-off", verifier_off);
     r.check("ex.headless-off", headless_off);
@@ -439,6 +482,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("kd.no-debugger", no_debugger);
     r.check("ex.sysinfo.with-input", sysinfo_with_input);
     r.check("etw.nobody-listens", etw_nobody_listens);
+    r.check("ex.no-notification-states", no_notification_states);
 }
 
 /// This file's test groups, in the order they run.

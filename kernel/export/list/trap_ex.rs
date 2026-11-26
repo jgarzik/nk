@@ -6,8 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    ExAllocateTimerInternal2,
-    ExSubscribeWnfStateChange,
-    ExUnsubscribeWnfStateChange,
-);
+trap_list!(ExAllocateTimerInternal2,);
