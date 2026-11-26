@@ -85,7 +85,7 @@ into memory a driver can write.
 | `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table |
 | `kernel/selftest/` | the boot-test groups |
-| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors |
+| `lib/` | pure, host-tested crates: PE and PDB readers, function tables, unwinding and exception decisions (`unwind`), page tables and allocators (`mm`), scheduler, wait and timer logic (`ke`), interrupt-controller encodings and MADT reading (`hal`), namespace and handle slots (`ob`), structure layouts (`ntabi`), registry, security descriptors, process-structure rules (`ps`) |
 | `tools/` | boot harness and judge, fixture fetcher, ledger, oracle VM, mutants, the gate |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -249,6 +249,18 @@ lowered, its processor looks for a better thread. Its base priority
 stays. As on Windows, a thread with a base priority asked for 0 gets 1,
 and one whose base is real-time (16 and up) is not taken below 16
 (`nk_ke::sched::priority_to_set`).
+
+A thread's base priority is its process's (8 for the System process,
+`KPROCESS.BasePriority`) plus a step, set through
+`ZwSetInformationThread` (`ThreadBasePriority`): -2 to 2, or 16 and
+-16, which pin the thread at 15 and at 1 (`KTHREAD.Saturation`). The
+priority moves by as much as the base moved, so a priority that was
+set apart from the base keeps its distance
+(`nk_ps::info::set_base_priority`, from what Windows 10 computes).
+`ThreadPriority` sets the priority alone, 1 to 31. Each class makes
+its checks in Windows' order; a class Windows never sets is
+`STATUS_INVALID_INFO_CLASS`, and one it sets and NK does not is
+`STATUS_NOT_IMPLEMENTED`.
 
 Preemption is requested, then done at the end of an interrupt: readying a
 thread, or the tick, marks the processor, and the switch happens when an

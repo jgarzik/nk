@@ -974,6 +974,37 @@ pub unsafe fn set_priority(thread: *mut Thread, new: u8) -> u8 {
     }
 }
 
+/// Set `thread`'s base priority `increment` away from its process's,
+/// as Windows' `KeSetBasePriorityThread` does, and move its priority
+/// with it (`nk_ps::info::set_base_priority`); returns the step the
+/// thread was at. Under the thread's own lock, like any change of its
+/// priority.
+///
+/// # Safety
+/// `thread` is a live thread of a process that is not real-time.
+pub unsafe fn set_base_priority(thread: *mut Thread, increment: i32) -> i32 {
+    // SAFETY: per the contract; the lock is held to the end, at
+    // `DISPATCH_LEVEL`. A thread's process outlives it.
+    unsafe {
+        let _lock = super::object::ObjectLock::take(thread.cast());
+        let process = field::<*mut u8>(thread, layout::PROCESS).read();
+        let old = priority(thread);
+        let change = nk_ps::info::set_base_priority(
+            process.add(nk_ntabi::process::BASE_PRIORITY).read(),
+            field::<u8>(thread, layout::BASE_PRIORITY).read(),
+            old,
+            field::<i8>(thread, layout::SATURATION).read(),
+            increment,
+        );
+        field::<u8>(thread, layout::BASE_PRIORITY).write(change.base);
+        field::<i8>(thread, layout::SATURATION).write(change.saturation);
+        if change.priority != old {
+            apply_priority(thread, old, change.priority);
+        }
+        change.was
+    }
+}
+
 /// [`KeSetPriorityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetprioritythread):
 /// give a thread another priority; returns the old one. A thread that
 /// is lowered below a ready thread gives way, and one raised above a

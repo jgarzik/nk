@@ -14,6 +14,7 @@ pub static GROUP: Group = Group {
         "ps.system",
         "ps.identity",
         "ps.attach",
+        "ps.thread-information",
         "ps.token",
         "ob.namespace.paths",
         "ob.namespace.links",
@@ -59,6 +60,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         crate::ps::process::identity_test(),
     );
     r.check("ps.attach", crate::ps::process::attach_test);
+    counted(
+        r,
+        "ps.thread-information",
+        "calls:",
+        crate::ps::thread_information_test(),
+    );
     counted(
         r,
         "ps.token",

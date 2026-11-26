@@ -52,6 +52,18 @@ pub const STATE: usize = 0x184;
 pub const NEXT_PROCESSOR: usize = 0x218;
 /// `BasePriority`: one signed byte.
 pub const BASE_PRIORITY: usize = 0x233;
+/// `Saturation`: one signed byte, 1 while the thread's base priority
+/// is the time-critical step, -1 while it is the idle step, else 0.
+pub const SATURATION: usize = 0x285;
+/// `ETHREAD.ClientSecurity`: the token the thread impersonates and how
+/// (a `PS_CLIENT_SECURITY_CONTEXT`, one pointer-sized word). Zero: no
+/// thread impersonates.
+pub const CLIENT_SECURITY: usize = 0x4A8;
+/// `ETHREAD.CrossThreadFlags`: 32 bits of flags, of which
+/// [`ACTIVE_IMPERSONATION_INFO`] says the thread impersonates.
+pub const CROSS_THREAD_FLAGS: usize = 0x510;
+/// `CrossThreadFlags.ActiveImpersonationInfo`.
+pub const ACTIVE_IMPERSONATION_INFO: u32 = 1 << 3;
 /// `Timer`: the thread's own `KTIMER`, for waits with a time limit.
 pub const TIMER: usize = 0x100;
 /// `WaitBlock`: four `KWAIT_BLOCK`s.

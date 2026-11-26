@@ -14,6 +14,9 @@ pub const EPROCESS_SIZE: usize = 0xA40;
 /// `KPROCESS.Header.Type` of a process: `ProcessObject`.
 pub const PROCESS_OBJECT: u8 = 3;
 
+/// `KPROCESS.BasePriority`: one signed byte, the priority a thread of
+/// the process has unless it is set apart. The System process's is 8.
+pub const BASE_PRIORITY: usize = 0x280;
 /// `UniqueProcessId`: the process id, pointer-sized.
 pub const UNIQUE_PROCESS_ID: usize = 0x440;
 /// `CreateTime`: when the process was made, as system time.

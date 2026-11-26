@@ -61,6 +61,9 @@ pub fn init(time: u64) -> Result<(), &'static str> {
             .write(layout::SYSTEM_PROCESS_ID);
         process.add(layout::CREATE_TIME).cast::<u64>().write(time);
         process
+            .add(layout::BASE_PRIORITY)
+            .write(thread::NORMAL_PRIORITY);
+        process
             .add(layout::IMAGE_FILE_NAME)
             .copy_from_nonoverlapping(b"System".as_ptr(), 6);
     }

@@ -209,6 +209,23 @@ fn thread_matches_the_kernel() {
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
+    assert_eq!(SATURATION, field("Saturation"));
+    assert_eq!(
+        CLIENT_SECURITY,
+        offset(&ethread, "_ETHREAD", "ClientSecurity")
+    );
+    assert_eq!(
+        CROSS_THREAD_FLAGS,
+        offset(&ethread, "_ETHREAD", "CrossThreadFlags")
+    );
+    let impersonating = ethread
+        .member("ActiveImpersonationInfo")
+        .expect("_ETHREAD.ActiveImpersonationInfo");
+    assert_eq!(impersonating.offset as usize, CROSS_THREAD_FLAGS);
+    assert_eq!(
+        impersonating.bits,
+        Some((ACTIVE_IMPERSONATION_INFO.trailing_zeros() as u8, 1))
+    );
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
@@ -273,6 +290,10 @@ fn process_matches_the_kernel() {
     assert_eq!(EPROCESS_SIZE, eprocess.size as usize);
     assert_eq!(field("Pcb"), 0);
     assert_eq!(offset(&kprocess, "_KPROCESS", "Header"), 0);
+    assert_eq!(
+        BASE_PRIORITY,
+        offset(&kprocess, "_KPROCESS", "BasePriority")
+    );
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));

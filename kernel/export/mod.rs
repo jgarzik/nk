@@ -241,6 +241,7 @@ static EXPORTS: &[Export] = &[
         ob::object::IoDeviceObjectType
     ),
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
+    export!(Partial, ps::ZwSetInformationThread),
     export!(Implemented, se::ZwSetSecurityObject),
     export!(Partial, ob::event::ZwWaitForSingleObject),
     export!(Implemented, cm::ZwCreateKey),
