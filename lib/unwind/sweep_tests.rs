@@ -880,10 +880,17 @@ fn a64_matches(op: &arm64::Op, w: u32, load: bool) -> bool {
     };
     match *op {
         // `sub sp, sp, #n` (`add` in an epilog), or a call to a helper
-        // that moves sp by a known amount.
+        // that moves sp by a known amount, or the store that makes room
+        // as it puts two argument registers of a variadic function where
+        // `va_start` looks for them (`stp x2, x3, [sp, #-n]!`).
         arm64::Op::Alloc(n) => {
             let adjust = if load { 0x9100_03FF } else { 0xD100_03FF };
-            (w & 0xFF80_03FF == adjust && imm12(w) == n) || w >> 26 == 0x25
+            let homing = !load
+                && w & 0xFFC0_03E0 == 0xA980_03E0
+                && w & 0x1F < 8
+                && (w >> 10) & 0x1F < 8
+                && a64_signed((w >> 15) & 0x7F, 7) * 8 == -i64::from(n);
+            (w & 0xFF80_03FF == adjust && imm12(w) == n) || w >> 26 == 0x25 || homing
         }
         arm64::Op::SavePair { a, b, offset, pre } => {
             let plain = if vector(a) { 0x6D00_0000 } else { 0xA900_0000 } | l;
