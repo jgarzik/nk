@@ -110,9 +110,7 @@ Its scope follows what its proof binaries import
 
 - Plug and Play builds the device tree and device stacks and sends the
   start and enumeration requests these drivers expect
-  (`IoInvalidateDeviceRelations`); the power manager answers the power
-  requests they send (`PoRequestPowerIrp`, `PoCallDriver`) for a machine
-  that stays on.
+  (`IoInvalidateDeviceRelations`).
 - Device interrupts are connected (`IoConnectInterruptEx`) through the
   controllers NK drives; DMA goes through the HAL's adapter interface
   (`IoGetDmaAdapter`).

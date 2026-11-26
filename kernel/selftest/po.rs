@@ -219,10 +219,10 @@ fn told() -> [usize; 4] {
 }
 
 /// A bus driver's device and a function driver's attached to it.
-struct Pair {
+pub(super) struct Pair {
     drivers: [*mut DRIVER_OBJECT; 2],
-    pdo: *mut DEVICE_OBJECT,
-    fdo: *mut DEVICE_OBJECT,
+    pub(super) pdo: *mut DEVICE_OBJECT,
+    pub(super) fdo: *mut DEVICE_OBJECT,
 }
 
 /// What stands in for a device node: the power manager only asks
@@ -230,7 +230,7 @@ struct Pair {
 static NODE: AtomicU32 = AtomicU32::new(0);
 
 impl Pair {
-    fn build() -> Result<Self, &'static str> {
+    pub(super) fn build() -> Result<Self, &'static str> {
         let mut pair = Pair {
             drivers: [core::ptr::null_mut(); 2],
             pdo: core::ptr::null_mut(),
@@ -255,7 +255,7 @@ impl Pair {
     /// Say whether the bus driver's device has a device node, as the
     /// Plug and Play manager gives one to a device a bus driver
     /// reports.
-    fn enumerated(&self, has_node: bool) {
+    pub(super) fn enumerated(&self, has_node: bool) {
         let node = if has_node {
             NODE.as_ptr().cast()
         } else {
