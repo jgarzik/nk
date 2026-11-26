@@ -140,10 +140,10 @@ fn enumerate() -> Result<usize, &'static str> {
 
 /// The first disk's device, as `disk.sys` names it; `\??\PhysicalDrive0`
 /// is its link.
-const DISK: &str = "\\Device\\Harddisk0\\DR0";
+pub(super) const DISK: &str = "\\Device\\Harddisk0\\DR0";
 
 /// Whether an object called `name` is in the namespace.
-fn exists(name: &str) -> bool {
+pub(super) fn exists(name: &str) -> bool {
     let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
     match ob::lookup(None, &wide) {
         Ok((body, rest)) => {

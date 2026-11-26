@@ -159,6 +159,47 @@ gate tier has, for each architecture:
   does not exist. The group is selected by name and
   leaves the stack running, so the leak comparison is waived for it
   (`test::keeps_what_it_started`).
+- `x86_64-storage-direct`: the same stack from `storahci.sys` up, on
+  a bus driver of the test's own in place of `pci.sys`
+  (`kernel/selftest/stordirect.rs`, `ahcibus.rs`). The bus driver
+  reports a device under the root and enumerates one child on it: the
+  AHCI controller, found by its class code in PCI configuration
+  space. The child answers what `pci.sys`'s device for that function
+  answers, read out of the pinned `pci.sys`: its identifiers and text,
+  its requirements and boot configuration from its address registers,
+  interrupt pin and message capability, `GUID_BUS_INTERFACE_STANDARD`
+  and the configuration requests, and at its start it programs the
+  address registers, the command register and the message capability.
+  Everything above the bus is as on the real path: the manager
+  installs the controller from the driver database, calls
+  `storahci`'s `AddDevice`, assigns and translates its resources and
+  starts it; Storport enumerates the disk; `disk.sys` is installed and
+  started on it. `stor.direct` requires the bus and the controller's
+  identifiers; `stor.direct.controller` the controller started by
+  `storahci` with its ports, the memory its sixth address register
+  names and one interrupt; `stor.direct.disk` the disk with the
+  reference Windows' instance path, identifiers, service and class,
+  started, and `\Device\Harddisk0\DR0`; `stor.direct.io` the proof of
+  disk I/O (below) on that device, and the scenario holds the image to
+  `disk_expect = "written"`.
+
+  What it does not prove is the path below the controller:
+  `acpi.sys` and `pci.sys` enumerating it, `acpi.sys`'s filter on its
+  stack, and the interfaces of `pci.sys` the test's bus does not
+  have. Storport asks for two of those, the D3cold support interface
+  and the device reset interface; the test's bus completes the
+  request unchanged, as `pci.sys` completes a request for an
+  interface it has no entry for, and Storport goes on without them.
+  The class filters the reference machine registers for disks
+  (`partmgr`, `EhStorClass`) have no image among the boot files and
+  are left out (`doc/DESIGN.md`, What is absent).
+
+  The two paths never both have the controller. The direct path
+  exists only in this group, which runs only when named
+  (`test=stor.direct`), and the group looks at the device tree first:
+  if a device with the controller's PCI device identifier is already
+  there, because `pci.sys` enumerated it, every test of the group is
+  skipped saying so, and no second device is made for the function.
 
 All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
@@ -240,7 +281,9 @@ a test disk that loses a write, writes a sector it was not asked to,
 reads a sector from the wrong place, or reports fewer bytes than it
 moved.
 
-Against Microsoft's disk the proof is `stor.io` of the `x86_64-storage`
+Against Microsoft's disk the proof is `stor.direct.io` of the
+`x86_64-storage-direct` scenario, whose image is held to
+`disk_expect = "written"`, and `stor.io` of the `x86_64-storage`
 scenario. That scenario says `disk_expect = "unchanged"` for as long as
 `stor.io` is skipped; the boot in which the disk device first exists
 writes the write range, and its scenario says `disk_expect = "written"`.

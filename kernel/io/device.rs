@@ -30,6 +30,8 @@ use nk_ntabi::status::*;
 
 /// `KDEVICE_QUEUE.Type` (`DeviceQueueObject`).
 const DEVICE_QUEUE_OBJECT: i16 = 0x14;
+/// Pool tag of a volume parameter block, as Windows spells it.
+const VPB_TAG: u32 = u32::from_le_bytes(*b"Vpb ");
 /// The object's `Size` field is 16 bits.
 const MAX_EXTENSION: u32 = 0xFFFF - size_of::<DEVICE_OBJECT>() as u32;
 
@@ -90,10 +92,36 @@ pub unsafe extern "C" fn IoCreateDevice(
     } else {
         ob::object::create_named(&ob::object::DEVICE_TYPE, total, ob::leaf(&name))
     };
+    // A device a file system can be mounted on has a volume parameter
+    // block from the start (`IopCreateVpb`): zeroed but for its type,
+    // its size and the device it belongs to.
+    let vpb = if device_type_has_vpb(device_type) {
+        let vpb = pool::alloc_zeroed(size_of::<VPB>(), VPB_TAG).cast::<VPB>();
+        if vpb.is_null() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        vpb
+    } else {
+        core::ptr::null_mut()
+    };
     let Some(body) = created else {
+        if !vpb.is_null() {
+            let _ = pool::free(vpb.cast());
+        }
         return STATUS_INSUFFICIENT_RESOURCES;
     };
     let device = body.cast::<DEVICE_OBJECT>();
+    if !vpb.is_null() {
+        // SAFETY: a fresh block of a VPB's size, and the fresh device;
+        // the block is the device's from here, freed with it
+        // (`deleted`).
+        unsafe {
+            (*vpb).Type = IO_TYPE_VPB;
+            (*vpb).Size = size_of::<VPB>() as i16;
+            (*vpb).RealDevice = device;
+            (*device).Vpb = vpb.cast();
+        }
+    }
     // SAFETY: `device` is a fresh, zeroed, exclusively owned block of
     // `total` bytes, 16-byte aligned as the pool guarantees; `driver` and
     // `device_out` are valid per the contract.
@@ -196,6 +224,12 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
         let descriptor = (*body.cast::<DEVICE_OBJECT>()).SecurityDescriptor;
         if !descriptor.is_null() {
             let _ = pool::free(descriptor.cast());
+        }
+        // The block `IoCreateDevice` gave it. No file system mounts on
+        // NK yet, so the block is still the device's own.
+        let vpb = (*body.cast::<DEVICE_OBJECT>()).Vpb;
+        if !vpb.is_null() {
+            let _ = pool::free(vpb.cast());
         }
         crate::po::run_down(body.cast());
     }

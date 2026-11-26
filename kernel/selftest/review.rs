@@ -22,6 +22,7 @@ pub static GROUP: Group = Group {
     names: &[
         "ob.current-thread",
         "io.device-list",
+        "io.device-vpb",
         "io.open-delete",
         "thread.wake-at-dispatch",
         "work.queue-types",
@@ -121,6 +122,53 @@ fn create_devices(_: usize) {
         }
     }
     FINISHED.fetch_add(1, Ordering::AcqRel);
+}
+
+/// A disk device is created with a volume parameter block, as Windows
+/// makes it (zeroed but for its type, its size and its device), which
+/// `disk.sys` writes to; a device of a type nothing mounts on has
+/// none. The block goes with its device.
+fn device_vpb() -> Result<(), &'static str> {
+    use nk_ntabi::io::{IO_TYPE_VPB, VPB};
+    const FILE_DEVICE_DISK: u32 = 0x07;
+    const FILE_DEVICE_UNKNOWN: u32 = 0x22;
+    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+    let driver = pool::alloc_zeroed(size, u32::from_le_bytes(*b"Test")).cast::<DRIVER_OBJECT>();
+    if driver.is_null() {
+        return Err("no memory for a driver object");
+    }
+    let before = pool::usage().blocks;
+    let mut verdict = Ok(());
+    for (kind, expected) in [(FILE_DEVICE_DISK, true), (FILE_DEVICE_UNKNOWN, false)] {
+        let mut device: *mut DEVICE_OBJECT = core::ptr::null_mut();
+        // SAFETY: the test's driver object; the device made is read
+        // and deleted here.
+        unsafe {
+            if IoCreateDevice(driver, 0, core::ptr::null(), kind, 0, 0, &raw mut device) != 0 {
+                verdict = Err("a device could not be created");
+                break;
+            }
+            let vpb = (*device).Vpb.cast::<VPB>();
+            if vpb.is_null() == expected {
+                verdict = Err("only a device a file system mounts on has a parameter block");
+            } else if expected
+                && ((*vpb).Type != IO_TYPE_VPB
+                    || (*vpb).Size != 0x60
+                    || (*vpb).RealDevice != device
+                    || !(*vpb).DeviceObject.is_null()
+                    || (*vpb).Flags != 0
+                    || (*vpb).ReferenceCount != 0)
+            {
+                verdict = Err("the parameter block is not as Windows makes it");
+            }
+            IoDeleteDevice(device);
+        }
+    }
+    if verdict.is_ok() && pool::usage().blocks != before {
+        verdict = Err("a deleted device left its parameter block behind");
+    }
+    let _ = pool::free(driver.cast());
+    verdict
 }
 
 /// Two processors create devices for one driver at once: every device
@@ -679,6 +727,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         ),
         Err(why) => r.fail("io.device-list", format_args!("{why}")),
     }
+    r.check("io.device-vpb", device_vpb);
     match open_delete() {
         Ok(n) => r.ok_with(
             "io.open-delete",

@@ -6,6 +6,7 @@
 //! architecture) makes its tests SKIP.
 
 mod absent;
+mod ahcibus;
 mod base;
 mod bitmap;
 mod callback;
@@ -59,6 +60,7 @@ mod smp;
 mod stack;
 mod startio;
 mod storage;
+mod stordirect;
 mod testdisk;
 mod thread;
 mod timer;
@@ -216,6 +218,7 @@ pub static GROUPS: &[&[&Group]] = &[
     oracle::GROUPS,
     neg::GROUPS,
     storage::GROUPS,
+    stordirect::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
