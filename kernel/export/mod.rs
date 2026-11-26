@@ -122,6 +122,8 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::irp::IoFreeIrp),
     export!(Implemented, io::mdl::IoFreeMdl),
     export!(Implemented, io::file::IoGetDeviceObjectPointer),
+    export!(Implemented, ob::object::IoGetFileObjectGenericMapping),
+    export!(Implemented, io::irp::IoGetRequestorProcess),
     export!(Implemented, io::remlock::IoInitializeRemoveLockEx),
     export!(Implemented, io::remlock::IoReleaseRemoveLockAndWaitEx),
     export!(Implemented, io::remlock::IoReleaseRemoveLockEx),

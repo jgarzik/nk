@@ -289,6 +289,45 @@ pub unsafe extern "C" fn IoFreeIrp(irp: *mut IRP) {
     }
 }
 
+/// [`IoGetRequestorProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetrequestorprocess):
+/// the process of the thread that made the request, or null for a
+/// request no thread made (`Tail.Overlay.Thread` null: an IRP a driver
+/// allocated itself). Read as the pinned kernel reads it:
+///
+/// | The IRP | Answer |
+/// | --- | --- |
+/// | marked [`IRP_ISSUING_PROCESS_IN_OVERLAY`] | `Overlay`'s first word, less its low three bits, whatever the thread |
+/// | no thread | null |
+/// | `ApcEnvironment` original | the thread's own process (`KTHREAD.Process`) |
+/// | `ApcEnvironment` attached | the process the thread is attached to (`KTHREAD.ApcState.Process`), as it stands now |
+/// | any other `ApcEnvironment` | null |
+///
+/// Every thread of NK's is in the System process, so a request NK
+/// sends for a thread answers `PsInitialSystemProcess`. No reference is
+/// taken, as on Windows.
+///
+/// # Safety
+/// `irp` is a live IRP, and its thread, if it names one, a live thread.
+pub unsafe extern "C" fn IoGetRequestorProcess(irp: *mut IRP) -> *mut core::ffi::c_void {
+    use nk_ntabi::thread as thread_layout;
+    // SAFETY: per the contract; both are read field by field.
+    unsafe {
+        if (*irp).Flags & IRP_ISSUING_PROCESS_IN_OVERLAY != 0 {
+            return ((*irp).Overlay[0] as usize & !7) as *mut core::ffi::c_void;
+        }
+        let thread = (*irp).Thread.cast::<u8>();
+        if thread.is_null() {
+            return core::ptr::null_mut();
+        }
+        let process = match (*irp).ApcEnvironment {
+            ORIGINAL_APC_ENVIRONMENT => thread_layout::PROCESS,
+            ATTACHED_APC_ENVIRONMENT => thread_layout::APC_STATE_PROCESS,
+            _ => return core::ptr::null_mut(),
+        };
+        thread.add(process).cast::<*mut core::ffi::c_void>().read()
+    }
+}
+
 /// [`IofCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iofcalldriver):
 /// what `IoCallDriver` compiles to. A driver sends a request to another.
 /// An exception the other's dispatch routine lets out passes through to

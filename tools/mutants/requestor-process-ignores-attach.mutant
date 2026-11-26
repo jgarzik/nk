@@ -1,0 +1,8 @@
+# IoGetRequestorProcess answers the thread's own process for a request
+# made while the thread was attached to another: a file system charges
+# or checks the wrong process.
+scenario: x86_64
+fails: io.requestor-process
+file: kernel/io/irp.rs
+replace:             ATTACHED_APC_ENVIRONMENT => thread_layout::APC_STATE_PROCESS,
+with:             ATTACHED_APC_ENVIRONMENT => thread_layout::PROCESS,

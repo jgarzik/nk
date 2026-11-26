@@ -252,6 +252,8 @@ ldr.lib.bind ok
 ldr.lib.counts ok
 ldr.lib.refused ok
 ldr.lib.as-service ok
+io.requestor-process ok
+io.file-generic-mapping ok
 null.load ok
 null.device ok
 null.open ok

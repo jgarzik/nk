@@ -15,6 +15,7 @@ mod driver_api;
 mod etw;
 mod ex;
 pub mod except;
+mod fsd;
 mod library;
 mod loader;
 mod mslib;
@@ -154,6 +155,7 @@ pub static GROUPS: &[&Group] = &[
     &etw::SYSTEM,
     &loader::GROUP,
     &library::GROUP,
+    &fsd::REQUESTOR,
     &null::GROUP,
     &mslib::GROUP,
     &sioctl::GROUP,

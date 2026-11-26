@@ -1146,6 +1146,13 @@ length, and null fails the probe. For `METHOD_NEITHER` the driver is handed both
 are, and what is there is the driver's to find out. The oracle's
 requests are user mode's, their buffers pages of the user range.
 
+A driver asks whose request it has with `IoGetRequestorProcess`: the
+process of the thread in the IRP, which for every request NK sends is
+the System process, and none for an IRP a driver allocated and gave no
+thread. `IoGetFileObjectGenericMapping` hands a file system the file
+type's own generic mapping, the one an open's desired access is mapped
+with.
+
 A request for user mode is also held to what its handle was granted,
 before any driver sees it (`STATUS_ACCESS_DENIED`): `FILE_READ_DATA` to
 read; `FILE_WRITE_DATA` to write, or `FILE_APPEND_DATA` unless the file
