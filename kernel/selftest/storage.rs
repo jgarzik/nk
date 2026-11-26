@@ -4,9 +4,15 @@
 //!
 //! The group runs alone (`test=stor.load`), on a machine that has the
 //! disk: what it leaves running is the machine's device tree.
+//!
+//! `stor.io` is the proof of disk I/O (`diskio.rs`) against the disk
+//! the stack makes of the machine's data disk. It runs once that
+//! device exists, and until then is skipped, saying so.
 
+use super::diskio;
 use crate::io::service;
 use crate::ldr;
+use crate::ob;
 use crate::pnp::node::{self, State};
 use crate::pnp::registry;
 use crate::test::{Group, Report};
@@ -15,7 +21,7 @@ use alloc::string::String;
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["stor.load", "stor.enumerate"],
+    names: &["stor.load", "stor.enumerate", "stor.io"],
     run,
     manual: true,
 };
@@ -132,6 +138,23 @@ fn enumerate() -> Result<usize, &'static str> {
     Ok(started)
 }
 
+/// The first disk's device, as `disk.sys` names it; `\??\PhysicalDrive0`
+/// is its link.
+const DISK: &str = "\\Device\\Harddisk0\\DR0";
+
+/// Whether an object called `name` is in the namespace.
+fn exists(name: &str) -> bool {
+    let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+    match ob::lookup(None, &wide) {
+        Ok((body, rest)) => {
+            // SAFETY: the look-up's reference.
+            unsafe { ob::object::dereference(body) };
+            rest.is_empty()
+        }
+        Err(_) => false,
+    }
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     crate::test::keeps_what_it_started();
     if let Some(absent) = IMAGES.iter().find(|file| ldr::boot_file(file).is_none()) {
@@ -145,6 +168,17 @@ fn run(r: &mut Report, _: &BootInfo) {
             format_args!("{started} of {} devices of the path started", PATH.len()),
         ),
         Err(why) => r.fail("stor.enumerate", format_args!("{why}")),
+    }
+    if !exists(DISK) {
+        r.skip(
+            "stor.io",
+            format_args!("the disk device {DISK} does not exist yet"),
+        );
+        return;
+    }
+    match diskio::disk_io(DISK) {
+        Ok(counts) => r.ok_with("stor.io", format_args!("{counts}")),
+        Err(why) => r.fail("stor.io", format_args!("{why}")),
     }
 }
 

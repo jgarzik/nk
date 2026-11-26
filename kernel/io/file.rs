@@ -1,6 +1,7 @@
-//! The requestor side of I/O: open a name, read, write, send control
-//! codes, close. This is what the system services `NtCreateFile`,
-//! `NtCreateNamedPipeFile`, `NtCreateMailslotFile`, `NtReadFile`,
+//! The requestor side of I/O: open a name, read, write, flush, send
+//! control codes, close. This is what the system services
+//! `NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`,
+//! `NtReadFile`, `NtWriteFile`, `NtFlushBuffersFile`,
 //! `NtDeviceIoControlFile`, `NtFsControlFile` and `NtClose` do on
 //! Windows; the kernel's self-tests are the only caller so far.
 //!
@@ -62,8 +63,6 @@ pub enum IoError {
         dispatch_status: NTSTATUS,
         completed: NTSTATUS,
     },
-    /// The device asks for a buffer method not implemented yet.
-    UnsupportedMethod,
     /// The I/O manager cannot use a buffer of the request: no driver
     /// saw it, and it fails with this status.
     Refused(NTSTATUS),
@@ -987,15 +986,30 @@ fn refused(result: Result<IoResult, IoError>) -> Result<IoResult, IoError> {
 }
 
 /// Read or write. `buffer` is filled by a read and sent by a write.
+/// The transfer is at byte `offset` of the file, or without one where
+/// the file object says its position is (`CurrentByteOffset`).
+///
+/// How the buffer reaches the driver is the choice of the device the
+/// request is sent to, as on Windows: copied through a system buffer
+/// (`DO_BUFFERED_IO`), described by an MDL with its pages locked
+/// (`DO_DIRECT_IO`), or as the address it is. A transfer of no bytes
+/// has neither system buffer nor MDL.
 ///
 /// # Safety
 /// A kernel-mode `buffer` must be valid for its length (writable for a
 /// read) until the returned request has been waited for.
-unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<Pending, IoError> {
+unsafe fn transfer(
+    handle: u64,
+    major: u8,
+    buffer: Buffer,
+    offset: Option<i64>,
+    mode: i8,
+) -> Result<Pending, IoError> {
     let len = buffer.len;
     // SAFETY: `file` is an open file, referenced.
-    let parameters =
-        |file: *mut FILE_OBJECT| unsafe { rw_parameters(len as u32, (*file).CurrentByteOffset) };
+    let parameters = |file: *mut FILE_OBJECT| unsafe {
+        rw_parameters(len as u32, offset.unwrap_or((*file).CurrentByteOffset))
+    };
     // SAFETY: per the contract; `irp` is fresh.
     let build = |_, irp: *mut IRP| unsafe {
         if mode != KERNEL_MODE {
@@ -1025,7 +1039,21 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
                 }
             }
         } else if flags & DO_DIRECT_IO != 0 {
-            return Err(IoError::UnsupportedMethod);
+            if len != 0 {
+                // The MDL is the request's from here: final completion
+                // unlocks and frees it, as does giving the request up.
+                let described = mdl::IoAllocateMdl(buffer.ptr().cast(), len as u32, 0, 0, irp);
+                if described.is_null() {
+                    return Err(IoError::NoMemory);
+                }
+                // A read writes the pages; a write reads them.
+                let operation = if major == IRP_MJ_READ {
+                    IO_WRITE_ACCESS
+                } else {
+                    IO_READ_ACCESS
+                };
+                mdl::probe_and_lock(described, mode, operation).map_err(IoError::Refused)?;
+            }
         } else {
             // Neither: the driver gets the caller's buffer as it is.
             (*irp).UserBuffer = buffer.ptr().cast();
@@ -1048,6 +1076,44 @@ pub fn read(handle: u64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
     unsafe { read_start(handle, buffer) }?.wait()
 }
 
+/// Read up to `buffer.len()` bytes at byte `offset` of the file, as
+/// `NtReadFile` does when it is given a `ByteOffset`.
+pub fn read_at(handle: u64, offset: i64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
+    let buffer = Buffer::of(buffer);
+    // SAFETY: a valid writable slice, borrowed until the request has
+    // been waited for, here.
+    unsafe { transfer(handle, IRP_MJ_READ, buffer, Some(offset), KERNEL_MODE) }?.wait()
+}
+
+/// Write `buffer` at byte `offset` of the file, as `NtWriteFile` does
+/// when it is given a `ByteOffset`.
+pub fn write_at(handle: u64, offset: i64, buffer: &[u8]) -> Result<IoResult, IoError> {
+    let buffer = Buffer::of(buffer);
+    // SAFETY: a write only reads the buffer, which is borrowed until
+    // the request has been waited for, here.
+    unsafe { transfer(handle, IRP_MJ_WRITE, buffer, Some(offset), KERNEL_MODE) }?.wait()
+}
+
+/// Have the file's device write out what it holds back
+/// (`IRP_MJ_FLUSH_BUFFERS`, what `NtFlushBuffersFile` sends): a request
+/// with no buffer and no parameters. User mode's handle must have been
+/// granted the access to write or append; kernel mode's is asked for
+/// nothing.
+pub fn flush(handle: u64) -> Result<IoResult, IoError> {
+    // SAFETY: the request names no buffer.
+    unsafe {
+        send(
+            handle,
+            IRP_MJ_FLUSH_BUFFERS,
+            |_| [0; 4],
+            KERNEL_MODE,
+            Needs::Write,
+            |_, _| Ok(()),
+        )
+    }?
+    .wait()
+}
+
 /// Send a read without waiting for it.
 ///
 /// # Safety
@@ -1056,14 +1122,14 @@ pub fn read(handle: u64, buffer: &mut [u8]) -> Result<IoResult, IoError> {
 pub unsafe fn read_start(handle: u64, buffer: &mut [u8]) -> Result<Pending, IoError> {
     // SAFETY: `buffer` is a valid writable slice; the rest per the
     // contract.
-    unsafe { transfer(handle, IRP_MJ_READ, Buffer::of(buffer), KERNEL_MODE) }
+    unsafe { transfer(handle, IRP_MJ_READ, Buffer::of(buffer), None, KERNEL_MODE) }
 }
 
 /// Write `buffer`.
 pub fn write(handle: u64, buffer: &[u8]) -> Result<IoResult, IoError> {
     // SAFETY: a write only reads the buffer, which is borrowed until
     // the request has been waited for, here.
-    unsafe { transfer(handle, IRP_MJ_WRITE, Buffer::of(buffer), KERNEL_MODE) }?.wait()
+    unsafe { transfer(handle, IRP_MJ_WRITE, Buffer::of(buffer), None, KERNEL_MODE) }?.wait()
 }
 
 /// Read or write (`major`) on behalf of user mode, as `NtReadFile` and
@@ -1073,7 +1139,7 @@ pub fn write(handle: u64, buffer: &[u8]) -> Result<IoResult, IoError> {
 /// append.
 pub fn user_transfer(handle: u64, major: u8, buffer: Buffer) -> Result<IoResult, IoError> {
     // SAFETY: a user-mode buffer is only used through checks.
-    let pending = unsafe { transfer(handle, major, buffer, USER_MODE) };
+    let pending = unsafe { transfer(handle, major, buffer, None, USER_MODE) };
     refused(pending.and_then(Pending::wait))
 }
 
