@@ -63,6 +63,7 @@ seh.cross.nested ok
 seh.fault.read ok
 seh.fault.write ok
 seh.fault.execute ok
+seh.fault.execute-null ok
 seh.fault.others ok
 seh.fault.continue ok
 seh.probe ok

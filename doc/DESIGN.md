@@ -737,7 +737,8 @@ in a driver), a fast-fail, a stack overflow. The decision is
 
 A call through a pointer that leads nowhere faults at its target, in no
 image: that frame is undone as a leaf's, and the search goes on in the
-caller.
+caller. A null pointer is no exception: address zero ends a stack only
+as a return address, never as the place a fault stopped the code.
 
 NK's own accesses to memory that may not be there (a requestor's
 buffer) are all one assembly routine, `mm::user::copy`. A fault in its

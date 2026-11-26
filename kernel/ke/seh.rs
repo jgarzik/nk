@@ -359,9 +359,11 @@ pub unsafe fn dispatch(record: *mut EXCEPTION_RECORD, context: *mut Context, int
     // told they are being asked a second time.
     let mut nested_frame = 0;
     loop {
-        if cpu::pc(&current) == 0 {
-            // The end of a stack: a thread's first frame. Every thread
-            // is a system thread.
+        if cpu::pc(&current) == 0 && !interrupted {
+            // The end of a stack: a thread's first frame, which returns
+            // to address zero. Every thread is a system thread. Code
+            // stopped at address zero is something else: a call through
+            // a null pointer, whose caller is searched.
             unhandled(
                 Unhandled::SystemThread,
                 record,
@@ -475,7 +477,7 @@ pub unsafe fn unwind(
     let flags = unsafe { (*record).ExceptionFlags };
     let mut interrupted = false;
     loop {
-        if cpu::pc(&current) == 0 {
+        if cpu::pc(&current) == 0 && !interrupted {
             kd::bugcheck(format_args!(
                 "0xC0000029 STATUS_INVALID_UNWIND_TARGET: no frame at {target_frame:#x} to unwind to"
             ));
