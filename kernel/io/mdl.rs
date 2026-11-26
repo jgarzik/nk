@@ -348,8 +348,12 @@ pub unsafe extern "C" fn MmMapLockedPagesSpecifyCache(
 
 /// [`MmUnmapLockedPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunmaplockedpages):
 /// remove the system mapping `MmMapLockedPagesSpecifyCache` made of the
-/// MDL's pages. For an MDL built over non-paged memory there is none to
-/// remove. Unmapping what is not the MDL's mapping stops the system.
+/// MDL's pages; the MDL is then as before it was mapped, a partial MDL
+/// included (`MmPrepareMdlForReuse`, which class drivers do between
+/// the pieces of a transfer). For an MDL built over non-paged memory
+/// there is none to remove. Unmapping what is not the MDL's own
+/// mapping stops the system: another address, or the mapping a partial
+/// MDL shares with its source.
 ///
 /// # Safety
 /// `mdl` must be a live MDL.
@@ -357,13 +361,18 @@ pub unsafe extern "C" fn MmUnmapLockedPages(base_address: *mut c_void, mdl: *mut
     // SAFETY: per the contract.
     unsafe {
         let flags = (*mdl).MdlFlags;
-        if flags & MDL_MAPPED_TO_SYSTEM_VA != 0 && (*mdl).MappedSystemVa == base_address {
+        if flags & MDL_SOURCE_IS_NONPAGED_POOL != 0 {
+            return;
+        }
+        let shared = flags & (MDL_PARTIAL | MDL_PARTIAL_HAS_BEEN_MAPPED) == MDL_PARTIAL;
+        if flags & MDL_MAPPED_TO_SYSTEM_VA != 0 && (*mdl).MappedSystemVa == base_address && !shared
+        {
             let va = base_address as u64 & !(PAGE_SIZE as u64 - 1);
             map::unmap(va, pages(mdl));
             map::free_va(va, pages(mdl));
             (*mdl).MappedSystemVa = core::ptr::null_mut();
-            (*mdl).MdlFlags &= !MDL_MAPPED_TO_SYSTEM_VA;
-        } else if flags & MDL_SOURCE_IS_NONPAGED_POOL == 0 {
+            (*mdl).MdlFlags &= !(MDL_MAPPED_TO_SYSTEM_VA | MDL_PARTIAL_HAS_BEEN_MAPPED);
+        } else {
             kd::bugcheck(format_args!(
                 "MmUnmapLockedPages: {base_address:p} is not where MDL {mdl:p} is mapped"
             ));

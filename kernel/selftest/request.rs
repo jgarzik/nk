@@ -675,8 +675,37 @@ fn partial_mdl_test() -> Result<u32, &'static str> {
             {
                 return Err("a partial MDL's mapping is not the part of the buffer it names");
             }
-            // `MmPrepareMdlForReuse`, as `IoFreeMdl` does it: freed and
-            // made again, the MDL has no mapping left.
+            // `MmPrepareMdlForReuse`, as classpnp does it between two
+            // pieces of a transfer: the part's own mapping is taken
+            // down, and the MDL is as it was before it was mapped; it
+            // then describes another part, mapped again.
+            mdl::MmUnmapLockedPages(view.cast(), part);
+            if (*part).MdlFlags & (MDL_MAPPED_TO_SYSTEM_VA | MDL_PARTIAL_HAS_BEEN_MAPPED) != 0
+                || !(*part).MappedSystemVa.is_null()
+            {
+                return Err("an unmapped partial MDL still says it has a mapping of its own");
+            }
+            mdl::IoBuildPartialMdl(source, part, va.add(0x400).cast(), 0x1000);
+            let second = stack::mapped(part);
+            if second.is_null() || second.read() != va.add(0x400).read() {
+                return Err("a partial MDL could not be used for a second part");
+            }
+            va.add(0x400).write(0x33);
+            if second.read() != 0x33 {
+                return Err("a reused partial MDL does not map the part it names");
+            }
+            mdl::MmUnmapLockedPages(second.cast(), part);
+            // `IoFreeMdl` prepares the MDL for reuse too: freed mapped
+            // or unmapped, and made again, it has no mapping left.
+            mdl::IoFreeMdl(part);
+            let part = mdl::IoAllocateMdl(va.cast(), LEN as u32, 0, 0, core::ptr::null_mut());
+            if part.is_null() {
+                return Err("no memory for an MDL");
+            }
+            mdl::IoBuildPartialMdl(source, part, at.cast(), 0x900);
+            if stack::mapped(part).is_null() {
+                return Err("a partial MDL was not mapped");
+            }
             mdl::IoFreeMdl(part);
             let part = mdl::IoAllocateMdl(va.cast(), LEN as u32, 0, 0, core::ptr::null_mut());
             if part.is_null() {
