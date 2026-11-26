@@ -511,6 +511,26 @@ timer's. NK's decisions:
   that waits without cancelling. So is a period outside the
   documented range.
 
+### UUIDs
+
+[`ExUuidCreate`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exuuidcreate)
+makes version-1 UUIDs ([RFC 4122](https://www.rfc-editor.org/rfc/rfc4122)):
+a time, a clock sequence, a node.
+
+- **The node is random and says so.** NK has no network card whose
+  address could be the node, so every UUID is unique on this machine
+  only and every call returns `RPC_NT_UUID_LOCAL_ONLY`, a success
+  status. The node carries both the multicast bit of an 802 address,
+  as the RFC asks of a made-up node, and the top bit of its first
+  byte.
+- **Each UUID is later than the last.** It carries the wall clock's
+  time, or one unit more than the UUID before it if the clock has not
+  moved or has gone back. So `STATUS_RETRY`, Windows' answer to a
+  caller faster than its clock, is never returned.
+- The clock sequence and the node are fixed at the first call, from
+  the wall clock, the cycle counter and the time since boot: enough to
+  tell boots and machines apart most of the time, and no secret.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:

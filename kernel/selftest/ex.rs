@@ -1,7 +1,7 @@
 //! Tests of the executive's locks, lists and timers, called the way a
 //! driver calls them: through the exports, on memory of the caller's.
 
-use crate::ex::{lookaside, pushlock, resource, slist, timer};
+use crate::ex::{lookaside, pushlock, resource, slist, timer, uuid};
 use crate::mm::pool;
 use crate::test::{Group, Report};
 use core::fmt::Display;
@@ -30,6 +30,8 @@ pub static GROUP: Group = Group {
         "ex.timer.delete",
         "ex.timer.wait",
         "ex.pool.raise",
+        "ex.uuid.fields",
+        "ex.uuid.unique",
     ],
     run,
     manual: false,
@@ -122,6 +124,8 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     r.check("ex.timer.wait", timer::wait_test);
     r.check("ex.pool.raise", pool_raise);
+    r.check("ex.uuid.fields", uuid::fields_test);
+    counted(r, "ex.uuid.unique", "UUIDs:", uuid::unique_test());
 }
 
 /// More than any pool holds.

@@ -69,6 +69,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
+| 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
@@ -120,6 +121,8 @@ Why this order:
   it: the waiters' events are set, and so the ready queues locked,
   after it is dropped. The queues share a rank and no two are held
   together.
+- The UUID lock is held while one UUID's time is chosen, reading the
+  clock and nothing else; nothing is taken inside it.
 - A timer table's lock owns a pending timer's links, due time,
   processor and `Inserted` bit. Expiry holds it while it takes a due
   timer out and puts a periodic one back, then drops it before queueing

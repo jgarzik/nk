@@ -139,6 +139,8 @@ ex.timer.periodic ok
 ex.timer.delete ok
 ex.timer.wait ok
 ex.pool.raise ok
+ex.uuid.fields ok
+ex.uuid.unique ok
 io.pend-dpc ok
 io.pend-timer ok
 io.pend-work ok

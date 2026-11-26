@@ -24,6 +24,15 @@ pub struct SLIST_HEADER {
     pub Region: u64,
 }
 
+/// `GUID`, which `UUID` is another name for.
+#[repr(C)]
+pub struct GUID {
+    pub Data1: u32,
+    pub Data2: u16,
+    pub Data3: u16,
+    pub Data4: [u8; 8],
+}
+
 /// `EXT_DELETE_CALLBACK`: what a driver may ask `ExDeleteTimer` to call
 /// once the timer is gone.
 pub type EXT_DELETE_CALLBACK = unsafe extern "C" fn(*mut c_void);
@@ -175,6 +184,10 @@ const _: () = {
     assert!(offset_of!(IO_WORKITEM, Context) == 0x30);
     assert!(offset_of!(IO_WORKITEM, ActivityId) == 0x44);
 
+    assert!(size_of::<GUID>() == 0x10);
+    assert!(offset_of!(GUID, Data2) == 0x04);
+    assert!(offset_of!(GUID, Data3) == 0x06);
+    assert!(offset_of!(GUID, Data4) == 0x08);
     assert!(size_of::<EXT_DELETE_PARAMETERS>() == 0x18);
     assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteCallback) == 0x08);
     assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteContext) == 0x10);
