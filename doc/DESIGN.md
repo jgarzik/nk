@@ -1194,8 +1194,8 @@ does what the query says. NK's decisions:
 
 - **The table is copied first**: every entry up to the one that ends
   it, names and default data too (a string default of length zero is
-  measured), and the environment block. A routine that rewrites the
-  table changes nothing for the call in progress.
+  measured). A routine that rewrites the table changes nothing for the
+  call in progress.
 - **The key is found once** and counted as open for the length of the
   call. Each entry reads the registry afresh, holding the lock for the
   read alone, so a routine may open, change or delete any key, this one
@@ -1216,6 +1216,12 @@ does what the query says. NK's decisions:
   buffer, a buffer that states its size) is too small. Nothing is
   stored there, the table goes on, and the call succeeds if nothing
   else fails.
+- **Nothing is expanded**: the environment a caller passes is not
+  read. A `REG_EXPAND_SZ`, value or default, asked for without
+  `RTL_QUERY_REGISTRY_NOEXPAND` ends the call with
+  `STATUS_INVALID_PARAMETER`, which is what the kernel of Windows 10
+  answers even when the environment has the variable. With the flag it
+  is delivered as stored.
 - **`RelativeTo`**: `RTL_REGISTRY_OPTIONAL` changes nothing, a key that
   is not there fails the call. `RTL_REGISTRY_USER` is
   `\Registry\User\.Default`: the system is the only user.

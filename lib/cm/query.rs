@@ -48,8 +48,6 @@ const REG_NONE: u32 = 0;
 const REG_SZ: u32 = 1;
 const REG_EXPAND_SZ: u32 = 2;
 const REG_MULTI_SZ: u32 = 7;
-const PERCENT: u16 = 0x25;
-const EQUALS: u16 = 0x3D;
 
 /// One `RTL_QUERY_REGISTRY_TABLE` entry, copied from the caller.
 #[derive(Debug, Clone, Copy)]
@@ -117,8 +115,8 @@ pub enum Action<'a> {
 /// Why a query stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueryError {
-    /// An entry's flags and members do not go together
-    /// (`STATUS_INVALID_PARAMETER`).
+    /// An entry's flags and members do not go together, or a
+    /// `REG_EXPAND_SZ` was to be expanded (`STATUS_INVALID_PARAMETER`).
     InvalidParameter,
     /// A subkey or a required value is not there
     /// (`STATUS_OBJECT_NAME_NOT_FOUND`).
@@ -126,7 +124,7 @@ pub enum QueryError {
     /// A value stored directly has another type than the entry expects
     /// (`STATUS_OBJECT_TYPE_MISMATCH`).
     TypeMismatch,
-    /// No memory to expand a string (`STATUS_INSUFFICIENT_RESOURCES`).
+    /// No memory for a value's name (`STATUS_INSUFFICIENT_RESOURCES`).
     NoMemory,
     /// Reading the registry, or doing an action, failed with this
     /// status.
@@ -169,60 +167,6 @@ pub fn buffer_data_offset(declared: i32, len: usize) -> Option<usize> {
 pub fn string_to_store(text: &[u8]) -> &[u8] {
     let whole = &text[..text.len() & !1];
     whole.strip_suffix(&[0, 0]).unwrap_or(whole)
-}
-
-/// The value of `name` in an environment block: `NAME=value` strings,
-/// each ended by a zero, the last by two.
-fn variable<'a>(environment: &'a [u16], name: &[u16]) -> Option<&'a [u16]> {
-    environment
-        .split(|&unit| unit == 0)
-        .take_while(|line| !line.is_empty())
-        .find_map(|line| {
-            // A name may start with `=`, as the names of the per-drive
-            // directories do.
-            let equals = 1 + line[1..].iter().position(|&unit| unit == EQUALS)?;
-            nk_rtl::names_equal(&line[..equals], name).then(|| &line[equals + 1..])
-        })
-}
-
-/// A `REG_EXPAND_SZ` string with each `%NAME%` replaced by the
-/// variable's value from `environment`; a name that is no variable
-/// stays as written. The result ends with a terminator.
-fn expand(data: &[u8], environment: &[u16]) -> Result<Vec<u8>, QueryError> {
-    let no_memory = |_| QueryError::NoMemory;
-    let mut text: Vec<u16> = Vec::new();
-    text.try_reserve(data.len() / 2).map_err(no_memory)?;
-    let (units, _) = data.as_chunks::<2>();
-    text.extend(
-        units
-            .iter()
-            .map(|&unit| u16::from_le_bytes(unit))
-            .take_while(|&unit| unit != 0),
-    );
-    let mut out: Vec<u8> = Vec::new();
-    let mut push = |units: &[u16]| -> Result<(), QueryError> {
-        out.try_reserve(units.len() * 2).map_err(no_memory)?;
-        out.extend(units.iter().flat_map(|unit| unit.to_le_bytes()));
-        Ok(())
-    };
-    let mut rest = &text[..];
-    while let Some(open) = rest.iter().position(|&unit| unit == PERCENT) {
-        push(&rest[..open])?;
-        let after = &rest[open + 1..];
-        let Some(close) = after.iter().position(|&unit| unit == PERCENT) else {
-            // A percent sign on its own.
-            rest = &rest[open..];
-            break;
-        };
-        match variable(environment, &after[..close]) {
-            Some(value) => push(value)?,
-            None => push(&rest[open..open + close + 2])?,
-        }
-        rest = &after[close + 1..];
-    }
-    push(rest)?;
-    push(&[0])?;
-    Ok(out)
 }
 
 /// The length of the string a `REG_MULTI_SZ` starts with, terminator
@@ -321,11 +265,15 @@ impl Query {
 
     /// The next thing to do for `table`, the caller's; `None` when
     /// there is nothing more. The table ends at the first entry with
-    /// neither routine nor name, or where the copy does. `environment`
-    /// is the block that `REG_EXPAND_SZ` values are expanded from,
-    /// empty if the caller gave none. `done` says how the action
-    /// before went: the status it failed with, or `Ok` (as before the
-    /// first).
+    /// neither routine nor name, or where the copy does. `done` says
+    /// how the action before went: the status it failed with, or `Ok`
+    /// (as before the first).
+    ///
+    /// Nothing is expanded. A `REG_MULTI_SZ` goes out one string at a
+    /// time unless the entry says [`NOEXPAND`]; a `REG_EXPAND_SZ`
+    /// without that flag ends the query (`InvalidParameter`), value or
+    /// default: the kernel of Windows 10 answers so, even given an
+    /// environment that has the variable.
     ///
     /// The query stops at the first entry that fails; a value that was
     /// not delivered for want of room ([`STATUS_BUFFER_TOO_SMALL`]) is
@@ -335,7 +283,6 @@ impl Query {
     pub fn next<'a, T: Table + ?Sized, R: Reader>(
         &'a mut self,
         table: &'a T,
-        environment: &[u16],
         reader: &mut R,
         done: Result<(), i32>,
     ) -> Result<Option<Action<'a>>, QueryError> {
@@ -346,7 +293,7 @@ impl Query {
             Err(status) => return Err(QueryError::Failed(status)),
             Ok(()) => {}
         }
-        let Some(step) = self.advance(table, environment, reader)? else {
+        let Some(step) = self.advance(table, reader)? else {
             return Ok(None);
         };
         Ok(self.action(table, step))
@@ -361,7 +308,6 @@ impl Query {
     fn advance<T: Table + ?Sized, R: Reader>(
         &mut self,
         table: &T,
-        environment: &[u16],
         reader: &mut R,
     ) -> Result<Option<Step>, QueryError> {
         self.delivered = false;
@@ -402,7 +348,7 @@ impl Query {
                             let found = reader
                                 .value(self.subkey_name(table), name)
                                 .map_err(QueryError::Failed)?;
-                            self.take(&entry, name, found, environment)?;
+                            self.take(&entry, name, found)?;
                         }
                         None if flags & NOVALUE != 0 => {
                             self.stage = Stage::Done;
@@ -423,7 +369,7 @@ impl Query {
                     match next {
                         Some((name, value)) => {
                             self.any = true;
-                            self.take(&entry, &name, Some(value), environment)?;
+                            self.take(&entry, &name, Some(value))?;
                         }
                         None if !self.any && flags & REQUIRED != 0 => {
                             return Err(QueryError::NotFound);
@@ -483,7 +429,6 @@ impl Query {
         entry: &Entry<'_>,
         name: &[u16],
         found: Option<Value>,
-        environment: &[u16],
     ) -> Result<(), QueryError> {
         let flags = entry.flags;
         let default_type = entry.default_type & 0xFF;
@@ -521,10 +466,9 @@ impl Query {
             return Ok(());
         }
         if kind == REG_EXPAND_SZ {
-            self.data = expand(self.data(entry), environment)?;
-            self.default = false;
-            self.kind = REG_SZ;
-        } else if kind == REG_MULTI_SZ {
+            return Err(QueryError::InvalidParameter);
+        }
+        if kind == REG_MULTI_SZ {
             self.kind = REG_SZ;
             self.stage = Stage::Strings { at: 0, slot: 0 };
         }
@@ -736,17 +680,17 @@ mod tests {
     /// Run a table against a registry; what was done, and how it ended.
     /// Work through `table` as the kernel does: ask for an action, do
     /// it, say how it went.
-    fn query(table: &[Entry<'_>], environment: &[u16], fake: &mut Fake) -> Result<(), QueryError> {
+    fn query(table: &[Entry<'_>], fake: &mut Fake) -> Result<(), QueryError> {
         let mut query = Query::default();
         let mut done = Ok(());
-        while let Some(action) = query.next(table, environment, fake, done)? {
+        while let Some(action) = query.next(table, fake, done)? {
             done = fake.act(action);
         }
         Ok(())
     }
 
     fn run(fake: &mut Fake, table: &[Entry<'_>]) -> (Vec<String>, Result<(), QueryError>) {
-        let result = query(table, &[], fake);
+        let result = query(table, fake);
         (std::mem::take(&mut fake.done), result)
     }
 
@@ -890,39 +834,48 @@ mod tests {
     }
 
     #[test]
-    fn an_expandable_string_is_expanded_from_the_environment() {
+    fn an_expandable_string_is_delivered_only_as_stored() {
         let name = w("Path");
-        let value = wide("%SystemRoot%\\x;%none%;%%;%=C:%;50%\0tail");
-        let mut fake = top(&[("Path", REG_EXPAND_SZ, &value)]);
-        let environment = w("=C:=C:\\dir\0SYSTEMROOT=C:\\Windows\0Empty=\0\0Hidden=1\0");
-        let table = [entry(true, 0, Some(&name))];
-        assert_eq!(query(&table, &environment, &mut fake), Ok(()));
-        // Names are matched whatever their case; what is no variable
-        // stays; the string ends at its terminator and is a plain
-        // string now.
-        assert_eq!(
-            fake.done,
-            ["call 0 Path 1 'C:\\Windows\\x;%none%;%%;C:\\dir;50%|'"]
-        );
-        // Variables after the block's end are not seen.
-        let hidden = wide("%Hidden%|%Empty%|\0");
-        let mut fake = top(&[("Path", REG_EXPAND_SZ, &hidden)]);
-        assert_eq!(query(&table, &environment, &mut fake), Ok(()));
-        assert_eq!(fake.done, ["call 0 Path 1 '%Hidden%|||'"]);
+        let value = wide("%SystemRoot%\\x\0");
+        let mut fake = top(&[("Path", REG_EXPAND_SZ, &value), ("N", REG_DWORD, &[1])]);
         // Asked for as stored, it keeps its type and its text.
-        let mut fake = top(&[("Path", REG_EXPAND_SZ, &value)]);
-        let raw = [entry(true, NOEXPAND, Some(&name))];
-        assert_eq!(query(&raw, &environment, &mut fake), Ok(()));
-        assert_eq!(
-            std::mem::take(&mut fake.done),
-            ["call 0 Path 2 '%SystemRoot%\\x;%none%;%%;%=C:%;50%|tail'"]
-        );
-        // Without an environment nothing is a variable.
-        let (done, _) = run(&mut fake, &table);
-        assert_eq!(
-            done,
-            ["call 0 Path 1 '%SystemRoot%\\x;%none%;%%;%=C:%;50%|'"]
-        );
+        let (done, result) = run(&mut fake, &[entry(true, NOEXPAND, Some(&name))]);
+        assert_eq!(result, Ok(()));
+        assert_eq!(done, ["call 0 Path 2 '%SystemRoot%\\x|'"]);
+        let (done, _) = run(&mut fake, &[entry(false, DIRECT | NOEXPAND, Some(&name))]);
+        assert_eq!(done, ["string 0+0 '%SystemRoot%\\x|'"]);
+        // To be expanded, it ends the query: by name, to a routine or
+        // stored directly, and among every value of the key.
+        let after = entry(true, NOVALUE, None);
+        for wanting in [
+            entry(true, 0, Some(&name)),
+            entry(false, DIRECT, Some(&name)),
+            entry(false, 0, Some(&name)),
+        ] {
+            let (done, result) = run(&mut fake, &[wanting, after]);
+            assert_eq!((done.len(), result), (0, Err(QueryError::InvalidParameter)));
+        }
+        let (done, result) = run(&mut fake, &[entry(true, 0, None), after]);
+        assert_eq!((done.len(), result), (0, Err(QueryError::InvalidParameter)));
+        fake.keys[0].1.reverse();
+        let (done, result) = run(&mut fake, &[entry(true, 0, None), after]);
+        assert_eq!(result, Err(QueryError::InvalidParameter));
+        assert_eq!(done, ["call 0 N 4 [1]"]);
+        // So does a default of that type.
+        let missing = w("Missing");
+        let default = Entry {
+            default_type: REG_EXPAND_SZ,
+            default_data: &value,
+            ..entry(true, 0, Some(&missing))
+        };
+        let (done, result) = run(&mut fake, &[default]);
+        assert_eq!((done.len(), result), (0, Err(QueryError::InvalidParameter)));
+        let as_stored = Entry {
+            flags: NOEXPAND,
+            ..default
+        };
+        let (done, _) = run(&mut fake, &[as_stored]);
+        assert_eq!(done, ["call 0 Missing 2 '%SystemRoot%\\x|'"]);
     }
 
     #[test]
@@ -1006,13 +959,12 @@ mod tests {
         let list = wide("a\0b\0\0");
         let mut fake = top(&[
             ("Text", REG_SZ, &hello),
-            ("Expand", REG_EXPAND_SZ, &hello),
             ("List", REG_MULTI_SZ, &list),
             ("Number", REG_DWORD, &[1, 2, 3, 4]),
             ("Byte", REG_BINARY, &[9]),
             ("Blob", REG_BINARY, &[1, 2, 3, 4, 5]),
         ]);
-        let names = ["Text", "Expand", "List", "Number", "Byte", "Blob"].map(w);
+        let names = ["Text", "List", "Number", "Byte", "Blob"].map(w);
         let table: Vec<Entry<'_>> = names
             .iter()
             .map(|name| entry(false, DIRECT, Some(name)))
@@ -1023,19 +975,18 @@ mod tests {
             done,
             [
                 "string 0+0 'hello|'",
-                "string 1+0 'hello|'",
                 // Each string in the next structure...
-                "string 2+0 'a|'",
-                "string 2+1 'b|'",
-                "small 3 [1, 2, 3, 4]",
-                "small 4 [9]",
-                "buffer 5 3 [1, 2, 3, 4, 5]"
+                "string 1+0 'a|'",
+                "string 1+1 'b|'",
+                "small 2 [1, 2, 3, 4]",
+                "small 3 [9]",
+                "buffer 4 3 [1, 2, 3, 4, 5]"
             ]
         );
         // ...or the whole list in one.
         let (done, _) = run(
             &mut fake,
-            &[entry(false, DIRECT | NOEXPAND, Some(&names[2]))],
+            &[entry(false, DIRECT | NOEXPAND, Some(&names[1]))],
         );
         assert_eq!(done, ["string 0+0 'a|b||'"]);
         // A default is stored like a value.
@@ -1053,10 +1004,10 @@ mod tests {
         let (done, result) = run(&mut fake, &table);
         assert_eq!(done.len(), 1);
         assert_eq!(result, Err(QueryError::Failed(STATUS_UNSUCCESSFUL)));
-        for at in [1, 4, 5, 7] {
+        for at in [1, 3, 4, 6] {
             fake.fail = Some((at, STATUS_BUFFER_TOO_SMALL));
             let (done, result) = run(&mut fake, &table);
-            assert_eq!((done.len(), result), (7, Ok(())), "action {at}");
+            assert_eq!((done.len(), result), (6, Ok(())), "action {at}");
         }
         fake.fail = None;
         // Direct storing takes a name, no routine and no subkey.
@@ -1209,7 +1160,7 @@ mod tests {
         // like any other: nothing was delivered yet.
         let mut query = Query::new();
         assert_eq!(
-            query.next(&table[..], &[], &mut fake, Err(STATUS_BUFFER_TOO_SMALL)),
+            query.next(&table[..], &mut fake, Err(STATUS_BUFFER_TOO_SMALL)),
             Err(QueryError::Failed(STATUS_BUFFER_TOO_SMALL))
         );
     }

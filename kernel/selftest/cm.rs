@@ -1108,7 +1108,8 @@ fn calling(flags: u32, name: Option<&[u16]>, tag: usize) -> RTL_QUERY_REGISTRY_T
 }
 
 /// Run `entries`, ended as a table must be, on the key `path` names
-/// from `relative_to`, with the environment the tests expand from.
+/// from `relative_to`, with an environment that has the variable the
+/// tests' expandable string names: nothing is expanded all the same.
 fn run_table(
     export: Export,
     relative_to: u32,
@@ -1338,10 +1339,10 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         return Err("a string was not stored in the caller's buffer only if it has room");
     }
 
-    // Expanded from the environment, unless asked for as stored; a
-    // variable the environment has not stays as written. Several
-    // strings as one, or each in the next counted string. A default
-    // string whose length is left to be measured.
+    // A string to be expanded is refused, as on Windows, and nothing
+    // stored; asked for as stored, it is stored. Several strings as
+    // one, or each in the next counted string. A default string whose
+    // length is left to be measured.
     let mut strings = [NO_STRING; 3];
     let mut one_string = |entry: RTL_QUERY_REGISTRY_TABLE| {
         let status = on_key(export, &[entry]);
@@ -1364,14 +1365,14 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
     ];
     if expanded
         != [
-            (0, string_of("value\\x%NOPE%")),
+            (INVALID_PARAMETER, None),
             (0, string_of("%NKVAR%\\x%NOPE%")),
             (0, string_of("a\0bc\0")),
             (0, string_of("dflt")),
             (0, string_of("nk")),
         ]
     {
-        return Err("a string was not expanded, or kept as stored, as asked");
+        return Err("a string was not refused, or kept as stored, as asked");
     }
     let several = on_key(
         export,
@@ -1510,7 +1511,7 @@ fn starts(text: &str) -> u32 {
 }
 
 /// An entry's routine is called with each value the entry asks for:
-/// one string of several at a time, an expandable string expanded, a
+/// one string of several at a time, an expandable string as stored, a
 /// default for a value that is not there, every value of a key. Its
 /// failure ends the query, but for the one status Windows ignores.
 fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
@@ -1545,12 +1546,8 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
             0,
             &[[REG_MULTI_SZ, 12, c('M'), starts("a"), 0x104]],
         ),
-        // Expanded, a plain string; or as stored.
-        (
-            calling(0, Some(expand), ok(5)),
-            0,
-            &[[REG_SZ, 28, c('E'), starts("va"), 0x105]],
-        ),
+        // To be expanded: refused, and no call. As stored: a call.
+        (calling(0, Some(expand), ok(5)), INVALID_PARAMETER, &[]),
         (
             calling(NOEXPAND, Some(expand), ok(6)),
             0,
@@ -1588,8 +1585,9 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         return Err("a routine's failure did not end the query, or the wrong status did");
     }
     // No name: every value of the key in the key's order, each under
-    // its own name; or, if the entry says so, one call with no value.
-    let every: [Call; 8] = [
+    // its own name, up to the string that would be expanded, which
+    // ends the query; or, if the entry says so, one call with no value.
+    let every: [Call; 7] = [
         [REG_DWORD, 4, c('N'), 0x5566_7788, 0x121],
         [REG_SZ, 6, c('T'), starts("nk"), 0x121],
         [REG_BINARY, 3, c('O'), 0xFF34_5678, 0x121],
@@ -1597,9 +1595,8 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         [REG_SZ, 4, c('M'), starts("a"), 0x121],
         [REG_SZ, 6, c('M'), starts("bc"), 0x121],
         [REG_QWORD, 8, c('Q'), 0x5566_7788, 0x121],
-        [REG_SZ, 28, c('E'), starts("va"), 0x121],
     ];
-    if calls_of(export, &[calling(0, None, ok(0x21))]) != (0, every.to_vec())
+    if calls_of(export, &[calling(0, None, ok(0x21))]) != (INVALID_PARAMETER, every.to_vec())
         || calls_of(export, &[calling(NOVALUE, None, ok(0x22))])
             != (0, alloc::vec![[0, 0, 0xFFFF, u32::MAX, 0x122]])
     {
@@ -1618,9 +1615,10 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
     {
         return Err("a subkey's routine did not get the subkey's values");
     }
-    // With the delete flag each value goes once its routine has had it.
-    let (status, calls) = calls_of(export, &[calling(DELETE, None, ok(0x25))]);
-    if (status, calls.len()) != (0, 8) || !enumerate_value(key, 0, 0, ROOM).refused(NO_MORE) {
+    // With the delete flag each value goes once its routine has had
+    // it: seven values, each as stored.
+    let (status, calls) = calls_of(export, &[calling(DELETE | NOEXPAND, None, ok(0x25))]);
+    if (status, calls.len()) != (0, 7) || !enumerate_value(key, 0, 0, ROOM).refused(NO_MORE) {
         return Err("values were not deleted once their routine had been called");
     }
     Ok(())
@@ -1765,7 +1763,6 @@ const fn terminated<const N: usize>(text: &str) -> [u16; N] {
 /// What [`query_and_raise`] names: it is a driver's function, unwound
 /// with the query, and keeps nothing that only a destructor frees.
 static RAISE_KEY: [u16; TABLE_KEY.len() + 1] = terminated(TABLE_KEY);
-static RAISE_ENVIRONMENT: [u16; 13] = terminated("NKVAR=value");
 static BETA: [u16; 5] = terminated("Beta");
 static MULTI: [u16; 6] = terminated("Multi");
 static ABSENT: [u16; 7] = terminated("Absent");
@@ -1791,8 +1788,8 @@ unsafe extern "C" fn raising(
 
 /// A body for a `__try`: a driver's function that runs a query table
 /// whose routine raises. Much of what a query can hold is held when it
-/// does: an environment, a value in hand, a string lent out, entries
-/// with names and a default still to come.
+/// does: a value in hand, a string lent out, entries with names and a
+/// default still to come.
 extern "C" fn query_and_raise(_: usize) {
     let table = [
         RTL_QUERY_REGISTRY_TABLE {
@@ -1824,7 +1821,7 @@ extern "C" fn query_and_raise(_: usize) {
             RAISE_KEY.as_ptr(),
             table.as_ptr(),
             core::ptr::null_mut(),
-            RAISE_ENVIRONMENT.as_ptr(),
+            core::ptr::null(),
         )
     };
     RAISE_RETURNED.store(status as u32 | 1 << 31, Ordering::Relaxed);
