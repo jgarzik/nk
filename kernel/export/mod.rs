@@ -91,6 +91,34 @@ macro_rules! export_entry {
     };
 }
 
+/// A list of routines NK exports and does not implement: defines each
+/// (see `trap`: it takes whatever the driver passed, looks at none of
+/// it, and stops the system naming itself) and the list's `EXPORTS`.
+macro_rules! trap_list {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("`", stringify!($name), "`: not implemented; stops the system.")]
+            pub extern "C" fn $name() -> ! {
+                crate::kd::bugcheck(format_args!(concat!(
+                    stringify!($name),
+                    ": NK does not implement this routine"
+                )))
+            }
+        )*
+
+        pub(in crate::export) static EXPORTS: &[Export] = &[
+            $(
+                Export {
+                    module: NT,
+                    name: stringify!($name),
+                    addr: $name as *const (),
+                    state: State::Traps,
+                },
+            )*
+        ];
+    };
+}
+
 mod list;
 
 /// Every export, list after list.

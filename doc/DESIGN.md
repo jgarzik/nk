@@ -1924,7 +1924,8 @@ alone. NK has run on no physical machine.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
-(`kernel/export/trap.rs`, which names them): the import binds, so the
+(`kernel/export/trap.rs` and `kernel/export/list/trap_*.rs`, which
+name them): the import binds, so the
 binary loads, and a call stops the system with `BUGCHECK: <name>: NK
 does not implement this routine`. One macro makes every such routine,
 so none can return. The ledger lists them in the state `traps`, apart
@@ -1934,6 +1935,7 @@ from `implemented`.
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
 | I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
+| What the storage stack imports and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
 
 The `*-neg-trap` scenarios call one through the address its name
 resolves to and require the stop that names it.
