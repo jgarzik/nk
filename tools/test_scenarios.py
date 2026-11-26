@@ -5,11 +5,13 @@ import tomllib
 import unittest
 from pathlib import Path
 
+import datadisk
+
 TOOLS = Path(__file__).resolve().parent
 SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
     "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
-    "golden", "canonical",
+    "golden", "canonical", "disk", "disk_size", "disk_expect",
 }
 
 
@@ -48,6 +50,18 @@ class Scenarios(unittest.TestCase):
                 if "golden" in sc:
                     self.assertTrue((TOOLS / "golden" / sc["golden"]).is_dir())
                 self.assertLess(len(sc.get("cmdline", "")), 256)
+                # A disk is always checked after the boot, and only a
+                # scenario with a disk says anything about one.
+                self.assertEqual("disk_expect" in sc, "disk" in sc)
+                if "disk_size" in sc:
+                    self.assertIn("disk", sc)
+                if "disk" in sc:
+                    self.assertEqual(sc["disk"], "ahci")
+                    self.assertIn(sc["disk_expect"], datadisk.CHECKS)
+                    size = sc.get("disk_size", datadisk.DEFAULT_MIB)
+                    self.assertIsInstance(size, int)
+                    # Room for the write range, and sectors after it.
+                    self.assertGreater(size << 20, datadisk.WRITE_END * datadisk.SECTOR)
 
     def test_each_architecture_has_its_main_scenario(self):
         # `make check` / `check-arm` and the ledger rely on these.
@@ -56,6 +70,11 @@ class Scenarios(unittest.TestCase):
             self.assertEqual((sc["arch"], sc.get("canonical"), sc["tier"]), (arch, True, "gate"))
             self.assertEqual(sc.get("expect", "ok"), "ok")
             self.assertNotIn("cmdline", sc, "the main scenario runs every test")
+
+    def test_the_gate_proves_a_disk_is_attached_and_compared(self):
+        sc = SCENARIOS["x86_64-disk-present"]
+        self.assertEqual((sc["tier"], sc["disk"], sc["disk_expect"], sc.get("expect", "ok")),
+                         ("gate", "ahci", "unchanged", "ok"))
 
     def test_the_gate_proves_failures_are_seen(self):
         for arch in ("x86_64", "aarch64"):

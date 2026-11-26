@@ -14,6 +14,15 @@
 #   must_fail expect = "fail": exactly these tests fail
 #   accel     "tcg": emulate the processor even where the host could run
 #             it directly (x86-64 only; arm64 is always emulated)
+#   disk      "ahci": the machine has a data disk on an AHCI controller
+#             (the one q35 has; one added to arm64's `virt`). It is a raw
+#             file made for each boot, every sector holding a pattern the
+#             kernel can compute (tools/datadisk.py, doc/TESTING.md)
+#   disk_size the disk's size in MiB (default 64)
+#   disk_expect  with `disk`, what the disk must hold after the boot:
+#             "unchanged": every sector its original pattern;
+#             "written": the sectors of the write range the written
+#             pattern, every other sector its original one
 #   golden    directory in tools/golden/ listing every test and its verdict
 #   canonical true: this run's log and export list are kept as
 #             target/qemu/serial-<arch>.log and exports-<arch>.txt (the
@@ -46,6 +55,18 @@ arch = "aarch64"
 tier = "gate"
 smp = 1
 golden = "aarch64"
+
+# A data disk on the machine changes nothing for a kernel that does not
+# write it: the boot passes, and the disk is as it was made. This is the
+# harness's own proof that the disk is attached, kept and compared.
+
+[x86_64-disk-present]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+cmdline = "test=mm.frames"
+disk = "ahci"
+disk_expect = "unchanged"
 
 # The soak tier (`make soak`): the whole test list again and again, with
 # other numbers of processors and both ways of running x86-64, on a host

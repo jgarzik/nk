@@ -14,7 +14,8 @@ Usage: ledger.py [--check | --missing <binary>...]
   --check    fail if a committed ledger differs from what would be generated
              (fixtures that are not downloaded make the check a visible SKIP)
   --missing  print, by area, the kernel names the named corpus binaries
-             import that the last x86-64 boot did not export as implemented
+             import that the last x86-64 boot did not export as implemented,
+             and the other modules they import from
 """
 
 import json
@@ -23,6 +24,9 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mkesp  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "target" / "fixtures"
@@ -130,16 +134,26 @@ def microsoft_kernel(exports, listing):
 def missing(exports, lists, wanted):
     """{area: [names]} that the binaries in `wanted` import from the
     kernel and NK does not export as implemented. An area is a name's
-    leading capitalised word (`Io`, `Rtl`); `other` holds the rest."""
-    areas, seen = {}, set()
+    leading capitalised word (`Io`, `Rtl`); `other` holds the rest.
+
+    Also returns which of `wanted` the corpus lists, and the modules
+    other than the kernel they import from. A binary may import nothing
+    from the kernel (a miniport imports from its port driver only): it
+    is in the corpus all the same."""
+    areas, seen, others = {}, set(), set()
     for line in lists.splitlines():
         if line.startswith("#"):
             continue
         head, _, symbols = line.partition(":")
         file, _, module = head.split()
-        if file not in wanted or module not in KERNEL_MODULES:
+        if file not in wanted:
             continue
         seen.add(file)
+        if module not in KERNEL_MODULES:
+            # `-` stands for a binary with no import table at all.
+            if module != "-":
+                others.add(module)
+            continue
         for name in symbols.split():
             state = next((exports[(m, name)] for m in KERNEL_MODULES if (m, name) in exports),
                          "missing")
@@ -149,7 +163,8 @@ def missing(exports, lists, wanted):
             prefix = re.match(r"[A-Z][a-z]+", name)
             area = prefix.group().removesuffix("f") if prefix else "other"
             areas.setdefault(area, set()).add(name if state == "missing" else f"{name}({state})")
-    return {area: sorted(names) for area, names in sorted(areas.items())}, sorted(seen)
+    by_area = {area: sorted(names) for area, names in sorted(areas.items())}
+    return by_area, sorted(seen), sorted(others)
 
 
 def corpus(exports, lists):
@@ -195,9 +210,9 @@ def corpus(exports, lists):
 
 def build(arch, fixtures):
     exports, booted = kernel_exports(arch)
-    # A fixture is on the boot volume as <name>.sys, which is what an
-    # importer's table calls it.
-    libraries = {fx["name"].lower() + ".sys": exports_of(peinfo(CACHE / fx["file"]))
+    # What a fixture is called on the boot volume is what an importer's
+    # table calls it.
+    libraries = {mkesp.boot_name(fx).lower(): exports_of(peinfo(CACHE / fx["file"]))
                  for fx in fixtures}
     entries, needed = [], {}
     for fx in fixtures:
@@ -238,14 +253,24 @@ def print_missing(wanted):
     if not booted:
         print("ledger: no boot log (run: make check)")
         return 1
-    areas, seen = missing(exports, CORPUS.read_text(), {w.lower() for w in wanted})
-    for name in sorted({w.lower() for w in wanted} - set(seen)):
-        print(f"ledger: {name} is not in the corpus")
-    total = sum(len(names) for names in areas.values())
-    print(f"{', '.join(seen)}: {total} kernel names not implemented")
-    for area, names in areas.items():
-        print(f"  {area} ({len(names)}): {' '.join(names)}")
+    for line in missing_report(exports, CORPUS.read_text(), wanted):
+        print(line)
     return 0
+
+
+def missing_report(exports, lists, wanted):
+    """The lines `--missing` prints for the binaries named `wanted`."""
+    wanted = {w.lower() for w in wanted}
+    areas, seen, others = missing(exports, lists, wanted)
+    lines = [f"ledger: {name} is not in the corpus" for name in sorted(wanted - set(seen))]
+    if not seen:
+        return lines
+    total = sum(len(names) for names in areas.values())
+    lines.append(f"{', '.join(seen)}: {total} kernel names not implemented")
+    lines += [f"  {area} ({len(names)}): {' '.join(names)}" for area, names in areas.items()]
+    if others:
+        lines.append(f"  imports from other modules: {' '.join(others)}")
+    return lines
 
 
 def main():
