@@ -1,0 +1,7 @@
+# RtlUpcaseUnicodeString writes the capitals and reports success
+# without storing the destination's new length: the driver sees the
+# length the string had before.
+scenario: x86_64
+fails: rtl.upcase
+file: kernel/rtl/string.rs
+remove:         (&raw mut (*destination).Length).write_unaligned(length);

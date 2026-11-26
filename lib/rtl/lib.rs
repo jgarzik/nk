@@ -2,25 +2,42 @@
 //! counted-string arithmetic and object-name handling here; in the
 //! modules, formatted output, upper-casing and comparison, the prefix
 //! table, wildcard matching, text forms and length rules, code pages,
-//! and the C string functions. Only the prefix table and the wildcard
-//! matcher allocate.
+//! the characters legal in file names, and the C string functions.
+//! Nothing here allocates: what a routine works on is the caller's.
 //!
 //! The kernel's `Rtl*` exports and its object namespace are thin wrappers
 //! over these functions, so the behaviour is tested on the build host.
 
 #![cfg_attr(not(test), no_std)]
 
-extern crate alloc;
-
 pub mod codepage;
 pub mod crt;
 pub mod format;
+pub mod legal;
 pub mod prefix;
 pub mod string;
 pub mod upcase;
 pub mod wildcard;
 
 pub use upcase::upcase_char;
+
+/// A counted string, where it lies: the prefix table and the wildcard
+/// matcher read a driver's names through this, a unit at a time.
+pub trait Text {
+    /// Its length in units.
+    fn length(&self) -> usize;
+    /// The unit at `at`, which is below `length`.
+    fn unit(&self, at: usize) -> u16;
+}
+
+impl Text for [u16] {
+    fn length(&self) -> usize {
+        self.len()
+    }
+    fn unit(&self, at: usize) -> u16 {
+        self[at]
+    }
+}
 
 /// Largest `Length`, in bytes, `RtlInitUnicodeString` will report: the
 /// 16-bit field must also leave room for the terminator in

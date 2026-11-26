@@ -947,6 +947,59 @@ deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
+## Strings
+
+The rules are `lib/rtl`; the exports in `kernel/rtl` read and write a
+driver's strings where they lie. A routine that cannot fail (a
+comparison, a search, `RtlCompareMemory`) takes its input one unit at a
+time and stops at the unit that decides the answer, so it needs neither
+a copy nor memory for one. Strings the routines allocate come from the
+pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
+
+- **The ANSI code page is Windows-1252**, the page of the reference
+  machine's English (United States) installation, compiled in
+  (`nk_rtl::codepage`); the registry's `Nls\CodePage` key is not
+  consulted. A character the page lacks becomes `?`: Windows' "best fit"
+  table (a fullwidth or accented letter to its plain form) is absent.
+- **Upper case** is one table, `nk_rtl::upcase`, built from the Unicode
+  character database. `RtlUpcaseUnicodeChar`, the string comparisons,
+  the object namespace and the registry all use it. Windows carries a
+  table of its own; the units where the two may differ are listed in
+  that module.
+- **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
+  fold `A` to `Z` only and do not use that table.
+
+### File names
+
+`FsRtlIsNameInExpression` and `FsRtlLegalAnsiCharacterArray` are
+exported from `kernel/rtl` with the strings they work on. The matcher
+(`nk_rtl::wildcard`) runs the expression as a state machine over the
+name, a bit per expression character in a fixed four kilobytes of the
+caller's stack: its time is bounded by the product of the two lengths
+whatever the pattern, it allocates nothing, and so it never raises,
+where Windows raises `STATUS_NO_MEMORY`. The name is upper-cased by the
+caller's table when one is passed, read from the caller's memory a unit
+at a time. The table of legal characters is built from each file
+system's naming rules (`nk_rtl::legal`): Microsoft publishes the flags
+and the macros that read the table, not its contents.
+
+### The prefix table
+
+A [prefix table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlinsertunicodeprefix)
+and its entries are the driver's memory, with the fields `ntifs.h`
+declares (`nk_ntabi::rtl`), and an entry points to the caller's name
+without copying it. NK keeps nothing beside them: the routines link the
+driver's entries through the driver's own fields, as the header's names
+describe (a list of trees by number of name components, a search tree
+in each, a ring of the names that differ only in case). The algorithm
+is `nk_rtl::prefix`, written against a store of nodes: the kernel's
+store is the driver's fields behind raw pointers, the host tests' is a
+vector, checked against a plain list over random sequences. No routine
+allocates, so none can fail for want of memory. Which rotations balance
+a tree is NK's choice: a name found without regard to case is splayed
+to its tree's root. The caller serialises the calls on one table, as on
+Windows. `RtlNextUnicodePrefix` is not exported.
+
 ## Security descriptors
 
 SIDs, ACLs and descriptors are byte layouts with rules: `lib/se`, with
@@ -954,6 +1007,17 @@ the exports in `kernel/se`. A driver's descriptor is the driver's memory:
 read and written through raw pointers, the rules run on copies.
 `SeExports` points to the well-known SIDs and privilege numbers, laid out
 as in `ntifs.h`.
+
+A SID's first two bytes say whether it is one and how long it is, so
+the routines that take one read those before the rest and never read a
+SID by a length it does not have; they copy at most the 68 bytes of the
+largest SID, onto the stack. `RtlValidSecurityDescriptor` judges an
+access list on a pool copy and answers "not valid" without memory for
+one. App-container SIDs (`RtlGetAppContainerSidType`,
+`RtlGetAppContainerParent`) are told apart by shape alone, `S-1-15-2`
+with eight or twelve sub-authorities (`nk_se::sid`, which lists what
+Microsoft's pages leave open); a parent's SID is a pool block the
+caller frees.
 
 Nothing is enforced: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`

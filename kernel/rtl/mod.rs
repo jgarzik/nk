@@ -2,7 +2,11 @@
 
 #![allow(non_snake_case)]
 
+pub mod crt;
+pub mod name;
+pub mod prefix;
 pub mod print;
+pub mod string;
 
 use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};
 use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};

@@ -94,6 +94,12 @@ call's arguments one array and pass its address on:
   point included, then on the stack; pushing the eight registers
   directly below the stack arguments completes it.
 
+A `va_list` is the address of such an array on both architectures:
+Windows declares it `char *`, `va_start` points it at the first unnamed
+argument, and every argument takes eight bytes. So `_vsnwprintf`, which
+takes one, is an ordinary function, and `_snwprintf` calls it with the
+address of what follows its three named arguments.
+
 The formatting itself is `nk_rtl::format`, tested on the host: flags,
 width, precision, the Microsoft size prefixes (`I64`, `w`, `h`), `%p` as
 sixteen upper-case digits, strings of either width, counted strings.
