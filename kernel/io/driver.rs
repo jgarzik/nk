@@ -327,3 +327,96 @@ impl DriverError {
         }
     }
 }
+
+/// `DRVO_BOOTREINIT_REGISTERED`: the driver has a routine waiting in
+/// the boot-reinitialisation queue.
+const DRVO_BOOTREINIT_REGISTERED: u32 = 0x20;
+
+/// A routine a boot driver asked to have called once every boot driver
+/// has initialised.
+struct Reinitialize {
+    driver: *mut DRIVER_OBJECT,
+    routine: usize,
+    context: usize,
+}
+
+// SAFETY: the pointer names a driver object the entry holds a reference
+// to; the rest are numbers.
+unsafe impl Send for Reinitialize {}
+
+/// The boot-reinitialisation queue, and whether it has been run: a
+/// routine registered after that is never called, as on Windows.
+static BOOT_REINITIALIZE: SpinLock<(Vec<Reinitialize>, bool)> =
+    SpinLock::new(Rank::Drivers, (Vec::new(), false));
+
+/// [`IoRegisterBootDriverReinitialization`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-ioregisterbootdriverreinitialization):
+/// have `routine` called, with `context`, after every boot driver's
+/// entry point has run and the devices they serve have been started. A
+/// routine may register again from within itself, to be called once
+/// more. Registered after the queue has been run, it is not called.
+///
+/// # Safety
+/// `driver` is a live driver object; `routine` is a
+/// `DRIVER_REINITIALIZE` routine of that driver.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoRegisterBootDriverReinitialization(
+    driver: *mut DRIVER_OBJECT,
+    routine: usize,
+    context: usize,
+) {
+    let mut queue = BOOT_REINITIALIZE.lock();
+    if queue.1 {
+        return;
+    }
+    // Without memory the routine is not called: Windows drops the
+    // registration the same way.
+    if queue.0.try_reserve(1).is_err() {
+        return;
+    }
+    // SAFETY: per the contract; the queue's reference keeps the driver
+    // object until its routine has been called.
+    unsafe {
+        ob::object::reference(driver.cast());
+        (*driver).Flags |= DRVO_BOOTREINIT_REGISTERED;
+    }
+    queue.0.push(Reinitialize {
+        driver,
+        routine,
+        context,
+    });
+}
+
+/// Call the routines boot drivers registered for reinitialisation, in
+/// the order registered, those registered meanwhile included, and close
+/// the queue. Each is given its driver object, its context and the
+/// number of times a reinitialisation routine of that driver has now
+/// been called.
+pub fn reinitialize_boot_drivers() {
+    loop {
+        let next = {
+            let mut queue = BOOT_REINITIALIZE.lock();
+            if queue.0.is_empty() {
+                queue.1 = true;
+                queue.0.shrink_to_fit();
+                return;
+            }
+            queue.0.remove(0)
+        };
+        // SAFETY: the queue's reference keeps the driver object; the
+        // routine is the driver's, of the documented signature, called
+        // at `PASSIVE_LEVEL` in the system thread, where an exception
+        // it lets out is unhandled.
+        unsafe {
+            let extension = (*next.driver).DriverExtension;
+            (*extension).Count += 1;
+            let count = (*extension).Count;
+            (*next.driver).Flags &= !DRVO_BOOTREINIT_REGISTERED;
+            seh::call(
+                next.routine,
+                [next.driver.addr(), next.context, count as usize, 0],
+                &Guard::Base(Unhandled::SystemThread),
+            );
+            ob::object::dereference(next.driver.cast());
+        }
+    }
+}

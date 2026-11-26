@@ -182,6 +182,93 @@ fn interrupt_object_matches_the_kernel() {
 }
 
 #[test]
+fn dma_structures_match_the_kernel() {
+    use crate::dma::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    // Every field of a structure, by name.
+    macro_rules! same {
+        ($ty:ident, $name:literal: $($field:ident),* $(,)?) => {{
+            let layout = types.layout($name).expect($name);
+            assert_eq!(size_of::<$ty>(), layout.size as usize, $name);
+            $(assert_eq!(
+                offset_of!($ty, $field),
+                offset(&layout, $name, stringify!($field)),
+                concat!($name, ".", stringify!($field))
+            );)*
+        }};
+    }
+    same!(DEVICE_DESCRIPTION, "_DEVICE_DESCRIPTION":
+        Version, Master, ScatterGather, DemandMode, AutoInitialize, Dma32BitAddresses,
+        IgnoreCount, Reserved1, Dma64BitAddresses, BusNumber, DmaChannel, InterfaceType,
+        DmaWidth, DmaSpeed, MaximumLength, DmaPort, DmaAddressWidth, DmaControllerInstance,
+        DmaRequestLine, DeviceAddress);
+    same!(DMA_ADAPTER, "_DMA_ADAPTER": Version, Size, DmaOperations);
+    same!(DMA_OPERATIONS, "_DMA_OPERATIONS":
+        Size, PutDmaAdapter, AllocateCommonBuffer, FreeCommonBuffer, AllocateAdapterChannel,
+        FlushAdapterBuffers, FreeAdapterChannel, FreeMapRegisters, MapTransfer,
+        GetDmaAlignment, ReadDmaCounter, GetScatterGatherList, PutScatterGatherList,
+        CalculateScatterGatherList, BuildScatterGatherList, BuildMdlFromScatterGatherList,
+        GetDmaAdapterInfo, GetDmaTransferInfo, InitializeDmaTransferContext,
+        AllocateCommonBufferEx, AllocateAdapterChannelEx, ConfigureAdapterChannel,
+        CancelAdapterChannel, MapTransferEx, GetScatterGatherListEx,
+        BuildScatterGatherListEx, FlushAdapterBuffersEx, FreeAdapterObject,
+        CancelMappedTransfer, AllocateDomainCommonBuffer, FlushDmaBuffer, JoinDmaDomain,
+        LeaveDmaDomain, GetDmaDomain, AllocateCommonBufferWithBounds,
+        AllocateCommonBufferVector, GetCommonBufferFromVectorByIndex,
+        FreeCommonBufferFromVector, FreeCommonBufferVector);
+    same!(SCATTER_GATHER_LIST, "_SCATTER_GATHER_LIST": NumberOfElements, Reserved, Elements);
+    same!(SCATTER_GATHER_ELEMENT, "_SCATTER_GATHER_ELEMENT": Address, Length, Reserved);
+    // The two info structures are a version and a union; NK declares
+    // the union's largest member in line.
+    let info = types
+        .layout("_DMA_ADAPTER_INFO")
+        .expect("_DMA_ADAPTER_INFO");
+    let v1 = types
+        .layout("_DMA_ADAPTER_INFO_V1")
+        .expect("_DMA_ADAPTER_INFO_V1");
+    let at = offset(&info, "_DMA_ADAPTER_INFO", "V1");
+    assert_eq!(size_of::<DMA_ADAPTER_INFO>(), info.size as usize);
+    for (field, mine) in [
+        (
+            "ReadDmaCounterAvailable",
+            offset_of!(DMA_ADAPTER_INFO, ReadDmaCounterAvailable),
+        ),
+        (
+            "ScatterGatherLimit",
+            offset_of!(DMA_ADAPTER_INFO, ScatterGatherLimit),
+        ),
+        (
+            "DmaAddressWidth",
+            offset_of!(DMA_ADAPTER_INFO, DmaAddressWidth),
+        ),
+        ("Flags", offset_of!(DMA_ADAPTER_INFO, Flags)),
+        (
+            "MinimumTransferUnit",
+            offset_of!(DMA_ADAPTER_INFO, MinimumTransferUnit),
+        ),
+    ] {
+        assert_eq!(
+            mine,
+            at + offset(&v1, "_DMA_ADAPTER_INFO_V1", field),
+            "{field}"
+        );
+    }
+    let transfer = types
+        .layout("_DMA_TRANSFER_INFO")
+        .expect("_DMA_TRANSFER_INFO");
+    let v2 = types
+        .layout("_DMA_TRANSFER_INFO_V2")
+        .expect("_DMA_TRANSFER_INFO_V2");
+    let at = offset(&transfer, "_DMA_TRANSFER_INFO", "V2");
+    assert_eq!(size_of::<DMA_TRANSFER_INFO>(), transfer.size as usize);
+    assert_eq!(
+        offset_of!(DMA_TRANSFER_INFO, LogicalPageCount),
+        at + offset(&v2, "_DMA_TRANSFER_INFO_V2", "LogicalPageCount")
+    );
+}
+
+#[test]
 fn timer_matches_the_kernel() {
     use crate::ke::{DISPATCHER_HEADER, KTIMER, TIMER_INSERTED};
     use core::mem::{offset_of, size_of};
@@ -1223,6 +1310,147 @@ fn driver_extension_matches_the_kernel() {
         IO_CLIENT_EXTENSION,
         "_IO_CLIENT_EXTENSION",
         [NextExtension, ClientIdentificationAddress]
+    );
+}
+
+#[test]
+fn device_queue_matches_the_kernel() {
+    use crate::io::{IRP_DEVICE_QUEUE_ENTRY, KDEVICE_QUEUE, KDEVICE_QUEUE_ENTRY};
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        KDEVICE_QUEUE,
+        "_KDEVICE_QUEUE",
+        [Type, Size, DeviceListHead, Lock, Busy]
+    );
+    same_layout!(
+        types,
+        KDEVICE_QUEUE_ENTRY,
+        "_KDEVICE_QUEUE_ENTRY",
+        [DeviceListEntry, SortKey, Inserted]
+    );
+    // The entry in an IRP: `Tail.Overlay.DeviceQueueEntry`.
+    let irp = types.layout("_IRP").expect("_IRP");
+    assert_eq!(IRP_DEVICE_QUEUE_ENTRY, offset(&irp, "_IRP", "Tail"));
+}
+
+#[test]
+fn plug_and_play_structures_match_the_kernel() {
+    use crate::pnp::*;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DEVICE_RELATIONS,
+        "_DEVICE_RELATIONS",
+        [Count, Objects]
+    );
+    same_layout!(
+        types,
+        DEVICE_CAPABILITIES,
+        "_DEVICE_CAPABILITIES",
+        [
+            Size,
+            Version,
+            Address,
+            UINumber,
+            DeviceState,
+            SystemWake,
+            DeviceWake,
+            D1Latency,
+            D2Latency,
+            D3Latency,
+        ]
+    );
+    // The capability bits share the word after `Version`.
+    let capabilities = types
+        .layout("_DEVICE_CAPABILITIES")
+        .expect("_DEVICE_CAPABILITIES");
+    for (name, bit) in [
+        ("DeviceD1", DEVICE_CAPABILITY_DEVICE_D1),
+        ("Removable", DEVICE_CAPABILITY_REMOVABLE),
+        ("UniqueID", DEVICE_CAPABILITY_UNIQUE_ID),
+        ("RawDeviceOK", DEVICE_CAPABILITY_RAW_DEVICE_OK),
+        ("SurpriseRemovalOK", DEVICE_CAPABILITY_SURPRISE_REMOVAL_OK),
+        ("WakeFromD3", DEVICE_CAPABILITY_WAKE_FROM_D3),
+        ("HardwareDisabled", DEVICE_CAPABILITY_HARDWARE_DISABLED),
+        ("NoDisplayInUI", DEVICE_CAPABILITY_NO_DISPLAY_IN_UI),
+    ] {
+        let member = capabilities.member(name).expect(name);
+        assert_eq!(
+            member.offset as usize,
+            core::mem::offset_of!(DEVICE_CAPABILITIES, Flags),
+            "{name}"
+        );
+        assert_eq!(member.bits, Some((bit.trailing_zeros() as u8, 1)), "{name}");
+    }
+    same_layout!(
+        types,
+        POWER_STATE,
+        "_POWER_STATE",
+        [SystemState, DeviceState]
+    );
+    same_layout!(
+        types,
+        POWER_SEQUENCE,
+        "_POWER_SEQUENCE",
+        [SequenceD1, SequenceD2, SequenceD3]
+    );
+    same_layout!(
+        types,
+        INTERFACE,
+        "_INTERFACE",
+        [
+            Size,
+            Version,
+            Context,
+            InterfaceReference,
+            InterfaceDereference
+        ]
+    );
+    same_layout!(
+        types,
+        CM_PARTIAL_RESOURCE_DESCRIPTOR,
+        "_CM_PARTIAL_RESOURCE_DESCRIPTOR",
+        [Type, ShareDisposition, Flags, u]
+    );
+    same_layout!(
+        types,
+        CM_PARTIAL_RESOURCE_LIST,
+        "_CM_PARTIAL_RESOURCE_LIST",
+        [Version, Revision, Count, PartialDescriptors]
+    );
+    same_layout!(
+        types,
+        CM_FULL_RESOURCE_DESCRIPTOR,
+        "_CM_FULL_RESOURCE_DESCRIPTOR",
+        [InterfaceType, BusNumber, PartialResourceList]
+    );
+    same_layout!(types, CM_RESOURCE_LIST, "_CM_RESOURCE_LIST", [Count, List]);
+    same_layout!(
+        types,
+        IO_RESOURCE_DESCRIPTOR,
+        "_IO_RESOURCE_DESCRIPTOR",
+        [Option, Type, ShareDisposition, Spare1, Flags, Spare2, u]
+    );
+    same_layout!(
+        types,
+        IO_RESOURCE_LIST,
+        "_IO_RESOURCE_LIST",
+        [Version, Revision, Count, Descriptors]
+    );
+    same_layout!(
+        types,
+        IO_RESOURCE_REQUIREMENTS_LIST,
+        "_IO_RESOURCE_REQUIREMENTS_LIST",
+        [
+            ListSize,
+            InterfaceType,
+            BusNumber,
+            SlotNumber,
+            Reserved,
+            AlternativeLists,
+            List,
+        ]
     );
 }
 

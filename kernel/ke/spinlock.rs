@@ -30,6 +30,8 @@ pub enum Rank {
     /// Devices' reference counts, delete-pending marks and attachment
     /// chains (`io::device`).
     IoDatabase = 25,
+    /// The errata manager's database (`ex::em`).
+    Errata = 26,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,

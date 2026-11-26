@@ -51,3 +51,9 @@ io.request.master-status ok
 io.mdl.partial ok
 io.driver-extension ok
 io.error-log ok
+io.start-io.queue ok
+io.start-io.cancel ok
+io.start-io.deferred ok
+io.request.power ok
+io.stack.send-synchronous ok
+io.no-paging-file ok

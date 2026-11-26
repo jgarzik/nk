@@ -60,7 +60,9 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
+| 10 | `io::driver::BOOT_REINITIALIZE` | the routines boot drivers registered for reinitialisation, and whether they have been run; never held with `DRIVERS` | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
+| 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
@@ -128,6 +130,10 @@ Why this order:
   the driver's and are called with the lock dropped: the entry counts
   the calls in progress instead, and a removal waits for the count to
   reach zero.
+- The errata database is locked around one registration or its
+  withdrawal, which allocate from the pool under it. What a provider
+  registers is copied out of its memory before the lock is taken, and
+  its driver object is referenced and released outside it.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
   memory is read and written outside it. The key object the handle
@@ -555,6 +561,15 @@ IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
 itself stops the system (freeing memory that is not a pool block, say),
 so does NK, with the same bugcheck code.
+
+### A device's queue
+
+A device queue's lock (`KDEVICE_QUEUE.Lock`, `io::startio`) is a
+driver's kind of spin lock, in the driver's device object: a driver's
+cancel routine takes a waiting request out under it. NK takes it only
+around linking and unlinking an entry, inside the cancel spin lock when
+the driver's requests are cancellable and never the other way round,
+and calls nothing while it is held.
 
 ## How it is tested
 

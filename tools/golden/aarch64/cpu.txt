@@ -1,3 +1,4 @@
 cpu.pcr ok
 cpu.breakpoint ok
 cpu.fp-preserved ok
+cpu.stack-probe ok

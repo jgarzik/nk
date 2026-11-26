@@ -46,6 +46,29 @@ impl Platform {
 
 static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(core::ptr::null_mut());
 
+/// The loader's hand-off block, which says where the firmware's tables
+/// are and which memory is firmware's.
+static BOOT: AtomicPtr<BootInfo> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The firmware's ACPI table of the signature `signature`, as a HAL
+/// answers an ACPI driver's request for it (`nk_acpi::lookup`). The
+/// table is the firmware's own memory, which nothing reuses.
+pub fn acpi_table(
+    signature: &[u8; 4],
+    oem_id: Option<&[u8; 6]>,
+    oem_table_id: Option<&[u8; 8]>,
+) -> Option<&'static [u8]> {
+    // SAFETY: null, or the hand-off block `init` was given, which lives
+    // for ever and is never written.
+    let info: &'static BootInfo = unsafe { BOOT.load(Ordering::Acquire).as_ref() }?;
+    let memory = DirectMap(info);
+    let table = nk_acpi::lookup(&memory, info.rsdp, signature, oem_id, oem_table_id)?;
+    // SAFETY: `DirectMap` hands out firmware memory in the direct map,
+    // mapped and unchanged for the life of the kernel; the slice's
+    // lifetime was tied to the local `DirectMap` only.
+    Some(unsafe { core::slice::from_raw_parts(table.as_ptr(), table.len()) })
+}
+
 /// The platform description. Panics before [`init`].
 pub fn get() -> &'static Platform {
     let p = PLATFORM.load(Ordering::Acquire);
@@ -78,7 +101,8 @@ impl PhysMem for DirectMap<'_> {
 }
 
 /// Read the MADT and record the processors and interrupt controllers.
-pub fn init(info: &BootInfo) -> Result<(), &'static str> {
+pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
+    BOOT.store(core::ptr::from_ref(info).cast_mut(), Ordering::Release);
     let mem = DirectMap(info);
     let table = nk_acpi::find_table(&mem, info.rsdp, b"APIC").ok_or("no ACPI MADT")?;
     let madt = nk_acpi::madt(table).ok_or("the ACPI MADT is malformed")?;

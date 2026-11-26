@@ -357,6 +357,64 @@ the same IRQL and lock. An object reported inactive
 Disconnecting waits for the chain's walkers (`doc/LOCKING.md`), so no
 routine of a disconnected object is running when it is freed.
 
+### DMA
+
+`kernel/hal/dma.rs`; the arithmetic is `nk_hal::dma`. The machines NK
+runs on have no I/O memory management unit and devices that see what
+the processor wrote, so a bus address is a physical address and nothing
+needs flushing. What an adapter is for is the device that cannot drive
+every address bit.
+
+`IoGetDmaAdapter` makes an adapter for a bus master, for a
+`DEVICE_DESCRIPTION` of version 0 to 3: the device reaches 64 bits of
+address, or 32, or 24, by its two flags, or what version 3's
+`DmaAddressWidth` states. It asks no bus driver, since every bus's
+addresses are physical addresses here, and it makes none for a device
+that is not a bus master: that needs a system DMA controller. The
+number of map registers reported is the pages of the device's longest
+transfer, plus one. `hal::dma::get_adapter(&Description)` is the same
+for the kernel's own callers.
+
+The driver calls through the adapter's table, the pinned build's
+`DMA_OPERATIONS`, every slot filled:
+
+- **Common buffers** (`AllocateCommonBuffer`, `...Ex`,
+  `...WithBounds`) are contiguous memory within the device's reach and
+  the caller's bounds; the logical address is the physical address.
+- **Scatter/gather lists** (`GetScatterGatherList`,
+  `BuildScatterGatherList`, `CalculateScatterGatherList`,
+  `PutScatterGatherList`) name the transfer's own memory, adjacent
+  pages joined into one element. A piece the device cannot reach is
+  replaced by a bounce page it can, never joined to its neighbours:
+  the data is copied there before the device reads it, and from there,
+  when the list is put back, after the device wrote it. The buffer a
+  list is built in holds the list and, after it, NK's record of the
+  bounces, which the list's `Reserved` word points to.
+- **Map registers** (`AllocateAdapterChannel`, `MapTransfer`,
+  `FlushAdapterBuffers`, `FreeMapRegisters`, `FreeAdapterChannel`) are
+  the same bounce pages, one per page of the transfer, allocated with
+  the channel when some memory is beyond the device's reach.
+  `MapTransfer` returns the memory's own address for as far as it runs
+  contiguously within reach, else the page's register.
+- Execution routines run at `DISPATCH_LEVEL` before the routine that
+  was asked returns: nothing waits for registers. An adapter channel
+  the routine keeps makes the next allocation fail with
+  `STATUS_INSUFFICIENT_RESOURCES` until it is freed, where Windows
+  would queue it.
+- `BuildMdlFromScatterGatherList` returns the original MDL for a
+  transfer nothing bounced, as documented, and stops the system for
+  one that bounced. `FlushDmaBuffer` has nothing to do.
+- **Traps**, each naming its slot (`DMA_OPERATIONS.<name>`): the
+  operations of a system DMA controller's device (`ReadDmaCounter`,
+  `ConfigureAdapterChannel`), the version 3 forms that take a transfer
+  context (`InitializeDmaTransferContext`, the `...Ex` channel, map,
+  list and flush routines, the two cancels, `GetDmaTransferInfo`,
+  `FreeAdapterObject`), DMA domains and common-buffer vectors.
+
+`HalTranslateBusAddress` answers a memory address with itself; an I/O
+port address too where the processor has ports, and with failure on
+arm64, where NK knows no window through which a bus's ports appear.
+
 ## Time
 
 One free-running counter is the source of all time: the TSC on x86-64,
@@ -1148,15 +1206,20 @@ make that safe.
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
 | dispatch routine, for a request a driver sends (`IoCallDriver`, `IoSynchronousCallDriver`) | nothing: the request, and for `IoSynchronousCallDriver` the event in the sender's frame that its completion routine sets, are left to the driver that raised |
+| dispatch routine, for a request the kernel sends to a stack and waits for (`io::stack::send_synchronous`) | nothing: the request, and the block its results go to, are left to the driver that raised |
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| boot driver's reinitialisation routine | base of the system thread: the queue's reference to the driver object is not given back |
+| a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
+| a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
 | a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
 | silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
 | interrupt service routine, a message's included | base: kernel mode |
+| a DMA execution routine (adapter channel, scatter/gather list) | undo: the IRQL, if NK raised it to `DISPATCH_LEVEL` for the call |
 | the routine of `KeSynchronizeExecution` | undo: release the interrupt's lock and restore the IRQL |
 | an executive timer's callback, and a `KTIMER2`'s (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
@@ -1242,6 +1305,17 @@ header, and its slots are checked against the pinned kernel's symbols.
 A slot NK has no routine for holds a trap that stops the system naming
 the table and the slot. NK reads a slot atomically each time it uses
 one, since a driver may have replaced it.
+
+What the slots hold so far, each as the pinned kernel's HAL behaves:
+`HalInitPowerManagement` (`kernel/hal/acpi.rs`) takes `acpi.sys`'s
+table of routines and gives it the HAL's ACPI table, a third table of
+the same kind with Windows' signature, version and slot order, whose
+`HalAcpiGetTable` finds a firmware table by signature (`RSDT` and
+`XSDT` both name the root table there is; `DSDT` is found through the
+FADT; `nk_acpi::lookup`). It returns the firmware's own table where
+Windows returns a copy. `HalQuerySystemInformation`
+(`kernel/hal/sysinfo.rs`) answers the information classes drivers
+reach and stops the system naming any other.
 
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
@@ -1374,6 +1448,13 @@ is a driver's count. Windows'
 loader reads boot-start drivers into memory before the kernel runs and
 the I/O manager starts system-start ones later; on NK both are boot
 files and the order is all that tells them apart.
+
+When they have all started, the routines boot drivers registered with
+`IoRegisterBootDriverReinitialization` are called in the order
+registered, each with the number of times that driver has now been
+reinitialised; one may register again from within itself. Afterwards
+the queue is closed, and a routine registered later is never called, as
+on Windows.
 
 - A service whose image is not among the boot files is passed over,
   with a line in the log: a test image holds only the drivers it was
@@ -1601,6 +1682,46 @@ sequentially consistent operations, since with less each can miss the
 other's write and a cancelled request is never completed. Cancelling a
 completed IRP whose routine is still set stops the system
 (`CANCEL_STATE_IN_COMPLETED_IRP`).
+
+**Plug and Play and power requests.** The minor function codes of
+`IRP_MJ_PNP` and `IRP_MJ_POWER`, where each request's parameters lie in
+the stack location, and the structures they point to (device relations
+and capabilities, resource lists and requirements, interfaces) are in
+`lib/ntabi/pnp.rs`, held to the kernel's symbols where those name them.
+A power request is sent as any other: `PoCallDriver` is `IofCallDriver`
+and `PoStartNextPowerIrp` does nothing, as in the pinned kernel. A
+driver's dispatch table starts out with one routine for every major
+function, these two included, which fails the request as invalid for
+the device, as Windows' does.
+
+The kernel's own requests to a stack go through
+`io::stack::send_synchronous(device, major, minor, parameters)`, which
+returns `(status, information)`: it builds an IRP for the whole stack
+the device is in, sends it to the top in the name of the calling
+thread, and waits for it, at `PASSIVE_LEVEL`. It is what the Plug and
+Play manager asks a device's drivers through. A Plug and Play or a
+power request starts out with `STATUS_NOT_SUPPORTED`, as Windows
+requires, so that status coming back means no driver handled it. A
+driver that returns other than `STATUS_PENDING` without completing the
+request keeps it: the breach is reported and the returned status is
+the answer.
+
+**StartIo** (`kernel/io/startio.rs`). A driver with a `StartIo` routine
+queues its requests with
+[`IoStartPacket`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iostartpacket)
+and asks for the next with `IoStartNextPacket`. The queue is the device
+object's `DeviceQueue` with Windows' meaning (busy while one request is
+`CurrentIrp`, the others linked through each IRP's device queue entry,
+by arrival or by key, under the queue's own spin lock); NK implements
+of the device queue what these routines need and exports none of the
+`Ke` routines for it, which nothing NK loads imports. `StartIo` is
+called at `DISPATCH_LEVEL`. The cancel routine is set, and a request
+already cancelled when it is queued has it called, under the cancel
+spin lock, as Microsoft documents. What `IoSetStartIoAttributes` chose
+is in the extension's `StartIoFlags`: with deferred start a call of
+`IoStartNextPacket` made while another is at work for the device (from
+`StartIo` itself) leaves word there, and the outer call starts the next
+request once `StartIo` has returned, as the pinned kernel does it.
 
 **Cancel-safe queues** (`IoCsq*`, `kernel/io/csq.rs`). While a request is
 queued its fourth driver-context pointer names the queue (or the
@@ -2304,6 +2425,21 @@ The tests `ke.bugcheck.*` check registration; the
 each kind registered, and the last one called prints which ran, in what
 order, and what they were shown.
 
+## Debug messages
+
+`DbgPrint` goes to the console, prefixed `DbgPrint:`. `DbgPrintEx` and
+`vDbgPrintExWithPrefix` go there too when the component filter lets
+them through (`lib/rtl/dbgfilter.rs`): at boot, as on Windows, only
+messages at the error level; `DbgSetDebugFilterState` changes a
+component's mask. `DbgCommandString` does nothing, as with no debugger.
+`DbgPrompt` is a breakpoint (next section); when it is passed over the
+response is empty.
+
+`__chkstk` (`kernel/arch/*/chkstk.rs`) probes each page of the stack a
+function is about to take. Kernel stacks are committed whole, so the
+probe finds every page there or lands in the unmapped stretch below
+the stack, which is a stack overflow.
+
 ## Breakpoints and the debugger
 
 A driver's breakpoint (`DbgBreakPoint`, in-line code) gets one of
@@ -2321,7 +2457,10 @@ other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
 publishes no arm64 binaries NK may use, so its own drivers run on x86-64
-alone. NK has run on no physical machine.
+alone. NK has run on no physical machine. NK has no errata database
+(Windows' comes from `errata.inf`, which NK does not read): a rule a
+driver asks the errata manager about is unknown, `STATUS_NOT_FOUND`,
+where Windows answers the rule's state.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
@@ -2340,11 +2479,21 @@ notifications registered and never made), no product policy
 (`kernel/ex/license.rs`: every licence value unknown, each name asked
 for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
 when Windows' engine is not running), no errata rules
-(`kernel/ex/em.rs`: the errata manager's database is empty, so a
-provider that names an entry type or callback and a client that asks
-about a rule are both told `STATUS_NOT_FOUND`, the rule's state
-unknown; `acpi.sys` and `pci.sys` go on as on a machine no erratum
-matches). A routine with many sub-functions
+(`kernel/ex/em.rs`: Windows reads the errata manager's database from
+an errata file at boot; NK reads none. `pci.sys` does not load unless
+it registers as a provider, so NK's database takes its entry types and
+callbacks from the providers that register them, checked as Windows
+checks a registration whose GUIDs it knows; it has no rule, so a client
+that asks about one is told `STATUS_NOT_FOUND`, the rule's state
+unknown, and `acpi.sys` and `pci.sys` go on as on a machine no erratum
+matches. With no rule nothing calls a provider's callbacks), no
+driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
+reported to it goes nowhere), no headless terminal (the same file:
+it cannot be enabled, questions are answered with zeros, output
+succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no paging
+file, and a hypervisor only as far as the processor's CPUID names one
+(`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
+none). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
 (`kernel/po/mod.rs`, `ZwPowerInformation`).
 

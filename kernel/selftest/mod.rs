@@ -13,6 +13,7 @@ mod clock;
 mod cm;
 mod counted;
 mod csq;
+mod dma;
 mod dpc;
 mod driver_api;
 mod em;
@@ -51,12 +52,14 @@ mod setoken;
 mod sioctl;
 mod smp;
 mod stack;
+mod startio;
 mod storage;
 mod thread;
 mod timer;
 mod timer2;
 mod wait;
 mod whea;
+mod without;
 mod work;
 
 use crate::io::file::{self, OpenRequest};
@@ -150,6 +153,7 @@ pub static GROUPS: &[&[&Group]] = &[
     pci::GROUPS,
     mmio::GROUPS,
     interrupt::GROUPS,
+    dma::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,
@@ -173,6 +177,7 @@ pub static GROUPS: &[&[&Group]] = &[
     absent::GROUPS,
     po::GROUPS,
     em::GROUPS,
+    without::GROUPS,
     whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,
@@ -186,6 +191,7 @@ pub static GROUPS: &[&[&Group]] = &[
     stack::GROUPS,
     request::GROUPS,
     iosupport::GROUPS,
+    startio::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

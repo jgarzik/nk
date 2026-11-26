@@ -4,8 +4,19 @@ use super::super::{Export, NT, State};
 use crate::ex;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
-    export!(Implemented, ex::em::EmClientQueryRuleState),
-    export!(Implemented, ex::em::EmClientRuleEvaluate),
+    export!(Implemented, ex::absent::HeadlessDispatch),
+    export!(Implemented, ex::absent::HviGetHypervisorFeatures),
+    export!(Implemented, ex::absent::HviIsAnyHypervisorPresent),
+    export!(Implemented, ex::absent::VfFailDeviceNode),
+    export!(Implemented, ex::absent::VfFailSystemBIOS),
+    export!(Implemented, ex::absent::VfIsVerificationEnabled),
+    export!(
+        Implemented,
+        ex::vsl::VslGetSecurePciDeviceAlternateFunctionNumberForVtl0Dma
+    ),
+    export!(Implemented, ex::vsl::VslQuerySecureDevice),
+    export!(Partial, ex::em::EmClientQueryRuleState),
+    export!(Partial, ex::em::EmClientRuleEvaluate),
     export!(Implemented, ex::em::EmProviderDeregister),
     export!(Implemented, ex::em::EmProviderRegister),
     export!(Implemented, ex::sysinfo::MmIsDriverVerifying),

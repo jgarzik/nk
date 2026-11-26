@@ -4,6 +4,7 @@ use super::super::{Export, NT, State};
 use crate::io;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, io::fsrtl::FsRtlIsSystemPagingFile),
     export!(Partial, io::mdl::IoAllocateMdl),
     export!(Implemented, io::interrupt::IoConnectInterruptEx),
     export!(Implemented, io::interrupt::IoDisconnectInterruptEx),
@@ -28,6 +29,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::irp::IoReleaseCancelSpinLock),
     export!(Implemented, io::irp::IofCallDriver),
     export!(Implemented, io::irp::IofCompleteRequest),
+    export!(Implemented, io::irp::PoCallDriver),
+    export!(Implemented, io::irp::PoStartNextPowerIrp),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
     export!(Partial, io::mdl::MmAllocatePagesForMdlEx),
     export!(Implemented, io::mdl::MmBuildMdlForNonPagedPool),
@@ -57,4 +60,11 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::driver::IoGetDriverObjectExtension),
     export!(Implemented, io::errlog::IoAllocateErrorLogEntry),
     export!(Implemented, io::errlog::IoWriteErrorLogEntry),
+    export!(Implemented, io::startio::IoSetStartIoAttributes),
+    export!(Implemented, io::startio::IoStartNextPacket),
+    export!(Implemented, io::startio::IoStartPacket),
+    export!(
+        Implemented,
+        io::driver::IoRegisterBootDriverReinitialization
+    ),
 ];

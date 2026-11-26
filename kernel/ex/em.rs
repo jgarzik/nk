@@ -1,46 +1,71 @@
 //! The errata manager: rules about the machine's flaws, which drivers
 //! supply facts for (providers) and ask about (clients).
 //!
-//! Windows reads the rules from an errata file at boot. NK reads none,
-//! so its database is empty, and each routine answers as Windows' does
-//! then (`nk_ex::em`): a provider that names an entry type or a
-//! callback is told it is not found, and so is a client that asks about
-//! a rule, with the rule's state unknown. Drivers treat both as "no
-//! erratum applies".
+//! Windows reads its database from an errata file at boot. NK reads
+//! none (`nk_ex::em`): the entry types and callbacks of its database
+//! are those providers register, and it has no rule, so a client is
+//! told its rule is not found and the rule's state is unknown. Drivers
+//! treat that as "no erratum applies". With no rule, nothing calls a
+//! provider's callbacks.
 
 #![allow(non_snake_case)]
 
+use crate::ke::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::ob::object;
+use alloc::vec::Vec;
 use core::ffi::c_void;
-use nk_ex::em::{self, Registration};
+use nk_ex::em::{self, Callback, Database, Entry};
 use nk_ntabi::em::{EM_CALLBACK_REGISTRATION, EM_ENTRY_REGISTRATION};
 use nk_ntabi::ex::GUID;
-use nk_ntabi::status::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_SUCCESS};
+use nk_ntabi::status::{
+    NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER, STATUS_SUCCESS,
+};
 
 /// Windows' pool tag for a provider.
 const TAG: u32 = u32::from_le_bytes(*b"EMpr");
 
+static DATABASE: SpinLock<Database> = SpinLock::new(Rank::Errata, Database::new());
+
 /// A registered provider: what its handle points to. It holds a
 /// reference to the provider's driver object.
 struct Provider {
+    registration: u64,
     driver: *mut c_void,
+}
+
+/// The GUID at `guid`, none for a null pointer.
+///
+/// # Safety
+/// `guid` is null or points to a GUID.
+unsafe fn guid_at(guid: *const GUID) -> Option<GUID> {
+    // SAFETY: per the contract.
+    (!guid.is_null()).then(|| unsafe { guid.read_unaligned() })
+}
+
+/// A vector with room for `count` items, or none for want of memory.
+fn room<T>(count: u32) -> Option<Vec<T>> {
+    let mut items = Vec::new();
+    items.try_reserve_exact(count as usize).ok()?;
+    Some(items)
 }
 
 /// `EmProviderRegister` (undocumented): register a driver as a provider
 /// of `entry_count` kinds of entry and `callback_count` callbacks, for
-/// a handle.
+/// a handle. The driver object is referenced until
+/// `EmProviderDeregister`.
 ///
-/// | Outcome | Status |
+/// | Refusal | Status |
 /// | --- | --- |
-/// | no driver object, no place for the handle, a count without its array, a null GUID or callback in the first registration | `STATUS_INVALID_PARAMETER` |
-/// | an entry type or a callback is named | `STATUS_NOT_FOUND`: NK's database is empty |
-/// | nothing is named | `STATUS_SUCCESS`, and the driver object is referenced until `EmProviderDeregister` |
+/// | no driver object, no place for the handle, a count without its array, an entry type or callback without a GUID, a callback without a routine | `STATUS_INVALID_PARAMETER` |
+/// | a callback another routine is registered for | `STATUS_OBJECT_NAME_COLLISION` |
+/// | no memory | `STATUS_INSUFFICIENT_RESOURCES` |
 ///
 /// # Safety
 /// `entries` and `callbacks` are null or point to as many registrations
-/// as their counts say; `handle` is null or points to room for a
-/// pointer; `driver` is null or a driver object the caller holds.
+/// as their counts say, each GUID pointer in them null or valid;
+/// `handle` is null or points to room for a pointer; `driver` is null
+/// or a driver object the caller holds.
 pub unsafe extern "C" fn EmProviderRegister(
     driver: *mut c_void,
     entries: *const EM_ENTRY_REGISTRATION,
@@ -49,34 +74,63 @@ pub unsafe extern "C" fn EmProviderRegister(
     callback_count: u32,
     handle: *mut *mut c_void,
 ) -> NTSTATUS {
-    let registration = Registration {
-        no_driver: driver.is_null(),
-        no_handle: handle.is_null(),
-        entry_count,
-        // SAFETY: per the contract, an array of at least one when the
-        // count is not zero; a copy, since the driver may write it.
-        first_entry: (entry_count != 0 && !entries.is_null())
-            .then(|| unsafe { entries.read_unaligned() }),
-        callback_count,
-        // SAFETY: as above.
-        first_callback: (callback_count != 0 && !callbacks.is_null())
-            .then(|| unsafe { callbacks.read_unaligned() }),
+    if driver.is_null()
+        || handle.is_null()
+        || (entry_count != 0 && entries.is_null())
+        || (callback_count != 0 && callbacks.is_null())
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let (Some(mut wanted_entries), Some(mut wanted_callbacks)) =
+        (room::<Entry>(entry_count), room::<Callback>(callback_count))
+    else {
+        return STATUS_INSUFFICIENT_RESOURCES;
     };
-    if let Err(status) = em::register(&registration) {
-        return status;
+    // Copies: the arrays and the GUIDs are the driver's memory.
+    for i in 0..entry_count as usize {
+        // SAFETY: per the contract, within the array.
+        let entry = unsafe { entries.add(i).read_unaligned() };
+        wanted_entries.push(Entry {
+            // SAFETY: per the contract.
+            guid: unsafe { guid_at(entry.EntryGuid) },
+            lazy_callback: entry.LazyEntryCallback.addr(),
+            lazy_context: entry.LazyCallbackContext.addr(),
+        });
+    }
+    for i in 0..callback_count as usize {
+        // SAFETY: per the contract, within the array.
+        let callback = unsafe { callbacks.add(i).read_unaligned() };
+        wanted_callbacks.push(Callback {
+            // SAFETY: per the contract.
+            guid: unsafe { guid_at(callback.CallbackGuid) },
+            function: callback.CallbackFunction.addr(),
+            context: callback.Context.addr(),
+        });
     }
     let provider = pool::alloc(size_of::<Provider>(), TAG).cast::<Provider>();
     if provider.is_null() {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    // SAFETY: the block just allocated; the caller's driver object,
-    // which it holds; the caller's place for the handle.
-    unsafe {
-        object::ObfReferenceObject(driver);
-        provider.write(Provider { driver });
-        handle.write_unaligned(provider.cast());
+    let registered = DATABASE.lock().register(&wanted_entries, &wanted_callbacks);
+    match registered {
+        Ok(registration) => {
+            // SAFETY: the block just allocated; the caller's driver
+            // object, which it holds; the caller's place for the handle.
+            unsafe {
+                object::ObfReferenceObject(driver);
+                provider.write(Provider {
+                    registration,
+                    driver,
+                });
+                handle.write_unaligned(provider.cast());
+            }
+            STATUS_SUCCESS
+        }
+        Err(status) => {
+            let _ = pool::free(provider.cast());
+            status
+        }
     }
-    STATUS_SUCCESS
 }
 
 /// `EmProviderDeregister` (undocumented): take back a registration.
@@ -89,12 +143,11 @@ pub unsafe extern "C" fn EmProviderDeregister(handle: *mut c_void) {
     if handle.is_null() {
         return;
     }
-    // SAFETY: per the contract, a provider NK allocated, whose driver
-    // object it referenced.
-    unsafe {
-        let provider = handle.cast::<Provider>().read();
-        object::ObfDereferenceObject(provider.driver);
-    }
+    // SAFETY: per the contract, a provider NK allocated.
+    let provider = unsafe { handle.cast::<Provider>().read() };
+    DATABASE.lock().deregister(provider.registration);
+    // SAFETY: the driver object the registration referenced.
+    unsafe { object::ObfDereferenceObject(provider.driver) };
     let _ = pool::free(handle.cast());
 }
 
@@ -131,4 +184,14 @@ pub unsafe extern "C" fn EmClientRuleEvaluate(
         unsafe { state.write_unaligned(em::STATE_UNKNOWN) };
     }
     em::rule(complete)
+}
+
+/// For the self-tests: the routine registered for a callback, and how
+/// many providers supply an entry type.
+pub fn registered(callback: &GUID, entry: &GUID) -> (Option<usize>, usize) {
+    let database = DATABASE.lock();
+    (
+        database.callback(callback).map(|(function, _)| function),
+        database.suppliers(entry),
+    )
 }
