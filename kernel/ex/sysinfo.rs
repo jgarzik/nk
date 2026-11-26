@@ -324,6 +324,76 @@ pub extern "C" fn MmIsDriverVerifying(_driver: *mut DRIVER_OBJECT) -> u32 {
     0
 }
 
+/// [`MmIsVerifierEnabled`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmisverifierenabled):
+/// `STATUS_NOT_SUPPORTED`, with no flags: NK has no driver verifier.
+/// That is Windows' answer with its verifier off.
+///
+/// # Safety
+/// `verifier_flags` is null or writable.
+pub unsafe extern "C" fn MmIsVerifierEnabled(verifier_flags: *mut u32) -> NTSTATUS {
+    if !verifier_flags.is_null() {
+        // SAFETY: per the contract.
+        unsafe { verifier_flags.write_unaligned(0) };
+    }
+    STATUS_NOT_SUPPORTED
+}
+
+/// [`MmAddVerifierThunks`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmaddverifierthunks):
+/// `STATUS_NOT_SUPPORTED`, Windows' answer with its verifier off: the
+/// thunks are not looked at.
+pub extern "C" fn MmAddVerifierThunks(_thunk_buffer: *mut c_void, _size: u32) -> NTSTATUS {
+    STATUS_NOT_SUPPORTED
+}
+
+/// `ExIsSoftBoot` (exported, not documented): whether the system was
+/// started by a soft restart, with the firmware skipped. NK is always
+/// started by firmware.
+pub extern "C" fn ExIsSoftBoot() -> u8 {
+    0
+}
+
+/// [`MmIsAddressValid`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmisaddressvalid):
+/// whether reading the address would not fault: whether it is mapped,
+/// as the processor reads its page tables. Callable at any IRQL.
+pub extern "C" fn MmIsAddressValid(virtual_address: *const c_void) -> u8 {
+    let address = virtual_address.addr() as u64;
+    // An address is 48 bits, sign-extended, on both architectures: one
+    // that is not names nothing, whatever a walk of the tables with its
+    // low bits would find.
+    let canonical = ((address as i64) << 16) >> 16 == address as i64;
+    u8::from(canonical && crate::mm::map::physical(address).is_some())
+}
+
+/// The answers of a system with no driver verifier, started by
+/// firmware; and which addresses are valid.
+pub fn answers_test() -> Result<(), &'static str> {
+    let mut flags = 7u32;
+    // SAFETY: a local.
+    let status = unsafe { MmIsVerifierEnabled(&raw mut flags) };
+    // SAFETY: null is allowed.
+    let none = unsafe { MmIsVerifierEnabled(core::ptr::null_mut()) };
+    if (status, flags, none) != (STATUS_NOT_SUPPORTED, 0, STATUS_NOT_SUPPORTED)
+        || MmAddVerifierThunks(core::ptr::null_mut(), 0) != STATUS_NOT_SUPPORTED
+    {
+        return Err("the driver verifier is not reported as off");
+    }
+    if ExIsSoftBoot() != 0 {
+        return Err("ExIsSoftBoot says the firmware was skipped");
+    }
+    let here = (&raw const flags).cast::<c_void>();
+    let code = answers_test as *const c_void;
+    if MmIsAddressValid(here) != 1 || MmIsAddressValid(code) != 1 {
+        return Err("MmIsAddressValid says the stack or the kernel's code is not mapped");
+    }
+    // Address zero, and the hole between the halves of the address
+    // space, are never mapped.
+    let hole = core::ptr::without_provenance::<c_void>(0x0000_8000_0000_0000);
+    if MmIsAddressValid(core::ptr::null()) != 0 || MmIsAddressValid(hole) != 0 {
+        return Err("MmIsAddressValid says an address nothing maps is valid");
+    }
+    Ok(())
+}
+
 /// `DbgkWerCaptureLiveKernelDump`: write a dump of the running system
 /// for error reporting. NK cannot: it answers as Windows does before
 /// its live-dump support has started, `STATUS_DEVICE_NOT_READY`, after

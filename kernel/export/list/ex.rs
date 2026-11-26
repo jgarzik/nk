@@ -131,4 +131,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::spinlock::ExInterlockedPushEntryList),
     export!(Implemented, ex::slist::FirstEntrySList),
     export!(Implemented, ex::work::ExTryQueueWorkItem),
+    export!(Implemented, ex::sysinfo::MmIsVerifierEnabled),
+    export!(Implemented, ex::sysinfo::MmAddVerifierThunks),
+    export!(Implemented, ex::sysinfo::ExIsSoftBoot),
+    export!(Implemented, ex::sysinfo::MmIsAddressValid),
 ];
