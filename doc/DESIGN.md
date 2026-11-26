@@ -792,6 +792,39 @@ a time, a clock sequence, a node.
   the wall clock, the cycle counter and the time since boot: enough to
   tell boots and machines apart most of the time, and no secret.
 
+### Run-down protection
+
+[Run-down protection](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/run-down-protection)
+is one word of the driver's memory with Windows' values
+(`nk_ex::rundown`): a count of holders, then, once the object is being
+run down, the address of a block on the stack of the thread doing it.
+That thread sleeps on an event in the block; each release counts the
+block down and the last one sets the event. The word is left naming
+the block, as on Windows, until the driver initialises it again. A
+release after run-down with nobody waiting stops the system.
+
+The cache-aware kind has a word a processor that is running, each on a
+64-byte line; a thread uses the word of the processor it is on at that
+moment, so a word may count below zero and only the sum means
+anything. Running it down closes every word in turn and adds up what
+they held. The header's layout and the size
+`ExSizeOfRundownProtectionCacheAware` answers are the kernel's own,
+which a driver that sets the memory aside itself relies on.
+
+### Spin locks with readers, and lists under a spin lock
+
+An `EX_SPIN_LOCK` is a `LONG` of the driver's memory with Windows'
+bits (`nk_ex::spinlock`): the writer's bit, a count of readers, and a
+note that somebody is spinning. Nobody queues. A writer claims its bit
+first and then waits for the readers inside to leave, and new readers
+wait for the writer, so a stream of readers cannot keep a writer out.
+
+The `ExInterlocked...List` routines take the driver's `KSPIN_LOCK`
+with the IRQL at `HIGH_LEVEL`, where Windows turns interrupts off, so
+they can be called at any IRQL. `ExTryQueueWorkItem` always queues and
+says so. `ExQueryTimerResolution` answers NK's one clock rate three
+times.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:
