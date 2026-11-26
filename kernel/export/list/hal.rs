@@ -15,4 +15,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, hal::dma::IoGetDmaAdapter),
     export!(Implemented, hal::pci::HalSetBusDataByOffset),
     export!(Partial, hal::target::HalGetInterruptTargetInformation),
+    export!(Implemented, hal::query::HalConvertDeviceIdtToIrql),
+    export!(Implemented, hal::query::HalGetMemoryCachingRequirements),
+    export!(Implemented, hal::query::HalGetMessageRoutingInfo),
+    export!(Implemented, hal::query::HalGetProcessorIdByNtNumber),
 ];

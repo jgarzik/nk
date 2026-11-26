@@ -3,6 +3,7 @@ hal.dispatch-tables ok
 hal.acpi-tables ok
 hal.system-information ok
 hal.interrupt-targets ok
+hal.queries ok
 hal.pci.bridge ok
 hal.pci.ahci ok
 hal.pci.write ok

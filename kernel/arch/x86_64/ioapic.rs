@@ -16,8 +16,8 @@ use crate::hal::platform;
 use crate::mm;
 use nk_hal::interrupt::{Line, Polarity, Trigger};
 use nk_hal::x86::{
-    DEVICE_VECTORS, IoApic, REDIRECTION_MASKED, VectorMap, io_apic_inputs, irql_of_vector, message,
-    redirection, redirection_target,
+    DEVICE_VECTORS, IoApic, REDIRECTION_MASKED, VectorMap, device_irql_of_vector, io_apic_inputs,
+    irql_of_vector, message, redirection, redirection_target,
 };
 
 const INDEX: usize = 0x00;
@@ -177,6 +177,12 @@ impl InterruptVectors {
     /// Whether `vector` is one a device interrupt can have.
     pub fn is_device(vector: u32) -> bool {
         DEVICE_VECTORS.contains(&vector)
+    }
+
+    /// The IRQL of a device's interrupt on `vector`, as Windows' HAL
+    /// tells drivers.
+    pub fn device_irql(vector: u32) -> u8 {
+        device_irql_of_vector(vector)
     }
 }
 

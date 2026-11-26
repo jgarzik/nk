@@ -10,6 +10,24 @@ pub const fn irql_of_vector(vector: u32) -> u8 {
     (vector >> 4) as u8
 }
 
+/// `HalConvertDeviceIdtToIrql`: the IRQL of a device's interrupt on
+/// `vector`, as the pinned kernel works it out: the vector's upper four
+/// bits, kept within the device levels 3 to 12; 3 for a number that is
+/// no vector.
+pub const fn device_irql_of_vector(vector: u32) -> u8 {
+    if vector >= 0x100 {
+        return 3;
+    }
+    let level = irql_of_vector(vector);
+    if level < 3 {
+        3
+    } else if level > 12 {
+        12
+    } else {
+        level
+    }
+}
+
 /// First of the MSRs an APIC in x2APIC mode is reached through.
 const MSR_X2APIC: u32 = 0x800;
 
@@ -464,6 +482,27 @@ mod tests {
         assert_eq!(irql_of_vector(0x20), 2);
         assert_eq!(irql_of_vector(0xFF), 15);
         assert_eq!(irql_of_vector(0x0F), 0);
+    }
+
+    #[test]
+    fn a_device_vector_runs_at_a_device_irql() {
+        assert_eq!(device_irql_of_vector(0x30), 3);
+        assert_eq!(device_irql_of_vector(0x51), 5);
+        assert_eq!(device_irql_of_vector(0xB7), 11);
+        assert_eq!(device_irql_of_vector(0xCF), 12);
+        // Below and above the device levels.
+        assert_eq!(device_irql_of_vector(0x00), 3);
+        assert_eq!(device_irql_of_vector(0x2F), 3);
+        assert_eq!(device_irql_of_vector(0xD0), 12);
+        assert_eq!(device_irql_of_vector(0xFF), 12);
+        // Not a vector.
+        assert_eq!(device_irql_of_vector(0x100), 3);
+        assert_eq!(device_irql_of_vector(0x1C0), 3);
+        assert_eq!(device_irql_of_vector(u32::MAX), 3);
+        // Within the device levels it is the vector's own IRQL.
+        for vector in 0x30..0xD0 {
+            assert_eq!(device_irql_of_vector(vector), irql_of_vector(vector));
+        }
     }
 
     #[test]
