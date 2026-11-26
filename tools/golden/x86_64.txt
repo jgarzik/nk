@@ -106,6 +106,9 @@ ex.pushlock.words ok
 ex.pushlock.hand-over ok
 ex.pushlock.readers ok
 ex.pushlock.contention ok
+ex.slist.swap ok
+ex.slist.order ok
+ex.slist.contention ok
 io.pend-dpc ok
 io.pend-timer ok
 io.pend-work ok

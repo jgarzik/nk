@@ -385,9 +385,32 @@ and its siblings. NK's decisions:
   every waiter if it wants shared.
 - **Nobody joins shared holders past a waiter,** so readers cannot
   starve a writer.
-- The flags argument is ignored: every driver of the corpus passes
-  zero.
+- The flags argument is not looked at. The WDK's own macros pass zero
+  (`EX_DEFAULT_PUSH_LOCK_FLAGS`); what other values ask of Windows is
+  not documented.
 - Releasing a lock the word says is not held stops the system.
+
+### Sequenced lists
+
+`SLIST_HEADER` is 16 bytes with the same fields on both architectures:
+depth, a sequence number, the first entry
+([Singly and doubly linked lists](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/singly-and-doubly-linked-lists)).
+Push, pop and flush are lock-free: each stores its new header with one
+16-byte compare-and-swap, `CMPXCHG16B` on x86-64 and an exclusive
+load and store of the pair on arm64 (`arch::swap_pair`).
+
+- The sequence number goes up on a push and stays on a pop or flush,
+  as Windows' x86-64 routines are seen to do; that is what makes a
+  swap against a stale header fail.
+- **A pop reads the first entry's link before it knows the entry is
+  still listed.** If the entry was popped and freed meanwhile the swap
+  fails and the value is dropped, but the read has happened. Windows
+  forgives a page fault at that instruction. NK relies on the memory
+  being mapped: pool memory always is, and lookaside lists, the main
+  user, keep pool blocks. An entry inside a driver's image goes when
+  the driver is unloaded; unloading with a pop in flight elsewhere is
+  a page fault that stops the system.
+- Pushing an entry that is not 16-byte aligned stops the system.
 
 ## Objects, references and handles
 

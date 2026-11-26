@@ -1,0 +1,6 @@
+# A push swaps the new entry in as first without writing where it leads:
+# the entries that were on the list can no longer be reached from it.
+scenario: x86_64
+fails: ex.slist.order
+file: kernel/ex/slist.rs
+remove:             (&raw mut (*entry).Next).write(next);

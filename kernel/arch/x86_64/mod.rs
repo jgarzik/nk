@@ -1,6 +1,7 @@
 //! x86-64.
 
 mod apic;
+mod atomic;
 mod clock;
 mod cpu;
 pub mod platform;
@@ -9,6 +10,8 @@ mod switch;
 mod trap;
 pub mod unwind;
 mod variadic;
+
+pub use atomic::swap_pair;
 
 pub use apic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
