@@ -2497,10 +2497,12 @@ other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
 publishes no arm64 binaries NK may use, so its own drivers run on x86-64
-alone. NK has run on no physical machine. NK has no errata database
-(Windows' comes from `errata.inf`, which NK does not read): a rule a
-driver asks the errata manager about is unknown, `STATUS_NOT_FOUND`,
-where Windows answers the rule's state.
+alone. NK has run on no physical machine. NK applies no errata:
+it has no errata database (Windows' comes from `errata.inf`, which NK
+does not read), and every rule a driver asks the errata manager about
+is reported as defined and not applying, where Windows evaluates the
+rules of that file; so the workarounds for the hardware it lists are
+not made.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
@@ -2521,12 +2523,13 @@ for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
 when Windows' engine is not running), no errata rules
 (`kernel/ex/em.rs`: Windows reads the errata manager's database from
 an errata file at boot; NK reads none. `pci.sys` does not load unless
-it registers as a provider, so NK's database takes its entry types and
-callbacks from the providers that register them, checked as Windows
-checks a registration whose GUIDs it knows; it has no rule, so a client
-that asks about one is told `STATUS_NOT_FOUND`, the rule's state
-unknown, and `acpi.sys` and `pci.sys` go on as on a machine no erratum
-matches. With no rule nothing calls a provider's callbacks), no
+it registers as a provider and every rule it asks about is answered,
+so NK's database takes its entry types and callbacks from the
+providers that register them, checked as Windows checks a registration
+whose GUIDs it knows, and answers every rule as Windows answers one
+whose conditions do not hold: `STATUS_SUCCESS`, the state false. Each
+rule asked about is logged once. Nothing calls a provider's
+callbacks), no
 driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
 reported to it goes nowhere), no headless terminal (the same file:
 it cannot be enabled, questions are answered with zeros, output

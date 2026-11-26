@@ -7,9 +7,7 @@ use core::ffi::c_void;
 use nk_bootinfo::BootInfo;
 use nk_ntabi::em::{EM_CALLBACK_REGISTRATION, EM_ENTRY_REGISTRATION};
 use nk_ntabi::ex::GUID;
-use nk_ntabi::status::{
-    STATUS_INVALID_PARAMETER, STATUS_NOT_FOUND, STATUS_OBJECT_NAME_COLLISION, STATUS_SUCCESS,
-};
+use nk_ntabi::status::{STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_COLLISION, STATUS_SUCCESS};
 
 pub static GROUP: Group = Group {
     names: &["em.providers", "em.no-rules"],
@@ -128,21 +126,25 @@ fn no_rules() -> Result<(), &'static str> {
     let input = [0usize; 2];
     // SAFETY: a GUID, and locals for the state and the entries.
     unsafe {
-        if em::EmClientQueryRuleState(&raw const ENTRY, &raw mut state) != STATUS_NOT_FOUND
-            || state != 1
+        // pci.sys does not load unless each rule it asks about is
+        // answered: defined, and not applying.
+        if em::EmClientQueryRuleState(&raw const ENTRY, &raw mut state) != STATUS_SUCCESS
+            || state != 0
         {
-            return Err("a rule's state was not unknown and its rule not found");
+            return Err("a rule was not reported as defined and not applying");
         }
         state = 7;
         if em::EmClientRuleEvaluate(&raw const ENTRY, input.as_ptr().cast(), 1, &raw mut state)
-            != STATUS_NOT_FOUND
-            || state != 1
+            != STATUS_SUCCESS
+            || state != 0
         {
-            return Err("an evaluated rule was not unknown and not found");
+            return Err("an evaluated rule was not reported as not applying");
         }
         state = 7;
         if em::EmClientQueryRuleState(core::ptr::null(), &raw mut state) != STATUS_INVALID_PARAMETER
             || em::EmClientRuleEvaluate(&raw const ENTRY, input.as_ptr().cast(), 0, &raw mut state)
+                != STATUS_INVALID_PARAMETER
+            || em::EmClientQueryRuleState(&raw const ENTRY, core::ptr::null_mut())
                 != STATUS_INVALID_PARAMETER
             || state != 7
         {
