@@ -83,6 +83,21 @@ fn what_a_kernel_reads_at_boot_is_there() {
 }
 
 #[test]
+fn the_boot_start_services_come_in_group_order() {
+    let Some(file) = fixture() else { return };
+    let (hive, root) = tree(&file);
+    let set = hive.open(root, &wide("ControlSet001")).unwrap();
+    let names: Vec<String> = crate::services::boot_start(&hive, set)
+        .unwrap()
+        .into_iter()
+        .map(|key| String::from_utf16(hive.info(key).unwrap().name).unwrap())
+        .collect();
+    // `Base` comes before `File System` in the group list; msrpc and
+    // the libraries start on demand.
+    assert_eq!(names, ["Null", "Npfs"]);
+}
+
+#[test]
 fn values_of_every_size_come_back_whole() {
     let Some(file) = fixture() else { return };
     let (hive, root) = tree(&file);

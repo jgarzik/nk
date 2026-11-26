@@ -136,7 +136,11 @@ pub(super) fn load(
             device = (*device).NextDevice;
         }
     }
-    DRIVERS.lock().push(Record {
+    let mut drivers = DRIVERS.lock();
+    // Room for exactly one more, as unloading leaves exactly enough: the
+    // table's memory then depends only on how many drivers are loaded.
+    drivers.reserve_exact(1);
+    drivers.push(Record {
         object,
         image,
         _driver_name: driver_name,

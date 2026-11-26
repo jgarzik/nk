@@ -1,0 +1,7 @@
+# The drivers the hive says start at boot are never started: the system
+# comes up without them and nothing says so.
+scenario: x86_64
+fails: io.service.boot-start
+file: kernel/main.rs
+replace:     if let Err(why) = io::service::start_boot_services() {
+with:     if let Err(why) = Ok::<(), &str>(()) {

@@ -5,7 +5,7 @@
 
 use super::resources;
 use crate::io::file::{self, IoResult};
-use crate::io::service;
+use crate::io::service::{self, ServiceError};
 use crate::ldr;
 use crate::ob;
 use crate::test::{Group, Report};
@@ -114,8 +114,23 @@ fn run(r: &mut Report, _: &BootInfo) {
     if ldr::boot_file("null.sys").is_none() {
         return r.skip_rest(format_args!("module null.sys not provided"));
     }
+    // Null starts at boot when the hive says so. It is stopped for the
+    // test, which loads and unloads it and counts what that leaves
+    // behind, and started again at the end.
+    let at_boot = service::running("Null");
+    if at_boot && let Err(why) = service::stop("Null") {
+        return r.fail("null.load", format_args!("could not stop Null: {why}"));
+    }
     let before = resources();
-    if let Err(e) = service::create("Null", "null.sys").and_then(|()| service::start("Null")) {
+    // A registry without the hive has no key for it: make one, as
+    // `sc create` would.
+    let started = match service::start("Null") {
+        Err(ServiceError::NoKey) => {
+            service::create("Null", "null.sys").and_then(|()| service::start("Null"))
+        }
+        other => other,
+    };
+    if let Err(e) = started {
         return r.fail("null.load", format_args!("{e:?}"));
     }
     r.ok("null.load");
@@ -152,12 +167,18 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("null.unload", format_args!("{why}")),
     }
     let after = resources();
-    if after == before {
-        r.ok("null.no-leak");
-    } else {
+    let restarted = !at_boot || service::start("Null").is_ok();
+    if after != before {
         r.fail(
             "null.no-leak",
             format_args!("before {before:?}, after {after:?}"),
         );
+    } else if !restarted {
+        r.fail(
+            "null.no-leak",
+            format_args!("Null could not be started again"),
+        );
+    } else {
+        r.ok("null.no-leak");
     }
 }

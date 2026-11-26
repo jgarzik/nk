@@ -123,11 +123,15 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     ke::thread::idle_loop()
 }
 
-/// The first thread: run the tests, then power off.
+/// The first thread: start the drivers that start at boot, run the
+/// tests, then power off.
 fn system_thread(info: usize) {
     // SAFETY: the address of the loader's hand-off block, which lives
     // for ever and is never written.
     let info = unsafe { &*(info as *const BootInfo) };
     export::print_all();
+    if let Err(why) = io::service::start_boot_services() {
+        test::abort("io.boot-start", format_args!("{why}"));
+    }
     test::run_all(selftest::GROUPS, info)
 }

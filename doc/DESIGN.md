@@ -570,12 +570,34 @@ happened at, and a stack walk finds each frame's function there.
 
 A driver is started from its service key, as on Windows
 (`kernel/io/service.rs`): `...\Services\<name>\ImagePath` names the
-image, and the last part of that path is looked up among the boot files,
-the contents of `\NK\drivers`, which stand for `System32\drivers` until
-there is a file system. Nothing else loads a driver. The tests make a
-key the way `sc create` does and then start the service; the driver's
-entry point is given the path to that key. Stopping a service runs the
-driver's unload routine and frees its image; the key stays.
+image, and a key without that value means `System32\drivers\<name>.sys`.
+The last part of the path is looked up among the boot files, the
+contents of `\NK\drivers`, which stand for `System32\drivers` until
+there is a file system. Nothing else loads a driver. The driver's entry
+point is given the path to its key. Stopping a service runs the driver's
+unload routine and frees its image; the key stays.
+
+**At boot**, before anything else is done with drivers, the system
+thread starts those whose keys say `Start` 0 (boot) or 1 (system), in
+Windows' order (`nk_cm::services`): boot start before system start; in
+each, by the place of the service's `Group` in
+`Control\ServiceGroupOrder`, then by the place of its `Tag` in the
+group's list under `Control\GroupOrderList`; services of no listed
+group last; a service after those it names in `DependOnService` and
+`DependOnGroup`. Only keys whose `Type` is a driver's count. Windows'
+loader reads boot-start drivers into memory before the kernel runs and
+the I/O manager starts system-start ones later; on NK both are boot
+files and the order is all that tells them apart.
+
+- A service whose image is not among the boot files is passed over,
+  with a line in the log: a test image holds only the drivers it was
+  given.
+- Any other failure is logged, and stops the boot if the key's
+  `ErrorControl` is 3 (critical). Windows restarts with the
+  last-known-good control set first; NK has the one.
+
+Other services start when something asks: the tests make a key the way
+`sc create` does and start it, or start one the hive describes.
 
 ## I/O
 

@@ -1,10 +1,13 @@
 //! Driver services: a driver is started from its key under
 //! `...\Services`, as on Windows, and stopped by its service name.
 //!
-//! The key says which image (`ImagePath`); the image is a boot file
+//! The key says which image (`ImagePath`; without one, the file in
+//! `System32\drivers` named for the service); the image is a boot file
 //! (`ldr::boot_file`), NK's `System32\drivers` until there is a file
 //! system. [`create`] writes a key the way the service control manager
-//! does for `sc create`; a key may equally come from the hive.
+//! does for `sc create`; a key may equally come from the hive, and the
+//! hive's boot-start and system-start drivers are started at boot
+//! ([`start_boot_services`]).
 
 use super::driver::{self, DriverError};
 use crate::{cm, ldr};
@@ -29,7 +32,7 @@ const ERROR_NORMAL: u32 = 1;
 #[derive(Debug)]
 #[expect(dead_code, reason = "fields are read through Debug in test reports")]
 pub enum ServiceError {
-    /// The service has no key, or the key no usable `ImagePath`.
+    /// The service has no key, or its `ImagePath` names no file.
     NoKey,
     /// The image the key names is not among the boot files.
     NoImage(String),
@@ -63,17 +66,38 @@ pub fn create(name: &str, file: &str) -> Result<(), ServiceError> {
     .map_err(|_| ServiceError::NoMemory)
 }
 
-/// Start the driver of the service `name`: find its image by the key's
-/// `ImagePath`, load it and run its entry point.
-pub fn start(name: &str) -> Result<*mut DRIVER_OBJECT, ServiceError> {
-    let (_, path) = cm::read(&key(name), "ImagePath").map_err(|_| ServiceError::NoKey)?;
+/// The boot file that is the image of the service `name`: the last
+/// part of its key's `ImagePath`, or `<name>.sys` for a key without
+/// one, which is the file Windows takes from `System32\drivers` then.
+pub fn image(name: &str) -> Result<String, ServiceError> {
+    let Ok((_, path)) = cm::read(&key(name), "ImagePath") else {
+        return if cm::exists(&key(name)) {
+            Ok(format!("{name}.sys"))
+        } else {
+            Err(ServiceError::NoKey)
+        };
+    };
     let path: Vec<u16> = path
         .as_chunks::<2>()
         .0
         .iter()
         .map(|c| u16::from_le_bytes(*c))
         .collect();
-    let file = String::from_utf16(nk_rtl::image_file(&path)).map_err(|_| ServiceError::NoKey)?;
+    match String::from_utf16(nk_rtl::image_file(&path)) {
+        Ok(file) if !file.is_empty() => Ok(file),
+        _ => Err(ServiceError::NoKey),
+    }
+}
+
+/// Whether the driver of the service `name` is running.
+pub fn running(name: &str) -> bool {
+    driver::running(name).is_some()
+}
+
+/// Start the driver of the service `name`: find its image ([`image`]),
+/// load it and run its entry point.
+pub fn start(name: &str) -> Result<*mut DRIVER_OBJECT, ServiceError> {
+    let file = image(name)?;
     if driver::running(name).is_some() {
         return Err(ServiceError::Running);
     }
@@ -81,6 +105,39 @@ pub fn start(name: &str) -> Result<*mut DRIVER_OBJECT, ServiceError> {
         return Err(ServiceError::NoImage(file));
     };
     driver::load(name, &file, image).map_err(ServiceError::Driver)
+}
+
+/// `SERVICE_ERROR_CRITICAL`: a boot without this driver has failed.
+const ERROR_CRITICAL: u32 = 3;
+
+/// Start the drivers the registry says start at boot: `Start` 0 (boot)
+/// and 1 (system), in the order `cm::boot_start` gives. Windows' loader
+/// and I/O manager do this before anything else runs.
+///
+/// A service whose image is not among the boot files is passed over,
+/// with a line in the log: the boot files stand for a driver directory
+/// that holds only what a test image was given. Any other failure is
+/// logged, and fails the boot if the key's
+/// [`ErrorControl`](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew)
+/// is critical. (Windows then restarts with the last-known-good control
+/// set and fails only if that is what was running; NK has one control
+/// set to run.)
+pub fn start_boot_services() -> Result<(), &'static str> {
+    for (name, error_control) in cm::boot_start()? {
+        match start(&name) {
+            Ok(_) => kprintln!("io: boot-start service {name} started"),
+            Err(ServiceError::NoImage(file)) => {
+                kprintln!("io: boot-start service {name} skipped: no boot file {file}");
+            }
+            Err(e) => {
+                kprintln!("io: boot-start service {name} failed: {e:?}");
+                if error_control == ERROR_CRITICAL {
+                    return Err("a boot-start driver whose failure is critical did not start");
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Stop the service `name`: have its driver unload, and free it.

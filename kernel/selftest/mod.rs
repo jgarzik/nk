@@ -23,6 +23,7 @@ mod pend;
 mod review;
 mod se;
 mod seh;
+mod service;
 mod sioctl;
 mod smp;
 mod thread;
@@ -60,6 +61,7 @@ pub static GROUPS: &[&Group] = &[
     &work::GROUP,
     &pend::GROUP,
     &open::GROUP,
+    &service::GROUP,
     &driver_api::GROUP,
     &loader::GROUP,
     &null::GROUP,

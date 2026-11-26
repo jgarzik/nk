@@ -17,9 +17,11 @@
 
 use crate::ke::{Rank, SpinLock};
 use crate::ob::{handle, object};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_cm::regf::{Regf, RegfError};
+use nk_cm::services::OrderError;
 use nk_cm::{Error, Fit, Hive, ImportError, KeyId};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
@@ -302,6 +304,44 @@ pub fn read(path: &str, name: &str) -> Result<(u32, Vec<u8>), NTSTATUS> {
         .map_err(|_| STATUS_INSUFFICIENT_RESOURCES)?;
     copy.extend_from_slice(data);
     Ok((kind, copy))
+}
+
+/// The driver services the current control set starts at boot, in the
+/// order they start (`nk_cm::services::boot_start`): each one's name
+/// and its `ErrorControl`. For the kernel's own use.
+pub fn boot_start() -> Result<Vec<(String, u32)>, &'static str> {
+    const NO_MEMORY: &str = "no memory for the list of boot-start services";
+    let mut hive = HIVE.lock();
+    let root = hive.root().map_err(|_| NO_MEMORY)?;
+    let set = hive
+        .open(root, &wide("Machine\\System\\CurrentControlSet"))
+        .map_err(|_| "there is no current control set")?;
+    let keys = nk_cm::services::boot_start(&hive, set).map_err(|error| match error {
+        OrderError::NoMemory => NO_MEMORY,
+        OrderError::Cycle(_) => "boot-start services depend on each other in a circle",
+    })?;
+    let mut services = Vec::new();
+    services
+        .try_reserve_exact(keys.len())
+        .map_err(|_| NO_MEMORY)?;
+    for key in keys {
+        let name = hive.info(key).map_or(&[][..], |info| info.name);
+        // `SERVICE_ERROR_NORMAL` where the key does not say.
+        let error_control = match hive.value(key, &wide("ErrorControl")) {
+            Ok((_, REG_DWORD, &[a, b, c, d])) => u32::from_le_bytes([a, b, c, d]),
+            _ => 1,
+        };
+        services.push((String::from_utf16_lossy(name), error_control));
+    }
+    Ok(services)
+}
+
+/// Whether there is a key at `path` (from the registry's root). For
+/// the kernel's own use.
+pub fn exists(path: &str) -> bool {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    hive.root().is_ok_and(|root| hive.open(root, &path).is_ok())
 }
 
 /// [`ZwDeleteKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletekey):

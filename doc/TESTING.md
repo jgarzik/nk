@@ -158,12 +158,12 @@ None is committed. An absent fixture makes its tests SKIP.
 
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
-| `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | read gives end-of-file, write accepts all bytes; unloads without leaks |
+| `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | started at boot from its key in the hive; read gives end-of-file, write accepts all bytes; unloads without leaks |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
 | `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
-| `\NK\SYSTEM` | a registry hive written by Windows' own registry from nk-fixtures' `hive/system.hive.txt` (one file for both architectures) | the kernel boots from it: its keys and values, of every size and name, are read back through `CurrentControlSet` (`cm.hive.*`) |
+| `\NK\SYSTEM` | a registry hive written by Windows' own registry from nk-fixtures' `hive/system.hive.txt` (one file for both architectures) | the kernel boots from it: its keys and values, of every size and name, are read back through `CurrentControlSet` (`cm.hive.*`); its boot-start services are started in group order, those without a boot file passed over (`io.service.boot-start`) |
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
