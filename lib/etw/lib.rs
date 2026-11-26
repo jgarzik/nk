@@ -9,12 +9,13 @@
 //! the blob a provider names itself with. [`logger`] answers questions
 //! about trace sessions when there are none. [`wmi`] is the record of
 //! devices registered with WMI and the check of a driver's
-//! registration.
+//! registration. [`activity`] makes activity ids.
 
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
+pub mod activity;
 pub mod logger;
 pub mod provider;
 pub mod traits;

@@ -22,6 +22,7 @@ pub static GROUP: Group = Group {
         "cpu.stack-probe",
         "kd.no-debugger",
         "ex.sysinfo.with-input",
+        "etw.nobody-listens",
     ],
     run,
     manual: false,
@@ -347,6 +348,86 @@ fn sysinfo_with_input() -> Result<(), &'static str> {
     Ok(())
 }
 
+fn etw_nobody_listens() -> Result<(), &'static str> {
+    use crate::etw;
+    use nk_ntabi::etw::{EVENT_DESCRIPTOR, GUID};
+    use nk_ntabi::status::{STATUS_INVALID_HANDLE, STATUS_NOT_SUPPORTED};
+    let provider = GUID {
+        Data1: 0x4E4B_0E01,
+        Data2: 2,
+        Data3: 3,
+        Data4: [4; 8],
+    };
+    // SAFETY: an all-zero descriptor is a valid value of this plain
+    // data.
+    let event: EVENT_DESCRIPTOR = unsafe { core::mem::zeroed() };
+    let mut handle = 0u64;
+    // SAFETY: a GUID and a place for the handle in locals; no callback.
+    let status = unsafe {
+        etw::EtwRegister(
+            &raw const provider,
+            None,
+            core::ptr::null_mut(),
+            &raw mut handle,
+        )
+    };
+    if status != STATUS_SUCCESS {
+        return Err("a provider was not registered");
+    }
+    let written = etw::EtwWrite(
+        handle,
+        &raw const event,
+        core::ptr::null(),
+        0,
+        core::ptr::null(),
+    );
+    let enabled = etw::EtwEventEnabled(handle, &raw const event);
+    let unregistered = etw::EtwUnregister(handle);
+    if written != STATUS_SUCCESS || enabled != 0 || unregistered != STATUS_SUCCESS {
+        return Err("an event nobody listens for was not dropped with success");
+    }
+    if etw::EtwWrite(
+        handle,
+        &raw const event,
+        core::ptr::null(),
+        0,
+        core::ptr::null(),
+    ) != STATUS_INVALID_HANDLE
+        || etw::EtwEventEnabled(0, &raw const event) != 0
+    {
+        return Err("a handle that names no provider was written through");
+    }
+    if etw::WmiTraceMessageVa(1, 0, &raw const provider, 10, core::ptr::null())
+        != STATUS_INVALID_HANDLE
+    {
+        return Err("a message was traced to a session that does not exist");
+    }
+    // Activity ids: made, each different; a system thread has none of
+    // its own.
+    let mut first = provider;
+    let mut second = provider;
+    // SAFETY: GUIDs in locals.
+    unsafe {
+        if etw::EtwActivityIdControl(3, &raw mut first) != STATUS_SUCCESS
+            || etw::EtwActivityIdControl(3, &raw mut second) != STATUS_SUCCESS
+            || first == second
+            || first == provider
+        {
+            return Err("activity ids were not made, each its own");
+        }
+        let kept = second;
+        for code in [1, 2, 4, 5, 0] {
+            if etw::EtwActivityIdControl(code, &raw mut second) != STATUS_NOT_SUPPORTED {
+                return Err("a system thread was given an activity id of its own");
+            }
+        }
+        if second != kept {
+            return Err("a refused control changed the caller's id");
+        }
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ex.verifier-off", verifier_off);
     r.check("ex.headless-off", headless_off);
@@ -357,6 +438,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cpu.stack-probe", crate::arch::chkstk_test);
     r.check("kd.no-debugger", no_debugger);
     r.check("ex.sysinfo.with-input", sysinfo_with_input);
+    r.check("etw.nobody-listens", etw_nobody_listens);
 }
 
 /// This file's test groups, in the order they run.
