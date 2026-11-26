@@ -195,6 +195,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
 | the other `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
 | `\NK\SYSTEM` | a registry hive written by Windows' own registry from nk-fixtures' `hive/system.hive.txt` (one file for both architectures) | the kernel boots from it: its keys and values, of every size and name, are read back through `CurrentControlSet` (`cm.hive.*`); its boot-start services are started in group order, those without a boot file passed over (`io.service.boot-start`) |
+| `\NK\OVERLAY` | `fixtures/registry-overlay.txt`, NK's own text file of keys and values not yet in the hive | laid over the hive at boot: its keys are read back, and a value of its own in place of the hive's (`cm.overlay`) |
 | `nkc-lib.sys`, `nkc-libuser.sys` | an export driver and a driver that imports from it by name, by ordinal and a variable (nk-fixtures `nkc/nkc-lib*.c`) | the library is loaded with its importer, initialised once per load, kept while an importer is left and unloaded with the last; the importer logs the values it logs on Windows |
 | `nkc-libbad.sys` | imports a name `nkc-lib.sys` does not export | refused with Windows' status, naming the import; its library is not left loaded |
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
@@ -208,6 +209,9 @@ They are identified by hash and never patched or rebuilt to suit NK.
 The manifest pins what no boot loads as well: the layout tables the
 WDK's compiler recorded and the kernel's symbol file, which the host
 tests compare `lib/ntabi` with (`doc/ABI.md`).
+`fixtures/registry-overlay.txt` is the one fixture kept in this
+repository: registry content, as text, that the next release of the
+hive takes over (`doc/DESIGN.md`, The registry).
 
 ## The Windows oracle
 
