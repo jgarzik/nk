@@ -1,0 +1,8 @@
+# A fault at address zero is a call through a null pointer, whose
+# caller's handlers are asked; only a return to address zero is the end
+# of a stack.
+scenario: x86_64
+fails: scenario
+file: kernel/ke/seh.rs
+replace:         if cpu::pc(&current) == 0 && !interrupted {
+with:         if cpu::pc(&current) == 0 {

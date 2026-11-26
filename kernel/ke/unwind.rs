@@ -7,9 +7,10 @@
 //! whatever the tables describe: compiled functions, the assembly
 //! stubs, the change of stack around DPC routines, interrupt frames.
 //!
-//! The walk ends at a frame whose program counter is zero: every stack
+//! The walk ends at a frame that returns to address zero: every stack
 //! is entered as if called from address zero (`doc/DESIGN.md`, "Unwind
-//! tables").
+//! tables"). Code an interrupt stopped at address zero is not the end:
+//! it was called through a null pointer, and is in no image.
 //!
 //! Three things make it fail instead of guess:
 //!
@@ -134,7 +135,7 @@ pub fn walk(
     let (mut regs, mut interrupted) = (*start, interrupted);
     for count in 0..MAX_FRAMES {
         let (pc, sp) = (unwind::pc(&regs), unwind::sp(&regs));
-        if pc == 0 {
+        if pc == 0 && !interrupted {
             return Ok(count);
         }
         let module = ldr::module_containing(pc).ok_or(WalkError::NoImage { pc })?;

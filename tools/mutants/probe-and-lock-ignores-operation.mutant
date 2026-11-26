@@ -1,0 +1,7 @@
+# MmProbeAndLockPages refuses to lock for writing pages whose mapping
+# is read-only.
+scenario: x86_64
+fails: mm.probe-and-lock.read-only
+file: kernel/io/mdl.rs
+replace:     let allowed = |writable: bool| writable || operation == IO_READ_ACCESS;
+with:     let allowed = |_: bool| operation < 3;

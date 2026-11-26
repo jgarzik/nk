@@ -1,0 +1,7 @@
+# Firmware's runtime memory lies in the low half, mapped and writable,
+# and is not user memory: a probe refuses a buffer that touches it.
+scenario: x86_64
+fails: io.user.firmware-buffer
+file: kernel/mm/user.rs
+replace:     user && !firmware(address as u64, len as u64)
+with:     user

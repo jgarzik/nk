@@ -3,5 +3,5 @@
 scenario: aarch64
 fails: sioctl.neither
 file: kernel/io/mdl.rs
-replace:                 user::frame_of(va)
-with:                 map::translate(va)
+replace:             let found = if access_mode == KERNEL_MODE || user::frame_of(va).is_some() {
+with:             let found = if true {

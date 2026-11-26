@@ -2,15 +2,20 @@
 //! it: each failed before its fix.
 
 use crate::io::device::{IoCreateDevice, IoDeleteDevice};
+use crate::io::mdl::{IoAllocateMdl, IoFreeMdl, MmUnlockPages};
+use crate::ke::seh::STATUS_ACCESS_VIOLATION;
 use crate::ke::{irql, smp, thread, time, wait};
 use crate::mm::pool;
-use crate::ob::handle::ObReferenceObjectByHandle;
+use crate::ob::handle::{self, ObReferenceObjectByHandle};
 use crate::ob::object::{ExEventObjectType, ObfDereferenceObject, PsThreadType};
 use crate::test::{Group, Report, Slot};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT};
+use nk_ntabi::io::{
+    DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT, IO_MODIFY_ACCESS, IO_READ_ACCESS,
+    IO_WRITE_ACCESS, KERNEL_MODE, MDL, MDL_PAGES_LOCKED,
+};
 use nk_ntabi::ke::KEVENT;
 
 pub static GROUP: Group = Group {
@@ -21,6 +26,9 @@ pub static GROUP: Group = Group {
         "thread.wake-at-dispatch",
         "work.queue-types",
         "work.driver-object",
+        "ps.thread.no-handle",
+        "ob.handle.open-close-race",
+        "mm.probe-and-lock.read-only",
     ],
     run,
     manual: false,
@@ -406,8 +414,268 @@ fn driver_object() -> Result<(), &'static str> {
     result
 }
 
+/// What a system thread's routine found: that it ran, and the handle
+/// its creator was to be given.
+static STARTED: AtomicU32 = AtomicU32::new(0);
+static HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+static HANDLE_SEEN: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+/// # Safety
+/// Called as a system thread's start routine.
+unsafe extern "C" fn note_start(_: *mut c_void) {
+    HANDLE_SEEN.store(HANDLE.load(Ordering::Acquire), Ordering::Release);
+    STARTED.fetch_add(1, Ordering::AcqRel);
+}
+
+/// `PsCreateSystemThread` reports failure only for a thread that never
+/// runs: one that cannot be given its handle is not started, and
+/// leaves nothing behind. One that can finds the handle already handed
+/// to its creator when it starts, as on Windows, which readies the
+/// thread last.
+fn thread_without_handle() -> Result<(), &'static str> {
+    const STATUS_INSUFFICIENT_RESOURCES: i32 = 0xC000_009Au32 as i32;
+    let threads = thread::count();
+    STARTED.store(0, Ordering::Release);
+    // SAFETY: the routine takes any context.
+    let status = unsafe {
+        crate::ps::create_system_thread(note_start, core::ptr::null_mut(), |_| {
+            STATUS_INSUFFICIENT_RESOURCES
+        })
+    };
+    if status != STATUS_INSUFFICIENT_RESOURCES {
+        return Err("a thread that got no handle was not reported as the failure it was");
+    }
+    // Long enough for a thread that was started to run.
+    for _ in 0..100 {
+        time::stall(1_000);
+        thread::yield_now();
+    }
+    if STARTED.load(Ordering::Acquire) != 0 {
+        return Err("PsCreateSystemThread failed, and the thread ran all the same");
+    }
+    if thread::count() != threads {
+        return Err("a thread that was never started is still there");
+    }
+
+    HANDLE.store(core::ptr::null_mut(), Ordering::Release);
+    HANDLE_SEEN.store(core::ptr::null_mut(), Ordering::Release);
+    // SAFETY: `HANDLE` is room for a handle; the routine takes any
+    // context.
+    let status = unsafe {
+        crate::ps::PsCreateSystemThread(
+            HANDLE.as_ptr(),
+            0x001F_FFFF,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Some(note_start),
+            core::ptr::null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err("a system thread could not be created");
+    }
+    let handle = HANDLE.load(Ordering::Acquire);
+    let deadline = time::interrupt_time() + 20_000_000;
+    while STARTED.load(Ordering::Acquire) != 1 || thread::count() != threads {
+        if time::interrupt_time() > deadline {
+            crate::ps::ZwClose(handle);
+            return Err("a system thread did not run and end");
+        }
+        thread::yield_now();
+    }
+    if crate::ps::ZwClose(handle) != 0 {
+        return Err("the new thread's handle did not close");
+    }
+    if handle.is_null() || HANDLE_SEEN.load(Ordering::Acquire) != handle {
+        return Err("a system thread ran before its creator had been given its handle");
+    }
+    Ok(())
+}
+
+/// The handle the opener keeps getting, for the closer to close, and
+/// how often the closer got there first.
+static GUESSED: AtomicU64 = AtomicU64::new(0);
+static STOLEN: AtomicU32 = AtomicU32::new(0);
+
+fn close_guessed(_: usize) {
+    while !GO.load(Ordering::Acquire) {
+        thread::yield_now();
+    }
+    while GO.load(Ordering::Acquire) {
+        if handle::close(GUESSED.load(Ordering::Relaxed)) == 0 {
+            STOLEN.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+    FINISHED.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Handle numbers are predictable: the lowest free slot is used first.
+/// So a handle can be closed, from another processor, the instant it
+/// is in the table, before its opener has returned. It owns its
+/// reference and its place in the object's handle count by then: the
+/// close gives up what the handle had, never what it was about to get.
+/// The object here has one reference besides the handle's, so a close
+/// that came too early would free it under its opener. Returns the
+/// handles opened and how many of them the other processor closed.
+fn open_close_race() -> Result<(u32, u32), &'static str> {
+    let threads = thread::count();
+    let (pool_before, handles_before) = (pool::usage().blocks, handle::count());
+    GO.store(false, Ordering::Release);
+    FINISHED.store(0, Ordering::Release);
+    STOLEN.store(0, Ordering::Release);
+    GUESSED.store(0, Ordering::Release);
+    thread::create(
+        close_guessed,
+        0,
+        thread::NORMAL_PRIORITY,
+        1 << other_processor(),
+    )?;
+    let mut opened = 0;
+    let mut wrong = None;
+    let deadline = time::interrupt_time() + RACE_TIME;
+    while time::interrupt_time() < deadline && wrong.is_none() {
+        // A few hundred opens between looks at the clock.
+        for _ in 0..256 {
+            let Some(body) =
+                crate::ob::object::create(&crate::ob::object::EVENT_TYPE, size_of::<KEVENT>())
+            else {
+                wrong = Some("no memory for an object");
+                break;
+            };
+            // SAFETY: a fresh object this test holds the reference to,
+            // which it gives up last.
+            unsafe {
+                let stolen = STOLEN.load(Ordering::Acquire);
+                let Ok(opened_as) = handle::open(body, 0) else {
+                    crate::ob::object::dereference(body);
+                    wrong = Some("no memory for a handle");
+                    break;
+                };
+                opened += 1;
+                GUESSED.store(opened_as, Ordering::Relaxed);
+                GO.store(true, Ordering::Release);
+                if handle::close(opened_as) != 0 {
+                    // The closer has it: wait until it is done with it.
+                    while STOLEN.load(Ordering::Acquire) == stolen {
+                        core::hint::spin_loop();
+                    }
+                }
+                if crate::ob::object::handle_count(body).load(Ordering::Acquire) != 0 {
+                    wrong = Some("an object's handle count is not zero with its handle closed");
+                }
+                if crate::ob::object::dereference(body) != 0 {
+                    wrong = Some("an object outlived its handle and its creator's reference");
+                }
+            }
+        }
+    }
+    GO.store(true, Ordering::Release);
+    GO.store(false, Ordering::Release);
+    while FINISHED.load(Ordering::Acquire) != 1 || thread::count() != threads {
+        thread::yield_now();
+    }
+    if let Some(wrong) = wrong {
+        return Err(wrong);
+    }
+    if handle::count() != handles_before || pool::usage().blocks != pool_before {
+        return Err("handles closed from two processors left a handle or an object behind");
+    }
+    Ok((opened, STOLEN.load(Ordering::Acquire)))
+}
+
+/// How long the race is run: 300 ms.
+const RACE_TIME: u64 = 3_000_000;
+
+/// The MDL [`probe_for`] probes.
+static PROBED: AtomicPtr<MDL> = AtomicPtr::new(core::ptr::null_mut());
+
+/// `MmProbeAndLockPages(Mdl, KernelMode, operation)`, as a driver calls
+/// it.
+extern "C" fn probe_for(operation: usize) {
+    // SAFETY: the test's MDL, whose pages are not locked.
+    unsafe {
+        crate::arch::seh::nk_entry_MmProbeAndLockPages(
+            PROBED.load(Ordering::Acquire).cast(),
+            KERNEL_MODE,
+            operation as u32,
+        );
+    }
+}
+
+/// `MmProbeAndLockPages` looks at the operation its caller means to
+/// do: pages that cannot be written are locked for `IoReadAccess` and
+/// refused for `IoWriteAccess` and `IoModifyAccess` with the access
+/// violation Windows raises. Pages that can be written are locked for
+/// all three. Returns the probes made.
+fn read_only_probe() -> Result<u32, &'static str> {
+    use crate::mm::{self, map};
+    use nk_mm::pt::Prot;
+    let frame = mm::alloc_frames(1).ok_or("no frames")?;
+    let Some(va) = map::alloc_va(1) else {
+        mm::free_frames(frame, 1);
+        return Err("no address space");
+    };
+    let mut probes = 0;
+    let mut check = |prot: Prot, writable: bool| -> Result<(), &'static str> {
+        map::map(va, frame, 1, prot).map_err(|_| "map failed")?;
+        // SAFETY: a page mapped just above, and the MDL made for it
+        // here, which is unlocked before it is freed.
+        let verdict = unsafe {
+            let mdl = IoAllocateMdl((va + 0x10) as *mut c_void, 32, 0, 0, core::ptr::null_mut());
+            if mdl.is_null() {
+                Err("no memory for an MDL")
+            } else {
+                PROBED.store(mdl, Ordering::Release);
+                let mut verdict = Ok(());
+                for operation in [IO_READ_ACCESS, IO_WRITE_ACCESS, IO_MODIFY_ACCESS] {
+                    let raised = super::except::raises(
+                        probe_for,
+                        operation as usize,
+                        STATUS_ACCESS_VIOLATION,
+                    )
+                    .is_ok();
+                    let locked = (*mdl).MdlFlags & MDL_PAGES_LOCKED != 0;
+                    if locked {
+                        MmUnlockPages(mdl);
+                    }
+                    probes += 1;
+                    let allowed = writable || operation == IO_READ_ACCESS;
+                    if raised == allowed || locked != allowed {
+                        verdict = Err(if allowed {
+                            "pages were not locked for an access their mapping allows"
+                        } else {
+                            "read-only pages were locked for writing"
+                        });
+                    }
+                }
+                IoFreeMdl(mdl);
+                verdict
+            }
+        };
+        map::unmap(va, 1);
+        verdict
+    };
+    let verdict = check(Prot::RO, false).and_then(|()| check(Prot::RW, true));
+    map::free_va(va, 1);
+    mm::free_frames(frame, 1);
+    verdict.map(|()| probes)
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ob.current-thread", current_thread);
+    match read_only_probe() {
+        Ok(n) => r.ok_with("mm.probe-and-lock.read-only", format_args!("probes: {n}")),
+        Err(why) => r.fail("mm.probe-and-lock.read-only", format_args!("{why}")),
+    }
+    match open_close_race() {
+        Ok((opened, stolen)) => r.ok_with(
+            "ob.handle.open-close-race",
+            format_args!("handles opened: {opened}, closed by the other processor: {stolen}"),
+        ),
+        Err(why) => r.fail("ob.handle.open-close-race", format_args!("{why}")),
+    }
+    r.check("ps.thread.no-handle", thread_without_handle);
     match device_list() {
         Ok(n) => r.ok_with(
             "io.device-list",

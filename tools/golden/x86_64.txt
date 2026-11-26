@@ -64,6 +64,7 @@ seh.cross.nested ok
 seh.fault.read ok
 seh.fault.write ok
 seh.fault.execute ok
+seh.fault.execute-null ok
 seh.fault.others ok
 seh.fault.continue ok
 seh.probe ok
@@ -146,6 +147,9 @@ io.csq-cancel ok
 io.csq-race ok
 io.wdm-version ok
 ob.current-thread ok
+mm.probe-and-lock.read-only ok
+ob.handle.open-close-race ok
+ps.thread.no-handle ok
 io.device-list ok
 io.open-delete ok
 thread.wake-at-dispatch ok
@@ -196,6 +200,10 @@ io.open.named-pipe ok
 io.fs-control ok
 io.close.cleanup-then-close ok
 io.close.deferred ok
+io.user.access ok
+io.user.firmware-buffer ok
+io.user.copy-out-fault ok
+io.open.pended ok
 io.service.default-image ok
 io.service.boot-start ok
 io.remove-lock ok
@@ -234,6 +242,7 @@ rtl.module-information ok
 ps.version ok
 dbgk.live-dump ok
 ldr.module.kernel ok
+io.driver.unload-reentered ok
 ldr.module.driver ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok

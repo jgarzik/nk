@@ -1,0 +1,7 @@
+# A request made for user mode is held to the access its handle was
+# granted: one through a handle that lacks the right reaches no driver.
+scenario: x86_64
+fails: io.user.access
+file: kernel/io/file.rs
+replace:         (_, Needs::All(mask)) => (Mode::User, mask),
+with:         (_, Needs::All(_)) => (Mode::User, 0),

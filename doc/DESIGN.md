@@ -283,6 +283,11 @@ stack. The switch saves what a call preserves on the outgoing stack
 in the thread's `KernelStack`. An exited thread is freed by the thread
 that runs next. The SMP rules are in `doc/LOCKING.md`.
 
+`PsCreateSystemThread` makes the thread, opens the creator's handle and
+writes it out, and only then makes the thread ready, as Windows does.
+A thread that cannot be given its handle is taken back unstarted, so
+the routine reports failure only for a thread that never ran.
+
 ## The System process
 
 There is one process, System, with Windows' id for it (4). Its block has
@@ -661,7 +666,11 @@ either mode. Every open returns the kernel handle, a driver's with
 `OBJ_KERNEL_HANDLE` or without (`ObOpenObjectByPointer`,
 `ZwCreateEvent`): on Windows a handle made in the System process is in
 the kernel's table whatever was asked. No other process, no other
-table. Each handle has the access it was granted and its
+table. A handle's number is predictable (the lowest free slot), so it
+can be closed the instant it is in the table: it is given its reference
+and its place in the object's handle count under the table's lock,
+which a close takes to remove it. Each handle has the access it was
+granted and its
 attributes (inherit, protect from close). A handle protected from close
 stays open: user mode closing it is refused
 (`STATUS_HANDLE_NOT_CLOSABLE`), kernel mode closing it stops the system
@@ -853,7 +862,8 @@ in a driver), a fast-fail, a stack overflow. The decision is
 
 A call through a pointer that leads nowhere faults at its target, in no
 image: that frame is undone as a leaf's, and the search goes on in the
-caller.
+caller. A null pointer is no exception: address zero ends a stack only
+as a return address, never as the place a fault stopped the code.
 
 NK's own accesses to memory that may not be there (a requestor's
 buffer) are all one assembly routine, `mm::user::copy`. A fault in its
@@ -870,7 +880,11 @@ parameters), by a write probe with the one `ExRaiseAccessViolation`
 raises (none). A write probe then reads and writes back a byte of each
 page, through the copy above; a read probe touches nothing.
 `MmProbeAndLockPages` raises `STATUS_ACCESS_VIOLATION` for a page that
-is not mapped, and for user mode a page outside the user range.
+is not mapped, for user mode a page outside the user range, and for
+`IoWriteAccess` or `IoModifyAccess` a page whose mapping is read-only.
+Firmware's runtime regions lie in the low half, mapped and writable, and
+are outside the user range to every probe, the I/O manager's own
+included: a requestor cannot name them as a buffer.
 
 **Finding a handler.** The dispatcher walks the stack from that context
 and calls the language handler of each function that names one,
@@ -1130,7 +1144,15 @@ sees it. A null buffer that it would copy is no buffer, and its length
 goes to the driver as zero; a direct method's second buffer keeps its
 length, and null fails the probe. For `METHOD_NEITHER` the driver is handed both addresses as they
 are, and what is there is the driver's to find out. The oracle's
-requests are user mode's, their buffers pages of the user range. Completion follows the Windows
+requests are user mode's, their buffers pages of the user range.
+
+A request for user mode is also held to what its handle was granted,
+before any driver sees it (`STATUS_ACCESS_DENIED`): `FILE_READ_DATA` to
+read; `FILE_WRITE_DATA` to write, or `FILE_APPEND_DATA` unless the file
+is a named pipe; for a control request the access its code names (bits
+14 and 15). Kernel mode's handle is asked for nothing.
+
+Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
 copy results to the requestor and signal its event. A buffered request's
 results are copied only as far as the requestor asked; a driver that
@@ -1163,7 +1185,10 @@ the System process, generic rights mapped to the file rights in both;
 the requestor's mode in the IRP. What the driver leaves in
 `IoStatus.Information` is the open's result. A create the driver fails
 leaves a file object with no device, about which the driver hears no
-more.
+more. The opener waits for a create the driver pends; what the request
+points to is on the opener's stack until then. A dispatch routine that
+returns anything but `STATUS_PENDING` for a create it has not completed
+may still hold that IRP: the system stops, naming the routine.
 
 **Cleanup and close.** A file object is an object of the file type, and
 the open returns a handle to it. The type's close procedure sends
@@ -1182,8 +1207,12 @@ cancelling is safe until then. Windows finishes a request in the
 requesting thread by APC; NK finishes it wherever it was completed, at
 `DISPATCH_LEVEL` or below. There is one address space, so a user-mode
 requestor's buffer is there to copy to from any thread; the copy is the
-one that may fail, and a buffer gone by then fails the request with the
-access violation.
+one that may fail, and a buffer gone by then makes the access violation
+the request's final status, in its status block. That is what the
+request returns if the driver pended it; one completed before the
+dispatch routine returned returns the routine's status, as Windows'
+system services do. The driver is held to the status it completed the
+request with, which the fault does not change.
 
 **Cancel.** `IoCancelIrp` marks the IRP, takes its cancel routine in one
 atomic step, and calls it holding the cancel spin lock, which the routine

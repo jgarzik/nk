@@ -25,6 +25,7 @@ mod ob;
 mod open;
 mod oracle;
 mod pend;
+mod requestor;
 mod review;
 mod rtl;
 mod se;
@@ -46,6 +47,16 @@ use nk_ntabi::status::NTSTATUS;
 /// handle.
 fn open(name: &str) -> Result<u64, NTSTATUS> {
     file::open(&OpenRequest::new(name)).map(|(handle, _)| handle)
+}
+
+/// Open `name` as [`open`] does, on behalf of user mode: the handle is
+/// one that requests made as user mode may go by.
+fn open_as_user(name: &str) -> Result<u64, NTSTATUS> {
+    let request = OpenRequest {
+        requestor_mode: nk_ntabi::io::USER_MODE,
+        ..OpenRequest::new(name)
+    };
+    file::open(&request).map(|(handle, _)| handle)
 }
 
 /// Where the tests that make requests as user mode keep the two
@@ -133,6 +144,7 @@ pub static GROUPS: &[&Group] = &[
     &ex::GROUP,
     &pend::GROUP,
     &open::GROUP,
+    &requestor::GROUP,
     &service::GROUP,
     &driver_api::GROUP,
     &etw::PROVIDERS,
@@ -183,6 +195,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::EXIT_HOLDING,
     &work::BAD_RETURN,
     &pend::OVERSTATED,
+    &requestor::CREATE_NOT_COMPLETED,
     &neg::PROTECTED_CLOSE,
 ];
 

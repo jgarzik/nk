@@ -323,8 +323,18 @@ fn run(r: &mut Report, _: &BootInfo) {
         r.check("sioctl.out-direct", || out_direct(file));
         r.check("sioctl.in-direct", || in_direct(file));
         r.check("sioctl.bad-requests", || bad_requests(file));
-        r.check("sioctl.neither", || neither(file));
-        r.check("sioctl.user-buffers", || user_buffers(file));
+        // Requests made as user mode go by a handle opened for it.
+        match super::open_as_user(DOS_NAME) {
+            Ok(user) => {
+                r.check("sioctl.neither", || neither(user));
+                r.check("sioctl.user-buffers", || user_buffers(user));
+                file::close(user);
+            }
+            Err(_) => {
+                r.fail("sioctl.neither", format_args!("no open for user mode"));
+                r.fail("sioctl.user-buffers", format_args!("no open for user mode"));
+            }
+        }
     } else {
         r.fail(
             "sioctl.open",

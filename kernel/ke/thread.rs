@@ -307,6 +307,68 @@ fn create_thread(
     affinity: u64,
     keep: bool,
 ) -> Result<*mut Thread, &'static str> {
+    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    // SAFETY: the thread is whole and on no queue. The caller's
+    // reference is taken first: the thread may run and end at once.
+    unsafe {
+        if keep {
+            ob::object::reference(thread.cast());
+        }
+        make_ready(thread);
+    }
+    Ok(thread)
+}
+
+/// Create a thread as [`create_referenced`] does, but do not make it
+/// ready: it runs once [`begin`] has started it, or never, if
+/// [`discard`] takes it back. For a creator that has something to do
+/// that may fail before the thread may run.
+pub fn create_unstarted(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    // SAFETY: a live thread nothing else has.
+    unsafe { ob::object::reference(thread.cast()) };
+    Ok(thread)
+}
+
+/// Start a thread from [`create_unstarted`].
+///
+/// # Safety
+/// `thread` came from `create_unstarted` and has been neither started
+/// nor discarded.
+pub unsafe fn begin(thread: *mut Thread) {
+    // SAFETY: per the contract: whole, and on no queue.
+    unsafe { make_ready(thread) };
+}
+
+/// Take back a thread from [`create_unstarted`] that will never run:
+/// its stack, its count, and the reference it holds on itself. The
+/// caller's reference stays the caller's to drop.
+///
+/// # Safety
+/// As [`begin`].
+pub unsafe fn discard(thread: *mut Thread) {
+    // SAFETY: per the contract: the thread is on no queue and never
+    // ran, so nothing waits on it and nothing uses its stack.
+    unsafe {
+        mm::stack::free((*thread).stack);
+        ob::object::dereference(thread.cast());
+    }
+    THREADS.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// A new thread that will run `entry(argument)`, whole, counted and on
+/// no queue: not yet ready.
+fn new_thread(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
     let allowed = affinity & super::smp::online();
     if allowed == 0 {
         return Err("a thread's affinity names no running processor");
@@ -329,14 +391,6 @@ fn create_thread(
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
     }
     THREADS.fetch_add(1, Ordering::AcqRel);
-    // SAFETY: the thread is whole and on no queue. The caller's
-    // reference is taken first: the thread may run and end at once.
-    unsafe {
-        if keep {
-            ob::object::reference(thread.cast());
-        }
-        make_ready(thread);
-    }
     Ok(thread)
 }
 

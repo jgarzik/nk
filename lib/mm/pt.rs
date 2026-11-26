@@ -56,6 +56,8 @@ pub trait Arch {
     fn present(&self, entry: u64) -> bool;
     /// True if a present entry at `level` maps memory rather than a table.
     fn is_leaf(&self, entry: u64, level: u8) -> bool;
+    /// True if a leaf entry lets the kernel write what it maps.
+    fn writable(&self, entry: u64) -> bool;
     /// Physical address held in a present entry.
     fn addr(&self, entry: u64) -> u64 {
         entry & 0x0000_FFFF_FFFF_F000
@@ -94,6 +96,10 @@ impl Arch for X86_64 {
 
     fn is_leaf(&self, entry: u64, level: u8) -> bool {
         level == 0 || entry & (1 << 7) != 0
+    }
+
+    fn writable(&self, entry: u64) -> bool {
+        entry & (1 << 1) != 0
     }
 }
 
@@ -176,6 +182,11 @@ impl Arch for Aarch64 {
 
     fn is_leaf(&self, entry: u64, level: u8) -> bool {
         level == 0 || entry & 0b10 == 0
+    }
+
+    fn writable(&self, entry: u64) -> bool {
+        // AP[2]: read-only.
+        entry & (1 << 7) == 0
     }
 }
 
@@ -274,6 +285,13 @@ pub fn map_range(
 
 /// The physical address `va` maps to, if any.
 pub fn translate(mem: &impl TableMem, arch: &impl Arch, root: u64, va: u64) -> Option<u64> {
+    lookup(mem, arch, root, va).map(|(pa, _)| pa)
+}
+
+/// The physical address `va` maps to, if any, and whether the mapping
+/// may be written: the leaf entry's protection, which is where `map`
+/// puts it.
+pub fn lookup(mem: &impl TableMem, arch: &impl Arch, root: u64, va: u64) -> Option<(u64, bool)> {
     let mut table = root;
     for l in (0..=3u8).rev() {
         let e = mem.read(table, index(va, l));
@@ -281,7 +299,8 @@ pub fn translate(mem: &impl TableMem, arch: &impl Arch, root: u64, va: u64) -> O
             return None;
         }
         if l < 3 && arch.is_leaf(e, l) {
-            return Some(arch.addr(e) & !(level_size(l) - 1) | va & (level_size(l) - 1));
+            let pa = arch.addr(e) & !(level_size(l) - 1) | va & (level_size(l) - 1);
+            return Some((pa, arch.writable(e)));
         }
         table = arch.addr(e);
     }
@@ -347,6 +366,34 @@ mod tests {
         mair_device: 0,
     };
     const KVA: u64 = 0xFFFF_F800_0000_0000;
+
+    #[test]
+    fn a_lookup_says_whether_the_mapping_may_be_written() {
+        fn check(arch: &impl Arch) {
+            let mut m = Mem::default();
+            let root = m.root();
+            for (i, prot) in [Prot::RO, Prot::RW, Prot::RX, Prot::RWX, Prot::DEVICE]
+                .into_iter()
+                .enumerate()
+            {
+                let small = KVA + 0x1000 * i as u64;
+                let large = KVA + 0x4000_0000 + 0x20_0000 * i as u64;
+                map(&mut m, arch, root, small, 0x20_5000, 0, prot).unwrap();
+                map(&mut m, arch, root, large, 0x4000_0000, 1, prot).unwrap();
+                assert_eq!(
+                    lookup(&m, arch, root, small + 0x123),
+                    Some((0x20_5123, prot.write))
+                );
+                assert_eq!(
+                    lookup(&m, arch, root, large + 0x12_3456),
+                    Some((0x4012_3456, prot.write))
+                );
+            }
+            assert_eq!(lookup(&m, arch, root, KVA + 0x8000), None);
+        }
+        check(&X86_64);
+        check(&ARM);
+    }
 
     #[test]
     fn map_translate_unmap_4k() {

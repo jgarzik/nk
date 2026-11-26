@@ -16,7 +16,7 @@ use core::ffi::c_void;
 use nk_ntabi::status::*;
 
 /// `KSTART_ROUTINE`.
-type StartRoutine = unsafe extern "C" fn(*mut c_void);
+pub type StartRoutine = unsafe extern "C" fn(*mut c_void);
 
 /// What a new system thread is to run.
 struct Start {
@@ -62,11 +62,37 @@ pub unsafe extern "C" fn PsCreateSystemThread(
     let Some(routine) = start_routine else {
         return STATUS_INVALID_PARAMETER;
     };
-    let start = Box::into_raw(Box::new(Start {
-        routine,
-        context: start_context,
-    }));
-    let created = thread::create_referenced(
+    // SAFETY: per the contract.
+    unsafe {
+        create_system_thread(routine, start_context, |thread| {
+            match handle::open(thread, desired_access) {
+                Ok(handle) => {
+                    thread_handle.write_unaligned(handle as *mut c_void);
+                    STATUS_SUCCESS
+                }
+                Err(status) => status,
+            }
+        })
+    }
+}
+
+/// Create a system thread that runs `routine(context)`. `announce` is
+/// given the thread object, to make the creator's handle to it and hand
+/// the handle over, and says whether it could. The thread is started
+/// after that, as Windows readies a new thread last: it finds its
+/// handle where its creator wanted it, and a thread that could not be
+/// given one never runs, so a failure is reported only for work that
+/// was not done.
+///
+/// # Safety
+/// `routine` may be called with `context` in a new thread.
+pub unsafe fn create_system_thread(
+    routine: StartRoutine,
+    context: *mut c_void,
+    announce: impl FnOnce(*mut u8) -> NTSTATUS,
+) -> NTSTATUS {
+    let start = Box::into_raw(Box::new(Start { routine, context }));
+    let created = thread::create_unstarted(
         system_thread,
         start as usize,
         thread::NORMAL_PRIORITY,
@@ -77,20 +103,20 @@ pub unsafe extern "C" fn PsCreateSystemThread(
         drop(unsafe { Box::from_raw(start) });
         return STATUS_INSUFFICIENT_RESOURCES;
     };
-    // SAFETY: per the contract; the reference `create_referenced` gave
-    // is handed to the handle and then given up. A thread that could
-    // not be given a handle runs all the same.
+    let status = announce(new.cast());
+    // SAFETY: a thread from `create_unstarted`, started or taken back
+    // once; one taken back never ran, so the box is still ours. Then
+    // the reference `create_unstarted` gave.
     unsafe {
-        let opened = handle::open(new.cast(), desired_access);
-        object::dereference(new.cast());
-        match opened {
-            Ok(handle) => {
-                thread_handle.write_unaligned(handle as *mut c_void);
-                STATUS_SUCCESS
-            }
-            Err(status) => status,
+        if nt_success(status) {
+            thread::begin(new);
+        } else {
+            thread::discard(new);
+            drop(Box::from_raw(start));
         }
+        object::dereference(new.cast());
     }
+    status
 }
 
 /// [`PsTerminateSystemThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-psterminatesystemthread):

@@ -1,0 +1,8 @@
+# A create request that comes back neither completed nor pending may
+# still be held by its driver, and points at the opener's stack: the
+# open does not return.
+scenario: x86_64-neg-create-not-completed
+fails: scenario
+file: kernel/io/file.rs
+replace:                     Err(IoError::NotCompleted { dispatch_status }) => {
+with:                     Err(IoError::NotCompleted { dispatch_status }) if false => {

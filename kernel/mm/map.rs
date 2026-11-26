@@ -108,8 +108,14 @@ pub fn unmap(va: u64, pages: usize) {
 
 /// The physical address `va` maps to in the kernel address space.
 pub fn translate(va: u64) -> Option<u64> {
+    lookup(va).map(|(pa, _)| pa)
+}
+
+/// The physical address `va` maps to in the kernel address space, and
+/// whether the mapping may be written.
+pub fn lookup(va: u64) -> Option<(u64, bool)> {
     let _guard = NEXT_VA.lock();
-    pt::translate(&Tables, &arch::pt_arch(), arch::pt_root_of(va), va)
+    pt::lookup(&Tables, &arch::pt_arch(), arch::pt_root_of(va), va)
 }
 
 /// The low half holds firmware's runtime regions, each at its physical

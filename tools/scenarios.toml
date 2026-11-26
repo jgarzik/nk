@@ -418,6 +418,23 @@ cmdline = "test=neg.information-overstated"
 expect = "bugcheck"
 match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
 
+# A dispatch routine returns success for a create request it has not
+# completed.
+
+[x86_64-neg-create-not-completed]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.create-not-completed"
+expect = "bugcheck"
+match = "BUGCHECK: a driver's dispatch routine at ntoskrnl.exe\\+0x[0-9a-f]+ returned 0x0 for a create request it had not completed"
+
+[aarch64-neg-create-not-completed]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.create-not-completed"
+expect = "bugcheck"
+match = "BUGCHECK: a driver's dispatch routine at ntoskrnl.exe\\+0x[0-9a-f]+ returned 0x0 for a create request it had not completed"
+
 [x86_64-neg-breakpoint]
 arch = "x86_64"
 tier = "gate"

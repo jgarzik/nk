@@ -42,6 +42,7 @@ pub static GROUP: Group = Group {
         "seh.fault.read",
         "seh.fault.write",
         "seh.fault.execute",
+        "seh.fault.execute-null",
         "seh.fault.others",
         "seh.fault.continue",
         "seh.probe",
@@ -471,13 +472,13 @@ fn shown(parameters: &[u64]) -> bool {
             .all(|(seen, wanted)| seen.load(Ordering::Relaxed) == *wanted)
 }
 
-/// A fault on an unmapped user address is an access violation the
-/// `__try` around it handles: it may be continued, and says which kind
-/// of access it was and where.
-fn fault_test(body: Body, access: u64) -> Result<(), &'static str> {
+/// A fault on the unmapped user address `address` is an access
+/// violation the `__try` around it handles: it may be continued, and
+/// says which kind of access it was and where.
+fn fault_test(body: Body, address: usize, access: u64) -> Result<(), &'static str> {
     arm([ACCEPT, DECLINE]);
-    caught_as(body, UNMAPPED, seh::STATUS_ACCESS_VIOLATION)?;
-    if !shown(&[access, UNMAPPED as u64]) {
+    caught_as(body, address, seh::STATUS_ACCESS_VIOLATION)?;
+    if !shown(&[access, address as u64]) {
         return Err("the filter was not shown one continuable record with the access and address");
     }
     Ok(())
@@ -659,13 +660,18 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("seh.cross.reference", || cross_test(REFERENCE));
     r.check("seh.cross.nested", || cross_test(OUTER));
     r.check("seh.fault.read", || {
-        fault_test(clobber_and_read, seh::ACCESS_READ)
+        fault_test(clobber_and_read, UNMAPPED, seh::ACCESS_READ)
     });
     r.check("seh.fault.write", || {
-        fault_test(nk_seh_write, seh::ACCESS_WRITE)
+        fault_test(nk_seh_write, UNMAPPED, seh::ACCESS_WRITE)
     });
     r.check("seh.fault.execute", || {
-        fault_test(nk_seh_call, seh::ACCESS_EXECUTE)
+        fault_test(nk_seh_call, UNMAPPED, seh::ACCESS_EXECUTE)
+    });
+    // A call through a null function pointer: the faulting program
+    // counter is zero, which is also how the end of a stack looks.
+    r.check("seh.fault.execute-null", || {
+        fault_test(nk_seh_call, 0, seh::ACCESS_EXECUTE)
     });
     match other_faults_test() {
         Ok(kinds) => r.ok_with("seh.fault.others", format_args!("{kinds} kinds")),

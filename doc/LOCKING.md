@@ -63,7 +63,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
-| 35 | `ob::handle::TABLE` | which object each handle names | DISPATCH |
+| 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
@@ -111,8 +111,15 @@ Why this order:
   memory is read and written outside it. No routine of a driver's runs
   under it: a query table takes it for each read and gives the routine
   copies.
+- A driver's entry point and unload routine run with the driver
+  table's lock released, so the table changes under them: an unload
+  finds its driver's record again once the routine has returned, under
+  the lock hold that removes it.
 - The tables above the pool hold `Vec`s, which allocate from the pool
-  while the table's lock is held. An object's last reference is never
+  while the table's lock is held. A new handle takes its reference and
+  its place in the object's handle count under the handle table's lock,
+  so that a close, which removes the entry under it, never gives back
+  what the handle has not yet got. An object's last reference is never
   dropped under the handle table's lock, nor is its type told of a
   closed handle there: freeing takes the pool's lock, and a file's close
   and delete procedures call its driver.

@@ -481,6 +481,42 @@ pub const fn ctl_code(device_type: u32, function: u32, method: u32, access: u32)
     device_type << 16 | access << 14 | function << 2 | method
 }
 
+/// File access rights a request needs of the handle it is made through.
+pub const FILE_READ_DATA: u32 = 0x1;
+pub const FILE_WRITE_DATA: u32 = 0x2;
+/// For a named pipe the same bit is `FILE_CREATE_PIPE_INSTANCE`.
+pub const FILE_APPEND_DATA: u32 = 0x4;
+/// `FILE_OBJECT.Flags`: the file is a named pipe (its file system sets
+/// it).
+pub const FO_NAMED_PIPE: u32 = 0x0000_0080;
+
+/// The access a control code says its requestor's handle must have:
+/// bits 14 and 15 of the code, `FILE_READ_ACCESS` and
+/// `FILE_WRITE_ACCESS`, which are `FILE_READ_DATA` and
+/// `FILE_WRITE_DATA`. `FILE_ANY_ACCESS` is none.
+pub const fn ctl_access(code: u32) -> u32 {
+    (code >> 14) & 3
+}
+
+/// Whether user mode may write through a handle granted `granted` to a
+/// file object with `file_flags`: the handle may write data, or append
+/// it, as `NtWriteFile` asks. A named pipe has no appending: the bit
+/// means something else there.
+pub const fn may_write(granted: u32, file_flags: u32) -> bool {
+    let append = if file_flags & FO_NAMED_PIPE == 0 {
+        FILE_APPEND_DATA
+    } else {
+        0
+    };
+    granted & (FILE_WRITE_DATA | append) != 0
+}
+
+/// `LOCK_OPERATION`: what the caller of `MmProbeAndLockPages` means to
+/// do with the pages.
+pub const IO_READ_ACCESS: u32 = 0;
+pub const IO_WRITE_ACCESS: u32 = 1;
+pub const IO_MODIFY_ACCESS: u32 = 2;
+
 /// `MDL.MdlFlags`
 pub const MDL_MAPPED_TO_SYSTEM_VA: i16 = 0x0001;
 pub const MDL_PAGES_LOCKED: i16 = 0x0002;
@@ -657,6 +693,33 @@ mod layout {
         assert_eq!(ctl_code(40000, 0x901, METHOD_OUT_DIRECT, 0), 0x9C40_2406);
         assert_eq!(ctl_code(40000, 0x902, METHOD_BUFFERED, 0), 0x9C40_2408);
         assert_eq!(ctl_code(40000, 0x903, METHOD_NEITHER, 0), 0x9C40_240F);
+    }
+
+    #[test]
+    fn a_control_code_names_the_access_its_handle_needs() {
+        assert_eq!(ctl_access(ctl_code(40000, 0x900, METHOD_BUFFERED, 0)), 0);
+        assert_eq!(
+            ctl_access(ctl_code(0xFFFF, 0xFFF, METHOD_NEITHER, 1)),
+            FILE_READ_DATA
+        );
+        assert_eq!(
+            ctl_access(ctl_code(0x22, 0, METHOD_BUFFERED, 2)),
+            FILE_WRITE_DATA
+        );
+        assert_eq!(ctl_access(ctl_code(0x22, 0x801, METHOD_IN_DIRECT, 3)), 3);
+        // FSCTL_PIPE_PEEK and FSCTL_PIPE_TRANSCEIVE, from the SDK.
+        assert_eq!(ctl_access(0x0011_400C), FILE_READ_DATA);
+        assert_eq!(ctl_access(0x0011_C017), 3);
+    }
+
+    #[test]
+    fn writing_needs_write_or_append_and_a_pipe_has_no_append() {
+        assert!(may_write(FILE_WRITE_DATA, 0));
+        assert!(may_write(FILE_APPEND_DATA, 0));
+        assert!(may_write(FILE_WRITE_DATA | FILE_READ_DATA, FO_NAMED_PIPE));
+        assert!(!may_write(FILE_APPEND_DATA, FO_NAMED_PIPE));
+        assert!(!may_write(FILE_READ_DATA | 0x0010_0000, 0));
+        assert!(!may_write(0, FO_SYNCHRONOUS_IO));
     }
 
     #[test]
