@@ -12,6 +12,5 @@ trap_list!(
     RtlDeleteRegistryValue,
     RtlFindMessage,
     RtlPcToFileName,
-    RtlRunOnceExecuteOnce,
     RtlWriteRegistryValue,
 );

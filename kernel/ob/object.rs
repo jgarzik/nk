@@ -192,6 +192,7 @@ static SYMBOLIC_LINK_NAME: [u16; 12] = wide(b"SymbolicLink");
 static DRIVER_NAME: [u16; 6] = wide(b"Driver");
 static FILE_NAME: [u16; 4] = wide(b"File");
 static JOB_NAME: [u16; 3] = wide(b"Job");
+static CALLBACK_NAME: [u16; 8] = wide(b"Callback");
 static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
 static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
@@ -284,8 +285,13 @@ pub static SILO_CONTEXT_NONPAGED_TYPE: ObjectType = ObjectType::new(
 /// ever made, so no object has it and no handle names one.
 pub static JOB_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 12, &JOB_NAME, None);
 
+/// Callback objects (`ex::callback`): a list of the routines drivers
+/// registered. A registration holds a reference, so an object that is
+/// deleted has none left.
+pub static CALLBACK_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 13, &CALLBACK_NAME, None);
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 13] = [
+static TYPES: [&ObjectType; 14] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -299,6 +305,7 @@ static TYPES: [&ObjectType; 13] = [
     &SILO_CONTEXT_PAGED_TYPE,
     &SILO_CONTEXT_NONPAGED_TYPE,
     &JOB_TYPE,
+    &CALLBACK_TYPE,
 ];
 
 /// What hides type indices in object headers. Chosen once, before the
