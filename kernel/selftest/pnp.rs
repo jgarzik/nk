@@ -833,6 +833,70 @@ fn properties(bench: &Bench) -> Result<(), &'static str> {
     if property_of(bench.function, 1, 256).0 != STATUS_INVALID_DEVICE_REQUEST {
         return Err("a function device object was taken for a physical one");
     }
+    // A property a driver gives the device is kept, with its type, in
+    // the device's key where Windows keeps it, and comes back; taken
+    // away, it is not found.
+    let category = ids::guid_from_text(CLASS).ok_or("the class is not a GUID")?;
+    let name = DEVPROPKEY {
+        fmtid: category,
+        pid: 12,
+    };
+    let get = |room: usize| {
+        let mut buffer = alloc::vec![0xEEu8; room];
+        let (mut length, mut kind) = (0xEEEE_EEEE, 0xEEEE_EEEE);
+        // SAFETY: a live device object, a key, a buffer of `room`
+        // bytes, and two numbers to write.
+        let status = unsafe {
+            pnp::export::IoGetDevicePropertyData(
+                pdo,
+                &raw const name,
+                0,
+                0,
+                room as u32,
+                buffer.as_mut_ptr(),
+                &raw mut length,
+                &raw mut kind,
+            )
+        };
+        (status, length, kind, buffer)
+    };
+    let set = |kind: u32, value: &[u8]| {
+        // SAFETY: as above; the value is readable.
+        unsafe {
+            pnp::export::IoSetDevicePropertyData(
+                pdo,
+                &raw const name,
+                0,
+                1,
+                kind,
+                value.len() as u32,
+                value.as_ptr(),
+            )
+        }
+    };
+    if get(8) != (STATUS_OBJECT_NAME_NOT_FOUND, 0, 0, alloc::vec![0xEE; 8]) {
+        return Err("a property nobody set was found");
+    }
+    // `DEVPROP_TYPE_UINT32` is 7.
+    if set(7, &0x1234_5678u32.to_le_bytes()) != STATUS_SUCCESS {
+        return Err("a property could not be set");
+    }
+    let stored = format!(
+        "{key}\\Properties\\{CLASS}\\000C",
+        key = registry::enum_key(&found.instance)
+    );
+    if cm::read(&stored, "") != Ok((0xFFFF_0007, 0x1234_5678u32.to_le_bytes().to_vec())) {
+        return Err("the property is not kept where Windows keeps it");
+    }
+    if get(4) != (STATUS_SUCCESS, 4, 7, 0x1234_5678u32.to_le_bytes().to_vec()) {
+        return Err("the property did not come back with its type and size");
+    }
+    if get(3) != (STATUS_BUFFER_TOO_SMALL, 4, 7, alloc::vec![0xEE; 3]) {
+        return Err("a buffer too small was not refused with the size needed");
+    }
+    if set(0, &[]) != STATUS_SUCCESS || get(8).0 != STATUS_OBJECT_NAME_NOT_FOUND {
+        return Err("a property taken away is still found");
+    }
     // The device key and the driver key open; the device key is the one
     // the settings were copied into.
     let key = registry::enum_key(&found.instance);

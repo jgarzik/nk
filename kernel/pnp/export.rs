@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use nk_ntabi::io::{DEVICE_OBJECT, UNICODE_STRING};
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
-use nk_ntabi::pnp::{BUS_RELATIONS, DEVICE_CAPABILITY_REMOVABLE};
+use nk_ntabi::pnp::{BUS_RELATIONS, DEVICE_CAPABILITY_REMOVABLE, DEVPROPKEY};
 use nk_ntabi::status::*;
 use nk_pnp::ids;
 
@@ -344,5 +344,144 @@ pub unsafe extern "C" fn IoGetDeviceNumaNode(
     }
     // SAFETY: per the contract.
     unsafe { node_number.write_unaligned(0) };
+    STATUS_SUCCESS
+}
+
+/// `DEVPROP_TYPE_EMPTY`: no value; setting it deletes the property.
+const DEVPROP_TYPE_EMPTY: u32 = 0;
+/// What a property's registry value carries its type in front of.
+const DEVPROP_REGISTRY_TYPE: u32 = 0xFFFF_0000;
+
+/// The key a device's property is kept in, as Windows keeps it:
+/// `Properties\{category}\NNNN` under the device's key, the value
+/// without a name, its registry type the property's type behind
+/// `0xFFFF`.
+///
+/// # Safety
+/// `key` points to a `DEVPROPKEY`.
+unsafe fn property_key(found: &Node, key: *const DEVPROPKEY) -> String {
+    // SAFETY: per the contract; a driver may pack the key.
+    let (fmtid, pid) = unsafe {
+        (
+            (&raw const (*key).fmtid).read_unaligned(),
+            (&raw const (*key).pid).read_unaligned(),
+        )
+    };
+    format!(
+        "{}\\Properties\\{}\\{pid:04X}",
+        registry::enum_key(&found.instance),
+        ids::guid_text(&fmtid)
+    )
+}
+
+/// [`IoSetDevicePropertyData`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetdevicepropertydata):
+/// give the device whose physical device object is `device` the
+/// property `key`, of type `kind`, or with `DEVPROP_TYPE_EMPTY` take
+/// it away. The property is kept in the device's key; NK's registry is
+/// never written out, so `PLUGPLAY_PROPERTY_PERSISTENT` changes
+/// nothing.
+///
+/// The properties Windows computes from what it knows of a device (the
+/// `DEVPKEY_Device_*` set) are not special here: one a driver sets is
+/// kept like any other.
+///
+/// INFERRED: `STATUS_INVALID_DEVICE_REQUEST` for a device that is not
+/// a physical device object, and `STATUS_INVALID_PARAMETER` for a
+/// locale other than neutral, which the pinned kernel sends down an
+/// error path NK did not follow to its status.
+///
+/// # Safety
+/// `device` is a live device object; `key` points to a `DEVPROPKEY`;
+/// `data` is readable for `size` bytes.
+pub unsafe extern "C" fn IoSetDevicePropertyData(
+    device: *mut DEVICE_OBJECT,
+    key: *const DEVPROPKEY,
+    lcid: u32,
+    _flags: u32,
+    kind: u32,
+    size: u32,
+    data: *const u8,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        crate::io::device::check(device, "IoSetDevicePropertyData");
+        let found = match node_of(device) {
+            Ok(found) => found,
+            Err(status) => return status,
+        };
+        if lcid != 0 || key.is_null() || (size != 0 && data.is_null()) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let path = property_key(&found, key);
+        if kind == DEVPROP_TYPE_EMPTY {
+            return match crate::cm::delete_tree(&path) {
+                Ok(()) => STATUS_SUCCESS,
+                Err(status) => status,
+            };
+        }
+        let mut value = alloc::vec![0u8; size as usize];
+        data.copy_to_nonoverlapping(value.as_mut_ptr(), value.len());
+        match crate::cm::write_path(
+            &path,
+            &[("", DEVPROP_REGISTRY_TYPE | (kind & 0xFFFF), &value)],
+        ) {
+            Ok(()) => STATUS_SUCCESS,
+            Err(status) => status,
+        }
+    }
+}
+
+/// [`IoGetDevicePropertyData`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdevicepropertydata):
+/// the property `key` of the device whose physical device object is
+/// `device`: its type, its size, and, if `size` bytes are room enough,
+/// its value (else `STATUS_BUFFER_TOO_SMALL`). A property the device
+/// was not given is not found (`STATUS_OBJECT_NAME_NOT_FOUND`, as the
+/// pinned kernel answers).
+///
+/// Only properties that were set are found: NK computes none of the
+/// properties Windows derives from what it knows of a device.
+///
+/// # Safety
+/// `device` is a live device object; `key` points to a `DEVPROPKEY`;
+/// `data` is writable for `size` bytes; `required_size` and `kind`
+/// are writable or null.
+pub unsafe extern "C" fn IoGetDevicePropertyData(
+    device: *mut DEVICE_OBJECT,
+    key: *const DEVPROPKEY,
+    lcid: u32,
+    _flags: u32,
+    size: u32,
+    data: *mut u8,
+    required_size: *mut u32,
+    kind: *mut u32,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        crate::io::device::check(device, "IoGetDevicePropertyData");
+        let report = |length: u32, found: u32| {
+            if !required_size.is_null() {
+                required_size.write_unaligned(length);
+            }
+            if !kind.is_null() {
+                kind.write_unaligned(found);
+            }
+        };
+        report(0, DEVPROP_TYPE_EMPTY);
+        let found = match node_of(device) {
+            Ok(found) => found,
+            Err(status) => return status,
+        };
+        if lcid != 0 || key.is_null() {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let Ok((stored, value)) = crate::cm::read(&property_key(&found, key), "") else {
+            return STATUS_OBJECT_NAME_NOT_FOUND;
+        };
+        report(value.len() as u32, stored & 0xFFFF);
+        if value.len() > size as usize {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        data.copy_from_nonoverlapping(value.as_ptr(), value.len());
+    }
     STATUS_SUCCESS
 }
