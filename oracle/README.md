@@ -33,6 +33,7 @@ One step per line; `#` starts a comment. Fields are separated by spaces.
 | `use <service>` | a driver that is part of the system: started if it is stopped, and stopped when the script ends only if this step started it |
 | `open <handle> <path> [option...]` | open an object-manager path, for synchronous I/O unless the options say otherwise |
 | `pipe <handle> <path> [option...]` | create an instance of the named pipe `<path>` (`NtCreateNamedPipeFile`): its server end |
+| `mailslot <handle> <path> [option...]` | create the mailslot `<path>` (`NtCreateMailslotFile`): its server end, which reads what clients write |
 | `ioctl <handle> <code> <input> <length>` | device control: code in hex, input bytes in hex or `-` for none, output buffer of `<length>` bytes |
 | `ioctlat <handle> <code> <input> <output>` | device control where either buffer may be at an address the script chooses: `<input>` as for `ioctl` or `@<address>:<length>`, `<output>` a length as for `ioctl` or `@<address>:<length>` |
 | `fsctl <handle> <code> <input> <length>` | file-system control (`NtFsControlFile`), fields as for `ioctl` |
@@ -58,15 +59,15 @@ name no file has.
 
 ### Options
 
-`open` and `pipe` end with any number of `<key>=<value>` fields, in any
-order. Masks are in hex, counts in decimal.
+`open`, `pipe` and `mailslot` end with any number of `<key>=<value>`
+fields, in any order. Masks are in hex, counts in decimal.
 
 | Option | Of | Default | Meaning |
 | --- | --- | --- | --- |
 | `root=<handle>` | `open` | none | `<path>` is relative to this open handle (`OBJECT_ATTRIBUTES.RootDirectory`) |
-| `access=<mask>` | both | `c0100000` | desired access; the default is `GENERIC_READ \| GENERIC_WRITE \| SYNCHRONIZE` |
-| `share=<mask>` | both | `open` `0`, `pipe` `3` | share access; `3` is read and write |
-| `options=<mask>` | both | `open` `60`, `pipe` `20` | create options; `20` is `FILE_SYNCHRONOUS_IO_NONALERT`, `40` is `FILE_NON_DIRECTORY_FILE` |
+| `access=<mask>` | all | `c0100000`, `mailslot` `80100000` | desired access; `c0100000` is `GENERIC_READ \| GENERIC_WRITE \| SYNCHRONIZE`, `80100000` the same without `GENERIC_WRITE` |
+| `share=<mask>` | `open`, `pipe` | `open` `0`, `pipe` `3` | share access; `3` is read and write |
+| `options=<mask>` | all | `open` `60`, `pipe` and `mailslot` `20` | create options; `20` is `FILE_SYNCHRONOUS_IO_NONALERT`, `40` is `FILE_NON_DIRECTORY_FILE` |
 | `disposition=<n>` | `pipe` | `3` | create disposition; `3` is `FILE_OPEN_IF`, `2` is `FILE_CREATE` |
 | `type=<n>` | `pipe` | `0` | `0` a stream of bytes, `1` messages |
 | `read=<n>` | `pipe` | `0` | the server end reads `0` bytes, `1` messages |
@@ -74,13 +75,21 @@ order. Masks are in hex, counts in decimal.
 | `instances=<n>` | `pipe` | `1` | most instances of the pipe; `4294967295` is no limit |
 | `inquota=<n>`, `outquota=<n>` | `pipe` | `4096` | bytes of buffer in each direction |
 | `timeout=<n>` | `pipe` | `50` | default timeout in milliseconds |
+| `quota=<n>` | `mailslot` | `0` | `MailslotQuota`: bytes of buffer for messages |
+| `maxmessage=<n>` | `mailslot` | `0` | `MaximumMessageSize`: bytes in the longest message; `0` is no limit |
+| `timeout=<n>` | `mailslot` | `0` | `ReadTimeout`: how long a read waits for a message, in milliseconds; `0` returns at once, `forever` waits for ever (a `ReadTimeout` of -1), `none` passes no `ReadTimeout` |
 
 `open` always opens what exists (`FILE_OPEN`); with no options it is the
-request the defaults describe.
+request the defaults describe. A mailslot has no share access or
+disposition to choose: `NtCreateMailslotFile` takes neither, and asks the
+I/O manager for read and write sharing and `FILE_CREATE`. A mailslot's
+client is an `open` of the same path for writing
+(`access=40100000 share=3`).
 
 Every handle is synchronous unless a script's options make it otherwise,
 and the replayer makes one request at a time: a `read` of a pipe with
-nothing in it, or a listen (`fsctl`) with no client, never returns.
+nothing in it, a listen (`fsctl`) with no client, or a `read` of an
+empty mailslot made with `timeout=forever`, never returns.
 
 ### Buffers at an address
 
@@ -117,8 +126,8 @@ Each step's line repeats the step, then `: `, then the result:
 - `load`, `install`, `use`, `unload`: `ok` or `failed`. `use` says `ok`
   whether the service was running or had to be started.
 - `open`, `close`: the status, eight hex digits.
-- `pipe`: the status and `IoStatusBlock.Information`, the result of the
-  create (`2`, `FILE_CREATED`, for a new pipe).
+- `pipe`, `mailslot`: the status and `IoStatusBlock.Information`, the
+  result of the create (`2`, `FILE_CREATED`, for a new pipe or mailslot).
 - `ioctl`, `fsctl`, `read`: status, byte count, and the whole output
   buffer in hex (`-` if it is empty).
 - `ioctlat`: the same; an output buffer at an address is not the
@@ -126,8 +135,9 @@ Each step's line repeats the step, then `: `, then the result:
 - `write`: status and byte count.
 
 The step is repeated with its fields single-spaced and its options as
-the script wrote them; `load` leaves out the file. The byte count, or a `pipe`'s
-`Information`, is `-` when the status is an error (`0xC0000000` and up):
+the script wrote them; `load` leaves out the file. The byte count, or a
+`pipe`'s or `mailslot`'s `Information`, is `-` when the status is an
+error (`0xC0000000` and up):
 Windows does not report one for a failed request. The last line is `end`.
 
 A step may stop Windows instead (a bugcheck). Then its line is the
@@ -144,8 +154,8 @@ hypervisor. On NK such a script is run in a boot of its own
 same step.
 
 On Windows the requests are made with the native API (`NtCreateFile`,
-`NtCreateNamedPipeFile`, `NtDeviceIoControlFile`, `NtFsControlFile`,
-...), so the status is the one the I/O manager
+`NtCreateNamedPipeFile`, `NtCreateMailslotFile`, `NtDeviceIoControlFile`,
+`NtFsControlFile`, ...), so the status is the one the I/O manager
 returned, not a Win32 error code translated from it. The runner is a
 user-mode program. On NK each request is likewise a system service made
 on behalf of user mode, and the replayer's buffers are pages of the

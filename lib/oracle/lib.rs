@@ -49,6 +49,12 @@ pub enum Step<'a> {
         path: &'a str,
         args: PipeArgs<'a>,
     },
+    /// Create a mailslot: its server end.
+    Mailslot {
+        handle: &'a str,
+        path: &'a str,
+        args: MailslotArgs<'a>,
+    },
     Close {
         handle: &'a str,
     },
@@ -84,6 +90,8 @@ pub enum Step<'a> {
 
 /// `GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE`.
 const READ_WRITE: u32 = 0xC010_0000;
+/// `GENERIC_READ | SYNCHRONIZE`.
+const READ: u32 = 0x8010_0000;
 /// `FILE_SYNCHRONOUS_IO_NONALERT`.
 const SYNCHRONOUS: u32 = 0x20;
 /// `FILE_NON_DIRECTORY_FILE`.
@@ -212,6 +220,54 @@ impl<'a> PipeArgs<'a> {
     }
 }
 
+/// What a `mailslot` step asks of `NtCreateMailslotFile`: what its
+/// options say, over the defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MailslotArgs<'a> {
+    /// The options as the script wrote them.
+    text: &'a str,
+    pub access: u32,
+    pub options: u32,
+    pub quota: u32,
+    pub maxmessage: u32,
+    /// `ReadTimeout` as the system service is given it, in units of
+    /// 100 ns: negative is relative, -1 is for ever. `None` passes no
+    /// timeout at all.
+    pub timeout: Option<i64>,
+}
+
+impl<'a> MailslotArgs<'a> {
+    fn parse(text: &'a str) -> Result<Self, &'static str> {
+        let mut args = Self {
+            text,
+            access: READ,
+            options: SYNCHRONOUS,
+            quota: 0,
+            maxmessage: 0,
+            // A read of an empty mailslot returns at once.
+            timeout: Some(0),
+        };
+        options(text, |key, value| {
+            match key {
+                "access" => args.access = hex32(value)?,
+                "options" => args.options = hex32(value)?,
+                "quota" => args.quota = decimal32(value)?,
+                "maxmessage" => args.maxmessage = decimal32(value)?,
+                "timeout" => {
+                    args.timeout = match value {
+                        "none" => None,
+                        "forever" => Some(-1),
+                        milliseconds => Some(-10_000 * i64::from(decimal32(milliseconds)?)),
+                    }
+                }
+                _ => return Err("unknown option"),
+            }
+            Ok(())
+        })?;
+        Ok(args)
+    }
+}
+
 /// A buffer at an address the script chose: `@<address>:<length>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct At<'a> {
@@ -316,7 +372,7 @@ pub fn parse_line(line: &str) -> Result<Option<Step<'_>>, &'static str> {
         "install" => Step::Install { file: next()? },
         "use" => Step::Use { service: next()? },
         "unload" => Step::Unload { service: next()? },
-        // These two end with any number of options.
+        // These three end with any number of options.
         "open" => {
             let (handle, path) = (next()?, next()?);
             let args = OpenArgs::parse(after(path))?;
@@ -326,6 +382,11 @@ pub fn parse_line(line: &str) -> Result<Option<Step<'_>>, &'static str> {
             let (handle, path) = (next()?, next()?);
             let args = PipeArgs::parse(after(path))?;
             return Ok(Some(Step::Pipe { handle, path, args }));
+        }
+        "mailslot" => {
+            let (handle, path) = (next()?, next()?);
+            let args = MailslotArgs::parse(after(path))?;
+            return Ok(Some(Step::Mailslot { handle, path, args }));
         }
         "close" => Step::Close { handle: next()? },
         "ioctl" => Step::Ioctl {
@@ -397,6 +458,10 @@ impl fmt::Display for Step<'_> {
             }
             Step::Pipe { handle, path, args } => {
                 write!(f, "pipe {handle} {path}")?;
+                spaced(f, args.text)
+            }
+            Step::Mailslot { handle, path, args } => {
+                write!(f, "mailslot {handle} {path}")?;
                 spaced(f, args.text)
             }
             Step::Close { handle } => write!(f, "close {handle}"),
@@ -603,6 +668,14 @@ mod tests {
                 "pipe s \\Device\\NamedPipe\\nk-test type=1 read=1",
             ),
             (
+                "mailslot m \\Device\\Mailslot\\nk-test",
+                "mailslot m \\Device\\Mailslot\\nk-test",
+            ),
+            (
+                "mailslot m \\Device\\Mailslot\\nk-test timeout=forever  quota=64",
+                "mailslot m \\Device\\Mailslot\\nk-test timeout=forever quota=64",
+            ),
+            (
                 "ioctlat dos 9c40240f @0:16 38",
                 "ioctlat dos 9c40240f @0:16 38",
             ),
@@ -694,6 +767,37 @@ mod tests {
     }
 
     #[test]
+    fn mailslot_options_override_the_defaults() {
+        let Step::Mailslot { handle, path, args } = one("mailslot m \\Device\\Mailslot\\x") else {
+            panic!("not a mailslot");
+        };
+        assert_eq!((handle, path), ("m", "\\Device\\Mailslot\\x"));
+        assert_eq!((args.access, args.options), (0x8010_0000, 0x20));
+        assert_eq!((args.quota, args.maxmessage), (0, 0));
+        assert_eq!(args.timeout, Some(0), "a read returns at once");
+        let Step::Mailslot { args, .. } =
+            one("mailslot m p access=c0100000 options=0 quota=4096 maxmessage=400 timeout=250")
+        else {
+            panic!("not a mailslot");
+        };
+        assert_eq!((args.access, args.options), (0xC010_0000, 0));
+        assert_eq!((args.quota, args.maxmessage), (4096, 400));
+        assert_eq!(args.timeout, Some(-2_500_000), "relative, in 100 ns");
+        let timeout = |text| {
+            let Step::Mailslot { args, .. } = one(text) else {
+                panic!("not a mailslot");
+            };
+            args.timeout
+        };
+        assert_eq!(timeout("mailslot m p timeout=forever"), Some(-1));
+        assert_eq!(timeout("mailslot m p timeout=none"), None);
+        assert_eq!(
+            timeout("mailslot m p timeout=4294967295"),
+            Some(-42_949_672_950_000)
+        );
+    }
+
+    #[test]
     fn a_buffer_is_the_replayers_or_at_an_address() {
         let Step::IoctlAt { input, output, .. } =
             one("ioctlat d 9c40240f @FFFF800000000000:16 @10000:38")
@@ -765,6 +869,17 @@ mod tests {
             "pipe s p inquota=1k",
             "pipe s p outquota=1k",
             "pipe s p timeout=soon",
+            "mailslot m",
+            "mailslot m p extra",
+            "mailslot m p share=3",
+            "mailslot m p disposition=2",
+            "mailslot m p access=g",
+            "mailslot m p options=g",
+            "mailslot m p quota=1k",
+            "mailslot m p maxmessage=-1",
+            "mailslot m p timeout=soon",
+            "mailslot m p timeout=-1",
+            "mailslot m p timeout=",
             "ioctlat d 9c40240f @0:16",
             "ioctlat d zz @0:16 @0:16",
             "ioctlat d 9c40240f @0 16",

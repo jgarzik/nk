@@ -1050,7 +1050,9 @@ fn privilege_sets_match_the_kernel() {
 
 #[test]
 fn create_requests_match_the_kernel() {
-    use crate::io::{IO_SECURITY_CONTEXT, NAMED_PIPE_CREATE_PARAMETERS};
+    use crate::io::{
+        IO_SECURITY_CONTEXT, MAILSLOT_CREATE_PARAMETERS, NAMED_PIPE_CREATE_PARAMETERS,
+    };
     use core::mem::{offset_of, size_of};
     let Some(types) = kernel_types() else { return };
     let context = types
@@ -1089,6 +1091,29 @@ fn create_requests_match_the_kernel() {
         InboundQuota,
         OutboundQuota,
         DefaultTimeout,
+        TimeoutSpecified
+    );
+
+    let mailslot = types
+        .layout("_MAILSLOT_CREATE_PARAMETERS")
+        .expect("_MAILSLOT_CREATE_PARAMETERS");
+    let field = |name| offset(&mailslot, "_MAILSLOT_CREATE_PARAMETERS", name);
+    assert_eq!(
+        size_of::<MAILSLOT_CREATE_PARAMETERS>(),
+        mailslot.size as usize
+    );
+    macro_rules! same_mailslot {
+        ($($name:ident),*) => {$(
+            assert_eq!(
+                offset_of!(MAILSLOT_CREATE_PARAMETERS, $name),
+                field(stringify!($name))
+            );
+        )*};
+    }
+    same_mailslot!(
+        MailslotQuota,
+        MaximumMessageSize,
+        ReadTimeout,
         TimeoutSpecified
     );
 }

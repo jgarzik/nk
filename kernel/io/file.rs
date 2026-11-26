@@ -1,8 +1,8 @@
 //! The requestor side of I/O: open a name, read, write, send control
 //! codes, close. This is what the system services `NtCreateFile`,
-//! `NtCreateNamedPipeFile`, `NtReadFile`, `NtDeviceIoControlFile`,
-//! `NtFsControlFile` and `NtClose` do on Windows; the kernel's
-//! self-tests are the only caller so far.
+//! `NtCreateNamedPipeFile`, `NtCreateMailslotFile`, `NtReadFile`,
+//! `NtDeviceIoControlFile`, `NtFsControlFile` and `NtClose` do on
+//! Windows; the kernel's self-tests are the only caller so far.
 //!
 //! An open resolves its name in the object namespace. The look-up stops
 //! at a device; what is left of the path is the device's to parse, so
@@ -75,6 +75,9 @@ pub enum Kind {
     /// An instance of a named pipe (`NtCreateNamedPipeFile`):
     /// `IRP_MJ_CREATE_NAMED_PIPE`, with these parameters.
     NamedPipe(NAMED_PIPE_CREATE_PARAMETERS),
+    /// A mailslot (`NtCreateMailslotFile`): `IRP_MJ_CREATE_MAILSLOT`,
+    /// with these parameters.
+    Mailslot(MAILSLOT_CREATE_PARAMETERS),
 }
 
 /// An open, as the system services take it.
@@ -400,9 +403,10 @@ unsafe fn set_name(file: *mut FILE_OBJECT, name: &[u16]) -> bool {
 /// A create request came back from its dispatch routine neither
 /// completed nor pending. The driver may still hold the IRP, which
 /// points at the file object and at the opener's stack (the security
-/// context, the access state, a pipe's parameters), so the open can
-/// neither go on nor be given up: the system stops, naming the routine.
-/// Windows goes on to finish the IRP as if it had been completed.
+/// context, the access state, a pipe's or a mailslot's parameters), so
+/// the open can neither go on nor be given up: the system stops, naming
+/// the routine. Windows goes on to finish the IRP as if it had been
+/// completed.
 ///
 /// # Safety
 /// `device` is a live device object.
@@ -459,9 +463,9 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
     let file = body.cast::<FILE_OBJECT>();
     // What the driver is handed by pointer lives here until the create
     // has completed: the access state, the security context that points
-    // to it, and a named pipe's parameters. They are the driver's to
-    // read and write meanwhile, so they are reached through raw
-    // pointers only.
+    // to it, and a named pipe's or a mailslot's parameters. They are the
+    // driver's to read and write meanwhile, so they are reached through
+    // raw pointers only.
     let desired = object::FILE_TYPE.map_generic(request.desired_access);
     // SAFETY: an all-zero access state, and its auxiliary data, are
     // valid values (integers and null pointers).
@@ -476,16 +480,22 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
     let context = &raw mut context as u64;
     let options = create_options(request.disposition, request.create_options);
     let share = request.share_access as u16;
-    let mut pipe = match request.kind {
-        Kind::NamedPipe(parameters) => Some(parameters),
-        Kind::File => None,
-    };
-    let (major, parameters) = match &mut pipe {
-        Some(pipe) => (
+    let mut kind = request.kind;
+    let (major, parameters) = match &mut kind {
+        Kind::NamedPipe(pipe) => (
             IRP_MJ_CREATE_NAMED_PIPE,
             create_pipe_parameters(context, options, share, core::ptr::from_mut(pipe) as u64),
         ),
-        None => (
+        Kind::Mailslot(mailslot) => (
+            IRP_MJ_CREATE_MAILSLOT,
+            create_pipe_parameters(
+                context,
+                options,
+                share,
+                core::ptr::from_mut(mailslot) as u64,
+            ),
+        ),
+        Kind::File => (
             IRP_MJ_CREATE,
             create_parameters(context, options, 0, share, 0),
         ),
