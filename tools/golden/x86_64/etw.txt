@@ -8,3 +8,4 @@ etw.lookup ok
 etw.classic ok
 etw.trace-message ok
 etw.trace-information ok
+etw.nobody-listens ok

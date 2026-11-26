@@ -2304,6 +2304,14 @@ latter with a driver object of their own that records each request as
 it arrives; a test group that leaves a provider registered fails like
 any other leak.
 
+`EtwWrite` is `EtwWriteTransfer` without a related activity, and
+`EtwEventEnabled` is false: no session takes any event.
+`WmiTraceMessageVa` answers as `WmiTraceMessage`. `EtwActivityIdControl`
+makes activity ids (`lib/etw/activity.rs`: this boot's base and a
+count); the codes that read or set the calling thread's id are
+`STATUS_NOT_SUPPORTED`, as Windows answers a system thread, whose id
+would live in a TEB it does not have.
+
 ## Questions about the system
 
 `kernel/ex/sysinfo.rs`, with the length rules in `nk_ex::sysinfo`.
