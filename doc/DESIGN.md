@@ -1966,9 +1966,11 @@ start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
-not bring up yet because their `AddDevice` or start reaches a routine
-NK lacks: at present `ACPI`, so nothing below the HAL's ACPI device is
-enumerated.
+not bring up yet because their `AddDevice` or start stops the system
+over something NK lacks: at present `ACPI`, whose start reads the
+firmware description Windows keeps under `HARDWARE\Description`
+(the "ACPI BIOS" record) and stops without it, so nothing below the
+HAL's ACPI device is enumerated.
 
 ## The registry
 
