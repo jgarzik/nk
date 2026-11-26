@@ -62,7 +62,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
-| 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
+| 35 | `ob::handle::TABLE` | which object each handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
