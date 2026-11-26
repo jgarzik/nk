@@ -146,10 +146,13 @@ gate tier has, for each architecture:
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,
   `pshed.dll`, `storport.sys`, `storahci.sys`, `classpnp.sys`,
   `disk.sys`) on the machine's AHCI controller and data disk, as far as
-  NK runs it (`kernel/selftest/storage.rs`): today its libraries that
-  initialise, `pshed.dll` and `classpnp.sys`. The group is selected by
-  name and leaves the stack running, so the leak comparison is waived
-  for it (`test::keeps_what_it_started`).
+  NK runs it (`kernel/selftest/storage.rs`). The boot has the stack's
+  registry (`registry = ["storage"]`), so its four drivers start at
+  boot from their service keys as on Windows, bringing in the
+  libraries they import from; `stor.load` requires every driver
+  running and every image loaded. The group is selected by name and
+  leaves the stack running, so the leak comparison is waived for it
+  (`test::keeps_what_it_started`).
 
 All but the first are tests of the tests. An expected bugcheck counts
 only if the test printed `NK-NEG-ARMED <name>` first, so a crash on the
