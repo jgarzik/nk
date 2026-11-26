@@ -355,9 +355,16 @@ fn compare() -> Result<(), &'static str> {
 fn upcase() -> Result<(), &'static str> {
     use crate::rtl::print::RtlFreeUnicodeString;
     use crate::rtl::string::{RtlUpcaseUnicodeChar, RtlUpcaseUnicodeString};
-    let capitals = [0x61, 0x7A, 0x7B, 0xE9, 0xF7, 0xFF, 0x3B1, 0xFF41, 0xFFFF]
-        .map(|c| RtlUpcaseUnicodeChar(c));
-    if capitals != [0x41, 0x5A, 0x7B, 0xC9, 0xF7, 0x178, 0x391, 0xFF21, 0xFFFF] {
+    // By Windows' table, which leaves the micro sign and the dotless i
+    // as they are.
+    let capitals = [
+        0x61, 0x7A, 0x7B, 0xB5, 0xE9, 0xF7, 0xFF, 0x131, 0x3B1, 0xFF41, 0xFFFF,
+    ]
+    .map(|c| RtlUpcaseUnicodeChar(c));
+    let expected = [
+        0x41, 0x5A, 0x7B, 0xB5, 0xC9, 0xF7, 0x178, 0x131, 0x391, 0xFF21, 0xFFFF,
+    ];
+    if capitals != expected {
         return Err("RtlUpcaseUnicodeChar gave the wrong capital");
     }
     let mut mixed: Vec<u16> = "abc \u{E9}\u{FF}z".encode_utf16().collect();

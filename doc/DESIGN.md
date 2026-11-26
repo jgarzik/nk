@@ -1115,9 +1115,8 @@ missing leads nowhere (`STATUS_OBJECT_NAME_NOT_FOUND`). Only the kernel
 makes links; no export opens the link itself.
 
 Names compare without regard to case, upper case against upper case by
-a full table (`nk_rtl::upcase_char`, built from the Unicode character
-database: Windows' own table may differ for a few characters, listed
-there). A key handle is a handle to a small object naming
+a full table (`nk_rtl::upcase_char`: Windows' own, recorded from Windows
+10). A key handle is a handle to a small object naming
 the key. The root key is such an object too, called `\Registry` in the
 object namespace: an absolute name, or one relative to a directory, is
 looked up there, through symbolic links like any other, and must end at
@@ -1252,11 +1251,12 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   (`nk_rtl::codepage`); the registry's `Nls\CodePage` key is not
   consulted. A character the page lacks becomes `?`: Windows' "best fit"
   table (a fullwidth or accented letter to its plain form) is absent.
-- **Upper case** is one table, `nk_rtl::upcase`, built from the Unicode
-  character database. `RtlUpcaseUnicodeChar`, the string comparisons,
-  the object namespace and the registry all use it. Windows carries a
-  table of its own; the units where the two may differ are listed in
-  that module.
+- **Upper case** is one table, `nk_rtl::upcase`: Windows' own, every
+  unit as `RtlUpcaseUnicodeChar` answers on Windows 10, recorded there
+  by the conformance driver `nkc-rtl`. It is older than the Unicode
+  character database and leaves alone some units that maps (the micro
+  sign, dotless i, long s, final sigma, Georgian). The string
+  comparisons, the object namespace and the registry all use it.
 - **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
   fold `A` to `Z` only and do not use that table.
 
