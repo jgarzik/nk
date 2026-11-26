@@ -76,6 +76,7 @@ The kernel command line is `\NK\cmdline.txt` on the boot volume:
 | `cpus=<n>` | `hal.cpus` fails unless the kernel finds `n` processors; the harness sets it to what it asked QEMU for |
 | `dpc-limit=<ticks>` | how long one DPC may run, instead of Windows' 20 seconds |
 | `debug=on` | behave as with a debugger attached that continues at every breakpoint |
+| `without=<file>` | boot as if the driver file `<file>` had not been provided: its service is passed over and a device that needs it is left without its driver |
 | `trace=registry` | log every key a driver opens and every value it reads, with the status: what a driver looks for in the registry, for bringing one up |
 
 ### What passing means
@@ -151,12 +152,13 @@ gate tier has, for each architecture:
   boot from their service keys as on Windows, bringing in the
   libraries they import from; `stor.load` requires every driver
   running and every image loaded; `stor.enumerate` requires the
-  devices of the path from the root to the disk, as far as NK brings
-  them up, to be where the reference Windows has them, with its
-  identifiers, services and classes, and says how many are started;
-  `stor.io` is the proof of disk I/O (below) against the disk device
-  the stack makes, `\Device\Harddisk0\DR0`, skipped while that device
-  does not exist. The group is selected by name and
+  devices of the path from the root to the disk (the HAL's device, the
+  ACPI device, the PCI root, the AHCI controller, the disk) to be where
+  the reference Windows has them, with its identifiers, services,
+  classes and stacks, each started, and the controller to have its
+  firmware's ports and registers and one message-signalled interrupt;
+  `stor.io` reads and writes the disk the stack makes, so the scenario
+  expects the image written. The group is selected by name and
   leaves the stack running, so the leak comparison is waived for it
   (`test::keeps_what_it_started`).
 - `x86_64-storage-direct`: the same stack from `storahci.sys` up, on
