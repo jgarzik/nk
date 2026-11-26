@@ -7,7 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    NtClose,
     NtGetEnvironmentVariableEx,
     NtQueryEnvironmentVariableInfoEx,
     NtQuerySystemInformationEx,

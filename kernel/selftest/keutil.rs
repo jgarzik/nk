@@ -9,7 +9,12 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::ke::{FAST_MUTEX, KDPC, KEVENT, KTIMER};
 
 static GROUP: Group = Group {
-    names: &["ke.queued-lock", "ke.processors", "ke.small-routines"],
+    names: &[
+        "ke.queued-lock",
+        "ke.processors",
+        "ke.small-routines",
+        "mm.answers",
+    ],
     run,
     manual: false,
 };
@@ -117,6 +122,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("ke.processors", format_args!("{why}")),
     }
     r.check("ke.small-routines", small_routines);
+    r.check("mm.answers", crate::ex::sysinfo::answers_test);
 }
 
 /// This file's test groups, in the order they run.
