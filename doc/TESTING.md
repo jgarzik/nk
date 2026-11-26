@@ -91,7 +91,8 @@ only if:
   on, as Windows would, and fails the run;
 - no line is torn or malformed;
 - tests and verdicts are those of the scenario's golden list
-  (`tools/golden/<name>.txt`): a test that disappears, appears, or turns
+  (`tools/golden/<name>/`, a file per first word of the tests' names):
+  a test that disappears, appears, or turns
   from OK into SKIP fails until the list is changed on purpose
   (`tools/boot_test.py <scenario> --bless`);
 - NK's second is a second: the kernel prints `NK-CLOCK-MARK` around a

@@ -172,3 +172,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         ),
     }
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

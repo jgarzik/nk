@@ -1,0 +1,6 @@
+dpc.run ok
+dpc.order ok
+dpc.remove ok
+dpc.other-cpu ok
+dpc.stack ok
+dpc.flush ok

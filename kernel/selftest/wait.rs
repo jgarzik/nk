@@ -126,3 +126,6 @@ fn switch_in_dpc(r: &mut Report, _: &BootInfo) {
         format_args!("a wait in a DPC routine that lowered the IRQL returned"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &AT_DISPATCH, &IN_DPC, &SWITCH_IN_DPC];

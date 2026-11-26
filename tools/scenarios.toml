@@ -14,7 +14,7 @@
 #   must_fail expect = "fail": exactly these tests fail
 #   accel     "tcg": emulate the processor even where the host could run
 #             it directly (x86-64 only; arm64 is always emulated)
-#   golden    file in tools/golden/ listing every test and its verdict
+#   golden    directory in tools/golden/ listing every test and its verdict
 #   canonical true: this run's log and export list are kept as
 #             target/qemu/serial-<arch>.log and exports-<arch>.txt (the
 #             ledger is generated from the latter)

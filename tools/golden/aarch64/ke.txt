@@ -1,0 +1,4 @@
+ke.irql-and-locks ok
+ke.interrupts ok
+ke.bugcheck.register ok
+ke.bugcheck.order ok

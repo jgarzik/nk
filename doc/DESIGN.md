@@ -994,7 +994,8 @@ to the sender's handlers as it passes Windows'.
 ## Exports
 
 Drivers import from `ntoskrnl.exe` and `HAL.dll` by name; both names
-resolve against one static table (`kernel/export/mod.rs`). Each entry is
+resolve against one static table, kept as a list per part of the kernel
+that implements the routines (`kernel/export/list/`). Each entry is
 the name, the address and a state: `Implemented`, `Partial` (gaps
 documented at the function) or `Traps` (bound so the driver loads;
 bugchecks by name if called). The same table feeds the import binder and,

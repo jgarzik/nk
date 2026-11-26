@@ -698,3 +698,16 @@ fn event_debug(r: &mut Report, _: &BootInfo) {
         include_str!("../../oracle/event-debug.txt"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[
+    &GROUP,
+    &EVENT,
+    &EVENT_DEBUG,
+    &FATAL_DISPATCH,
+    &FATAL_WORK,
+    &FATAL_DPC,
+    &FATAL_KERNEL_READ,
+    &FATAL_THREAD,
+    &CROSS_DPC,
+];

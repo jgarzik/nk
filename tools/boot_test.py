@@ -74,14 +74,21 @@ def load_scenarios():
     return tomllib.loads((TOOLS / "scenarios.toml").read_text())
 
 
-def golden_path(name):
-    return TOOLS / "golden" / f"{name}.txt"
+def golden_dir(name):
+    return TOOLS / "golden" / name
+
+
+def golden_file(test):
+    """The file of a golden list a test is in: the first word of its name."""
+    return test.split(".")[0] + ".txt"
 
 
 def load_golden(name):
-    """{test name: "ok"|"skip"} from tools/golden/<name>.txt."""
+    """{test name: "ok"|"skip"} from the files of tools/golden/<name>/."""
     golden = {}
-    for line in golden_path(name).read_text().splitlines():
+    lines = [line for path in sorted(golden_dir(name).glob("*.txt"))
+             for line in path.read_text().splitlines()]
+    for line in lines:
         if line and not line.startswith("#"):
             test, verdict = line.split()
             golden[test] = verdict
@@ -319,9 +326,16 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
                 print(f"    {line}")
             return 1
         if bless and "golden" in sc:
-            lines = [f"{t} {v.lower()}" for t, v, _ in log.tests]
-            golden_path(sc["golden"]).write_text("\n".join(lines) + "\n")
-            print(f"  wrote {golden_path(sc['golden']).relative_to(ROOT)}")
+            files = {}
+            for test, verdict, _ in log.tests:
+                files.setdefault(golden_file(test), []).append(f"{test} {verdict.lower()}")
+            directory = golden_dir(sc["golden"])
+            directory.mkdir(exist_ok=True)
+            for stale in set(p.name for p in directory.glob("*.txt")) - set(files):
+                (directory / stale).unlink()
+            for file, lines in files.items():
+                (directory / file).write_text("\n".join(lines) + "\n")
+            print(f"  wrote {directory.relative_to(ROOT)}/")
         expect = sc.get("expect", "ok")
         counts = log.completes[0] if log.completes else (0, 0, 0)
         detail = f"pass={counts[0]} skip={counts[2]}" if expect == "ok" else f"expected {expect}"

@@ -1,0 +1,12 @@
+mm.frames ok
+mm.map ok
+mm.low-half ok
+mm.user.map ok
+mm.user.refused ok
+mm.user.other-cpu ok
+mm.user.copy ok
+mm.pool ok
+mm.stack ok
+mm.probe-and-lock.read-only ok
+mm.routine-address ok
+mm.driver-paging ok

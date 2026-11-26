@@ -2276,3 +2276,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.hive.names", hive_names);
     r.check("cm.hive.refused", || crate::cm::refused_test(hive));
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

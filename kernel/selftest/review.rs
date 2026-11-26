@@ -690,3 +690,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("work.driver-object", driver_object);
     r.check("work.queue-types", queue_types);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

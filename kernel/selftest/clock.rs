@@ -39,3 +39,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         time::host_mark_test(),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

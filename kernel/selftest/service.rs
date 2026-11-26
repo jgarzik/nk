@@ -101,3 +101,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("io.service.boot-start", format_args!("{why}")),
     }
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

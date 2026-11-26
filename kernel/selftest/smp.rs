@@ -72,3 +72,6 @@ fn stuck(r: &mut Report, _: &BootInfo) {
         format_args!("a call to a stuck processor returned"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &STUCK];

@@ -54,3 +54,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     report(r, "ms.wmilib", "wmilib.sys");
     report(r, "ms.msrpc", "msrpc.sys");
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

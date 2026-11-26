@@ -2154,3 +2154,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.anonymous", anonymous_logon);
     r.check("se.audit", audit_alarm);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

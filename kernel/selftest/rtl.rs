@@ -1278,3 +1278,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.wildcards", wildcards);
     r.check("rtl.legal-characters", legal_characters);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

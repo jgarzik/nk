@@ -114,3 +114,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "thread.identity", "checks:", thread::identity_test());
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

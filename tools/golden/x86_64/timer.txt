@@ -1,0 +1,6 @@
+timer.never-early ok
+timer.shared-bucket ok
+timer.cancel ok
+timer.periodic ok
+timer.chain ok
+timer.other-cpu ok

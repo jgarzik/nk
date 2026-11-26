@@ -308,3 +308,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.printf", printf);
     r.check("rtl.strings", strings);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

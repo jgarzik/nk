@@ -1983,3 +1983,15 @@ fn wmi_event() -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[
+    &PROVIDERS,
+    &CLASSIC,
+    &WMI,
+    &GROUP,
+    &SYSTEM,
+    &BUGCHECK_EX,
+    &BUGCHECK_CALLBACK,
+    &UNREGISTER_TWICE,
+];

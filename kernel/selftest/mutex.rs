@@ -50,3 +50,6 @@ fn exit_holding(r: &mut Report, _: &BootInfo) {
         format_args!("a thread ended holding a mutex, and nothing happened"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &EXIT_HOLDING];

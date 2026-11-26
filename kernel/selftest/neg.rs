@@ -284,3 +284,20 @@ fn trap(r: &mut Report, _: &BootInfo) {
         format_args!("a trap returned {status:#x} and handle {port:p}"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[
+    &PANIC,
+    &FAULT,
+    &NULL,
+    &LOW_MEMORY,
+    &STACK_OVERFLOW,
+    &DPC_STACK_OVERFLOW,
+    &LOCK_ORDER,
+    &LOCK_TWICE,
+    &IRQL_LOWER,
+    &META_FAIL,
+    &BREAKPOINT,
+    &PROTECTED_CLOSE,
+    &TRAP,
+];

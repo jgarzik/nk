@@ -464,3 +464,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.device", device);
     r.check("se.token", token::token_test);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

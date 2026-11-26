@@ -422,3 +422,6 @@ fn run(r: &mut Report, _: &BootInfo) {
         with_driver(cancel_race),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &OVERSTATED];

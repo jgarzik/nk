@@ -128,15 +128,15 @@ pub fn abort(name: &str, why: fmt::Arguments<'_>) -> ! {
 }
 
 /// Run the selected groups, print the totals and power off.
-pub fn run_all(groups: &[&Group], info: &BootInfo) -> ! {
+pub fn run_all(groups: &[&[&Group]], info: &BootInfo) -> ! {
+    let groups = || groups.iter().flat_map(|file| file.iter());
     let pattern = info.option("test");
-    let plan: usize = groups
-        .iter()
+    let plan: usize = groups()
         .filter(|g| selected(g, pattern))
         .map(|g| g.names.len())
         .sum();
     kprintln!("NK-TEST-PLAN {plan}");
-    for group in groups.iter().filter(|g| selected(g, pattern)) {
+    for group in groups().filter(|g| selected(g, pattern)) {
         let before = resources();
         let mut report = Report {
             claims: Claims::new(group.names).expect("a group reports at most 64 verdicts"),

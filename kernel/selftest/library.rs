@@ -409,3 +409,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("ldr.lib.as-service", as_service);
     r.check("ldr.lib.no-memory", no_memory);
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

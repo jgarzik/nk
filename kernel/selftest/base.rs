@@ -61,3 +61,6 @@ fn run(r: &mut Report, info: &BootInfo) {
         Err(why) => r.fail("hal.cpus", format_args!("{why}")),
     }
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

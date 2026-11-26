@@ -48,3 +48,6 @@ fn watchdog(r: &mut Report, _: &BootInfo) {
         format_args!("a DPC that never returns returned"),
     );
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP, &WATCHDOG];

@@ -167,3 +167,6 @@ fn pool_raise() -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+/// This file's test groups, in the order they run.
+pub static GROUPS: &[&Group] = &[&GROUP];

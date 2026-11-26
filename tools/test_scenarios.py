@@ -14,12 +14,13 @@ KEYS = {
 
 
 def golden_lists():
+    """{list name: [[test, verdict]]}: a list is a directory of files, one
+    per first word of the tests' names."""
     lists = {}
-    for path in sorted((TOOLS / "golden").glob("*.txt")):
-        if path.stem == "blocked":
-            continue
-        entries = [l.split() for l in path.read_text().splitlines() if l and l[0] != "#"]
-        lists[path.stem] = entries
+    for directory in sorted(p for p in (TOOLS / "golden").iterdir() if p.is_dir()):
+        lists[directory.name] = [
+            l.split() for path in sorted(directory.glob("*.txt"))
+            for l in path.read_text().splitlines() if l and l[0] != "#"]
     return lists
 
 
@@ -45,7 +46,7 @@ class Scenarios(unittest.TestCase):
                     self.assertEqual(expect, "bugcheck")
                     re.compile(sc["then"])
                 if "golden" in sc:
-                    self.assertTrue((TOOLS / "golden" / f"{sc['golden']}.txt").exists())
+                    self.assertTrue((TOOLS / "golden" / sc["golden"]).is_dir())
                 self.assertLess(len(sc.get("cmdline", "")), 256)
 
     def test_each_architecture_has_its_main_scenario(self):
@@ -71,6 +72,10 @@ class Scenarios(unittest.TestCase):
                 self.assertTrue(all(len(e) == 2 and e[1] in ("ok", "skip") for e in entries))
                 names = [e[0] for e in entries]
                 self.assertEqual(len(names), len(set(names)), "duplicate test names")
+                for path in (TOOLS / "golden" / name).glob("*.txt"):
+                    for line in path.read_text().splitlines():
+                        self.assertEqual(line.split(".")[0].split()[0] + ".txt", path.name,
+                                         f"{line.split()[0]} is in the wrong file")
 
     def test_no_test_is_skipped_everywhere_unless_it_says_why(self):
         ok, skipped = set(), set()
