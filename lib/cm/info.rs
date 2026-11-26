@@ -204,10 +204,13 @@ pub const KEY_NODE_HEADER: usize = 24;
 pub const KEY_FULL_HEADER: usize = 44;
 /// Size of a `KEY_NAME_INFORMATION` before the name: its length.
 pub const KEY_NAME_HEADER: usize = 4;
-/// Size of a `KEY_CACHED_INFORMATION` without the name it leaves room
-/// for and never holds: last write time, title index, five counts, name
-/// length.
-pub const KEY_CACHED_SIZE: usize = 36;
+/// Size of a `KEY_CACHED_INFORMATION` as C counts it: last write time,
+/// title index, five counts and the name's length, 36 bytes, then the
+/// first character of a name it never holds and padding to the
+/// structure's alignment of eight.
+pub const KEY_CACHED_SIZE: usize = 40;
+/// How much of a `KEY_CACHED_INFORMATION` is written: its fields.
+const KEY_CACHED_FIELDS: usize = 36;
 /// Size of a `KEY_VALUE_BASIC_INFORMATION` before the name: title
 /// index, type, name length.
 pub const VALUE_BASIC_HEADER: usize = 12;
@@ -337,7 +340,9 @@ pub fn key_name_information(path: &[u16], out: &mut [u8]) -> (Fit, usize) {
 
 /// Write a key as a `KEY_CACHED_INFORMATION` into `out`: the counts of
 /// the full form and the length of the key's name, without name or
-/// class. It is all there or not at all.
+/// class. It is all there or not at all: Windows wants room for the
+/// whole structure ([`KEY_CACHED_SIZE`]) and writes its fields, leaving
+/// the four bytes after them alone.
 pub fn key_cached_information(key: &KeyInfo<'_>, out: &mut [u8]) -> (Fit, usize) {
     let [low, high] = time(key.last_write);
     let fields = [
@@ -351,7 +356,12 @@ pub fn key_cached_information(key: &KeyInfo<'_>, out: &mut [u8]) -> (Fit, usize)
         key.max_value_data_len,
         key.name.len() as u32 * 2,
     ];
-    fixed_information(&fields, out)
+    const { assert!(size_of::<[u32; 9]>() == KEY_CACHED_FIELDS) };
+    if out.len() >= KEY_CACHED_SIZE && fixed(out, &fields) {
+        (Fit::All, KEY_CACHED_SIZE)
+    } else {
+        (Fit::Nothing, KEY_CACHED_SIZE)
+    }
 }
 
 /// Write a structure that is `fields` and nothing more, 32 bits each,
@@ -363,6 +373,17 @@ pub fn fixed_information(fields: &[u32], out: &mut [u8]) -> (Fit, usize) {
     } else {
         (Fit::Nothing, needed)
     }
+}
+
+/// Write a structure that is one 32-bit word of bit fields into `out`:
+/// the bits of `mask` become those of `flags`; the others, which the
+/// structure reserves, keep what `out` held, as Windows leaves them.
+pub fn flag_information(flags: u32, mask: u32, out: &mut [u8]) -> (Fit, usize) {
+    let Some(word) = out.first_chunk_mut::<4>() else {
+        return (Fit::Nothing, 4);
+    };
+    *word = (u32::from_le_bytes(*word) & !mask | flags & mask).to_le_bytes();
+    (Fit::All, 4)
 }
 
 /// Write a value as a `KEY_VALUE_BASIC_INFORMATION` into `out`: its
@@ -701,9 +722,12 @@ mod tests {
     #[test]
     fn cached_information_is_the_counts_and_no_name() {
         let all = at_every_length(KEY_CACHED_SIZE, |out| key_cached_information(&KEY, out));
-        assert_eq!(all.len(), 36);
+        // The structure's size, of which the last four bytes are left
+        // alone.
+        assert_eq!(all.len(), 40);
+        assert_eq!(all[36..], [0xEE; 4]);
         assert_eq!(all[..8], TIME);
-        let fields: Vec<u32> = all[8..]
+        let fields: Vec<u32> = all[8..36]
             .chunks(4)
             .map(|field| u32::from_le_bytes(field.try_into().unwrap()))
             .collect();
@@ -713,6 +737,24 @@ mod tests {
         // A structure of fixed size is there whole or not at all.
         let all = at_every_length(12, |out| fixed_information(&[1, 2, 0x0403_0201], out));
         assert_eq!(all, [1, 0, 0, 0, 2, 0, 0, 0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_word_of_flags_keeps_its_reserved_bits() {
+        let format = |out: &mut [u8]| flag_information(0b0101, 0b1111, out);
+        for len in 0..4 {
+            let mut short = vec![0xEE; len];
+            assert_eq!(format(&mut short), (Fit::Nothing, 4));
+            assert_eq!(short, vec![0xEE; len]);
+        }
+        // The four flags are written, set or clear; the rest stays.
+        let mut out = [0xEE; 6];
+        assert_eq!(format(&mut out), (Fit::All, 4));
+        assert_eq!(out, [0xE5, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE]);
+        // A flag outside the mask is not written.
+        let mut out = [0; 4];
+        assert_eq!(flag_information(0b11, 0b01, &mut out), (Fit::All, 4));
+        assert_eq!(out, [1, 0, 0, 0]);
     }
 
     #[test]

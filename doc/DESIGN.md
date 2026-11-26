@@ -1233,9 +1233,8 @@ missing leads nowhere (`STATUS_OBJECT_NAME_NOT_FOUND`). Only the kernel
 makes links; no export opens the link itself.
 
 Names compare without regard to case, upper case against upper case by
-a full table (`nk_rtl::upcase_char`, built from the Unicode character
-database: Windows' own table may differ for a few characters, listed
-there). A key handle is a handle to a small object naming
+a full table (`nk_rtl::upcase_char`: Windows' own, recorded from Windows
+10). A key handle is a handle to a small object naming
 the key. The root key is such an object too, called `\Registry` in the
 object namespace: an absolute name, or one relative to a directory, is
 looked up there, through symbolic links like any other, and must end at
@@ -1265,11 +1264,17 @@ An open key describes itself
 in every form. Its full name starts at `\REGISTRY`, each part in the
 letter case it was created in (`MACHINE`, `SYSTEM`, `HARDWARE` and
 `USER` are Windows' spellings), with symbolic links followed: a key
-opened through `CurrentControlSet` names its control set. What NK has
+opened through `CurrentControlSet` names its control set. The cached
+form (`KEY_CACHED_INFORMATION`) is all there or not at all: it wants
+room for the structure as C sizes it, 40 bytes, and writes the 36 of
+its fields. What NK has
 none of is reported as Windows reports a key without it: no flags, no
-virtualization, no handle tags, no layer. Every key is trusted
+virtualization, no handle tags. Every key is trusted
 (`KeyTrustInformation`), because the registry holds only the system's
-own hive.
+own hive. Where a form is a word of bit fields (virtualization, trust)
+the flags are written and the reserved bits stay the caller's. The
+forms are those Windows 10 answers: it has no layer form
+(`KeyLayerInformation` is `STATUS_INVALID_PARAMETER`).
 
 A key's last write time is when its values or its list of subkeys last
 changed: setting or deleting a value stamps the key, making or deleting
@@ -1283,10 +1288,11 @@ holds: as on Windows, the numbers only grow while the key has subkeys
 hive file starts from the numbers the file gives it.
 
 Creating makes only the last key of a path, as on Windows, and gives a
-new key its class. A value is read by name in the forms it is
-enumerated in; there are no layered keys, so the form that describes a
-value of one (`KeyValueLayerInformation`) is refused like a form that
-does not exist, `STATUS_INVALID_PARAMETER`. A deleted value leaves its
+new key its class. A value is enumerated in the basic, full and partial
+forms, and read by name in those and the two aligned for 64 bits, which
+Windows 10 refuses to enumerate in (`STATUS_INVALID_PARAMETER`); there
+are no layered keys, so the form that describes a value of one
+(`KeyValueLayerInformation`) is refused the same way. A deleted value leaves its
 place in the order to the next; set again, it is the key's last. A key
 without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
@@ -1305,8 +1311,8 @@ does what the query says. NK's decisions:
 
 - **The table is copied first**: every entry up to the one that ends
   it, names and default data too (a string default of length zero is
-  measured), and the environment block. A routine that rewrites the
-  table changes nothing for the call in progress.
+  measured). A routine that rewrites the table changes nothing for the
+  call in progress.
 - **The key is found once** and counted as open for the length of the
   call. Each entry reads the registry afresh, holding the lock for the
   read alone, so a routine may open, change or delete any key, this one
@@ -1320,7 +1326,24 @@ does what the query says. NK's decisions:
 - **A stored string** is the value without the terminator it ends
   with, and a terminator after it: a counted string without a buffer is
   given one from the pool, which the caller frees; one with a buffer
-  must have room for the terminator (`STATUS_BUFFER_TOO_SMALL`).
+  must have room for the terminator.
+- **No room is no failure**: `STATUS_BUFFER_TOO_SMALL` from delivering
+  a value does not end the query, as on Windows, whether a routine
+  answers it or the place an entry points to (a counted string's
+  buffer, a buffer that states its size) is too small. Nothing is
+  stored there, the table goes on, and the call succeeds if nothing
+  else fails.
+- **Several strings as one** (`REG_MULTI_SZ` with
+  `RTL_QUERY_REGISTRY_NOEXPAND`) are delivered from the registry with
+  one terminator more than the value holds, counted in the length, as
+  Windows delivers them: `a\0bc\0\0`, 12 bytes, reaches a routine as
+  14 and a counted string with a `Length` of 12.
+- **Nothing is expanded**: the environment a caller passes is not
+  read. A `REG_EXPAND_SZ`, value or default, asked for without
+  `RTL_QUERY_REGISTRY_NOEXPAND` ends the call with
+  `STATUS_INVALID_PARAMETER`, which is what the kernel of Windows 10
+  answers even when the environment has the variable. With the flag it
+  is delivered as stored.
 - **`RelativeTo`**: `RTL_REGISTRY_OPTIONAL` changes nothing, a key that
   is not there fails the call. `RTL_REGISTRY_USER` is
   `\Registry\User\.Default`: the system is the only user.
@@ -1344,13 +1367,16 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
 - **The ANSI code page is Windows-1252**, the page of the reference
   machine's English (United States) installation, compiled in
   (`nk_rtl::codepage`); the registry's `Nls\CodePage` key is not
-  consulted. A character the page lacks becomes `?`: Windows' "best fit"
-  table (a fullwidth or accented letter to its plain form) is absent.
-- **Upper case** is one table, `nk_rtl::upcase`, built from the Unicode
-  character database. `RtlUpcaseUnicodeChar`, the string comparisons,
-  the object namespace and the registry all use it. Windows carries a
-  table of its own; the units where the two may differ are listed in
-  that module.
+  consulted. A character the page lacks becomes its best fit by
+  Windows' table (a fullwidth or accented letter to its plain form),
+  recorded from Windows 10 like the upper-case table, and `?` where
+  that has none.
+- **Upper case** is one table, `nk_rtl::upcase`: Windows' own, every
+  unit as `RtlUpcaseUnicodeChar` answers on Windows 10, recorded there
+  by the conformance driver `nkc-rtl`. It is older than the Unicode
+  character database and leaves alone some units that maps (the micro
+  sign, dotless i, long s, final sigma, Georgian). The string
+  comparisons, the object namespace and the registry all use it.
 - **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
   fold `A` to `Z` only and do not use that table.
 
@@ -1362,11 +1388,14 @@ exported from `kernel/rtl` with the strings they work on. The matcher
 name, a bit per expression character in a fixed four kilobytes of the
 caller's stack: its time is bounded by the product of the two lengths
 whatever the pattern, it allocates nothing, and so it never raises,
-where Windows raises `STATUS_NO_MEMORY`. The name is upper-cased by the
-caller's table when one is passed, read from the caller's memory a unit
-at a time. The table of legal characters is built from each file
-system's naming rules (`nk_rtl::legal`): Microsoft publishes the flags
-and the macros that read the table, not its contents.
+where Windows raises `STATUS_NO_MEMORY`. What matches is what Windows
+matches, the two cases included that the documented wording of the DOS
+wildcards does not cover (stated in `nk_rtl::wildcard`). The name is
+upper-cased by the caller's table when one is passed, read from the
+caller's memory a unit at a time. The table of legal characters is
+built from each file system's naming rules (`nk_rtl::legal`) and is
+Windows 10's entry for entry: Microsoft publishes the flags and the
+macros that read the table, not its contents.
 
 ### The prefix table
 
@@ -1400,9 +1429,9 @@ largest SID, onto the stack. `RtlValidSecurityDescriptor` judges an
 access list on a pool copy and answers "not valid" without memory for
 one. App-container SIDs (`RtlGetAppContainerSidType`,
 `RtlGetAppContainerParent`) are told apart by shape alone, `S-1-15-2`
-with eight or twelve sub-authorities (`nk_se::sid`, which lists what
-Microsoft's pages leave open); a parent's SID is a pool block the
-caller frees.
+with eight or twelve sub-authorities, and refused with Windows'
+statuses (`nk_se::sid`); a parent's SID is a pool block the caller
+frees.
 
 Nothing is enforced: there is no user mode to check. Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`

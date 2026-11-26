@@ -364,6 +364,8 @@ pub static GROUP: Group = Group {
         "oracle.nkc-work",
         "oracle.nkc-se",
         "oracle.nkc-reg",
+        "oracle.nkc-rtl",
+        "oracle.nkc-rtl-tables",
         "oracle.cancel",
         "oracle.nkc-lib",
         "oracle.nkc-lib-twice",
@@ -468,6 +470,20 @@ fn run(r: &mut Report, _: &BootInfo) {
         "nkc-reg.sys",
         include_str!("../../oracle/nkc-reg.script"),
         include_str!("../../oracle/nkc-reg.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-rtl",
+        "nkc-rtl.sys",
+        include_str!("../../oracle/nkc-rtl.script"),
+        include_str!("../../oracle/nkc-rtl.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-rtl-tables",
+        "nkc-rtl.sys",
+        include_str!("../../oracle/nkc-rtl-tables.script"),
+        include_str!("../../oracle/nkc-rtl-tables.txt"),
     );
     check(
         r,

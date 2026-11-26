@@ -103,7 +103,9 @@ pub const SID_TEXT_MAX: usize = 2 + 3 + 1 + 14 + SID_MAX_SUB_AUTHORITIES * 11;
 /// have (`STATUS_INVALID_SID`).
 ///
 /// `authority` is the `IdentifierAuthority`, most significant byte
-/// first.
+/// first: a number of 48 bits, printed in decimal if it fits in 32 and
+/// else in hexadecimal after `0x`, without leading zeros, as Windows
+/// 10 prints it.
 pub fn sid_text(
     revision: u8,
     authority: &[u8; 6],
@@ -120,7 +122,7 @@ pub fn sid_text(
     let value = authority.iter().fold(0u64, |v, &b| v << 8 | u64::from(b));
     if value > u64::from(u32::MAX) {
         push_text(out, &mut at, "0x");
-        push_number(out, &mut at, value, 16, 12, false);
+        push_number(out, &mut at, value, 16, 1, false);
     } else {
         push_number(out, &mut at, value, 10, 1, false);
     }
@@ -359,12 +361,12 @@ mod tests {
             // The largest authority printed in decimal, and the smallest
             // in hexadecimal.
             (1, [0, 0, 0xFF, 0xFF, 0xFF, 0xFF], &[1], "S-1-4294967295-1"),
-            (1, [0, 1, 0, 0, 0, 0], &[1], "S-1-0x000100000000-1"),
+            (1, [0, 1, 0, 0, 0, 0], &[1], "S-1-0x100000000-1"),
             (
                 1,
                 [0x01, 0x02, 0x03, 0xAB, 0xCD, 0xEF],
                 &[u32::MAX],
-                "S-1-0x010203abcdef-4294967295",
+                "S-1-0x10203abcdef-4294967295",
             ),
             (255, [0; 6], &[0, 0], "S-255-0-0-0"),
         ];

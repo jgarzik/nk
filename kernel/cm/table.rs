@@ -247,7 +247,6 @@ struct Run {
     /// is, whatever the routine does to it.
     key: KeyId,
     rows: Rows,
-    environment: Vec<u16>,
     query: Query,
     /// The block the routine being called was lent its value in.
     lent: *mut u8,
@@ -335,7 +334,9 @@ fn lend(name: &[u16], data: &[u8]) -> Option<(*mut u8, *mut u16)> {
 /// Store a string in the counted string that is `slot` such structures
 /// past `target`: in its buffer if it has one, which must have room
 /// for the terminator too, or in a new one from the pool, which the
-/// caller frees.
+/// caller frees. Without that room, or for a string longer than a
+/// counted string counts, nothing is stored
+/// (`STATUS_BUFFER_TOO_SMALL`, which does not end the query).
 ///
 /// # Safety
 /// `target` points to at least `slot + 1` counted strings, each
@@ -372,7 +373,9 @@ unsafe fn store_string(target: usize, slot: usize, text: &[u8]) -> Result<(), NT
 
 /// Store data of more than four bytes in the buffer at `target`, whose
 /// first 32 bits say how large it is and whether the data are to be
-/// preceded by their length and type (`query::buffer_data_offset`).
+/// preceded by their length and type (`query::buffer_data_offset`). A
+/// buffer too small is left as it is (`STATUS_BUFFER_TOO_SMALL`, which
+/// does not end the query).
 ///
 /// # Safety
 /// `target` points to a buffer of the size its first 32 bits give,
@@ -484,9 +487,7 @@ unsafe fn work(run: *mut Run, context: *mut c_void) -> NTSTATUS {
             // unwound gives the run back with nothing borrowed from it.
             let state = unsafe { &mut *run };
             let mut registry = Registry(state.key);
-            let next = state
-                .query
-                .next(&state.rows, &state.environment, &mut registry, done);
+            let next = state.query.next(&state.rows, &mut registry, done);
             match next {
                 // SAFETY: per the contract.
                 Ok(Some(action)) => unsafe {
@@ -579,25 +580,16 @@ unsafe fn query_table(
     path: *const u16,
     table: *const RTL_QUERY_REGISTRY_TABLE,
     context: *mut c_void,
-    environment: *const u16,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     let key = match unsafe { top_key(relative_to, path) } {
         Ok(key) => key,
         Err(status) => return status,
     };
-    // SAFETY: per the contract: the table, and an environment block,
-    // which is strings ended by an empty one.
-    let copied = unsafe {
-        let environment = if environment.is_null() {
-            Some(Vec::new())
-        } else {
-            units(environment, wide_list_len(environment))
-        };
-        (rows(table), environment)
-    };
+    // SAFETY: per the contract.
+    let copied = unsafe { rows(table) };
     let run = pool::alloc(size_of::<Run>(), TAG).cast::<Run>();
-    let (Some(rows), Some(environment), false) = (copied.0, copied.1, run.is_null()) else {
+    let (Some(rows), false) = (copied, run.is_null()) else {
         if !run.is_null() {
             let _ = pool::free(run.cast());
         }
@@ -611,7 +603,6 @@ unsafe fn query_table(
         run.write(Run {
             key,
             rows: Rows(rows),
-            environment,
             query: Query::new(),
             lent: core::ptr::null_mut(),
         });
@@ -639,21 +630,26 @@ unsafe fn query_table(
 /// - A value stored directly need not be type-checked
 ///   (`RTL_QUERY_REGISTRY_TYPECHECK`): Windows demands the check for a
 ///   key in a hive it does not trust, and NK has no such hive.
+/// - The environment is not read. The kernel of Windows 10 expands no
+///   `REG_EXPAND_SZ`: one asked for without
+///   `RTL_QUERY_REGISTRY_NOEXPAND` ends the call with
+///   `STATUS_INVALID_PARAMETER`, even given an environment that has
+///   the variable it names.
 ///
 /// # Safety
 /// `path` is a terminated string, or a key handle if `relative_to`
 /// says so; `table` points to entries, the last with neither routine
 /// nor name, whose members are what Microsoft documents for their
-/// flags; `environment` is null or strings ended by an empty one.
+/// flags.
 pub unsafe extern "C" fn RtlQueryRegistryValues(
     relative_to: u32,
     path: *const u16,
     table: *const RTL_QUERY_REGISTRY_TABLE,
     context: *mut c_void,
-    environment: *const u16,
+    _environment: *const u16,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
-    unsafe { query_table(relative_to, path, table, context, environment) }
+    unsafe { query_table(relative_to, path, table, context) }
 }
 
 /// [`RtlQueryRegistryValuesEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlqueryregistryvalues):
@@ -669,8 +665,8 @@ pub unsafe extern "C" fn RtlQueryRegistryValuesEx(
     path: *const u16,
     table: *const RTL_QUERY_REGISTRY_TABLE,
     context: *mut c_void,
-    environment: *const u16,
+    _environment: *const u16,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
-    unsafe { query_table(relative_to, path, table, context, environment) }
+    unsafe { query_table(relative_to, path, table, context) }
 }

@@ -10,11 +10,9 @@
 //! The header's macros index the table with a character below 0x80 and
 //! test the flags below; a character from 0x80 up never reaches it.
 //!
-//! # INFERRED
-//!
 //! Microsoft publishes the flags and the macros, not the table. It is
-//! built here from the naming rules of each file system, to be checked
-//! against the table of a running Windows:
+//! built here from rules that give the table of Windows 10, as the
+//! conformance driver `nkc-rtl` read it there, all 128 entries:
 //!
 //! - no control character, and none of `" * / < > ? \ |`, is legal in
 //!   a FAT, HPFS or NTFS name; HPFS also excludes `:`, and FAT `:` and
@@ -22,7 +20,7 @@
 //! - the wildcards are `*` and `?` and the three DOS ones, `"`, `<`
 //!   and `>`;
 //! - the OLE flag, which with the NTFS one says what a stream's name
-//!   may hold, is set for every character but NUL and `! / : \`.
+//!   may hold, is set for every character but NUL and `! . / : \`.
 
 /// `FSRTL_FAT_LEGAL`.
 pub const FAT_LEGAL: u8 = 0x01;
@@ -60,7 +58,7 @@ const fn flags(c: u8) -> u8 {
     if among(c, b"\"*<>?") {
         flags |= WILD_CHARACTER;
     }
-    if c != 0 && !among(c, b"!/:\\") {
+    if c != 0 && !among(c, b"!./:\\") {
         flags |= OLE_LEGAL;
     }
     flags
@@ -124,7 +122,50 @@ mod tests {
         assert_eq!(of(b'\\'), 0);
         assert_eq!(of(b'|'), OLE_LEGAL);
         assert_eq!(of(b'!'), ALL & !OLE_LEGAL);
-        assert_eq!(of(b'.'), ALL);
+        assert_eq!(of(b'.'), ALL & !OLE_LEGAL);
+    }
+
+    /// The table as Windows 10 has it, four entries to a word, the
+    /// first in the low byte: what the conformance driver `nkc-rtl`
+    /// logs there.
+    #[test]
+    fn the_table_is_the_one_read_on_windows() {
+        const WINDOWS: [u32; 32] = [
+            0x1010_1000,
+            0x1010_1010,
+            0x1010_1010,
+            0x1010_1010,
+            0x1010_1010,
+            0x1010_1010,
+            0x1010_1010,
+            0x1010_1010,
+            0x1718_0717,
+            0x1717_1717,
+            0x1618_1717,
+            0x0007_1716,
+            0x1717_1717,
+            0x1717_1717,
+            0x1604_1717,
+            0x1818_1618,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1617_1717,
+            0x1717_1600,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1717,
+            0x1717_1710,
+        ];
+        let bytes: Vec<u8> = WINDOWS.iter().flat_map(|word| word.to_le_bytes()).collect();
+        assert_eq!(bytes, LEGAL_ANSI_CHARACTERS);
     }
 
     /// The header's `FsRtlTestAnsiCharacter`: any of the flags, or the

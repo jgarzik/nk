@@ -37,8 +37,9 @@ mod writer;
 pub use import::{ImportError, import};
 pub use info::{
     KEY_BASIC_HEADER, KEY_CACHED_SIZE, KEY_FULL_HEADER, KEY_NAME_HEADER, KEY_NODE_HEADER, KeyInfo,
-    NO_CLASS, VALUE_BASIC_HEADER, fixed_information, key_basic_information, key_cached_information,
-    key_full_information, key_name_information, key_node_information, value_basic_information,
+    NO_CLASS, VALUE_BASIC_HEADER, fixed_information, flag_information, key_basic_information,
+    key_cached_information, key_full_information, key_name_information, key_node_information,
+    value_basic_information,
 };
 
 /// A key in a hive.

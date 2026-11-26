@@ -21,6 +21,60 @@ pub mod wildcard;
 
 pub use upcase::upcase_char;
 
+/// Windows' tables, as the conformance driver `nkc-rtl` returned them
+/// on Windows 10 (`oracle/nkc-rtl-tables.txt`): the tables here are
+/// held to them unit by unit.
+#[cfg(test)]
+mod recorded {
+    const TRANSCRIPT: &str = include_str!("../../oracle/nkc-rtl-tables.txt");
+
+    /// What the device-control requests with these function numbers
+    /// returned, one after another.
+    fn bytes(functions: core::ops::Range<u32>) -> Vec<u8> {
+        let mut all = Vec::new();
+        for line in TRANSCRIPT.lines() {
+            // `ioctl d <code> - <room>: <status> <length> <bytes>`
+            let mut fields = line.split(' ');
+            if fields.next() != Some("ioctl") {
+                continue;
+            }
+            let code = u32::from_str_radix(fields.nth(1).unwrap(), 16).unwrap();
+            // `CTL_CODE`: the function number is bits 2 to 13.
+            if functions.contains(&(code >> 2 & 0xFFF)) {
+                let hex = fields.next_back().unwrap();
+                all.extend(
+                    (0..hex.len())
+                        .step_by(2)
+                        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap()),
+                );
+            }
+        }
+        all
+    }
+
+    fn units(bytes: &[u8]) -> Vec<u16> {
+        let (pairs, _) = bytes.as_chunks::<2>();
+        pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect()
+    }
+
+    /// `RtlUpcaseUnicodeChar` of each of the 65536 units.
+    pub fn upcase() -> Vec<u16> {
+        units(&bytes(0xA00..0xA10))
+    }
+
+    /// The unit `RtlMultiByteToUnicodeN` makes of each of the 256
+    /// bytes.
+    pub fn to_unicode() -> Vec<u16> {
+        units(&bytes(0xA10..0xA11))
+    }
+
+    /// The byte `RtlUnicodeToMultiByteN` makes of each of the 65536
+    /// units.
+    pub fn to_ansi() -> Vec<u8> {
+        bytes(0xA20..0xA30)
+    }
+}
+
 /// A counted string, where it lies: the prefix table and the wildcard
 /// matcher read a driver's names through this, a unit at a time.
 pub trait Text {

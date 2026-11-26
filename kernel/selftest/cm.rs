@@ -361,8 +361,9 @@ fn delete_value(key: *mut c_void) -> Result<(), &'static str> {
     };
     // Values, the longest name, the longest data, the key's own name.
     let counts = |values, name, data| {
-        let whole = joined(&[&TIME, &fields(&[0, 3, 12, values, name, data, 14])]);
-        query_key_info(key, 4, ROOM).is(ROOM, &whole, 36, 8)
+        let counted = fields(&[0, 3, 12, values, name, data, 14]);
+        let whole = joined(&[&TIME, &counted, &[UNTOUCHED; 4]]);
+        query_key_info(key, 4, ROOM).is(ROOM, &whole, 40, 8)
     };
     let deleted = [
         delete_named(key, "NUMBER"),
@@ -444,7 +445,7 @@ fn child(parent: *mut c_void, name: &str, class: Option<&str>) -> (u32, *mut c_v
 
 /// The key the enumeration and query tests work on, made as the
 /// conformance driver `nkc-reg` makes its own, so that the numbers
-/// here are the ones its source predicts:
+/// here are the ones it logs on Windows:
 ///
 /// ```text
 /// NkcTest, class "Cls"
@@ -687,8 +688,8 @@ fn enumerate_value(key: *mut c_void, index: u32, class: u32, room: usize) -> Ans
 }
 
 /// The values of [`build`]'s key in each form, as (index, class, fixed
-/// part, the whole structure): what `ZwEnumerateValueKey` answers by
-/// index and `ZwQueryValueKey` by name.
+/// part, the whole structure): what `ZwQueryValueKey` answers by name
+/// and, in the first three classes, `ZwEnumerateValueKey` by index.
 fn value_forms() -> Vec<(u32, u32, usize, Vec<u8>)> {
     let gap = |bytes: usize| alloc::vec![UNTOUCHED; bytes];
     let number = 0x1234_5678u32.to_le_bytes();
@@ -768,10 +769,20 @@ fn value_forms() -> Vec<(u32, u32, usize, Vec<u8>)> {
     ]
 }
 
-/// Values come by index in the order they were first set, in every
-/// form, each with Windows' status and length for a buffer of any size.
+/// Values come by index in the order they were first set, in the basic,
+/// full and partial forms, each with Windows' status and length for a
+/// buffer of any size. The forms aligned for 64 bits are for a value
+/// asked for by name: enumerating in one is refused.
 fn enumerate_values(key: *mut c_void) -> Result<(), &'static str> {
     for (index, class, fixed, whole) in value_forms() {
+        if class > 2 {
+            let refused = [0, fixed, ROOM]
+                .map(|room| enumerate_value(key, index, class, room).refused(INVALID_PARAMETER));
+            if refused != [true; 3] {
+                return Err("a value was enumerated in a form aligned for 64 bits");
+            }
+            continue;
+        }
         let ask = |room| enumerate_value(key, index, class, room);
         if !at_every_room(&whole, fixed, 0, ask) {
             crate::kd::print(format_args!(
@@ -826,7 +837,7 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
     let gap = [UNTOUCHED; 2];
     let name = utf16("NkcTest");
     // (class, fixed part, bytes of time at the start, the structure)
-    let forms: [(u32, usize, usize, Vec<u8>); 10] = [
+    let forms: [(u32, usize, usize, Vec<u8>); 9] = [
         (0, KEY_BASIC, 8, joined(&[&TIME, &fields(&[0, 14]), &name])),
         // The class starts at the next multiple of four after the name.
         (
@@ -855,19 +866,22 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
             0,
             name_form("\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Services\\NkcTest"),
         ),
-        // The counts again, and the length of the name without the name.
+        // The counts again, and the length of the name without the
+        // name: all 40 bytes of the structure or nothing, of which the
+        // last four are left alone.
         (
             4,
-            36,
+            40,
             8,
-            joined(&[&TIME, &fields(&[0, 3, 12, 5, 12, 12, 14])]),
+            joined(&[&TIME, &fields(&[0, 3, 12, 5, 12, 12, 14]), &[UNTOUCHED; 4]]),
         ),
-        // Flags, virtualization, handle tags: none. Trusted. No layer.
+        // Flags, virtualization, handle tags: none. Trusted. Of a word
+        // of bit fields the flags are written (five, and one) and the
+        // reserved bits left alone.
         (5, 12, 0, fields(&[0, 0, 0])),
-        (6, 4, 0, fields(&[0])),
+        (6, 4, 0, fields(&[0xEEEE_EEE0])),
         (7, 4, 0, fields(&[0])),
-        (8, 4, 0, fields(&[1])),
-        (9, 4, 0, fields(&[0])),
+        (8, 4, 0, fields(&[0xEEEE_EEEF])),
     ];
     for (class, fixed, skip, whole) in forms {
         if !at_every_room(&whole, fixed, skip, |room| query_key_info(key, class, room)) {
@@ -875,7 +889,10 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
             return Err("an open key was not described as Windows describes it");
         }
     }
-    if !query_key_info(key, 10, ROOM).refused(INVALID_PARAMETER) {
+    // The layer form, which this Windows has not, and a number past it.
+    if !query_key_info(key, 9, ROOM).refused(INVALID_PARAMETER)
+        || !query_key_info(key, 10, ROOM).refused(INVALID_PARAMETER)
+    {
         return Err("a form there is none of was answered");
     }
     // The registry's own root, and a key of the hive or the skeleton
@@ -916,8 +933,8 @@ fn query_value_info(key: *mut c_void, name: &str, class: u32, room: usize) -> An
 }
 
 /// A value is described by name in every form it is described in by
-/// index: found whatever the letter case of the name asked for, and
-/// named as it was set.
+/// index and in the two aligned for 64 bits: found whatever the letter
+/// case of the name asked for, and named as it was set.
 fn query_value(key: *mut c_void) -> Result<(), &'static str> {
     let names = ["NUMBER", "text", "ODD", "", "mULTI"];
     for (index, class, fixed, whole) in value_forms() {
@@ -1091,7 +1108,8 @@ fn calling(flags: u32, name: Option<&[u16]>, tag: usize) -> RTL_QUERY_REGISTRY_T
 }
 
 /// Run `entries`, ended as a table must be, on the key `path` names
-/// from `relative_to`, with the environment the tests expand from.
+/// from `relative_to`, with an environment that has the variable the
+/// tests' expandable string names: nothing is expanded all the same.
 fn run_table(
     export: Export,
     relative_to: u32,
@@ -1191,7 +1209,7 @@ fn with_more_values(
 }
 
 /// A value is stored where its entry points, by its type and size, as
-/// Microsoft documents and as nkc-reg's source predicts: small data in
+/// Microsoft documents and as Windows answers nkc-reg: small data in
 /// place, longer data in a buffer that says its size, a string in a
 /// counted string.
 fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
@@ -1274,7 +1292,8 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
 
     // More than four bytes: a buffer whose first word is its size. A
     // positive size wants length and type before the data, a negative
-    // one the data alone; one too small for either is refused.
+    // one the data alone; one too small for either gets nothing, and
+    // that is no failure of the query.
     let mut buffer = [0xEEEE_EEEEu32; 6];
     let sized = [24, -24, 12].map(|size: i32| {
         buffer = [0xEEEE_EEEE; 6];
@@ -1287,14 +1306,15 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         != [
             (0, [8, REG_QWORD, 0x5566_7788, 0x1122_3344, E, E]),
             (0, [0x5566_7788, 0x1122_3344, E, E, E, E]),
-            (TOO_SMALL, [12, E, E, E, E, E]),
+            (0, [12, E, E, E, E, E]),
         ]
     {
         return Err("a value of more than four bytes was not stored in a sized buffer");
     }
 
     // A string: in a new buffer with room for the terminator; in the
-    // caller's, if it has that room.
+    // caller's, if it has that room. If not, nothing is stored and the
+    // query succeeds all the same.
     let mut string = NO_STRING;
     let into = &raw mut string;
     let mut small_buffer = [0xEEEEu16; 4];
@@ -1315,14 +1335,15 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
     let fits = own(6);
     let short = own(4);
     string = NO_STRING;
-    if fits != (0, 4, 6, [0x6E, 0x6B, 0, 0xEEEE]) || short != (TOO_SMALL, 0, 4, [0xEEEE; 4]) {
+    if fits != (0, 4, 6, [0x6E, 0x6B, 0, 0xEEEE]) || short != (0, 0, 4, [0xEEEE; 4]) {
         return Err("a string was not stored in the caller's buffer only if it has room");
     }
 
-    // Expanded from the environment, unless asked for as stored; a
-    // variable the environment has not stays as written. Several
-    // strings as one, or each in the next counted string. A default
-    // string whose length is left to be measured.
+    // A string to be expanded is refused, as on Windows, and nothing
+    // stored; asked for as stored, it is stored. Several strings as
+    // one, which counts both terminators the list ends with and is
+    // followed by a third, or each in the next counted string. A default string whose
+    // length is left to be measured.
     let mut strings = [NO_STRING; 3];
     let mut one_string = |entry: RTL_QUERY_REGISTRY_TABLE| {
         let status = on_key(export, &[entry]);
@@ -1345,14 +1366,14 @@ fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
     ];
     if expanded
         != [
-            (0, string_of("value\\x%NOPE%")),
+            (INVALID_PARAMETER, None),
             (0, string_of("%NKVAR%\\x%NOPE%")),
-            (0, string_of("a\0bc\0")),
+            (0, string_of("a\0bc\0\0")),
             (0, string_of("dflt")),
             (0, string_of("nk")),
         ]
     {
-        return Err("a string was not expanded, or kept as stored, as asked");
+        return Err("a string was not refused, or kept as stored, as asked");
     }
     let several = on_key(
         export,
@@ -1491,7 +1512,7 @@ fn starts(text: &str) -> u32 {
 }
 
 /// An entry's routine is called with each value the entry asks for:
-/// one string of several at a time, an expandable string expanded, a
+/// one string of several at a time, an expandable string as stored, a
 /// default for a value that is not there, every value of a key. Its
 /// failure ends the query, but for the one status Windows ignores.
 fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
@@ -1512,7 +1533,7 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
             &[[REG_SZ, 6, c('T'), starts("nk"), 0x102]],
         ),
         // Each string of several, as a string; or all of them as they
-        // are stored.
+        // are stored, and one terminator more.
         (
             calling(0, Some(multi), ok(3)),
             0,
@@ -1524,14 +1545,10 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         (
             calling(NOEXPAND, Some(multi), ok(4)),
             0,
-            &[[REG_MULTI_SZ, 12, c('M'), starts("a"), 0x104]],
+            &[[REG_MULTI_SZ, 14, c('M'), starts("a"), 0x104]],
         ),
-        // Expanded, a plain string; or as stored.
-        (
-            calling(0, Some(expand), ok(5)),
-            0,
-            &[[REG_SZ, 28, c('E'), starts("va"), 0x105]],
-        ),
+        // To be expanded: refused, and no call. As stored: a call.
+        (calling(0, Some(expand), ok(5)), INVALID_PARAMETER, &[]),
         (
             calling(NOEXPAND, Some(expand), ok(6)),
             0,
@@ -1569,8 +1586,9 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         return Err("a routine's failure did not end the query, or the wrong status did");
     }
     // No name: every value of the key in the key's order, each under
-    // its own name; or, if the entry says so, one call with no value.
-    let every: [Call; 8] = [
+    // its own name, up to the string that would be expanded, which
+    // ends the query; or, if the entry says so, one call with no value.
+    let every: [Call; 7] = [
         [REG_DWORD, 4, c('N'), 0x5566_7788, 0x121],
         [REG_SZ, 6, c('T'), starts("nk"), 0x121],
         [REG_BINARY, 3, c('O'), 0xFF34_5678, 0x121],
@@ -1578,9 +1596,8 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
         [REG_SZ, 4, c('M'), starts("a"), 0x121],
         [REG_SZ, 6, c('M'), starts("bc"), 0x121],
         [REG_QWORD, 8, c('Q'), 0x5566_7788, 0x121],
-        [REG_SZ, 28, c('E'), starts("va"), 0x121],
     ];
-    if calls_of(export, &[calling(0, None, ok(0x21))]) != (0, every.to_vec())
+    if calls_of(export, &[calling(0, None, ok(0x21))]) != (INVALID_PARAMETER, every.to_vec())
         || calls_of(export, &[calling(NOVALUE, None, ok(0x22))])
             != (0, alloc::vec![[0, 0, 0xFFFF, u32::MAX, 0x122]])
     {
@@ -1599,9 +1616,10 @@ fn table_routine(key: *mut c_void, export: Export) -> Result<(), &'static str> {
     {
         return Err("a subkey's routine did not get the subkey's values");
     }
-    // With the delete flag each value goes once its routine has had it.
-    let (status, calls) = calls_of(export, &[calling(DELETE, None, ok(0x25))]);
-    if (status, calls.len()) != (0, 8) || !enumerate_value(key, 0, 0, ROOM).refused(NO_MORE) {
+    // With the delete flag each value goes once its routine has had
+    // it: seven values, each as stored.
+    let (status, calls) = calls_of(export, &[calling(DELETE | NOEXPAND, None, ok(0x25))]);
+    if (status, calls.len()) != (0, 7) || !enumerate_value(key, 0, 0, ROOM).refused(NO_MORE) {
         return Err("values were not deleted once their routine had been called");
     }
     Ok(())
@@ -1746,7 +1764,6 @@ const fn terminated<const N: usize>(text: &str) -> [u16; N] {
 /// What [`query_and_raise`] names: it is a driver's function, unwound
 /// with the query, and keeps nothing that only a destructor frees.
 static RAISE_KEY: [u16; TABLE_KEY.len() + 1] = terminated(TABLE_KEY);
-static RAISE_ENVIRONMENT: [u16; 13] = terminated("NKVAR=value");
 static BETA: [u16; 5] = terminated("Beta");
 static MULTI: [u16; 6] = terminated("Multi");
 static ABSENT: [u16; 7] = terminated("Absent");
@@ -1772,8 +1789,8 @@ unsafe extern "C" fn raising(
 
 /// A body for a `__try`: a driver's function that runs a query table
 /// whose routine raises. Much of what a query can hold is held when it
-/// does: an environment, a value in hand, a string lent out, entries
-/// with names and a default still to come.
+/// does: a value in hand, a string lent out, entries with names and a
+/// default still to come.
 extern "C" fn query_and_raise(_: usize) {
     let table = [
         RTL_QUERY_REGISTRY_TABLE {
@@ -1805,7 +1822,7 @@ extern "C" fn query_and_raise(_: usize) {
             RAISE_KEY.as_ptr(),
             table.as_ptr(),
             core::ptr::null_mut(),
-            RAISE_ENVIRONMENT.as_ptr(),
+            core::ptr::null(),
         )
     };
     RAISE_RETURNED.store(status as u32 | 1 << 31, Ordering::Relaxed);

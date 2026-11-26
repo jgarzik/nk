@@ -1,0 +1,14 @@
+# NK conformance driver nkc-rtl (the run-time library).
+#
+# One request runs the driver's checks of the C string routines,
+# _vsnwprintf, counted strings and the ANSI code page, SIDs, access
+# lists and descriptors, the prefix table and wildcard matching, and
+# returns the values it logged, 32 bits each, ending with 0x4E4B4321.
+# What each value means is written beside it in nk-fixtures
+# nkc/nkc-rtl.c.
+
+load nkc-rtl nkc-rtl.sys
+open d \Device\NkcRtl
+ioctl d 00222000 - 16384
+close d
+unload nkc-rtl

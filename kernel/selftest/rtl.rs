@@ -355,9 +355,16 @@ fn compare() -> Result<(), &'static str> {
 fn upcase() -> Result<(), &'static str> {
     use crate::rtl::print::RtlFreeUnicodeString;
     use crate::rtl::string::{RtlUpcaseUnicodeChar, RtlUpcaseUnicodeString};
-    let capitals = [0x61, 0x7A, 0x7B, 0xE9, 0xF7, 0xFF, 0x3B1, 0xFF41, 0xFFFF]
-        .map(|c| RtlUpcaseUnicodeChar(c));
-    if capitals != [0x41, 0x5A, 0x7B, 0xC9, 0xF7, 0x178, 0x391, 0xFF21, 0xFFFF] {
+    // By Windows' table, which leaves the micro sign and the dotless i
+    // as they are.
+    let capitals = [
+        0x61, 0x7A, 0x7B, 0xB5, 0xE9, 0xF7, 0xFF, 0x131, 0x3B1, 0xFF41, 0xFFFF,
+    ]
+    .map(|c| RtlUpcaseUnicodeChar(c));
+    let expected = [
+        0x41, 0x5A, 0x7B, 0xB5, 0xC9, 0xF7, 0x178, 0x131, 0x391, 0xFF21, 0xFFFF,
+    ];
+    if capitals != expected {
         return Err("RtlUpcaseUnicodeChar gave the wrong capital");
     }
     let mut mixed: Vec<u16> = "abc \u{E9}\u{FF}z".encode_utf16().collect();
@@ -440,12 +447,14 @@ fn multibyte() -> Result<(), &'static str> {
     }
     room = [0xEEEE; 16];
     // Room for two characters; then five bytes, whose odd one is none.
-    if to_wide(&mut room, 4, 3) != (0x8000_0005, 4)
+    // What does not fit is left out, and the status is success all the
+    // same, as on Windows.
+    if to_wide(&mut room, 4, 3) != (0, 4)
         || room[..3] != [0x61, 0x62, 0xEEEE]
-        || to_wide(&mut room, 5, 3) != (0x8000_0005, 4)
+        || to_wide(&mut room, 5, 3) != (0, 4)
         || room[2] != 0xEEEE
     {
-        return Err("bytes that do not fit were not cut off with a warning");
+        return Err("bytes that do not fit were not cut off, or not without a word");
     }
     // SAFETY: as above; the count may be left out.
     let status = unsafe {
@@ -491,6 +500,22 @@ fn multibyte() -> Result<(), &'static str> {
     };
     if status != 0 || narrow[0] != 0x80 {
         return Err("the euro sign is not byte 0x80");
+    }
+    // Characters the page lacks, which Windows fits as best it can: A
+    // macron, an en-width hyphen, fullwidth `z`.
+    let (fitted, mut plain) = ([0x100u16, 0x2010, 0xFF5A], [0xEEu8; 3]);
+    // SAFETY: three characters into room for three bytes.
+    let status = unsafe {
+        RtlUnicodeToMultiByteN(
+            plain.as_mut_ptr(),
+            3,
+            core::ptr::null_mut(),
+            fitted.as_ptr(),
+            6,
+        )
+    };
+    if status != 0 || plain != *b"A-z" {
+        return Err("a character the code page lacks did not become its best fit");
     }
     // SAFETY: three characters into room for two bytes.
     let status = unsafe {
@@ -746,7 +771,7 @@ fn sid_text() -> Result<(), &'static str> {
     {
         return Err("a SID's text is wrong");
     }
-    if text(&wide_authority, "S-1-0x010000000005-18") != (0, true) {
+    if text(&wide_authority, "S-1-0x10000000005-18") != (0, true) {
         return Err("an authority beyond 32 bits is not printed in hexadecimal");
     }
     if text(&revised, "") != (0xC000_0078, true) {
@@ -807,10 +832,10 @@ fn app_container() -> Result<(), &'static str> {
             (first, kind, second, right)
         }
     }
-    const NOT_APPCONTAINER: u32 = 0xC000_0200;
+    const NOT_APPCONTAINER: u32 = 0xC000_A200;
     const INVALID_PARAMETER: u32 = 0xC000_000D;
-    if asked(&SidRoom::new(5, &[18])) != (NOT_APPCONTAINER, 0, NOT_APPCONTAINER, false)
-        || asked(&SidRoom::new(15, &[3, 1])) != (NOT_APPCONTAINER, 0, NOT_APPCONTAINER, false)
+    if asked(&SidRoom::new(5, &[18])) != (NOT_APPCONTAINER, 0, INVALID_PARAMETER, false)
+        || asked(&SidRoom::new(15, &[3, 1])) != (NOT_APPCONTAINER, 0, INVALID_PARAMETER, false)
     {
         return Err("a SID that is no app container's was taken for one");
     }
@@ -820,8 +845,10 @@ fn app_container() -> Result<(), &'static str> {
     if asked(&SidRoom::new(15, &PACKAGE)) != (0, 1, 0, true) {
         return Err("a child's SID did not give its parent");
     }
-    if asked(&SidRoom::new(15, &PACKAGE[..2])) != (0, 3, INVALID_PARAMETER, false)
-        || asked(&SidRoom::new(15, &PACKAGE[..9])) != (0, 3, INVALID_PARAMETER, false)
+    // Of the invalid type, which is stored, and no app container's.
+    let invalid = (NOT_APPCONTAINER, 3, INVALID_PARAMETER, false);
+    if asked(&SidRoom::new(15, &PACKAGE[..2])) != invalid
+        || asked(&SidRoom::new(15, &PACKAGE[..9])) != invalid
     {
         return Err("a package SID of the wrong length is not of the invalid type");
     }
@@ -1137,6 +1164,11 @@ fn wildcards() -> Result<(), &'static str> {
         ("<.txt", "a.b.txt", 0, 1),
         ("<.b", "a.b.c", 0, 0),
         ("<\"*", "file", 0, 1),
+        // `<` takes the last period as its last character; `>` at a
+        // period matches nothing, and the expression, run out, has the
+        // period all the same.
+        ("a<c", "a.c", 0, 1),
+        (">", ".", 0, 1),
         ("a>", "a", 0, 1),
         ("a>c", "ac", 0, 0),
         (">>>>>>>>\">>>", "abc.de", 0, 1),
@@ -1217,6 +1249,10 @@ fn legal_characters() -> Result<(), &'static str> {
     }
     if !test(b'|', false, stream) || !test(1, false, stream) || test(b'/', false, stream) {
         return Err("a stream's name does not take what a file's refuses");
+    }
+    // The OLE flag alone: Windows clears it for the period.
+    if test(b'.', false, 16) || !test(b'.', false, fat) || !test(b'-', false, 16) {
+        return Err("the period is legal in an OLE name, or not in a FAT one");
     }
     let wild = (0..128).filter(|&c| test(c, false, 8)).count();
     if wild != 5 {

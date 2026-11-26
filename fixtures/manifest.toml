@@ -342,19 +342,19 @@ note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
 name = "nkc-reg"
 arch = "x86_64"
 file = "nkc-reg.x64.sys"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.x64.nkc-reg.sys"
-sha256 = "2e787bfe049656183b992ccf837df14d1e1c6ca7047eef1031036e613123ddb9"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-reg.x64.nkc-reg.sys"
+sha256 = "05b57b25658590ff0b305c565e2784db3bbb87c0c2bebd585dc9901b0bdcc2c7"
 status = "nk-authored"
-note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+note = "nk-fixtures v8 nkc/nkc-reg.c: the registry, enumeration and query tables"
 
 [[fixture]]
 name = "nkc-reg"
 arch = "aarch64"
 file = "nkc-reg.arm64.sys"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.arm64.nkc-reg.sys"
-sha256 = "914fa4358c1caab2bdc9aa8dda2608a55b557b4b1f6e7fd483e425f00a3654fc"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-reg.arm64.nkc-reg.sys"
+sha256 = "73c4ab227875adfdb1f3c34dfb447f87bd933699f742b7ff6317bd8a8c9255da"
 status = "nk-authored"
-note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+note = "nk-fixtures v8 nkc/nkc-reg.c: the registry, enumeration and query tables"
 
 [[fixture]]
 name = "nkc-seh"
@@ -560,3 +560,21 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-etw.arm64
 sha256 = "2163446ec2ff0c00673c9f040e3109c6c247f33d1a1ed00dbc3a36507164d655"
 status = "nk-authored"
 note = "nk-fixtures v8 nkc/nkc-etw.c: trace providers, WMI registration, bugcheck callbacks, system information"
+
+[[fixture]]
+name = "nkc-rtl"
+arch = "x86_64"
+file = "nkc-rtl.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.x64.nkc-rtl.sys"
+sha256 = "5c80d7181c541582fc7ee651b94756499516fbc87c103c0afe16b8d70aad9b97"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"
+
+[[fixture]]
+name = "nkc-rtl"
+arch = "aarch64"
+file = "nkc-rtl.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.arm64.nkc-rtl.sys"
+sha256 = "0b2faf232c39383d1f677b9aeefabb7f52d766734d379add0898b9b2a1af15b5"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"

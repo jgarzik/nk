@@ -1,0 +1,44 @@
+# NK conformance driver nkc-rtl: Windows' tables, whole.
+#
+# Sixteen requests return RtlUpcaseUnicodeChar of every 16-bit unit,
+# 4096 units each; one the Unicode of each byte in the ANSI code page;
+# sixteen the ANSI byte of every 16-bit unit. See nk-fixtures
+# nkc/nkc-rtl.c.
+
+load nkc-rtl nkc-rtl.sys
+open d \Device\NkcRtl
+ioctl d 00222800 - 8192
+ioctl d 00222804 - 8192
+ioctl d 00222808 - 8192
+ioctl d 0022280c - 8192
+ioctl d 00222810 - 8192
+ioctl d 00222814 - 8192
+ioctl d 00222818 - 8192
+ioctl d 0022281c - 8192
+ioctl d 00222820 - 8192
+ioctl d 00222824 - 8192
+ioctl d 00222828 - 8192
+ioctl d 0022282c - 8192
+ioctl d 00222830 - 8192
+ioctl d 00222834 - 8192
+ioctl d 00222838 - 8192
+ioctl d 0022283c - 8192
+ioctl d 00222840 - 512
+ioctl d 00222880 - 4096
+ioctl d 00222884 - 4096
+ioctl d 00222888 - 4096
+ioctl d 0022288c - 4096
+ioctl d 00222890 - 4096
+ioctl d 00222894 - 4096
+ioctl d 00222898 - 4096
+ioctl d 0022289c - 4096
+ioctl d 002228a0 - 4096
+ioctl d 002228a4 - 4096
+ioctl d 002228a8 - 4096
+ioctl d 002228ac - 4096
+ioctl d 002228b0 - 4096
+ioctl d 002228b4 - 4096
+ioctl d 002228b8 - 4096
+ioctl d 002228bc - 4096
+close d
+unload nkc-rtl
