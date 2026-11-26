@@ -306,6 +306,29 @@ fn msi_capability(function: Function) -> Option<u32> {
     None
 }
 
+/// What the function's message capability holds: whether messages are
+/// enabled, how many (as the power of two the register states), and
+/// the address and data of the first. `None` without the capability.
+pub fn message_programmed(function: Function) -> Option<(bool, u32, u64, u16)> {
+    let capability = msi_capability(function)?;
+    let control = read16(function, capability + 2);
+    let low = u64::from(read32(function, capability + 4));
+    let (high, data) = if control & MSI_64BIT != 0 {
+        (
+            u64::from(read32(function, capability + 8)),
+            read16(function, capability + 12),
+        )
+    } else {
+        (0, read16(function, capability + 8))
+    };
+    Some((
+        control & MSI_ENABLE != 0,
+        1 << ((control & MSI_MULTIPLE_ENABLE) >> 4),
+        high << 32 | low,
+        data,
+    ))
+}
+
 /// The function's interrupt line as firmware left it, if it has a pin
 /// and a line.
 fn line(function: Function) -> Option<u32> {

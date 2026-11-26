@@ -181,11 +181,20 @@ gate tier has, for each architecture:
   `storahci`'s device gone from it and no resources or interrupt
   vector held, and take its device away when the controller leaves the
   bus; done twice, the second round must leave the kernel holding
-  exactly what the first left (`selftest::resources`), after which the
-  controller comes back for the tests that follow;
+  exactly what the first left (`selftest::resources`). Each round
+  ends with the controller's key and driver key deleted, so that every
+  round and the start that follows is the controller's first: it is
+  installed from the driver database and then asked for its
+  requirements with `MSISupported` in its key, which is when the bus,
+  like `pci.sys`, offers a message. The controller then comes back for
+  the tests that follow;
   `stor.direct.controller` the controller started by
   `storahci` with its ports, the memory its sixth address register
-  names and one interrupt, with `storahci`'s the one service routine
+  names and one interrupt: one message, as on the reference machine
+  (the raw descriptor latched and message-signalled with the message
+  token for a vector, the controller's message capability enabled for
+  one message with the address and data the hardware layer has for
+  the vector), with `storahci`'s the one service routine
   on its vector and called at least once (the count is in the
   verdict; Storport's DPCs are not counted anywhere, and are proved by
   the disk having been found, since every command's completion goes
@@ -201,13 +210,14 @@ gate tier has, for each architecture:
   `disk_expect = "written"`. `x86_64-storage-direct-smp1` is the same
   on one processor.
 
-  Most of the boot's time is three requests of the proof: the
-  transfers at and across the disk's end. With no partition manager
-  on the stack they reach the controller, which fails them, and
-  `classpnp.sys` retries each for some four seconds, logs Windows'
-  event 153 (an `NK-ERRORLOG` line each) and fails it with
-  `STATUS_IO_DEVICE_ERROR`; the verdict states the three statuses and
-  the proof's time.
+  The proof leaves out the transfers at and across the disk's end
+  here, as it does for `stor.io` (`diskio::Beyond::Skip`): with no
+  partition manager on the stack they reach the controller, which
+  fails them, and `classpnp.sys` retries each for some four seconds,
+  logs Windows' event 153 and fails it with `STATUS_IO_DEVICE_ERROR`.
+  That is Microsoft's code at work, not NK's, and was most of the
+  boot's time. NK's test disk is asked them. The verdict states the
+  proof's time.
 
   What it does not prove is the path below the controller:
   `acpi.sys` and `pci.sys` enumerating it, `acpi.sys`'s filter on its
@@ -287,7 +297,7 @@ direct I/O at byte offsets, control codes, flush) it
   `STATUS_INVALID_PARAMETER`; whole sectors at or across the disk's end
   fail with whatever the drive's refusal comes to (Microsoft's disk
   driver sends such a request down for the drive to judge) and move
-  nothing;
+  nothing. These last are asked of NK's test disk only;
 - does it at once from several threads, each with its own handle:
   three read stretches that are never written, one rewrites the write
   range, and the write range is read meanwhile;

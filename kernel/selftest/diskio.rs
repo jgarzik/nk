@@ -38,6 +38,19 @@ pub static GROUPS: &[&Group] = &[&GROUP];
 /// by several threads at once.
 const SHARE_READ_WRITE: u32 = 0x3;
 
+/// Whether the proof makes the transfers at and across the disk's
+/// end, which a disk refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Beyond {
+    Probe,
+    /// Not on Microsoft's disk: with no partition manager on its stack
+    /// such a transfer reaches the controller, which fails it, and
+    /// `classpnp.sys` retries each for seconds before it gives up.
+    /// That is Microsoft's code's doing, not NK's, and costs the boot
+    /// most of its time.
+    Skip,
+}
+
 /// What the proof did.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Counts {
@@ -51,9 +64,6 @@ pub struct Counts {
     /// and its adapter's limits and bus.
     pub bus_type: u32,
     pub adapter: Option<answer::Adapter>,
-    /// The statuses of the transfers beyond the disk's end: a read at
-    /// the end, a read across it, a write at it.
-    pub beyond: [NTSTATUS; 3],
 }
 
 impl core::fmt::Display for Counts {
@@ -436,7 +446,7 @@ fn written(disk: &mut Disk, facts: &Facts) -> Result<(), &'static str> {
 /// is `STATUS_INVALID_PARAMETER`. A transfer of whole sectors at or
 /// across the disk's end is the drive's to refuse: it fails, with the
 /// status the drive's refusal comes to, and moves nothing.
-fn limits(disk: &Disk, facts: &Facts) -> Result<[NTSTATUS; 3], &'static str> {
+fn limits(disk: &Disk, facts: &Facts, beyond: Beyond) -> Result<(), &'static str> {
     let nothing = IoResult {
         status: STATUS_SUCCESS,
         information: 0,
@@ -457,6 +467,9 @@ fn limits(disk: &Disk, facts: &Facts) -> Result<[NTSTATUS; 3], &'static str> {
     {
         return Err("a transfer that is not whole sectors was not refused as an invalid parameter");
     }
+    if beyond == Beyond::Skip {
+        return buffer.intact("a refused transfer wrote outside the requestor's buffer");
+    }
     let end = facts.sectors * sector;
     let beyond = [
         disk.try_read(end, &mut buffer.bytes()[..SECTOR])?,
@@ -475,8 +488,7 @@ fn limits(disk: &Disk, facts: &Facts) -> Result<[NTSTATUS; 3], &'static str> {
     {
         return Err("a transfer beyond the disk's end did not fail with no bytes");
     }
-    buffer.intact("a refused transfer wrote outside the requestor's buffer")?;
-    Ok(beyond.map(|result| result.status))
+    buffer.intact("a refused transfer wrote outside the requestor's buffer")
 }
 
 /// How the threads of the concurrent phase tell what came of them: the
@@ -671,14 +683,14 @@ fn concurrent(name: &str, disk: &mut Disk, facts: &Facts) -> Result<(), &'static
 /// disk does not make refused; do all of it at once from several
 /// threads; flush; and read the write range and its surroundings once
 /// more. Only the write range is written.
-pub fn disk_io(name: &str) -> Result<Counts, &'static str> {
+pub fn disk_io(name: &str, beyond: Beyond) -> Result<Counts, &'static str> {
     let mut disk = Disk::open(name)?;
     let facts = properties(name, &disk)?;
     originals(&mut disk, &facts)?;
     unaligned(&mut disk, &facts)?;
     write_range(&mut disk, &facts, 0)?;
     written(&mut disk, &facts)?;
-    let beyond = limits(&disk, &facts)?;
+    limits(&disk, &facts, beyond)?;
     concurrent(name, &mut disk, &facts)?;
     let flushed = file::flush(disk.handle).map_err(why)?;
     if flushed.status != STATUS_SUCCESS {
@@ -691,7 +703,6 @@ pub fn disk_io(name: &str) -> Result<Counts, &'static str> {
         sectors: facts.sectors,
         bus_type: facts.bus_type,
         adapter: Some(facts.adapter),
-        beyond,
         ..disk.counts
     })
 }
@@ -946,7 +957,7 @@ fn detects() -> Result<u32, &'static str> {
     for (fault, sector) in faults {
         let _disk = TestDisk::new()?;
         fault.at(sector);
-        match disk_io(testdisk::NAME) {
+        match disk_io(testdisk::NAME, Beyond::Probe) {
             Err(why) => kprintln!("disk: {fault:?} at sector {sector}: noticed: {why}"),
             Ok(_) => {
                 kprintln!("disk: {fault:?} at sector {sector}: not noticed");
@@ -969,7 +980,7 @@ fn run(report: &mut Report, _: &BootInfo) {
     match TestDisk::new() {
         Ok(disk) => {
             let (_, flushes, _) = testdisk::requests();
-            let proof = disk_io(testdisk::NAME);
+            let proof = disk_io(testdisk::NAME, Beyond::Probe);
             match proof {
                 Ok(counts) => report.ok_with("disk.io.proof", format_args!("{counts}")),
                 Err(why) => report.fail("disk.io.proof", format_args!("{why}")),
