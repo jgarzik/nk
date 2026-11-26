@@ -6,6 +6,7 @@ pub mod bitmap;
 pub mod counted;
 pub mod crt;
 pub mod feature;
+pub mod image;
 pub mod name;
 pub mod once;
 pub mod prefix;

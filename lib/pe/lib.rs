@@ -12,6 +12,7 @@
 
 pub mod exports;
 pub mod modules;
+pub mod resources;
 
 /// `IMAGE_FILE_MACHINE_AMD64`
 pub const MACHINE_AMD64: u16 = 0x8664;

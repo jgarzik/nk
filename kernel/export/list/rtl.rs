@@ -130,4 +130,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::range::RtlInvertRangeList),
     export!(Implemented, rtl::range::RtlInvertRangeListEx),
     export!(Implemented, rtl::once::RtlRunOnceExecuteOnce),
+    export!(Partial, rtl::image::RtlFindMessage),
+    export!(Implemented, rtl::image::RtlPcToFileName),
 ];

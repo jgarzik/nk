@@ -1514,6 +1514,20 @@ memory out, so an image is resident from load to unload, which is
 within what both promise. The first still answers the base of the image
 an address is in, or null.
 
+**An image's messages.** A driver reads text from a message table in
+an image's resources with
+[`RtlFindMessage`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlfindmessage)
+(`pci.sys` takes its device descriptions from its own). The resource
+directory and the table are read through the image's view
+(`nk_pe::resources`, `kernel/rtl/image.rs`), and the entry is handed
+out at its address in the image. The languages tried are the pinned
+kernel's: the one asked for and its parents, and for a request without
+a language the system's languages, then US English, then whichever the
+table has first. NK is a US English system. A language's parent is its
+primary language (Windows asks its locale data, which for a few
+languages names a script instead), and no language files stand beside
+an image. `RtlPcToFileName` names the loaded image an address is in.
+
 ## Starting a driver
 
 A driver is started from its service key, as on Windows
