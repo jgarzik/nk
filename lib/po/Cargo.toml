@@ -1,0 +1,17 @@
+[package]
+name = "nk-po"
+description = "The power manager's rules for a machine that is on and stays on"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+nk-ntabi = { path = "../ntabi" }
+
+[lints]
+workspace = true

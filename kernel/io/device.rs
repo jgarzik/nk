@@ -168,7 +168,8 @@ unsafe fn destroy(device: *mut DEVICE_OBJECT) {
 }
 
 /// The object manager's call when the last pointer to a device has
-/// gone: free the security descriptor it was given.
+/// gone: free the security descriptor it was given, and the power
+/// manager's block.
 ///
 /// # Safety
 /// `body` is a device object nothing refers to any more.
@@ -180,6 +181,7 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
         if !descriptor.is_null() {
             let _ = pool::free(descriptor.cast());
         }
+        crate::po::run_down(body.cast());
     }
 }
 

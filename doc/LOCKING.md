@@ -71,6 +71,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
+| 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
