@@ -287,3 +287,4 @@ oracle.nkc-lib-twice ok
 oracle.nkc-libbad ok
 oracle.nkc-seh ok
 oracle.nkc-cross ok
+oracle.nkc-ob ok

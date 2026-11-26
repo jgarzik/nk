@@ -370,6 +370,7 @@ pub static GROUP: Group = Group {
         "oracle.nkc-libbad",
         "oracle.nkc-seh",
         "oracle.nkc-cross",
+        "oracle.nkc-ob",
     ],
     run,
     manual: false,
@@ -508,6 +509,13 @@ fn run(r: &mut Report, _: &BootInfo) {
         "nkc-cross.sys",
         include_str!("../../oracle/nkc-cross.script"),
         include_str!("../../oracle/nkc-cross.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-ob",
+        "nkc-ob.sys",
+        include_str!("../../oracle/nkc-ob.script"),
+        include_str!("../../oracle/nkc-ob.txt"),
     );
 }
 

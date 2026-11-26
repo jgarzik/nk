@@ -9,9 +9,11 @@
 //! high bits set, as on Windows, and is a handle for kernel mode only.
 //! The same number without those bits is the System process's own
 //! handle to the entry, good in that process for either mode; every
-//! thread is in that process. Which of the two an open gives back is
-//! the opener's choice (`OBJ_KERNEL_HANDLE`). There are no other
-//! processes and so no other tables.
+//! thread is in that process. A driver's open always gives the kernel
+//! handle, with `OBJ_KERNEL_HANDLE` or without: on Windows a handle
+//! made in the System process is in the kernel's table whatever was
+//! asked. The other name is what NK's own requests on behalf of user
+//! mode go by. There are no other processes and so no other tables.
 //!
 //! The access is checked when a handle is used on behalf of user mode
 //! and never for kernel mode, as
@@ -316,10 +318,10 @@ pub unsafe extern "C" fn ObReferenceObjectByHandleWithTag(
 
 /// [`ObOpenObjectByPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-obopenobjectbypointer):
 /// a handle to an object the caller has a pointer to, granted the
-/// desired access and given the attributes asked for: the kernel
-/// handle with `OBJ_KERNEL_HANDLE`, else the System process's own. No
-/// access is checked: the access state and the access mode are not
-/// looked at.
+/// desired access and given the attributes asked for. It is a kernel
+/// handle with `OBJ_KERNEL_HANDLE` or without, as every handle made in
+/// the System process is on Windows. No access is checked: the access
+/// state and the access mode are not looked at.
 ///
 /// # Safety
 /// `object` is an object-manager object the caller holds a reference
@@ -343,8 +345,7 @@ pub unsafe extern "C" fn ObOpenObjectByPointer(
             handle.write_unaligned(core::ptr::null_mut());
             return STATUS_OBJECT_TYPE_MISMATCH;
         }
-        let kernel = handle_attributes & OBJ_KERNEL_HANDLE != 0;
-        match open_with(object.cast(), desired_access, attributes, kernel) {
+        match open_with(object.cast(), desired_access, attributes, true) {
             Ok(opened) => {
                 handle.write_unaligned(opened as *mut c_void);
                 STATUS_SUCCESS
@@ -711,8 +712,8 @@ pub fn access_test() -> Result<u32, &'static str> {
                 &raw mut second,
             );
             let second = second as u64;
-            // Asked for with `OBJ_KERNEL_HANDLE`, the kernel handle
-            // comes back.
+            // Asked for with `OBJ_KERNEL_HANDLE` or without, the kernel
+            // handle comes back.
             let mut third = core::ptr::null_mut();
             let opened = ObOpenObjectByPointer(
                 body.cast(),
@@ -725,17 +726,25 @@ pub fn access_test() -> Result<u32, &'static str> {
             );
             let third = third as u64;
             looked += 1;
-            let kinds = ((second as i64) > 0, (third as i64) < 0);
-            let refused = by_handle(third, 0, USER_MODE).0;
+            let kinds = ((second as i64) < 0, (third as i64) < 0);
+            let refused = (
+                by_handle(second, 0, USER_MODE).0,
+                by_handle(third, 0, USER_MODE).0,
+            );
             if opened != STATUS_SUCCESS || close(third) != STATUS_SUCCESS {
                 return Err("a kernel handle could not be opened by pointer and closed");
             }
-            if kinds != (true, true) || refused != STATUS_INVALID_HANDLE {
-                return Err("OBJ_KERNEL_HANDLE did not decide which handle an open gives");
+            if kinds != (true, true) || refused != (STATUS_INVALID_HANDLE, STATUS_INVALID_HANDLE) {
+                return Err(
+                    "an open by pointer did not give a kernel handle, which user mode has no use of",
+                );
             }
+            // The System process's own name for the second handle's
+            // entry: by it user mode gets what the handle was granted.
+            let own = second & !nk_ntabi::ob::KERNEL_HANDLE;
             let through = (
-                by_handle(second, MODIFY, USER_MODE),
-                by_handle(second, SYNCHRONIZE, USER_MODE).0,
+                by_handle(own, MODIFY, USER_MODE),
+                by_handle(own, SYNCHRONIZE, USER_MODE).0,
                 by_handle(handle, MODIFY, USER_MODE).0,
             );
             looked += 3;
@@ -830,7 +839,8 @@ pub fn protected_close_test(armed: impl FnOnce()) -> &'static str {
     if status != STATUS_SUCCESS {
         return "a protected handle could not be opened";
     }
-    if close_for(handle, Mode::User) != STATUS_HANDLE_NOT_CLOSABLE {
+    // User mode knows the entry by the System process's own name for it.
+    if close_for(handle & !nk_ntabi::ob::KERNEL_HANDLE, Mode::User) != STATUS_HANDLE_NOT_CLOSABLE {
         return "user mode was not told that a protected handle cannot be closed";
     }
     match reference(handle, None) {

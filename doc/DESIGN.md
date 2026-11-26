@@ -657,10 +657,11 @@ closed. An entry has two names: the kernel handle, with Windows'
 kernel-handle bits, which is a handle for kernel mode only
 (`STATUS_INVALID_HANDLE` for user mode), and the same number without
 those bits, the System process's own handle, good in that process for
-either mode. `OBJ_KERNEL_HANDLE` decides which an open returns
-(`ObOpenObjectByPointer`, `ZwCreateEvent`); NK's own opens for files,
-keys and new threads return the kernel handle. No other process, no
-other table. Each handle has the access it was granted and its
+either mode. Every open returns the kernel handle, a driver's with
+`OBJ_KERNEL_HANDLE` or without (`ObOpenObjectByPointer`,
+`ZwCreateEvent`): on Windows a handle made in the System process is in
+the kernel's table whatever was asked. No other process, no other
+table. Each handle has the access it was granted and its
 attributes (inherit, protect from close). A handle protected from close
 stays open: user mode closing it is refused
 (`STATUS_HANDLE_NOT_CLOSABLE`), kernel mode closing it stops the system

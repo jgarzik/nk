@@ -1,0 +1,15 @@
+# NK conformance driver nkc-ob (objects).
+#
+# The first request returns what the reference routines return and what
+# referencing through a handle gives (wrong type, no handle, more access
+# than the handle has, a kernel handle for user mode); the second, the
+# kernel's store of security descriptors. 32 bits each, ending with
+# 0x4E4B4321. What each value means is written beside it in nk-fixtures
+# nkc/nkc-ob.c.
+
+load nkc-ob nkc-ob.sys
+open d \Device\NkcOb
+ioctl d 00222000 - 16384
+ioctl d 00222004 - 16384
+close d
+unload nkc-ob

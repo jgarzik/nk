@@ -515,3 +515,21 @@ sha256 = "cdd23c4fa5e025f91bef406ecb1cb8692e83391b590dc3e0b282156c540542a6"
 status = "nk-authored"
 boot = false
 note = "nk-fixtures v6 nkc/nkc-libbad.c: imports a name nkc-lib.sys lacks"
+
+[[fixture]]
+name = "nkc-ob"
+arch = "x86_64"
+file = "nkc-ob.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-ob.x64.nkc-ob.sys"
+sha256 = "518838556fcd47e327566ef00a054174f447df8ef1a2b84bd5c47ea1fe429b91"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-ob.c: object references, references through handles, the security-descriptor store"
+
+[[fixture]]
+name = "nkc-ob"
+arch = "aarch64"
+file = "nkc-ob.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-ob.arm64.nkc-ob.sys"
+sha256 = "5778d0132dc80a780ed0dcdabab3866520a3f82d59f9523d068aa0688cbb08fb"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-ob.c: object references, references through handles, the security-descriptor store"

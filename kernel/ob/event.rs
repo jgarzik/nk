@@ -31,8 +31,8 @@ const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 /// [`ZwCreateEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwcreateevent):
 /// a new event (`event_type` 0 for a notification event, 1 for a
 /// synchronization event) and a handle to it, granted the access asked
-/// for: the kernel handle with `OBJ_KERNEL_HANDLE`, else the System
-/// process's own.
+/// for: a kernel handle with `OBJ_KERNEL_HANDLE` or without, as every
+/// handle made in the System process is on Windows.
 ///
 /// Only events without a name are made. Object attributes that name
 /// the event, or ask for it to be permanent or exclusive (which is
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn ZwCreateEvent(
                 inherit: attributes & OBJ_INHERIT != 0,
                 protect_from_close: false,
             },
-            attributes & OBJ_KERNEL_HANDLE != 0,
+            true,
         );
         object::dereference(body);
         match opened {
@@ -227,12 +227,12 @@ pub fn self_test() -> Result<u32, &'static str> {
     }
 
     // A synchronization event satisfies one wait. No attributes: the
-    // handle is the System process's own.
+    // handle is a kernel handle all the same.
     let (status, event) = create(None, 1, 1);
-    let own = (event as i64) > 0;
+    let kernel_handle = (event as i64) < 0;
     let once = [wait_on(event, 0, Some(0)), wait_on(event, 0, Some(0))];
     let closed = close(event);
-    if status != STATUS_SUCCESS || !own || closed != STATUS_SUCCESS {
+    if status != STATUS_SUCCESS || !kernel_handle || closed != STATUS_SUCCESS {
         return Err("an event could not be created without object attributes");
     }
     if once != [0, STATUS_TIMEOUT] {
