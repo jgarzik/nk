@@ -1544,6 +1544,21 @@ a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
 
+### Bitmaps
+
+An [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap)
+header and its buffer are the driver's memory, and NK keeps nothing
+beside them. The rules are `nk_rtl::bitmap`, written against a buffer
+read and written a byte or a `ULONG` at a time: the kernel's is the
+driver's buffer behind a raw pointer, the host tests' a vector checked
+against the same bits held one by one. A routine that changes a run
+writes the bytes that hold the run and no others, as Windows does, so
+two locks may guard two parts of one bitmap. What Microsoft's pages
+leave open (where a search with a hint starts and wraps, what a search
+stores when it finds nothing, how many bits a copy moves) is read from
+the kernel NK follows and stated in `nk_rtl::bitmap`. The interlocked
+routines change one `ULONG` at a time through an atomic.
+
 ## Security descriptors
 
 SIDs, ACLs and descriptors are byte layouts with rules: `lib/se`, with

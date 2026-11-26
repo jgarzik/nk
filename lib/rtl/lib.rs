@@ -2,7 +2,8 @@
 //! counted-string arithmetic and object-name handling here; in the
 //! modules, formatted output, upper-casing and comparison, the prefix
 //! table, wildcard matching, text forms and length rules, code pages,
-//! the characters legal in file names, and the C string functions.
+//! the characters legal in file names, bitmaps, and the C string
+//! functions.
 //! Nothing here allocates: what a routine works on is the caller's.
 //!
 //! The kernel's `Rtl*` exports and its object namespace are thin wrappers
@@ -10,6 +11,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod bitmap;
 pub mod codepage;
 pub mod crt;
 pub mod format;

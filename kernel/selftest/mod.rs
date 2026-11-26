@@ -6,6 +6,7 @@
 //! architecture) makes its tests SKIP.
 
 mod base;
+mod bitmap;
 mod cancel;
 mod clock;
 mod cm;
@@ -138,6 +139,7 @@ pub static GROUPS: &[&[&Group]] = &[
     wait::GROUPS,
     ob::GROUPS,
     rtl::GROUPS,
+    bitmap::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,

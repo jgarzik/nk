@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod bitmap;
 pub mod crt;
 pub mod name;
 pub mod prefix;

@@ -17,3 +17,4 @@ rtl.version ok
 rtl.printf ok
 rtl.strings ok
 rtl.module-information ok
+rtl.bitmap ok
