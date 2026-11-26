@@ -4,13 +4,14 @@
 //! The system is in S0 and every device in D0, always (`doc/DESIGN.md`,
 //! "Power"). [`request`] makes the power requests a driver asks for,
 //! [`setting`] keeps the registrations for power settings and for
-//! coalescing, [`absent`] answers for what a machine that never
-//! sleeps, hibernates or overheats does not have. The rules are
-//! `nk_po`'s.
+//! coalescing, [`fx`] is the runtime power framework, [`absent`]
+//! answers for what a machine that never sleeps or hibernates does not
+//! have. The rules are `nk_po`'s.
 
 #![allow(non_snake_case)]
 
 pub mod absent;
+pub mod fx;
 pub mod request;
 pub mod setting;
 
@@ -41,6 +42,13 @@ struct Dope {
     turns: Turns<usize>,
     /// The flags `PoDirectedDripsSetDeviceFlags` has been given.
     drips_flags: u32,
+    /// Whether the Plug and Play manager has begun to start the device
+    /// (`fx::prepare_device`), and the registration its drivers made
+    /// with the runtime power framework since, if any: the address of
+    /// an `fx::Fx`. Kept in the block of the device at the bottom of
+    /// the stack.
+    fx_prepared: bool,
+    fx: usize,
 }
 
 /// The power manager's records.
@@ -57,6 +65,13 @@ struct Power {
     coalescing: Vec<setting::Coalescing>,
     /// How many coalescing registrations have been made.
     coalescing_made: usize,
+    /// The address of every device registered with the runtime power
+    /// framework (`fx::Fx`).
+    fx: Vec<usize>,
+    /// Those whose drivers are owed callbacks from a worker, oldest
+    /// first, and whether a worker is making them or queued to.
+    fx_work: Vec<usize>,
+    fx_working: bool,
 }
 
 static POWER: SpinLock<Power> = SpinLock::new(
@@ -67,6 +82,9 @@ static POWER: SpinLock<Power> = SpinLock::new(
         telling: false,
         coalescing: Vec::new(),
         coalescing_made: 0,
+        fx: Vec::new(),
+        fx_work: Vec::new(),
+        fx_working: false,
     },
 );
 
@@ -88,6 +106,8 @@ unsafe fn dope(_power: &mut Power, device: *mut DEVICE_OBJECT) -> *mut Dope {
                 block.write(Dope {
                     turns: Turns::new(),
                     drips_flags: 0,
+                    fx_prepared: false,
+                    fx: 0,
                 });
                 slot.write(block.cast());
             }

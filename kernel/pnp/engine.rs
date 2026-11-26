@@ -944,8 +944,13 @@ fn start(pdo: usize) {
     let _ = registry::write_allocation(&found.instance, &filtered, &given.raw);
     kprintln!("pnp: {}: starting", found.instance);
     let parameters = start_device_parameters(raw.0 as u64, translated.0 as u64);
+    // From here the device's drivers may register it with the runtime
+    // power framework, as on Windows (`PnpStartDevice`).
     // SAFETY: as above; the lists stay until the request has completed.
-    let (status, _) = unsafe { query::pnp(device, IRP_MN_START_DEVICE, parameters) };
+    let (status, _) = unsafe {
+        crate::po::fx::prepare_device(device);
+        query::pnp(device, IRP_MN_START_DEVICE, parameters)
+    };
     if !nt_success(status) {
         return give_up(
             pdo,
@@ -993,7 +998,10 @@ fn start(pdo: usize) {
 fn give_up(pdo: usize, problem: u32, why: core::fmt::Arguments<'_>) {
     // SAFETY: the tree's device; the engine's mutex is held, at
     // `PASSIVE_LEVEL`.
-    unsafe { query::pnp(pdo as *mut DEVICE_OBJECT, IRP_MN_REMOVE_DEVICE, [0; 4]) };
+    unsafe {
+        query::pnp(pdo as *mut DEVICE_OBJECT, IRP_MN_REMOVE_DEVICE, [0; 4]);
+        crate::po::fx::abandon_device(pdo as *mut DEVICE_OBJECT);
+    }
     take_back(pdo);
     if let Some(found) = node::get(pdo) {
         registry::clear_allocation(&found.instance);
@@ -1091,6 +1099,9 @@ pub fn remove(pdo: usize, surprise: bool) {
         if !found.reported {
             query::pnp(device, IRP_MN_REMOVE_DEVICE, [0; 4]);
         }
+        // What its drivers left with the power framework goes, as
+        // Windows' `IopRemoveDevice` sees to.
+        crate::po::fx::abandon_device(device);
         take_back(pdo);
         if let Some(service) = &found.service {
             registry::service_stopped_serving(service, &found.instance);
