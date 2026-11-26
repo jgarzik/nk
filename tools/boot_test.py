@@ -28,6 +28,10 @@ outright. A passing run deletes its directory; a failing run keeps the
 logs and says where. The logs of the scenarios marked `canonical` are also
 kept as target/qemu/serial-<arch>.log and exports-<arch>.txt.
 
+A scenario with `disk` gets a data disk, data.img in its directory, made
+before the boot and compared after it with what the scenario's
+`disk_expect` allows (tools/datadisk.py).
+
 Environment: BOOT_TEST_TIMEOUT (seconds, default 120), QEMU_SMP, QEMU_MEM,
 NO_KVM=1 (emulate x86-64 too), JOBS (parallel boots in a tier), KEEP=1
 (keep every scenario directory), QEMU_LOG_DIR (default target/qemu).
@@ -48,6 +52,7 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import datadisk  # noqa: E402
 import judge  # noqa: E402
 import mkesp  # noqa: E402
 
@@ -110,7 +115,23 @@ def kernel_cmdline(sc):
     return " ".join(words)
 
 
-def qemu_command(arch, smp, interactive):
+def disk_devices(arch, disk):
+    """QEMU's arguments for the scenario's data disk (`disk`: "ahci" or
+    None): data.img on the machine's AHCI controller. Not a snapshot:
+    what the guest writes has to be in the file after the boot."""
+    if disk is None:
+        return []
+    if disk != "ahci":
+        raise ValueError(f"unknown disk {disk!r}")
+    drive = ["-drive", "if=none,id=nkdata,format=raw,file=data.img"]
+    if arch == "x86_64":
+        # q35 has an ICH9 AHCI controller; its ports are the bus `ide`.
+        return drive + ["-device", "ide-hd,drive=nkdata,bus=ide.0"]
+    # `virt` has none: the same controller, as a PCIe device.
+    return drive + ["-device", "ich9-ahci,id=ahci", "-device", "ide-hd,drive=nkdata,bus=ahci.0"]
+
+
+def qemu_command(arch, smp, interactive, disk=None):
     """The command line. Paths are relative to the scenario directory, where
     QEMU is started, so the QMP socket path stays short."""
     code, _ = FIRMWARE[arch]
@@ -129,6 +150,7 @@ def qemu_command(arch, smp, interactive):
         "-device", "virtio-blk-pci,drive=esp,bootindex=0",
         "-nic", "none", "-display", "none", "-no-reboot",
     ]
+    cmd += disk_devices(arch, disk)
     if interactive:
         return cmd + ["-serial", "mon:stdio"]
     return cmd + [
@@ -198,21 +220,22 @@ def kill_stale(directory):
             pass
 
 
-def boot(arch, smp, directory, interactive):
-    """Run QEMU in `directory` (which holds esp.img and vars.fd). Returns
+def boot(arch, smp, directory, interactive, disk=None):
+    """Run QEMU in `directory` (which holds esp.img, vars.fd and, for a
+    scenario with a disk, data.img). Returns
     the timeout in seconds if it had to be killed (else 0), and the host
     times at which the kernel's clock marks arrived. The serial output
     goes to serial.log there."""
     proc, timed_out, marks = None, 0, []
     try:
         if interactive:
-            proc = subprocess.Popen(qemu_command(arch, smp, True), cwd=directory)
+            proc = subprocess.Popen(qemu_command(arch, smp, True, disk), cwd=directory)
             proc.wait()
             return 0, marks
         with open(directory / "serial.log", "wb") as log, \
                 open(directory / "qemu.err", "wb") as err:
             proc = subprocess.Popen(
-                qemu_command(arch, smp, False), cwd=directory,
+                qemu_command(arch, smp, False, disk), cwd=directory,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
                 start_new_session=True, preexec_fn=die_with_parent,
             )
@@ -269,7 +292,9 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
     esp = directory / "esp.img"
-    passed = False
+    disk, data = sc.get("disk"), directory / "data.img"
+    disk_mib = sc.get("disk_size", datadisk.DEFAULT_MIB)
+    passed, disk_wrong = False, False
     try:
         if image:
             # Booted as a snapshot, never written; a link keeps it in place.
@@ -278,7 +303,9 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         else:
             missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc))
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
-        timed_out, marks = boot(arch, smp_of(sc), directory, interactive)
+        if disk:
+            datadisk.create(data, disk_mib)
+        timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
         if interactive:
             passed = True
             return 0
@@ -293,7 +320,9 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
                 if (directory / kept).exists():
                     (directory / kept).rename(directory / f"firmware-hang.{kept}")
             shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
-            timed_out, marks = boot(arch, smp_of(sc), directory, interactive)
+            if disk:
+                datadisk.create(data, disk_mib)
+            timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
             text = (directory / "serial.log").read_text(errors="replace")
         log = judge.Log(text)
         golden = load_golden(sc["golden"]) if "golden" in sc and not bless else None
@@ -303,6 +332,12 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             must_fail=sc.get("must_fail", ()),
             timed_out=timed_out, marks=marks,
         )
+        if disk:
+            # QEMU has exited, or been killed: either way what it wrote
+            # is in the file.
+            wrong = datadisk.verify(data, sc["disk_expect"], disk_mib)
+            disk_wrong = bool(wrong)
+            problems += wrong
         if sc.get("canonical") and not image:
             shutil.copyfile(directory / "serial.log", OUT / f"serial-{arch}.log")
             if log.exports():
@@ -318,6 +353,8 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             print(f"boot test {name}: FAILED")
             for p in problems:
                 print(f"  {p}")
+            if disk_wrong:
+                print(f"  the data disk is kept: {data}")
             print(f"  last serial lines ({directory / 'serial.log'}):")
             for line in log.tail():
                 print(f"    {line}")
@@ -337,6 +374,9 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         # never help a diagnosis; the logs stay unless the run passed.
         for scratch in ("esp.img", "vars.fd", "qmp.sock", "qemu.pid"):
             (directory / scratch).unlink(missing_ok=True)
+        # The disk is the evidence when it is what was wrong.
+        if not disk_wrong:
+            data.unlink(missing_ok=True)
         if passed and not KEEP:
             shutil.rmtree(directory, ignore_errors=True)
 
