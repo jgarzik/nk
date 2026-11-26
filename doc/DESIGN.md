@@ -1394,8 +1394,10 @@ table of routines and gives it the HAL's ACPI table, a third table of
 the same kind with Windows' signature, version and slot order, whose
 `HalAcpiGetTable` finds a firmware table by signature (`RSDT` and
 `XSDT` both name the root table there is; `DSDT` is found through the
-FADT; `nk_acpi::lookup`). It returns the firmware's own table where
-Windows returns a copy. `HalQuerySystemInformation`
+FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
+table the root table lists but the root tables, the DSDT and the FACS,
+as a count and pointers, made once. Both give the firmware's own
+tables where Windows gives copies. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other. One is the list of I/O
 ports the ACPI driver must keep firmware's AML code away from: on

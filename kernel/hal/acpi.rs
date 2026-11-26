@@ -71,6 +71,63 @@ pub unsafe extern "C" fn HalAcpiGetTable(
     })
 }
 
+/// What `HalAcpiGetAllTables` returns: a count, padded to a pointer,
+/// and then that many pointers to tables. Made once, and kept.
+static ALL_TABLES: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Pool tag of the list of tables.
+const TAG: u32 = u32::from_le_bytes(*b"NkAt");
+
+/// The HAL's ACPI table, `HalAcpiGetAllTables`: every table the
+/// firmware's root table lists, but for the root tables themselves, the
+/// DSDT and the FACS, as a count followed by pointers to the tables, in
+/// the root table's order. The same list is returned every time; null
+/// without memory for it. As with [`HalAcpiGetTable`], the tables are
+/// the firmware's own.
+pub extern "C" fn HalAcpiGetAllTables() -> *mut c_void {
+    let made = ALL_TABLES.load(Ordering::Acquire);
+    if !made.is_null() {
+        return made;
+    }
+    let count = platform::acpi_tables().count();
+    let list = crate::mm::pool::alloc_zeroed(8 + count * 8, TAG).cast::<u64>();
+    if list.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: a fresh block of a count and `count` pointers.
+    unsafe {
+        list.cast::<u32>().write(count as u32);
+        for (n, table) in platform::acpi_tables().enumerate() {
+            list.add(1 + n).write(table.as_ptr() as u64);
+        }
+    }
+    match ALL_TABLES.compare_exchange(
+        core::ptr::null_mut(),
+        list.cast(),
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => list.cast(),
+        Err(first) => {
+            // Another caller made it meanwhile: theirs is the list.
+            let _ = crate::mm::pool::free(list.cast());
+            first
+        }
+    }
+}
+
+/// The pool block [`HalAcpiGetAllTables`] keeps, for the accounting of
+/// what tests leave behind: (blocks, bytes).
+pub fn storage() -> (usize, usize) {
+    let list = ALL_TABLES.load(Ordering::Acquire);
+    if list.is_null() {
+        return (0, 0);
+    }
+    // SAFETY: the block starts with its count.
+    let count = unsafe { list.cast::<u32>().read() } as usize;
+    (1, 8 + count * 8)
+}
+
 /// Put the routines of this file in their slots.
 pub fn init() {
     HalDispatchTable.provide(
@@ -78,6 +135,10 @@ pub fn init() {
         HalInitPowerManagement as *const (),
     );
     HalAcpiDispatchTable.provide(acpi_slot("HalAcpiGetTable"), HalAcpiGetTable as *const ());
+    HalAcpiDispatchTable.provide(
+        acpi_slot("HalAcpiGetAllTables"),
+        HalAcpiGetAllTables as *const (),
+    );
 }
 
 /// For the self-tests: the exchange and the table lookups, made as
@@ -137,6 +198,22 @@ pub fn test() -> Result<(), &'static str> {
     }
     if signature(b"NKNK").is_some() {
         return Err("a table the firmware does not have was found");
+    }
+    // Every table, as a count and pointers: the FADT and the MADT are
+    // among them, the root table and the DSDT are not, and a second
+    // request is given the same list.
+    let all = HalAcpiGetAllTables();
+    if all.is_null() || HalAcpiGetAllTables() != all {
+        return Err("the list of all tables was not made once");
+    }
+    // SAFETY: the list is a count and that many pointers to tables.
+    let signatures = unsafe {
+        let count = all.cast::<u32>().read() as usize;
+        (0..count).map(move |n| all.cast::<*const [u8; 4]>().add(1 + n).read().read())
+    };
+    let has = |name: &[u8; 4]| signatures.clone().any(|signature| &signature == name);
+    if !has(b"FACP") || !has(b"APIC") || has(b"DSDT") || has(b"XSDT") || has(b"RSDT") {
+        return Err("the list of all tables has not the tables Windows' HAL lists");
     }
     // SAFETY: ids no table has.
     let other = unsafe { get(u32::from_le_bytes(*b"FACP"), b"NoSuch", none.1) };

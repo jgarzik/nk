@@ -63,6 +63,23 @@ pub fn acpi_root() -> Option<u64> {
     nk_acpi::root_address(&DirectMap(info), info.rsdp)
 }
 
+/// Every ACPI table a HAL hands an ACPI driver that asks for all of
+/// them (`nk_acpi::all_tables`), each the firmware's own memory.
+pub fn acpi_tables() -> impl Iterator<Item = &'static [u8]> {
+    boot_info().into_iter().flat_map(|info| {
+        // The tables are collected while the map of physical memory is
+        // borrowed, and outlive it: firmware memory in the direct map.
+        let memory = DirectMap(info);
+        let tables: alloc::vec::Vec<(*const u8, usize)> = nk_acpi::all_tables(&memory, info.rsdp)
+            .map(|table| (table.as_ptr(), table.len()))
+            .collect();
+        tables.into_iter().map(|(at, length)| {
+            // SAFETY: as in `acpi_table`.
+            unsafe { core::slice::from_raw_parts(at, length) }
+        })
+    })
+}
+
 /// The firmware's ACPI table of the signature `signature`, as a HAL
 /// answers an ACPI driver's request for it (`nk_acpi::lookup`). The
 /// table is the firmware's own memory, which nothing reuses.
