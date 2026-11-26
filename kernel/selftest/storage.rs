@@ -74,7 +74,7 @@ const SYSTEM: &str = "{4d36e97d-e325-11ce-bfc1-08002be10318}";
 /// The path as far as NK brings it up. A device NK finds and does not
 /// start yet is listed with `started: false`, and the test holds NK to
 /// that too: it is changed in the commit that starts the device.
-const PATH: [Expected; 2] = [
+const PATH: [Expected; 3] = [
     Expected {
         instance: "ROOT\\ACPI_HAL\\0000",
         parent: "HTREE\\ROOT\\0",
@@ -88,6 +88,14 @@ const PATH: [Expected; 2] = [
         parent: "ROOT\\ACPI_HAL\\0000",
         hardware_id: "ACPI_HAL\\PNP0C08",
         service: "ACPI",
+        class: SYSTEM,
+        started: true,
+    },
+    Expected {
+        instance: "ACPI\\PNP0A08\\0",
+        parent: "ACPI_HAL\\PNP0C08\\0",
+        hardware_id: "ACPI\\VEN_PNP&DEV_0A08",
+        service: "pci",
         class: SYSTEM,
         started: false,
     },

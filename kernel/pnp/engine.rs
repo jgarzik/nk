@@ -42,15 +42,22 @@ const DO_BUS_ENUMERATED_DEVICE: u32 = 0x1000;
 /// `DelayedWorkQueue`.
 const DELAYED_WORK_QUEUE: u32 = 1;
 
-/// Services whose devices NK does not bring up yet, and why: the
-/// driver's `AddDevice` or start reaches a routine NK lacks or looks
-/// for something NK does not provide, and stops the system. A device served by one stays as it was
-/// found. A name leaves this list in the commit that makes its driver
-/// run (`doc/DESIGN.md`, What is absent).
-const HELD_BACK: &[(&str, &str)] = &[(
-    "ACPI",
-    "its start reaches routines NK lacks; a boot with this entry removed names the next",
-)];
+/// What NK does not bring up yet, and why: a service, whose devices
+/// are then found and not given their drivers, or a device identifier,
+/// for a device that is started without a driver. Bringing one up
+/// reaches a routine NK lacks, or does not come to an end. A name
+/// leaves this list in the commit that makes it work
+/// (`doc/DESIGN.md`, What is absent).
+const HELD_BACK: &[(&str, &str)] = &[
+    (
+        "pci",
+        "its start reaches routines NK lacks; a boot with this entry removed names the next",
+    ),
+    (
+        "ACPI\\ACPI0010",
+        "started without a driver, acpi.sys never completes its start request",
+    ),
+];
 
 /// The engine's mutex, and what only its holder touches: which
 /// resources every device holds.
@@ -386,9 +393,11 @@ fn identify(pdo: usize) {
         found.description = query::text(device, DEVICE_TEXT_DESCRIPTION);
         found.location = query::text(device, DEVICE_TEXT_LOCATION_INFORMATION);
         if !found.reported {
-            // No backslash: the identifier is one key's name.
+            // No backslash: the identifier is one key's name. A bus
+            // driver that answers none, or fails the query for any
+            // reason but want of memory, has a device without one, as
+            // on Windows (`PnpQueryID`): ACPI's devices without `_UID`.
             let instance = match query::id(device, BUS_QUERY_INSTANCE_ID).as_deref() {
-                Ok([]) => None,
                 Ok([id]) => {
                     let fixed = ids::fixed_up(id, ids::MAX_ID, ids::Separators::Exactly(0))
                         .filter(|id| !id.is_empty());
@@ -402,14 +411,15 @@ fn identify(pdo: usize) {
                     };
                     Some(fixed)
                 }
-                _ => {
+                Err(&STATUS_INSUFFICIENT_RESOURCES) => {
                     node::with(pdo, |node| node.instance = found.device_id.clone());
                     return fail(
                         pdo,
-                        node::CM_PROB_INVALID_DATA,
-                        format_args!("the query for its instance identifier failed"),
+                        node::CM_PROB_OUT_OF_MEMORY,
+                        format_args!("no memory for its instance identifier"),
                     );
                 }
+                _ => None,
             };
             let unique = found.capabilities & DEVICE_CAPABILITY_UNIQUE_ID != 0;
             let prefix = if unique && instance.is_some() {
@@ -560,6 +570,21 @@ fn add_drivers(pdo: usize) -> bool {
             record.section,
             record.id
         );
+        // What the device requires may depend on what installation
+        // just put in its key: pci.sys offers a message-signalled
+        // interrupt only to a device whose `Device Parameters` say it
+        // supports one. On Windows the device was installed before
+        // this boot and its bus driver found the settings when first
+        // asked; here it is asked again, now that they are there.
+        // SAFETY: the tree's device; the engine's mutex is held, at
+        // `PASSIVE_LEVEL`.
+        let requirements = unsafe { query::requirements(device) };
+        if requirements != found.requirements {
+            node::with(pdo, |node| node.requirements = requirements);
+            if let Some(now) = node::get(pdo) {
+                let _ = registry::write_identity(&now);
+            }
+        }
     }
     let class = registry::string(&key, "ClassGUID");
     node::with(pdo, |node| node.class = class.clone());
@@ -572,6 +597,22 @@ fn add_drivers(pdo: usize) -> bool {
     }
     let service =
         registry::string(&key, "Service").map(|value| String::from(database::service_name(&value)));
+    let held = HELD_BACK.iter().find(|(held, _)| {
+        held.eq_ignore_ascii_case(&found.device_id)
+            || service
+                .as_deref()
+                .is_some_and(|service| held.eq_ignore_ascii_case(service))
+    });
+    if let Some((held, why)) = held {
+        // Said once: the device is looked at whenever anything moves.
+        if !node::with(pdo, |node| core::mem::replace(&mut node.held_back, true)).unwrap_or(true) {
+            kprintln!(
+                "pnp: {}: not started: {held} is held back ({why})",
+                found.instance
+            );
+        }
+        return false;
+    }
     let Some(service) = service else {
         if found.capabilities & DEVICE_CAPABILITY_RAW_DEVICE_OK != 0 {
             node::with(pdo, |node| node.state = State::Stacked);
@@ -584,19 +625,6 @@ fn add_drivers(pdo: usize) -> bool {
         );
         return true;
     };
-    if let Some((_, why)) = HELD_BACK
-        .iter()
-        .find(|(held, _)| held.eq_ignore_ascii_case(&service))
-    {
-        // Said once: the device is looked at whenever anything moves.
-        if !node::with(pdo, |node| core::mem::replace(&mut node.held_back, true)).unwrap_or(true) {
-            kprintln!(
-                "pnp: {}: not started: its driver {service} is held back ({why})",
-                found.instance
-            );
-        }
-        return false;
-    }
     // Lower filters of the device, then of its class; the function
     // driver; upper filters of the device, then of its class.
     let class_key = class.as_deref().map(registry::class_key);

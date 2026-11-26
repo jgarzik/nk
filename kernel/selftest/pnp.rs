@@ -177,15 +177,31 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()
 }
 
+/// The flags of the memory a child requires once its key holds the
+/// settings its installation copies there: as pci.sys builds other
+/// requirements for a device whose `Device Parameters` allow messages.
+const INSTALLED_FLAGS: u16 = 0x80;
+
+/// Whether the child `device` has been installed: its key holds the
+/// device settings of the driver database's configuration.
+fn settings_installed(device: *mut DEVICE_OBJECT) -> bool {
+    node::get(device as usize).is_some_and(|found| {
+        let key = registry::enum_key(&found.instance);
+        !found.instance.is_empty()
+            && registry::dword(&format!("{key}\\Device Parameters\\Settings"), "Depth") == Some(7)
+    })
+}
+
 /// What a child requires: a page of memory at a place of its own, and
-/// the test's interrupt line, shared.
-fn child_requirements(number: u32) -> Requirements {
+/// the test's interrupt line, shared. The memory's flags say whether
+/// the child was `installed` when it was asked.
+fn child_requirements(number: u32, installed: bool) -> Requirements {
     let at = MEMORY + u64::from(number) * u64::from(PAGE);
     let mut descriptors = alloc::vec![IoDescriptor::range(
         0,
         TYPE_MEMORY,
         1,
-        0,
+        if installed { INSTALLED_FLAGS } else { 0 },
         Wanted {
             length: u64::from(PAGE),
             alignment: u64::from(PAGE),
@@ -263,7 +279,7 @@ unsafe fn child_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
                 complete(request, STATUS_SUCCESS, 0)
             }
             IRP_MN_QUERY_RESOURCE_REQUIREMENTS => {
-                let bytes = child_requirements(number).to_bytes();
+                let bytes = child_requirements(number, settings_installed(device)).to_bytes();
                 let block = crate::mm::pool::alloc(bytes.len(), pnp::TAG);
                 if !block.is_null() {
                     block.copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
@@ -708,8 +724,12 @@ fn enumerate(bench: &Bench) -> Result<(), &'static str> {
         return Err("the child's key does not hold its identity");
     }
     match cm::read(&format!("{key}\\LogConf"), "BasicConfigVector") {
-        Ok((10, bytes)) if bytes == child_requirements(1).to_bytes() => {}
-        _ => return Err("LogConf\\BasicConfigVector is not the child's requirements"),
+        // Asked again once installed, when its settings were there.
+        Ok((10, bytes)) if bytes == child_requirements(1, true).to_bytes() => {}
+        _ => return Err("LogConf\\BasicConfigVector is not the child's requirements as installed"),
+    }
+    if found.requirements != child_requirements(1, true).to_bytes() {
+        return Err("the node does not hold the requirements the installed device states");
     }
     // SAFETY: the tree's device.
     let flags = unsafe { (*(found.pdo as *mut DEVICE_OBJECT)).Flags };
@@ -1245,6 +1265,10 @@ fn start_resources() -> Result<(u32, u32), &'static str> {
         return Err("the raw list does not hold the child's memory");
     }
     let (raw, _) = ResourceList::parse(&found.raw).ok_or("the node has no raw list")?;
+    // The memory it was given is the memory it required once installed.
+    if raw.partials().next().map(|memory| memory.flags) != Some(INSTALLED_FLAGS) {
+        return Err("the device was not given what it requires as an installed device");
+    }
     let key = registry::enum_key(&found.instance);
     match cm::read(&format!("{key}\\Control"), "AllocConfig") {
         Ok((8, bytes)) if bytes == raw.to_bytes() => {}
