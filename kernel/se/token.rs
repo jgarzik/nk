@@ -7,14 +7,23 @@
 //! (`nk_ntabi::se`): a file system is handed them and reads them in
 //! line, so they are filled in through raw pointers, field by field.
 //!
-//! There is one token, the System process's, and no impersonation: a
-//! captured subject is always that token.
+//! A token never changes once it is made: nothing NK exports adjusts
+//! one. So a token needs no lock of its own, and "locking" a subject
+//! (`SeLockSubjectContext`) is what is left of Windows' routine when
+//! the token lock cannot be contended: a critical region per token.
 
+use crate::ke::mutex::{KeEnterCriticalRegion, KeLeaveCriticalRegion};
+use crate::mm::pool;
 use crate::ob::object;
 use crate::ps::process;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU64, Ordering};
-use nk_ntabi::se::{ACCESS_STATE, LUID, SECURITY_SUBJECT_CONTEXT, TOKEN_HAS_TRAVERSE_PRIVILEGE};
+use nk_ntabi::ob::GENERIC_MAPPING;
+use nk_ntabi::process::UNIQUE_PROCESS_ID;
+use nk_ntabi::se::{
+    ACCESS_STATE, AUX_ACCESS_DATA, LUID, SECURITY_SUBJECT_CONTEXT, TOKEN_HAS_TRAVERSE_PRIVILEGE,
+};
+use nk_ntabi::status::*;
 use nk_se::token::{SE_CHANGE_NOTIFY_PRIVILEGE, Token};
 
 /// The next locally unique identifier. Windows keeps the values below
@@ -54,84 +63,210 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
 /// # Safety
 /// `body` is a token object the caller holds a reference to for as long
 /// as it uses the result. No driver can write a token: its layout is
-/// NK's own, and nothing but this module changes one.
+/// NK's own, and nothing changes one after `create`.
 pub unsafe fn of<'a>(body: *mut u8) -> &'a Token {
     // SAFETY: per the contract.
     unsafe { &*body.cast::<Token>() }
 }
 
-/// Record who the calling thread acts as, what
-/// [`SeCaptureSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-secapturesubjectcontext)
-/// does: no client token (no thread impersonates), the process's
-/// primary token, referenced until [`release_subject_context`], and the
-/// process's id for auditing.
+/// The two tokens of a subject context: the client's (null when the
+/// thread impersonated nobody) and the primary.
+///
+/// # Safety
+/// `context` is readable for a `SECURITY_SUBJECT_CONTEXT`.
+unsafe fn tokens(context: *const SECURITY_SUBJECT_CONTEXT) -> (*mut u8, *mut u8) {
+    // SAFETY: per the contract.
+    unsafe {
+        (
+            (&raw const (*context).ClientToken).read().cast(),
+            (&raw const (*context).PrimaryToken).read().cast(),
+        )
+    }
+}
+
+/// The token a captured subject acts with: the client's if it has one,
+/// else the primary.
+///
+/// # Safety
+/// `context` is a captured subject context, not released: its tokens
+/// are referenced for as long as the result is used.
+pub unsafe fn effective<'a>(context: *const SECURITY_SUBJECT_CONTEXT) -> &'a Token {
+    // SAFETY: per the contract.
+    unsafe {
+        let (client, primary) = tokens(context);
+        of(if client.is_null() { primary } else { client })
+    }
+}
+
+/// [`SeCaptureSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-secapturesubjectcontext):
+/// record who the calling thread acts as: its process's primary token,
+/// referenced until [`SeReleaseSubjectContext`], and the process's id
+/// for auditing. No thread has a client token, and as on Windows
+/// `ImpersonationLevel` is then left as the caller had it.
 ///
 /// # Safety
 /// `context` is writable for a `SECURITY_SUBJECT_CONTEXT`.
-pub unsafe fn capture_subject_context(context: *mut SECURITY_SUBJECT_CONTEXT) {
-    // SAFETY: per the contract.
+pub unsafe extern "C" fn SeCaptureSubjectContext(context: *mut SECURITY_SUBJECT_CONTEXT) {
+    let current = process::PsGetCurrentProcess();
+    // SAFETY: per the contract; the current process is a live process
+    // object, whose id is at a pointer-aligned offset.
     unsafe {
+        let id = current
+            .cast::<u8>()
+            .add(UNIQUE_PROCESS_ID)
+            .cast::<*mut c_void>()
+            .read();
+        (&raw mut (*context).ProcessAuditId).write(id);
         (&raw mut (*context).ClientToken).write(core::ptr::null_mut());
-        (&raw mut (*context).ImpersonationLevel).write(nk_se::token::SECURITY_ANONYMOUS);
-        (&raw mut (*context).PrimaryToken).write(process::reference_primary_token().cast());
-        (&raw mut (*context).ProcessAuditId)
-            .write(nk_ntabi::process::SYSTEM_PROCESS_ID as *mut c_void);
+        (&raw mut (*context).PrimaryToken).write(process::PsReferencePrimaryToken(current));
     }
 }
 
-/// Give up what [`capture_subject_context`] took: the reference on the
-/// primary token.
+/// [`SeReleaseSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-sereleasesubjectcontext):
+/// give up the references a capture took, and forget the tokens.
 ///
 /// # Safety
-/// `context` was filled in by `capture_subject_context` and not
+/// `context` was filled in by [`SeCaptureSubjectContext`] and not
 /// released since.
-pub unsafe fn release_subject_context(context: *mut SECURITY_SUBJECT_CONTEXT) {
-    // SAFETY: per the contract: the token is the one referenced there.
+pub unsafe extern "C" fn SeReleaseSubjectContext(context: *mut SECURITY_SUBJECT_CONTEXT) {
+    // SAFETY: per the contract: the tokens are the ones referenced
+    // there.
     unsafe {
-        let token = (&raw const (*context).PrimaryToken).read();
+        let (client, primary) = tokens(context);
         (&raw mut (*context).PrimaryToken).write(core::ptr::null_mut());
-        object::dereference(token.cast());
-    }
-}
-
-/// Set up the access state of an open that asks for `desired` access,
-/// as `SeCreateAccessState` does: the subject captured, an operation id
-/// of its own, everything asked for still to be granted (generic
-/// rights as given: the type being opened maps them), and whether the
-/// subject may pass through directories without a check. No security
-/// descriptor, no auxiliary data, no privileges used, no names.
-///
-/// # Safety
-/// `state` is writable for an `ACCESS_STATE`.
-pub unsafe fn create_access_state(state: *mut ACCESS_STATE, desired: u32) {
-    let id = allocate_luid();
-    // SAFETY: per the contract; the token is referenced by the subject
-    // context captured into the state.
-    unsafe {
-        state.write_bytes(0, 1);
-        let subject = &raw mut (*state).SubjectSecurityContext;
-        capture_subject_context(subject);
-        let token = of((&raw const (*subject).PrimaryToken).read().cast());
-        (&raw mut (*state).OperationID).write(LUID {
-            LowPart: id as u32,
-            HighPart: (id >> 32) as i32,
-        });
-        (&raw mut (*state).RemainingDesiredAccess).write(desired);
-        (&raw mut (*state).OriginalDesiredAccess).write(desired);
-        if token.privilege_enabled(SE_CHANGE_NOTIFY_PRIVILEGE) {
-            (&raw mut (*state).Flags).write(TOKEN_HAS_TRAVERSE_PRIVILEGE);
+        (&raw mut (*context).ClientToken).write(core::ptr::null_mut());
+        object::dereference(primary);
+        if !client.is_null() {
+            object::dereference(client);
         }
     }
 }
 
-/// End an access state from [`create_access_state`]: release its
-/// subject (`SeDeleteAccessState`).
+/// [`SeLockSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-selocksubjectcontext):
+/// keep the subject's tokens from changing. Windows enters a critical
+/// region and takes the token's lock shared, for the primary token and
+/// again for a client token. NK's tokens never change, so the critical
+/// regions are all there is to it; a driver sees them
+/// (`KeAreApcsDisabled`).
 ///
 /// # Safety
-/// `state` was set up by `create_access_state` and not deleted since.
-pub unsafe fn delete_access_state(state: *mut ACCESS_STATE) {
+/// `context` is a captured subject context.
+pub unsafe extern "C" fn SeLockSubjectContext(context: *mut SECURITY_SUBJECT_CONTEXT) {
+    KeEnterCriticalRegion();
     // SAFETY: per the contract.
-    unsafe { release_subject_context(&raw mut (*state).SubjectSecurityContext) };
+    if !unsafe { tokens(context) }.0.is_null() {
+        KeEnterCriticalRegion();
+    }
+}
+
+/// [`SeUnlockSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seunlocksubjectcontext):
+/// undo [`SeLockSubjectContext`].
+///
+/// # Safety
+/// `context` is a captured subject context the calling thread locked.
+pub unsafe extern "C" fn SeUnlockSubjectContext(context: *mut SECURITY_SUBJECT_CONTEXT) {
+    KeLeaveCriticalRegion();
+    // SAFETY: per the contract.
+    if !unsafe { tokens(context) }.0.is_null() {
+        KeLeaveCriticalRegion();
+    }
+}
+
+/// `SeCreateAccessState` (`ntifs.h` names it; Microsoft's file systems
+/// call it): set up the access state of an open that asks for `desired`
+/// access, in the caller's `state` and `aux`. As Windows fills them:
+/// both zeroed; generic rights mapped when a mapping is given, which is
+/// also kept in `aux`; everything asked for still to be granted, and
+/// remembered as asked; the calling thread's subject captured; an
+/// operation id of its own; the traverse flag when the subject's token
+/// holds `SeChangeNotifyPrivilege` enabled; the privileges used so far
+/// (none) kept in the state's own set, which `aux` points to.
+///
+/// # Safety
+/// `state` is writable for an `ACCESS_STATE` and `aux` for an
+/// `AUX_ACCESS_DATA`; `mapping` is null or points to a mapping.
+pub unsafe extern "C" fn SeCreateAccessState(
+    state: *mut ACCESS_STATE,
+    aux: *mut AUX_ACCESS_DATA,
+    desired: u32,
+    mapping: *const GENERIC_MAPPING,
+) -> NTSTATUS {
+    let id = allocate_luid();
+    // SAFETY: per the contract; the tokens are referenced by the
+    // subject context captured into the state.
+    unsafe {
+        let mapping = (!mapping.is_null()).then(|| mapping.read_unaligned());
+        let desired = match mapping {
+            Some(mapping) => nk_se::access::map_generic(
+                desired,
+                &nk_se::access::GenericMapping {
+                    read: mapping.GenericRead,
+                    write: mapping.GenericWrite,
+                    execute: mapping.GenericExecute,
+                    all: mapping.GenericAll,
+                },
+            ),
+            None => desired,
+        };
+        state.write_bytes(0, 1);
+        aux.write_bytes(0, 1);
+        (&raw mut (*state).AuxData).write(aux.cast());
+        let subject = &raw mut (*state).SubjectSecurityContext;
+        SeCaptureSubjectContext(subject);
+        if effective(subject).privilege_enabled(SE_CHANGE_NOTIFY_PRIVILEGE) {
+            (&raw mut (*state).Flags).write(TOKEN_HAS_TRAVERSE_PRIVILEGE);
+        }
+        (&raw mut (*state).RemainingDesiredAccess).write(desired);
+        (&raw mut (*state).OriginalDesiredAccess).write(desired);
+        (&raw mut (*aux).PrivilegesUsed).write((&raw mut (*state).Privileges).cast());
+        (&raw mut (*state).OperationID).write(LUID {
+            LowPart: id as u32,
+            HighPart: (id >> 32) as i32,
+        });
+        if let Some(mapping) = mapping {
+            (&raw mut (*aux).GenericMapping).write(mapping);
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// `SeDeleteAccessState`: end an access state from
+/// [`SeCreateAccessState`]. What the open collected in the pool goes
+/// back to it: a privilege set that outgrew the state's own, the
+/// object's name and its type's name, a new object's security
+/// descriptor nobody took. Then the subject is released.
+///
+/// # Safety
+/// `state` was set up by `SeCreateAccessState` and not deleted since;
+/// what it points to is as the routines that fill it left it.
+pub unsafe extern "C" fn SeDeleteAccessState(state: *mut ACCESS_STATE) {
+    // SAFETY: per the contract: each pointer is null or a pool block
+    // the state owns.
+    unsafe {
+        let aux = (&raw const (*state).AuxData)
+            .read()
+            .cast::<AUX_ACCESS_DATA>();
+        if (&raw const (*state).PrivilegesAllocated).read() != 0 {
+            pool::ExFreePoolWithTag((&raw const (*aux).PrivilegesUsed).read().cast(), 0);
+        }
+        for name in [
+            &raw const (*state).ObjectName,
+            &raw const (*state).ObjectTypeName,
+        ] {
+            let buffer = (&raw const (*name).Buffer).read();
+            if !buffer.is_null() {
+                pool::ExFreePoolWithTag(buffer.cast(), 0);
+            }
+        }
+        if !aux.is_null() {
+            let new = &raw mut (*aux).NewSecurityDescriptor;
+            if !new.read().is_null() {
+                pool::ExFreePoolWithTag(new.read(), 0);
+                new.write(core::ptr::null_mut());
+            }
+        }
+        SeReleaseSubjectContext(&raw mut (*state).SubjectSecurityContext);
+    }
 }
 
 // ---- tests --------------------------------------------------------------
@@ -140,7 +275,7 @@ pub unsafe fn delete_access_state(state: *mut ACCESS_STATE) {
 ///
 /// # Safety
 /// `body` is an object the caller holds a reference to.
-unsafe fn references(body: *mut u8) -> i64 {
+pub unsafe fn references(body: *mut u8) -> i64 {
     // SAFETY: per the contract.
     unsafe {
         let count = object::reference(body) - 1;
@@ -181,98 +316,6 @@ pub fn token_test() -> Result<(), &'static str> {
             return Err("referencing the primary token did not reference the System token");
         }
         object::dereference(referenced);
-    }
-    Ok(())
-}
-
-/// A captured subject and a new access state hold what a file system
-/// reads from them.
-pub fn access_state_test() -> Result<(), &'static str> {
-    /// `GENERIC_READ` and a specific right.
-    const DESIRED: u32 = 0x8000_0001;
-    // SAFETY: an all-zero state is valid (integers and null pointers).
-    let mut states: [ACCESS_STATE; 2] = unsafe { core::mem::zeroed() };
-    let [first, second] = [&raw mut states[0], &raw mut states[1]];
-    // SAFETY: locals that outlive the calls; the token outlives all.
-    unsafe {
-        let token = process::reference_primary_token();
-        let before = references(token);
-
-        let subject = &raw mut (*first).SubjectSecurityContext;
-        capture_subject_context(subject);
-        let captured = (
-            (*subject).ClientToken,
-            (*subject).ImpersonationLevel,
-            (*subject).PrimaryToken,
-            (*subject).ProcessAuditId as u64,
-        );
-        let held = references(token);
-        release_subject_context(subject);
-        if captured != (core::ptr::null_mut(), 0, token.cast(), 4) {
-            object::dereference(token);
-            return Err("a captured subject is not the System process acting as itself");
-        }
-        if held != before + 1 || references(token) != before {
-            object::dereference(token);
-            return Err("a captured subject did not hold its token exactly until released");
-        }
-
-        // Dirty memory: everything not stated must come out zero.
-        first
-            .cast::<u8>()
-            .write_bytes(0xA5, size_of::<ACCESS_STATE>());
-        create_access_state(first, DESIRED);
-        create_access_state(second, 0);
-        let held = references(token);
-        let verdict = (|| {
-            let state = &*first.cast_const();
-            if state.RemainingDesiredAccess != DESIRED
-                || state.OriginalDesiredAccess != DESIRED
-                || state.PreviouslyGrantedAccess != 0
-            {
-                return Err("a new access state does not hold the access asked for, as asked");
-            }
-            if state.Flags != TOKEN_HAS_TRAVERSE_PRIVILEGE {
-                return Err("the System token's right to traverse is not in the access state");
-            }
-            let subject = &state.SubjectSecurityContext;
-            if subject.PrimaryToken != token.cast()
-                || !subject.ClientToken.is_null()
-                || subject.ProcessAuditId as u64 != 4
-            {
-                return Err("a new access state's subject is not the caller");
-            }
-            let id = |state: *const ACCESS_STATE| {
-                ((*state).OperationID.LowPart, (*state).OperationID.HighPart)
-            };
-            if id(first) == (0, 0) || id(first) == id(second) {
-                return Err("two access states share an operation id");
-            }
-            let quiet = state.SecurityEvaluated == 0
-                && state.GenerateAudit == 0
-                && state.GenerateOnClose == 0
-                && state.PrivilegesAllocated == 0
-                && state.AuditPrivileges == 0
-                && state.SecurityDescriptor.is_null()
-                && state.AuxData.is_null()
-                && state.Privileges == [0; 11]
-                && state.ObjectName.Length == 0
-                && state.ObjectName.Buffer.is_null()
-                && state.ObjectTypeName.Length == 0
-                && state.ObjectTypeName.Buffer.is_null();
-            if !quiet {
-                return Err("a new access state holds something nobody put there");
-            }
-            Ok(())
-        })();
-        delete_access_state(first);
-        delete_access_state(second);
-        let after = references(token);
-        object::dereference(token);
-        verdict?;
-        if held != before + 2 || after != before {
-            return Err("an access state did not hold its token exactly until deleted");
-        }
     }
     Ok(())
 }

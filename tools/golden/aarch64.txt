@@ -92,6 +92,7 @@ se.descriptor ok
 se.capture ok
 se.device ok
 se.token ok
+se.subject-context ok
 se.access-state ok
 cm.keys ok
 cm.values ok

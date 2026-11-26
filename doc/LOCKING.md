@@ -257,6 +257,14 @@ its list and its APC-disable count changed on its behalf by the
 releasing thread, under that mutex's lock; otherwise only a thread
 itself changes them.
 
+### Tokens
+
+A token is written once, before anything else can reach it, and never
+again, so it has no lock: whoever holds a reference reads it freely.
+What Windows guards with the token's lock (`SeLockSubjectContext`,
+`SeQueryInformationToken`) NK reads without one. `SeLockSubjectContext`
+still enters the critical regions a driver can observe.
+
 ### Waiting and waking
 
 The race between a thread going to sleep and whatever would wake it is

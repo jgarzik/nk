@@ -994,16 +994,29 @@ the System process's, with the user, groups and privileges of Windows'
 SYSTEM token (the table at `Token::system` says which of those facts
 Microsoft documents). No thread impersonates.
 
+A token never changes once it is made: NK exports nothing that adjusts
+one. So a token has no lock, and
+[`SeLockSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-selocksubjectcontext)
+is what is left of Windows' routine when the token lock cannot be
+contended: a critical region for each token of the subject.
+
 What an open carries about its requestor has Windows' layout, because a
 file system reads it in line (`kernel/se/token.rs`):
 
-- the subject context: no client token, the primary token (referenced
-  until the context is released), the process id for auditing;
-- the access state: the subject, an operation id of its own, the access
-  asked for as both original and remaining, generic rights as given (the
-  type being opened maps them), nothing granted yet, and the traverse
-  flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
-  security descriptor, auxiliary data, privileges and names are empty.
+- the subject context
+  ([`SeCaptureSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-secapturesubjectcontext)):
+  no client token, the primary token (referenced until the context is
+  released), the process id for auditing. With no client token the
+  impersonation level is not written, as on Windows;
+- the access state (`SeCreateAccessState`), in the two structures its
+  maker supplies, `ACCESS_STATE` and `AUX_ACCESS_DATA`: the subject, an
+  operation id of its own, the access asked for as both original and
+  remaining (generic rights mapped when a mapping is given), nothing
+  granted yet, the traverse flag when the token holds
+  `SeChangeNotifyPrivilege` enabled, and the privileges used, which
+  start in the state's own set. An open NK makes itself gets both
+  structures, with the file type's mapping. `SeDeleteAccessState` frees
+  what the state came to own in the pool and releases the subject.
 
 ## Breakpoints and the debugger
 

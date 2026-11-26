@@ -182,6 +182,10 @@ Security descriptors (absolute and self-relative), ACL and SID headers
 agree too. A structure is added to the
 comparison by the commit that starts using it.
 
+`AUX_ACCESS_DATA` is such a private layout that a driver nevertheless
+allocates: whoever calls `SeCreateAccessState` supplies the room, 0xE0
+bytes in this build, and the kernel writes all of it.
+
 There is nothing to compare arm64 with: NK has no source of Windows 10
 arm64 kernels or symbols. arm64 uses the documented structures, the facts
 the WDK compiles into the probe, and layouts of NK's own for whatever no

@@ -222,7 +222,13 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, se::RtlLengthSid),
     export!(Implemented, se::RtlSetDaclSecurityDescriptor),
     export!(Implemented, se::SeCaptureSecurityDescriptor),
+    export!(Implemented, se::token::SeCaptureSubjectContext),
+    export!(Implemented, se::token::SeCreateAccessState),
+    export!(Implemented, se::token::SeDeleteAccessState),
     export_variable!(Implemented, "SeExports", se::SeExports),
+    export!(Implemented, se::token::SeLockSubjectContext),
+    export!(Implemented, se::token::SeReleaseSubjectContext),
+    export!(Implemented, se::token::SeUnlockSubjectContext),
     export_variable!(
         Implemented,
         "IoDeviceObjectType",
