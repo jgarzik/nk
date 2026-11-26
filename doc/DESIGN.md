@@ -414,6 +414,23 @@ load and store of the pair on arm64 (`arch::swap_pair`).
   a page fault that stops the system.
 - Pushing an entry that is not 16-byte aligned stops the system.
 
+### Lookaside lists
+
+Allocating from a
+[lookaside list](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-lookaside-lists)
+and freeing to it are code from the WDK's headers inside the driver,
+which works on the structure directly and calls its `Allocate` and
+`Free` pointers. The kernel initialises the structure and, on delete,
+hands the blocks still kept to `Free`.
+
+- `Allocate` and `Free` are the driver's routines or, where it gave
+  none, `ExAllocatePoolWithTag` and `ExFreePool`.
+- `Size` is stored as given, not rounded up.
+- `Depth` starts at 4 and stays there, `MaximumDepth` at 256. Windows
+  scans all lists periodically and moves `Depth` with the miss counts;
+  NK has no scan, and `ListEntry`, by which Windows finds the lists,
+  links the list to itself.
+
 ## Objects, references and handles
 
 Object-manager allocations have Windows' `OBJECT_HEADER` in front:

@@ -1,7 +1,7 @@
 //! Tests of the executive's locks, lists and timers, called the way a
 //! driver calls them: through the exports, on memory of the caller's.
 
-use crate::ex::{pushlock, slist};
+use crate::ex::{lookaside, pushlock, slist};
 use crate::test::{Group, Report};
 use core::fmt::Display;
 use nk_bootinfo::BootInfo;
@@ -16,6 +16,9 @@ pub static GROUP: Group = Group {
         "ex.slist.order",
         "ex.slist.contention",
         "ex.pool.variants",
+        "ex.lookaside.fields",
+        "ex.lookaside.cache",
+        "ex.lookaside.routines",
     ],
     run,
     manual: false,
@@ -64,5 +67,18 @@ fn run(r: &mut Report, _: &BootInfo) {
         "ex.pool.variants",
         "blocks:",
         crate::mm::pool::variants_test(),
+    );
+    r.check("ex.lookaside.fields", lookaside::fields_test);
+    counted(
+        r,
+        "ex.lookaside.cache",
+        "blocks kept:",
+        lookaside::cache_test(),
+    );
+    counted(
+        r,
+        "ex.lookaside.routines",
+        "calls of the list's own routines:",
+        lookaside::routines_test(),
     );
 }

@@ -1,0 +1,8 @@
+# A lookaside list initialised without a free routine is left with none:
+# the driver's in-line code calls through the null pointer the first
+# time the list is full.
+scenario: x86_64
+fails: ex.lookaside.fields
+file: kernel/ex/lookaside.rs
+replace:         (&raw mut (*list).Free).write(Some(free.unwrap_or(pool::ExFreePool)));
+with:         (&raw mut (*list).Free).write(free);

@@ -110,6 +110,9 @@ ex.slist.swap ok
 ex.slist.order ok
 ex.slist.contention ok
 ex.pool.variants ok
+ex.lookaside.fields ok
+ex.lookaside.cache ok
+ex.lookaside.routines ok
 io.pend-dpc ok
 io.pend-timer ok
 io.pend-work ok
