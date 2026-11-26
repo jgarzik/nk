@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod crt;
 pub mod print;
 
 use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};

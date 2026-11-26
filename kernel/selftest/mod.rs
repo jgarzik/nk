@@ -23,6 +23,7 @@ mod open;
 mod oracle;
 mod pend;
 mod review;
+mod rtl;
 mod se;
 mod seh;
 mod service;
@@ -119,6 +120,7 @@ pub static GROUPS: &[&Group] = &[
     &except::GROUP,
     &wait::GROUP,
     &ob::GROUP,
+    &rtl::GROUP,
     &se::GROUP,
     &cm::GROUP,
     &csq::GROUP,

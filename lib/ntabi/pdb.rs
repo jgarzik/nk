@@ -818,3 +818,16 @@ fn object_attributes_match_the_kernel() {
         field("SecurityQualityOfService")
     );
 }
+
+#[test]
+fn runtime_library_structures_match_the_kernel() {
+    use crate::rtl::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let string = types.layout("_STRING").expect("_STRING");
+    let field = |name| offset(&string, "_STRING", name);
+    assert_eq!(size_of::<STRING>(), string.size as usize);
+    assert_eq!(offset_of!(STRING, Length), field("Length"));
+    assert_eq!(offset_of!(STRING, MaximumLength), field("MaximumLength"));
+    assert_eq!(offset_of!(STRING, Buffer), field("Buffer"));
+}

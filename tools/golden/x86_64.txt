@@ -85,6 +85,8 @@ ob.namespace.links ok
 ob.namespace.name-info ok
 ob.handle-access ok
 ob.security ok
+rtl.crt ok
+rtl.vsnwprintf ok
 se.well-known ok
 se.descriptor ok
 se.capture ok
