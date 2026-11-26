@@ -16,7 +16,7 @@
 //! | `ExInitializeResourceLite` | [`Resource::new`] |
 //! | `ExReinitializeResourceLite` | [`Resource::reinitialize`] |
 //! | `ExDeleteResourceLite` | nothing to decide: the kernel frees the table |
-//! | `ExAcquireResourceExclusiveLite`, `ExTryToAcquireResourceExclusiveLite` (no wait) | [`Resource::acquire_exclusive`] |
+//! | `ExAcquireResourceExclusiveLite` | [`Resource::acquire_exclusive`] |
 //! | `ExAcquireResourceSharedLite`, `ExAcquireSharedStarveExclusive`, `ExAcquireSharedWaitForExclusive` | [`Resource::acquire_shared`] |
 //! | `ExReleaseResourceLite`, `ExReleaseResourceForThreadLite` | [`Resource::release`] |
 //! | `ExConvertExclusiveToSharedLite` | [`Resource::convert_exclusive_to_shared`] |

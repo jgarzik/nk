@@ -178,10 +178,6 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ex::resource::ExReleaseResourceLite),
     export!(Partial, ex::timer::ExSetTimer),
     export!(Implemented, ex::pushlock::ExTryAcquirePushLockExclusiveEx),
-    export!(
-        Implemented,
-        ex::resource::ExTryToAcquireResourceExclusiveLite
-    ),
     export!(Implemented, ex::slist::ExpInterlockedFlushSList),
     export!(Implemented, ex::slist::ExpInterlockedPopEntrySList),
     export!(Implemented, ex::slist::ExpInterlockedPushEntrySList),

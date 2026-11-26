@@ -409,17 +409,6 @@ pub unsafe extern "C" fn ExAcquireResourceExclusiveLite(resource: *mut ERESOURCE
     u8::from(unsafe { acquire(resource, wait != 0, None) })
 }
 
-/// `ExTryToAcquireResourceExclusiveLite`, which `ntifs.h` declares for
-/// file systems: exclusive access if it can be had without waiting,
-/// as `ExAcquireResourceExclusiveLite` without `wait`.
-///
-/// # Safety
-/// `resource` points to an initialised `ERESOURCE`.
-pub unsafe extern "C" fn ExTryToAcquireResourceExclusiveLite(resource: *mut ERESOURCE) -> u8 {
-    // SAFETY: per the contract.
-    u8::from(unsafe { acquire(resource, false, None) })
-}
-
 /// [`ExAcquireResourceSharedLite`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exacquireresourcesharedlite).
 ///
 /// # Safety
@@ -599,8 +588,7 @@ fn yielding(wait: bool) -> bool {
 }
 
 fn try_exclusive() -> bool {
-    // SAFETY: see above.
-    unsafe { ExTryToAcquireResourceExclusiveLite(res()) != 0 }
+    exclusive(false)
 }
 
 fn let_go() {
