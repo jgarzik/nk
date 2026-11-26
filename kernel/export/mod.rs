@@ -299,6 +299,7 @@ static EXPORTS: &[Export] = &[
     export!(Partial, ob::event::ZwCreateEvent),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export!(Implemented, rtl::name::FsRtlIsNameInExpression),
+    export!(Implemented, io::fsrtl::FsRtlTeardownPerStreamContexts),
     export_variable!(
         Implemented,
         "FsRtlLegalAnsiCharacterArray",

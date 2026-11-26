@@ -4,16 +4,20 @@
 //! passes (read from the binaries), and the driver, where one is
 //! needed, is here in Rust.
 
+use crate::ex::pushlock;
 use crate::io::file::{self, OpenRequest};
-use crate::io::{device, irp};
+use crate::io::{device, fsrtl, irp};
 use crate::mm::pool;
 use crate::ob::object;
 use crate::ps::process;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
+use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
+use nk_ntabi::fsrtl::*;
 use nk_ntabi::io::*;
+use nk_ntabi::ke::FAST_MUTEX;
 use nk_ntabi::status::*;
 use nk_ntabi::thread as thread_layout;
 
@@ -261,4 +265,368 @@ fn file_generic_mapping() -> Result<(), &'static str> {
         return Err("an open for GENERIC_READ did not reach the driver as the mapping's read mask");
     }
     Ok(())
+}
+
+pub static STREAM_CONTEXTS: Group = Group {
+    names: &["fsrtl.teardown-stream-contexts"],
+    run: |r, _| match stream_contexts() {
+        Ok(freed) => r.ok_with(STREAM_CONTEXTS.names[0], format_args!("{freed} contexts")),
+        Err(why) => r.fail(STREAM_CONTEXTS.names[0], format_args!("{why}")),
+    },
+    manual: false,
+};
+
+/// What a filter attaches to a stream: the context header Windows
+/// defines, then the filter's own.
+#[repr(C)]
+struct StreamContext {
+    header: FSRTL_PER_STREAM_CONTEXT,
+    /// The stream it is attached to.
+    stream: *mut FSRTL_ADVANCED_FCB_HEADER,
+    id: u32,
+}
+
+/// Contexts freed, and their ids in the order they were freed, four
+/// bits each.
+static FREED: AtomicU32 = AtomicU32::new(0);
+static ORDER: AtomicU32 = AtomicU32::new(0);
+/// What a free callback found wrong, a bit each.
+static WRONG: AtomicU32 = AtomicU32::new(0);
+const STILL_LINKED: u32 = 1;
+const LOCK_HELD: u32 = 2;
+const IN_CRITICAL_REGION: u32 = 4;
+const NO_MEMORY: u32 = 8;
+/// `KeAreApcsDisabled` for the test's thread outside the routine.
+static APCS_DISABLED: AtomicU32 = AtomicU32::new(0);
+/// The id of a context for the next free callback to attach to the
+/// stream it is called for, or zero.
+static ATTACH_LATE: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a header's contexts are guarded by its push lock.
+///
+/// # Safety
+/// `stream` is an initialised header.
+unsafe fn has_push_lock(stream: *mut FSRTL_ADVANCED_FCB_HEADER) -> bool {
+    // SAFETY: per the contract.
+    unsafe { fcb_header_version((*stream).Common.ReservedAndVersion) >= FSRTL_FCB_HEADER_V1 }
+}
+
+/// Attach a context to a stream as `FsRtlInsertPerStreamContext` does:
+/// at the head of the header's list. The caller holds the header's
+/// lock, or nobody else can reach the header.
+///
+/// # Safety
+/// `stream` is an initialised advanced header.
+unsafe fn attach(stream: *mut FSRTL_ADVANCED_FCB_HEADER, id: u32) -> Result<(), &'static str> {
+    let context = pool::alloc_zeroed(size_of::<StreamContext>(), TAG).cast::<StreamContext>();
+    if context.is_null() {
+        return Err("no memory for a stream context");
+    }
+    // SAFETY: a fresh block of a context's size; the header per the
+    // contract.
+    unsafe {
+        (*context).header.OwnerId = (&raw const FREED).cast_mut().cast::<c_void>();
+        (*context).header.InstanceId = stream.cast();
+        (*context).header.FreeCallback = Some(free_context);
+        (*context).stream = stream;
+        (*context).id = id;
+        let head = &raw mut (*stream).FilterContexts;
+        let entry = &raw mut (*context).header.Links;
+        let first = (*head).Flink;
+        (*entry).Flink = first;
+        (*entry).Blink = head;
+        (*first).Blink = entry;
+        (*head).Flink = entry;
+    }
+    Ok(())
+}
+
+/// A filter's `FreeCallback`. It checks what Microsoft documents and
+/// the pinned kernel does for it: the context is off the stream's list
+/// already, and the header's lock is free for it to take, outside any
+/// critical region of the kernel's making. Then it frees the context,
+/// which is what the callback is for.
+///
+/// # Safety
+/// Called by `FsRtlTeardownPerStreamContexts` with a context made by
+/// `attach`.
+unsafe extern "C" fn free_context(context: *mut FSRTL_PER_STREAM_CONTEXT) {
+    let context = context.cast::<StreamContext>();
+    // SAFETY: per the contract: the context is this routine's now, and
+    // its stream's header is live until the teardown returns.
+    unsafe {
+        let stream = (*context).stream;
+        let head = &raw mut (*stream).FilterContexts;
+        let late = ATTACH_LATE.swap(0, Ordering::AcqRel);
+        let mut wrong = 0;
+        // With the lock held: what the list holds, and one more.
+        let inspect = move || {
+            let mut found = 0;
+            let mut entry = (*head).Flink;
+            while entry != head {
+                if entry == &raw mut (*context).header.Links {
+                    found |= STILL_LINKED;
+                }
+                entry = (*entry).Flink;
+            }
+            // A filter may attach to the stream while it is torn down.
+            if late != 0 && attach(stream, late).is_err() {
+                found |= NO_MEMORY;
+            }
+            found
+        };
+        if has_push_lock(stream) {
+            if u32::from(crate::ke::mutex::KeAreApcsDisabled())
+                != APCS_DISABLED.load(Ordering::Acquire)
+            {
+                wrong |= IN_CRITICAL_REGION;
+            }
+            crate::ke::mutex::KeEnterCriticalRegion();
+            if pushlock::ExTryAcquirePushLockExclusiveEx(&raw mut (*stream).PushLock, 0) == 0 {
+                wrong |= LOCK_HELD;
+            } else {
+                wrong |= inspect();
+                pushlock::ExReleasePushLockEx(&raw mut (*stream).PushLock, 0);
+            }
+            crate::ke::mutex::KeLeaveCriticalRegion();
+        } else if crate::ke::mutex::ExTryToAcquireFastMutex((*stream).FastMutex) == 0 {
+            wrong |= LOCK_HELD;
+        } else {
+            wrong |= inspect();
+            crate::ke::mutex::ExReleaseFastMutex((*stream).FastMutex);
+        }
+        WRONG.fetch_or(wrong, Ordering::AcqRel);
+        // One thread tears a stream down: nothing else updates these.
+        ORDER.store(
+            ORDER.load(Ordering::Acquire) << 4 | (*context).id,
+            Ordering::Release,
+        );
+        FREED.fetch_add(1, Ordering::AcqRel);
+        let _ = pool::free(context.cast());
+    }
+}
+
+/// A stream's control block as `npfs.sys` and `msfs.sys` make one: a
+/// zeroed pool block with the header at its front, set up by the code
+/// `FsRtlSetupAdvancedHeader` compiles to in both (advanced, supporting
+/// filter contexts, version 3, an empty list, a zero push lock), and a
+/// fast mutex of its own from the pool, initialised in line.
+struct Stream {
+    header: *mut FSRTL_ADVANCED_FCB_HEADER,
+}
+
+impl Stream {
+    fn new(version: u8) -> Result<Self, &'static str> {
+        // What npfs.sys allocates for a control block.
+        const FCB_SIZE: usize = 0x188;
+        let header = pool::alloc_zeroed(FCB_SIZE, TAG).cast::<FSRTL_ADVANCED_FCB_HEADER>();
+        let fast_mutex = pool::alloc_zeroed(size_of::<FAST_MUTEX>(), TAG).cast::<FAST_MUTEX>();
+        if header.is_null() || fast_mutex.is_null() {
+            for block in [header.cast::<u8>(), fast_mutex.cast()] {
+                if !block.is_null() {
+                    let _ = pool::free(block);
+                }
+            }
+            return Err("no memory for a stream's control block");
+        }
+        // SAFETY: two fresh, zeroed blocks of the sizes written to.
+        unsafe {
+            (*header).Common.Flags |= FSRTL_FLAG_ADVANCED_HEADER;
+            (*header).Common.Flags2 |= FSRTL_FLAG2_SUPPORTS_FILTER_CONTEXTS;
+            (*header).Common.ReservedAndVersion =
+                with_fcb_header_version((*header).Common.ReservedAndVersion, version);
+            let head = &raw mut (*header).FilterContexts;
+            (*head).Flink = head;
+            (*head).Blink = head;
+            (*fast_mutex).Count = 1;
+            crate::ke::wait::KeInitializeEvent(&raw mut (*fast_mutex).Event, 1, 0);
+            (*header).FastMutex = fast_mutex;
+        }
+        Ok(Self { header })
+    }
+
+    /// Attach contexts with these ids, in this order, under the
+    /// header's lock.
+    fn attach(&self, ids: &[u32]) -> Result<(), &'static str> {
+        // SAFETY: the stream's own header and locks.
+        unsafe {
+            let pushed = has_push_lock(self.header);
+            if pushed {
+                crate::ke::mutex::KeEnterCriticalRegion();
+                pushlock::ExAcquirePushLockExclusiveEx(&raw mut (*self.header).PushLock, 0);
+            } else {
+                crate::ke::mutex::ExAcquireFastMutex((*self.header).FastMutex);
+            }
+            let result = ids.iter().try_for_each(|&id| attach(self.header, id));
+            if pushed {
+                pushlock::ExReleasePushLockEx(&raw mut (*self.header).PushLock, 0);
+                crate::ke::mutex::KeLeaveCriticalRegion();
+            } else {
+                crate::ke::mutex::ExReleaseFastMutex((*self.header).FastMutex);
+            }
+            result
+        }
+    }
+
+    /// Tear the stream's contexts down, as the file system does just
+    /// before it frees the control block. Returns how many were freed
+    /// and in which order.
+    fn teardown(&self) -> (u32, u32) {
+        FREED.store(0, Ordering::Release);
+        ORDER.store(0, Ordering::Release);
+        // SAFETY: the stream's header, which nothing else uses.
+        unsafe { fsrtl::FsRtlTeardownPerStreamContexts(self.header) };
+        (FREED.load(Ordering::Acquire), ORDER.load(Ordering::Acquire))
+    }
+
+    /// Whether no context is attached and neither lock is held.
+    fn at_rest(&self) -> bool {
+        // SAFETY: the stream's own header and mutex.
+        unsafe {
+            let head = &raw mut (*self.header).FilterContexts;
+            (*head).Flink == head
+                && (*head).Blink == head
+                && (*self.header).PushLock == 0
+                && (*(*self.header).FastMutex).Count == 1
+        }
+    }
+}
+
+impl Drop for Stream {
+    /// Free the mutex, then the block, as both drivers do after the
+    /// teardown.
+    fn drop(&mut self) {
+        // SAFETY: the stream's own blocks, used by nothing else now.
+        unsafe {
+            let _ = pool::free((*self.header).FastMutex.cast());
+            let _ = pool::free(self.header.cast());
+        }
+    }
+}
+
+/// `FsRtlTeardownPerStreamContexts`, called as `npfs.sys` and
+/// `msfs.sys` call it: with the control block they are about to free,
+/// whose header they set up in line, whatever is attached to it and
+/// without looking first. The contexts are attached here the way the
+/// filter manager's side of the kernel attaches them, since no filter
+/// runs on NK. Checked: a stream with nothing attached is left exactly
+/// as it was; every context is unlinked and its `FreeCallback` called
+/// once, the newest first, with the lock free and the region left; a
+/// context attached by a callback is torn down too; a version 0 header
+/// goes by its fast mutex; a header whose flags deny it has contexts is
+/// not read. Returns how many contexts the callbacks freed.
+fn stream_contexts() -> Result<u32, &'static str> {
+    WRONG.store(0, Ordering::Release);
+    ATTACH_LATE.store(0, Ordering::Release);
+    let apcs_disabled = u32::from(crate::ke::mutex::KeAreApcsDisabled());
+    APCS_DISABLED.store(apcs_disabled, Ordering::Release);
+    let mut total = 0;
+
+    let stream = Stream::new(FSRTL_FCB_HEADER_V3)?;
+    if stream.teardown() != (0, 0) || !stream.at_rest() {
+        return Err("tearing down a stream with no contexts did something");
+    }
+    stream.attach(&[1, 2, 3])?;
+    // The first callback, for context 3, attaches context 4.
+    ATTACH_LATE.store(4, Ordering::Release);
+    let (freed, order) = stream.teardown();
+    total += freed;
+    if freed != 4 {
+        return Err("not every context's FreeCallback was called once");
+    }
+    if order != 0x3421 {
+        return Err("the contexts were not freed newest first, one attached meanwhile next");
+    }
+    if !stream.at_rest() {
+        return Err("the list or its lock is not as an empty stream's afterwards");
+    }
+
+    // A header that says it has no contexts is not read, whatever its
+    // list holds; with the flags back, the context is torn down.
+    stream.attach(&[5])?;
+    for (flags, flags2) in [
+        (FSRTL_FLAG_ADVANCED_HEADER, 0),
+        (0, FSRTL_FLAG2_SUPPORTS_FILTER_CONTEXTS),
+    ] {
+        // SAFETY: the stream's own header.
+        unsafe {
+            (*stream.header).Common.Flags = flags;
+            (*stream.header).Common.Flags2 = flags2;
+        }
+        if stream.teardown() != (0, 0) {
+            return Err("a header that denies having contexts had them torn down");
+        }
+    }
+    // SAFETY: the stream's own header.
+    unsafe {
+        (*stream.header).Common.Flags = FSRTL_FLAG_ADVANCED_HEADER;
+        (*stream.header).Common.Flags2 = FSRTL_FLAG2_SUPPORTS_FILTER_CONTEXTS;
+    }
+    let (freed, order) = stream.teardown();
+    total += freed;
+    if (freed, order) != (1, 5) || !stream.at_rest() {
+        return Err("the context of a header that says it has contexts was not torn down");
+    }
+    drop(stream);
+
+    // An old header: no push lock, the file system's fast mutex guards
+    // the list.
+    let old = Stream::new(FSRTL_FCB_HEADER_V0)?;
+    old.attach(&[6, 7])?;
+    let (freed, order) = old.teardown();
+    total += freed;
+    if (freed, order) != (2, 0x76) || !old.at_rest() {
+        return Err("a version 0 header's contexts were not torn down under its fast mutex");
+    }
+    drop(old);
+
+    let wrong = WRONG.load(Ordering::Acquire);
+    if wrong & STILL_LINKED != 0 {
+        return Err("a FreeCallback found its context still on the list");
+    }
+    if wrong & LOCK_HELD != 0 {
+        return Err("a FreeCallback could not take the header's lock");
+    }
+    if wrong & IN_CRITICAL_REGION != 0 {
+        return Err("a FreeCallback ran inside the routine's critical region");
+    }
+    if wrong & NO_MEMORY != 0 {
+        return Err("no memory for a context attached during the teardown");
+    }
+    if u32::from(crate::ke::mutex::KeAreApcsDisabled()) != apcs_disabled {
+        return Err("the routine did not leave the critical region it entered");
+    }
+    Ok(total)
+}
+
+/// A stream whose list of contexts does not link back must stop the
+/// system, as the pinned kernel's check of the links does (a fast
+/// fail), before anything is unlinked through it.
+pub static BROKEN_LIST: Group = Group {
+    names: &["neg.stream-context-list"],
+    run: broken_list,
+    manual: true,
+};
+
+fn broken_list(r: &mut Report, _: &BootInfo) {
+    let name = BROKEN_LIST.names[0];
+    let stream = match Stream::new(FSRTL_FCB_HEADER_V3) {
+        Ok(stream) => stream,
+        Err(why) => return r.fail(name, format_args!("{why}")),
+    };
+    if let Err(why) = stream.attach(&[1, 2]) {
+        return r.fail(name, format_args!("{why}"));
+    }
+    // SAFETY: the stream's own list: the second context no longer
+    // points back at the first.
+    unsafe {
+        let first = (*stream.header).FilterContexts.Flink;
+        (*(*first).Flink).Blink = &raw mut (*stream.header).FilterContexts;
+    }
+    kprintln!("NK-NEG-ARMED {name}");
+    let (freed, _) = stream.teardown();
+    r.fail(
+        name,
+        format_args!("a broken list was torn down: {freed} contexts freed"),
+    );
 }

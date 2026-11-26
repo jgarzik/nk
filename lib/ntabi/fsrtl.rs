@@ -1,0 +1,138 @@
+//! What a file system keeps for the kernel at the front of each stream's
+//! control block: the FCB header (`ntifs.h`).
+//!
+//! The file system allocates and initialises the header itself, in line
+//! ([`FsRtlSetupAdvancedHeader`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlsetupadvancedheader)
+//! is a macro), so every field is the driver's to write.
+
+use crate::ex::{ERESOURCE, EX_PUSH_LOCK};
+use crate::ke::{FAST_MUTEX, LIST_ENTRY};
+use core::ffi::c_void;
+
+/// [`FSRTL_COMMON_FCB_HEADER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_fsrtl_common_fcb_header).
+#[repr(C)]
+pub struct FSRTL_COMMON_FCB_HEADER {
+    pub NodeTypeCode: i16,
+    pub NodeByteSize: i16,
+    /// `FSRTL_FLAG_*`.
+    pub Flags: u8,
+    pub IsFastIoPossible: u8,
+    /// `FSRTL_FLAG2_*`.
+    pub Flags2: u8,
+    /// Two bit fields: `Reserved` in the low four bits, `Version` in
+    /// the high four ([`fcb_header_version`]).
+    pub ReservedAndVersion: u8,
+    pub Resource: *mut ERESOURCE,
+    pub PagingIoResource: *mut ERESOURCE,
+    pub AllocationSize: i64,
+    pub FileSize: i64,
+    pub ValidDataLength: i64,
+}
+
+/// [`FSRTL_ADVANCED_FCB_HEADER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_fsrtl_advanced_fcb_header):
+/// the common header, which it begins with, and what was added to it
+/// since. `Flags` says whether a header is this long
+/// ([`FSRTL_FLAG_ADVANCED_HEADER`]) and `Version` which of the later
+/// fields it has.
+#[repr(C)]
+pub struct FSRTL_ADVANCED_FCB_HEADER {
+    pub Common: FSRTL_COMMON_FCB_HEADER,
+    /// The file system's own mutex, which also guards `FilterContexts`
+    /// in a header of version 0.
+    pub FastMutex: *mut FAST_MUTEX,
+    /// The stream's [`FSRTL_PER_STREAM_CONTEXT`]s, by their `Links`.
+    pub FilterContexts: LIST_ENTRY,
+    /// Guards `FilterContexts`. Version 1 and later.
+    pub PushLock: EX_PUSH_LOCK,
+    /// Version 1 and later.
+    pub FileContextSupportPointer: *mut *mut c_void,
+    /// A union: `Oplock`, or `ReservedForRemote`. Version 2 and later.
+    pub Oplock: *mut c_void,
+    /// Version 3 and later.
+    pub ReservedContext: *mut c_void,
+}
+
+/// [`FSRTL_PER_STREAM_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_fsrtl_per_stream_context):
+/// what a filter attaches to a stream, at the front of a block of its
+/// own.
+#[repr(C)]
+pub struct FSRTL_PER_STREAM_CONTEXT {
+    pub Links: LIST_ENTRY,
+    pub OwnerId: *mut c_void,
+    pub InstanceId: *mut c_void,
+    /// Called with the context when the stream is torn down; it frees
+    /// the block.
+    pub FreeCallback: Option<unsafe extern "C" fn(*mut FSRTL_PER_STREAM_CONTEXT)>,
+}
+
+/// `Flags`: the header is an `FSRTL_ADVANCED_FCB_HEADER`.
+pub const FSRTL_FLAG_ADVANCED_HEADER: u8 = 0x40;
+/// `Flags2`: filters may attach contexts to the stream; `FilterContexts`
+/// is a list.
+pub const FSRTL_FLAG2_SUPPORTS_FILTER_CONTEXTS: u8 = 0x02;
+
+/// `Version`: the header ends with `FilterContexts`.
+pub const FSRTL_FCB_HEADER_V0: u8 = 0;
+/// `Version`: `PushLock` and `FileContextSupportPointer` follow.
+pub const FSRTL_FCB_HEADER_V1: u8 = 1;
+/// `Version`: `Oplock` follows.
+pub const FSRTL_FCB_HEADER_V2: u8 = 2;
+/// `Version`: `ReservedContext` follows. What the headers of the pinned
+/// build's kit set.
+pub const FSRTL_FCB_HEADER_V3: u8 = 3;
+
+/// The `Version` in a header's `ReservedAndVersion` byte.
+pub const fn fcb_header_version(reserved_and_version: u8) -> u8 {
+    reserved_and_version >> 4
+}
+
+/// `ReservedAndVersion` with its `Version` set to `version`, the
+/// reserved bits kept.
+pub const fn with_fcb_header_version(reserved_and_version: u8, version: u8) -> u8 {
+    (reserved_and_version & 0x0F) | (version << 4)
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<FSRTL_COMMON_FCB_HEADER>() == 0x30);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, NodeByteSize) == 0x02);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, Flags) == 0x04);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, IsFastIoPossible) == 0x05);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, Flags2) == 0x06);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, ReservedAndVersion) == 0x07);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, Resource) == 0x08);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, PagingIoResource) == 0x10);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, AllocationSize) == 0x18);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, FileSize) == 0x20);
+    assert!(offset_of!(FSRTL_COMMON_FCB_HEADER, ValidDataLength) == 0x28);
+
+    assert!(size_of::<FSRTL_ADVANCED_FCB_HEADER>() == 0x68);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, Common) == 0x00);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, FastMutex) == 0x30);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, FilterContexts) == 0x38);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, PushLock) == 0x48);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, FileContextSupportPointer) == 0x50);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, Oplock) == 0x58);
+    assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, ReservedContext) == 0x60);
+
+    assert!(size_of::<FSRTL_PER_STREAM_CONTEXT>() == 0x28);
+    assert!(offset_of!(FSRTL_PER_STREAM_CONTEXT, OwnerId) == 0x10);
+    assert!(offset_of!(FSRTL_PER_STREAM_CONTEXT, InstanceId) == 0x18);
+    assert!(offset_of!(FSRTL_PER_STREAM_CONTEXT, FreeCallback) == 0x20);
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_version_is_the_high_four_bits_and_leaves_the_low_four() {
+        // What `FsRtlSetupAdvancedHeader` compiles to in npfs.sys and
+        // msfs.sys: `and al, 0x0F; or al, 0x30`.
+        assert_eq!(with_fcb_header_version(0x00, FSRTL_FCB_HEADER_V3), 0x30);
+        assert_eq!(with_fcb_header_version(0xA5, FSRTL_FCB_HEADER_V1), 0x15);
+        assert_eq!(fcb_header_version(0x30), FSRTL_FCB_HEADER_V3);
+        assert_eq!(fcb_header_version(0x0F), FSRTL_FCB_HEADER_V0);
+        assert_eq!(fcb_header_version(0x2F), FSRTL_FCB_HEADER_V2);
+    }
+}

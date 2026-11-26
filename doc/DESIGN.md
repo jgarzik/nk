@@ -946,6 +946,7 @@ make that safe.
 | an executive timer's callback (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
+| a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
@@ -1237,6 +1238,27 @@ caller's context block) and its cancel routine is the I/O manager's,
 which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
 canceller has it.
+
+**Stream contexts** (`kernel/io/fsrtl.rs`). A file system puts an
+`FSRTL_ADVANCED_FCB_HEADER` at the front of each stream's control block
+and initialises it with code compiled into the driver; `npfs.sys` and
+`msfs.sys` make it version 3, advanced, supporting filter contexts.
+When it frees the block it calls
+[`FsRtlTeardownPerStreamContexts`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlteardownperstreamcontexts),
+and NK does what the pinned kernel does: under the header's own lock
+(its push lock inside a critical region, or the file system's fast
+mutex in a version 0 header) it unlinks the first context, lets the
+lock go, calls the context's `FreeCallback`, and takes the lock again,
+until the list is empty. A list found empty is not locked. A list whose
+links do not lead back stops the system (`0x139`). NK differs in one
+thing no correct file system can see: a header whose flags say it is
+not advanced or supports no filter contexts is not read further, where
+Windows reads the list regardless. Nothing in NK attaches a context:
+no binary NK loads imports the routines that do
+(`FsRtlInsertPerStreamContext`), so they are not exported. The test
+`fsrtl.teardown-stream-contexts` attaches them by hand to headers set
+up as the two drivers' code sets them up; the
+`*-neg-stream-context-list` scenarios break a list.
 
 **Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
 user range, is described by its physical pages, and a system address is

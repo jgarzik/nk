@@ -1071,3 +1071,63 @@ fn runtime_library_structures_match_the_kernel() {
     assert_eq!(offset_of!(GUID, Data3), field("Data3"));
     assert_eq!(offset_of!(GUID, Data4), field("Data4"));
 }
+
+#[test]
+fn fcb_header_matches_the_kernel() {
+    use crate::fsrtl::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    // The symbols have the advanced header as one flat structure, the
+    // common header's fields at its front; they have neither the common
+    // header nor the per-stream context by name.
+    let header = types
+        .layout("_FSRTL_ADVANCED_FCB_HEADER")
+        .expect("_FSRTL_ADVANCED_FCB_HEADER");
+    let field = |name| offset(&header, "_FSRTL_ADVANCED_FCB_HEADER", name);
+    assert_eq!(size_of::<FSRTL_ADVANCED_FCB_HEADER>(), header.size as usize);
+    macro_rules! common {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(FSRTL_COMMON_FCB_HEADER, $name), field(stringify!($name)));
+        )*};
+    }
+    common!(
+        NodeTypeCode,
+        NodeByteSize,
+        Flags,
+        IsFastIoPossible,
+        Flags2,
+        Resource,
+        PagingIoResource,
+        AllocationSize,
+        FileSize,
+        ValidDataLength
+    );
+    macro_rules! advanced {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, $name), field(stringify!($name)));
+        )*};
+    }
+    advanced!(
+        FastMutex,
+        FilterContexts,
+        PushLock,
+        FileContextSupportPointer,
+        Oplock,
+        ReservedContext
+    );
+    assert_eq!(
+        offset_of!(FSRTL_ADVANCED_FCB_HEADER, Oplock),
+        field("ReservedForRemote")
+    );
+    // `Reserved` and `Version` share the byte after `Flags2`, four bits
+    // each, the version above.
+    let at = offset_of!(FSRTL_COMMON_FCB_HEADER, ReservedAndVersion) as u64;
+    let bits = |name: &str| {
+        let member = header.member(name).expect(name);
+        assert_eq!(member.offset, at, "{name}");
+        member.bits.expect(name)
+    };
+    assert_eq!(bits("Reserved"), (0, 4));
+    assert_eq!(bits("Version"), (4, 4));
+    assert_eq!(with_fcb_header_version(0, 0xF), 0xF0);
+}

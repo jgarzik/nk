@@ -1,0 +1,7 @@
+# FsRtlTeardownPerStreamContexts unlinks each context a filter attached
+# and never calls its FreeCallback: the filter's memory for every file
+# closed is lost, and nothing says so.
+scenario: x86_64
+fails: fsrtl.teardown-stream-contexts
+file: kernel/io/fsrtl.rs
+remove:             seh::call(free, [context.addr(), 0, 0, 0], &Guard::Nothing);

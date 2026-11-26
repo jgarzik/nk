@@ -254,6 +254,7 @@ ldr.lib.refused ok
 ldr.lib.as-service ok
 io.requestor-process ok
 io.file-generic-mapping ok
+fsrtl.teardown-stream-contexts ok
 null.load skip
 null.device skip
 null.open skip

@@ -418,6 +418,13 @@ woken after it. An acquire that may wait is for below `DISPATCH_LEVEL`;
 the queries and an acquire that does not wait work at `DISPATCH_LEVEL`
 too. The critical region is the caller's to enter, as for a push lock.
 
+The lock of a stream's FCB header is the file system's too: the push
+lock in the header, or in an old header the fast mutex it points to.
+`FsRtlTeardownPerStreamContexts` (`kernel/io/fsrtl.rs`) takes it, in a
+critical region it enters itself, only to unlink one context at a
+time; it holds neither while the context's `FreeCallback` runs, and
+takes no ranked lock inside it.
+
 NK's own rules above are not applied to drivers. A driver that moves the
 IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows

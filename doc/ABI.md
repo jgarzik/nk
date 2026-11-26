@@ -192,6 +192,11 @@ priority and `Saturation`, the silo it is attached to (`ETHREAD.Silo`)
 and where its impersonation would be (`ClientSecurity`,
 `CrossThreadFlags.ActiveImpersonationInfo`); a process's base priority,
 `Session`, `Job` and `ServerSilo`; and `KAPC_STATE`. Microsoft's
+The FCB header a file system shares with the kernel
+(`FSRTL_ADVANCED_FCB_HEADER`, `lib/ntabi/fsrtl.rs`) agrees, its
+`Version` bits included; the symbols do not have
+`FSRTL_PER_STREAM_CONTEXT`, which is as `ntifs.h` declares it and as
+the kernel's code reads it. Microsoft's
 `npfs.sys`, `msfs.sys` and `msrpc.sys` read none of the current
 thread's fields in line: they go through exports. A structure is added
 to the comparison by the commit that starts using it.

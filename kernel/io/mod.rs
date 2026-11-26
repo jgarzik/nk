@@ -9,6 +9,7 @@ pub mod csq;
 pub mod device;
 pub mod driver;
 pub mod file;
+pub mod fsrtl;
 pub mod irp;
 pub mod mdl;
 pub mod remlock;
