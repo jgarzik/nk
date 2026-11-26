@@ -48,7 +48,7 @@ const DELAYED_WORK_QUEUE: u32 = 1;
 /// run (`doc/DESIGN.md`, What is absent).
 const HELD_BACK: &[(&str, &str)] = &[(
     "ACPI",
-    "its start calls ExAllocateTimerInternal2, which NK lacks",
+    "its start asks HalQuerySystemInformation for class 16, which NK lacks",
 )];
 
 /// The engine's mutex, and what only its holder touches: which

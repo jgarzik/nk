@@ -512,6 +512,20 @@ const _: () = {
     assert!(offset_of!(IO_RESOURCE_REQUIREMENTS_LIST, List) == 32);
 };
 
+/// [`DEVPROPKEY`](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/devpropkey):
+/// the name of a device property: its category, a GUID, and its number
+/// in the category.
+#[repr(C)]
+pub struct DEVPROPKEY {
+    pub fmtid: [u8; 16],
+    pub pid: u32,
+}
+
+const _: () = {
+    assert!(size_of::<DEVPROPKEY>() == 20);
+    assert!(core::mem::offset_of!(DEVPROPKEY, pid) == 16);
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
