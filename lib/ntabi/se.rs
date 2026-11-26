@@ -126,6 +126,30 @@ const _: () = {
     assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, EffectiveOnly) == 9);
 };
 
+/// [`SECURITY_CLIENT_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-secreateclientsecurity):
+/// who a client is, as a server keeps it to act for the client later.
+/// The server allocates it and reads it in line.
+#[repr(C)]
+pub struct SECURITY_CLIENT_CONTEXT {
+    pub SecurityQos: SECURITY_QUALITY_OF_SERVICE,
+    pub ClientToken: *mut c_void,
+    /// The context names the client's own token, not a copy.
+    pub DirectlyAccessClientToken: u8,
+    pub DirectAccessEffectiveOnly: u8,
+    pub ServerIsRemote: u8,
+    /// A `TOKEN_CONTROL`: three LUIDs and a token source.
+    pub ClientTokenControl: [u32; 10],
+}
+
+const _: () = {
+    assert!(size_of::<SECURITY_CLIENT_CONTEXT>() == 0x48);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, ClientToken) == 0x10);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, DirectlyAccessClientToken) == 0x18);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, DirectAccessEffectiveOnly) == 0x19);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, ServerIsRemote) == 0x1A);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, ClientTokenControl) == 0x1C);
+};
+
 /// [`LUID_AND_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_luid_and_attributes):
 /// a privilege and its `SE_PRIVILEGE_*` bits. Twelve bytes: the header
 /// packs it to four.

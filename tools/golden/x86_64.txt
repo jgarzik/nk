@@ -133,6 +133,7 @@ se.descriptor-info ok
 se.token-query ok
 se.token-handles ok
 se.impersonation ok
+se.client-security ok
 cm.keys ok
 cm.values ok
 cm.delete ok

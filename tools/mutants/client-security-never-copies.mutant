@@ -1,0 +1,8 @@
+# A client tracked statically is recorded as its own token, not a
+# copy: the server then acts with whatever that token is later, and at
+# the client's own level instead of the one asked.
+scenario: x86_64
+fails: se.client-security
+file: kernel/se/impersonate.rs
+replace:         let token = if dynamic {
+with:         let token = if dynamic || asked.ImpersonationLevel != 9 {

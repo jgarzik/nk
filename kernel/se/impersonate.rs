@@ -25,12 +25,13 @@ use crate::ke::{Rank, SpinLock};
 use crate::ob::{handle, object};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicU32, Ordering};
+use nk_ntabi::se::{SECURITY_CLIENT_CONTEXT, SECURITY_QUALITY_OF_SERVICE};
 use nk_ntabi::status::*;
 use nk_ntabi::thread::{
     ACTIVE_IMPERSONATION_INFO, CLIENT_SECURITY, COPY_TOKEN_ON_OPEN, CROSS_THREAD_FLAGS,
 };
 use nk_ob::handles::Mode;
-use nk_se::token::{SECURITY_ANONYMOUS, TokenType};
+use nk_se::token::{SECURITY_ANONYMOUS, SECURITY_DELEGATION, SECURITY_IMPERSONATION, TokenType};
 
 /// Guards every thread's `ClientSecurity` and its two flags.
 static IMPERSONATION: SpinLock<()> = SpinLock::new(Rank::Impersonation, ());
@@ -204,6 +205,128 @@ pub unsafe extern "C" fn PsDereferenceImpersonationToken(token: *mut c_void) {
         // SAFETY: per the contract.
         unsafe { object::dereference(token.cast()) };
     }
+}
+
+/// [`SeCreateClientSecurity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-secreateclientsecurity):
+/// record in the caller's `SECURITY_CLIENT_CONTEXT` who a client
+/// thread is, so that a server can act for it later. As the pinned
+/// kernel does it:
+///
+/// - the client's token is the one the thread impersonates, else its
+///   process's primary token;
+/// - a client that itself impersonates must do so at
+///   `SecurityImpersonation` or above, and cannot be recorded at a
+///   higher level than its own (`STATUS_BAD_IMPERSONATION_LEVEL`);
+/// - tracked dynamically, the context names the client's token itself
+///   and holds a reference to it; tracked statically, it owns a copy:
+///   an impersonation token at the level asked;
+/// - the context says whether the token may be used effective-only:
+///   when the quality of service asks, or the client thread
+///   impersonates that way.
+///
+/// A tracking mode or a level there is not is
+/// `STATUS_INVALID_PARAMETER`.
+///
+/// Partial: for a remote server tracked dynamically Windows also
+/// records the token's control information
+/// (`ClientTokenControl`); NK records only that the server is remote.
+///
+/// # Safety
+/// `thread` is a thread the caller holds a reference to, or the
+/// running thread; `qos` points to a quality of service; `context` is
+/// writable for a `SECURITY_CLIENT_CONTEXT`.
+pub unsafe extern "C" fn SeCreateClientSecurity(
+    thread: *mut c_void,
+    qos: *const SECURITY_QUALITY_OF_SERVICE,
+    remote_session: u8,
+    context: *mut SECURITY_CLIENT_CONTEXT,
+) -> NTSTATUS {
+    // SAFETY: per the contract. Both structures are the driver's
+    // memory: read and written field by field.
+    unsafe {
+        let asked = qos.read_unaligned();
+        if asked.ContextTrackingMode > 1 || asked.ImpersonationLevel > SECURITY_DELEGATION {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let (client, mut effective_only) = match reference(thread.cast()) {
+            Some(worn) => {
+                if worn.level < SECURITY_IMPERSONATION || asked.ImpersonationLevel > worn.level {
+                    object::dereference(worn.token);
+                    return STATUS_BAD_IMPERSONATION_LEVEL;
+                }
+                (worn.token, worn.effective_only)
+            }
+            // Every thread belongs to the System process.
+            None => (crate::ps::process::reference_primary_token(), false),
+        };
+        effective_only |= asked.EffectiveOnly != 0;
+        let dynamic = asked.ContextTrackingMode != 0;
+        let token = if dynamic {
+            client
+        } else {
+            let copy = token::duplicate(
+                client,
+                TokenType::Impersonation,
+                asked.ImpersonationLevel,
+                false,
+            );
+            object::dereference(client);
+            match copy {
+                Some(copy) => copy,
+                None => return STATUS_INSUFFICIENT_RESOURCES,
+            }
+        };
+        (&raw mut (*context).DirectAccessEffectiveOnly).write(u8::from(effective_only));
+        (&raw mut (*context).DirectlyAccessClientToken).write(u8::from(dynamic));
+        (&raw mut (*context).SecurityQos).write_unaligned(SECURITY_QUALITY_OF_SERVICE {
+            Length: size_of::<SECURITY_QUALITY_OF_SERVICE>() as u32,
+            ..asked
+        });
+        (&raw mut (*context).ClientToken).write_unaligned(token.cast());
+        (&raw mut (*context).ServerIsRemote).write(remote_session);
+    }
+    STATUS_SUCCESS
+}
+
+/// [`SeImpersonateClientEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-seimpersonateclientex):
+/// make a thread (the calling one, for null) impersonate the client a
+/// context records: with the context's token, at the context's level,
+/// effective-only as the context says, and so that opening the
+/// thread's token copies it.
+///
+/// # Safety
+/// `context` was filled in by [`SeCreateClientSecurity`] and not
+/// deleted since; `server_thread` is null or a thread the caller holds
+/// a reference to.
+pub unsafe extern "C" fn SeImpersonateClientEx(
+    context: *const SECURITY_CLIENT_CONTEXT,
+    server_thread: *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract: the context holds a reference to its
+    // token.
+    unsafe {
+        let qos = (&raw const (*context).SecurityQos).read_unaligned();
+        let effective_only = if (&raw const (*context).DirectlyAccessClientToken).read() != 0 {
+            (&raw const (*context).DirectAccessEffectiveOnly).read() != 0
+        } else {
+            qos.EffectiveOnly != 0
+        };
+        let thread = if server_thread.is_null() {
+            thread::current()
+        } else {
+            server_thread.cast()
+        };
+        set(
+            thread,
+            Some(Impersonation {
+                token: (&raw const (*context).ClientToken).read_unaligned().cast(),
+                level: qos.ImpersonationLevel,
+                effective_only,
+                copy_on_open: true,
+            }),
+        );
+    }
+    STATUS_SUCCESS
 }
 
 /// `ThreadImpersonationToken` of `ZwSetInformationThread`: make

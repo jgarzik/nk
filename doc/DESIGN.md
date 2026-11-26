@@ -1466,7 +1466,12 @@ reference to the token until it puts it off or is freed. A thread
 takes a token on through `ZwSetInformationThread`
 (`ThreadImpersonationToken`: an impersonation token by handle, or
 none), and anyone may ask what a thread wears
-(`PsReferenceImpersonationToken`, `ZwOpenThreadTokenEx`). Windows
+(`PsReferenceImpersonationToken`, `ZwOpenThreadTokenEx`). A server
+records its client in a `SECURITY_CLIENT_CONTEXT` of its own
+([`SeCreateClientSecurity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-secreateclientsecurity):
+the client's token itself when tracked dynamically, a copy at the
+level asked when tracked statically) and later takes it on
+(`SeImpersonateClientEx`). Windows
 lowers the level of an impersonation its process is not entitled to;
 the System process, the only one, is entitled to all.
 

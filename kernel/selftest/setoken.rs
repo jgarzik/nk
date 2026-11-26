@@ -18,8 +18,9 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::io::FILE_GENERIC_MAPPING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::se::{
-    ACCESS_STATE, AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_DESCRIPTOR,
-    SECURITY_QUALITY_OF_SERVICE, SECURITY_SUBJECT_CONTEXT, TOKEN_HAS_TRAVERSE_PRIVILEGE,
+    ACCESS_STATE, AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_CLIENT_CONTEXT,
+    SECURITY_DESCRIPTOR, SECURITY_QUALITY_OF_SERVICE, SECURITY_SUBJECT_CONTEXT,
+    TOKEN_HAS_TRAVERSE_PRIVILEGE,
 };
 
 pub static GROUP: Group = Group {
@@ -35,6 +36,7 @@ pub static GROUP: Group = Group {
         "se.token-query",
         "se.token-handles",
         "se.impersonation",
+        "se.client-security",
     ],
     run,
     manual: false,
@@ -1828,6 +1830,162 @@ fn impersonation() -> Result<(), &'static str> {
     on_a_thread(impersonating)
 }
 
+// ---- client security ------------------------------------------------------
+
+/// A client context of the calling thread: the status and the context
+/// (every byte `0xA5` where the routine wrote nothing).
+fn client_of(level: u32, dynamic: bool) -> (i32, SECURITY_CLIENT_CONTEXT) {
+    let qos = SECURITY_QUALITY_OF_SERVICE {
+        Length: 12,
+        ImpersonationLevel: level,
+        ContextTrackingMode: u8::from(dynamic),
+        EffectiveOnly: 0,
+    };
+    let mut context: SECURITY_CLIENT_CONTEXT = dirty();
+    // SAFETY: the running thread and locals.
+    let status = unsafe {
+        SeCreateClientSecurity(
+            crate::ke::thread::current().cast(),
+            &raw const qos,
+            0,
+            &raw mut context,
+        )
+    };
+    (status, context)
+}
+
+/// What the header's `SeDeleteClientSecurity` does: give up the
+/// context's token, by its type.
+fn delete_client(context: &SECURITY_CLIENT_CONTEXT) {
+    // SAFETY: a context that holds a reference to its token.
+    unsafe {
+        if SeTokenType(context.ClientToken) == 1 {
+            process::PsDereferencePrimaryToken(context.ClientToken);
+        } else {
+            PsDereferenceImpersonationToken(context.ClientToken);
+        }
+    }
+}
+
+/// One access check as the calling thread's subject, client token and
+/// all: the status and the access granted.
+fn check_now(dacl: &'static [Ace], desired: u32) -> (u32, u32) {
+    let mut subject: SECURITY_SUBJECT_CONTEXT = dirty();
+    let subject = &raw mut subject;
+    let mut descriptor = Absolute::new(Some(&USERS), Some(&SYSTEM), Dacl::List(dacl));
+    // SAFETY: a local, captured for as long as it is used.
+    unsafe {
+        SeCaptureSubjectContext(subject);
+        let answer = check(descriptor.pointer(), subject, desired, 0, false);
+        SeReleaseSubjectContext(subject);
+        (answer.status, answer.granted)
+    }
+}
+
+/// A server records its client and acts for it, as `nkc-se` does.
+fn client_security_on_thread() -> Result<(), &'static str> {
+    let (primary, _) = primary();
+    // SAFETY: the reference just taken; the process keeps the token.
+    unsafe { object::dereference(primary) };
+    {
+        // Tracked dynamically: the thread's own token, directly.
+        let (status, client) = client_of(2, true);
+        if status != 0 {
+            return Err("no client context");
+        }
+        let right = client.DirectlyAccessClientToken == 1
+            && client.ClientToken == primary.cast()
+            && client.SecurityQos.ImpersonationLevel == 2
+            && client.SecurityQos.Length == 12
+            && client.ServerIsRemote == 0
+            && client.DirectAccessEffectiveOnly == 0;
+        delete_client(&client);
+        if !right {
+            return Err("a client tracked dynamically is not the thread's own token");
+        }
+        // Tracked statically: a copy, an impersonation token.
+        let (status, client) = client_of(2, false);
+        if status != 0 {
+            return Err("no client context with a copy");
+        }
+        // SAFETY: the context's token, which it holds.
+        let kind = unsafe { SeTokenType(client.ClientToken) };
+        let right = client.DirectlyAccessClientToken == 0
+            && kind == 2
+            && client.ClientToken != primary.cast()
+            && client.SecurityQos.ImpersonationLevel == 2;
+        // SAFETY: the context, not deleted yet.
+        let taken = unsafe { SeImpersonateClientEx(&raw const client, core::ptr::null_mut()) };
+        let worn = wearing();
+        // The thread's token, opened, is a copy: copy-on-open.
+        let (opened_status, opened) = open_thread_token();
+        let copied =
+            opened_status == 0 && token_of(opened) != client.ClientToken && brief(opened) == (2, 2);
+        crate::ps::ZwClose(opened);
+        let as_system = check_now(&ALLOW_R, 1);
+        // A client of a thread that impersonates is what it wears.
+        let (nested_status, nested) = client_of(2, true);
+        let nested_right = nested_status == 0 && nested.ClientToken == client.ClientToken;
+        if nested_status == 0 {
+            delete_client(&nested);
+        }
+        let put_off = wear(core::ptr::null_mut(), 8);
+        delete_client(&client);
+        if !right || taken != 0 || worn != (client.ClientToken, 1, 0, 2) {
+            return Err("the thread does not wear its client's copy, copied on open");
+        }
+        if !copied {
+            return Err("the token of a thread that wears a client was not copied on open");
+        }
+        if as_system != (0, 1) || !nested_right || put_off != 0 {
+            return Err("acting for a client that is the system is not acting as the system");
+        }
+        // A client that only identifies: worn, and no good for access.
+        let (status, client) = client_of(1, false);
+        if status != 0 {
+            return Err("no client context that identifies");
+        }
+        // SAFETY: the context, not deleted yet.
+        let taken = unsafe { SeImpersonateClientEx(&raw const client, core::ptr::null_mut()) };
+        let worn = wearing();
+        let refused = check_now(&ALLOW_R, 1);
+        let (nested_status, _) = client_of(1, true);
+        let put_off = wear(core::ptr::null_mut(), 8);
+        delete_client(&client);
+        if taken != 0 || worn != (client.ClientToken, 1, 0, 1) || put_off != 0 {
+            return Err("the thread does not wear a client that identifies at that level");
+        }
+        if refused != (BAD_LEVEL, 0) || nested_status != BAD_LEVEL_STATUS {
+            return Err("a client that only identifies was good for access, or for a client");
+        }
+        // Tracking and levels there are not.
+        let qos = SECURITY_QUALITY_OF_SERVICE {
+            Length: 12,
+            ImpersonationLevel: 4,
+            ContextTrackingMode: 0,
+            EffectiveOnly: 0,
+        };
+        let mut context: SECURITY_CLIENT_CONTEXT = dirty();
+        // SAFETY: the running thread and locals.
+        let status = unsafe {
+            SeCreateClientSecurity(
+                crate::ke::thread::current().cast(),
+                &raw const qos,
+                0,
+                &raw mut context,
+            )
+        };
+        if status != 0xC000_000Du32 as i32 {
+            return Err("a level there is not was recorded");
+        }
+        Ok(())
+    }
+}
+
+fn client_security() -> Result<(), &'static str> {
+    on_a_thread(client_security_on_thread)
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -1840,4 +1998,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.token-query", token_query);
     r.check("se.token-handles", token_handles);
     r.check("se.impersonation", impersonation);
+    r.check("se.client-security", client_security);
 }
