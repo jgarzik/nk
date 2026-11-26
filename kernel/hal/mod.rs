@@ -14,6 +14,7 @@ pub mod pm;
 pub mod query;
 pub mod sysinfo;
 pub mod target;
+pub mod variables;
 
 use crate::arch;
 use core::ffi::c_void;

@@ -20,4 +20,14 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, hal::query::HalGetMemoryCachingRequirements),
     export!(Implemented, hal::query::HalGetMessageRoutingInfo),
     export!(Implemented, hal::query::HalGetProcessorIdByNtNumber),
+    export!(Implemented, hal::variables::NtGetEnvironmentVariableEx),
+    export!(
+        Implemented,
+        hal::variables::NtQueryEnvironmentVariableInfoEx
+    ),
+    export!(
+        Implemented,
+        hal::variables::HalEnumerateEnvironmentVariablesEx
+    ),
+    export!(Implemented, hal::variables::HalSetEnvironmentVariableEx),
 ];
