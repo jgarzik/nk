@@ -82,11 +82,11 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
-| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -961,6 +961,8 @@ make that safe.
 | a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
+| a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
+| a hardware error source's `Uninitialize` (`WheaRemoveErrorSource`) | nothing: the source stays pending removal, closed to calls |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
@@ -1876,6 +1878,35 @@ writes nothing.
 is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers
 `STATUS_DEVICE_NOT_READY`, Windows' answer before its live-dump support
 has started.
+
+## Hardware errors
+
+WHEA is Windows' path for hardware errors: a *source* reports them, the
+kernel makes a record of each. NK keeps the sources (`kernel/whea`;
+the rules and sizes are `lib/whea`, taken from the pinned kernel's
+code).
+
+- A driver registers as a source with
+  `WheaAddErrorSourceDeviceDriverV1`. NK builds the descriptor Windows
+  builds (type 16, version 11, the kernel's two sections added to the
+  driver's, the report packets preallocated), gives the source the next
+  id, counting from zero, marks it started and calls the driver's
+  `Initialize(Context, ErrorSourceId)` before returning, at the
+  caller's IRQL with no lock held. The status of `Initialize` is the
+  routine's.
+- A source whose `Initialize` fails is left by Windows stopped, in a
+  table nothing looks stopped sources up in. NK frees it; its id is not
+  used again.
+- A descriptor is a pool block of exactly the descriptor's size, which
+  `WheaGetErrorSource` hands out for a started source. What NK decides
+  by (state, calls in progress, context) is in its own table; the state
+  in the descriptor is a copy for drivers to read.
+- `WheaRemoveErrorSource` waits for the calls into the source to end,
+  calls `Uninitialize(Context)` and leaves the descriptor allocated in
+  the removed state, as Windows does. A device driver source's packets
+  are freed there.
+- NK has no firmware or platform sources: the first source a driver
+  adds has id 0.
 
 ## Stopping the system
 
