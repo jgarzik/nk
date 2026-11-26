@@ -128,11 +128,37 @@ pub fn storage() -> (usize, usize) {
     (1, 8 + count * 8)
 }
 
+/// The HAL's ACPI table, `HalAcpiMachineStateInit`: `acpi.sys`, as its
+/// device starts, tells the HAL which of the sleep states S1 to S5 the
+/// firmware has and the values that enter each (`_states`: three bytes
+/// a state), and is told the interrupt model, which it hands the
+/// firmware's `_PIC` method: 1 for the APIC, 3 for a version 3 GIC, as
+/// the pinned kernel's HAL numbers its controllers.
+///
+/// Windows' HAL registers its sleep routine with the power manager for
+/// each state there is. NK registers none: the machine never sleeps,
+/// and is powered off through the firmware's runtime services
+/// (`hal::power_off_or_halt`), so the states are not looked at.
+///
+/// # Safety
+/// `interrupt_model` points to a writable `ULONG`.
+pub unsafe extern "C" fn HalAcpiMachineStateInit(
+    _states: *const c_void,
+    interrupt_model: *mut u32,
+) {
+    // SAFETY: the caller's.
+    unsafe { interrupt_model.write_unaligned(crate::arch::INTERRUPT_MODEL) };
+}
+
 /// Put the routines of this file in their slots.
 pub fn init() {
     HalDispatchTable.provide(
         public_slot("HalInitPowerManagement"),
         HalInitPowerManagement as *const (),
+    );
+    HalAcpiDispatchTable.provide(
+        acpi_slot("HalAcpiMachineStateInit"),
+        HalAcpiMachineStateInit as *const (),
     );
     HalAcpiDispatchTable.provide(acpi_slot("HalAcpiGetTable"), HalAcpiGetTable as *const ());
     HalAcpiDispatchTable.provide(
@@ -219,6 +245,33 @@ pub fn test() -> Result<(), &'static str> {
     let other = unsafe { get(u32::from_le_bytes(*b"FACP"), b"NoSuch", none.1) };
     if !other.is_null() {
         return Err("a table was found whatever OEM id was asked for");
+    }
+    Ok(())
+}
+
+/// For the self-tests: the machine states handed over as `acpi.sys`
+/// hands them, through the slot at Windows' offset.
+pub fn machine_state_test() -> Result<(), &'static str> {
+    type MachineStateInit = unsafe extern "C" fn(*const c_void, *mut u32);
+    // SAFETY: the slot holds `HalAcpiMachineStateInit`, of this type.
+    let init: MachineStateInit = unsafe {
+        core::mem::transmute(
+            HalAcpiDispatchTable
+                .address()
+                .cast::<u8>()
+                .add(0x10)
+                .cast::<*const ()>()
+                .read(),
+        )
+    };
+    // S5 alone, entered with the value 5 in both control registers.
+    let mut states = [0u8; 15];
+    states[12..].copy_from_slice(&[1, 5, 5]);
+    let mut model = u32::MAX;
+    // SAFETY: locals of the sizes the routine takes.
+    unsafe { init(states.as_ptr().cast(), &raw mut model) };
+    if model != crate::arch::INTERRUPT_MODEL || !matches!(model, 1 | 3) {
+        return Err("the interrupt model is not the one of this machine's controller");
     }
     Ok(())
 }

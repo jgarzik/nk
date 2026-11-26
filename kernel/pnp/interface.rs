@@ -330,3 +330,68 @@ pub fn enabled_of(class: &[u8; 16]) -> Vec<String> {
         .map(|known| known.link.clone())
         .collect()
 }
+
+/// [`IoSetDeviceInterfacePropertyData`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetdeviceinterfacepropertydata):
+/// give the registered interface whose link is `link_name` the
+/// property `key`, of type `kind`, or with `DEVPROP_TYPE_EMPTY` (0)
+/// take it away. The property is kept with the interface's record,
+/// under `Properties\{category}\NNNN` of its reference string's key
+/// (where exactly Windows keeps an interface's properties NK has not
+/// read; nothing reads them back but
+/// `IoGetDeviceInterfacePropertyData`, which no driver NK runs
+/// imports).
+///
+/// INFERRED: `STATUS_OBJECT_NAME_NOT_FOUND` for a link that names no
+/// registered interface, and `STATUS_INVALID_PARAMETER` for a locale
+/// other than neutral.
+///
+/// # Safety
+/// `link_name` points to a counted string; `key` to a `DEVPROPKEY`;
+/// `data` is readable for `size` bytes.
+pub unsafe extern "C" fn IoSetDeviceInterfacePropertyData(
+    link_name: *const UNICODE_STRING,
+    key: *const nk_ntabi::pnp::DEVPROPKEY,
+    lcid: u32,
+    _flags: u32,
+    kind: u32,
+    size: u32,
+    data: *const u8,
+) -> NTSTATUS {
+    if lcid != 0 || key.is_null() || (size != 0 && data.is_null()) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; a driver may pack the key.
+    let (link, fmtid, pid, value) = unsafe {
+        let mut value = alloc::vec![0u8; size as usize];
+        data.copy_to_nonoverlapping(value.as_mut_ptr(), value.len());
+        (
+            String::from_utf16_lossy(&crate::rtl::copy_unicode(link_name)),
+            (&raw const (*key).fmtid).read_unaligned(),
+            (&raw const (*key).pid).read_unaligned(),
+            value,
+        )
+    };
+    let known = INTERFACES
+        .lock()
+        .iter()
+        .find(|known| known.link.eq_ignore_ascii_case(&link))
+        .map(|known| (known.link.clone(), known.class));
+    let Some((link, class)) = known else {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    };
+    let (_, instance_key) = keys(&class, &link);
+    let path = format!(
+        "{instance_key}\\Properties\\{}\\{pid:04X}",
+        ids::guid_text(&fmtid)
+    );
+    let done = if kind == 0 {
+        cm::delete_tree(&path)
+    } else {
+        let stored = super::registry::DEVPROP_REGISTRY_TYPE | (kind & 0xFFFF);
+        cm::write_path(&path, &[("", stored, &value)])
+    };
+    match done {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
+}

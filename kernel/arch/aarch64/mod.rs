@@ -33,6 +33,10 @@ pub use gic::{
 /// run its deferred procedure calls: DISPATCH_LEVEL.
 pub const DPC: (u32, u8) = (3, 2);
 
+/// The interrupt model Windows' HAL reports to `acpi.sys`, which hands
+/// it to the firmware's `_PIC` method: a version 3 GIC.
+pub const INTERRUPT_MODEL: u32 = 3;
+
 /// `(interrupt id, IRQL)` of the interprocessor interrupt.
 pub const IPI: (u32, u8) = (1, 14);
 

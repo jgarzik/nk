@@ -32,6 +32,7 @@ use nk_ntabi::ke::KMUTANT;
 use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
 use nk_pnp::assign::{self, Claims};
+use nk_pnp::connection::{Delivery, Source, connection_data};
 use nk_pnp::resources::{Partial, Requirements, ResourceList, TYPE_INTERRUPT};
 use nk_pnp::{database, ids, relations};
 
@@ -743,6 +744,10 @@ struct Given {
     ranges: Vec<assign::Range>,
     interrupts: Vec<io::interrupt::Resource>,
     vectors: Vec<u32>,
+    /// The device's interrupt connection data, the value of the
+    /// property a bus driver reads it from; empty for a device without
+    /// translated interrupts.
+    connection: Vec<u8>,
 }
 
 /// Give back the vectors a device's interrupts were translated to.
@@ -762,6 +767,7 @@ fn give(found: &Node, filtered: &[u8]) -> Result<Given, (u32, &'static str)> {
         ranges: Vec::new(),
         interrupts: Vec::new(),
         vectors: Vec::new(),
+        connection: Vec::new(),
     };
     if filtered.is_empty() {
         return Ok(nothing);
@@ -818,6 +824,17 @@ fn give(found: &Node, filtered: &[u8]) -> Result<Given, (u32, &'static str)> {
             }
         }
     }
+    if !given.interrupts.is_empty() {
+        let deliveries: Vec<Delivery> = given.interrupts.iter().filter_map(delivery).collect();
+        if deliveries.len() != given.interrupts.len() {
+            release_vectors(&given.vectors);
+            return Err((
+                node::CM_PROB_NORMAL_CONFLICT,
+                "the hardware layer does not say how an interrupt it gave out is delivered",
+            ));
+        }
+        given.connection = connection_data(&deliveries);
+    }
     given.raw = ResourceList::of(
         requirements.interface,
         requirements.bus,
@@ -827,6 +844,34 @@ fn give(found: &Node, filtered: &[u8]) -> Result<Given, (u32, &'static str)> {
     given.translated =
         ResourceList::of(requirements.interface, requirements.bus, translated).to_bytes();
     Ok(given)
+}
+
+/// How a translated interrupt is delivered, for the device's
+/// connection data: a message's address and data, a line's number and
+/// signalling, as the hardware layer set them up.
+fn delivery(resource: &io::interrupt::Resource) -> Option<Delivery> {
+    use crate::hal::interrupt::{self as hal, Polarity, Trigger};
+    let translated = resource.translated;
+    let source = if resource.message {
+        let message = hal::message(translated.vector)?;
+        Source::Message {
+            address: message.address,
+            data: message.data,
+        }
+    } else {
+        let line = hal::info(translated.vector)?.line?;
+        Source::Line {
+            gsi: line.gsi,
+            edge: line.trigger == Trigger::Edge,
+            low: line.polarity == Polarity::Low,
+        }
+    };
+    Some(Delivery {
+        vector: translated.vector,
+        irql: translated.level,
+        affinity: translated.affinity,
+        source,
+    })
 }
 
 /// Give a raw interrupt a vector. Returns what `io::interrupt` is told
@@ -894,6 +939,9 @@ fn take_back(pdo: usize) {
     .unwrap_or_default();
     io::interrupt::withdraw(pdo as *mut DEVICE_OBJECT);
     release_vectors(&vectors);
+    if let Some(instance) = node::with(pdo, |node| node.instance.clone()) {
+        registry::clear_connection(&instance);
+    }
     with_claims(|claims| claims.release(pdo));
 }
 
@@ -942,6 +990,15 @@ fn start(pdo: usize) {
         );
     };
     let _ = registry::write_allocation(&found.instance, &filtered, &given.raw);
+    if !given.connection.is_empty()
+        && registry::write_connection(&found.instance, &given.connection).is_err()
+    {
+        return give_up(
+            pdo,
+            node::CM_PROB_OUT_OF_MEMORY,
+            format_args!("no memory for its interrupt connection data"),
+        );
+    }
     kprintln!("pnp: {}: starting", found.instance);
     let parameters = start_device_parameters(raw.0 as u64, translated.0 as u64);
     // From here the device's drivers may register it with the runtime

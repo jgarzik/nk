@@ -86,7 +86,7 @@ into memory a driver can write.
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
-| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `disk` (the data disk's pattern, a disk's answers to its control codes and the transfers it takes), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -1398,7 +1398,13 @@ the same kind with Windows' signature, version and slot order, whose
 FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
 table the root table lists but the root tables, the DSDT and the FACS,
 as a count and pointers, made once. Both give the firmware's own
-tables where Windows gives copies. The table's remaining routines that
+tables where Windows gives copies. `HalAcpiMachineStateInit` takes
+the sleep states the firmware has and answers with the interrupt model
+for the firmware's `_PIC` method (the APIC's on x86-64, a version 3
+GIC's on arm64); Windows' HAL registers its sleep routine with the
+power manager for each state, NK registers nothing, since it never
+sleeps and powers off through the firmware's runtime services. The
+table's remaining routines that
 `acpi.sys` uses at start (`kernel/hal/pm.rs`) give it the FACS and
 ACPI's fixed hardware: whether a register block exists, and one access
 of it read or written. The blocks are set up once from the FADT by
@@ -1650,10 +1656,25 @@ on Windows: NK stops, naming both.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
 (`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),
-`read`, `write`,
+`read`, `write`, `read_at`, `write_at` (`NtReadFile`, `NtWriteFile`
+without and with a byte offset), `flush` (`NtFlushBuffersFile`),
 `device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
 IRP and calls the dispatch routine inside a critical region (as Windows
 does for a synchronous request).
+
+A read's or a write's buffer reaches the driver the way the device at
+the top of the stack asks for, as on Windows: through a system buffer
+(`DO_BUFFERED_IO`), as an MDL over the requestor's own buffer with its
+pages locked (`DO_DIRECT_IO`; a read locks them for writing, a write
+for reading, and final completion unlocks and frees the MDL), or as
+the address it is. A transfer of no bytes has neither system buffer nor
+MDL. Without a byte offset the transfer is where the file object's
+`CurrentByteOffset` says; NK does not move that position after a
+transfer, so a requestor that wants the next bytes says where they are.
+A flush is a request with no buffer and no parameters. A disk is read
+and written this way, with direct I/O at byte offsets: by NK's own test
+disk and by Microsoft's `disk.sys` alike (`doc/TESTING.md`, "The data
+disk").
 
 **The requestor.** A request is made on behalf of kernel mode, whose
 buffers are trusted, or of user mode (`user_control`,
@@ -2034,8 +2055,23 @@ away a registration its drivers left behind).
 
 **Registered and never acted on.** Coalescing callbacks
 (`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
-platform's low-power idle state) and a device's flags for that state
-(`PoDirectedDripsSetDeviceFlags`).
+platform's low-power idle state), a device's flags for that state
+(`PoDirectedDripsSetDeviceFlags`, and the two internal requests of
+`ZwPowerInformation` through which `storport.sys` sets and clears
+them) and the reasons a sleep state is unavailable
+(`ZwPowerInformation`, `SystemPowerLoggingEntry`: `acpi.sys` logs one
+for each sleep state the firmware lacks; one entry a reason, a second
+refused, `nk_po::logging`).
+
+**Power information** (`ZwPowerInformation`, `kernel/po/mod.rs`). The
+platform is not always on, always connected (`PlatformInformation`),
+so the question whether a device would keep it out of the low-power
+idle state is not supported (`QueryPotentialDripsConstraint`, asked by
+`pci.sys` as it starts a device), and the notice that the firmware's
+tables can be read (`FirmwareTableInformationRegistered`, from
+`acpi.sys`) changes nothing: Windows reads from them again whether the
+platform has that state. Any other level stops the system, naming
+itself.
 
 **Shutting down.** A driver's request for a shutdown that ends with
 the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button
@@ -2171,7 +2207,10 @@ translator interface. Translation: memory, ports and bus numbers are
 what they are; an interrupt gets its vector from the hardware layer
 (`hal::interrupt::translate`, a line by its number, messages by their
 count) and is recorded for `IoConnectInterruptEx`
-(`io::interrupt::assign`); the interrupts of the HAL's own child are
+(`io::interrupt::assign`), and how each is delivered (a line's number
+and signalling, a message's address and data) is put in the device's
+interrupt connection data, the property `pci.sys` reads to program a
+device's messages; the interrupts of the HAL's own child are
 vectors already and stay as stated, as the reference Windows records
 them. The start carries the raw and the translated list; `Control`
 gets `AllocConfig` and `FilteredConfigVector`, and the service's `Enum`

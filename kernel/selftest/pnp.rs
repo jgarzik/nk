@@ -1053,6 +1053,41 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
         {
             return Err("the interface is not recorded under DeviceClasses as Windows records it");
         }
+        // A property of the interface is kept with its record; one for
+        // a link nobody registered is refused.
+        let property = DEVPROPKEY {
+            fmtid: class,
+            pid: 3,
+        };
+        let set = |name: *const UNICODE_STRING| {
+            // SAFETY: a counted string, a key and four bytes to read.
+            unsafe {
+                pnp::interface::IoSetDeviceInterfacePropertyData(
+                    name,
+                    &raw const property,
+                    0,
+                    0,
+                    7,
+                    4,
+                    7u32.to_le_bytes().as_ptr(),
+                )
+            }
+        };
+        if set(&raw const name) != STATUS_SUCCESS
+            || cm::read(&format!("{key}\\#\\Properties\\{CLASS}\\0003"), "")
+                != Ok((0xFFFF_0007, 7u32.to_le_bytes().to_vec()))
+        {
+            return Err("the interface's property was not kept with its record");
+        }
+        let mut stranger: Vec<u16> = "\\??\\NkNoSuchInterface".encode_utf16().collect();
+        let stranger = UNICODE_STRING {
+            Length: (stranger.len() * 2) as u16,
+            MaximumLength: (stranger.len() * 2) as u16,
+            Buffer: stranger.as_mut_ptr(),
+        };
+        if set(&raw const stranger) != STATUS_OBJECT_NAME_NOT_FOUND {
+            return Err("a property was set for an interface nobody registered");
+        }
         let mut handle = core::ptr::null_mut();
         // SAFETY: a driver object and a callback of the test's, a GUID
         // and a handle to write.
@@ -1237,6 +1272,20 @@ fn start_resources() -> Result<(u32, u32), &'static str> {
     if found.vectors != [vector] {
         return Err("the node does not hold the vector");
     }
+    // The device's interrupt connection data says how the line is
+    // delivered: one controller input, the line's number, the vector.
+    let property = registry::property_key(
+        &found.instance,
+        &nk_pnp::connection::CONNECTION_DATA_CATEGORY,
+        nk_pnp::connection::CONNECTION_DATA_NUMBER,
+    );
+    let Ok((_, data)) = cm::read(&property, "") else {
+        return Err("the device has no interrupt connection data");
+    };
+    let word = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    if data.len() != 96 || word(0) != 1 || word(8) != 0 || word(12) != vector || word(64) != line {
+        return Err("the connection data is not one controller input, the line and its vector");
+    }
     Ok((line, vector))
 }
 
@@ -1375,6 +1424,14 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
         if !found.raw.is_empty() || !found.vectors.is_empty() {
             return Err("the failed device still holds resources");
+        }
+        let property = registry::property_key(
+            &found.instance,
+            &nk_pnp::connection::CONNECTION_DATA_CATEGORY,
+            nk_pnp::connection::CONNECTION_DATA_NUMBER,
+        );
+        if cm::exists(&property) {
+            return Err("the failed device still has interrupt connection data");
         }
         // Its interface, left enabled, is disabled with it.
         let link: Vec<u16> = format!("\\??\\{}#{CLASS}", found.instance.replace('\\', "#"))

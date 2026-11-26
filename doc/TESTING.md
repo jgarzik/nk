@@ -153,7 +153,10 @@ gate tier has, for each architecture:
   running and every image loaded; `stor.enumerate` requires the
   devices of the path from the root to the disk, as far as NK brings
   them up, to be where the reference Windows has them, with its
-  identifiers, services and classes, and says how many are started. The group is selected by name and
+  identifiers, services and classes, and says how many are started;
+  `stor.io` is the proof of disk I/O (below) against the disk device
+  the stack makes, `\Device\Harddisk0\DR0`, skipped while that device
+  does not exist. The group is selected by name and
   leaves the stack running, so the leak comparison is waived for it
   (`test::keeps_what_it_started`).
 
@@ -193,6 +196,54 @@ requires of the file after the boot:
 A sector that differs is a problem of the boot like any other, named
 with what it holds instead; the image is then kept beside the logs.
 `tools/test_datadisk.py` holds the check to that without booting.
+
+The kernel's side is one function, `disk_io` in
+`kernel/selftest/diskio.rs`, which is given the name of a disk device
+and nothing else. Through NK's own requestor (`kernel/io/file.rs`:
+direct I/O at byte offsets, control codes, flush) it
+
+- opens the disk and asks for its geometry, length, device number and
+  its device, adapter and access-alignment properties, and holds them
+  to each other: a whole fixed disk of 512-byte sectors, its length the
+  size its geometry gives, its cylinders the whole cylinders of that
+  size (`lib/disk/answer.rs` reads the answers; its host tests read the
+  bytes Windows answered for the reference machine's disks);
+- reads the original pattern from the first sector, the middle and the
+  last sector, and into buffers that start inside a page and span
+  several: one sector, eight, 128 KiB, and the largest transfer the
+  adapter's properties allow, ending at the disk's last sector;
+- writes the written pattern to the write range in unequal pieces,
+  reads it back in one transfer, and reads across both of its ends:
+  written inside, original outside;
+- sees the transfers a disk does not make refused: no bytes succeeds
+  and moves nothing; a length or an offset that is not whole sectors is
+  `STATUS_INVALID_PARAMETER`; whole sectors at or across the disk's end
+  fail with whatever the drive's refusal comes to (Microsoft's disk
+  driver sends such a request down for the drive to judge) and move
+  nothing;
+- does it at once from several threads, each with its own handle:
+  three read stretches that are never written, one rewrites the write
+  range, and the write range is read meanwhile;
+- flushes, and reads the write range and its surroundings once more.
+
+It writes the write range and nothing else. The pattern is
+`lib/disk/pattern.rs`, the mirror of `tools/datadisk.py`.
+
+The proof runs on every boot of the main scenarios against a disk of
+NK's own (`disk.io.*`, `kernel/selftest/testdisk.rs`): a driver in the
+kernel whose device does direct I/O on 8 MiB of pool memory holding the
+original pattern, answers as `nk_disk::model` says Microsoft's disk
+driver does, and completes what it takes from a DPC. `disk.io.image`
+then holds the test disk's bytes to what `disk_expect = "written"`
+holds an image to, and `disk.io.detects` requires the proof to fail on
+a test disk that loses a write, writes a sector it was not asked to,
+reads a sector from the wrong place, or reports fewer bytes than it
+moved.
+
+Against Microsoft's disk the proof is `stor.io` of the `x86_64-storage`
+scenario. That scenario says `disk_expect = "unchanged"` for as long as
+`stor.io` is skipped; the boot in which the disk device first exists
+writes the write range, and its scenario says `disk_expect = "written"`.
 
 ### Soak
 

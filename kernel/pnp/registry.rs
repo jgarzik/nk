@@ -378,3 +378,37 @@ pub fn clear_allocation(instance: &str) {
     cm::delete_value(&key, "FilteredConfigVector");
     cm::delete_value(&key, "AllocConfig");
 }
+
+/// The key a property of the device `instance` is kept in, as Windows
+/// keeps it: `Properties\{category}\NNNN` under the device's key.
+pub fn property_key(instance: &str, category: &[u8; 16], number: u32) -> String {
+    format!(
+        "{}\\Properties\\{}\\{number:04X}",
+        enum_key(instance),
+        ids::guid_text(category)
+    )
+}
+
+/// What a property's registry value carries its type behind, and
+/// `DEVPROP_TYPE_BINARY`.
+pub const DEVPROP_REGISTRY_TYPE: u32 = 0xFFFF_0000;
+const DEVPROP_TYPE_BINARY: u32 = 0x1003;
+
+fn connection_key(instance: &str) -> String {
+    use nk_pnp::connection::{CONNECTION_DATA_CATEGORY, CONNECTION_DATA_NUMBER};
+    property_key(instance, &CONNECTION_DATA_CATEGORY, CONNECTION_DATA_NUMBER)
+}
+
+/// Give the device its interrupt connection data, as the property a
+/// bus driver reads it by (`IoGetDevicePropertyData`).
+pub fn write_connection(instance: &str, data: &[u8]) -> Result<(), i32> {
+    cm::write_path(
+        &connection_key(instance),
+        &[("", DEVPROP_REGISTRY_TYPE | DEVPROP_TYPE_BINARY, data)],
+    )
+}
+
+/// Take the device's interrupt connection data away.
+pub fn clear_connection(instance: &str) {
+    let _ = cm::delete_tree(&connection_key(instance));
+}

@@ -547,6 +547,22 @@ fn power_state() -> Result<u32, &'static str> {
         {
             return Err("a device's flags were not recorded");
         }
+        // The same through `ZwPowerInformation`, as `storport.sys`
+        // sets and clears them.
+        if crate::po::test_drips(true, pair.pdo, 0x10, 0x10) != STATUS_INVALID_PARAMETER
+            || crate::po::test_drips(true, pair.pdo, 0x40, 0x18) != STATUS_INVALID_PARAMETER
+            || crate::po::test_drips(true, pair.pdo, 0x10, 0x18) != STATUS_SUCCESS
+            || request::test_state(pair.pdo).1 != 0x35
+        {
+            return Err("the internal request did not set a device's flags");
+        }
+        if crate::po::test_drips(false, core::ptr::null_mut(), 0x10, 0x18)
+            != STATUS_INVALID_PARAMETER
+            || crate::po::test_drips(false, pair.pdo, 0x14, 0x18) != STATUS_SUCCESS
+            || request::test_state(pair.pdo).1 != 0x21
+        {
+            return Err("the internal request did not clear a device's flags");
+        }
     }
     Ok(11)
 }

@@ -15,6 +15,7 @@ mod cm;
 mod cmnotify;
 mod counted;
 mod csq;
+mod diskio;
 mod dma;
 mod dpc;
 mod driver_api;
@@ -58,6 +59,7 @@ mod smp;
 mod stack;
 mod startio;
 mod storage;
+mod testdisk;
 mod thread;
 mod timer;
 mod timer2;
@@ -200,6 +202,7 @@ pub static GROUPS: &[&[&Group]] = &[
     request::GROUPS,
     iosupport::GROUPS,
     startio::GROUPS,
+    diskio::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,
