@@ -12,9 +12,10 @@
 //! - Query: a part that is not named, or that the object lacks, is left
 //!   out and its control bits are clear; a part named brings every
 //!   control bit that describes it (defaulted, present, auto-inherited,
-//!   protected). An object with no descriptor yields an empty one. The
-//!   parts are laid out SACL, DACL, owner, group, as
-//!   `RtlAbsoluteToSelfRelativeSD` does.
+//!   protected). An object with no descriptor yields an empty one.
+//! - Query: the parts are laid out owner, group, DACL, SACL: the order
+//!   Windows shows for the first three, and the pinned kernel's code
+//!   for the SACL.
 //! - Set: naming the owner without supplying one is
 //!   `STATUS_INVALID_OWNER`; a group named and not supplied leaves the
 //!   object without a group; an ACL named and not marked present leaves
@@ -68,7 +69,7 @@ pub fn query_security(
     object
         .map(|object| object.present().selected(information))
         .unwrap_or_default()
-        .write_relative(out)
+        .write_queried(out)
 }
 
 /// `SeSetSecurityDescriptorInfo`: the descriptor `object` (a
@@ -200,6 +201,19 @@ mod tests {
             assert_eq!(copy.group, asked(GROUP).then_some(&LOCAL_SYSTEM[..]));
             assert_eq!(copy.dacl, asked(DACL).then_some(&dacl[..]));
             assert_eq!(copy.sacl, asked(SACL).then_some(&sacl[..]));
+            // Laid out owner, group, DACL, SACL, each where the one
+            // before it ends.
+            let mut at = 20;
+            for (index, field) in [(0, 4), (1, 8), (2, 16), (3, 12)] {
+                let (bit, _, bytes) = parts[index];
+                let offset = u32::from_le_bytes(out[field..field + 4].try_into().unwrap());
+                if asked(bit) {
+                    assert_eq!(offset as usize, at, "{information:#x}: part {bit}");
+                    at += bytes;
+                } else {
+                    assert_eq!(offset, 0, "{information:#x}: part {bit}");
+                }
+            }
         }
     }
 
@@ -325,10 +339,15 @@ mod tests {
             (new.owner, new.group, new.sacl, new.dacl)
         );
 
-        // What was set is what a query then reads.
+        // What was set is what a query then reads, laid out its own way.
         let mut out = [0u8; 200];
         let length = query_security(Some(&got), 0xF, &mut out).unwrap();
-        assert_eq!(out[..length], changed[..]);
+        assert_eq!(length, changed.len());
+        let read = parse_relative(&out[..length]).unwrap();
+        assert_eq!(
+            (read.control, read.owner, read.group, read.sacl, read.dacl),
+            (got.control, got.owner, got.group, got.sacl, got.dacl)
+        );
     }
 
     #[test]

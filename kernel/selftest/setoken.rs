@@ -1219,6 +1219,11 @@ fn descriptor_info() -> Result<(), &'static str> {
         if query(&mut object, DACL, 128) != (0, 68, 0x8004, [0, 0, 0, 20]) {
             return Err("the access list alone is not what a query for it gives");
         }
+        // Owner, group and list together, in that order: SIDs of 12
+        // and 16 bytes, then the list.
+        if query(&mut object, OWNER | GROUP | DACL, 128) != (0, 96, 0x8004, [20, 32, 0, 48]) {
+            return Err("a query does not lay out owner, group and list as Windows does");
+        }
         if query(&mut object, 0, 128) != (0, 20, 0x8000, [0; 4]) {
             return Err("a query for nothing does not give an empty descriptor");
         }

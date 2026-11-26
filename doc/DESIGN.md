@@ -1480,7 +1480,8 @@ gets them from
 `SeQuerySecurityDescriptorInfo` and changes one with
 `SeSetSecurityDescriptorInfo` (`lib/se/descriptor.rs`). Each descriptor
 handed out is one self-relative pool block, the driver's to keep and
-free; a changed descriptor is a new block and the old one is the
+free, laid out lists first, then owner and group; what a query copies
+out is laid out owner, group, DACL, SACL, as Windows' is; a changed descriptor is a new block and the old one is the
 driver's to free. A list the creator supplies, or the token's default,
 is assigned whole, as long as it says it is, its generic rights mapped
 and the masks kept within what "generic all" maps to; the
