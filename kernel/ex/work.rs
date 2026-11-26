@@ -425,6 +425,7 @@ pub fn many_test() -> Result<u64, &'static str> {
         prepare(index);
     }
     // 192 items from six threads, 64 from four DPCs.
+    let threads = thread::count();
     for n in 0..6 {
         thread::create(
             from_thread,
@@ -442,6 +443,12 @@ pub fn many_test() -> Result<u64, &'static str> {
     }
     if !finished(ITEMS as u64) {
         return Err("not every queued work item ran");
+    }
+    // The items have run; the threads that queued them end in their
+    // own time, and are waited for, so that none is left to end under
+    // the next test.
+    if !super::stress::until(super::stress::PROMPT_MS, || thread::count() == threads) {
+        return Err("the threads that queued the items did not finish");
     }
     // SAFETY: no object is involved. Time for a second run to show.
     unsafe { wait::wait(None, Some(-200_000)) };
