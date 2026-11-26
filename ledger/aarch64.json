@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 123,
-  "implemented": 114,
+  "total": 129,
+  "implemented": 120,
   "partial": 4,
   "traps": 0,
   "missing": 0,
@@ -1182,13 +1182,38 @@
   {
    "name": "nkc-reg",
    "file": "nkc-reg.arm64.sys",
-   "sha256": "914fa4358c1caab2bdc9aa8dda2608a55b557b4b1f6e7fd483e425f00a3654fc",
+   "sha256": "73c4ab227875adfdb1f3c34dfb447f87bd933699f742b7ff6317bd8a8c9255da",
    "status": "nk-authored",
    "loaded_at_boot": true,
    "imports": [
     {
      "module": "ntoskrnl.exe",
+     "name": "ZwEnumerateValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwCreateKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
      "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValues",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwDeleteValueKey",
      "state": "implemented"
     },
     {
@@ -1198,12 +1223,22 @@
     },
     {
      "module": "ntoskrnl.exe",
+     "name": "ZwQueryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
      "name": "IoCreateDevice",
      "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
-     "name": "ZwCreateKey",
+     "name": "ZwQueryValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
      "state": "implemented"
     },
     {
@@ -1228,12 +1263,12 @@
     },
     {
      "module": "ntoskrnl.exe",
-     "name": "ZwQueryValueKey",
+     "name": "ZwEnumerateKey",
      "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
-     "name": "RtlInitUnicodeString",
+     "name": "RtlQueryRegistryValuesEx",
      "state": "implemented"
     },
     {

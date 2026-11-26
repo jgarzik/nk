@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 123,
-  "implemented": 114,
+  "total": 129,
+  "implemented": 120,
   "partial": 4,
   "traps": 0,
   "missing": 0,
@@ -1206,7 +1206,7 @@
   {
    "name": "nkc-reg",
    "file": "nkc-reg.x64.sys",
-   "sha256": "2e787bfe049656183b992ccf837df14d1e1c6ca7047eef1031036e613123ddb9",
+   "sha256": "05b57b25658590ff0b305c565e2784db3bbb87c0c2bebd585dc9901b0bdcc2c7",
    "status": "nk-authored",
    "loaded_at_boot": true,
    "imports": [
@@ -1217,7 +1217,17 @@
     },
     {
      "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValues",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
      "name": "KeGetCurrentIrql",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
      "state": "implemented"
     },
     {
@@ -1257,12 +1267,37 @@
     },
     {
      "module": "ntoskrnl.exe",
+     "name": "ZwDeleteValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwEnumerateKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwEnumerateValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
      "name": "ZwQueryValueKey",
      "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwSetValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValuesEx",
      "state": "implemented"
     }
    ]

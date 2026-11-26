@@ -445,7 +445,7 @@ fn child(parent: *mut c_void, name: &str, class: Option<&str>) -> (u32, *mut c_v
 
 /// The key the enumeration and query tests work on, made as the
 /// conformance driver `nkc-reg` makes its own, so that the numbers
-/// here are the ones its source predicts:
+/// here are the ones it logs on Windows:
 ///
 /// ```text
 /// NkcTest, class "Cls"
@@ -1209,7 +1209,7 @@ fn with_more_values(
 }
 
 /// A value is stored where its entry points, by its type and size, as
-/// Microsoft documents and as nkc-reg's source predicts: small data in
+/// Microsoft documents and as Windows answers nkc-reg: small data in
 /// place, longer data in a buffer that says its size, a string in a
 /// counted string.
 fn table_direct(key: *mut c_void, export: Export) -> Result<(), &'static str> {
