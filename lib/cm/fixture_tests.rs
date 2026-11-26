@@ -69,17 +69,27 @@ fn what_a_kernel_reads_at_boot_is_there() {
         "List",
     );
     assert_eq!(kind, REG_MULTI_SZ);
-    assert!(order.starts_with(&utf16("System Reserved\0Boot Bus Extender\0")));
-    assert!(order.ends_with(&utf16("Base\0File System\0\0")));
+    // Windows' list: it starts with this group, and `Base` comes
+    // before `File System`.
+    assert!(order.starts_with(&utf16("System Reserved\0")));
+    let place = |group: &str| {
+        let group = utf16(&format!("\0{group}\0"));
+        order
+            .windows(group.len())
+            .position(|window| window == group)
+            .unwrap_or_else(|| panic!("no group {group:?}"))
+    };
+    assert!(place("Base") < place("File System"));
     // Names differ in case from how they are asked for.
     assert_eq!(
         value(&hive, root, "controlset001\\SERVICES\\npfs", "start"),
         (REG_DWORD, 1u32.to_le_bytes().to_vec())
     );
-    assert_eq!(
-        value(&hive, root, "ControlSet001\\Services\\Npfs", "Group"),
-        (REG_SZ, utf16("File System\0"))
-    );
+    // Windows spells this group `File system` in its drivers' keys,
+    // and so may the hive.
+    let (kind, group) = value(&hive, root, "ControlSet001\\Services\\Npfs", "Group");
+    assert_eq!(kind, REG_SZ);
+    assert!(group.eq_ignore_ascii_case(&utf16("File System\0")));
 }
 
 #[test]
@@ -92,9 +102,17 @@ fn the_boot_start_services_come_in_group_order() {
         .into_iter()
         .map(|key| String::from_utf16(hive.info(key).unwrap().name).unwrap())
         .collect();
-    // `Base` comes before `File System` in the group list; msrpc and
-    // the libraries start on demand.
-    assert_eq!(names, ["Null", "Npfs"]);
+    // `Base` comes before `File System` in the group list, however
+    // the keys spell the latter; in that group, which has no tag list,
+    // Msfs (if the hive has it) comes before Npfs as the keys do;
+    // msrpc starts on demand.
+    let msfs = hive.open(set, &wide("Services\\Msfs")).is_ok();
+    let expected: &[&str] = if msfs {
+        &["Null", "Msfs", "Npfs"]
+    } else {
+        &["Null", "Npfs"]
+    };
+    assert_eq!(names, expected);
 }
 
 #[test]

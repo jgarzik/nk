@@ -1983,8 +1983,10 @@ fn hive_values() -> Result<(), &'static str> {
             return Err("a value of the hive is not in the registry as the hive has it");
         }
     }
+    // Windows spells this group `File system` in its drivers' keys and
+    // `File System` in the list of groups; the hive may do either.
     let services = value_of(&alloc::format!("{SERVICES}\\Npfs"), "Group");
-    if services != Ok((1, utf16("File System\0"))) {
+    if !matches!(&services, Ok((1, group)) if group.eq_ignore_ascii_case(&utf16("File System\0"))) {
         return Err("a service key of the hive is not under CurrentControlSet\\Services");
     }
     let last = key(

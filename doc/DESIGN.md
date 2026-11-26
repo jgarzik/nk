@@ -787,9 +787,12 @@ thread starts those whose keys say `Start` 0 (boot) or 1 (system), in
 Windows' order (`nk_cm::services`): boot start before system start; in
 each, by the place of the service's `Group` in
 `Control\ServiceGroupOrder`, then by the place of its `Tag` in the
-group's list under `Control\GroupOrderList`; services of no listed
-group last; a service after those it names in `DependOnService` and
-`DependOnGroup`. Only keys whose `Type` is a driver's count. Windows'
+group's list under `Control\GroupOrderList` (a tag the list has not, or
+none, after those it has); services of no listed group last; a service
+after those it names in `DependOnService` and `DependOnGroup`. A group
+is the same group in any letter case: Windows' own keys say
+`File system` where its list says `File System`. Only keys whose `Type`
+is a driver's count. Windows'
 loader reads boot-start drivers into memory before the kernel runs and
 the I/O manager starts system-start ones later; on NK both are boot
 files and the order is all that tells them apart.
