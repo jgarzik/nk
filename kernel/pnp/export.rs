@@ -339,13 +339,9 @@ pub unsafe extern "C" fn IoGetDeviceNumaNode(
 
 /// `DEVPROP_TYPE_EMPTY`: no value; setting it deletes the property.
 const DEVPROP_TYPE_EMPTY: u32 = 0;
-/// What a property's registry value carries its type in front of.
-const DEVPROP_REGISTRY_TYPE: u32 = 0xFFFF_0000;
+use registry::DEVPROP_REGISTRY_TYPE;
 
-/// The key a device's property is kept in, as Windows keeps it:
-/// `Properties\{category}\NNNN` under the device's key, the value
-/// without a name, its registry type the property's type behind
-/// `0xFFFF`.
+/// The key of a device's property.
 ///
 /// # Safety
 /// `key` points to a `DEVPROPKEY`.
@@ -357,11 +353,7 @@ unsafe fn property_key(found: &Node, key: *const DEVPROPKEY) -> String {
             (&raw const (*key).pid).read_unaligned(),
         )
     };
-    format!(
-        "{}\\Properties\\{}\\{pid:04X}",
-        registry::enum_key(&found.instance),
-        ids::guid_text(&fmtid)
-    )
+    registry::property_key(&found.instance, &fmtid, pid)
 }
 
 /// [`IoSetDevicePropertyData`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetdevicepropertydata):
