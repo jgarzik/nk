@@ -10,7 +10,6 @@ trap_list!(
     HalBugCheckSystem,
     HalConvertDeviceIdtToIrql,
     HalEnumerateEnvironmentVariablesEx,
-    HalGetInterruptTargetInformation,
     HalGetMemoryCachingRequirements,
     HalGetMessageRoutingInfo,
     HalGetProcessorIdByNtNumber,

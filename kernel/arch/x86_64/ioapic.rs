@@ -122,6 +122,9 @@ pub fn interrupt_message(vector: u32, processor: usize) -> Option<(u64, u32)> {
 pub struct InterruptVectors(VectorMap);
 
 impl InterruptVectors {
+    /// Devices can be given messages: the local APICs take them.
+    pub const MESSAGES: bool = true;
+
     pub const fn new() -> Self {
         Self(VectorMap::new())
     }

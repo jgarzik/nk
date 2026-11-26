@@ -15,6 +15,7 @@ pub mod fsrtl;
 pub mod interrupt;
 pub mod irp;
 pub mod mdl;
+pub mod priority;
 pub mod remlock;
 pub mod service;
 pub mod stack;

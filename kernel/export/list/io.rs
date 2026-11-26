@@ -67,4 +67,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         Implemented,
         io::driver::IoRegisterBootDriverReinitialization
     ),
+    export!(Implemented, io::priority::IoRegisterPriorityCallback),
+    export!(Implemented, io::priority::IoUnregisterPriorityCallback),
 ];

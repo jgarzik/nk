@@ -18,7 +18,12 @@ use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["io.driver-extension", "work.caller-memory", "io.error-log"],
+    names: &[
+        "io.driver-extension",
+        "work.caller-memory",
+        "io.error-log",
+        "io.priority-callback",
+    ],
     run,
     manual: false,
 };
@@ -366,4 +371,12 @@ fn run(report: &mut Report, _: &BootInfo) {
     numbered("io.driver-extension", driver_extension());
     numbered("work.caller-memory", caller_memory_work_item());
     numbered("io.error-log", error_log());
+    report.check("io.priority-callback", || {
+        let object = stack::make_driver(refuse)?;
+        // SAFETY: a driver object of the test's own.
+        let result = unsafe { crate::io::priority::test(object) };
+        // SAFETY: it has no device.
+        unsafe { stack::free_driver(object) };
+        result
+    });
 }

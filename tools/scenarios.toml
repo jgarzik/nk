@@ -810,5 +810,6 @@ match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(paramet
 arch = "x86_64"
 tier = "gate"
 cmdline = "test=stor.load"
+registry = ["storage"]
 disk = "ahci"
 disk_expect = "unchanged"

@@ -30,6 +30,7 @@ mod info;
 pub mod manifest;
 #[cfg(test)]
 mod manifest_tests;
+pub mod notify;
 pub mod query;
 pub mod regf;
 #[cfg(test)]

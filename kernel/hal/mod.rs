@@ -8,6 +8,7 @@ pub mod interrupt;
 pub mod pci;
 pub mod platform;
 pub mod sysinfo;
+pub mod target;
 
 use crate::arch;
 use core::ffi::c_void;

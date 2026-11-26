@@ -1260,6 +1260,7 @@ make that safe.
 | a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`, `WheaAddErrorSource`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
 | the `Correct` of a kind of hardware error source (`WheaAddErrorSource`) | nothing: the source is in the table, stopped, and stays |
 | a hardware error source's `Uninitialize` (`WheaRemoveErrorSource`) | nothing: the source stays pending removal, closed to calls |
+| the work item of a key's watcher (`ZwNotifyChangeKey`) | none of NK's: it is queued, and runs from a worker, whose base stops the system |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for
@@ -1346,6 +1347,12 @@ FADT; `nk_acpi::lookup`). It returns the firmware's own table where
 Windows returns a copy. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other.
+
+`HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
+rather than a slot, tells `pci.sys` how interrupts name their
+destination: by a processor's own identifier (physical mode) on both
+architectures, with messages deliverable where the architecture's
+controller takes them.
 
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
@@ -1904,6 +1911,23 @@ meanwhile, leave the call with the key it was asked about
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
+### Watching a key
+
+`ZwNotifyChangeKey` (`kernel/cm/notify.rs`, rules in
+`lib/cm/notify.rs`) makes a watch on a key: for some kinds of change,
+with the keys below it or not. NK has the form kernel-mode callers
+use, asynchronous: the call returns `STATUS_PENDING`, and the change
+that meets the watch writes `STATUS_NOTIFY_ENUM_DIR` to the caller's
+status block, sets its event and queues its work item (the routine's
+`ApcRoutine` and `ApcContext` are a work item and its queue for a
+kernel-mode caller). A watch is met once. Closing the handle it was
+made through ends it and tells the watcher `STATUS_NOTIFY_CLEANUP`.
+The changes seen are a value set or deleted (`ZwSetValueKey`,
+`ZwDeleteValueKey`, NK's own writes) and a key made or deleted, which
+is a change of name at the key above; a change made through the query
+table routines' deletions or `RtlWriteRegistryValue` is not seen. A
+synchronous request stops the system by name.
+
 ### Query tables
 
 [`RtlQueryRegistryValues`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlqueryregistryvalues)
@@ -2333,6 +2357,14 @@ latter with a driver object of their own that records each request as
 it arrives; a test group that leaves a provider registered fails like
 any other leak.
 
+`EtwWrite` is `EtwWriteTransfer` without a related activity, and
+`EtwEventEnabled` is false: no session takes any event.
+`WmiTraceMessageVa` answers as `WmiTraceMessage`. `EtwActivityIdControl`
+makes activity ids (`lib/etw/activity.rs`: this boot's base and a
+count); the codes that read or set the calling thread's id are
+`STATUS_NOT_SUPPORTED`, as Windows answers a system thread, whose id
+would live in a TEB it does not have.
+
 ## Questions about the system
 
 `kernel/ex/sysinfo.rs`, with the length rules in `nk_ex::sysinfo`.
@@ -2573,12 +2605,19 @@ callbacks), no
 driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
 reported to it goes nowhere), no headless terminal (the same file:
 it cannot be enabled, questions are answered with zeros, output
-succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no paging
+succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no
+notification states (`kernel/ex/wnf.rs`: a WNF state name is unknown,
+`STATUS_OBJECT_NAME_NOT_FOUND`, as Windows answers for a name that has
+no instance and that its registry does not list; a name NK's registry
+does list stops the system, since Windows would have a state for it),
+no paging
 file, and a hypervisor only as far as the processor's CPUID names one
 (`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
 none). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
-(`kernel/po/mod.rs`, `ZwPowerInformation`).
+(`kernel/po/mod.rs`, `ZwPowerInformation`). There is no sleep study:
+the request for its helper's table of routines fails, where Windows
+always has the helper, and `pci.sys` then reports nothing to it.
 
 | Territory | Imported by | Why |
 | --- | --- | --- |
