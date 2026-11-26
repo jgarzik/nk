@@ -55,6 +55,155 @@ pub fn init() {
     }
 }
 
+/// The HAL's ACPI table, `HalPciInterfaceReadConfig`: `acpi.sys` reads
+/// `length` bytes of a function's configuration space from `offset`,
+/// for firmware's AML and for the bus interface it gives `pci.sys` for
+/// a root bus. `bus` and `slot` name the function
+/// (`Function::from_interface`). Returns `length`, as Windows' routine
+/// does whatever it read; what NK cannot reach reads as all ones, as
+/// the bus answers for a function that is not there.
+///
+/// # Safety
+/// `buffer` is writable for `length` bytes.
+pub unsafe extern "C" fn HalPciInterfaceReadConfig(
+    _context: *mut c_void,
+    bus: u32,
+    slot: u32,
+    buffer: *mut u8,
+    offset: u32,
+    length: u32,
+) -> u32 {
+    let function = Function::from_interface(bus, slot);
+    let read = mechanism(function).map_or(0, |m| {
+        let within = pci::within(offset, length, m.space());
+        // SAFETY: `within` is at most `length` and ends in the space.
+        unsafe { copy_out(m, function, offset, within, buffer) };
+        within
+    });
+    // SAFETY: the rest of the caller's buffer.
+    unsafe {
+        buffer
+            .add(read as usize)
+            .write_bytes(0xFF, (length - read) as usize);
+    }
+    length
+}
+
+/// The HAL's ACPI table, `HalPciInterfaceWriteConfig`: the write that
+/// goes with [`HalPciInterfaceReadConfig`]. Returns `length`; what NK
+/// cannot reach is not written.
+///
+/// # Safety
+/// `buffer` is readable for `length` bytes.
+pub unsafe extern "C" fn HalPciInterfaceWriteConfig(
+    _context: *mut c_void,
+    bus: u32,
+    slot: u32,
+    buffer: *const u8,
+    offset: u32,
+    length: u32,
+) -> u32 {
+    let function = Function::from_interface(bus, slot);
+    if let Some(m) = mechanism(function) {
+        let within = pci::within(offset, length, m.space());
+        // SAFETY: `within` is at most `length` and ends in the space.
+        unsafe { copy_in(m, function, offset, within, buffer) };
+    }
+    length
+}
+
+/// The HAL's ACPI table, `HalSetMaxLegacyPciBusNumber`: `acpi.sys`
+/// tells the HAL of a bus number firmware uses. Windows' HAL keeps the
+/// highest and answers its bus-data exports only up to it. NK's
+/// (`hal::bus`) answer for every bus a configuration mechanism reaches,
+/// so there is no maximum to raise.
+pub extern "C" fn HalSetMaxLegacyPciBusNumber(_bus: u32) {}
+
+/// Put the routines of this file in their slots.
+pub fn provide() {
+    use super::dispatch::{HalAcpiDispatchTable, acpi_slot};
+    HalAcpiDispatchTable.provide(
+        acpi_slot("HalPciInterfaceReadConfig"),
+        HalPciInterfaceReadConfig as *const (),
+    );
+    HalAcpiDispatchTable.provide(
+        acpi_slot("HalPciInterfaceWriteConfig"),
+        HalPciInterfaceWriteConfig as *const (),
+    );
+    HalAcpiDispatchTable.provide(
+        acpi_slot("HalSetMaxLegacyPciBusNumber"),
+        HalSetMaxLegacyPciBusNumber as *const (),
+    );
+}
+
+/// For the self-tests: the host bridge's first registers read as
+/// `acpi.sys` reads them, through the slot at Windows' offset, and a
+/// function no mechanism reaches.
+pub fn interface_test() -> Result<(), &'static str> {
+    type Read = unsafe extern "C" fn(*mut c_void, u32, u32, *mut u8, u32, u32) -> u32;
+    let slot = |offset: usize| {
+        // SAFETY: the table is pointers after its header.
+        unsafe {
+            super::dispatch::HalAcpiDispatchTable
+                .address()
+                .cast::<u8>()
+                .add(offset)
+                .cast::<*const ()>()
+                .read()
+        }
+    };
+    // SAFETY: the slot holds `HalPciInterfaceReadConfig`, of this type.
+    let read_config: Read = unsafe { core::mem::transmute(slot(0x30)) };
+    let bridge = Function {
+        segment: 0,
+        bus: 0,
+        device: 0,
+        function: 0,
+    };
+    let mut own = [0u8; 8];
+    if read(bridge, 0, &mut own) != own.len() {
+        return Err("the host bridge's registers were not read");
+    }
+    let mut through = [0u8; 8];
+    // SAFETY: a local of the length given.
+    let length = unsafe { read_config(core::ptr::null_mut(), 0, 0, through.as_mut_ptr(), 0, 8) };
+    if length != 8 || through != own {
+        return Err("the interface did not read what the HAL's own access reads");
+    }
+    // A segment no mechanism reaches reads as all ones, in full.
+    let mut absent = [0u8; 4];
+    // SAFETY: as above.
+    let length = unsafe {
+        read_config(
+            core::ptr::null_mut(),
+            0xFFFF << 8,
+            0,
+            absent.as_mut_ptr(),
+            0,
+            4,
+        )
+    };
+    if length != 4 || absent != [0xFF; 4] {
+        return Err("a function that cannot be reached did not read as all ones");
+    }
+    // A write of the vendor identifier, which is read-only, is taken
+    // and changes nothing.
+    type Write = unsafe extern "C" fn(*mut c_void, u32, u32, *const u8, u32, u32) -> u32;
+    // SAFETY: the slot holds `HalPciInterfaceWriteConfig`, of this type.
+    let write_config: Write = unsafe { core::mem::transmute(slot(0x38)) };
+    // SAFETY: two bytes of a local.
+    let length = unsafe { write_config(core::ptr::null_mut(), 0, 0, own.as_ptr(), 0, 2) };
+    let mut after = [0u8; 8];
+    read(bridge, 0, &mut after);
+    if length != 2 || after != own {
+        return Err("a write through the interface was not carried out as the HAL's own");
+    }
+    // SAFETY: the slot holds `HalSetMaxLegacyPciBusNumber`.
+    let set_max: extern "C" fn(u32) = unsafe { core::mem::transmute(slot(0x48)) };
+    set_max(0xFF);
+    Ok(())
+}
+
 /// How one function's registers are reached.
 #[derive(Clone, Copy)]
 enum Mechanism {

@@ -35,6 +35,7 @@ pub fn init(info: &BootInfo) {
     EFI_RUNTIME.store(info.efi_runtime, Ordering::Relaxed);
     acpi::init();
     interrupt::init();
+    pci::provide();
     sysinfo::init();
 }
 

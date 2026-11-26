@@ -18,6 +18,19 @@ pub struct Function {
 }
 
 impl Function {
+    /// The function the HAL's ACPI table's configuration routines are
+    /// asked for: `bus` holds the segment above its low byte, and
+    /// `slot` is a `PCI_SLOT_NUMBER`, the device in its low five bits
+    /// and the function in the next three.
+    pub const fn from_interface(bus: u32, slot: u32) -> Self {
+        Self {
+            segment: (bus >> 8) as u16,
+            bus: bus as u8,
+            device: (slot & 0x1F) as u8,
+            function: (slot >> 5 & 7) as u8,
+        }
+    }
+
     /// Function 0 of the same device, which says whether the device has
     /// other functions.
     pub const fn first(self) -> Self {
@@ -139,6 +152,29 @@ pub const fn present(function: u8, vendor: u16, first_header_type: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_interface_names_a_function_by_bus_and_slot() {
+        assert_eq!(
+            Function::from_interface(0x0000_0203, 0xFF),
+            Function {
+                segment: 2,
+                bus: 3,
+                device: 31,
+                function: 7
+            }
+        );
+        // 00:1f.2, and bits of the slot number above the function.
+        assert_eq!(
+            Function::from_interface(0, 0xFFFF_FF00 | 2 << 5 | 0x1F),
+            Function {
+                segment: 0,
+                bus: 0,
+                device: 31,
+                function: 2
+            }
+        );
+    }
 
     #[test]
     fn a_slot_number_holds_device_and_function() {
