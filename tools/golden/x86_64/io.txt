@@ -61,3 +61,6 @@ io.no-paging-file ok
 io.open.zw-file ok
 io.service.zw-load-missing ok
 io.service.zw-load ok
+io.irp-extension ok
+io.activity-id.thread ok
+io.request-facts ok

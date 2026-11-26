@@ -540,6 +540,112 @@ pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
 pub const IRP_PRIORITY_HINT_MASK: u32 = 0x000E_0000;
 pub const IRP_PRIORITY_HINT_NORMAL: u32 = 0x0006_0000;
 
+/// `IRP_PAGING_IO`: the request is the memory manager's, for a page.
+pub const IRP_PAGING_IO: u32 = 0x0000_0002;
+
+/// `IO_PRIORITY_HINT`.
+pub const IO_PRIORITY_VERY_LOW: u32 = 0;
+pub const IO_PRIORITY_LOW: u32 = 1;
+pub const IO_PRIORITY_NORMAL: u32 = 2;
+/// `IO_PAGING_PRIORITY`.
+pub const IO_PAGING_PRIORITY_INVALID: u32 = 0;
+pub const IO_PAGING_PRIORITY_NORMAL: u32 = 1;
+pub const IO_PAGING_PRIORITY_HIGH: u32 = 2;
+
+/// [`IoGetIoPriorityHint`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetiopriorityhint)
+/// as the pinned kernel works it out of `IRP.Flags`: the hint is the
+/// three bits of [`IRP_PRIORITY_HINT_MASK`], less one; a request with
+/// none is of normal priority; and a hint below normal counts as
+/// normal while the thread that made the request has its I/O priority
+/// boosted (`thread_boosted`: there is a thread, and its
+/// `IoBoostCount` is not zero).
+pub const fn io_priority_hint(irp_flags: u32, thread_boosted: bool) -> u32 {
+    let stored = (irp_flags & IRP_PRIORITY_HINT_MASK) >> 17;
+    if stored == 0 {
+        return IO_PRIORITY_NORMAL;
+    }
+    let hint = stored - 1;
+    if hint < IO_PRIORITY_NORMAL && thread_boosted {
+        return IO_PRIORITY_NORMAL;
+    }
+    hint
+}
+
+/// [`IoGetPagingIoPriority`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetpagingiopriority)
+/// as the pinned kernel works it out of `IRP.Flags`: invalid for a
+/// request that is not paging I/O; else high for the stored hint 5,
+/// and normal for every other, none included.
+pub const fn paging_io_priority(irp_flags: u32) -> u32 {
+    if irp_flags & IRP_PAGING_IO == 0 {
+        return IO_PAGING_PRIORITY_INVALID;
+    }
+    if (irp_flags & IRP_PRIORITY_HINT_MASK) >> 17 == 5 {
+        IO_PAGING_PRIORITY_HIGH
+    } else {
+        IO_PAGING_PRIORITY_NORMAL
+    }
+}
+
+/// `IRP.AllocationFlags`: the IRP has an extension from the pool
+/// (`IrpExtension` points to an [`IOP_IRP_EXTENSION`]), and: its
+/// generic extension is kept in the `IrpExtension` field itself,
+/// which is then no pointer.
+pub const IRP_ALLOCATION_EXTENSION: u8 = 0x40;
+pub const IRP_ALLOCATION_GENERIC_INLINE: u8 = 0x80;
+
+/// `IOP_IRP_EXTENSION`: what `IRP.IrpExtension` points to. Private to
+/// Windows; its layout is the pinned kernel's.
+#[repr(C)]
+pub struct IOP_IRP_EXTENSION {
+    /// Bit 0: the block is from the pool.
+    pub ExtensionFlags: u16,
+    /// One bit for each kind of extension the block holds
+    /// (`IRP_EXTENSION_*`).
+    pub TypesAllocated: u16,
+    pub GenericExtension: [u8; 4],
+    pub VerifierContext: PVOID,
+    pub DiskIoAttributionHandle: PVOID,
+    pub ActivityId: crate::etw::GUID,
+    /// A union: a timestamp, a zeroing offset, a file system's tracked
+    /// offset (a pointer and an offset), or an adapter's crypto
+    /// parameters.
+    pub Parameters: [u64; 2],
+    pub DriverFlags: u64,
+}
+
+/// The kinds of IRP extension, as bits of `TypesAllocated` are
+/// numbered.
+pub const IRP_EXTENSION_ACTIVITY_ID: u32 = 0;
+pub const IRP_EXTENSION_GENERIC: u32 = 2;
+pub const IRP_EXTENSION_FS_TRACK_OFFSET: u32 = 5;
+pub const IRP_EXTENSION_DISK_IO_ATTRIBUTION: u32 = 6;
+pub const IRP_EXTENSION_ADAPTER_CRYPTO: u32 = 7;
+pub const IRP_EXTENSION_DRIVER_FLAGS: u32 = 8;
+/// The most bytes a generic extension holds
+/// (`IoSizeofGenericIrpExtension`).
+pub const IRP_GENERIC_EXTENSION_SIZE: usize = 4;
+
+/// `IoPropagateIrpExtension`'s flags: which kinds to copy.
+pub const IRP_PROPAGATE_GENERIC: u32 = 0x1;
+pub const IRP_PROPAGATE_ACTIVITY_ID: u32 = 0x2;
+pub const IRP_PROPAGATE_FS_TRACK_OFFSET: u32 = 0x4;
+pub const IRP_PROPAGATE_DISK_IO_ATTRIBUTION: u32 = 0x8;
+pub const IRP_PROPAGATE_ADAPTER_CRYPTO: u32 = 0x10;
+pub const IRP_PROPAGATE_DRIVER_FLAGS: u32 = 0x20;
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<IOP_IRP_EXTENSION>() == 0x40);
+    assert!(offset_of!(IOP_IRP_EXTENSION, TypesAllocated) == 2);
+    assert!(offset_of!(IOP_IRP_EXTENSION, GenericExtension) == 4);
+    assert!(offset_of!(IOP_IRP_EXTENSION, DiskIoAttributionHandle) == 0x10);
+    assert!(offset_of!(IOP_IRP_EXTENSION, ActivityId) == 0x18);
+    assert!(offset_of!(IOP_IRP_EXTENSION, Parameters) == 0x28);
+    assert!(offset_of!(IOP_IRP_EXTENSION, DriverFlags) == 0x38);
+    assert!(offset_of!(IRP, AllocationFlags) == 0x47);
+    assert!(offset_of!(IRP, IrpExtension) == 0xC8);
+};
+
 /// Whether `IoBuildSynchronousFsdRequest` of the pinned kernel builds a
 /// request of this major function with no buffer and no transfer
 /// parameters: a flush, a shutdown, a power or a Plug and Play request.
@@ -1274,6 +1380,51 @@ mod layout {
         assert!(!fsd_request_has_no_buffer(0x109));
         assert_eq!(IRP_PRIORITY_HINT_NORMAL & !IRP_PRIORITY_HINT_MASK, 0);
         assert_eq!(IRP_PRIORITY_HINT_NORMAL >> 17, 3);
+    }
+
+    #[test]
+    fn the_priority_hint_is_read_out_of_the_flags() {
+        let stored = |hint: u32| hint << 17;
+        // No hint, and the hint NK's built requests carry: normal.
+        assert_eq!(io_priority_hint(0, false), IO_PRIORITY_NORMAL);
+        assert_eq!(io_priority_hint(0, true), IO_PRIORITY_NORMAL);
+        assert_eq!(
+            io_priority_hint(IRP_PRIORITY_HINT_NORMAL, false),
+            IO_PRIORITY_NORMAL
+        );
+        // Stored one more than it is.
+        assert_eq!(io_priority_hint(stored(1), false), IO_PRIORITY_VERY_LOW);
+        assert_eq!(io_priority_hint(stored(2), false), IO_PRIORITY_LOW);
+        assert_eq!(io_priority_hint(stored(4), false), 3);
+        assert_eq!(io_priority_hint(stored(5), false), 4);
+        assert_eq!(io_priority_hint(stored(7), false), 6);
+        // A boosted thread's low requests count as normal; others stay.
+        assert_eq!(io_priority_hint(stored(1), true), IO_PRIORITY_NORMAL);
+        assert_eq!(io_priority_hint(stored(2), true), IO_PRIORITY_NORMAL);
+        assert_eq!(io_priority_hint(stored(5), true), 4);
+        // Other flags are not the hint.
+        assert_eq!(
+            io_priority_hint(stored(2) | 0xFFF1_FFFF, false),
+            IO_PRIORITY_LOW
+        );
+    }
+
+    #[test]
+    fn the_paging_priority_is_of_paging_requests_only() {
+        let stored = |hint: u32| hint << 17;
+        assert_eq!(paging_io_priority(0), IO_PAGING_PRIORITY_INVALID);
+        assert_eq!(paging_io_priority(stored(5)), IO_PAGING_PRIORITY_INVALID);
+        assert_eq!(paging_io_priority(IRP_PAGING_IO), IO_PAGING_PRIORITY_NORMAL);
+        assert_eq!(
+            paging_io_priority(IRP_PAGING_IO | stored(5)),
+            IO_PAGING_PRIORITY_HIGH
+        );
+        for hint in [1, 2, 3, 4, 6, 7] {
+            assert_eq!(
+                paging_io_priority(IRP_PAGING_IO | stored(hint)),
+                IO_PAGING_PRIORITY_NORMAL
+            );
+        }
     }
 
     #[test]

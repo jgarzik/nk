@@ -134,12 +134,15 @@ unsafe fn ask(device: *mut DEVICE_OBJECT, update: bool) {
             && let Some(pdos) = rules::registration_pdos(&reply, minor == IRP_MN_REGINFO_EX)
         {
             // The driver referenced each physical device object for
-            // WMI, which keeps nothing of the registration: the
+            // WMI, which keeps only the names of the data blocks: the
             // references go back.
             for pdo in pdos {
                 // SAFETY: an object the driver referenced on WMI's
                 // behalf.
                 unsafe { ob::object::dereference(pdo as *mut u8) };
+            }
+            if let Some(guids) = rules::registration_guids(&reply) {
+                WMI.lock().set_guids(device.addr(), guids);
             }
         }
         return;
@@ -332,6 +335,47 @@ pub unsafe extern "C" fn IoWMIRegistrationControl(device: *mut c_void, action: u
         }
         _ => STATUS_INVALID_PARAMETER,
     }
+}
+
+/// `WMIGUID_NOTIFICATION`, and the access that asks for a trace
+/// provider's block: opens that are for events, not for data.
+const WMIGUID_NOTIFICATION: u32 = 0x4;
+const TRACELOG_REGISTER_GUIDS: u32 = 0x0004_0000;
+
+/// [`IoWMIOpenBlock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmiopenblock):
+/// open a WMI data block, by its GUID, to query it, set it or run its
+/// methods. A block no registered device's registration names is not
+/// there: `STATUS_WMI_GUID_NOT_FOUND`, as the pinned kernel answers
+/// such an open (`WmipOpenBlock`), and nothing is written.
+///
+/// NK is no WMI consumer: it keeps the names of the blocks devices
+/// register and never asks a device for one. Opening a block that is
+/// registered, or opening one for its events (which Windows allows
+/// before anyone registers it), stops the system by name: the
+/// ledger's "partial".
+///
+/// # Safety
+/// `guid` is readable; `data_block_object` is writable.
+pub unsafe extern "C" fn IoWMIOpenBlock(
+    guid: *const GUID,
+    desired_access: u32,
+    _data_block_object: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract: a GUID is sixteen bytes.
+    let name = unsafe { guid.cast::<[u8; 16]>().read_unaligned() };
+    if desired_access & (WMIGUID_NOTIFICATION | TRACELOG_REGISTER_GUIDS) != 0 {
+        kd::bugcheck(format_args!(
+            "IoWMIOpenBlock: opening the WMI block {name:02x?} for its events (access \
+             {desired_access:#x}) is not implemented"
+        ));
+    }
+    if !WMI.lock().registers(&name) {
+        return STATUS_WMI_GUID_NOT_FOUND;
+    }
+    kd::bugcheck(format_args!(
+        "IoWMIOpenBlock: the WMI data block {name:02x?} is registered by a driver, and querying \
+         a registered block is not implemented"
+    ))
 }
 
 /// [`IoWMIDeviceObjectToProviderId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iowmideviceobjecttoproviderid):

@@ -9,6 +9,8 @@
 use nk_ntabi::etw::GUID;
 use nk_ntabi::status::{NTSTATUS, STATUS_NOT_SUPPORTED};
 
+/// `EVENT_ACTIVITY_CTRL_GET_ID`: read the calling thread's id.
+pub const GET_ID: u32 = 1;
 /// `EVENT_ACTIVITY_CTRL_CREATE_ID`: make a new id, touching no
 /// thread's.
 pub const CREATE_ID: u32 = 3;

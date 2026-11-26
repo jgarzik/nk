@@ -103,6 +103,15 @@ pub(super) fn stacks() -> [Option<Stack>; 2] {
     [Some(super::thread::current_stack()), dpc]
 }
 
+/// The stack `address` is on, if code on this processor can be
+/// running on it right now.
+pub fn stack_holding(address: u64) -> Option<Stack> {
+    stacks()
+        .into_iter()
+        .flatten()
+        .find(|stack| stack.base <= address && address < stack.top)
+}
+
 /// Read the stack slot at `address`, if it is one.
 pub(super) fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
     let on = |stack: &Stack| {
