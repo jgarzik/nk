@@ -20,6 +20,7 @@ pub static GROUP: Group = Group {
         "cm.enumerate.keys",
         "cm.enumerate.values",
         "cm.query.key",
+        "cm.query.value",
         "cm.namespace",
         "cm.control-set",
         "cm.hive.values",
@@ -227,16 +228,15 @@ fn values() -> Result<(), &'static str> {
         {
             return Err("setting a value again did not replace it");
         }
-        // The other forms of query are not there; a handle to something
-        // else is not a key.
         // The full form: the name as it was set, and where the data is
-        // (at the next multiple of eight bytes, as on Windows). Six
-        // bytes short of the whole, it holds what fitted and says so.
+        // (at the next multiple of eight bytes, as on Windows), the
+        // bytes between left alone. Six bytes short of the whole, it
+        // holds what fitted and says so.
         let (status, length, out) = query(handle, "TEXT", 1, 32);
         if (status, length) != (0x8000_0005, 38)
             || out[4..20] != [1, 0, 0, 0, 32, 0, 0, 0, 6, 0, 0, 0, 8, 0, 0, 0]
             || out[20..28] != [b'T', 0, b'e', 0, b'x', 0, b't', 0]
-            || out[28..32] != [0; 4]
+            || out[28..32] != [0xEE; 4]
         {
             return Err("the full form of a value is not its name, type and data");
         }
@@ -249,8 +249,10 @@ fn values() -> Result<(), &'static str> {
         if sizing != (0xC000_0023, 38, 0x8000_0005) {
             return Err("the full form did not say how much room it needs");
         }
-        if query(handle, "Number", 0, 28).0 != 0xC000_0002 {
-            return Err("an unimplemented form of query did not say so");
+        // A form there is none of; a handle to something else is not a
+        // key.
+        if query(handle, "Number", 6, 28).0 != 0xC000_000D {
+            return Err("a form of query there is none of did not say so");
         }
         let mut thread = core::ptr::null_mut();
         // SAFETY: the running thread is an object; the handle is closed
@@ -827,6 +829,45 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
     Ok(())
 }
 
+fn query_value_info(key: *mut c_void, name: &str, class: u32, room: usize) -> Answer {
+    let text: Vec<u16> = name.encode_utf16().collect();
+    let name = counted(&text);
+    // SAFETY: the buffer is `ROOM` bytes and the room no more; the name
+    // outlives the call.
+    answer(room, |out, room, length| unsafe {
+        ZwQueryValueKey(key, &raw const name, class, out, room, length)
+    })
+}
+
+/// A value is described by name in every form it is described in by
+/// index: found whatever the letter case of the name asked for, and
+/// named as it was set.
+fn query_value(key: *mut c_void) -> Result<(), &'static str> {
+    let names = ["NUMBER", "text", "ODD", "", "mULTI"];
+    for (index, class, fixed, whole) in value_forms() {
+        let name = names[index as usize];
+        let ask = |room| query_value_info(key, name, class, room);
+        if !at_every_room(&whole, fixed, 0, ask) {
+            crate::kd::print(format_args!("cm.query.value: {name}, class {class}\n"));
+            return Err("a value was not described by name as Windows describes it");
+        }
+    }
+    // The form of a layered key's value and a form there is none of,
+    // whether or not the value is there; a value that is not.
+    for (name, class, status) in [
+        ("Text", 5, INVALID_PARAMETER),
+        ("Text", 6, INVALID_PARAMETER),
+        ("Absent", 6, INVALID_PARAMETER),
+        ("Absent", 0, NOT_FOUND),
+        ("Absent", 4, NOT_FOUND),
+    ] {
+        if !query_value_info(key, name, class, ROOM).refused(status) {
+            return Err("a value that is not there, or a form there is none of, was answered");
+        }
+    }
+    Ok(())
+}
+
 /// A registry name is a path in the object namespace: it is looked up
 /// there, through symbolic links and from a directory if one is given,
 /// and must lead to the registry's root key, which walks the rest.
@@ -1087,6 +1128,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.enumerate.keys", || with_key(enumerate_keys));
     r.check("cm.enumerate.values", || with_key(enumerate_values));
     r.check("cm.query.key", || with_key(query_key));
+    r.check("cm.query.value", || with_key(query_value));
     r.check("cm.namespace", namespace);
     r.check("cm.control-set", control_set);
     let Some(hive) = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE) else {

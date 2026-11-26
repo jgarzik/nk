@@ -711,14 +711,15 @@ pub unsafe extern "C" fn ZwEnumerateValueKey(
     unsafe { inform(information, length, result_length, format) }
 }
 
-/// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey),
-/// for `KeyValueFullInformation` (name, type and data) and
-/// `KeyValuePartialInformation` (type and data). The other forms are
-/// not implemented.
+/// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey):
+/// describe the value of that name, in the forms `ZwEnumerateValueKey`
+/// has. The name is matched whatever its letter case and reported as
+/// it was set.
 ///
 /// # Safety
-/// `value_name` is null or a counted string; `information` is writable
-/// for `length` bytes and `result_length` for four.
+/// `value_name` is null or a counted string; `information` is readable
+/// and writable for `length` bytes and `result_length` writable for
+/// four.
 pub unsafe extern "C" fn ZwQueryValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
@@ -727,8 +728,8 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     length: u32,
     result_length: *mut u32,
 ) -> NTSTATUS {
-    if class != PARTIAL && class != FULL {
-        return STATUS_NOT_IMPLEMENTED;
+    if class > VALUE_PARTIAL_ALIGN64 {
+        return STATUS_INVALID_PARAMETER;
     }
     let key = match key_of(key_handle) {
         Ok(key) => key,
@@ -736,46 +737,13 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     };
     // SAFETY: per the contract.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
-    // The answer is put together in the kernel's own memory, under the
-    // lock, and copied to the driver's afterwards.
-    let answer = {
+    let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
-        let (stored_name, kind, data) = match hive.value(key, &name) {
-            Ok(value) => value,
-            Err(error) => return status(error),
-        };
-        // Sized first, with no room at all, so that the copy made is
-        // no larger than the answer.
-        let write = |out: &mut [u8]| match class {
-            FULL => nk_cm::full_information(stored_name, kind, data, out),
-            _ => nk_cm::partial_information(kind, data, out),
-        };
-        let room = (length as usize).min(write(&mut []).1);
-        let mut out = Vec::new();
-        if out.try_reserve_exact(room).is_err() {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-        out.resize(room, 0);
-        let (fit, needed) = write(&mut out);
-        (fit, needed, out)
+        let (stored_name, kind, data) = hive.value(key, &name).map_err(status)?;
+        Ok(value_information(class, stored_name, kind, data, out))
     };
-    let (fit, needed, out) = answer;
-    // SAFETY: per the contract; `out` is no longer than `length`.
-    unsafe {
-        result_length.write_unaligned(needed as u32);
-        match fit {
-            Fit::Nothing => return STATUS_BUFFER_TOO_SMALL,
-            Fit::All | Fit::Part => {
-                for (i, &byte) in out.iter().enumerate() {
-                    information.add(i).write(byte);
-                }
-            }
-        }
-    }
-    match fit {
-        Fit::All => STATUS_SUCCESS,
-        _ => STATUS_BUFFER_OVERFLOW,
-    }
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
 }
 
 // ---- tests --------------------------------------------------------------

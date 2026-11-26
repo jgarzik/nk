@@ -974,9 +974,11 @@ holds: as on Windows, the numbers only grow while the key has subkeys
 (or values) and start again when the last one goes. A key copied from a
 hive file starts from the numbers the file gives it.
 
-Creating makes only the last key of a path, as on Windows. Values are
-read as `KeyValuePartialInformation` or `KeyValueFullInformation`; other
-forms answer `STATUS_NOT_IMPLEMENTED`. A key without subkeys can be
+Creating makes only the last key of a path, as on Windows, and gives a
+new key its class. A value is read by name in the forms it is
+enumerated in; there are no layered keys, so the form that describes a
+value of one (`KeyValueLayerInformation`) is refused like a form that
+does not exist, `STATUS_INVALID_PARAMETER`. A key without subkeys can be
 deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
