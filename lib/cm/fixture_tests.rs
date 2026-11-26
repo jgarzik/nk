@@ -85,11 +85,12 @@ fn what_a_kernel_reads_at_boot_is_there() {
         value(&hive, root, "controlset001\\SERVICES\\npfs", "start"),
         (REG_DWORD, 1u32.to_le_bytes().to_vec())
     );
-    // Windows spells this group `File system` in its drivers' keys,
-    // and so may the hive.
-    let (kind, group) = value(&hive, root, "ControlSet001\\Services\\Npfs", "Group");
-    assert_eq!(kind, REG_SZ);
-    assert!(group.eq_ignore_ascii_case(&utf16("File System\0")));
+    // Windows spells this group `File system` in its drivers' keys and
+    // `File System` in the list of groups, and so does the hive.
+    assert_eq!(
+        value(&hive, root, "ControlSet001\\Services\\Npfs", "Group"),
+        (REG_SZ, utf16("File system\0"))
+    );
 }
 
 #[test]
@@ -104,15 +105,8 @@ fn the_boot_start_services_come_in_group_order() {
         .collect();
     // `Base` comes before `File System` in the group list, however
     // the keys spell the latter; in that group, which has no tag list,
-    // Msfs (if the hive has it) comes before Npfs as the keys do;
-    // msrpc starts on demand.
-    let msfs = hive.open(set, &wide("Services\\Msfs")).is_ok();
-    let expected: &[&str] = if msfs {
-        &["Null", "Msfs", "Npfs"]
-    } else {
-        &["Null", "Npfs"]
-    };
-    assert_eq!(names, expected);
+    // Msfs comes before Npfs as the keys do; msrpc starts on demand.
+    assert_eq!(names, ["Null", "Msfs", "Npfs"]);
 }
 
 #[test]

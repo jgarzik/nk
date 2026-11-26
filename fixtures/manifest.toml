@@ -437,12 +437,12 @@ note = "Windows-driver-samples d49bb7d7 general/cancel/sys"
 name = "system-hive"
 arch = "any"
 file = "system.hiv"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/system.hiv"
-sha256 = "b867592587a585fcad1eade7c0fe6d4b40accc2e355b3a7d7c2f160810555841"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/system.hiv"
+sha256 = "253c9e65fc97b816bbb299c42febea1b4d34e9953583693cb3b3ca012e3ffd96"
 status = "windows-written"
 kind = "hive"
 boot = false
-note = "nk-fixtures v6 hive/system.hive.txt, saved by the registry of the Windows build runner"
+note = "nk-fixtures v8 hive/system.hive.txt, saved by the registry of the Windows build runner"
 
 # An export driver and what imports from it (nk-fixtures nkc/nkc-lib*.c).
 # nkc-lib.sys is a library: loaded when a driver that imports from it is

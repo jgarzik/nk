@@ -17,27 +17,17 @@ pub static GROUP: Group = Group {
 };
 
 /// The fixture hive's boot-start drivers, in the order of their groups
-/// in its `ServiceGroupOrder`: `Base`, then `File System`, however the
-/// drivers' keys spell that. The group has no tag list, so Msfs, if the
-/// hive has it, comes before Npfs as their keys do.
-fn fixture_order() -> alloc::vec::Vec<&'static str> {
-    let msfs = cm::exists("Machine\\System\\CurrentControlSet\\Services\\Msfs");
-    ["Null", "Msfs", "Npfs"]
-        .into_iter()
-        .filter(|&name| name != "Msfs" || msfs)
-        .collect()
-}
+/// in its `ServiceGroupOrder`: `Base`, then `File System`, which the
+/// drivers' keys spell `File system`. That group has no tag list, so
+/// Msfs comes before Npfs as their keys do.
+const FIXTURE_ORDER: [&str; 3] = ["Null", "Msfs", "Npfs"];
 
 /// Each boot-start service whose image is among the boot files is
 /// running, and each whose image is not was passed over. Returns what
 /// became of each, in order.
 fn boot_start() -> Result<String, &'static str> {
     let services = cm::boot_start()?;
-    if !services
-        .iter()
-        .map(|(name, _)| &name[..])
-        .eq(fixture_order())
-    {
+    if !services.iter().map(|(name, _)| &name[..]).eq(FIXTURE_ORDER) {
         return Err("the hive's boot-start services are not Null, then the file systems");
     }
     let mut seen = String::new();
