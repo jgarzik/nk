@@ -8,8 +8,9 @@
 //! Only what that needs is here: the multi-stream file container, the
 //! info stream (the identity a PE image names its PDB by), and the type
 //! stream's structures, unions, bit fields and arrays. Input is untrusted:
-//! every offset is bounds-checked and a malformed file is an `Err`, never
-//! a panic.
+//! every offset is bounds-checked, every length is checked against what
+//! the file holds before memory is allocated for it, and a malformed file
+//! is an `Err`, never a panic or a failed allocation.
 //!
 //! Format: <https://llvm.org/docs/PDB/index.html>.
 
@@ -58,6 +59,9 @@ pub enum PdbError {
     NoSuchType,
     /// Two bodies of one type disagree about a field they share.
     Conflict,
+    /// The named length is more than the file, or the stream it is in,
+    /// can hold.
+    TooLarge(&'static str),
 }
 
 fn u16_at(b: &[u8], off: usize) -> Result<u16, PdbError> {
@@ -104,7 +108,7 @@ impl<'a> Pdb<'a> {
             return Err(PdbError::BadContainer);
         }
         if directory_bytes > data.len() {
-            return Err(PdbError::BadContainer);
+            return Err(PdbError::TooLarge("directory size"));
         }
 
         // The block map lists the blocks of the directory; the directory
@@ -131,18 +135,26 @@ impl<'a> Pdb<'a> {
 
         let count = u32_at(&directory, 0).map_err(bad)? as usize;
         if count > directory_bytes / 4 {
-            return Err(PdbError::BadContainer);
+            return Err(PdbError::TooLarge("stream count"));
         }
         let mut streams = Vec::with_capacity(count);
         let mut total = 0usize;
         for i in 0..count {
             let size = u32_at(&directory, 4 + i * 4).map_err(bad)?;
             let size = if size == NIL_STREAM { 0 } else { size };
+            if size as usize > data.len() {
+                return Err(PdbError::TooLarge("stream size"));
+            }
             streams.push((size, total));
             total += (size as usize).div_ceil(block_size);
         }
-        let mut blocks = Vec::with_capacity(total);
+        // `count` and every stream's size are bounded by the file's length
+        // above, so neither sum can overflow.
         let first = 4 + count * 4;
+        if total > directory_bytes.saturating_sub(first) / 4 {
+            return Err(PdbError::TooLarge("stream block list"));
+        }
+        let mut blocks = Vec::with_capacity(total);
         for i in 0..total {
             blocks.push(u32_at(&directory, first + i * 4).map_err(bad)?);
         }
@@ -269,7 +281,12 @@ impl Types {
         if first < FIRST_RECORD || end < first || body_end > data.len() {
             return Err(PdbError::Truncated);
         }
-        let mut records = Vec::with_capacity((end - first) as usize);
+        // A record is at least its length word and its kind word.
+        let count = (end - first) as usize;
+        if count > bytes / 4 {
+            return Err(PdbError::TooLarge("type record count"));
+        }
+        let mut records = Vec::with_capacity(count);
         let mut off = header;
         while off < body_end {
             let len = usize::from(u16_at(&data, off)?);
@@ -280,7 +297,7 @@ impl Types {
             records.push(off as u32);
             off += 2 + len;
         }
-        if records.len() != (end - first) as usize {
+        if records.len() != count {
             return Err(PdbError::BadRecord);
         }
         Ok(Types {
@@ -753,6 +770,58 @@ mod tests {
         assert_eq!(layout_of(&records, "_EMPTY").unwrap().members, []);
     }
 
+    /// Offset in `file` of its stream directory, when that is one block.
+    fn directory_of(file: &[u8], block_size: usize) -> usize {
+        u32_at(file, 3 * block_size).unwrap() as usize * block_size
+    }
+
+    fn put(file: &mut [u8], off: usize, v: u32) {
+        file[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    #[test]
+    fn lengths_beyond_the_file_are_named_errors() {
+        // Each of these lengths sizes an allocation. One the file cannot
+        // hold is refused by name before anything is allocated for it;
+        // the largest asks for 16 GiB, which a host may or may not grant.
+        let good = msf(&[vec![], info_stream(5), tpi(&[]), vec![7; 600]], 512);
+        let parse = |file: &[u8]| Pdb::parse(file).map(|_| ());
+
+        let mut file = good.clone();
+        put(&mut file, 44, good.len() as u32 + 1);
+        assert_eq!(parse(&file), Err(PdbError::TooLarge("directory size")));
+
+        let directory = directory_of(&good, 512);
+        let mut file = good.clone();
+        put(&mut file, directory, 0x3FFF_FFFF);
+        assert_eq!(parse(&file), Err(PdbError::TooLarge("stream count")));
+
+        let mut file = good.clone();
+        put(&mut file, directory + 4 + 3 * 4, good.len() as u32 + 1);
+        assert_eq!(parse(&file), Err(PdbError::TooLarge("stream size")));
+        // A deleted stream is empty, whatever its size word says.
+        put(&mut file, directory + 4 + 3 * 4, NIL_STREAM);
+        assert_eq!(Pdb::parse(&file).unwrap().stream(3).unwrap(), b"");
+
+        // A size the file could hold, but more blocks than the directory
+        // has room to list.
+        let mut file = good.clone();
+        put(&mut file, directory + 4 + 3 * 4, good.len() as u32);
+        assert_eq!(parse(&file), Err(PdbError::TooLarge("stream block list")));
+
+        // A type stream whose header counts more records than its bytes
+        // can hold: the count of the CI abort, 0xFF00_0002 records.
+        for claimed in [0xFF00_0002u32, 1] {
+            let mut types = tpi(&[]);
+            put(&mut types, 12, 0x1000 + claimed);
+            let file = msf(&[vec![], info_stream(5), types], 512);
+            assert_eq!(
+                Pdb::parse(&file).unwrap().types().map(|_| ()),
+                Err(PdbError::TooLarge("type record count"))
+            );
+        }
+    }
+
     #[test]
     fn malformed_files_are_errors_not_panics() {
         assert!(matches!(
@@ -784,6 +853,11 @@ mod tests {
                 let _ = p.info();
                 p.types()?.layout("_S")
             });
+        }
+
+        // Anything that is not a PDB at all.
+        for body in [&b""[..], b"<html><body>404 Not Found</body></html>"] {
+            assert!(matches!(Pdb::parse(body), Err(PdbError::BadContainer)));
         }
 
         // A field list that continues into itself.
