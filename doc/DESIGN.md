@@ -265,6 +265,10 @@ There is one process, System, with Windows' id for it (4). Its block has
 is zero. Every thread belongs to it, the idle threads included (Windows
 gives those a process of their own), and carries a client id: the
 process id and a thread id from the same sequence of multiples of four.
+The id routines read those fields (`PsGetCurrentProcessId`,
+`PsGetThreadProcessId`, ...). There are no sessions: the process's
+`Session` is null, which Windows reads as session 0, and so do
+`PsGetProcessSessionId` and `PsGetThreadSessionId`.
 The kernel handle table is its handle table. `EPROCESS.Token` holds its
 primary token the way Windows stores it, as a fast reference: a pointer
 whose low four bits count references handed out in advance. NK hands out

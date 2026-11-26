@@ -96,6 +96,105 @@ pub extern "C" fn IoGetCurrentProcess() -> *mut c_void {
     PsGetCurrentProcess()
 }
 
+/// The running thread's client id: its process's id, then its own.
+fn current_client_id() -> [*mut c_void; 2] {
+    // SAFETY: the running thread's block; the field is pointer-aligned
+    // and written once, when the thread is made.
+    unsafe {
+        thread::object_field::<[*mut c_void; 2]>(thread::current(), thread_layout::CID).read()
+    }
+}
+
+/// [`PsGetCurrentProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentprocessid):
+/// the id of the calling thread's process, from the thread's client id.
+pub extern "C" fn PsGetCurrentProcessId() -> *mut c_void {
+    current_client_id()[0]
+}
+
+/// [`PsGetCurrentThreadId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentthreadid):
+/// the calling thread's id.
+pub extern "C" fn PsGetCurrentThreadId() -> *mut c_void {
+    current_client_id()[1]
+}
+
+/// [`PsGetProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetprocessid).
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsGetProcessId(process: *mut c_void) -> *mut c_void {
+    // SAFETY: per the contract; the field is pointer-aligned and
+    // written once.
+    unsafe {
+        process
+            .cast::<u8>()
+            .add(layout::UNIQUE_PROCESS_ID)
+            .cast::<*mut c_void>()
+            .read()
+    }
+}
+
+/// [`PsGetThreadProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psgetthreadprocessid):
+/// the id of the process `thread` belongs to, from the thread's client
+/// id.
+///
+/// # Safety
+/// `thread` is a thread object.
+pub unsafe extern "C" fn PsGetThreadProcessId(thread: *mut c_void) -> *mut c_void {
+    // SAFETY: per the contract; the field is pointer-aligned and
+    // written once.
+    unsafe {
+        thread
+            .cast::<u8>()
+            .add(thread_layout::CID)
+            .cast::<*mut c_void>()
+            .read()
+    }
+}
+
+/// `PsGetProcessSessionId` (`ntoskrnl.exe` exports it; the kit's
+/// headers do not declare it): the id of the session `process` is in.
+/// A process in no session (`EPROCESS.Session` null) reads as session
+/// 0, as on Windows, and no process is ever in one: there are no
+/// session spaces to point at.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsGetProcessSessionId(process: *mut c_void) -> u32 {
+    // SAFETY: per the contract; the field is pointer-aligned.
+    let session = unsafe {
+        process
+            .cast::<u8>()
+            .add(layout::SESSION)
+            .cast::<*mut c_void>()
+            .read()
+    };
+    if !session.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "PsGetProcessSessionId: process {process:p} names a session, and there are none"
+        ));
+    }
+    0
+}
+
+/// `PsGetThreadSessionId` (exported, not in the kit's headers): the
+/// session of the process `thread` belongs to.
+///
+/// # Safety
+/// `thread` is a thread object.
+pub unsafe extern "C" fn PsGetThreadSessionId(thread: *mut c_void) -> u32 {
+    // SAFETY: per the contract: a thread names its process, which
+    // lives at least as long, at a pointer-aligned offset.
+    unsafe {
+        PsGetProcessSessionId(
+            thread
+                .cast::<u8>()
+                .add(thread_layout::PROCESS)
+                .cast::<*mut c_void>()
+                .read(),
+        )
+    }
+}
+
 /// [`PsReferencePrimaryToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psreferenceprimarytoken):
 /// the process's primary token, with a reference the caller gives up
 /// through [`PsDereferencePrimaryToken`]. The token is read out of the
@@ -198,6 +297,72 @@ pub fn self_test() -> Result<(), &'static str> {
         return Err("NtCurrentProcess was accepted as a thread");
     }
     Ok(())
+}
+
+/// What a thread beside the tested one says it is.
+static PEER: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+
+/// Who a thread is, as a driver asks: the System process's id is 4 by
+/// every route, each thread has an id of its own from the same
+/// sequence, and process and threads are in session 0. Returns the
+/// questions asked.
+pub fn identity_test() -> Result<u32, &'static str> {
+    fn peer(_: usize) {
+        PEER[0].store(PsGetCurrentProcessId().addr() as u64, Ordering::Release);
+        PEER[1].store(PsGetCurrentThreadId().addr() as u64, Ordering::Release);
+        PEER[2].store(PsGetCurrentProcess().addr() as u64, Ordering::Release);
+    }
+    let process = system().cast::<c_void>();
+    let me = thread::current().cast::<c_void>();
+    let (pid, tid) = (
+        PsGetCurrentProcessId().addr(),
+        PsGetCurrentThreadId().addr(),
+    );
+    // SAFETY: the System process and the running thread.
+    let (of_process, of_thread) = unsafe {
+        (
+            PsGetProcessId(process).addr(),
+            PsGetThreadProcessId(me).addr(),
+        )
+    };
+    if pid as u64 != layout::SYSTEM_PROCESS_ID || of_process != pid || of_thread != pid {
+        return Err("the System process's id is not 4 by every way of asking");
+    }
+    if tid == 0 || tid % 4 != 0 || tid == pid {
+        return Err("the calling thread's id is not an id of its own");
+    }
+    let other = thread::create_referenced(peer, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    // SAFETY: a thread this test holds a reference to, which it gives
+    // up at the end; the wait is for that thread's end.
+    let (waited, its_process, sessions) = unsafe {
+        let waited = crate::ke::wait::wait(Some(other.cast()), None);
+        let facts = (
+            PsGetThreadProcessId(other.cast()).addr(),
+            [
+                PsGetProcessSessionId(process),
+                PsGetThreadSessionId(me),
+                PsGetThreadSessionId(other.cast()),
+            ],
+        );
+        object::dereference(other.cast());
+        (waited, facts.0, facts.1)
+    };
+    let said = PEER
+        .each_ref()
+        .map(|fact| fact.load(Ordering::Acquire) as usize);
+    if waited != 0 {
+        return Err("the other thread could not be waited for");
+    }
+    if said[0] != pid || said[2] != process.addr() || its_process != pid {
+        return Err("another system thread is not in the System process");
+    }
+    if said[1] == tid || said[1] == 0 || said[1] % 4 != 0 || said[1] == pid {
+        return Err("another thread does not have an id of its own");
+    }
+    if sessions != [0; 3] {
+        return Err("the System process or a thread of it is not in session 0");
+    }
+    Ok(11)
 }
 
 /// How many references `body` has, the caller's own included.

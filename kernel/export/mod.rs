@@ -196,6 +196,12 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ps::PsCreateSystemThread),
     export!(Implemented, ps::process::PsDereferencePrimaryToken),
     export!(Implemented, ps::process::PsGetCurrentProcess),
+    export!(Implemented, ps::process::PsGetCurrentProcessId),
+    export!(Implemented, ps::process::PsGetCurrentThreadId),
+    export!(Implemented, ps::process::PsGetProcessId),
+    export!(Implemented, ps::process::PsGetProcessSessionId),
+    export!(Implemented, ps::process::PsGetThreadProcessId),
+    export!(Implemented, ps::process::PsGetThreadSessionId),
     export_variable!(
         Implemented,
         "PsInitialSystemProcess",

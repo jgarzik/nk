@@ -25,6 +25,10 @@ pub const TOKEN: usize = 0x4B8;
 /// The bits of an `EX_FAST_REF` that are a count, not part of the
 /// pointer. Objects are 16-byte aligned, so a pointer has them clear.
 pub const FAST_REF_COUNT_MASK: usize = 0xF;
+/// `Session`: the session the process is in (an `MM_SESSION_SPACE`), or
+/// null for a process in none, which reads as session 0. The System
+/// process is in none.
+pub const SESSION: usize = 0x558;
 /// `ImageFileName`: the image's name, 15 bytes, zero padded.
 pub const IMAGE_FILE_NAME: usize = 0x5A8;
 pub const IMAGE_FILE_NAME_LEN: usize = 15;

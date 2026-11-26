@@ -12,6 +12,7 @@ pub static GROUP: Group = Group {
         "ob.handles",
         "ob.thread",
         "ps.system",
+        "ps.identity",
         "ps.token",
         "ob.namespace.paths",
         "ob.namespace.links",
@@ -49,6 +50,12 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "ob.handles", "look-ups:", handle::handle_test());
     counted(r, "ob.thread", "waits:", handle::thread_test());
     r.check("ps.system", crate::ps::process::self_test);
+    counted(
+        r,
+        "ps.identity",
+        "questions:",
+        crate::ps::process::identity_test(),
+    );
     counted(
         r,
         "ps.token",

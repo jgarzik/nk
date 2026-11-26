@@ -247,6 +247,7 @@ fn process_matches_the_kernel() {
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
+    assert_eq!(SESSION, field("Session"));
     assert_eq!(TOKEN, field("Token"));
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.
