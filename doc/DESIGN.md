@@ -1338,6 +1338,12 @@ Windows returns a copy. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other.
 
+`HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
+rather than a slot, tells `pci.sys` how interrupts name their
+destination: by a processor's own identifier (physical mode) on both
+architectures, with messages deliverable where the architecture's
+controller takes them.
+
 The start-up state drivers read (`kernel/kd/variables.rs`):
 `KdDebuggerEnabled` is false and `KdDebuggerNotPresent` true, NK
 speaking no Windows debugger protocol; `KdComPortInUse` names the I/O
@@ -2569,7 +2575,9 @@ file, and a hypervisor only as far as the processor's CPUID names one
 (`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
 none). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
-(`kernel/po/mod.rs`, `ZwPowerInformation`).
+(`kernel/po/mod.rs`, `ZwPowerInformation`). There is no sleep study:
+the request for its helper's table of routines fails, where Windows
+always has the helper, and `pci.sys` then reports nothing to it.
 
 | Territory | Imported by | Why |
 | --- | --- | --- |

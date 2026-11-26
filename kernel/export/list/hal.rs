@@ -14,4 +14,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, hal::dma::HalTranslateBusAddress),
     export!(Partial, hal::dma::IoGetDmaAdapter),
     export!(Implemented, hal::pci::HalSetBusDataByOffset),
+    export!(Partial, hal::target::HalGetInterruptTargetInformation),
 ];

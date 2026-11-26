@@ -11,6 +11,7 @@ pub static GROUP: Group = Group {
         "hal.dispatch-tables",
         "hal.acpi-tables",
         "hal.system-information",
+        "hal.interrupt-targets",
         "kd.variables",
     ],
     run,
@@ -21,6 +22,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("hal.dispatch-tables", dispatch::layout_test);
     r.check("hal.acpi-tables", crate::hal::acpi::test);
     r.check("hal.system-information", crate::hal::sysinfo::test);
+    r.check("hal.interrupt-targets", crate::hal::target::test);
     r.check("kd.variables", || variables::variables_test(info));
 }
 

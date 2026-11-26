@@ -95,6 +95,9 @@ pub fn interrupt_message(_vector: u32, _processor: usize) -> Option<(u64, u32)> 
 pub struct InterruptVectors;
 
 impl InterruptVectors {
+    /// Devices cannot be given messages: NK drives no ITS.
+    pub const MESSAGES: bool = false;
+
     pub const fn new() -> Self {
         Self
     }
