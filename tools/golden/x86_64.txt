@@ -282,6 +282,7 @@ null.unload ok
 null.no-leak ok
 ms.wpprecorder ok
 ms.wmilib ok
+ms.msrpc ok
 sioctl.load ok
 sioctl.open ok
 sioctl.buffered ok

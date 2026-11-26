@@ -42,9 +42,14 @@ sha256 = "0241160ae1e5635d8e12c517c50b327471ec9ae6af08538751892cbe467ba7ff"
 status = "microsoft-inbox"
 note = "wmilib.sys 10.0.19041.1, the WMI library drivers import from: an export driver"
 
-# null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
-# image size of the Windows 10 ARM64 build, which no public index lists.
-# Do not substitute a Windows 11 binary.
+[[fixture]]
+name = "msrpc"
+arch = "x86_64"
+file = "msrpc.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/msrpc.sys/A79D353E61000/msrpc.sys"
+sha256 = "25ec79b44ff2f02a814d7c320fb27e2fa515403814069ecd0b6cb745f7d9389f"
+status = "microsoft-inbox"
+note = "msrpc.sys 10.0.19041.1706, the kernel RPC run-time: an export driver"
 
 [[fixture]]
 name = "sioctl"

@@ -4,10 +4,10 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 189,
-  "implemented": 178,
-  "partial": 6,
-  "traps": 0,
+  "total": 237,
+  "implemented": 205,
+  "partial": 9,
+  "traps": 18,
   "missing": 0,
   "library": 5
  },
@@ -286,6 +286,425 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoWMIDeviceObjectToProviderId",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "msrpc",
+   "file": "msrpc.x64.sys",
+   "sha256": "25ec79b44ff2f02a814d7c320fb27e2fa515403814069ecd0b6cb745f7d9389f",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetCurrentProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "NtQuerySystemInformation",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmPageEntireDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlUnicodeStringToAnsiString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTagPriority",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquirePushLockExclusiveEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleasePushLockExclusiveEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeBugCheckEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlValidSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlValidSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenThreadTokenEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryInformationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlEqualSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeEnterCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeLeaveCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleasePushLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExUuidCreate",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExInitializePagedLookasideList",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExDeletePagedLookasideList",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExpInterlockedPopEntrySList",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExpInterlockedPushEntrySList",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExQueryDepthSList",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcSendWaitReceivePort",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcDeletePortSection",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcDeleteSectionView",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcQueryInformationMessage",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcSetInformation",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcQueryInformation",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcCreatePortSection",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcCreateSectionView",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcDisconnectPort",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeQueryActiveProcessorCountEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwWaitForSingleObject",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlertThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwRemoveIoCompletionEx",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAttachSiloToCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDetachSiloFromCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObjectWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwCreateIoCompletion",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentServerSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfReferenceObjectWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetIoCompletionEx",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenProcessTokenEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwImpersonateAnonymousToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetInformationThread",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwDuplicateToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentThreadId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCopySid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAbsoluteToSelfRelativeSD",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_wcsicmp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeAnsiString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "wcsstr",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "InitializeSListHead",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcConnectPort",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcConnectPortEx",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcCreateSecurityContext",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcDeleteSecurityContext",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcCancelMessage",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwAlpcCreateResourceReserve",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExpInterlockedFlushSList",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeDelayExecutionThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeStackAttachProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeQueryTimeIncrement",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeUnstackDetachProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "DbgPrint",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlMultiByteToUnicodeN",
      "state": "implemented"
     }
    ]
