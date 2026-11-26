@@ -150,7 +150,10 @@ gate tier has, for each architecture:
   registry (`registry = ["storage"]`), so its four drivers start at
   boot from their service keys as on Windows, bringing in the
   libraries they import from; `stor.load` requires every driver
-  running and every image loaded. The group is selected by name and
+  running and every image loaded; `stor.enumerate` requires the
+  devices of the path from the root to the disk, as far as NK brings
+  them up, to be where the reference Windows has them, with its
+  identifiers, services and classes, and says how many are started. The group is selected by name and
   leaves the stack running, so the leak comparison is waived for it
   (`test::keeps_what_it_started`).
 

@@ -138,7 +138,8 @@ macro_rules! hal_acpi_dispatch_slots {
             HalPciInterfaceReadConfig, HalPciInterfaceWriteConfig, HalInterruptGetApicVersion,
             HalSetMaxLegacyPciBusNumber, HalInterruptIsGsiValid, HalAcpiGetTable,
             HalAcpiGetRsdp, HalAcpiGetFacsMapping, HalAcpiGetAllTables,
-            HalAcpiPmRegisterAvailable,
+            HalAcpiPmRegisterAvailable, HalAcpiPmRegisterRead, HalAcpiPmRegisterWrite,
+            HalAcpiAccessSecureAddress,
         }
     };
 }
@@ -194,7 +195,11 @@ const _: () = assert!(matches!(
     slot_offset(HAL_DISPATCH_SLOTS, "HalInitPowerManagement"),
     Some(0x68)
 ));
-const _: () = assert!(FIRST_SLOT + HAL_ACPI_DISPATCH_SLOTS.len() * 8 == 0x80);
+const _: () = assert!(FIRST_SLOT + HAL_ACPI_DISPATCH_SLOTS.len() * 8 == 0x98);
+const _: () = assert!(matches!(
+    slot_offset(HAL_ACPI_DISPATCH_SLOTS, "HalAcpiPmRegisterRead"),
+    Some(0x80)
+));
 const _: () = assert!(matches!(
     slot_offset(HAL_ACPI_DISPATCH_SLOTS, "HalAcpiGetTable"),
     Some(0x58)

@@ -10,6 +10,7 @@ pub mod fatal;
 pub mod interrupt;
 pub mod pci;
 pub mod platform;
+pub mod pm;
 pub mod query;
 pub mod sysinfo;
 pub mod target;

@@ -57,6 +57,15 @@ pub fn boot_info() -> Option<&'static BootInfo> {
     unsafe { BOOT.load(Ordering::Acquire).as_ref() }
 }
 
+/// `length` bytes of memory the firmware described, at the physical
+/// address `at`, in the kernel's map of physical memory.
+pub fn firmware_memory(at: u64, length: usize) -> Option<&'static [u8]> {
+    let memory = DirectMap(boot_info()?);
+    let bytes = memory.bytes(at, length)?;
+    // SAFETY: as in `acpi_table`: firmware memory in the direct map.
+    Some(unsafe { core::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) })
+}
+
 /// The physical address of the firmware's root ACPI table.
 pub fn acpi_root() -> Option<u64> {
     let info = boot_info()?;
@@ -166,6 +175,7 @@ pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
     }));
     kprintln!("hal: {n} processors; {}", platform.controllers);
     PLATFORM.store(platform, Ordering::Release);
+    super::pm::init();
     Ok(())
 }
 
