@@ -48,7 +48,7 @@ const DELAYED_WORK_QUEUE: u32 = 1;
 /// run (`doc/DESIGN.md`, What is absent).
 const HELD_BACK: &[(&str, &str)] = &[(
     "ACPI",
-    "its start asks HalQuerySystemInformation for class 16, which NK lacks",
+    "its start reaches routines NK lacks; a boot with this entry removed names the next",
 )];
 
 /// The engine's mutex, and what only its holder touches: which
@@ -984,6 +984,8 @@ fn start(pdo: usize) {
     if let Some(service) = &found.service {
         let _ = registry::service_serves(service, &found.instance);
     }
+    // The interfaces its drivers enabled while it started exist now.
+    super::interface::device_started(pdo);
     let stack = if found.drivers.is_empty() {
         String::from("no driver: a raw device")
     } else {
@@ -996,6 +998,7 @@ fn start(pdo: usize) {
 /// the device is removed, so that they detach and delete what they
 /// attached, take back what it was given, and leave it failed.
 fn give_up(pdo: usize, problem: u32, why: core::fmt::Arguments<'_>) {
+    super::interface::device_stopped(pdo, false);
     // SAFETY: the tree's device; the engine's mutex is held, at
     // `PASSIVE_LEVEL`.
     unsafe {
@@ -1090,6 +1093,7 @@ pub fn remove(pdo: usize, surprise: bool) {
     // SAFETY: the tree's device; the engine's mutex is held, at
     // `PASSIVE_LEVEL`. The reference dropped last is the tree's.
     unsafe {
+        super::interface::device_stopped(pdo, true);
         if found.state == State::Started && surprise {
             query::pnp(device, IRP_MN_SURPRISE_REMOVAL, [0; 4]);
         }
