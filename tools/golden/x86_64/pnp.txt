@@ -8,4 +8,5 @@ pnp.start-resources ok
 pnp.invalidate-relations ok
 pnp.failed-start ok
 pnp.invalid-instance-id ok
+pnp.invalidate-state ok
 pnp.removed ok

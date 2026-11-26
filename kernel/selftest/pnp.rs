@@ -40,6 +40,7 @@ pub static GROUP: Group = Group {
         "pnp.invalidate-relations",
         "pnp.failed-start",
         "pnp.invalid-instance-id",
+        "pnp.invalidate-state",
         "pnp.removed",
     ],
     run,
@@ -111,6 +112,9 @@ static RAW_LINE: AtomicU32 = AtomicU32::new(0);
 static VECTOR: AtomicU32 = AtomicU32::new(0);
 static LEVEL: AtomicU32 = AtomicU32::new(0);
 static COUNTS: AtomicU32 = AtomicU32::new(0);
+/// What the function driver answers a query for the device's state
+/// with: `PNP_DEVICE_STATE` bits.
+static DEVICE_STATE: AtomicU32 = AtomicU32::new(0);
 /// How many removal requests reached a layer.
 static REMOVED: AtomicUsize = AtomicUsize::new(0);
 
@@ -360,6 +364,10 @@ unsafe extern "C" fn dispatch(device: *mut DEVICE_OBJECT, request: *mut IRP) -> 
                     record_start(parameters);
                     (*request).IoStatus.Status = STATUS_SUCCESS;
                 }
+                if minor == IRP_MN_QUERY_PNP_DEVICE_STATE && (*own).number == 2 {
+                    (*request).IoStatus.Status = STATUS_SUCCESS;
+                    (*request).IoStatus.Information = DEVICE_STATE.load(Ordering::Acquire) as usize;
+                }
                 if minor == IRP_MN_REMOVE_DEVICE {
                     REMOVED.fetch_add(1, Ordering::AcqRel);
                     (*request).IoStatus.Status = STATUS_SUCCESS;
@@ -510,6 +518,7 @@ impl Bench {
         ADDED.store(0, Ordering::Release);
         REMOVED.store(0, Ordering::Release);
         FAILING.store(0, Ordering::Release);
+        DEVICE_STATE.store(0, Ordering::Release);
         PRESENT.store(0, Ordering::Release);
         let line = InterruptTestSource::find().map_or(u32::MAX, |source| source.line().gsi);
         LINE.store(line, Ordering::Release);
@@ -824,6 +833,70 @@ fn properties(bench: &Bench) -> Result<(), &'static str> {
     if property_of(bench.function, 1, 256).0 != STATUS_INVALID_DEVICE_REQUEST {
         return Err("a function device object was taken for a physical one");
     }
+    // A property a driver gives the device is kept, with its type, in
+    // the device's key where Windows keeps it, and comes back; taken
+    // away, it is not found.
+    let category = ids::guid_from_text(CLASS).ok_or("the class is not a GUID")?;
+    let name = DEVPROPKEY {
+        fmtid: category,
+        pid: 12,
+    };
+    let get = |room: usize| {
+        let mut buffer = alloc::vec![0xEEu8; room];
+        let (mut length, mut kind) = (0xEEEE_EEEE, 0xEEEE_EEEE);
+        // SAFETY: a live device object, a key, a buffer of `room`
+        // bytes, and two numbers to write.
+        let status = unsafe {
+            pnp::export::IoGetDevicePropertyData(
+                pdo,
+                &raw const name,
+                0,
+                0,
+                room as u32,
+                buffer.as_mut_ptr(),
+                &raw mut length,
+                &raw mut kind,
+            )
+        };
+        (status, length, kind, buffer)
+    };
+    let set = |kind: u32, value: &[u8]| {
+        // SAFETY: as above; the value is readable.
+        unsafe {
+            pnp::export::IoSetDevicePropertyData(
+                pdo,
+                &raw const name,
+                0,
+                1,
+                kind,
+                value.len() as u32,
+                value.as_ptr(),
+            )
+        }
+    };
+    if get(8) != (STATUS_OBJECT_NAME_NOT_FOUND, 0, 0, alloc::vec![0xEE; 8]) {
+        return Err("a property nobody set was found");
+    }
+    // `DEVPROP_TYPE_UINT32` is 7.
+    if set(7, &0x1234_5678u32.to_le_bytes()) != STATUS_SUCCESS {
+        return Err("a property could not be set");
+    }
+    let stored = format!(
+        "{key}\\Properties\\{CLASS}\\000C",
+        key = registry::enum_key(&found.instance)
+    );
+    if cm::read(&stored, "") != Ok((0xFFFF_0007, 0x1234_5678u32.to_le_bytes().to_vec())) {
+        return Err("the property is not kept where Windows keeps it");
+    }
+    if get(4) != (STATUS_SUCCESS, 4, 7, 0x1234_5678u32.to_le_bytes().to_vec()) {
+        return Err("the property did not come back with its type and size");
+    }
+    if get(3) != (STATUS_BUFFER_TOO_SMALL, 4, 7, alloc::vec![0xEE; 3]) {
+        return Err("a buffer too small was not refused with the size needed");
+    }
+    if set(0, &[]) != STATUS_SUCCESS || get(8).0 != STATUS_OBJECT_NAME_NOT_FOUND {
+        return Err("a property taken away is still found");
+    }
     // The device key and the driver key open; the device key is the one
     // the settings were copied into.
     let key = registry::enum_key(&found.instance);
@@ -1028,18 +1101,55 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
         Ok(())
     });
-    // The bus loses its children: each is removed, and what it held is
-    // free again.
+    // The first child's driver says the device's state changed, and
+    // then that it failed (`PNP_DEVICE_FAILED`): the manager asks, and
+    // takes the device down. Its node tells of the NUMA node first.
     let vector = started.ok().map(|(_, vector)| vector);
     let before = REMOVED.load(Ordering::Acquire);
+    r.check("pnp.invalidate-state", || {
+        let first = CHILDREN[0].load(Ordering::Acquire);
+        let mut numa = 0xEEEE;
+        // SAFETY: live device objects of the test's, and a number to
+        // write.
+        unsafe {
+            if pnp::export::IoGetDeviceNumaNode(first, &raw mut numa) != STATUS_SUCCESS || numa != 0
+            {
+                return Err("the device is not on node 0");
+            }
+            if pnp::export::IoGetDeviceNumaNode(bench.function, &raw mut numa)
+                != STATUS_INVALID_PARAMETER
+            {
+                return Err("a function device object was given a node");
+            }
+            // Nothing changed: the device stays.
+            pnp::export::IoInvalidateDeviceState(first);
+            pnp::settle();
+            if child(1).is_none_or(|node| node.state != State::Started) {
+                return Err("a device whose state is unchanged did not stay started");
+            }
+            DEVICE_STATE.store(query::PNP_DEVICE_FAILED, Ordering::Release);
+            pnp::export::IoInvalidateDeviceState(first);
+        }
+        pnp::settle();
+        let found = child(1).ok_or("the first child has no node")?;
+        if found.state != State::Failed || found.problem != node::CM_PROB_FAILED_POST_START {
+            return Err("the device its driver calls failed is not failed with problem 43");
+        }
+        if REMOVED.load(Ordering::Acquire) != before + 3 {
+            return Err("the failed device's three devices were not told it is removed");
+        }
+        if !found.raw.is_empty() || !found.vectors.is_empty() {
+            return Err("the failed device still holds resources");
+        }
+        Ok(())
+    });
+    // The bus loses its children: each is removed, and what it held is
+    // free again.
     bench.report(0);
     pnp::settle();
     r.check("pnp.removed", || {
         if child(1).is_some() || child(2).is_some() {
             return Err("the children the bus no longer reports still have nodes");
-        }
-        if REMOVED.load(Ordering::Acquire) != before + 3 {
-            return Err("the started child's three devices were not told it is removed");
         }
         if CHILDREN
             .iter()

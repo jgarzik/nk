@@ -42,6 +42,7 @@ mod pci;
 mod pend;
 mod pnp;
 mod po;
+mod pofx;
 mod range;
 mod request;
 mod requestor;
@@ -180,6 +181,7 @@ pub static GROUPS: &[&[&Group]] = &[
     hal::GROUPS,
     absent::GROUPS,
     po::GROUPS,
+    pofx::GROUPS,
     em::GROUPS,
     without::GROUPS,
     whea::GROUPS,

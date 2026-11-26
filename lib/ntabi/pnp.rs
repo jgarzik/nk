@@ -244,6 +244,18 @@ pub union POWER_STATE {
     pub DeviceState: u32,
 }
 
+/// [`REQUEST_POWER_COMPLETE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nc-wdm-request_power_complete):
+/// the completion function a driver gives `PoRequestPowerIrp`: the
+/// device it named, the minor function, the `POWER_STATE` (one 32-bit
+/// value), its context, the request's status block.
+pub type REQUEST_POWER_COMPLETE = unsafe extern "C" fn(
+    *mut DEVICE_OBJECT,
+    u8,
+    u32,
+    *mut core::ffi::c_void,
+    *mut crate::io::IO_STATUS_BLOCK,
+);
+
 /// `POWER_SEQUENCE`: how often the device has left each low-power
 /// state.
 #[repr(C)]
@@ -498,6 +510,20 @@ const _: () = {
     assert!(size_of::<IO_RESOURCE_REQUIREMENTS_LIST>() == 72);
     assert!(offset_of!(IO_RESOURCE_REQUIREMENTS_LIST, AlternativeLists) == 28);
     assert!(offset_of!(IO_RESOURCE_REQUIREMENTS_LIST, List) == 32);
+};
+
+/// [`DEVPROPKEY`](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/devpropkey):
+/// the name of a device property: its category, a GUID, and its number
+/// in the category.
+#[repr(C)]
+pub struct DEVPROPKEY {
+    pub fmtid: [u8; 16],
+    pub pid: u32,
+}
+
+const _: () = {
+    assert!(size_of::<DEVPROPKEY>() == 20);
+    assert!(core::mem::offset_of!(DEVPROPKEY, pid) == 16);
 };
 
 #[cfg(test)]

@@ -82,11 +82,11 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `pnp`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `pnp`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
-| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -1280,6 +1280,11 @@ make that safe.
 | dispatch routine, for a request a driver sends (`IoCallDriver`, `IoSynchronousCallDriver`) | nothing: the request, and for `IoSynchronousCallDriver` the event in the sender's frame that its completion routine sets, are left to the driver that raised |
 | dispatch routine, for a request the kernel sends to a stack and waits for (`io::stack::send_synchronous`) | nothing: the request, and the block its results go to, are left to the driver that raised |
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
+| dispatch routine, for a power request the power manager makes for a driver (`PoRequestPowerIrp`) | nothing: the request, and the power manager's record of it, are left to the driver that raised |
+| a driver's power completion function (`PoRequestPowerIrp`) | nothing: the request stays as it is, and the device's later queries and sets wait behind it |
+| a power setting callback | nothing: it is called from a worker, whose base stops the system |
+| a component's active-condition callback (PoFx) | nothing: the component stays in its transition, which never finishes |
+| a component's idle-condition callback (PoFx) | undo: the IRQL NK raised to `DISPATCH_LEVEL` for the call; the component stays in its transition |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | a driver's `AddDevice` (the Plug and Play manager) | base: a system thread |
@@ -1392,7 +1397,13 @@ the same kind with Windows' signature, version and slot order, whose
 FADT; `nk_acpi::lookup`). It returns the firmware's own table where
 Windows returns a copy. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
-reach and stops the system naming any other.
+reach and stops the system naming any other. One is the list of I/O
+ports the ACPI driver must keep firmware's AML code away from: on
+x86-64 the PC's interrupt controllers, timers, clock and DMA
+controllers, as Windows' HAL lists them, and the PCI configuration
+ports, which carry a routine of the HAL's: AML's accesses to those are
+not made on the ports but carried out by the HAL through its own
+configuration access. arm64 has no I/O ports and an empty list.
 
 `HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
 rather than a slot, tells `pci.sys` how interrupts name their
@@ -1894,6 +1905,112 @@ source's system mapping if there is one; mapped on its own, it keeps
 that mapping until it is freed. A part outside the source's buffer
 stops the system.
 
+## Power
+
+The machine is on and stays on: the system is in S0 and every device in
+D0, always. NK never sleeps, hibernates, powers a device down for
+being idle, or wakes. What is left of a power manager is what a driver
+must be able to ask of one and get Windows' answer to (`kernel/po`;
+rules in `lib/po`).
+
+**Power requests.**
+[`PoRequestPowerIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-porequestpowerirp)
+builds a request as the pinned kernel does: an IRP one stack location
+deeper than the stack, whose topmost location is the power manager's
+own, starting out as `STATUS_NOT_SUPPORTED`, sent to the top of the
+stack. A wait-wake is sent at once and stays where the bus driver
+holds it: nothing on NK ever wakes, and the driver that asked cancels
+it with `IoCancelIrp`. Queries and sets of a device's power state are
+sent to one stack one at a time, in the order asked for; the next goes
+down from the thread that completed the one before, after that one's
+completion function has run. The power manager's completion routine
+calls the driver's completion function at whatever IRQL the request was
+completed, and frees the IRP. A stack whose bottom device has no device
+node (`DEVOBJ_EXTENSION.DeviceNode`, the Plug and Play manager's) is
+refused, as on Windows. NK runs no watchdog on a request
+(`PoQueryWatchdogTime` says so), and there is no platform extension to
+tell.
+
+Windows sends a device no power request when it is started: a driver
+is in D0 when its start request arrives and says so itself
+(`PoSetPowerState`). The state a driver reports is recorded where
+Windows records it, in the device object's `PowerFlags`, and nobody is
+told, as nobody is by the pinned kernel. What else the power manager
+keeps about a device is in a block of NK's own that the extension's
+`Dope` points to, as Windows' own block is; it goes with the device
+object's memory.
+
+**Power settings.** A driver registers for a setting by GUID
+([`PoRegisterPowerSettingCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-poregisterpowersettingcallback))
+and Windows calls it, from a worker thread, with the value the setting
+has. Two settings have a value on NK, the two the pinned kernel itself
+sets as it starts: the power source is AC, the console's display is on.
+Every other setting gets its value on Windows from something NK lacks
+(the power scheme, which user mode's power service applies; the
+platform's idle driver; a session), so a registration for one is kept
+and never called, which is Windows' behaviour for a setting that has
+not been given a value. No setting changes, so no callback is called
+twice. Taking a registration back waits for its callback if another
+thread is in it.
+
+**The runtime power framework (PoFx).** A driver registers a device
+as a set of components
+([`PoFxRegisterDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pofxregisterdevice),
+all three versions of the description), and says when it uses each and
+when it has stopped. NK counts as Windows does and tells the driver in
+the same order (`lib/po/fx.rs`): a component is registered active with
+one activation, which `PoFxStartDevicePowerManagement` gives up; when
+the last activation goes the idle-condition callback is made, at
+`DISPATCH_LEVEL` as the pinned kernel makes it, and the component is
+idle once the driver has called `PoFxCompleteIdleCondition`; the first
+activation of an idle component makes the active-condition callback, in
+the caller's thread before the call returns, or from a worker thread
+when the caller asks (`PO_FX_FLAG_ASYNC_ONLY`) or when the activation
+had to wait for an idle transition to finish. One transition of a
+component is under way at a time. A blocking call waits for the
+component to be at rest.
+
+That is where NK stops. A component stays in F0 and a device in D0:
+`ComponentIdleStateCallback`, `DevicePowerNotRequiredCallback`,
+`DevicePowerRequiredCallback` and the directed power callbacks are
+recorded and never called, and the idle timeout, latency, residency and
+watchdog callback a driver sets are recorded and never acted on.
+Completing what NK never asked for stops the system with the bugcheck
+the pinned kernel raises for it. There is no platform extension (PEP),
+and what a driver asks of one gets the pinned kernel's answer with
+none: a power control request is not supported, no crash dump device
+can be registered, performance states the extension must supply or
+handle are not implemented. Performance states a driver manages itself
+and dependencies between components (providers) stop the system,
+naming themselves. The Plug and Play manager's own activations of a
+device around enumeration, which on Windows keep it in D0, are not
+made.
+
+The framework accepts a device only once the Plug and Play manager has
+begun to start it, as on Windows (`po::fx::prepare_device`, called
+before the start request; `po::fx::abandon_device` on removal takes
+away a registration its drivers left behind).
+
+**Registered and never acted on.** Coalescing callbacks
+(`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
+platform's low-power idle state) and a device's flags for that state
+(`PoDirectedDripsSetDeviceFlags`).
+
+**Absent.** Hibernation: `PoSetHiberRange` stops the system with the
+bugcheck the pinned kernel raises when it is called and no hibernation
+is in progress. An ordered shutdown before a bugcheck:
+`PoShutdownBugCheck` stops at once with the code it is given. Thermal
+requests are traps.
+
+The tests `po.*` run a bus driver and a function driver of their own:
+requests of each kind go down their stack and come back to the
+completion function, a held set keeps the next query waiting, a
+wait-wake is marked and cancelled; settings callbacks are registered,
+called and taken back, from another thread and from inside; a
+device is registered with the framework in each version, and its
+components activated and idled with the callbacks, their order, thread
+and IRQL checked.
+
 ## Plug and Play
 
 `kernel/pnp` is the Plug and Play manager; the rules it applies are
@@ -2022,10 +2139,8 @@ is no query-remove, no eject, no stop and no rebalance.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
 not bring up yet because their `AddDevice` or start stops the system
-over something NK lacks: at present `ACPI`, whose start reads the
-firmware description Windows keeps under `HARDWARE\Description`
-(the "ACPI BIOS" record) and stops without it, so nothing below the
-HAL's ACPI device is enumerated.
+over something NK lacks, with the reason beside each name: at present
+`ACPI`, so nothing below the HAL's ACPI device is enumerated.
 
 ## The registry
 
@@ -2826,7 +2941,7 @@ transition calls them.
 
 ## What is absent
 
-No APCs, power management, processes
+No APCs, sleep states, device power-down ("Power"), processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft

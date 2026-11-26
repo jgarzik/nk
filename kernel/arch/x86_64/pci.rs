@@ -64,3 +64,32 @@ impl PciPorts {
         }
     }
 }
+
+/// The I/O ports firmware's AML code must not touch on a PC, as
+/// Windows' HAL lists them for the ACPI driver: first port, how many,
+/// whether the rule is for every version of the interpreter (1) or only
+/// those AML written for old Windows gets (0), and whether accesses are
+/// carried out for the AML by the HAL instead (the PCI configuration
+/// ports). They are the interrupt controllers, timers, clock, DMA
+/// controllers and their page registers, the edge/level registers and
+/// the configuration ports.
+pub const AML_FORBIDDEN_PORTS: &[(u32, u32, u32, bool)] = &[
+    (0x00, 0x10, 1, false),
+    (0x20, 0x02, 0, false),
+    (0x40, 0x04, 1, false),
+    (0x48, 0x04, 1, false),
+    (0x70, 0x02, 1, false),
+    (0x74, 0x03, 1, false),
+    (0x81, 0x03, 1, false),
+    (0x87, 0x01, 1, false),
+    (0x89, 0x01, 1, false),
+    (0x8A, 0x02, 1, false),
+    (0x8F, 0x01, 1, false),
+    (0x90, 0x02, 1, false),
+    (0x93, 0x02, 1, false),
+    (0x96, 0x02, 1, false),
+    (0xA0, 0x02, 0, false),
+    (0xC0, 0x20, 1, false),
+    (0x4D0, 0x02, 0, false),
+    (0xCF8, 0x08, 1, true),
+];

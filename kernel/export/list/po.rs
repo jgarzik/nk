@@ -3,4 +3,37 @@
 use super::super::{Export, NT, State};
 use crate::po;
 
-pub(in crate::export) static EXPORTS: &[Export] = &[export!(Partial, po::ZwPowerInformation)];
+pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, po::absent::PoSetHiberRange),
+    export!(Implemented, po::absent::PoShutdownBugCheck),
+    export!(Implemented, po::fx::PoFxActivateComponent),
+    export!(Implemented, po::fx::PoFxCompleteDevicePowerNotRequired),
+    export!(Implemented, po::fx::PoFxCompleteDirectedPowerDown),
+    export!(Implemented, po::fx::PoFxCompleteIdleCondition),
+    export!(Implemented, po::fx::PoFxCompleteIdleState),
+    export!(Implemented, po::fx::PoFxIdleComponent),
+    export!(Implemented, po::fx::PoFxNotifySurprisePowerOn),
+    export!(Implemented, po::fx::PoFxPowerControl),
+    export!(Implemented, po::fx::PoFxPowerOnCrashdumpDevice),
+    export!(Partial, po::fx::PoFxRegisterComponentPerfStates),
+    export!(Implemented, po::fx::PoFxRegisterCrashdumpDevice),
+    export!(Partial, po::fx::PoFxRegisterDevice),
+    export!(Implemented, po::fx::PoFxRegisterDripsWatchdogCallback),
+    export!(Implemented, po::fx::PoFxReportDevicePoweredOn),
+    export!(Implemented, po::fx::PoFxSetComponentLatency),
+    export!(Implemented, po::fx::PoFxSetComponentResidency),
+    export!(Implemented, po::fx::PoFxSetDeviceIdleTimeout),
+    export!(Implemented, po::fx::PoFxStartDevicePowerManagement),
+    export!(Implemented, po::fx::PoFxUnregisterDevice),
+    export!(Implemented, po::request::PoDirectedDripsSetDeviceFlags),
+    export!(Implemented, po::request::PoGetSystemWake),
+    export!(Implemented, po::request::PoQueryWatchdogTime),
+    export!(Partial, po::request::PoRequestPowerIrp),
+    export!(Implemented, po::request::PoSetPowerState),
+    export!(Implemented, po::request::PoSetSystemWake),
+    export!(Implemented, po::setting::PoRegisterCoalescingCallback),
+    export!(Partial, po::setting::PoRegisterPowerSettingCallback),
+    export!(Implemented, po::setting::PoUnregisterCoalescingCallback),
+    export!(Implemented, po::setting::PoUnregisterPowerSettingCallback),
+    export!(Partial, po::ZwPowerInformation),
+];

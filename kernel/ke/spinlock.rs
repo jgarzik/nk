@@ -53,6 +53,8 @@ pub enum Rank {
     RegistryWatches = 34,
     /// The kernel handle table (`ob::handle`).
     Handles = 35,
+    /// The power manager's records (`po`).
+    Power = 37,
     /// The executive pool (`mm::pool`).
     Pool = 40,
     /// Kernel address space and page tables (`mm::map`).
