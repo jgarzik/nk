@@ -265,6 +265,35 @@ fn range_list() -> Result<(), &'static str> {
         if header.Count != 0 || header.ListHead.Flink != list.cast() {
             return Err("RtlFreeRangeList did not empty the list");
         }
+
+        // Counted user data, as `acpi.sys` adds its interrupts: a pool
+        // block that starts with a count, which a copy of the entry
+        // raises and an entry freed lowers; the last frees the block.
+        const TAG: u32 = u32::from_le_bytes(*b"NkRt");
+        let data = crate::mm::pool::alloc_zeroed(16, TAG).cast::<u32>();
+        if data.is_null() {
+            return Err("no memory for a range's user data");
+        }
+        data.write(1);
+        if RtlAddRange(list, 0x10, 0x1F, 0, 0x12, data.cast(), owner(1)) != STATUS_SUCCESS
+            || data.read() != 1
+            || walk(list)? != [(0x10, 0x1F, 0x11)]
+        {
+            return Err("RtlAddRange did not mark a range with counted user data");
+        }
+        RtlInitializeRangeList(copy);
+        if RtlCopyRangeList(copy, list) != STATUS_SUCCESS || data.read() != 2 {
+            return Err("a copy of a range did not count its user data once more");
+        }
+        RtlFreeRangeList(copy);
+        if data.read() != 1 || crate::mm::pool::info(data.cast()).is_none() {
+            return Err("freeing the copy did not give up one share of the user data");
+        }
+        if RtlDeleteRange(list, 0x10, 0x1F, owner(1)) != STATUS_SUCCESS
+            || crate::mm::pool::info(data.cast()).is_some()
+        {
+            return Err("the last range freed did not free its counted user data");
+        }
     }
     Ok(())
 }

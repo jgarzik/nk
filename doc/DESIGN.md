@@ -2586,7 +2586,11 @@ containers, which walks in the same order and gives every range the
 same flags (`nk_rtl::range` says why), so an iterator's `MergedHead`
 is always null. No routine but an add or a copy allocates, so deleting
 cannot fail for want of memory as it can on Windows. `RtlAddRange`'s
-flag 0x10, which no header declares, stops the system by name. An
+flag 0x10, which no header declares and `acpi.sys` passes for its
+interrupts, says the range's user data is a pool block starting with
+a count of the entries that point to it: the range carries 0x10 in
+its flags, a copy of the entry raises the count, an entry freed
+lowers it and frees the block at zero, as the pinned kernel does. An
 alignment of zero is refused by `RtlFindRange`; Windows divides by it.
 The caller serialises the calls on one list.
 
