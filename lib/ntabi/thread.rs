@@ -30,6 +30,18 @@ pub const KERNEL_STACK: usize = 0x58;
 /// `Running`: one byte, non-zero while a processor is on this thread's
 /// stack.
 pub const RUNNING: usize = 0x71;
+/// `Alerted`: two bytes, one per processor mode (kernel, then user),
+/// non-zero while an alert in that mode is waiting for the thread's
+/// next alertable wait.
+pub const ALERTED: usize = 0x72;
+/// `MiscFlags`: 32 bits of flags, of which NK keeps
+/// [`MISC_FLAG_ALERTABLE`].
+pub const MISC_FLAGS: usize = 0x74;
+/// `MiscFlags.Alertable`: the thread is in a wait an alert may end.
+pub const MISC_FLAG_ALERTABLE: u32 = 1 << 4;
+/// `WaitMode`: the processor mode of the thread's alertable wait, one
+/// signed byte.
+pub const WAIT_MODE: usize = 0x187;
 /// `Priority`: the current priority, one signed byte.
 pub const PRIORITY: usize = 0xC3;
 /// `WaitListEntry`: links the thread into a ready queue.

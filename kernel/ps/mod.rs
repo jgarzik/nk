@@ -103,6 +103,34 @@ pub extern "C" fn ZwClose(handle: *mut c_void) -> NTSTATUS {
     handle::close(handle as u64)
 }
 
+/// `THREAD_ALERT`: the right to alert a thread.
+const THREAD_ALERT: u32 = 0x4;
+
+/// `ZwAlertThread` (`ntifs.h`):
+/// alert the thread a handle names, in kernel mode, which is the mode
+/// of a caller of the `Zw` routine (`ke::wait::alert`). The handle
+/// must name a thread.
+pub extern "C" fn ZwAlertThread(thread_handle: *mut c_void) -> NTSTATUS {
+    let found = handle::reference_for(
+        thread_handle as u64,
+        Some(&raw const object::THREAD_TYPE),
+        THREAD_ALERT,
+        nk_ob::handles::Mode::Kernel,
+    );
+    match found {
+        Ok((thread, _)) => {
+            // SAFETY: a thread, referenced by the look-up until the
+            // alert is made.
+            unsafe {
+                crate::ke::wait::alert(thread.cast(), nk_ntabi::io::KERNEL_MODE);
+                object::dereference(thread);
+            }
+            STATUS_SUCCESS
+        }
+        Err(status) => status,
+    }
+}
+
 /// [`KeGetCurrentThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetcurrentthread).
 /// In-line code on x86-64; a call on arm64.
 pub extern "C" fn KeGetCurrentThread() -> *mut c_void {

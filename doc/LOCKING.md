@@ -276,7 +276,13 @@ the timer's own lock to signal it; a timer that was set again in
 between is left alone.
 
 A thread's lock also serialises changes of its priority ("Switching
-threads" above): a ready queue's lock is taken inside it.
+threads" above): a ready queue's lock is taken inside it. And it
+covers the thread's alert state (`Alerted`, `Alertable`, `WaitMode`).
+A thread takes its own lock, holding no other, to say its wait is
+alertable, after looking for an alert left for it, and again to say
+the wait is over; an alerter takes it to claim such a wait through the
+wait register or else to leave the alert. So an alert either ends the
+wait in progress or is found by the next: none falls between.
 
 A mutex's lock also covers its owner and its place in the owner's list
 of mutexes held. A thread being let in to a mutex while it sleeps has

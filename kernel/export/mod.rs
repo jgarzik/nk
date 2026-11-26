@@ -211,6 +211,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ps::process::PsReferencePrimaryToken),
     export!(Implemented, ps::PsTerminateSystemThread),
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
+    export!(Implemented, ps::ZwAlertThread),
     export!(Implemented, ps::ZwClose),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export!(Implemented, rtl::print::RtlFreeUnicodeString),

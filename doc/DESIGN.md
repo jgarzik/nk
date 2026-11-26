@@ -304,9 +304,22 @@ limit is one more object, and the first signalled ends the wait. A wait
 may name up to 64 objects (the caller's wait blocks beyond three), for
 any one (it reports which) or for all (it takes all or none).
 
-Waits are not alertable. A wait that would block at `DISPATCH_LEVEL`
-stops the system (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a
-semaphore past its limit, an exception on Windows, stops the system.
+A wait that would block at `DISPATCH_LEVEL` stops the system
+(`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
+its limit, an exception on Windows, stops the system.
+
+**Alerts.** A thread can be alerted (`ZwAlertThread`), and an alert
+ends an alertable wait with `STATUS_ALERTED`
+([Waits and APCs](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/waits-and-apcs)).
+The state is where Windows keeps it: `KTHREAD.Alerted`, a byte per
+processor mode, and the `Alertable` flag and `WaitMode` of the wait in
+progress. A thread in an alertable wait is woken; any other keeps the
+alert, one at most per mode, for its next alertable wait, which
+returns at once without looking at its objects or its time limit and
+takes nothing. An alert made in kernel mode ends a wait of either
+mode; `ZwAlertThread` alerts in kernel mode. Waits that are not
+alertable never see an alert. An alert is the only thing that ends a
+wait this way: there are no APCs to deliver.
 
 ## Mutexes and critical regions
 

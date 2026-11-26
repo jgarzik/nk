@@ -196,6 +196,15 @@ fn thread_matches_the_kernel() {
     assert_eq!(KERNEL_STACK, field("KernelStack"));
     assert_eq!(RUNNING, field("Running"));
     assert_eq!(PRIORITY, field("Priority"));
+    assert_eq!(ALERTED, field("Alerted"));
+    assert_eq!(MISC_FLAGS, field("MiscFlags"));
+    let alertable = kthread.member("Alertable").expect("_KTHREAD.Alertable");
+    assert_eq!(alertable.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        alertable.bits,
+        Some((MISC_FLAG_ALERTABLE.trailing_zeros() as u8, 1))
+    );
+    assert_eq!(WAIT_MODE, field("WaitMode"));
     assert_eq!(WAIT_LIST_ENTRY, field("WaitListEntry"));
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
