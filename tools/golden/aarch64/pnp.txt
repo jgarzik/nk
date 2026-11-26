@@ -12,3 +12,4 @@ pnp.invalid-instance-id ok
 pnp.interface ok
 pnp.invalidate-state ok
 pnp.removed ok
+pnp.re-enumerated ok

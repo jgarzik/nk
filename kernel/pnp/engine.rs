@@ -435,6 +435,20 @@ fn identify(pdo: usize) {
                     format_args!("another device has the same instance path"),
                 );
             }
+            // The device has its name from here on, and its key: a bus
+            // driver that is asked for the device's requirements next
+            // may look in the key for what an earlier installation left
+            // there, as it can on Windows, where the instance key is
+            // made before those queries.
+            let named = (found.instance.clone(), found.device_id.clone());
+            node::with(pdo, |node| (node.instance, node.device_id) = named);
+            if crate::cm::write_path(&registry::enum_key(&found.instance), &[]).is_err() {
+                return fail(
+                    pdo,
+                    node::CM_PROB_OUT_OF_MEMORY,
+                    format_args!("its key could not be made"),
+                );
+            }
         }
         // A list with an invalid identifier in it is no list.
         let list = |kind| {
