@@ -1074,14 +1074,7 @@ pub fn smp_test() -> Result<u32, &'static str> {
     for n in 0..threads as usize {
         thread::create(body, 0, thread::NORMAL_PRIORITY, 1 << (n % processors))?;
     }
-    let deadline = crate::ke::time::interrupt_time() + 300_000_000;
-    while thread::count() != threads_before && crate::ke::time::interrupt_time() < deadline {
-        // SAFETY: no object is involved.
-        unsafe { wait::wait(None, Some(-10_000)) };
-    }
-    if thread::count() != threads_before {
-        return Err("the threads did not finish");
-    }
+    thread::settle(threads_before);
     let lived = threads * ROUNDS;
     if FAILED.load(Ordering::Relaxed) != 0 || WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a monitor's life went wrong on some processor");

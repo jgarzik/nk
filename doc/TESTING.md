@@ -104,6 +104,19 @@ scenario must be listed with its reason in `tools/golden/blocked.txt`.
 When driver fixtures are not downloaded the harness says so and accepts
 SKIP where the golden list says OK.
 
+### Time in a test
+
+A test does not limit by the clock what the kernel promises only
+eventually. It waits for the threads it started to end for as long as
+that takes (`ke::thread::settle`), and never returns while one of them
+can still run: they use what the test is about to tear down. A thread
+that never ends is a hang, and the harness's time limit for the whole
+boot is the hang detector: it reports where every processor was. A
+limit inside the test would only turn a slow host, an emulated machine
+on a busy one, into a failure. A limit stays where the time is the
+promise: a wait that must time out, a step one thread owes another at
+once.
+
 ### Scenarios
 
 `tools/scenarios.toml` lists the boots and documents their fields. The

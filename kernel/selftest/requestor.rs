@@ -604,9 +604,7 @@ fn closed_at_once() -> Result<u32, &'static str> {
         }
     }
     GUESSING.store(0, Ordering::Release);
-    if !wait(&|| thread::count() == threads) {
-        return Err("the closing thread did not end");
-    }
+    thread::settle(threads);
     kprintln!(
         "io: handles closed by the thread that guessed them: {}",
         GUESSED_RIGHT.load(Ordering::Acquire)

@@ -881,18 +881,17 @@ fn note(tag: u64) {
     let _ = TRACE.try_update(Ordering::AcqRel, Ordering::Acquire, |t| Some(t << 4 | tag));
 }
 
-/// Wait, yielding, until only `threads` threads exist; `false` after two
-/// seconds.
-fn settle(threads: u32) -> bool {
-    let deadline = super::time::interrupt_time() + 20_000_000;
+/// Wait, yielding, until only `threads` threads exist: how a test waits
+/// for the threads it started to end. There is no time limit, and a test
+/// does not return while a thread of its own can still run: the threads
+/// use what the test would tear down. A thread that never ends is a
+/// hang, which the boot harness reports with every processor's
+/// registers; a limit here would only turn a slow host into a failure.
+pub fn settle(threads: u32) {
     while count() != threads {
-        if super::time::interrupt_time() > deadline {
-            return false;
-        }
         yield_now();
         core::hint::spin_loop();
     }
-    true
 }
 
 /// Threads are created, run on their own stacks at PASSIVE_LEVEL as the
@@ -921,9 +920,7 @@ pub fn lifecycle_test() -> Result<u32, &'static str> {
         create(body, 0x1234, NORMAL_PRIORITY, 1 << me)?;
         yield_now();
     }
-    if !settle(before) {
-        return Err("threads that returned from their entry were not reaped");
-    }
+    settle(before);
     if RAN.load(Ordering::Acquire) != ROUNDS {
         return Err("not every thread ran once");
     }
@@ -1016,9 +1013,7 @@ pub fn turns_test() -> Result<(), &'static str> {
     for tag in 1..=3 {
         create(body, tag, NORMAL_PRIORITY, 1 << me)?;
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     // 1, 2, 3 each run to their yield, then each finishes, in order.
     if TRACE.load(Ordering::Acquire) != 0x123_9AB {
         return Err("threads of one priority did not take turns in order");
@@ -1047,9 +1042,7 @@ pub fn priority_test() -> Result<(), &'static str> {
     // SAFETY: only the tag-1 thread is left; it is on this processor's
     // queue, which is not running while this thread is.
     let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if after_yield != 0x32 {
         return Err("a yield did not run the higher then the equal thread, and only those");
     }
@@ -1220,9 +1213,7 @@ pub fn set_priority_test() -> Result<(), &'static str> {
         let from_10 = KeSetPriorityThread(this, i32::from(NORMAL_PRIORITY));
         (from_16, after_first, from_10, TRACE.load(Ordering::Acquire))
     };
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if (was, from_16, from_10) != (i32::from(NORMAL_PRIORITY), 16, 10) {
         return Err("setting a priority did not return the one before");
     }
@@ -1397,9 +1388,7 @@ pub fn set_other_priority_test() -> Result<u32, &'static str> {
             ob::object::dereference(thread.cast());
         }
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if was != i32::from(NORMAL_PRIORITY) || not_yet != 0 || woke != 0x1 {
         return Err("a waiting thread did not wake with the priority it was given");
     }
@@ -1553,21 +1542,12 @@ pub fn raise_preempted_test() -> Result<u32, &'static str> {
     };
     // Wait for the pusher to say it has got as far as `round`.
     let reached = |stage: &AtomicU32, round: u32| {
-        let deadline = super::time::interrupt_time() + 20_000_000;
         while stage.load(Ordering::Acquire) != round + 1 {
-            if super::time::interrupt_time() > deadline {
-                return false;
-            }
             core::hint::spin_loop();
         }
-        true
     };
-    let mut stuck = false;
     for round in 0..ROUNDS {
-        if !reached(&PARKED, round) {
-            stuck = true;
-            break;
-        }
+        reached(&PARKED, round);
         // The pusher wakes there and the runner is put aside for it: a
         // little later each round, and over a wider span every so
         // often, the raise meets that moment.
@@ -1595,10 +1575,7 @@ pub fn raise_preempted_test() -> Result<u32, &'static str> {
         // Below the pusher again, the runner gives way to it; the
         // pusher has then run this round, and may go back to wait.
         set(NORMAL_PRIORITY);
-        if !reached(&AWAKE, round) {
-            stuck = true;
-            break;
-        }
+        reached(&AWAKE, round);
         ROUND.store(round + 1, Ordering::Release);
     }
     STOP.store(true, Ordering::Release);
@@ -1611,9 +1588,7 @@ pub fn raise_preempted_test() -> Result<u32, &'static str> {
             ob::object::dereference(thread.cast());
         }
     }
-    if stuck || count() != before {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err(
             "a thread raised while it was put aside did not get its processor back at once",
@@ -1632,9 +1607,7 @@ pub fn other_cpu_test() -> Result<u32, &'static str> {
     let target = super::smp::online_count() - 1;
     TRACE.store(0, Ordering::Relaxed);
     create(body, 0, NORMAL_PRIORITY, 1 << target)?;
-    if !settle(before) {
-        return Err("a thread created for another processor did not run and exit");
-    }
+    settle(before);
     if TRACE.load(Ordering::Acquire) != target as u64 + 1 {
         return Err("the thread did not run on the processor it was created for");
     }
@@ -1662,8 +1635,9 @@ pub fn registers_test() -> Result<u32, &'static str> {
     for seed in 1..=3 {
         create(body, seed, NORMAL_PRIORITY, 1 << me)?;
     }
-    if !settle(before) || RAN.load(Ordering::Acquire) != 3 {
-        return Err("the threads did not finish");
+    settle(before);
+    if RAN.load(Ordering::Acquire) != 3 {
+        return Err("not all three threads ran to their end");
     }
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a register a call preserves changed across a thread switch");
@@ -1686,8 +1660,9 @@ pub fn preempt_test() -> Result<(), &'static str> {
     let after_higher = TRACE.load(Ordering::Acquire);
     // SAFETY: the lower thread is still on this processor's queue.
     let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
-    if !moved || !settle(before) {
-        return Err("the threads did not finish");
+    settle(before);
+    if !moved {
+        return Err("the ready thread of lower priority was not on this processor's queue");
     }
     if after_lower != 0 {
         return Err("a thread of lower priority ran ahead of its creator");
@@ -1725,9 +1700,7 @@ pub fn quantum_test() -> Result<u64, &'static str> {
     super::time::stall(2_000_000);
     STOP.store(true, Ordering::Release);
     let switches = dispatcher.switches.load(Ordering::Relaxed) - switches;
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     let spins = SPINS.each_ref().map(|s| s.load(Ordering::Relaxed));
     let (least, most) = (
         spins.iter().min().unwrap_or(&0),
@@ -1769,9 +1742,7 @@ pub fn preempt_registers_test() -> Result<u64, &'static str> {
     for seed in 1..=3 {
         create(body, seed, NORMAL_PRIORITY, 1 << me)?;
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a register changed under a thread that was preempted");
     }
@@ -1842,9 +1813,7 @@ pub fn migrate_test() -> Result<u64, &'static str> {
         }
     }
     STOP.store(true, Ordering::Release);
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a register a call preserves changed when a thread moved");
     }
@@ -1885,9 +1854,7 @@ pub fn affinity_test() -> Result<u64, &'static str> {
     if create(body, 0, NORMAL_PRIORITY, 1 << 63).is_ok() {
         return Err("a thread was created for a processor that does not exist");
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a thread ran on a processor outside its affinity");
     }
@@ -1925,9 +1892,7 @@ pub fn steal_behind_test() -> Result<u32, &'static str> {
     RAN.store(0, Ordering::Release);
     RUNNER_ON.store(u32::MAX, Ordering::Release);
     create(spinner, 0, NORMAL_PRIORITY + 1, 1 << there)?;
-    let deadline = super::time::interrupt_time() + 20_000_000;
-    while RUNNER_ON.load(Ordering::Acquire) == u32::MAX && super::time::interrupt_time() < deadline
-    {
+    while RUNNER_ON.load(Ordering::Acquire) == u32::MAX {
         core::hint::spin_loop();
     }
     // Both wait behind the spinner, the pinned one first. The second
@@ -1957,9 +1922,7 @@ pub fn steal_behind_test() -> Result<u32, &'static str> {
             ob::object::dereference(thread.cast());
         }
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     let (queued_there, status) = waited?;
     if !queued_there {
         return Err("the thread was not queued behind the pinned one on the busy processor");
@@ -2034,11 +1997,9 @@ pub fn identity_test() -> Result<u64, &'static str> {
         create(spinner, 0, NORMAL_PRIORITY, ANYWHERE)?;
         create(sleeper, 0, NORMAL_PRIORITY, ANYWHERE)?;
     }
-    let deadline = super::time::interrupt_time() + 300_000_000;
+    // Asleep between looks: the threads are as many as two to a
+    // processor, and this one would take a turn from them.
     while count() != before {
-        if super::time::interrupt_time() > deadline {
-            return Err("the threads did not finish");
-        }
         // SAFETY: no object is involved.
         unsafe { super::wait::wait(None, Some(-100_000)) };
     }

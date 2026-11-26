@@ -462,13 +462,7 @@ pub fn shared_reference_test() -> Result<u32, &'static str> {
     for n in 0..threads as usize {
         thread::create(body, 0, thread::NORMAL_PRIORITY, 1 << (n % processors))?;
     }
-    let deadline = time::interrupt_time() + 100_000_000;
-    while thread::count() != threads_before && time::interrupt_time() < deadline {
-        thread::yield_now();
-    }
-    if thread::count() != threads_before {
-        return Err("the threads did not finish");
-    }
+    thread::settle(threads_before);
     // SAFETY: the creating reference, which must be the last.
     let left = unsafe { object::dereference(shared) };
     if SHARED_WRONG.load(Ordering::Relaxed) != 0 {

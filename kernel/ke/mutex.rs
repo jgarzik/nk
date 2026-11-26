@@ -315,7 +315,6 @@ pub unsafe extern "C" fn ExReleaseFastMutex(mutex: *mut FAST_MUTEX) {
 
 // ---- tests --------------------------------------------------------------
 
-use super::time;
 use crate::test::Slot;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
@@ -451,13 +450,9 @@ fn exclusion(enter: fn(), leave: fn()) -> Result<u64, &'static str> {
     for _ in 0..THREADS {
         thread::create(body, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
     }
-    // Generous: an emulated machine on a busy host hands a contended
-    // lock over slowly, and slow is not wrong.
-    let deadline = time::interrupt_time() + 600_000_000;
+    // However long it takes: an emulated machine on a busy host hands
+    // a contended lock over slowly, and a waiter never let in hangs.
     while thread::count() != before {
-        if time::interrupt_time() > deadline {
-            return Err("the threads did not finish: a waiter was never let in");
-        }
         // SAFETY: no object is involved.
         unsafe { wait::wait(None, Some(-10_000)) };
     }

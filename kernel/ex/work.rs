@@ -447,9 +447,7 @@ pub fn many_test() -> Result<u64, &'static str> {
     // The items have run; the threads that queued them end in their
     // own time, and are waited for, so that none is left to end under
     // the next test.
-    if !super::stress::until(super::stress::PROMPT_MS, || thread::count() == threads) {
-        return Err("the threads that queued the items did not finish");
-    }
+    super::stress::ended(threads);
     // SAFETY: no object is involved. Time for a second run to show.
     unsafe { wait::wait(None, Some(-200_000)) };
     if RAN.iter().any(|ran| ran.load(Ordering::Acquire) != 1) {

@@ -718,9 +718,7 @@ fn tried() -> (u32, u32) {
 fn finish(threads_before: u32) -> Result<(), &'static str> {
     // SAFETY: the static event.
     unsafe { wait::KeSetEvent(GO.ptr(), 0, 0) };
-    if !stress::until(stress::PROMPT_MS, || thread::count() == threads_before) {
-        return Err("a helper thread did not end");
-    }
+    stress::ended(threads_before);
     if held() != (false, 0, 0) || waiters() != (0, 0) {
         return Err("the resource was not left free");
     }
@@ -880,9 +878,7 @@ pub fn starve_test() -> Result<(), &'static str> {
             return Err("the routine that yields to exclusive waiters did not yield");
         }
         start(NEWCOMER)?;
-        if !stress::until(stress::PROMPT_MS, || thread::count() == before + 1) {
-            return Err("the newcomer did not end");
-        }
+        stress::ended(before + 1);
         if tried() != (0, 1) {
             return Err("a newcomer got in past the waiter, or could not by starving it");
         }

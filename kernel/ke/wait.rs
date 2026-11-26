@@ -682,17 +682,12 @@ fn delay_ms(ms: i64) {
     unsafe { wait(None, Some(-ms * 10_000)) };
 }
 
-/// Sleep until only `threads` threads exist; `false` after three
-/// seconds.
-fn settle(threads: u32) -> bool {
-    let deadline = time::interrupt_time() + 30_000_000;
+/// As [`thread::settle`], sleeping between looks instead of yielding,
+/// so that threads of any priority get the processor meanwhile.
+fn settle(threads: u32) {
     while thread::count() != threads {
-        if time::interrupt_time() > deadline {
-            return false;
-        }
         delay_ms(1);
     }
-    true
 }
 
 fn waiter(_: usize) {
@@ -724,7 +719,8 @@ pub fn notification_test() -> Result<u32, &'static str> {
     if set(&EVENT) != 0 {
         return Err("setting an event that was not signalled reported it signalled");
     }
-    if !settle(before) || WOKE.load(Ordering::Acquire) != 3 {
+    settle(before);
+    if WOKE.load(Ordering::Acquire) != 3 {
         return Err("setting a notification event did not wake all three waiters");
     }
     // SAFETY: a static, initialised event.
@@ -766,9 +762,7 @@ pub fn synchronization_test() -> Result<u32, &'static str> {
             return Err("one setting of a synchronization event did not wake exactly one waiter");
         }
     }
-    if !settle(before) {
-        return Err("the waiters did not finish");
-    }
+    settle(before);
     // Nobody waiting: it stays set, once, for whoever comes next.
     let (first, second) = (set(&EVENT), set(&EVENT));
     let (taken, gone) = (wait_event(&EVENT, Some(0)), wait_event(&EVENT, Some(0)));
@@ -860,9 +854,7 @@ pub fn timeout_test() -> Result<u32, &'static str> {
     )?;
     delay_ms(5);
     set(&REPLY);
-    if !settle(before) {
-        return Err("the helper threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a wait with a long time limit was not satisfied by its event");
     }
@@ -928,9 +920,7 @@ pub fn semaphore_test() -> Result<u64, &'static str> {
     STOP.store(true, Ordering::Release);
     // SAFETY: as above. One unit each to let the takers see the stop.
     unsafe { KeReleaseSemaphore(sem, 0, TAKERS as i32, 0) };
-    if !settle(before) {
-        return Err("the takers did not finish");
-    }
+    settle(before);
     if taken != UNITS || left != 0 {
         return Err("units released to a semaphore were lost or taken twice");
     }
@@ -973,9 +963,7 @@ pub fn ping_pong_test() -> Result<u64, &'static str> {
     }
     STOP.store(true, Ordering::Release);
     set(&EVENT);
-    if !settle(before) {
-        return Err("the partner did not finish");
-    }
+    settle(before);
     if TAKEN.load(Ordering::Acquire) != rounds {
         return Err("the two sides disagree on how many turns were handed over");
     }
@@ -1024,9 +1012,7 @@ pub fn race_test() -> Result<u64, &'static str> {
         }
     }
     STOP.store(true, Ordering::Release);
-    if !settle(before) {
-        return Err("the taker did not finish");
-    }
+    settle(before);
     // SAFETY: a static, initialised event.
     let left = unsafe { KeReadStateEvent(EVENT.ptr()) } as u64;
     if TAKEN.load(Ordering::Acquire) + left != effective {
@@ -1084,7 +1070,7 @@ pub fn alert_test() -> Result<u32, &'static str> {
         // SAFETY: a thread this test holds a reference to, which it
         // gives up here.
         unsafe {
-            let status = wait(Some(ended.cast()), Some(-100_000_000));
+            let status = wait(Some(ended.cast()), None);
             object::dereference(ended.cast());
             handle::close(opened);
             status
@@ -1187,9 +1173,7 @@ pub fn alert_test() -> Result<u32, &'static str> {
     };
     let no_handle = ZwAlertThread(core::ptr::null_mut());
 
-    if !settle(before) {
-        return Err("the helper threads did not finish");
-    }
+    settle(before);
     if alerted_it != 0 || ended != STATUS_SUCCESS || in_wait[0] != STATUS_ALERTED {
         return Err("an alert did not end an alertable wait with STATUS_ALERTED");
     }
@@ -1284,16 +1268,13 @@ pub fn alert_race_test() -> Result<u64, &'static str> {
     STOP.store(true, Ordering::Release);
     // SAFETY: threads this test holds references to, which it gives up
     // here; the setter has ended before the waiter is let run dry.
-    let ended = unsafe {
-        let first = wait(Some(helper.cast()), Some(-100_000_000));
-        let second = wait(Some(target.cast()), Some(-100_000_000));
+    unsafe {
+        wait(Some(helper.cast()), None);
+        wait(Some(target.cast()), None);
         object::dereference(helper.cast());
         object::dereference(target.cast());
-        (first, second)
-    };
-    if ended != (STATUS_SUCCESS, STATUS_SUCCESS) || !settle(before) {
-        return Err("the threads did not finish");
     }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a wait returned a status that is none of its three");
     }
@@ -1523,9 +1504,7 @@ pub fn blocking_many_test() -> Result<u32, &'static str> {
     if (wait_events(4, false, None), states()) != (3, 0) {
         return Err("a blocking wait for any did not report the event another thread set");
     }
-    if !settle(before) {
-        return Err("the setter did not finish");
-    }
+    settle(before);
     let started = time::interrupt_time();
     thread::create(setter, 4, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
     if (wait_events(4, true, None), states()) != (STATUS_SUCCESS, 0) {
@@ -1534,15 +1513,14 @@ pub fn blocking_many_test() -> Result<u32, &'static str> {
     if time::interrupt_time() - started < 600_000 {
         return Err("a wait for all returned before the last object was set");
     }
-    if !settle(before) {
-        return Err("the setter did not finish");
-    }
+    settle(before);
     // Three of four set, and time runs out.
     thread::create(setter, 3, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
     if wait_events(4, true, Some(120)) != STATUS_TIMEOUT {
         return Err("a wait for all succeeded with one object never set");
     }
-    if !settle(before) || states() != 0b0111 {
+    settle(before);
+    if states() != 0b0111 {
         return Err("a wait for all that timed out took objects");
     }
     Ok(3)
@@ -1584,9 +1562,7 @@ pub fn all_race_test() -> Result<u64, &'static str> {
         }
     }
     STOP.store(true, Ordering::Release);
-    if !settle(before) {
-        return Err("the takers did not finish");
-    }
+    settle(before);
     let taken = TAKEN.load(Ordering::Acquire);
     let left = states();
     for (which, &set) in effective.iter().enumerate() {

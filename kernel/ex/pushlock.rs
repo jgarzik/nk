@@ -416,9 +416,7 @@ fn inside() -> u32 {
 fn finish(threads_before: u32) -> Result<(), &'static str> {
     // SAFETY: the static event.
     unsafe { wait::KeSetEvent(GO.ptr(), 0, 0) };
-    if !stress::until(stress::PROMPT_MS, || thread::count() == threads_before) {
-        return Err("a helper thread did not end");
-    }
+    stress::ended(threads_before);
     if lock_word() != 0 {
         return Err("the lock was not left free");
     }

@@ -88,10 +88,7 @@ fn remove_lock() -> Result<(), &'static str> {
         acquire();
         IoReleaseRemoveLockAndWaitEx(LOCK.ptr(), core::ptr::null_mut(), 0x20);
     }
-    let deadline = time::interrupt_time() + 20_000_000;
-    while thread::count() != before && time::interrupt_time() < deadline {
-        thread::yield_now();
-    }
+    thread::settle(before);
     Ok(())
 }
 

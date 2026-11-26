@@ -706,16 +706,7 @@ pub fn stack_test() -> Result<u32, &'static str> {
     super::thread::create(waiter, 0, super::thread::NORMAL_PRIORITY + 1, 1 << me)?;
     let queued = insert(0);
     let woken = WOKEN.load(Ordering::Acquire);
-    for _ in 0..2000 {
-        if super::thread::count() == threads {
-            break;
-        }
-        super::thread::yield_now();
-        time::stall(1000);
-    }
-    if super::thread::count() != threads {
-        return Err("the thread a DPC routine woke did not end");
-    }
+    super::thread::settle(threads);
     if !queued || woken != 1 {
         return Err("a thread woken by a DPC routine did not run before the interrupted thread");
     }

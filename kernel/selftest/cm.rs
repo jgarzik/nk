@@ -451,9 +451,7 @@ fn closed_in_call() -> Result<(), &'static str> {
         }
     }
     RACE_ROUND.store(u32::MAX, Ordering::Release);
-    if !wait(&|| thread::count() == threads) {
-        return Err("the second thread did not end");
-    }
+    thread::settle(threads);
     kprintln!(
         "cm: values set before the key was deleted: {}; refused for a deleted key: {}; for a closed handle: {}",
         ended[0],

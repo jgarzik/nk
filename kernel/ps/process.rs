@@ -586,13 +586,7 @@ pub fn token_test() -> Result<u32, &'static str> {
                 1 << (n % processors),
             )?;
         }
-        let deadline = crate::ke::time::interrupt_time() + 100_000_000;
-        while thread::count() != threads_before && crate::ke::time::interrupt_time() < deadline {
-            thread::yield_now();
-        }
-        if thread::count() != threads_before {
-            return Err("the threads did not finish");
-        }
+        thread::settle(threads_before);
         let left = references(token);
         PsDereferencePrimaryToken(token.cast());
         if TOKEN_WRONG.load(Ordering::Relaxed) != 0 {

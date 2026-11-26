@@ -1,6 +1,7 @@
 //! What the tests of this directory share: threads that contend, and
-//! waiting for them with a limit, so that a waiter never let in fails
-//! its test instead of hanging the boot.
+//! waiting for them. A step one thread owes another at once is waited
+//! for with a limit; the end of the threads themselves is waited for
+//! without one, as [`thread::settle`] says.
 
 use crate::ke::{thread, time, wait};
 
@@ -28,19 +29,22 @@ pub fn until(ms: u64, ready: impl Fn() -> bool) -> bool {
 /// emulated machine on a busy host is slow, and slow is not wrong.
 pub const PROMPT_MS: u64 = 10_000;
 
-/// How long threads contending in a loop are given to finish.
-pub const PATIENCE_MS: u64 = 60_000;
+/// Sleep until only `threads` threads exist, however long that takes:
+/// [`thread::settle`], asleep between looks so that threads of any
+/// priority get the processor.
+pub fn ended(threads: u32) {
+    while thread::count() != threads {
+        nap();
+    }
+}
 
 /// Run `count` threads, the `n`th calling `entry(n)`, and wait for all
-/// of them to end.
+/// of them to end: those that could be made, if not all could.
 pub fn run(count: usize, entry: thread::Entry) -> Result<(), &'static str> {
     let before = thread::count();
-    for index in 0..count {
-        thread::create(entry, index, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
-    }
-    if until(PATIENCE_MS, || thread::count() == before) {
-        Ok(())
-    } else {
-        Err("the threads did not finish: a waiter was never let in")
-    }
+    let made = (0..count).try_for_each(|index| {
+        thread::create(entry, index, thread::NORMAL_PRIORITY, thread::ANYWHERE).map(|_| ())
+    });
+    ended(before);
+    made
 }

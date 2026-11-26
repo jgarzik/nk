@@ -380,7 +380,7 @@ static LOG_BYTES: core::sync::atomic::AtomicPtr<alloc::vec::Vec<u8>> =
 /// once: while any holds it they all hold one copy, and it is gone
 /// when the last lets go. Returns the descriptors logged.
 pub fn store_smp_test() -> Result<u32, &'static str> {
-    use crate::ke::{thread, time};
+    use crate::ke::thread;
     const ROUNDS: u32 = 2000;
     fn body(_: usize) {
         // SAFETY: the test keeps the bytes until every thread has
@@ -409,17 +409,14 @@ pub fn store_smp_test() -> Result<u32, &'static str> {
     LOG_WRONG.store(0, Ordering::Relaxed);
     let processors = crate::ke::smp::online_count();
     let threads = processors.max(2);
-    for n in 0..threads {
-        thread::create(body, 0, thread::NORMAL_PRIORITY, 1 << (n % processors))?;
-    }
-    let deadline = time::interrupt_time() + 100_000_000;
-    while thread::count() != threads_before && time::interrupt_time() < deadline {
-        thread::yield_now();
-    }
-    if thread::count() != threads_before {
-        return Err("the threads did not finish");
-    }
+    // The threads read `bytes`: whether or not all of them could be
+    // made, those that were have ended before it goes.
+    let made = (0..threads).try_for_each(|n| {
+        thread::create(body, 0, thread::NORMAL_PRIORITY, 1 << (n % processors)).map(|_| ())
+    });
+    thread::settle(threads_before);
     LOG_BYTES.store(core::ptr::null_mut(), Ordering::Release);
+    made?;
     if LOG_WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a logged descriptor was not a copy of what was logged");
     }
