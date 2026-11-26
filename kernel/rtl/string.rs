@@ -179,7 +179,7 @@ pub unsafe extern "C" fn RtlMultiByteToUnicodeN(
 
 /// [`RtlUnicodeToMultiByteN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlunicodetomultibyten):
 /// UTF-16 to ANSI bytes, as many as fit; no terminator. A character the
-/// code page lacks becomes `?`.
+/// code page lacks becomes its best fit by Windows' table, or `?`.
 ///
 /// # Safety
 /// `multibyte` is writable for `max_bytes` bytes, `unicode` readable for

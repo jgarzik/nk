@@ -1249,8 +1249,10 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
 - **The ANSI code page is Windows-1252**, the page of the reference
   machine's English (United States) installation, compiled in
   (`nk_rtl::codepage`); the registry's `Nls\CodePage` key is not
-  consulted. A character the page lacks becomes `?`: Windows' "best fit"
-  table (a fullwidth or accented letter to its plain form) is absent.
+  consulted. A character the page lacks becomes its best fit by
+  Windows' table (a fullwidth or accented letter to its plain form),
+  recorded from Windows 10 like the upper-case table, and `?` where
+  that has none.
 - **Upper case** is one table, `nk_rtl::upcase`: Windows' own, every
   unit as `RtlUpcaseUnicodeChar` answers on Windows 10, recorded there
   by the conformance driver `nkc-rtl`. It is older than the Unicode

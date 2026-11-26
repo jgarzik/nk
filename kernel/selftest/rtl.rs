@@ -501,6 +501,22 @@ fn multibyte() -> Result<(), &'static str> {
     if status != 0 || narrow[0] != 0x80 {
         return Err("the euro sign is not byte 0x80");
     }
+    // Characters the page lacks, which Windows fits as best it can: A
+    // macron, an en-width hyphen, fullwidth `z`.
+    let (fitted, mut plain) = ([0x100u16, 0x2010, 0xFF5A], [0xEEu8; 3]);
+    // SAFETY: three characters into room for three bytes.
+    let status = unsafe {
+        RtlUnicodeToMultiByteN(
+            plain.as_mut_ptr(),
+            3,
+            core::ptr::null_mut(),
+            fitted.as_ptr(),
+            6,
+        )
+    };
+    if status != 0 || plain != *b"A-z" {
+        return Err("a character the code page lacks did not become its best fit");
+    }
     // SAFETY: three characters into room for two bytes.
     let status = unsafe {
         RtlUnicodeToMultiByteN(narrow.as_mut_ptr(), 2, &raw mut converted, han.as_ptr(), 6)
