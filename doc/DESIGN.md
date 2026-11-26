@@ -2182,7 +2182,12 @@ answer, found in the pinned kernel: no feature configuration
 notifications registered and never made), no product policy
 (`kernel/ex/license.rs`: every licence value unknown, each name asked
 for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
-when Windows' engine is not running). A routine with many sub-functions
+when Windows' engine is not running), no errata rules
+(`kernel/ex/em.rs`: the errata manager's database is empty, so a
+provider that names an entry type or callback and a client that asks
+about a rule are both told `STATUS_NOT_FOUND`, the rule's state
+unknown; `acpi.sys` and `pci.sys` go on as on a machine no erratum
+matches). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
 (`kernel/po/mod.rs`, `ZwPowerInformation`).
 

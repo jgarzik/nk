@@ -15,6 +15,7 @@ mod counted;
 mod csq;
 mod dpc;
 mod driver_api;
+mod em;
 mod etw;
 mod ex;
 pub mod except;
@@ -162,6 +163,7 @@ pub static GROUPS: &[&[&Group]] = &[
     hal::GROUPS,
     absent::GROUPS,
     po::GROUPS,
+    em::GROUPS,
     whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,

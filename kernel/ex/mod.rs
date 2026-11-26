@@ -1,5 +1,6 @@
 //! The executive: services built on the kernel core that drivers use.
 
+pub mod em;
 pub mod license;
 pub mod lookaside;
 pub mod pushlock;
