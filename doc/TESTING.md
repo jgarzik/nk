@@ -4,6 +4,26 @@ Windows defines the expected behaviour. Oracle tests hold NK to a
 transcript recorded on real Windows; other expectations come from
 Microsoft's documentation, sample source and the fixture binaries.
 
+## What gets a test
+
+Microsoft's binaries running in boot scenarios are the proof of the
+driver ABI: a routine one of them calls on its way to a passing verdict
+is tested by that boot. During a phase:
+
+- a structure a binary can see is checked against Microsoft's layout
+  tables (`lib/ntabi`, below);
+- algorithmic code in `lib/` gets host unit tests;
+- a bug gets a test that fails before the fix;
+- the golden lists stay: a verdict that disappears or turns into a SKIP
+  fails the boot;
+- a routine a Microsoft binary already executes in a scenario gets no
+  boot self-test of NK's own.
+
+Hardening is the failure paths, cleanup after a failure, `make soak`,
+`make mutants` and the arm64 mirror of the x86-64 work. It runs on a
+tagged snapshot once a phase's proof boots, beside the next phase, and
+is never a condition of a commit.
+
 ## The gates
 
 | Gate | Passes | Prints | Runs |
@@ -42,8 +62,7 @@ by name (`tools/boot_test.py aarch64-smp1`, `make check-arm`).
 | `make oracle` | re-record the transcripts on Windows | no: needs KVM and the VM |
 
 `make help` lists the targets that test nothing themselves (`fixtures`,
-`ledger`, `corpus`). The ungated targets run when the code they cover
-changes and at the end of a phase.
+`ledger`, `corpus`). The ungated targets belong to hardening.
 
 ## Host unit tests
 
@@ -360,8 +379,8 @@ writes the write range, and its scenario says `disk_expect = "written"`.
 with one to eight processors on both architectures,
 x86-64 both virtualised and emulated. It starts twice as many guest
 processors as the host has, on purpose: an overloaded host stalls guest
-processors at arbitrary instants, which is what shakes out races. Run it
-whenever scheduling, locking or interrupt entry changes.
+processors at arbitrary instants, which is what shakes out races. It
+is part of hardening.
 
 ### Firmware hangs
 
@@ -465,9 +484,9 @@ with the test that must catch it. `make mutants` applies each, rebuilds,
 boots, requires that test to fail, and restores the source. `make test`
 checks every mutant still applies.
 
-A change that adds a mechanism whose failure would be silent (state
-saved and restored, an interrupt acknowledged, a wake-up delivered) adds
-the mutant that removes it.
+A mechanism whose failure would be silent (state saved and restored, an
+interrupt acknowledged, a wake-up delivered) gets the mutant that
+removes it, in hardening.
 
 ## Unwind coverage
 
