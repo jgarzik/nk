@@ -6,4 +6,4 @@ scenario: x86_64
 # test that waits with a time limit waits for ever.
 fails: scenario
 file: kernel/ke/dpc.rs
-remove:         arch::self_interrupt(arch::DPC.0);
+remove:             arch::self_interrupt(arch::DPC.0);

@@ -14,6 +14,5 @@ trap_list!(
     KeReportCacheIncoherentDevice,
     KeRevertToUserGroupAffinityThread,
     KeSetSystemGroupAffinityThread,
-    KeSetTargetProcessorDpcEx,
     KeStartDynamicProcessor,
 );

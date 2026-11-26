@@ -227,6 +227,19 @@ impl Fifo {
         self.tail = link;
     }
 
+    /// Add `link` at the front: it is served next.
+    ///
+    /// # Safety
+    /// As [`Fifo::push`].
+    pub unsafe fn push_front(&mut self, link: *mut Link) {
+        // SAFETY: per the contract.
+        unsafe { (&raw mut (*link).next).write(self.head) };
+        if self.head.is_null() {
+            self.tail = link;
+        }
+        self.head = link;
+    }
+
     /// Take the link at the front; null if the queue is empty.
     ///
     /// # Safety
@@ -1153,6 +1166,30 @@ mod tests {
                 [q.pop(), q.pop(), q.pop()],
                 [p[1], p[0], core::ptr::null_mut()]
             );
+        }
+    }
+
+    #[test]
+    fn fifo_serves_what_is_put_in_front_first() {
+        let mut nodes = links(4);
+        let p: Vec<*mut Link> = nodes.iter_mut().map(core::ptr::from_mut).collect();
+        let mut q = Fifo::new();
+        // SAFETY: the nodes outlive the queue's use of them.
+        unsafe {
+            // Into an empty queue: the only one, and the back too.
+            q.push_front(p[0]);
+            q.push(p[1]);
+            q.push_front(p[2]);
+            q.push_front(p[3]);
+            assert_eq!(
+                [q.pop(), q.pop(), q.pop(), q.pop(), q.pop()],
+                [p[3], p[2], p[0], p[1], core::ptr::null_mut()]
+            );
+            assert!(q.is_empty());
+            q.push_front(p[1]);
+            assert!(q.remove(p[1]) && q.is_empty());
+            q.push(p[0]);
+            assert_eq!(q.pop(), p[0]);
         }
     }
 
