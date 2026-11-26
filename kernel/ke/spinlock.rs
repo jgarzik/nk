@@ -30,13 +30,13 @@ pub enum Rank {
     /// Devices' reference counts, delete-pending marks and attachment
     /// chains (`io::device`).
     IoDatabase = 25,
-    /// Which interrupts each device has been given (`io::interrupt`).
-    DeviceInterrupts = 29,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
     /// The sources of hardware errors (`whea`).
     Whea = 28,
+    /// Which interrupts each device has been given (`io::interrupt`).
+    DeviceInterrupts = 29,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).
