@@ -171,17 +171,16 @@ fn kernel_names() -> Result<(), &'static str> {
     if routine.is_none() || resolve(b"HAL.dll", b"KeSetEvent") != routine {
         return Err("the kernel and the HAL are not one table");
     }
-    let persisted = resolve(b"ntoskrnl.exe", b"KsrQueryMetadata");
-    if persisted.is_none()
-        || resolve(b"ext-ms-win-ntos-ksr-l1-1-3.dll", b"KsrQueryMetadata") != persisted
-        || resolve(b"EXT-MS-WIN-NTOS-KSR-L1-1-1.DLL", b"KsrQueryMetadata") != persisted
-    {
-        return Err("an import from the API set NK hosts was not bound to the kernel's routine");
-    }
-    if resolve(b"ext-ms-win-ntos-other-l1-1-0.dll", b"KeSetEvent").is_some()
+    if resolve(b"ext-ms-win-ntos-ksr-l1-1-3.dll", b"KeSetEvent").is_some()
         || resolve(b"nosuch.sys", b"KeSetEvent").is_some()
     {
         return Err("a module that is not the kernel resolved to the kernel's table");
+    }
+    if !crate::export::is_extension_api_set(b"EXT-MS-win-ntos-ksr-l1-1-3.dll")
+        || crate::export::is_extension_api_set(b"api-ms-win-core-apiquery-l1-1-0.dll")
+        || crate::export::is_extension_api_set(b"ext.sys")
+    {
+        return Err("the names of extension API sets are not told from other modules'");
     }
     let by_number = resolve_ordinal(b"ntoskrnl.exe", 4);
     if by_number.is_none() || by_number != resolve(b"ntoskrnl.exe", b"ExAllocateTimerInternal2") {

@@ -1083,10 +1083,15 @@ Two more spellings reach the same table (`kernel/export/mod.rs`). An
 import from the kernel by number is bound through a short list of the
 numbers Microsoft's binaries use, each with the name Microsoft's public
 symbols give the routine: NK's table has names, not Microsoft's
-numbering. An import from an API set whose routines are the kernel's
-(`ext-ms-win-ntos-ksr-*`, any version) is an import from the kernel:
-Windows finds the hosting module in its API-set schema; NK lists the
-sets it hosts.
+numbering.
+
+An import from an extension API set (`ext-ms-*`: `acpi.sys` and
+`pci.sys` import `ext-ms-win-ntos-ksr`) is left as the image has it.
+Such a set may have no module on a given Windows, so the linker puts
+in each import's slot a routine of the importing image itself, which
+answers "not supported"; Windows' loader overwrites the slot only when
+its API-set schema names a host. NK hosts no extension set: the slot
+stays, checked to hold an address inside the image (`nk_pe::Bind::Own`).
 
 A driver can also ask for a routine by name while it runs
 (`MmGetSystemRoutineAddress`) and do without it when the answer is
@@ -1161,8 +1166,7 @@ the status alone.
 
 Not handled:
 
-- kernel-mode API-set names (`ext-ms-*`) other than those NK hosts
-  (Exports);
+- API sets that must have a host (`api-ms-*`);
 - importing from an image that runs as a driver (started from its
   service key) rather than as a library: refused;
 - images that import from each other in a circle: refused, at eight
