@@ -81,6 +81,7 @@ ob.references-smp ok
 ob.handles ok
 ob.thread ok
 ps.system ok
+ps.token ok
 ob.namespace.paths ok
 ob.namespace.links ok
 ob.namespace.name-info ok

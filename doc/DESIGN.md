@@ -268,7 +268,11 @@ process id and a thread id from the same sequence of multiples of four.
 The kernel handle table is its handle table. `EPROCESS.Token` holds its
 primary token the way Windows stores it, as a fast reference: a pointer
 whose low four bits count references handed out in advance. NK hands out
-none, so the bits are zero.
+none, so the bits are zero: `PsReferencePrimaryToken` takes each
+reference on the token itself. `PsInitialSystemProcess` holds the
+process, and the current process (`PsGetCurrentProcess`,
+`IoGetCurrentProcess`) is the one the calling thread says it is attached
+to, `KTHREAD.ApcState.Process`.
 
 ## Waits
 

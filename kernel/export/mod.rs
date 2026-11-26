@@ -177,6 +177,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::wait::KeDelayExecutionThread),
     export!(Implemented, ke::mutex::KeEnterCriticalRegion),
     export!(Implemented, ps::KeGetCurrentThread),
+    export!(Implemented, ps::process::IoGetCurrentProcess),
     export!(Implemented, ke::wait::KeInitializeEvent),
     export!(Implemented, ke::mutex::KeInitializeMutex),
     export!(Implemented, ke::wait::KeInitializeSemaphore),
@@ -190,6 +191,14 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ke::wait::KeWaitForMultipleObjects),
     export!(Implemented, ke::wait::KeWaitForSingleObject),
     export!(Implemented, ps::PsCreateSystemThread),
+    export!(Implemented, ps::process::PsDereferencePrimaryToken),
+    export!(Implemented, ps::process::PsGetCurrentProcess),
+    export_variable!(
+        Implemented,
+        "PsInitialSystemProcess",
+        ps::process::PsInitialSystemProcess
+    ),
+    export!(Implemented, ps::process::PsReferencePrimaryToken),
     export!(Implemented, ps::PsTerminateSystemThread),
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Implemented, ps::ZwClose),
