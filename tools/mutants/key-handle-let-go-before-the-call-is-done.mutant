@@ -1,0 +1,8 @@
+# A registry call lets go of the key object as soon as it has read the
+# key's number from it: the handle is closed under the call, the key's
+# place goes to a new key, and the call changes that one.
+scenario: x86_64
+fails: cm.delete.closed-in-call
+file: kernel/cm/mod.rs
+replace:     Ok(Held { body, key })
+with:     Ok(Held { body: unsafe { object::dereference(body); object::reference(crate::ps::process::system()); crate::ps::process::system() }, key })

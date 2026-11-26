@@ -314,7 +314,11 @@ impl Drop for Target {
 /// the handle `root` names: a directory, where the look-up starts, or
 /// an open file, whose device parses the whole name. The look-up ends
 /// at a device; whatever else it ends at is no file.
-fn resolve(root: Option<u64>, name: &[u16]) -> Result<Target, NTSTATUS> {
+///
+/// The root handle is the requestor's, referenced on behalf of `mode`
+/// with no access asked of it, as Windows' `ObpLookupObjectName` does:
+/// a kernel handle is no root for user mode.
+fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
     let is = |body: *mut u8, ty: &'static object::ObjectType| {
         // SAFETY: called with objects this function holds a reference to.
         core::ptr::eq(unsafe { object::type_of(body) }, ty)
@@ -322,7 +326,7 @@ fn resolve(root: Option<u64>, name: &[u16]) -> Result<Target, NTSTATUS> {
     let found = match root {
         None => ob::lookup(None, name),
         Some(root) => {
-            let root = handle::reference(root, None)?;
+            let (root, _) = handle::reference_for(root, None, 0, mode)?;
             if is(root, &object::FILE_TYPE) {
                 // Relative to an open file: the name as given is the
                 // driver's to read, and is not absolute.
@@ -448,7 +452,11 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         return Err(STATUS_INVALID_PARAMETER);
     }
     let name: Vec<u16> = request.name.encode_utf16().collect();
-    let target = resolve(request.root, &name)?;
+    let mode = match request.requestor_mode {
+        KERNEL_MODE => Mode::Kernel,
+        _ => Mode::User,
+    };
+    let target = resolve(request.root, &name, mode)?;
     let device = target.device;
     // Finding the device and counting the open are two steps, and the
     // device may be deleted between them: its memory is held (by the
@@ -570,10 +578,16 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
             // to what the handle was granted.
             unsafe {
                 let kernel = request.requestor_mode == KERNEL_MODE;
+                // Marked as having had a handle before it has one: the
+                // handle's number can be guessed, and from the moment
+                // it is in the table another thread may close it and
+                // write the flags (`cleanup`). Nothing else can reach
+                // the file yet, nor if no handle is made.
+                (*file).Flags |= FO_HANDLE_CREATED;
                 let handle =
                     handle::open_with(body, granted, nk_ob::handles::Attributes::default(), kernel);
-                if handle.is_ok() {
-                    (*file).Flags |= FO_HANDLE_CREATED;
+                if handle.is_err() {
+                    (*file).Flags &= !FO_HANDLE_CREATED;
                 }
                 object::dereference(body);
                 return handle.map(|handle| (handle, r.information));

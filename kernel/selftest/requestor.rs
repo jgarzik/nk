@@ -10,7 +10,7 @@
 use super::USER_OUTPUT;
 use crate::io::file::{self, IoError, IoResult, OpenRequest};
 use crate::io::{device, irp};
-use crate::ke::{dpc, time, timer};
+use crate::ke::{dpc, thread, time, timer};
 use crate::mm::{self, pool, user};
 use crate::test::{Group, Report, Slot};
 use alloc::vec::Vec;
@@ -27,6 +27,8 @@ pub static GROUP: Group = Group {
         "io.user.firmware-buffer",
         "io.user.copy-out-fault",
         "io.open.pended",
+        "io.open.user-root",
+        "io.open.closed-at-once",
     ],
     run,
     manual: false,
@@ -70,7 +72,8 @@ static DPC: Slot<KDPC> = Slot::new();
 /// The access the held create asked for, as its security context and
 /// access state said when the request was completed.
 static ASKED_AT_COMPLETION: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
-/// Cleanup and close requests the driver was sent.
+/// Create, cleanup and close requests the driver was sent.
+static CREATES: AtomicU32 = AtomicU32::new(0);
 static CLEANUPS: AtomicU32 = AtomicU32::new(0);
 static CLOSES: AtomicU32 = AtomicU32::new(0);
 
@@ -118,6 +121,7 @@ unsafe extern "C" fn open_or_close(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTST
         let location = (*irp).CurrentStackLocation;
         let file = (*location).FileObject;
         match (*location).MajorFunction {
+            IRP_MJ_CREATE => drop(CREATES.fetch_add(1, Ordering::AcqRel)),
             IRP_MJ_CLEANUP => drop(CLEANUPS.fetch_add(1, Ordering::AcqRel)),
             IRP_MJ_CLOSE => drop(CLOSES.fetch_add(1, Ordering::AcqRel)),
             _ => {}
@@ -477,6 +481,139 @@ fn pended_open() -> Result<u32, &'static str> {
     Ok(2)
 }
 
+/// An open names its root by handle, and the handle is the requestor's:
+/// Windows references it on behalf of the open's mode and asks no
+/// access of it (`ObpLookupObjectName`). So a kernel handle is no root
+/// for an open made for user mode, and no driver hears of that open;
+/// the same entry by the name user mode has for it is one. Returns the
+/// opens made.
+fn user_root() -> Result<u32, &'static str> {
+    // Granted nothing: no access is asked of a root.
+    let request = OpenRequest {
+        desired_access: 0,
+        ..OpenRequest::new(DEVICE)
+    };
+    let kernel = file::open(&request)
+        .map(|(handle, _)| handle)
+        .map_err(|_| "the device did not open")?;
+    let relative = |root, mode| {
+        CREATES.store(0, Ordering::Release);
+        let request = OpenRequest {
+            root: Some(root),
+            requestor_mode: mode,
+            ..OpenRequest::new("below")
+        };
+        let opened = file::open(&request).map(|(handle, _)| file::close(handle));
+        (opened, CREATES.load(Ordering::Acquire))
+    };
+    let own = kernel & !nk_ntabi::ob::KERNEL_HANDLE;
+    let opens = [
+        relative(kernel, USER_MODE),
+        relative(own, USER_MODE),
+        relative(kernel, KERNEL_MODE),
+        relative(own, KERNEL_MODE),
+    ];
+    file::close(kernel);
+    if opens[0].0.is_ok() {
+        return Err("an open for user mode was resolved from a kernel handle as its root");
+    }
+    if opens[0] != (Err(STATUS_INVALID_HANDLE), 0) {
+        return Err("an open for user mode from a kernel handle was not an invalid handle");
+    }
+    if opens[1..]
+        .iter()
+        .any(|open| *open != (Ok(STATUS_SUCCESS), 1))
+    {
+        return Err("an open relative to a handle its requestor may use was refused");
+    }
+    Ok(opens.len() as u32)
+}
+
+/// The handle the opens of [`closed_at_once`] are given, for the thread
+/// that closes it under them; whether that thread is to go on; and how
+/// often it got there first.
+static GUESSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static GUESSING: AtomicU32 = AtomicU32::new(0);
+static GUESSED_RIGHT: AtomicU32 = AtomicU32::new(0);
+
+/// Close the handle the next open will be given, again and again.
+fn close_guessed(_: usize) {
+    let alone = crate::ke::smp::online_count() == 1;
+    while GUESSING.load(Ordering::Acquire) == 1 {
+        if file::close(GUESSED.load(Ordering::Acquire)) == STATUS_SUCCESS {
+            GUESSED_RIGHT.fetch_add(1, Ordering::AcqRel);
+        }
+        if alone {
+            thread::yield_now();
+        }
+    }
+}
+
+/// A handle's number can be guessed, so a handle can be closed by
+/// another thread the instant it exists, while the open that made it
+/// is still returning. Whoever closes it, the driver is sent one
+/// cleanup and one close for each file it opened. Returns the opens
+/// made.
+fn closed_at_once() -> Result<u32, &'static str> {
+    const ROUNDS: u32 = 2000;
+    let wait = |ready: &dyn Fn() -> bool| {
+        let deadline = time::interrupt_time() + 100_000_000;
+        while !ready() && time::interrupt_time() < deadline {
+            thread::yield_now();
+        }
+        ready()
+    };
+    let sent = || {
+        (
+            CLEANUPS.load(Ordering::Acquire),
+            CLOSES.load(Ordering::Acquire),
+        )
+    };
+    CLEANUPS.store(0, Ordering::Release);
+    CLOSES.store(0, Ordering::Release);
+    // Every open is given the lowest free number: the same each time.
+    let (handle, _) =
+        file::open(&OpenRequest::new(DEVICE)).map_err(|_| "the device did not open")?;
+    file::close(handle);
+    if sent() != (1, 1) {
+        return Err("a file opened and closed was not cleaned up and closed once");
+    }
+    GUESSED.store(handle, Ordering::Release);
+    GUESSED_RIGHT.store(0, Ordering::Release);
+    GUESSING.store(1, Ordering::Release);
+    let threads = thread::count();
+    thread::create(close_guessed, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    let mut verdict = Ok(ROUNDS);
+    for round in 1..=ROUNDS {
+        match file::open(&OpenRequest::new(DEVICE)) {
+            // Closed here, unless the other thread was first.
+            Ok((handle, _)) => drop(file::close(handle)),
+            Err(_) => {
+                verdict = Err("the device did not open");
+                break;
+            }
+        }
+        // The close request is the last a file's driver hears of it.
+        if !wait(&|| sent().1 == round + 1) {
+            verdict = Err("a file whose handle was closed was never closed for its driver");
+            break;
+        }
+        if sent().0 != round + 1 {
+            verdict = Err("a file whose handle was closed under its open was cleaned up twice");
+            break;
+        }
+    }
+    GUESSING.store(0, Ordering::Release);
+    if !wait(&|| thread::count() == threads) {
+        return Err("the closing thread did not end");
+    }
+    kprintln!(
+        "io: handles closed by the thread that guessed them: {}",
+        GUESSED_RIGHT.load(Ordering::Acquire)
+    );
+    verdict
+}
+
 /// A dispatch routine that returns success for a create request it has
 /// not completed breaks the driver's contract, and the driver may still
 /// hold the IRP, which points at the opener's stack. The system stops,
@@ -512,4 +649,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted("io.user.firmware-buffer", with_driver(firmware_buffer));
     counted("io.user.copy-out-fault", with_driver(copy_out_fault));
     counted("io.open.pended", with_driver(pended_open));
+    counted("io.open.user-root", with_driver(user_root));
+    counted("io.open.closed-at-once", with_driver(closed_at_once));
 }

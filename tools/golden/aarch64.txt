@@ -51,6 +51,7 @@ thread.quantum ok
 thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
+thread.steal-behind ok
 thread.identity ok
 seh.walk.thread ok
 seh.walk.dpc ok
@@ -143,6 +144,7 @@ se.audit ok
 cm.keys ok
 cm.values ok
 cm.delete ok
+cm.delete.closed-in-call ok
 cm.delete.value ok
 cm.enumerate.keys ok
 cm.enumerate.values ok
@@ -221,6 +223,8 @@ io.user.access ok
 io.user.firmware-buffer ok
 io.user.copy-out-fault ok
 io.open.pended ok
+io.open.user-root ok
+io.open.closed-at-once ok
 io.service.default-image ok
 io.service.boot-start ok
 io.remove-lock ok
@@ -256,6 +260,7 @@ ex.sysinfo.modules ok
 ex.sysinfo.modules.short ok
 ex.sysinfo.driver ok
 rtl.module-information ok
+ex.sysinfo.modules.no-memory ok
 ps.version ok
 dbgk.live-dump ok
 ldr.module.kernel ok
@@ -269,6 +274,7 @@ ldr.lib.bind ok
 ldr.lib.counts ok
 ldr.lib.refused ok
 ldr.lib.as-service ok
+ldr.lib.no-memory ok
 io.requestor-process ok
 io.file-generic-mapping ok
 fsrtl.teardown-stream-contexts ok

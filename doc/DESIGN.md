@@ -1032,7 +1032,10 @@ not load its target.
   the next importer loads it afresh. As Microsoft documents, a library
   without `DllUnload`, or whose `DllUnload` fails, stays loaded.
 - **A refused importer leaves nothing.** Its libraries lose it as an
-  importer again, and one loaded for it alone is unloaded.
+  importer again, and one loaded for it alone is unloaded. The memory
+  to count an importer and to list a library is taken before the
+  library is loaded and before its code runs, so a load that runs out
+  of memory fails with nothing loaded and nothing to undo.
 
 What a refused load is called is what Windows' `NtLoadDriver` returns
 on the reference system; the transcripts (`oracle/nkc-lib*.txt`) show
@@ -1207,7 +1210,10 @@ it completed with, fails the request's test. A request made through a
 handle holds the file object until it has been waited for.
 
 **Open.** The name is looked up in the namespace, from the root or from
-a directory a root handle names. The look-up ends at a device, and what
+a directory a root handle names. The root handle is referenced on
+behalf of the open's requestor, with no access asked of it, as Windows
+references it: a kernel handle is no root for user mode
+(`STATUS_INVALID_HANDLE`). The look-up ends at a device, and what
 is left of the path is the device's to parse (Windows' `IopParseDevice`):
 it becomes the new file object's `FileName`, backslash first, in a pool
 block of the I/O manager's. A name relative to an open file goes to that
@@ -1245,6 +1251,12 @@ at `PASSIVE_LEVEL`: a file whose last reference goes above it is put on
 a list through its header (`NextToFree`) and deleted by a worker
 thread, as on Windows. Other types' objects are deleted where their last
 reference goes.
+
+A file object's `Flags` have no lock. The open marks the file as having
+had a handle (`FO_HANDLE_CREATED`, which spares it a cleanup request
+when it is deleted) before the handle is in the table, and takes the
+mark back if no handle is made: once the handle is there, another
+thread may close it, and the flags are that close's to write.
 
 **Pending.** A driver may return `STATUS_PENDING` and complete later from
 a DPC, timer or worker; the requestor waits on an event completion sets.
@@ -1391,7 +1403,11 @@ are no layered keys, so the form that describes a value of one
 (`KeyValueLayerInformation`) is refused the same way. A deleted value leaves its
 place in the order to the next; set again, it is the key's last. A key
 without subkeys can be
-deleted: gone by name at once, open handles good only for closing. No
+deleted: gone by name at once, open handles good only for closing. A
+call that was given a handle keeps the key's object until it returns,
+so a handle closed under it, and a key deleted and another made
+meanwhile, leave the call with the key it was asked about
+(`STATUS_KEY_DELETED`) and not with whichever key has its place. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
@@ -1803,7 +1819,10 @@ whoever takes the first module that contains it. The kernel and
 entry's `Flags` is zero and its `Section` and `MappedBase` are left as
 the caller had them, which is what Windows does with those two.
 `RtlQueryModuleInformation`, which the WDK's auxiliary library calls,
-reports the same list in its two sizes.
+reports the same list in its two sizes. Either is answered from a copy
+of the table, made in memory sized outside the table's lock; without
+that memory the query fails with `STATUS_INSUFFICIENT_RESOURCES` and
+writes nothing.
 
 `PsGetVersion` gives `RtlGetVersion`'s numbers. `MmIsDriverVerifying`
 is false: there is no verifier. `DbgkWerCaptureLiveKernelDump` answers

@@ -565,8 +565,10 @@ unsafe fn top_key(relative_to: u32, path: *const u16) -> Result<KeyId, NTSTATUS>
         }
         absolute(&full)?
     };
+    // The key the path starts at is held until the key it leads to has
+    // been counted, and let go of after the lock.
     let mut hive = HIVE.lock();
-    let key = hive.open(start, &rest).map_err(status)?;
+    let key = hive.open(start.key(), &rest).map_err(status)?;
     hive.opened(key);
     Ok(key)
 }

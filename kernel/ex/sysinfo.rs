@@ -36,9 +36,13 @@ struct Listed {
 /// kernel's (its imports bind to the kernel's exports), so it is listed
 /// with the kernel's range. An address in that range is the kernel's to
 /// whoever takes the first module that contains it.
-fn listed() -> Vec<Listed> {
-    let modules = ldr::modules();
-    let mut list = Vec::with_capacity(modules.len() + 1);
+///
+/// `None` without memory for the list: the query fails
+/// (`STATUS_INSUFFICIENT_RESOURCES`), having written nothing.
+fn listed() -> Option<Vec<Listed>> {
+    let modules = ldr::modules()?;
+    let mut list = Vec::new();
+    list.try_reserve_exact(modules.len() + 1).ok()?;
     for (index, module) in modules.iter().enumerate() {
         // The kernel's own image is the first entered.
         let names: &[(Origin, &[u8])] = if index == 0 {
@@ -64,7 +68,7 @@ fn listed() -> Vec<Listed> {
             });
         }
     }
-    list
+    Some(list)
 }
 
 /// Write a module's path as Windows does: its characters and the
@@ -80,12 +84,13 @@ unsafe fn write_path(to: *mut u8, path: &[u8; MODULE_PATH_LENGTH]) {
 
 /// Class 11: the count of loaded modules and as many entries as fit.
 /// `Section` and `MappedBase` of an entry are not written, as on
-/// Windows. `Flags` is zero: NK keeps no loader flags.
+/// Windows. `Flags` is zero: NK keeps no loader flags. `None` without
+/// memory to list them.
 ///
 /// # Safety
 /// `buffer` is writable for `length` bytes.
-unsafe fn modules(buffer: *mut u8, length: u32) -> (NTSTATUS, u32) {
-    let list = listed();
+unsafe fn modules(buffer: *mut u8, length: u32) -> Option<(NTSTATUS, u32)> {
+    let list = listed()?;
     let plan = rules::module_list(list.len() as u32, length);
     // SAFETY: per the contract and the plan: the count if the header
     // fits, and whole entries that fit.
@@ -113,7 +118,7 @@ unsafe fn modules(buffer: *mut u8, length: u32) -> (NTSTATUS, u32) {
     } else {
         STATUS_INFO_LENGTH_MISMATCH
     };
-    (status, plan.needed)
+    Some((status, plan.needed))
 }
 
 /// Class 0, written field by field: the bytes between and after the
@@ -156,7 +161,8 @@ unsafe fn basic(to: *mut SYSTEM_BASIC_INFORMATION) {
 /// `SystemIsolatedUserModeInformation` (165), which says there is no
 /// secure kernel. Any other class is `STATUS_INVALID_INFO_CLASS`, and
 /// leaves `return_length` alone, as Windows does for a class it does
-/// not know.
+/// not know. Without memory to list the modules, class 11 is
+/// `STATUS_INSUFFICIENT_RESOURCES`, and nothing is written.
 ///
 /// # Safety
 /// `buffer` is writable for `length` bytes, and `return_length` is null
@@ -208,7 +214,10 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
             },
         ),
         // SAFETY: per the contract.
-        SYSTEM_MODULE_INFORMATION_CLASS => unsafe { modules(buffer, length) },
+        SYSTEM_MODULE_INFORMATION_CLASS => match unsafe { modules(buffer, length) } {
+            Some(answer) => answer,
+            None => return STATUS_INSUFFICIENT_RESOURCES,
+        },
         _ => return STATUS_INVALID_INFO_CLASS,
     };
     if !return_length.is_null() {
@@ -221,7 +230,8 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
 /// `RtlQueryModuleInformation`, which the WDK's auxiliary library
 /// (`AuxKlibQueryModuleInformation`) calls: the loaded modules, each as
 /// its base alone (`size_per_module` 8) or as `AUX_MODULE_EXTENDED_INFO`
-/// (0x110). With no buffer, the length needed.
+/// (0x110). With no buffer, the length needed. Without memory to list
+/// them, `STATUS_INSUFFICIENT_RESOURCES`, and nothing is written.
 ///
 /// # Safety
 /// `information_length` is readable and writable; `buffer` is null or
@@ -231,7 +241,9 @@ pub unsafe extern "C" fn RtlQueryModuleInformation(
     size_per_module: u32,
     buffer: *mut c_void,
 ) -> NTSTATUS {
-    let list = listed();
+    let Some(list) = listed() else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
     // The length is read only once a buffer makes it matter, as on
     // Windows.
     let given = if buffer.is_null() {

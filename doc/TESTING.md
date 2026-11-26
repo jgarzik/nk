@@ -63,6 +63,11 @@ A declared verdict never reported is a FAIL, as is one reported twice,
 one not declared, and a group that does not give back what it took
 (`NK-TEST leak:FAIL`).
 
+A test reaches what the kernel does without memory by watching its own
+thread's allocations from the kernel's heap (`kernel/rt.rs`): it counts
+those a call makes, then repeats the call with each of them refused in
+turn.
+
 The kernel command line is `\NK\cmdline.txt` on the boot volume:
 
 | Word | Meaning |

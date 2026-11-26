@@ -109,7 +109,12 @@ Why this order:
   pool, the lists allocate from it under the lock.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
-  memory is read and written outside it. No routine of a driver's runs
+  memory is read and written outside it. The key object the handle
+  named stays referenced until the lock has been released for the last
+  time in the call: an object counts its key as open, and a key that
+  is open keeps its place in the tree, so what the call finds under
+  the lock is that key or its deletion, never a key made since. The
+  reference is dropped outside the lock, which the last one takes. No routine of a driver's runs
   under it: a query table takes it for each read and gives the routine
   copies.
 - A driver's entry point and unload routine run with the driver
@@ -300,8 +305,9 @@ do:
   has.
 - **Whoever queues, answers for the queue.** A changer that finds the
   thread on no queue does nothing more about a raise. So a processor
-  looking for work reads another's best thread where it is, under that
-  queue's lock, and takes it off only to run it. And a processor that
+  looking for work reads another's threads where they are, under that
+  queue's lock, from the best down to the first it is allowed to run,
+  and takes that one off only to run it. And a processor that
   queues a thread has the queue's processor look again: always, for a
   thread made ready; for the thread it is itself leaving, when the
   priority it queued the thread at is above the one it chose the next

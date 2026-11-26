@@ -629,7 +629,7 @@ fn driver_paging() -> Result<(), &'static str> {
     use crate::ldr;
     let routine = paged_routine as *const () as *mut c_void;
     let image = ldr::module_containing(routine as u64).ok_or("the routine is in no image")?;
-    let images = ldr::modules().len();
+    let images = ldr::modules().map(|list| list.len());
     // What the routine's code is, and what it computes, read at
     // `DISPATCH_LEVEL`.
     let at_dispatch = || {
@@ -675,7 +675,7 @@ fn driver_paging() -> Result<(), &'static str> {
         }
     }
     let _ = pool::free(block);
-    if ldr::modules().len() != images || at_dispatch() != before {
+    if ldr::modules().map(|list| list.len()) != images || at_dispatch() != before {
         return Err("the paging routines changed the images");
     }
     Ok(())

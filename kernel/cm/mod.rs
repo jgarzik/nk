@@ -226,16 +226,44 @@ fn status(error: Error) -> NTSTATUS {
     }
 }
 
-/// The key a key handle names.
-fn key_of(handle: *mut c_void) -> Result<KeyId, NTSTATUS> {
+/// A key found through its key object, and the reference to that
+/// object, held for as long as this lives.
+///
+/// A key's number names it only while the key is counted as open: the
+/// registry gives the place of a deleted key nobody has open to the
+/// next key made. A key object counts as one open until it is freed, so
+/// whoever holds a reference to it may take the registry's lock and
+/// find that key there, or find it deleted, whatever has been done with
+/// the handle meanwhile; never another key.
+///
+/// Dropped with the registry's lock released: the object's last
+/// reference going takes that lock ([`closed`]).
+struct Held {
+    body: *mut u8,
+    key: KeyId,
+}
+
+impl Held {
+    fn key(&self) -> KeyId {
+        self.key
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: the reference this was made with.
+        unsafe { object::dereference(self.body) };
+    }
+}
+
+/// The key a key handle names, held open until the call that asked has
+/// done with it.
+fn key_of(handle: *mut c_void) -> Result<Held, NTSTATUS> {
     let body = handle::reference(handle as u64, Some(&raw const object::KEY_TYPE))?;
     // SAFETY: a key object, referenced by the look-up: its body is the
     // key's number, written once when it was made.
-    unsafe {
-        let key = KeyId::from_index(body.cast::<usize>().read());
-        object::dereference(body);
-        Ok(key)
-    }
+    let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
+    Ok(Held { body, key })
 }
 
 /// The key the name in `attributes` starts at, and the path from
@@ -245,12 +273,13 @@ fn key_of(handle: *mut c_void) -> Result<KeyId, NTSTATUS> {
 /// relative to an open key starts at that key.
 ///
 /// Reads the driver's memory and resolves its handle, so it is called
-/// before the registry's lock is taken.
+/// before the registry's lock is taken; the key it starts at is held
+/// until the caller lets go of it, after that lock is released.
 ///
 /// # Safety
 /// `attributes` points to an `OBJECT_ATTRIBUTES` whose name is null or
 /// a counted string.
-unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(KeyId, Vec<u16>), NTSTATUS> {
+unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>), NTSTATUS> {
     if attributes.is_null() {
         return Err(STATUS_INVALID_PARAMETER);
     }
@@ -289,27 +318,29 @@ fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
     core::ptr::eq(unsafe { object::type_of(body) }, ty)
 }
 
-/// The key the object `body` is. What leads elsewhere in the namespace
-/// names no key.
+/// The key the object `body` is, held by the caller's reference. What
+/// leads elsewhere in the namespace names no key.
 ///
 /// # Safety
-/// The caller holds a reference to `body`, which is given up here.
-unsafe fn key_object(body: *mut u8) -> Result<KeyId, NTSTATUS> {
+/// The caller holds a reference to `body`, which is given up here or
+/// when what is returned is dropped.
+unsafe fn key_object(body: *mut u8) -> Result<Held, NTSTATUS> {
+    if !is(body, &object::KEY_TYPE) {
+        // SAFETY: per the contract.
+        unsafe { object::dereference(body) };
+        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+    }
     // SAFETY: per the contract; a key object's body is the key's
     // number, written once when it was made.
-    unsafe {
-        let key =
-            is(body, &object::KEY_TYPE).then(|| KeyId::from_index(body.cast::<usize>().read()));
-        object::dereference(body);
-        key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)
-    }
+    let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
+    Ok(Held { body, key })
 }
 
 /// The key the absolute name `path` starts at, and the path from
 /// there: the name is looked up in the object namespace, where it must
 /// lead to a key, the registry's root, with the rest of the path left
 /// over.
-fn absolute(path: &[u16]) -> Result<(KeyId, Vec<u16>), NTSTATUS> {
+fn absolute(path: &[u16]) -> Result<(Held, Vec<u16>), NTSTATUS> {
     let (body, rest) = crate::ob::lookup(None, path)?;
     // SAFETY: the reference the look-up took.
     Ok((unsafe { key_object(body) }?, rest))
@@ -435,10 +466,12 @@ pub fn exists(path: &str) -> bool {
 /// handles still open to it, this one included, are good only for
 /// closing.
 pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     let now = now();
     let mut hive = HIVE.lock();
     // The key it was a subkey of has changed with it.
@@ -466,8 +499,9 @@ pub unsafe extern "C" fn ZwOpenKey(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     let found = unsafe { named(attributes) }.and_then(|(start, path)| {
+        // `start` outlives the lock: a parameter goes after the locals.
         let mut hive = HIVE.lock();
-        let key = hive.open(start, &path).map_err(status)?;
+        let key = hive.open(start.key(), &path).map_err(status)?;
         hive.opened(key);
         Ok(key)
     });
@@ -525,8 +559,9 @@ pub unsafe extern "C" fn ZwCreateKey(
     // SAFETY: per the contract.
     let made = unsafe { named(attributes) }.and_then(|(start, path)| {
         let now = now();
+        // `start` outlives the lock: a parameter goes after the locals.
         let mut hive = HIVE.lock();
-        let (key, new) = hive.create(start, &path).map_err(status)?;
+        let (key, new) = hive.create(start.key(), &path).map_err(status)?;
         if new {
             let classed = hive.set_class(key, &class);
             if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
@@ -567,10 +602,12 @@ pub unsafe extern "C" fn ZwSetValueKey(
     data: *const u8,
     data_size: u32,
 ) -> NTSTATUS {
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     // SAFETY: per the contract. Name and data are the driver's memory:
     // the registry is given copies.
     let (name, data) = unsafe {
@@ -599,10 +636,12 @@ pub unsafe extern "C" fn ZwDeleteValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
 ) -> NTSTATUS {
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     // SAFETY: per the contract. The name is the driver's memory: the
     // registry is given a copy.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
@@ -717,10 +756,12 @@ pub unsafe extern "C" fn ZwEnumerateKey(
     if class > KEY_FULL {
         return STATUS_INVALID_PARAMETER;
     }
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
         let subkey = hive
@@ -767,10 +808,12 @@ pub unsafe extern "C" fn ZwQueryKey(
     if class > KEY_TRUST {
         return STATUS_INVALID_PARAMETER;
     }
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
         let info = hive.info(key).map_err(status)?;
@@ -810,10 +853,12 @@ pub unsafe extern "C" fn ZwEnumerateValueKey(
     if class > PARTIAL {
         return STATUS_INVALID_PARAMETER;
     }
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
         let (name, kind, data) = hive
@@ -848,10 +893,12 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     if class > VALUE_PARTIAL_ALIGN64 {
         return STATUS_INVALID_PARAMETER;
     }
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     // SAFETY: per the contract.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
     let format = |out: &mut [u8]| {

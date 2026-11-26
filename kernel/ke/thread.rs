@@ -449,9 +449,11 @@ fn wake_an_idle(allowed: u64) {
 }
 
 /// Take a thread this processor may run from another processor's queues:
-/// the best that one has, if its affinity allows. A thread it may not
-/// have is looked at where it is and never leaves its queue: whoever
-/// changes its priority meanwhile finds it there (`apply_priority`).
+/// the best there that its affinity allows here, which need not be the
+/// best there is. Each thread is looked at where it is, under its
+/// queue's lock, and only the one taken leaves its queue: whoever
+/// changes a thread's priority meanwhile finds it there
+/// (`apply_priority`).
 fn steal() -> Option<*mut Thread> {
     let me = pcr::current_processor() as usize;
     let processors = super::smp::online_count();
@@ -463,13 +465,15 @@ fn steal() -> Option<*mut Thread> {
         // SAFETY: queued threads are live, and while queued their
         // affinity and processor belong to the queue's lock.
         unsafe {
-            let Some((best, _)) = ready.first(0) else {
+            let allowed = ready.first_where(|link| {
+                field::<u64>(thread_of(link), layout::AFFINITY).read() & 1 << me != 0
+            });
+            let Some((link, level)) = allowed else {
                 continue;
             };
-            if field::<u64>(thread_of(best), layout::AFFINITY).read() & 1 << me == 0 {
-                continue;
-            }
-            let thread = dequeue(&mut ready, 0)?;
+            ready.remove(link, level);
+            let thread = thread_of(link);
+            (*thread).queued_on.store(0, Ordering::SeqCst);
             next_processor(thread).store(me as u32, Ordering::Relaxed);
             return Some(thread);
         }
@@ -1888,6 +1892,82 @@ pub fn affinity_test() -> Result<u64, &'static str> {
         return Err("a thread ran on a processor outside its affinity");
     }
     Ok(SPINS[0].load(Ordering::Relaxed))
+}
+
+/// A processor with nothing to run takes a thread it may run from
+/// another's queue even when that queue's best thread is one it may
+/// not. On another processor a thread spins above everything; behind it
+/// wait a thread pinned there and then one this processor may run too.
+/// This thread sleeps, its processor has nothing left, and the second
+/// must run here, at once: nothing else would ever give it a processor.
+/// Returns the processor it ran on.
+pub fn steal_behind_test() -> Result<u32, &'static str> {
+    use super::wait;
+    fn spinner(_: usize) {
+        RUNNER_ON.store(pcr::current_processor(), Ordering::Release);
+        while !STOP.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    fn pinned(_: usize) {}
+    fn free(_: usize) {
+        RAN.store(pcr::current_processor() + 1, Ordering::Release);
+    }
+    let processors = super::smp::online_count();
+    if processors < 2 {
+        // No other processor to take from.
+        return Ok(0);
+    }
+    let before = count();
+    let me = pcr::current_processor() as usize;
+    let there = (me + 1) % processors;
+    STOP.store(false, Ordering::Release);
+    RAN.store(0, Ordering::Release);
+    RUNNER_ON.store(u32::MAX, Ordering::Release);
+    create(spinner, 0, NORMAL_PRIORITY + 1, 1 << there)?;
+    let deadline = super::time::interrupt_time() + 20_000_000;
+    while RUNNER_ON.load(Ordering::Acquire) == u32::MAX && super::time::interrupt_time() < deadline
+    {
+        core::hint::spin_loop();
+    }
+    // Both wait behind the spinner, the pinned one first. The second
+    // may run here as well, but this processor is busy with this
+    // thread, so it is queued there, where it would rather be.
+    let made = create(pinned, 0, NORMAL_PRIORITY, 1 << there)
+        .and_then(|_| create_unstarted(free, 0, NORMAL_PRIORITY, 1 << there | 1 << me));
+    let waited = made.map(|thread| {
+        // SAFETY: a thread this test holds a reference to, not yet
+        // started; then waited for, and let go of.
+        unsafe {
+            field::<u32>(thread, layout::IDEAL_PROCESSOR).write(there as u32);
+            begin(thread);
+            let queued_there = (*thread).queued_on.load(Ordering::SeqCst) == there as u32 + 1;
+            // This processor goes idle for as long as the wait lasts.
+            let status = wait::wait(Some(thread.cast()), Some(-100_000_000));
+            (queued_there, status)
+        }
+    });
+    let ran = RAN.load(Ordering::Acquire);
+    STOP.store(true, Ordering::Release);
+    if let Ok(thread) = made {
+        // SAFETY: the reference `create_unstarted` gave; the thread
+        // has run by now or runs once the spinner has gone.
+        unsafe {
+            wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    if !settle(before) {
+        return Err("the threads did not finish");
+    }
+    let (queued_there, status) = waited?;
+    if !queued_there {
+        return Err("the thread was not queued behind the pinned one on the busy processor");
+    }
+    if status != wait::STATUS_SUCCESS || ran != me as u32 + 1 {
+        return Err("an idle processor left a thread it may run waiting behind one it may not run");
+    }
+    Ok(ran - 1)
 }
 
 /// A thread is itself, on the processor it is on, wherever it runs and

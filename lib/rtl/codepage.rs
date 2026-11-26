@@ -1,24 +1,19 @@
-//! Conversion between the 8-bit code pages and UTF-16: the content and
-//! size rules of
+//! Conversion between the 8-bit ANSI code page and UTF-16: the content
+//! and size rules of
 //! [`RtlMultiByteToUnicodeN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlmultibytetounicoden),
-//! [`RtlUnicodeToMultiByteN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlunicodetomultibyten),
-//! [`RtlAnsiStringToUnicodeString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlansistringtounicodestring)
+//! [`RtlUnicodeToMultiByteN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlunicodetomultibyten)
 //! and
 //! [`RtlUnicodeStringToAnsiString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlunicodestringtoansistring).
 //!
-//! # The tables
+//! # The table
 //!
-//! Bytes below 0x80 are ASCII in both pages. The upper halves are
-//! transcribed from the mapping files Microsoft gave the Unicode
-//! Consortium:
-//!
-//! - [`ANSI_1252`] is `MAPPINGS/VENDORS/MICSFT/WINDOWS/CP1252.TXT`; the
-//!   five bytes it leaves undefined (81, 8D, 8F, 90, 9D) map to the
-//!   control characters of the same value, as
-//!   `MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1252.txt` has them;
-//! - [`OEM_437`] is `MAPPINGS/VENDORS/MICSFT/PC/CP437.TXT`.
-//!
-//! All under <https://www.unicode.org/Public/>.
+//! Bytes below 0x80 are ASCII. The upper half is transcribed from the
+//! mapping file Microsoft gave the Unicode Consortium: [`ANSI_1252`] is
+//! `MAPPINGS/VENDORS/MICSFT/WINDOWS/CP1252.TXT`; the five bytes it
+//! leaves undefined (81, 8D, 8F, 90, 9D) map to the control characters
+//! of the same value, as
+//! `MAPPINGS/VENDORS/MICSFT/WindowsBestFit/bestfit1252.txt` has them.
+//! Both under <https://www.unicode.org/Public/>.
 //!
 //! [`BEST_FIT_1252`] is Windows' own: for a unit 1252 has no byte for,
 //! the byte `RtlUnicodeToMultiByteN` gives on Windows 10 (10.0.19045)
@@ -32,15 +27,11 @@
 //! # INFERRED
 //!
 //! - That the pinned Windows, installed with the English (United
-//!   States) system locale, has 1252 as its ANSI page and 437 as its
-//!   OEM page.
-//! - The OEM page has no best fit here: a unit 437 has no byte for
-//!   becomes `?`. Nothing exported converts to the OEM page.
+//!   States) system locale, has 1252 as its ANSI page.
 //! - `RtlUnicodeStringToAnsiString` into a buffer that is too small
-//!   stores what fits, terminated, and returns `STATUS_BUFFER_OVERFLOW`;
-//!   `RtlAnsiStringToUnicodeString` in the same position stores nothing.
-//!   Both need room for the terminator. Microsoft's pages say only that
-//!   the routines fail.
+//!   stores what fits, terminated, and returns `STATUS_BUFFER_OVERFLOW`.
+//!   It needs room for the terminator. Microsoft's page says only that
+//!   the routine fails.
 
 /// An 8-bit code page whose lower half is ASCII.
 pub struct CodePage {
@@ -156,30 +147,6 @@ pub static ANSI_1252: CodePage = CodePage {
     best_fit: &BEST_FIT_1252,
 };
 
-/// Code page 437, the original IBM PC's.
-#[rustfmt::skip]
-pub static OEM_437: CodePage = CodePage {
-    high: [
-        0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
-        0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
-        0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
-        0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
-        0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
-        0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
-        0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
-        0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
-        0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
-        0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
-        0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
-        0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
-        0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
-        0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
-        0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
-        0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0,
-    ],
-    best_fit: &[],
-};
-
 impl CodePage {
     /// The UTF-16 unit of `byte`.
     pub fn to_unicode(&self, byte: u8) -> u16 {
@@ -230,17 +197,6 @@ pub fn unicode_to_multibyte_chars(
     )
 }
 
-/// `RtlAnsiStringToUnicodeString`: the `Length` of the result and the
-/// `MaximumLength` it needs, terminator included, for a source of
-/// `ansi_length` bytes. The routine allocates that much, or fails with
-/// `STATUS_BUFFER_OVERFLOW` if the caller's buffer is smaller. None if
-/// the result cannot be a counted string
-/// (`STATUS_INVALID_PARAMETER_2`).
-pub fn ansi_to_unicode_lengths(ansi_length: u16) -> Option<(u16, u16)> {
-    let needed = u16::try_from((u32::from(ansi_length) + 1) * 2).ok()?;
-    Some((needed - 2, needed))
-}
-
 /// `RtlUnicodeStringToAnsiString`: the `Length` of the result and the
 /// `MaximumLength` it needs, terminator included, for a source of
 /// `unicode_length` bytes. The routine allocates that much, or stores
@@ -272,70 +228,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ascii_is_itself_in_both_pages() {
-        for page in [&ANSI_1252, &OEM_437] {
-            for byte in 0..0x80u8 {
-                assert_eq!(page.to_unicode(byte), u16::from(byte));
-                assert_eq!(page.from_unicode(u16::from(byte)), byte);
-            }
+    fn ascii_is_itself() {
+        let page = &ANSI_1252;
+        for byte in 0..0x80u8 {
+            assert_eq!(page.to_unicode(byte), u16::from(byte));
+            assert_eq!(page.from_unicode(u16::from(byte)), byte);
         }
     }
 
     #[test]
     fn every_byte_survives_the_round_trip() {
-        for page in [&ANSI_1252, &OEM_437] {
-            for byte in 0..=u8::MAX {
-                assert_eq!(page.from_unicode(page.to_unicode(byte)), byte, "{byte:02X}");
-            }
+        let page = &ANSI_1252;
+        for byte in 0..=u8::MAX {
+            assert_eq!(page.from_unicode(page.to_unicode(byte)), byte, "{byte:02X}");
         }
     }
 
-    /// The upper halves a second time, as the characters themselves in
-    /// byte order, written out from the pages' character charts rather
-    /// than from the mapping files.
+    /// The upper half a second time, as the characters themselves in
+    /// byte order, written out from the page's character chart rather
+    /// than from the mapping file.
     const CHART_1252: &str = "€\u{81}‚ƒ„…†‡ˆ‰Š‹Œ\u{8D}Ž\u{8F}\u{90}‘’“”•–—˜™š›œ\u{9D}žŸ\
         \u{A0}¡¢£¤¥¦§¨©ª«¬\u{AD}®¯°±²³´µ¶·¸¹º»¼½¾¿\
         ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß\
         àáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ";
-    const CHART_437: &str = "ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒ\
-        áíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐\
-        └┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀\
-        αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u{A0}";
 
     #[test]
-    fn the_tables_agree_with_the_character_charts() {
-        for (page, chart) in [(&ANSI_1252, CHART_1252), (&OEM_437, CHART_437)] {
-            let chart: Vec<u16> = chart.encode_utf16().collect();
-            assert_eq!(chart.len(), 128);
-            for (byte, &unit) in (0x80..=0xFFu8).zip(&chart) {
-                assert_eq!(page.to_unicode(byte), unit, "{byte:02X}");
-            }
+    fn the_table_agrees_with_the_character_chart() {
+        let chart: Vec<u16> = CHART_1252.encode_utf16().collect();
+        assert_eq!(chart.len(), 128);
+        for (byte, &unit) in (0x80..=0xFFu8).zip(&chart) {
+            assert_eq!(ANSI_1252.to_unicode(byte), unit, "{byte:02X}");
         }
     }
 
     #[test]
     fn known_characters() {
-        // (byte, unit in 1252, unit in 437)
-        for (byte, ansi, oem) in [
-            (0x80, 0x20AC, 0x00C7), // euro sign; C cedilla
-            (0x81, 0x0081, 0x00FC), // undefined in 1252; u diaeresis
-            (0x8D, 0x008D, 0x00EC),
-            (0x8F, 0x008F, 0x00C5),
-            (0x90, 0x0090, 0x00C9),
-            (0x9D, 0x009D, 0x00A5), // undefined in 1252; yen sign
-            (0x99, 0x2122, 0x00D6), // trade mark; O diaeresis
-            (0x9F, 0x0178, 0x0192),
-            (0xA0, 0x00A0, 0x00E1), // no-break space; a acute
-            (0xB0, 0x00B0, 0x2591), // degree; light shade
-            (0xC4, 0x00C4, 0x2500), // A diaeresis; box horizontal
-            (0xDB, 0x00DB, 0x2588), // U circumflex; full block
-            (0xE1, 0x00E1, 0x00DF), // a acute; sharp s
-            (0xE9, 0x00E9, 0x0398), // e acute; theta
-            (0xFE, 0x00FE, 0x25A0), // thorn; black square
-            (0xFF, 0x00FF, 0x00A0), // y diaeresis; no-break space
+        for (byte, unit) in [
+            (0x80, 0x20AC), // euro sign
+            (0x81, 0x0081), // undefined in 1252
+            (0x8D, 0x008D),
+            (0x8F, 0x008F),
+            (0x90, 0x0090),
+            (0x9D, 0x009D), // undefined in 1252
+            (0x99, 0x2122), // trade mark
+            (0x9F, 0x0178),
+            (0xA0, 0x00A0), // no-break space
+            (0xB0, 0x00B0), // degree
+            (0xC4, 0x00C4), // A diaeresis
+            (0xDB, 0x00DB), // U circumflex
+            (0xE1, 0x00E1), // a acute
+            (0xE9, 0x00E9), // e acute
+            (0xFE, 0x00FE), // thorn
+            (0xFF, 0x00FF), // y diaeresis
         ] {
-            assert_eq!(ANSI_1252.to_unicode(byte), ansi, "{byte:02X}");
-            assert_eq!(OEM_437.to_unicode(byte), oem, "{byte:02X}");
+            assert_eq!(ANSI_1252.to_unicode(byte), unit, "{byte:02X}");
         }
     }
 
@@ -348,11 +294,9 @@ mod tests {
 
     #[test]
     fn a_unit_the_page_lacks_is_its_best_fit_or_a_question_mark() {
-        // The euro sign is in 1252 and not in 437; theta the reverse,
-        // and 1252 makes do with a `T`.
+        // The euro sign is in 1252; theta is not, and 1252 makes do
+        // with a `T`.
         assert_eq!(ANSI_1252.from_unicode(0x20AC), 0x80);
-        assert_eq!(OEM_437.from_unicode(0x20AC), b'?');
-        assert_eq!(OEM_437.from_unicode(0x0398), 0xE9);
         assert_eq!(ANSI_1252.from_unicode(0x0398), b'T');
         // C1 controls: only the five 1252 leaves undefined.
         assert_eq!(ANSI_1252.from_unicode(0x0081), 0x81);
@@ -372,9 +316,6 @@ mod tests {
             (0xFFFF, b'?'),
         ] {
             assert_eq!(ANSI_1252.from_unicode(unit), byte, "{unit:04X}");
-        }
-        for unit in [0xFF21, 0x0100, 0xD800, 0xFFFF] {
-            assert_eq!(OEM_437.from_unicode(unit), b'?', "{unit:04X}");
         }
     }
 
@@ -449,15 +390,6 @@ mod tests {
                 "{source} into {max_bytes}"
             );
         }
-    }
-
-    #[test]
-    fn ansi_to_unicode_sizes() {
-        assert_eq!(ansi_to_unicode_lengths(0), Some((0, 2)));
-        assert_eq!(ansi_to_unicode_lengths(5), Some((10, 12)));
-        assert_eq!(ansi_to_unicode_lengths(0x7FFE), Some((0xFFFC, 0xFFFE)));
-        assert_eq!(ansi_to_unicode_lengths(0x7FFF), None);
-        assert_eq!(ansi_to_unicode_lengths(0xFFFF), None);
     }
 
     #[test]
