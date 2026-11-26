@@ -99,8 +99,19 @@ static LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// be: its own device, the status the request completed with.
 static WRONG: AtomicU32 = AtomicU32::new(0);
 /// How many stack locations the last request had when it reached the
-/// bus driver.
+/// bus driver, and its minor function and parameters.
 static STACK_COUNT: AtomicU32 = AtomicU32::new(0);
+static MINOR: AtomicU32 = AtomicU32::new(0);
+static PARAMETERS: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+
+/// The minor function and the parameters of the last request that
+/// reached the bus driver.
+pub(super) fn arrived_with() -> (u8, [u64; 4]) {
+    (
+        MINOR.load(Ordering::Acquire) as u8,
+        core::array::from_fn(|i| PARAMETERS[i].load(Ordering::Acquire) as u64),
+    )
+}
 
 const fn event(kind: u32, level: u32, major: u8) -> u32 {
     kind << 16 | level << 8 | major as u32
@@ -300,6 +311,10 @@ unsafe extern "C" fn bus_dispatch(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> 
         let parameters = (*location).Parameters;
         log(ARRIVED, (*layer(device)).level, major);
         STACK_COUNT.store((*irp).StackCount as u32, Ordering::Release);
+        MINOR.store(u32::from((*location).MinorFunction), Ordering::Release);
+        for (slot, value) in PARAMETERS.iter().zip(parameters) {
+            slot.store(value as usize, Ordering::Release);
+        }
         if (*location).DeviceObject != device {
             WRONG.fetch_add(1, Ordering::AcqRel);
         }

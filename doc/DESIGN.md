@@ -661,6 +661,15 @@ time; one already past fires inside `KeSetTimer`. The driver owns the
 `KTIMER`; its layout and the header bits NK uses (`Inserted`, the lock
 bit, `Expired`) are Windows'.
 
+A `KTIMER2` (`KeInitializeTimer2`, `KeSetTimer2`, `KeCancelTimer2`) is
+storage of the driver's whose fields no driver reads, so NK uses its
+136 bytes its own way (`ke::timer2`): a kernel timer where Windows has
+the dispatcher header, the DPC each expiry queues, and the callback's
+context. It behaves as an executive timer does, with the same
+departures: periods in whole milliseconds, no high resolution, never
+late on purpose. The header's type byte is a kernel timer's, not
+Windows' value for a `KTIMER2`.
+
 ## Work items
 
 Three queues (critical, delayed, hypercritical), each with worker threads
@@ -677,6 +686,16 @@ stops (`WORKER_THREAD_RETURNED_AT_BAD_IRQL`).
 An I/O work item is kernel-allocated at Windows' size and tied to a
 device, referenced from queueing until the routine returns, or to a
 driver object, which has no count to hold it by.
+
+A driver may keep an I/O work item in memory of its own instead:
+`IoSizeofWorkItem` bytes (Windows' `IO_WORKITEM`, which NK's is, so
+nothing of NK's lies outside them), made a work item by
+`IoInitializeWorkItem` and given up with `IoUninitializeWorkItem`,
+which stops the system if the item is still queued. A routine queued
+with `IoQueueWorkItemEx` is handed the item as well. Which kind of
+routine an item has is its `Type`, set as the pinned kernel sets it:
+`IoInitializeWorkItem` makes the newer kind, `IoQueueWorkItem` the
+older, and `IoQueueWorkItemEx` leaves it.
 
 ## The executive's locks, lists and timers
 
@@ -839,6 +858,39 @@ a time, a clock sequence, a node.
 - The clock sequence and the node are fixed at the first call, from
   the wall clock, the cycle counter and the time since boot: enough to
   tell boots and machines apart most of the time, and no secret.
+
+### Run-down protection
+
+[Run-down protection](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/run-down-protection)
+is one word of the driver's memory with Windows' values
+(`nk_ex::rundown`): a count of holders, then, once the object is being
+run down, the address of a block on the stack of the thread doing it.
+That thread sleeps on an event in the block; each release counts the
+block down and the last one sets the event. The word is left naming
+the block, as on Windows, until the driver initialises it again. A
+release after run-down with nobody waiting stops the system.
+
+The cache-aware kind has a word a processor that is running, each on a
+64-byte line; a thread uses the word of the processor it is on at that
+moment, so a word may count below zero and only the sum means
+anything. Running it down closes every word in turn and adds up what
+they held. The header's layout and the size
+`ExSizeOfRundownProtectionCacheAware` answers are the kernel's own,
+which a driver that sets the memory aside itself relies on.
+
+### Spin locks with readers, and lists under a spin lock
+
+An `EX_SPIN_LOCK` is a `LONG` of the driver's memory with Windows'
+bits (`nk_ex::spinlock`): the writer's bit, a count of readers, and a
+note that somebody is spinning. Nobody queues. A writer claims its bit
+first and then waits for the readers inside to leave, and new readers
+wait for the writer, so a stream of readers cannot keep a writer out.
+
+The `ExInterlocked...List` routines take the driver's `KSPIN_LOCK`
+with the IRQL at `HIGH_LEVEL`, where Windows turns interrupts off, so
+they can be called at any IRQL. `ExTryQueueWorkItem` always queues and
+says so. `ExQueryTimerResolution` answers NK's one clock rate three
+times.
 
 ## Objects, references and handles
 
@@ -1146,6 +1198,8 @@ make that safe.
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
+| a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
 | a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
 | silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
@@ -1154,10 +1208,11 @@ make that safe.
 | interrupt service routine, a message's included | base: kernel mode |
 | a DMA execution routine (adapter channel, scatter/gather list) | undo: the IRQL, if NK raised it to `DISPATCH_LEVEL` for the call |
 | the routine of `KeSynchronizeExecution` | undo: release the interrupt's lock and restore the IRQL |
-| an executive timer's callback (from the timer's DPC) | base: kernel mode |
+| an executive timer's callback, and a `KTIMER2`'s (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
 | a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
+| a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 | a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
@@ -1358,7 +1413,11 @@ each, by the place of the service's `Group` in
 `Control\ServiceGroupOrder`, then by the place of its `Tag` in the
 group's list under `Control\GroupOrderList` (a tag the list has not, or
 none, after those it has); services of no listed group last; a service
-after those it names in `DependOnService` and `DependOnGroup`. A group
+after those it names in `DependOnService` and `DependOnGroup`. The
+group `Core` comes before every listed group, in the order of its
+tags, though neither list names it: it is `acpi.sys`'s group, and the
+reference Windows' boot log has `acpi.sys` loaded before every bus
+driver. A group
 is the same group in any letter case: Windows' own keys say
 `File system` where its list says `File System`. Only keys whose `Type`
 is a driver's count. Windows'
@@ -1480,6 +1539,16 @@ allocates and finds again by an address of its choosing
 `IO_CLIENT_EXTENSION`, and are freed by the driver type's delete
 procedure when the driver object goes.
 
+A driver reports an error with a device through the error log
+([`IoAllocateErrorLogEntry`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateerrorlogentry),
+`IoWriteErrorLogEntry`, `kernel/io/errlog.rs`). A packet is allocated
+as the pinned kernel allocates it: within Windows' sizes, behind the
+I/O manager's header, counted against the limit on outstanding
+packets, holding its device and driver object. NK has no event log
+service to queue it to: writing a packet prints one `NK-ERRORLOG` line
+to the boot log, naming the driver, the device, the error code and the
+final status, and frees the packet.
+
 A driver counts the requests in progress on a device with a
 [remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
 (`kernel/io/remlock.rs`): the lock is the driver's memory in the
@@ -1582,6 +1651,34 @@ sequentially consistent operations, since with less each can miss the
 other's write and a cancelled request is never completed. Cancelling a
 completed IRP whose routine is still set stops the system
 (`CANCEL_STATE_IN_COMPLETED_IRP`).
+
+**Plug and Play and power requests.** The minor function codes of
+`IRP_MJ_PNP` and `IRP_MJ_POWER`, where each request's parameters lie in
+the stack location, and the structures they point to (device relations
+and capabilities, resource lists and requirements, interfaces) are in
+`lib/ntabi/pnp.rs`, held to the kernel's symbols where those name them.
+A power request is sent as any other: `PoCallDriver` is `IofCallDriver`
+and `PoStartNextPowerIrp` does nothing, as in the pinned kernel. A
+driver's dispatch table starts out with one routine for every major
+function, these two included, which fails the request as invalid for
+the device, as Windows' does.
+
+**StartIo** (`kernel/io/startio.rs`). A driver with a `StartIo` routine
+queues its requests with
+[`IoStartPacket`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iostartpacket)
+and asks for the next with `IoStartNextPacket`. The queue is the device
+object's `DeviceQueue` with Windows' meaning (busy while one request is
+`CurrentIrp`, the others linked through each IRP's device queue entry,
+by arrival or by key, under the queue's own spin lock); NK implements
+of the device queue what these routines need and exports none of the
+`Ke` routines for it, which nothing NK loads imports. `StartIo` is
+called at `DISPATCH_LEVEL`. The cancel routine is set, and a request
+already cancelled when it is queued has it called, under the cancel
+spin lock, as Microsoft documents. What `IoSetStartIoAttributes` chose
+is in the extension's `StartIoFlags`: with deferred start a call of
+`IoStartNextPacket` made while another is at work for the device (from
+`StartIo` itself) leaves word there, and the outer call starts the next
+request once `StartIo` has returned, as the pinned kernel does it.
 
 **Cancel-safe queues** (`IoCsq*`, `kernel/io/csq.rs`). While a request is
 queued its fourth driver-context pointer names the queue (or the
@@ -1882,6 +1979,21 @@ large memory included, are `nk_rtl::resource`; the exports in
 `kernel/rtl` read and write a driver's descriptor field by field. The
 layouts are `nk_ntabi::resource`, with the views of each union the
 kernel itself uses.
+
+### Range lists
+
+A range list's header and its iterator are the driver's, laid out as
+the Windows 2000 DDK declares them (`nk_ntabi::rtl`); the entries are
+pool blocks of the kernel's, each beginning with the `RTL_RANGE` the
+iterator hands out. Windows keeps overlapping ranges inside private
+*merged* containers. NK keeps one chain in order of start and no
+containers, which walks in the same order and gives every range the
+same flags (`nk_rtl::range` says why), so an iterator's `MergedHead`
+is always null. No routine but an add or a copy allocates, so deleting
+cannot fail for want of memory as it can on Windows. `RtlAddRange`'s
+flag 0x10, which no header declares, stops the system by name. An
+alignment of zero is refused by `RtlFindRange`; Windows divides by it.
+The caller serialises the calls on one list.
 
 ## Security descriptors
 
@@ -2305,7 +2417,15 @@ answer, found in the pinned kernel: no feature configuration
 notifications registered and never made), no product policy
 (`kernel/ex/license.rs`: every licence value unknown, each name asked
 for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
-when Windows' engine is not running). A routine with many sub-functions
+when Windows' engine is not running), no errata rules
+(`kernel/ex/em.rs`: Windows reads the errata manager's database from
+an errata file at boot; NK reads none. `pci.sys` does not load unless
+it registers as a provider, so NK's database takes its entry types and
+callbacks from the providers that register them, checked as Windows
+checks a registration whose GUIDs it knows; it has no rule, so a client
+that asks about one is told `STATUS_NOT_FOUND`, the rule's state
+unknown, and `acpi.sys` and `pci.sys` go on as on a machine no erratum
+matches. With no rule nothing calls a provider's callbacks). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
 (`kernel/po/mod.rs`, `ZwPowerInformation`).
 

@@ -4,3 +4,4 @@ work.runs ok
 work.many ok
 work.io ok
 work.delete-race ok
+work.caller-memory ok

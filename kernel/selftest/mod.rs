@@ -16,9 +16,11 @@ mod csq;
 mod dma;
 mod dpc;
 mod driver_api;
+mod em;
 mod etw;
 mod ex;
 pub mod except;
+mod exlock;
 mod fsd;
 mod hal;
 mod interrupt;
@@ -36,6 +38,7 @@ mod oracle;
 mod pci;
 mod pend;
 mod po;
+mod range;
 mod request;
 mod requestor;
 mod resource;
@@ -48,9 +51,11 @@ mod setoken;
 mod sioctl;
 mod smp;
 mod stack;
+mod startio;
 mod storage;
 mod thread;
 mod timer;
+mod timer2;
 mod wait;
 mod whea;
 mod work;
@@ -151,6 +156,7 @@ pub static GROUPS: &[&[&Group]] = &[
     smp::GROUPS,
     dpc::GROUPS,
     timer::GROUPS,
+    timer2::GROUPS,
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,
@@ -159,6 +165,7 @@ pub static GROUPS: &[&[&Group]] = &[
     rtl::GROUPS,
     bitmap::GROUPS,
     counted::GROUPS,
+    range::GROUPS,
     resource::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
@@ -166,18 +173,21 @@ pub static GROUPS: &[&[&Group]] = &[
     hal::GROUPS,
     absent::GROUPS,
     po::GROUPS,
+    em::GROUPS,
     whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,
     mutex::GROUPS,
     work::GROUPS,
     ex::GROUPS,
+    exlock::GROUPS,
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,
     stack::GROUPS,
     request::GROUPS,
     iosupport::GROUPS,
+    startio::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

@@ -9,6 +9,7 @@ pub mod feature;
 pub mod name;
 pub mod prefix;
 pub mod print;
+pub mod range;
 pub mod resource;
 pub mod string;
 

@@ -9,6 +9,7 @@ pub mod build;
 pub mod csq;
 pub mod device;
 pub mod driver;
+pub mod errlog;
 pub mod file;
 pub mod fsrtl;
 pub mod interrupt;
@@ -16,6 +17,7 @@ pub mod irp;
 pub mod mdl;
 pub mod remlock;
 pub mod service;
+pub mod startio;
 pub mod symlink;
 pub mod wmi;
 
