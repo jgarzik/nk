@@ -1423,7 +1423,13 @@ x86-64 the PC's interrupt controllers, timers, clock and DMA
 controllers, as Windows' HAL lists them, and the PCI configuration
 ports, which carry a routine of the HAL's: AML's accesses to those are
 not made on the ports but carried out by the HAL through its own
-configuration access. arm64 has no I/O ports and an empty list.
+configuration access. arm64 has no I/O ports and an empty list. Two
+more are asked by `acpi.sys`'s interrupt arbiter as it is set up: the
+HAL's secondary interrupt services, which NK lacks (no interrupt
+controller behind another interrupt, such as a GPIO controller, is
+served) and reports as Windows' HAL does while it has none, a failure;
+and the limit of message-signalled interrupts for one device, where NK
+keeps Windows' value, 2048, which is no limit.
 
 `HalGetInterruptTargetInformation` (`kernel/hal/target.rs`), an export
 rather than a slot, tells `pci.sys` how interrupts name their
