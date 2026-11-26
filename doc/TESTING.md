@@ -165,6 +165,7 @@ None is committed. An absent fixture makes its tests SKIP.
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | started at boot from its key in the hive; read gives end-of-file, write accepts all bytes; unloads without leaks |
+| `npfs.sys` | Microsoft's named pipe file system (x86-64 only) | started at boot from its key in the hive; a pipe is created, a client connects, both ends read and write, peek, disconnect and close, each request answered as on Windows |
 | `wpprecorder.sys` | Microsoft's WPP trace recorder, an export driver (x86-64 only) | loads as a library, its `DllInitialize` succeeds with every routine it looks up by name found, and it unloads without leaks |
 | `wmilib.sys` | Microsoft's WMI library, an export driver (x86-64 only) | likewise loads as a library, initialises and unloads without leaks |
 | `msrpc.sys` | Microsoft's kernel RPC run-time, an export driver (x86-64 only) | likewise loads as a library, initialises and unloads without leaks; its ALPC and completion-port imports are bound to traps it does not reach |

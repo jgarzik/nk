@@ -52,6 +52,19 @@ status = "microsoft-inbox"
 note = "msrpc.sys 10.0.19041.1706, the kernel RPC run-time: an export driver"
 
 [[fixture]]
+name = "npfs"
+arch = "x86_64"
+file = "npfs.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/npfs.sys/733C49801c000/npfs.sys"
+sha256 = "9e3c3e5e7c33dacc77d347dad2cd37043f47e0dd93dbb6ee7710bd68aee0b30b"
+status = "microsoft-inbox"
+note = "npfs.sys 10.0.19041.1526, the named pipe file system"
+
+# null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
+# image size of the Windows 10 ARM64 build, which no public index lists.
+# Do not substitute a Windows 11 binary.
+
+[[fixture]]
 name = "sioctl"
 arch = "x86_64"
 file = "sioctl.x64.sys"

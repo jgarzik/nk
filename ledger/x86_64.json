@@ -4,9 +4,9 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 237,
-  "implemented": 205,
-  "partial": 9,
+  "total": 276,
+  "implemented": 243,
+  "partial": 10,
   "traps": 18,
   "missing": 0,
   "library": 5
@@ -705,6 +705,570 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlMultiByteToUnicodeN",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "npfs",
+   "file": "npfs.x64.sys",
+   "sha256": "9e3c3e5e7c33dacc77d347dad2cd37043f47e0dd93dbb6ee7710bd68aee0b30b",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValuesEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_vsnwprintf",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetAppContainerSidType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSubAuthoritySid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_wcsicmp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlConvertSidToUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlUpcaseUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeQueryInformationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlPrefixUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetAppContainerParent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeEnterCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExTryAcquirePushLockExclusiveEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquirePushLockExclusiveEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleasePushLockExclusiveEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeLeaveCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAppendPrivileges",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeFreePrivileges",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithQuotaTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAccessCheck",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetFileObjectGenericMapping",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAssignSecurity",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "strncmp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObDereferenceSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInsertUnicodePrefix",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeOpenObjectAuditAlarm",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetThreadProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeUnlockSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetThreadSessionId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeLockSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeSinglePrivilegeCheck",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeExports",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObLogSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCompareMemory",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetProcessSessionId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetRequestorProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseCancelSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmProbeAndLockPages",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "FsRtlIsNameInExpression",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateMdl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ProbeForWrite",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleasePushLockSharedEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeMdl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquirePushLockSharedEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmMapLockedPagesSpecifyCache",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExRaiseStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeResetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeBugCheckEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetJobSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCreateAccessState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferencePrimaryToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsJobType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandleWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmUserProbeAddress",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsReferencePrimaryToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeDeleteAccessState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_stricmp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObjectWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsReferenceImpersonationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExEventObjectType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferenceImpersonationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeImpersonateClientEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCreateClientSecurity",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeTokenType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetOwnerSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetDaclSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeQuerySecurityDescriptorInfo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddAccessAllowedAce",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAbsoluteToSelfRelativeSD",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateAcl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeSetSecurityDescriptorInfo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetGroupSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAttachSiloToCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsInsertPermanentSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDetachSiloFromCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferenceSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAllocSiloContextSlot",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlRemoveUnicodePrefix",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitializeUnicodePrefix",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFindUnicodePrefix",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "FsRtlTeardownPerStreamContexts",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsIsHostSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetTimer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAcquireSpinLockRaiseToDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlUpcaseUnicodeChar",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeTimer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeCancelTimer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfReferenceObject",
      "state": "implemented"
     }
    ]

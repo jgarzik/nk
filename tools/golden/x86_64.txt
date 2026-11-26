@@ -320,3 +320,4 @@ oracle.nkc-seh ok
 oracle.nkc-cross ok
 oracle.nkc-ob ok
 oracle.nkc-etw ok
+oracle.npfs ok
