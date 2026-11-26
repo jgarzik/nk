@@ -1,0 +1,9 @@
+# A thread that ends is signalled, and its waiters woken, before the
+# reference it held on itself is dropped and it is counted out: whoever
+# waited for it finds it still there, and frees nothing with its own
+# reference.
+scenario: x86_64
+fails: thread.buried
+file: kernel/ke/thread.rs
+replace:                 let buried = ob::object::dereference_unless_last(previous.cast());
+with:                 let buried = false;

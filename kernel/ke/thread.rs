@@ -39,9 +39,11 @@
 //!   elsewhere; so no ring of processors can form, each waiting for the
 //!   thread the next is leaving.
 //! - A thread that exits is buried by the thread that runs after it:
-//!   its stack is freed, it is signalled (a thread is an object others
-//!   can wait on), and the reference it held on itself while it ran is
-//!   dropped. The block itself lives until the last reference goes.
+//!   its stack is freed, the reference it held on itself while it ran
+//!   is dropped, and it is signalled (a thread is an object others can
+//!   wait on), in that order as far as anyone can see: whoever learns
+//!   that a thread has ended finds it buried. The block itself lives
+//!   until the last reference goes.
 
 use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
@@ -751,21 +753,49 @@ fn after_switch() {
             );
             super::mutex::check_none_held(previous);
             mm::stack::free((*previous).stack);
-            // It has ended: whoever waits for it may go on.
-            let woken = {
+            // It has ended: whoever waits for it may go on. They are
+            // to find it gone, so the reference it held on itself while
+            // it could run is dropped and it is counted out before its
+            // lock is let go, which is when its end can first be seen.
+            // Others may then drop the last reference at any moment:
+            // `deleted` waits for the lock, so the block outlives this
+            // hold of it.
+            let (woken, buried) = {
                 let _lock = super::object::ObjectLock::take(header);
                 super::object::signal(header).store(1, Ordering::Release);
-                super::object::satisfy(header)
+                let woken = super::object::satisfy(header);
+                let buried = ob::object::dereference_unless_last(previous.cast());
+                if buried {
+                    THREADS.fetch_sub(1, Ordering::AcqRel);
+                }
+                (woken, buried)
             };
             woken.ready();
-            // The reference it held on itself while it could run. Only
-            // then is it counted gone: whoever waits for the count to
-            // fall finds the memory already returned.
-            ob::object::dereference(previous.cast());
-            THREADS.fetch_sub(1, Ordering::AcqRel);
+            if !buried {
+                // Its own reference was the only one: nobody holds the
+                // thread to see it end. Counted out once the memory is
+                // back, for whoever waits for the count to fall.
+                ob::object::dereference(previous.cast());
+                THREADS.fetch_sub(1, Ordering::AcqRel);
+            }
         } else {
             (*previous).swap_busy.store(false, Ordering::Release);
         }
+    }
+}
+
+/// The object manager's call when the last reference to a thread has
+/// gone. The processor that buried the thread may have dropped the
+/// thread's own reference a moment ago and still hold the thread's
+/// lock (`after_switch`): the block is not freed under it.
+///
+/// # Safety
+/// `body` is a thread object nothing refers to any more.
+pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
+    // SAFETY: per the contract: the block is live until this returns.
+    unsafe {
+        drop(super::object::ObjectLock::take(body.cast()));
+        crate::se::impersonate::thread_deleted(body);
     }
 }
 
@@ -881,6 +911,72 @@ pub fn lifecycle_test() -> Result<u32, &'static str> {
     }
     if mm::free_frame_count() < frames {
         return Err("threads leaked memory");
+    }
+    Ok(ROUNDS)
+}
+
+/// A thread whose end has been seen is gone: whoever waited for it, or
+/// asked and was told it had ended, finds it no longer counted, its
+/// stack returned and its own reference dropped, so that its memory
+/// goes with the caller's reference. Returns the threads seen off.
+pub fn buried_test() -> Result<u32, &'static str> {
+    fn body(_: usize) {}
+    const ROUNDS: u32 = 600;
+    let me = pcr::current_processor() as usize;
+    let processors = super::smp::online_count();
+    for round in 0..ROUNDS {
+        // On another processor when there is one, so that its end and
+        // this thread's look at it can happen at the same moment.
+        let step = 1 + round as usize % processors.saturating_sub(1).max(1);
+        let there = (me + step) % processors;
+        let (threads, blocks, frames) = (count(), mm::pool::usage().blocks, mm::free_frame_count());
+        let thread = create_referenced(body, 0, NORMAL_PRIORITY, 1 << there)?;
+        // SAFETY: a thread this test holds a reference to, which it
+        // gives up here.
+        let (counted, freed) = unsafe {
+            let counted = match round % 3 {
+                // Asleep until it ends.
+                0 => {
+                    super::wait::wait(Some(thread.cast()), None);
+                    count()
+                }
+                // Asking again and again, to catch it just ended.
+                1 => {
+                    while super::wait::wait(Some(thread.cast()), Some(0)) != 0 {
+                        if there == me {
+                            yield_now();
+                        }
+                        core::hint::spin_loop();
+                    }
+                    count()
+                }
+                // Looking under its lock, where its end first shows:
+                // the closest anyone can come to the moment itself.
+                _ => loop {
+                    let seen = {
+                        let _lock = super::object::ObjectLock::take(thread.cast());
+                        let ended = super::object::signal(thread.cast()).load(Ordering::Acquire);
+                        (ended > 0).then(count)
+                    };
+                    if let Some(counted) = seen {
+                        break counted;
+                    }
+                    if there == me {
+                        yield_now();
+                    }
+                    core::hint::spin_loop();
+                },
+            };
+            let stack_back = mm::free_frame_count() >= frames;
+            ob::object::dereference(thread.cast());
+            (counted, stack_back && mm::pool::usage().blocks == blocks)
+        };
+        if counted != threads {
+            return Err("a thread whose end was seen was still counted");
+        }
+        if !freed {
+            return Err("a thread whose end was seen still held its stack or a reference");
+        }
     }
     Ok(ROUNDS)
 }

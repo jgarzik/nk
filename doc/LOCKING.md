@@ -276,8 +276,12 @@ rules stand in for the lock:
   processors each waiting for the thread the next is leaving. No two
   processors' ready queues are ever locked together.
 - **The next thread cleans up.** The thread switched to clears the flag
-  of the one before it, or frees it if it exited. A thread never frees
-  its own stack.
+  of the one before it, or buries it if it exited. A thread never frees
+  its own stack. The burial signals the thread and drops the thread's
+  reference to itself under the thread's lock (its header's object
+  lock, below), so that nobody sees the one without the other; the last
+  reference may then go from anywhere, and the thread's delete
+  procedure takes and releases that lock before the block is freed.
 
 A thread's priority can be changed by another thread while the thread
 runs, waits or is queued, and no one lock covers all three. Two rules
@@ -323,7 +327,9 @@ the timer's own lock to signal it; a timer that was set again in
 between is left alone.
 
 A thread's lock also serialises changes of its priority ("Switching
-threads" above): a ready queue's lock is taken inside it. And it
+threads" above): a ready queue's lock is taken inside it. A thread's
+delete procedure takes it as a barrier, whatever its caller holds: the
+burial it waits out takes nothing inside it but wait registers. And it
 covers the thread's alert state (`Alerted`, `Alertable`, `WaitMode`).
 A thread takes its own lock, holding no other, to say its wait is
 alertable, after looking for an alert left for it, and again to say

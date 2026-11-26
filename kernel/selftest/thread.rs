@@ -7,6 +7,7 @@ use nk_bootinfo::BootInfo;
 pub static GROUP: Group = Group {
     names: &[
         "thread.lifecycle",
+        "thread.buried",
         "thread.turns",
         "thread.priority",
         "thread.set-priority",
@@ -42,6 +43,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         "thread.lifecycle",
         "threads run and reaped:",
         thread::lifecycle_test(),
+    );
+    counted(
+        r,
+        "thread.buried",
+        "threads seen off:",
+        thread::buried_test(),
     );
     r.check("thread.turns", thread::turns_test);
     r.check("thread.priority", thread::priority_test);

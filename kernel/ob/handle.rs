@@ -611,13 +611,9 @@ pub fn thread_test() -> Result<u32, &'static str> {
             return Err("the thread's handle could not be closed");
         }
     }
-    // A thread is signalled as it is buried, a moment before its own
-    // reference goes: wait for the burial to be over.
-    let deadline = time::interrupt_time() + 50_000_000;
-    while thread::count() != threads_before && time::interrupt_time() < deadline {
-        thread::yield_now();
-    }
-    if blocks() != pool_before {
+    // A thread seen to have ended is buried: its own reference went
+    // before the waits for it returned.
+    if thread::count() != threads_before || blocks() != pool_before {
         return Err("threads that ended and were let go of were not freed");
     }
     Ok(5)

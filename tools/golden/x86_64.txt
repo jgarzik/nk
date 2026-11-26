@@ -37,6 +37,7 @@ timer.periodic ok
 timer.chain ok
 timer.other-cpu ok
 thread.lifecycle ok
+thread.buried ok
 thread.turns ok
 thread.priority ok
 thread.set-priority ok

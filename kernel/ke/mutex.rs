@@ -363,14 +363,9 @@ fn in_another_thread(entry: thread::Entry) -> Result<(), &'static str> {
         wait::wait(Some(other.cast()), None);
         crate::ob::object::dereference(other.cast());
     }
-    // It is signalled as it is buried; wait for the burial to be over,
-    // so that what it used is seen to be returned.
-    let deadline = time::interrupt_time() + 50_000_000;
-    while thread::count() != before {
-        if time::interrupt_time() > deadline {
-            return Err("a thread that ended was not buried");
-        }
-        thread::yield_now();
+    // A thread seen to have ended is buried: what it used is back.
+    if thread::count() != before {
+        return Err("a thread that ended was not buried");
     }
     Ok(())
 }
