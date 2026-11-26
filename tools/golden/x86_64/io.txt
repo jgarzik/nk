@@ -32,3 +32,9 @@ io.driver.unload-reentered ok
 io.requestor-process ok
 io.file-generic-mapping ok
 io.open.missing-name ok
+io.stack.attach ok
+io.stack.open-goes-to-the-top ok
+io.stack.pended-below ok
+io.stack.detach-then-delete ok
+io.stack.delete-then-detach ok
+io.stack.fast-io-detach ok

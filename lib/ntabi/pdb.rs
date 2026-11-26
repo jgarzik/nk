@@ -1148,6 +1148,30 @@ fn device_object_extension_matches_the_kernel() {
 }
 
 #[test]
+fn fast_io_dispatch_matches_the_kernel() {
+    use crate::io::{FAST_IO_DETACH_DEVICE, FAST_IO_DISPATCH, FAST_IO_ROUTINES};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("_FAST_IO_DISPATCH")
+        .expect("_FAST_IO_DISPATCH");
+    let field = |name| offset(&table, "_FAST_IO_DISPATCH", name);
+    let routine = |index: usize| offset_of!(FAST_IO_DISPATCH, Routines) + index * 8;
+    assert_eq!(size_of::<FAST_IO_DISPATCH>(), table.size as usize);
+    assert_eq!(
+        offset_of!(FAST_IO_DISPATCH, SizeOfFastIoDispatch),
+        field("SizeOfFastIoDispatch")
+    );
+    assert_eq!(routine(0), field("FastIoCheckIfPossible"));
+    assert_eq!(routine(FAST_IO_DETACH_DEVICE), field("FastIoDetachDevice"));
+    assert_eq!(
+        routine(FAST_IO_ROUTINES - 1),
+        field("ReleaseForCcFlush"),
+        "the last routine"
+    );
+}
+
+#[test]
 fn object_attributes_match_the_kernel() {
     use crate::ob::OBJECT_ATTRIBUTES;
     use core::mem::{offset_of, size_of};

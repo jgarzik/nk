@@ -35,6 +35,7 @@ mod service;
 mod setoken;
 mod sioctl;
 mod smp;
+mod stack;
 mod thread;
 mod timer;
 mod wait;
@@ -149,6 +150,7 @@ pub static GROUPS: &[&[&Group]] = &[
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,
+    stack::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

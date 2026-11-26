@@ -951,6 +951,7 @@ make that safe.
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
 | silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
@@ -1154,6 +1155,32 @@ about a device it keeps in the fields Windows keeps it in (deletion
 pending is `DOE_DELETE_PENDING` in `ExtensionFlags`). A device's
 own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes.
+
+**Stacks.** Devices are stacked as on Windows
+([`IoAttachDeviceToDeviceStack`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioattachdevicetodevicestack),
+`IoDetachDevice`): the chain up is `AttachedDevice`, the chain down the
+extension's `AttachedTo`, and a device's `StackSize` is one more than
+that of the device it was attached to. Attaching goes to the top of the
+stack the target is in and looks at that device only: it is refused
+while the top is still initialising, is going away, or has a stack as
+deep as the pinned kernel allows (`MAXIMUM_ATTACH_STACK_SIZE`).
+`IoGetAttachedDeviceReference` and `IoGetDeviceAttachmentBaseRef` hand
+out the top and the bottom with a pointer reference.
+
+A request for a device is a request for its stack: an open sends the
+create to the top of the stack the named device is in, in an IRP with a
+location for every device of it, and so does every later request on the
+file (`file::related_device`, Windows' `IoGetRelatedDeviceObject`). The
+file stays counted on the device that was named, and
+`IoGetDeviceObjectPointer` hands out the top. How a read's or a write's
+buffer travels is the top device's choice (`DO_BUFFERED_IO`).
+
+A deleted device with another still attached to it stays, deletion
+pending, until that one detaches. The driver of the attached device is
+told at once if it has a `FastIoDetachDevice` routine, as the pinned
+kernel tells it. A device deleted while it is itself still attached to
+the one below would leave that one pointing at freed memory, as it does
+on Windows: NK stops, naming both.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
 (`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),

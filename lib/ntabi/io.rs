@@ -193,6 +193,45 @@ pub const DO_EXCLUSIVE: u32 = 0x0000_0008;
 pub const DO_DIRECT_IO: u32 = 0x0000_0010;
 pub const DO_DEVICE_HAS_NAME: u32 = 0x0000_0040;
 pub const DO_DEVICE_INITIALIZING: u32 = 0x0000_0080;
+/// Passed up a stack: a device attached to one that has it gets it.
+pub const DO_DEVICE_IRP_REQUIRES_EXTENSION: u32 = 0x0800_0000;
+
+/// The deepest stack another device can still be attached to: the
+/// pinned kernel refuses to attach to a device whose `StackSize` has
+/// reached this.
+pub const MAXIMUM_ATTACH_STACK_SIZE: i8 = 0x7D;
+
+/// How many routines a `FAST_IO_DISPATCH` holds.
+pub const FAST_IO_ROUTINES: usize = 27;
+/// Which of them is `FastIoDetachDevice`.
+pub const FAST_IO_DETACH_DEVICE: usize = 12;
+
+/// [`FAST_IO_DISPATCH`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_fast_io_dispatch):
+/// what `DRIVER_OBJECT.FastIoDispatch` points to. The driver says how
+/// much of it there is; a routine past that size is not there.
+#[repr(C)]
+pub struct FAST_IO_DISPATCH {
+    pub SizeOfFastIoDispatch: u32,
+    pub Routines: [PVOID; FAST_IO_ROUTINES],
+}
+
+/// `FastIoDetachDevice`: the device `target`, which `source` is
+/// attached to, is being deleted.
+pub type FAST_IO_DETACH_DEVICE_ROUTINE =
+    unsafe extern "C" fn(source: *mut DEVICE_OBJECT, target: *mut DEVICE_OBJECT);
+
+/// Where in a driver's `FAST_IO_DISPATCH` the routine numbered `index`
+/// is, if a table of `size` bytes (`SizeOfFastIoDispatch`) reaches it:
+/// the pinned kernel calls `FastIoDetachDevice` only from a table
+/// larger than the routine's offset.
+pub const fn fast_io_routine_offset(size: u32, index: usize) -> Option<usize> {
+    let offset = core::mem::offset_of!(FAST_IO_DISPATCH, Routines) + index * size_of::<PVOID>();
+    if index < FAST_IO_ROUTINES && size as usize > offset {
+        Some(offset)
+    } else {
+        None
+    }
+}
 
 /// `DEVICE_OBJECT.Queue`: a device-queue wait block, 0x48 bytes.
 #[repr(C)]
@@ -664,6 +703,9 @@ const _: () = {
     assert!(offset_of!(DEVICE_OBJECT, SectorSize) == 0x130);
     assert!(offset_of!(DEVICE_OBJECT, DeviceObjectExtension) == 0x138);
     assert!(offset_of!(DEVICE_OBJECT, Reserved) == 0x140);
+    assert!(size_of::<FAST_IO_DISPATCH>() == 0xE0);
+    assert!(offset_of!(FAST_IO_DISPATCH, Routines) == 0x08);
+    assert!(offset_of!(DEVICE_OBJECT, Spare1) == 0x132);
     assert!(size_of::<DEVOBJ_EXTENSION>() == 0x70);
     assert!(offset_of!(DEVOBJ_EXTENSION, Size) == 0x02);
     assert!(offset_of!(DEVOBJ_EXTENSION, DeviceObject) == 0x08);
@@ -807,6 +849,28 @@ mod layout {
         assert!(!may_write(FILE_APPEND_DATA, FO_NAMED_PIPE));
         assert!(!may_write(FILE_READ_DATA | 0x0010_0000, 0));
         assert!(!may_write(0, FO_SYNCHRONOUS_IO));
+    }
+
+    #[test]
+    fn a_fast_io_routine_is_there_only_in_a_table_that_reaches_it() {
+        // `FastIoDetachDevice` is at 0x68, and the kernel asks for a
+        // table larger than that.
+        assert_eq!(
+            fast_io_routine_offset(0xE0, FAST_IO_DETACH_DEVICE),
+            Some(0x68)
+        );
+        assert_eq!(
+            fast_io_routine_offset(0x69, FAST_IO_DETACH_DEVICE),
+            Some(0x68)
+        );
+        assert_eq!(fast_io_routine_offset(0x68, FAST_IO_DETACH_DEVICE), None);
+        assert_eq!(fast_io_routine_offset(0, FAST_IO_DETACH_DEVICE), None);
+        assert_eq!(fast_io_routine_offset(0xE0, 0), Some(0x08));
+        assert_eq!(
+            fast_io_routine_offset(0xE0, FAST_IO_ROUTINES - 1),
+            Some(0xD8)
+        );
+        assert_eq!(fast_io_routine_offset(u32::MAX, FAST_IO_ROUTINES), None);
     }
 
     #[test]
