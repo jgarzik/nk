@@ -582,7 +582,18 @@ a routine leaves the queue to the run in progress.
 The driver owns the `KDPC`. As on Windows `DpcData` is non-null exactly
 while queued; NK stores the queue's address there. A DPC running over 20
 seconds stops the system (`DPC_WATCHDOG_VIOLATION`); the tick checks.
-No targeting of another processor and no importance ordering.
+No targeting of another processor and no importance ordering: an
+importance set with `KeSetImportanceDpc` is kept in the `KDPC` and not
+acted on. A threaded DPC (`KeInitializeThreadedDpc`) is an ordinary
+DPC, run at `DISPATCH_LEVEL`, which is how Windows runs one with
+threaded DPCs turned off. `KeSetCoalescableTimer` sets a timer that is
+never delayed.
+
+Drivers that ask about processors by group or NUMA node are told of
+one group and one node, numbers 0, holding every running processor
+(`nk_ke::topology`); a processor's index is its number in the group.
+`KeFlushIoBuffers` does nothing on x86-64 and, on arm64, writes the
+buffer's cache lines back and drops them.
 
 `ke::dpc::flush` waits until every DPC that was queued or running
 anywhere has finished: an interprocessor call has each processor queue

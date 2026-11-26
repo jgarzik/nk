@@ -226,3 +226,8 @@ pub fn counter() -> u64 {
 /// Make freshly written code executable. x86 keeps instruction and data
 /// caches coherent by itself.
 pub fn sync_icache(_start: *const u8, _len: usize) {}
+
+/// Make memory hold what the data cache holds of a range, for a
+/// device that reads or writes it behind the processor's back. A
+/// device's access on this architecture goes through the caches.
+pub fn sync_dcache(_start: *const u8, _len: usize) {}

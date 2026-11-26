@@ -291,3 +291,21 @@ pub fn sync_icache(start: *const u8, len: usize) {
     // SAFETY: as above.
     unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
 }
+
+/// Make memory hold what the data cache holds of a range, and drop
+/// the cached lines, for a device that reads or writes the range
+/// behind the processor's back.
+pub fn sync_dcache(start: *const u8, len: usize) {
+    // The smallest cache line the architecture allows.
+    const LINE: usize = 16;
+    let end = start as usize + len;
+    let mut addr = start as usize & !(LINE - 1);
+    while addr < end {
+        // SAFETY: cache maintenance on a mapped address has no
+        // memory-safety effect.
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) addr, options(nostack)) };
+        addr += LINE;
+    }
+    // SAFETY: as above.
+    unsafe { core::arch::asm!("dsb ish", options(nostack)) };
+}

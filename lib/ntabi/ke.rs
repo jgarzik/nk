@@ -146,6 +146,28 @@ pub struct KTIMER {
     pub Period: u32,
 }
 
+/// [`PROCESSOR_NUMBER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/miniport/ns-miniport-_processor_number):
+/// a processor by its group and its number in the group.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PROCESSOR_NUMBER {
+    pub Group: u16,
+    pub Number: u8,
+    pub Reserved: u8,
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<PROCESSOR_NUMBER>() == 4);
+    assert!(core::mem::offset_of!(PROCESSOR_NUMBER, Number) == 2);
+    assert!(core::mem::offset_of!(PROCESSOR_NUMBER, Reserved) == 3);
+};
+
+/// `DISPATCHER_HEADER.Type`... of a `KDPC` made by
+/// `KeInitializeThreadedDpc`: `ThreadedDpcObject`.
+pub const THREADED_DPC_OBJECT: u8 = 0x1A;
+/// `KDPC_IMPORTANCE`: `HighImportance`, the largest value there is.
+pub const HIGH_IMPORTANCE: u8 = 2;
+
 /// `KTIMER2` (`wdm.h`): the storage a driver sets aside for a timer of
 /// the `KeInitializeTimer2` family. The fields are Windows' and no
 /// driver reads them; how NK uses the bytes is `ke::timer2`'s.

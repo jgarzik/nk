@@ -56,6 +56,12 @@ pub extern "C" fn KeBugCheckEx(code: u32, p1: usize, p2: usize, p3: usize, p4: u
     )
 }
 
+/// [`KeBugCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-kebugcheck):
+/// stop the system with a code and no parameters.
+pub extern "C" fn KeBugCheck(code: u32) -> ! {
+    KeBugCheckEx(code, 0, 0, 0, 0)
+}
+
 /// The head of the list of registered records. Its links are null until
 /// the first record is registered.
 struct Head(UnsafeCell<LIST_ENTRY>);

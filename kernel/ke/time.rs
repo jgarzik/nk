@@ -169,6 +169,40 @@ pub unsafe extern "C" fn ExQueryTimerResolution(
     }
 }
 
+/// [`KeQueryUnbiasedInterruptTime`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryunbiasedinterrupttime):
+/// the time the system has been running and awake. NK never sleeps, so
+/// that is the interrupt time.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryUnbiasedInterruptTime() -> u64 {
+    interrupt_time()
+}
+
+/// [`KeQueryInterruptTimePrecise`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryinterrupttimeprecise):
+/// the interrupt time as of now, not of the last clock tick, and the
+/// performance counter it was worked out from.
+///
+/// # Safety
+/// `qpc_time_stamp` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeQueryInterruptTimePrecise(qpc_time_stamp: *mut u64) -> u64 {
+    let count = arch::counter().wrapping_sub(EPOCH.load(Ordering::Relaxed));
+    // SAFETY: per the contract.
+    unsafe { qpc_time_stamp.write_unaligned(count) };
+    counter_to_time(count, frequency())
+}
+
+/// [`KeQueryUnbiasedInterruptTimePrecise`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryunbiasedinterrupttimeprecise):
+/// [`KeQueryInterruptTimePrecise`], which on a system that never sleeps
+/// is the same.
+///
+/// # Safety
+/// `qpc_time_stamp` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeQueryUnbiasedInterruptTimePrecise(qpc_time_stamp: *mut u64) -> u64 {
+    // SAFETY: per the contract.
+    unsafe { KeQueryInterruptTimePrecise(qpc_time_stamp) }
+}
+
 /// [`KeQueryPerformanceCounter`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryperformancecounter).
 ///
 /// # Safety
