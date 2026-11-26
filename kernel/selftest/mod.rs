@@ -49,6 +49,7 @@ mod setoken;
 mod sioctl;
 mod smp;
 mod stack;
+mod startio;
 mod storage;
 mod thread;
 mod timer;
@@ -180,6 +181,7 @@ pub static GROUPS: &[&[&Group]] = &[
     stack::GROUPS,
     request::GROUPS,
     iosupport::GROUPS,
+    startio::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

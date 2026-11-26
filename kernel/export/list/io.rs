@@ -57,4 +57,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::driver::IoGetDriverObjectExtension),
     export!(Implemented, io::errlog::IoAllocateErrorLogEntry),
     export!(Implemented, io::errlog::IoWriteErrorLogEntry),
+    export!(Implemented, io::startio::IoSetStartIoAttributes),
+    export!(Implemented, io::startio::IoStartNextPacket),
+    export!(Implemented, io::startio::IoStartPacket),
 ];

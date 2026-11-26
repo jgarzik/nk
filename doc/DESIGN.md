@@ -1098,6 +1098,8 @@ make that safe.
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
+| a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
 | a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
 | silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
@@ -1548,6 +1550,23 @@ sequentially consistent operations, since with less each can miss the
 other's write and a cancelled request is never completed. Cancelling a
 completed IRP whose routine is still set stops the system
 (`CANCEL_STATE_IN_COMPLETED_IRP`).
+
+**StartIo** (`kernel/io/startio.rs`). A driver with a `StartIo` routine
+queues its requests with
+[`IoStartPacket`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iostartpacket)
+and asks for the next with `IoStartNextPacket`. The queue is the device
+object's `DeviceQueue` with Windows' meaning (busy while one request is
+`CurrentIrp`, the others linked through each IRP's device queue entry,
+by arrival or by key, under the queue's own spin lock); NK implements
+of the device queue what these routines need and exports none of the
+`Ke` routines for it, which nothing NK loads imports. `StartIo` is
+called at `DISPATCH_LEVEL`. The cancel routine is set, and a request
+already cancelled when it is queued has it called, under the cancel
+spin lock, as Microsoft documents. What `IoSetStartIoAttributes` chose
+is in the extension's `StartIoFlags`: with deferred start a call of
+`IoStartNextPacket` made while another is at work for the device (from
+`StartIo` itself) leaves word there, and the outer call starts the next
+request once `StartIo` has returned, as the pinned kernel does it.
 
 **Cancel-safe queues** (`IoCsq*`, `kernel/io/csq.rs`). While a request is
 queued its fourth driver-context pointer names the queue (or the

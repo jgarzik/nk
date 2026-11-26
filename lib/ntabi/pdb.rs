@@ -1227,6 +1227,27 @@ fn driver_extension_matches_the_kernel() {
 }
 
 #[test]
+fn device_queue_matches_the_kernel() {
+    use crate::io::{IRP_DEVICE_QUEUE_ENTRY, KDEVICE_QUEUE, KDEVICE_QUEUE_ENTRY};
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        KDEVICE_QUEUE,
+        "_KDEVICE_QUEUE",
+        [Type, Size, DeviceListHead, Lock, Busy]
+    );
+    same_layout!(
+        types,
+        KDEVICE_QUEUE_ENTRY,
+        "_KDEVICE_QUEUE_ENTRY",
+        [DeviceListEntry, SortKey, Inserted]
+    );
+    // The entry in an IRP: `Tail.Overlay.DeviceQueueEntry`.
+    let irp = types.layout("_IRP").expect("_IRP");
+    assert_eq!(IRP_DEVICE_QUEUE_ENTRY, offset(&irp, "_IRP", "Tail"));
+}
+
+#[test]
 fn fast_io_dispatch_matches_the_kernel() {
     use crate::io::{FAST_IO_DETACH_DEVICE, FAST_IO_DISPATCH, FAST_IO_ROUTINES};
     use core::mem::{offset_of, size_of};
