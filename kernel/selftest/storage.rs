@@ -184,7 +184,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         );
         return;
     }
-    match diskio::disk_io(DISK) {
+    match diskio::disk_io(DISK, diskio::Beyond::Skip) {
         Ok(counts) => r.ok_with("stor.io", format_args!("{counts}")),
         Err(why) => r.fail("stor.io", format_args!("{why}")),
     }

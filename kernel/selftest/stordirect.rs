@@ -21,7 +21,10 @@ use alloc::string::String;
 use nk_bootinfo::BootInfo;
 use nk_disk::answer::Adapter;
 use nk_ntabi::io::DEVICE_OBJECT;
-use nk_pnp::resources::{ResourceList, TYPE_INTERRUPT, TYPE_MEMORY, TYPE_PORT};
+use nk_pnp::resources::{
+    INTERRUPT_LATCHED, INTERRUPT_MESSAGE, MESSAGE_TOKEN, ResourceList, TYPE_INTERRUPT, TYPE_MEMORY,
+    TYPE_PORT,
+};
 
 pub static GROUP: Group = Group {
     names: &[
@@ -118,6 +121,15 @@ fn failed_start(bus: &Bus) -> Result<String, &'static str> {
         if !bus.child().is_null() || node::by_instance(&found.instance).is_some() {
             return Err("a controller that left the bus still has a device");
         }
+        // The round's installation goes too: its key and its driver
+        // key. Every round, and the start that follows, is then the
+        // controller's first: installed from the driver database, and
+        // asked for its requirements with its key written.
+        let key = registry::enum_key(&found.instance);
+        if let Some(driver) = registry::string(&key, "Driver") {
+            let _ = crate::cm::delete_tree(&registry::class_key(&driver));
+        }
+        let _ = crate::cm::delete_tree(&key);
         instance = found.instance;
         *round = Some(super::resources());
     }
@@ -182,11 +194,17 @@ fn controller(bus: &Bus) -> Result<String, &'static str> {
     if interrupts != 1 {
         return Err("the controller was not given one interrupt");
     }
-    let kind = if raw.partials().any(|partial| partial.is_message()) {
-        "message"
-    } else {
-        "line"
-    };
+    // The one interrupt is a message, as on the reference machine: the
+    // raw descriptor latched and message-signalled, one message, the
+    // vector the token Windows puts there.
+    let message = raw
+        .partials()
+        .find(|partial| partial.kind == TYPE_INTERRUPT)
+        .filter(|partial| partial.flags == INTERRUPT_LATCHED | INTERRUPT_MESSAGE)
+        .and_then(|partial| partial.as_interrupt());
+    if !matches!(message, Some((_, 1, MESSAGE_TOKEN, _))) {
+        return Err("the controller's interrupt is not one message, as Windows gives it");
+    }
     // Storport connected the interrupt, and the controller has
     // interrupted: the disk was found by commands whose completion
     // the service routine saw and a DPC of Storport's reported.
@@ -204,8 +222,16 @@ fn controller(bus: &Bus) -> Result<String, &'static str> {
     if calls == 0 {
         return Err("the controller's service routine was never called");
     }
+    // The bus programmed the controller's message capability with the
+    // address and data the hardware layer has for the vector, one
+    // message, enabled: the interrupts counted above were messages.
+    let to = crate::hal::interrupt::message(vector)
+        .ok_or("the hardware layer has no message for the controller's vector")?;
+    if ahcibus::message_programmed(bus.function()) != Some((true, 1, to.address, to.data as u16)) {
+        return Err("the controller's message capability does not hold the vector's message");
+    }
     Ok(format!(
-        "{}: ports {ports:#x}, memory {memory:#x}, {kind} interrupt on vector {vector:#x} served {calls} times",
+        "{}: ports {ports:#x}, memory {memory:#x}, one message on vector {vector:#x}, served {calls} times",
         found.instance
     ))
 }
@@ -348,7 +374,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     }
     if storage::exists(storage::DISK) {
         let began = crate::ke::time::interrupt_time();
-        let proof = diskio::disk_io(storage::DISK);
+        let proof = diskio::disk_io(storage::DISK, diskio::Beyond::Skip);
         let took = (crate::ke::time::interrupt_time() - began) / 10_000;
         match proof {
             // The disk's own answers are the reference machine's.
@@ -365,10 +391,7 @@ fn run(r: &mut Report, _: &BootInfo) {
             }
             Ok(counts) => r.ok_with(
                 "stor.direct.io",
-                format_args!(
-                    "{counts}; flushed; beyond the end {:#x} {:#x} {:#x}; {took} ms",
-                    counts.beyond[0], counts.beyond[1], counts.beyond[2]
-                ),
+                format_args!("{counts}; flushed; {took} ms"),
             ),
             Err(why) => r.fail("stor.direct.io", format_args!("{why}")),
         }
