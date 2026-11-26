@@ -29,6 +29,7 @@ mod open;
 mod oracle;
 mod pend;
 mod requestor;
+mod resource;
 mod review;
 mod rtl;
 mod se;
@@ -142,6 +143,7 @@ pub static GROUPS: &[&[&Group]] = &[
     rtl::GROUPS,
     bitmap::GROUPS,
     counted::GROUPS,
+    resource::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,

@@ -20,3 +20,4 @@ rtl.module-information ok
 rtl.bitmap ok
 rtl.counted ok
 rtl.crt-strings ok
+rtl.resource ok

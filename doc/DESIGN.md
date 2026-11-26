@@ -1577,6 +1577,15 @@ stores when it finds nothing, how many bits a copy moves) is read from
 the kernel NK follows and stated in `nk_rtl::bitmap`. The interlocked
 routines change one `ULONG` at a time through an atomic.
 
+### Resource descriptors
+
+The encodings of a port or memory range's length in a
+[resource descriptor](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_cm_partial_resource_descriptor),
+large memory included, are `nk_rtl::resource`; the exports in
+`kernel/rtl` read and write a driver's descriptor field by field. The
+layouts are `nk_ntabi::resource`, with the views of each union the
+kernel itself uses.
+
 ## Security descriptors
 
 SIDs, ACLs and descriptors are byte layouts with rules: `lib/se`, with

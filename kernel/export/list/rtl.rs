@@ -89,4 +89,9 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::crt::strstr),
     export!(Implemented, rtl::crt::strtok_s),
     export!(Implemented, rtl::print::_vsnprintf),
+    export!(Implemented, rtl::resource::RtlCmDecodeMemIoResource),
+    export!(Implemented, rtl::resource::RtlCmEncodeMemIoResource),
+    export!(Implemented, rtl::resource::RtlIoDecodeMemIoResource),
+    export!(Implemented, rtl::resource::RtlIoEncodeMemIoResource),
+    export!(Implemented, rtl::resource::RtlFindClosestEncodableLength),
 ];

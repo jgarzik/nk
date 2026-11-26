@@ -19,6 +19,7 @@ pub mod crt;
 pub mod format;
 pub mod legal;
 pub mod prefix;
+pub mod resource;
 pub mod string;
 pub mod upcase;
 pub mod wildcard;
