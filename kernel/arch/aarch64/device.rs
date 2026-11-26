@@ -133,6 +133,13 @@ impl InterruptVectors {
         is_line(gsi).then(|| (gsi, spi_level(gsi)))
     }
 
+    /// Take `vector`, which the interrupt arbiter chose for the line
+    /// `gsi`: its IRQL, or `None` unless it is the line's own id, the
+    /// only vector a line can have here.
+    pub fn claim(&mut self, vector: u32, gsi: u32) -> Option<u8> {
+        (vector == gsi && is_line(gsi)).then(|| spi_level(gsi))
+    }
+
     /// Vectors for a device's messages: none.
     pub fn messages(&mut self, _count: u32) -> Option<(u32, u8)> {
         None

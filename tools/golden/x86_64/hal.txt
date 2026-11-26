@@ -20,3 +20,4 @@ hal.dma.map-registers ok
 hal.firmware-variables ok
 hal.acpi-machine-states ok
 hal.interrupt-controller-lines ok
+hal.interrupt-arbiter ok

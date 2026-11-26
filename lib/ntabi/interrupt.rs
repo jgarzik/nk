@@ -183,6 +183,47 @@ pub struct GROUP_AFFINITY {
     pub Reserved: [u16; 3],
 }
 
+/// `INTERRUPT_VECTOR_DATA`: how one interrupt of a device is delivered,
+/// as the interrupt arbiter (in `acpi.sys`) states it to the HAL and in
+/// a device's interrupt connection data. In no header; the layout is
+/// the pinned kernel's symbols'.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct INTERRUPT_VECTOR_DATA {
+    /// `INTERRUPT_CONNECTION_TYPE`: 0 for a line of a controller.
+    pub Type: u32,
+    pub Vector: u32,
+    pub Irql: u8,
+    /// `KINTERRUPT_POLARITY`.
+    pub Polarity: u32,
+    /// `KINTERRUPT_MODE`.
+    pub Mode: u32,
+    pub TargetProcessors: GROUP_AFFINITY,
+    /// Bit 30 of the first word: a remapping table entry is already
+    /// allocated.
+    pub IntRemapInfo: [u32; 4],
+    /// For a line: its global system interrupt.
+    pub ControllerInputGsiv: u32,
+    pub HvDeviceId: u64,
+    /// For a message: its address and data, or the request for one.
+    pub Message: [u64; 2],
+}
+
+/// `INTERRUPT_VECTOR_DATA.Type`: a line of an interrupt controller.
+pub const INTERRUPT_CONNECTION_CONTROLLER_INPUT: u32 = 0;
+
+const _: () = {
+    assert!(size_of::<INTERRUPT_VECTOR_DATA>() == 88);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, Irql) == 8);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, Polarity) == 12);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, Mode) == 16);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, TargetProcessors) == 24);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, IntRemapInfo) == 40);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, ControllerInputGsiv) == 56);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, HvDeviceId) == 64);
+    assert!(core::mem::offset_of!(INTERRUPT_VECTOR_DATA, Message) == 72);
+};
+
 /// What `HalGetMessageRoutingInfo` is asked. In no header: the layout
 /// is what the pinned kernel reads and `pci.sys` fills in, and the
 /// names are NK's.

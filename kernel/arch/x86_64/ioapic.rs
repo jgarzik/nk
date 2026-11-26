@@ -176,6 +176,15 @@ impl InterruptVectors {
         self.taking(1)
     }
 
+    /// Take `vector`, which the interrupt arbiter chose for the line
+    /// `gsi`: its IRQL, or `None` if it is no free device vector.
+    pub fn claim(&mut self, vector: u32, _gsi: u32) -> Option<u8> {
+        for (test, _) in [super::TEST_LOW, super::TEST_HIGH, super::TEST_STRAY] {
+            self.0.reserve(test);
+        }
+        self.0.claim(vector).then(|| irql_of_vector(vector))
+    }
+
     /// `count` consecutive vectors of one IRQL for a device's messages:
     /// the first vector, and the IRQL.
     pub fn messages(&mut self, count: u32) -> Option<(u32, u8)> {
