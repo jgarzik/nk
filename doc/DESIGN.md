@@ -628,7 +628,8 @@ make that safe.
 
 | Call into a driver | Guard |
 | --- | --- |
-| dispatch routine | undo: leave the critical region the request is sent in |
+| dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
+| dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
@@ -657,7 +658,11 @@ to what a conformance driver's own `__try` blocks saw on Windows
 (nested and collided unwinds, `__leave`, `goto` and `return` out of a
 `__try`, the raising routines, the probes, faults), and the
 `*-oracle-nkc-seh-fatal-*` scenarios to the bugcheck Windows stopped
-with in each place an exception went unhandled.
+with in each place an exception went unhandled. `oracle.nkc-cross` has
+one driver send requests of its own to another: an exception raised in
+the far driver's dispatch routine, or in the sender's completion
+routine under the far driver's `IoCompleteRequest`, passes NK's frames
+to the sender's handlers as it passes Windows'.
 
 ## Exports
 

@@ -114,6 +114,8 @@ gate tier has, for each architecture:
   the same step, and with `debug=on` runs as on Windows with a debugger;
 - `*-oracle-nkc-seh-fatal-*`: each request of the conformance driver
   `nkc-seh-fatal` stops NK with the bugcheck it stopped Windows with;
+- `*-oracle-nkc-cross-dpc`: likewise the conformance driver `nkc-cross`,
+  whose DPC routine raises over a thread inside a `__try`;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
 All but the first are tests of the tests. An expected bugcheck counts

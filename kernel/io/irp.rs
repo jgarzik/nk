@@ -259,6 +259,43 @@ pub unsafe fn free(irp: *mut IRP) {
     }
 }
 
+/// [`IoAllocateIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateirp):
+/// an IRP of a driver's own, with `stack_size` stack locations, or null.
+/// Nothing is charged to a process: NK keeps no quota.
+pub extern "C" fn IoAllocateIrp(stack_size: i8, _charge_quota: u8) -> *mut IRP {
+    if stack_size <= 0 {
+        return core::ptr::null_mut();
+    }
+    alloc(stack_size)
+}
+
+/// [`IoFreeIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iofreeirp).
+///
+/// # Safety
+/// `irp` is an IRP from `IoAllocateIrp` that no driver still holds.
+pub unsafe extern "C" fn IoFreeIrp(irp: *mut IRP) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*irp).Type != IO_TYPE_IRP {
+            kd::bugcheck(format_args!("IoFreeIrp: {irp:p} is not an IRP"));
+        }
+        free(irp);
+    }
+}
+
+/// [`IofCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iofcalldriver):
+/// what `IoCallDriver` compiles to. A driver sends a request to another.
+/// An exception the other's dispatch routine lets out passes through to
+/// the sender's handlers, and NK holds nothing across the call.
+///
+/// # Safety
+/// `device` is a live device object and `irp` a live IRP whose next
+/// stack location the caller has set up.
+pub unsafe extern "C" fn IofCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { call_driver(device, irp, &Guard::Nothing) }
+}
+
 /// The cancel spin lock: one lock for the whole system, which a driver's
 /// cancel routine is entered holding and must release. It is a driver's
 /// kind of lock (taken here, released there), so it is not one of NK's

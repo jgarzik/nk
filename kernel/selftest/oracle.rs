@@ -369,6 +369,7 @@ pub static GROUP: Group = Group {
         "oracle.nkc-lib-twice",
         "oracle.nkc-libbad",
         "oracle.nkc-seh",
+        "oracle.nkc-cross",
     ],
     run,
     manual: false,
@@ -501,6 +502,13 @@ fn run(r: &mut Report, _: &BootInfo) {
         include_str!("../../oracle/nkc-seh.script"),
         include_str!("../../oracle/nkc-seh.txt"),
     );
+    check(
+        r,
+        "oracle.nkc-cross",
+        "nkc-cross.sys",
+        include_str!("../../oracle/nkc-cross.script"),
+        include_str!("../../oracle/nkc-cross.txt"),
+    );
 }
 
 /// The conformance driver `nkc-seh-fatal`: each script makes one request
@@ -532,6 +540,26 @@ fatal!(FATAL_WORK, fatal_work, "work");
 fatal!(FATAL_DPC, fatal_dpc, "dpc");
 fatal!(FATAL_KERNEL_READ, fatal_kernel_read, "kernel-read");
 fatal!(FATAL_THREAD, fatal_thread, "thread");
+
+/// The conformance drivers `nkc-cross` and `nkc-cross-b`: a DPC routine
+/// raises while the thread that queued it is inside a `__try`, which is
+/// not offered the exception; Windows stops. Run alone: it ends the
+/// boot.
+pub static CROSS_DPC: Group = Group {
+    names: &["oracle.nkc-cross-dpc"],
+    run: cross_dpc,
+    manual: true,
+};
+
+fn cross_dpc(r: &mut Report, _: &BootInfo) {
+    check(
+        r,
+        "oracle.nkc-cross-dpc",
+        "nkc-cross.sys",
+        include_str!("../../oracle/nkc-cross-dpc.script"),
+        include_str!("../../oracle/nkc-cross-dpc.txt"),
+    );
+}
 
 /// Microsoft's event sample, as on Windows booted with no debugger: its
 /// first act is a breakpoint, which stops the system. Run alone: it

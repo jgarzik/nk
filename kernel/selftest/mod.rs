@@ -159,6 +159,7 @@ pub static GROUPS: &[&Group] = &[
     &oracle::FATAL_DPC,
     &oracle::FATAL_KERNEL_READ,
     &oracle::FATAL_THREAD,
+    &oracle::CROSS_DPC,
     &smp::STUCK,
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,

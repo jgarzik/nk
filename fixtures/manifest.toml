@@ -375,6 +375,42 @@ status = "nk-authored"
 note = "nk-fixtures v6 nkc/nkc-seh-fatal.c: exceptions nothing handles, each a bugcheck"
 
 [[fixture]]
+name = "nkc-cross"
+arch = "x86_64"
+file = "nkc-cross.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross.x64.nkc-cross.sys"
+sha256 = "79f9950b58a77f86442d01ec9bf5c0ebd27d843b98f2f4879ac8800c9c8ce66f"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross.c: exceptions that cross the kernel, the sending side"
+
+[[fixture]]
+name = "nkc-cross"
+arch = "aarch64"
+file = "nkc-cross.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross.arm64.nkc-cross.sys"
+sha256 = "232eed9f5a538f0d1462255e14126af50f4e4cf4b66f01633e72eff409f6263e"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross.c: exceptions that cross the kernel, the sending side"
+
+[[fixture]]
+name = "nkc-cross-b"
+arch = "x86_64"
+file = "nkc-cross-b.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross-b.x64.nkc-cross-b.sys"
+sha256 = "5c97ba9d4498233704d0d61c3691a07810bd454e05e27921c2bd6d75595a2a9e"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross-b.c: exceptions that cross the kernel, the far side"
+
+[[fixture]]
+name = "nkc-cross-b"
+arch = "aarch64"
+file = "nkc-cross-b.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross-b.arm64.nkc-cross-b.sys"
+sha256 = "fc2a0664c4441975149635049f8727f086587689949a7c28bac7e9856b1f85b2"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross-b.c: exceptions that cross the kernel, the far side"
+
+[[fixture]]
 name = "cancel"
 arch = "x86_64"
 file = "cancel.x64.sys"

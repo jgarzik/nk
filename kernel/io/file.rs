@@ -604,6 +604,53 @@ pub unsafe extern "C" fn deleted(object: *mut c_void) {
     }
 }
 
+/// [`IoGetDeviceObjectPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetdeviceobjectpointer):
+/// open the named device for kernel mode and hand the caller the file
+/// object, with a reference, and the device the file's requests go to.
+/// The handle of the open is closed again, so the device's driver is
+/// sent a create and a cleanup now, and a close when the caller gives
+/// the file object's reference up.
+///
+/// # Safety
+/// `name` is a counted string and the two last arguments are writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoGetDeviceObjectPointer(
+    name: *const UNICODE_STRING,
+    desired_access: u32,
+    file_object: *mut *mut FILE_OBJECT,
+    device_object: *mut *mut DEVICE_OBJECT,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    let name = alloc::string::String::from_utf16_lossy(&unsafe { crate::rtl::copy_unicode(name) });
+    let request = OpenRequest {
+        name: &name,
+        root: None,
+        desired_access,
+        share_access: 0,
+        create_options: FILE_NON_DIRECTORY_FILE,
+        disposition: FILE_OPEN,
+        kind: Kind::File,
+        requestor_mode: KERNEL_MODE,
+    };
+    let handle = match open(&request) {
+        Ok((handle, _)) => handle,
+        Err(status) => return status,
+    };
+    let Ok(file) = file_of(handle) else {
+        crate::kd::bugcheck(format_args!(
+            "IoGetDeviceObjectPointer: a handle just opened names no file"
+        ))
+    };
+    close(handle);
+    // SAFETY: per the contract; the reference just taken keeps the file
+    // object, whose device is set for as long as it is open.
+    unsafe {
+        file_object.write(file);
+        device_object.write((*file).DeviceObject);
+    }
+    STATUS_SUCCESS
+}
+
 /// The open file `handle` names, with a reference for a request to
 /// hold.
 fn file_of(handle: u64) -> Result<*mut FILE_OBJECT, IoError> {
