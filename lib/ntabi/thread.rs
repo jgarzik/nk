@@ -35,8 +35,12 @@ pub const RUNNING: usize = 0x71;
 /// next alertable wait.
 pub const ALERTED: usize = 0x72;
 /// `MiscFlags`: 32 bits of flags, of which NK keeps
-/// [`MISC_FLAG_ALERTABLE`].
+/// [`MISC_FLAG_ALERTABLE`] and [`MISC_FLAG_SYSTEM_AFFINITY_ACTIVE`].
 pub const MISC_FLAGS: usize = 0x74;
+/// `MiscFlags.SystemAffinityActive`: the thread's affinity is one set
+/// with `KeSetSystemGroupAffinityThread`, not its own
+/// ([`USER_AFFINITY`]).
+pub const MISC_FLAG_SYSTEM_AFFINITY_ACTIVE: u32 = 1 << 3;
 /// `MiscFlags.Alertable`: the thread is in a wait an alert may end.
 pub const MISC_FLAG_ALERTABLE: u32 = 1 << 4;
 /// `WaitMode`: the processor mode of the thread's alertable wait, one
@@ -85,6 +89,11 @@ pub const MUTANT_LIST_HEAD: usize = 0x308;
 pub const AFFINITY: usize = 0x240;
 /// `IdealProcessor`: the processor it is placed on by preference.
 pub const IDEAL_PROCESSOR: usize = 0x24C;
+/// `UserAffinity.Mask`: the thread's own affinity, which
+/// `KeRevertToUserGroupAffinityThread` goes back to.
+pub const USER_AFFINITY: usize = 0x228;
+/// `UserIdealProcessor`: the ideal processor that goes with it.
+pub const USER_IDEAL_PROCESSOR: usize = 0xC4;
 /// `ETHREAD.StartAddress`.
 pub const START_ADDRESS: usize = 0x450;
 /// `ApcState.Process`: the process whose address space the thread is

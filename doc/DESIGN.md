@@ -439,6 +439,18 @@ processor its affinity allows, else its ideal processor. A processor with
 nothing to run takes the best thread it is allowed from another's queues,
 and one that leaves a thread waiting wakes an idle processor to take it.
 
+A thread changes its own affinity while it runs
+(`KeSetSystemGroupAffinityThread`, `KeRevertToUserGroupAffinityThread`):
+nothing reads a running thread's affinity but the thread, so no lock is
+involved. If the processor it is on is no longer allowed, the dispatcher
+takes whatever is ready there, or the idle thread, and makes the thread
+ready on a processor of its affinity: before the call returns, or, for
+a caller at `DISPATCH_LEVEL`, when the IRQL comes down. `UserAffinity`
+and `UserIdealProcessor` keep what the thread was created with, and
+`SystemAffinityActive` says a system affinity is in force, as on
+Windows. An ideal processor the new affinity does not allow becomes the
+highest one it does.
+
 A processor leaves a thread when it yields, waits or exits; when a higher
 priority becomes ready there; or when its quantum (two clock ticks, as on
 Windows client) is spent and an equal is waiting. A preempted thread goes
