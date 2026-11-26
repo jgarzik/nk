@@ -5,9 +5,9 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 758,
-  "implemented": 510,
-  "partial": 34,
-  "traps": 139,
+  "implemented": 588,
+  "partial": 56,
+  "traps": 39,
   "missing": 10,
   "library": 65
  },
@@ -2345,12 +2345,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoReserveDependency",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoResolveDependency",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2370,7 +2370,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceRelations",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2415,12 +2415,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDevicePropertyData",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2445,17 +2445,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeReportCacheIncoherentDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoRegisterDeviceInterface",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDeviceInterfacePropertyData",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2465,7 +2465,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoOpenDeviceRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2495,7 +2495,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDependency",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2515,7 +2515,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetPowerState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2530,7 +2530,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetSystemWake",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2575,7 +2575,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDeviceProperty",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2660,17 +2660,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoUnregisterPlugPlayNotification",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwOpenFile",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwLoadDriver",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2680,7 +2680,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoRegisterPlugPlayNotification",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2690,12 +2690,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDevicePropertyData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxNotifySurprisePowerOn",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2750,7 +2750,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwSetSystemInformation",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2780,7 +2780,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoWMIOpenBlock",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2810,7 +2810,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoShutdownBugCheck",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2820,7 +2820,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetImportanceDpc",
-     "state": "partial"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2850,7 +2850,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoUnregisterPowerSettingCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2865,22 +2865,22 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoRegisterPowerSettingCallback",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeProcessorGroupAffinity",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetSystemGroupAffinityThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeRevertToUserGroupAffinityThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2895,7 +2895,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDeviceNumaNode",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2985,7 +2985,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwInitiatePowerAction",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3015,12 +3015,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoUnregisterPlugPlayNotificationEx",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwCreateFile",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3085,7 +3085,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetHiberRange",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3320,7 +3320,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeRegisterProcessorChangeCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3420,7 +3420,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoRequestPowerIrp",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3455,7 +3455,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDeviceInterfaceState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3465,7 +3465,7 @@
     {
      "module": "HAL.dll",
      "name": "HalGetMessageRoutingInfo",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -3475,7 +3475,7 @@
     {
      "module": "HAL.dll",
      "name": "HalGetProcessorIdByNtNumber",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -3490,7 +3490,7 @@
     {
      "module": "HAL.dll",
      "name": "HalGetMemoryCachingRequirements",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -3520,7 +3520,7 @@
     {
      "module": "HAL.dll",
      "name": "HalConvertDeviceIdtToIrql",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "WMILIB.SYS",
@@ -3649,7 +3649,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoOpenDeviceRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3704,7 +3704,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetHiberRange",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3784,37 +3784,37 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterCrashdumpDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterDevice",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxSetDeviceIdleTimeout",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxActivateComponent",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxStartDevicePowerManagement",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterDripsWatchdogCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxUnregisterDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3824,17 +3824,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteIdleCondition",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteIdleState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxNotifySurprisePowerOn",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3844,12 +3844,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceRelations",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoGetSystemWake",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3864,12 +3864,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxIdleComponent",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoRequestPowerIrp",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3884,12 +3884,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxReportDevicePoweredOn",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteDevicePowerNotRequired",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -3994,7 +3994,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetPowerState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4024,7 +4024,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetSystemWake",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4039,12 +4039,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExSubscribeWnfStateChange",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ExUnsubscribeWnfStateChange",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4214,7 +4214,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlFindMessage",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4259,7 +4259,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxPowerOnCrashdumpDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4329,12 +4329,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoRegisterPlugPlayNotification",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoUnregisterPlugPlayNotificationEx",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4359,12 +4359,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDevicePropertyData",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeIpiGenericCall",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4379,7 +4379,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDevicePropertyData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4464,7 +4464,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoUnregisterPlugPlayNotification",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4494,7 +4494,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4509,17 +4509,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDeviceProperty",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoUnregisterPowerSettingCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoRegisterPowerSettingCallback",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4709,7 +4709,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoDirectedDripsSetDeviceFlags",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4774,7 +4774,7 @@
     {
      "module": "HAL.dll",
      "name": "HalGetMessageRoutingInfo",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -4928,7 +4928,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetSystemGroupAffinityThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -4943,12 +4943,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetHiberRange",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeRevertToUserGroupAffinityThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5003,12 +5003,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "NtGetEnvironmentVariableEx",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "NtQueryEnvironmentVariableInfoEx",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5038,7 +5038,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeProcessorGroupAffinity",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5048,12 +5048,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlPcToFileName",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
      "name": "HalEnumerateEnvironmentVariablesEx",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -5063,7 +5063,7 @@
     {
      "module": "HAL.dll",
      "name": "HalBugCheckSystem",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "HAL.dll",
@@ -5073,7 +5073,7 @@
     {
      "module": "HAL.dll",
      "name": "HalSetEnvironmentVariableEx",
-     "state": "traps"
+     "state": "implemented"
     }
    ]
   },
@@ -5087,12 +5087,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoRegisterDeviceInterface",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxActivateComponent",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5167,7 +5167,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5177,7 +5177,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDeviceInterfaceState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5187,7 +5187,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoRegisterPowerSettingCallback",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5212,12 +5212,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwQueryWnfStateData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetAdapterCryptoEngineExtension",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5242,7 +5242,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetTargetProcessorDpcEx",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5257,7 +5257,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxIdleComponent",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5292,7 +5292,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetIoPriorityHint",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5302,12 +5302,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDevicePropertyData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetActivityIdIrp",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5337,7 +5337,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoUnregisterPowerSettingCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5417,7 +5417,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDeviceProperty",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5467,7 +5467,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoUnregisterCoalescingCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5512,7 +5512,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoRegisterCoalescingCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5547,12 +5547,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceRelations",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterCrashdumpDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5777,7 +5777,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxSetComponentResidency",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5807,7 +5807,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetRequestorProcessId",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5817,7 +5817,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxUnregisterDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5867,7 +5867,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxStartDevicePowerManagement",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5912,7 +5912,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxPowerControl",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5922,7 +5922,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxSetComponentLatency",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5937,7 +5937,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoPropagateIrpExtension",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5947,7 +5947,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetConfigurationInformation",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5957,12 +5957,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteDirectedPowerDown",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterDevice",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -5982,27 +5982,27 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterComponentPerfStates",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxPowerOnCrashdumpDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxReportDevicePoweredOn",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoRequestPowerIrp",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetPowerState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6012,12 +6012,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxSetDeviceIdleTimeout",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteIdleState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6027,7 +6027,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteDevicePowerNotRequired",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6037,7 +6037,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxCompleteIdleCondition",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6117,7 +6117,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoOpenDeviceRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6147,7 +6147,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoIs32bitProcess",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6297,7 +6297,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetGenericIrpExtension",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6307,22 +6307,22 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlWriteRegistryValue",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeSetImportanceDpc",
-     "state": "partial"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlCheckRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "RtlCreateRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6560,7 +6560,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoRegisterPowerSettingCallback",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6625,12 +6625,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetActivityIdIrp",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoOpenDeviceRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6765,7 +6765,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoRegisterDeviceInterface",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6815,7 +6815,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlDeleteRegistryValue",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6840,7 +6840,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetDeviceInterfaceState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6885,12 +6885,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwQueryWnfStateData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetPagingIoPriority",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6940,27 +6940,27 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoClearActivityIdThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetIoPriorityHint",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDevicePropertyData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetActivityIdThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetActivityIdIrp",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6980,7 +6980,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoUnregisterPowerSettingCallback",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7030,7 +7030,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetDeviceProperty",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7070,7 +7070,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetHardErrorOrVerifyDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7080,7 +7080,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoIs32bitProcess",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7130,12 +7130,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoPropagateActivityIdToThread",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceRelations",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7190,12 +7190,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoQueryWatchdogTime",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetPowerState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7210,7 +7210,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoPropagateIrpExtensionEx",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7220,7 +7220,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoRecordIoAttribution",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7250,7 +7250,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoIsActivityTracingEnabled",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7270,7 +7270,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetIoAttributionHandle",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7295,7 +7295,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlWriteRegistryValue",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7340,7 +7340,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetConfigurationInformation",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7375,12 +7375,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetGenericIrpExtension",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetGenericIrpExtension",
-     "state": "traps"
+     "state": "implemented"
     }
    ]
   },
@@ -7409,7 +7409,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetHardErrorOrVerifyDevice",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7449,7 +7449,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoInvalidateDeviceRelations",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7514,12 +7514,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoOpenDeviceRegistryKey",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetConfigurationInformation",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7574,7 +7574,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwCreateDirectoryObject",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7644,7 +7644,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetActivityIdIrp",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7654,7 +7654,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetIoPriorityHint",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7664,7 +7664,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoSetActivityIdIrp",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7679,12 +7679,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwMakeTemporaryObject",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "ZwQueryWnfStateData",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7709,7 +7709,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetStackLimits",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -10638,9 +10638,9 @@
   "binaries": 58,
   "kernel_names": {
    "total": 1740,
-   "implemented": 508,
-   "partial": 34,
-   "traps": 139,
+   "implemented": 586,
+   "partial": 56,
+   "traps": 39,
    "missing": 1059
   },
   "by_binary": [
@@ -10649,9 +10649,9 @@
     "version": "10.0.19041.1741",
     "kernel": {
      "total": 260,
-     "implemented": 191,
-     "partial": 15,
-     "traps": 53,
+     "implemented": 218,
+     "partial": 27,
+     "traps": 14,
      "missing": 1
     },
     "by_ordinal": 1,
@@ -10666,9 +10666,9 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 170,
-     "partial": 7,
-     "traps": 6,
+     "implemented": 171,
+     "partial": 9,
+     "traps": 3,
      "missing": 68
     },
     "by_ordinal": 0,
@@ -10683,9 +10683,9 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 40,
-     "implemented": 26,
-     "partial": 4,
-     "traps": 2,
+     "implemented": 27,
+     "partial": 5,
+     "traps": 0,
      "missing": 8
     },
     "by_ordinal": 0,
@@ -10712,9 +10712,9 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 240,
-     "implemented": 129,
-     "partial": 7,
-     "traps": 8,
+     "implemented": 133,
+     "partial": 10,
+     "traps": 1,
      "missing": 96
     },
     "by_ordinal": 0,
@@ -10728,9 +10728,9 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 171,
-     "implemented": 133,
-     "partial": 7,
-     "traps": 31,
+     "implemented": 158,
+     "partial": 11,
+     "traps": 2,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -10741,9 +10741,9 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 186,
-     "implemented": 118,
-     "partial": 6,
-     "traps": 2,
+     "implemented": 119,
+     "partial": 7,
+     "traps": 0,
      "missing": 60
     },
     "by_ordinal": 0,
@@ -10754,9 +10754,9 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 121,
-     "implemented": 79,
-     "partial": 6,
-     "traps": 4,
+     "implemented": 80,
+     "partial": 9,
+     "traps": 0,
      "missing": 32
     },
     "by_ordinal": 0,
@@ -10780,9 +10780,9 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 68,
-     "implemented": 53,
-     "partial": 2,
-     "traps": 13,
+     "implemented": 61,
+     "partial": 5,
+     "traps": 2,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -10795,9 +10795,9 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 486,
-     "implemented": 257,
-     "partial": 13,
-     "traps": 44,
+     "implemented": 286,
+     "partial": 23,
+     "traps": 5,
      "missing": 172
     },
     "by_ordinal": 1,
@@ -10812,9 +10812,9 @@
     "version": "10.0.19041.1826",
     "kernel": {
      "total": 326,
-     "implemented": 138,
-     "partial": 7,
-     "traps": 6,
+     "implemented": 142,
+     "partial": 8,
+     "traps": 1,
      "missing": 175
     },
     "by_ordinal": 0,
@@ -10830,9 +10830,9 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 148,
-     "partial": 7,
-     "traps": 16,
+     "implemented": 158,
+     "partial": 10,
+     "traps": 3,
      "missing": 154
     },
     "by_ordinal": 0,
@@ -10860,9 +10860,9 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 107,
-     "implemented": 65,
-     "partial": 3,
-     "traps": 27,
+     "implemented": 84,
+     "partial": 11,
+     "traps": 0,
      "missing": 12
     },
     "by_ordinal": 0,
@@ -10891,9 +10891,9 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 33,
-     "implemented": 29,
+     "implemented": 30,
      "partial": 2,
-     "traps": 1,
+     "traps": 0,
      "missing": 1
     },
     "by_ordinal": 0,
@@ -10908,9 +10908,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 69,
-     "partial": 1,
-     "traps": 7,
+     "implemented": 75,
+     "partial": 2,
+     "traps": 0,
      "missing": 14
     },
     "by_ordinal": 0,
@@ -10924,9 +10924,9 @@
     "version": "10.0.19041.1266",
     "kernel": {
      "total": 78,
-     "implemented": 55,
-     "partial": 6,
-     "traps": 7,
+     "implemented": 58,
+     "partial": 10,
+     "traps": 0,
      "missing": 10
     },
     "by_ordinal": 0,
@@ -10939,9 +10939,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 51,
-     "partial": 2,
-     "traps": 9,
+     "implemented": 58,
+     "partial": 4,
+     "traps": 0,
      "missing": 4
     },
     "by_ordinal": 0,
@@ -10955,9 +10955,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 58,
+     "implemented": 60,
      "partial": 2,
-     "traps": 2,
+     "traps": 0,
      "missing": 4
     },
     "by_ordinal": 0,
@@ -10972,9 +10972,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 13,
-     "implemented": 9,
+     "implemented": 10,
      "partial": 1,
-     "traps": 1,
+     "traps": 0,
      "missing": 2
     },
     "by_ordinal": 0,
@@ -10985,9 +10985,9 @@
     "version": "10.0.19041.1586",
     "kernel": {
      "total": 120,
-     "implemented": 80,
+     "implemented": 81,
      "partial": 2,
-     "traps": 3,
+     "traps": 2,
      "missing": 35
     },
     "by_ordinal": 0,
@@ -11000,9 +11000,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 60,
-     "partial": 2,
-     "traps": 7,
+     "implemented": 64,
+     "partial": 4,
+     "traps": 1,
      "missing": 22
     },
     "by_ordinal": 0,
@@ -11055,8 +11055,8 @@
     "kernel": {
      "total": 147,
      "implemented": 100,
-     "partial": 2,
-     "traps": 3,
+     "partial": 5,
+     "traps": 0,
      "missing": 42
     },
     "by_ordinal": 0,
@@ -11067,9 +11067,9 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 230,
-     "partial": 12,
-     "traps": 29,
+     "implemented": 248,
+     "partial": 20,
+     "traps": 3,
      "missing": 88
     },
     "by_ordinal": 0,
@@ -11083,9 +11083,9 @@
     "version": "10.0.19041.1682",
     "kernel": {
      "total": 235,
-     "implemented": 167,
-     "partial": 10,
-     "traps": 3,
+     "implemented": 168,
+     "partial": 11,
+     "traps": 1,
      "missing": 55
     },
     "by_ordinal": 0,
@@ -11113,9 +11113,9 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 219,
-     "partial": 11,
-     "traps": 17,
+     "implemented": 229,
+     "partial": 16,
+     "traps": 2,
      "missing": 378
     },
     "by_ordinal": 0,
@@ -11146,9 +11146,9 @@
     "version": "10.0.19041.1889",
     "kernel": {
      "total": 137,
-     "implemented": 96,
-     "partial": 2,
-     "traps": 17,
+     "implemented": 109,
+     "partial": 5,
+     "traps": 1,
      "missing": 22
     },
     "by_ordinal": 0,
@@ -11161,9 +11161,9 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 239,
-     "implemented": 182,
-     "partial": 19,
-     "traps": 38,
+     "implemented": 210,
+     "partial": 27,
+     "traps": 2,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -11178,9 +11178,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 41,
-     "implemented": 27,
+     "implemented": 37,
      "partial": 4,
-     "traps": 10,
+     "traps": 0,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -11191,9 +11191,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 71,
-     "implemented": 51,
+     "implemented": 58,
      "partial": 2,
-     "traps": 7,
+     "traps": 0,
      "missing": 11
     },
     "by_ordinal": 0,
@@ -11204,9 +11204,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 68,
-     "implemented": 49,
-     "partial": 1,
-     "traps": 11,
+     "implemented": 57,
+     "partial": 2,
+     "traps": 2,
      "missing": 7
     },
     "by_ordinal": 0,
@@ -11219,9 +11219,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 19,
-     "implemented": 12,
-     "partial": 1,
-     "traps": 5,
+     "implemented": 14,
+     "partial": 4,
+     "traps": 0,
      "missing": 1
     },
     "by_ordinal": 0,
@@ -11264,9 +11264,9 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 269,
-     "implemented": 208,
-     "partial": 15,
-     "traps": 46,
+     "implemented": 245,
+     "partial": 21,
+     "traps": 3,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -11277,9 +11277,9 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 212,
-     "partial": 10,
-     "traps": 12,
+     "implemented": 216,
+     "partial": 15,
+     "traps": 3,
      "missing": 95
     },
     "by_ordinal": 0,
@@ -11298,9 +11298,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 42,
-     "implemented": 33,
+     "implemented": 35,
      "partial": 1,
-     "traps": 2,
+     "traps": 0,
      "missing": 6
     },
     "by_ordinal": 0,
@@ -11330,9 +11330,9 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 29,
-     "implemented": 25,
+     "implemented": 26,
      "partial": 1,
-     "traps": 1,
+     "traps": 0,
      "missing": 2
     },
     "by_ordinal": 0,
@@ -11343,9 +11343,9 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 75,
-     "partial": 6,
-     "traps": 13,
+     "implemented": 81,
+     "partial": 9,
+     "traps": 4,
      "missing": 21
     },
     "by_ordinal": 0,
@@ -11362,9 +11362,9 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 121,
-     "implemented": 77,
-     "partial": 7,
-     "traps": 15,
+     "implemented": 84,
+     "partial": 11,
+     "traps": 4,
      "missing": 22
     },
     "by_ordinal": 0,
@@ -11379,9 +11379,9 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 109,
-     "implemented": 71,
-     "partial": 2,
-     "traps": 19,
+     "implemented": 85,
+     "partial": 6,
+     "traps": 1,
      "missing": 17
     },
     "by_ordinal": 0,
@@ -11394,9 +11394,9 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 89,
-     "implemented": 70,
-     "partial": 0,
-     "traps": 3,
+     "implemented": 71,
+     "partial": 1,
+     "traps": 1,
      "missing": 16
     },
     "by_ordinal": 0,
@@ -11409,9 +11409,9 @@
     "version": "1.31.19041.1566",
     "kernel": {
      "total": 217,
-     "implemented": 148,
-     "partial": 10,
-     "traps": 37,
+     "implemented": 174,
+     "partial": 18,
+     "traps": 3,
      "missing": 22
     },
     "by_ordinal": 0,
@@ -11426,8 +11426,8 @@
     "kernel": {
      "total": 38,
      "implemented": 34,
-     "partial": 1,
-     "traps": 1,
+     "partial": 2,
+     "traps": 0,
      "missing": 2
     },
     "by_ordinal": 0,
@@ -11454,8 +11454,8 @@
     "kernel": {
      "total": 37,
      "implemented": 14,
-     "partial": 0,
-     "traps": 1,
+     "partial": 1,
+     "traps": 0,
      "missing": 22
     },
     "by_ordinal": 0,
@@ -11472,9 +11472,9 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 451,
-     "implemented": 186,
-     "partial": 8,
-     "traps": 23,
+     "implemented": 193,
+     "partial": 18,
+     "traps": 6,
      "missing": 234
     },
     "by_ordinal": 0,
@@ -11492,9 +11492,9 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 439,
-     "implemented": 181,
-     "partial": 8,
-     "traps": 19,
+     "implemented": 188,
+     "partial": 15,
+     "traps": 5,
      "missing": 231
     },
     "by_ordinal": 0,
