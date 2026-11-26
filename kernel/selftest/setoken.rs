@@ -8,6 +8,7 @@ use crate::ob::object;
 use crate::ps::process;
 use crate::se::access::*;
 use crate::se::descriptor::*;
+use crate::se::impersonate::*;
 use crate::se::token::*;
 use crate::se::zwtoken::*;
 use crate::test::{Group, Report};
@@ -33,6 +34,7 @@ pub static GROUP: Group = Group {
         "se.descriptor-info",
         "se.token-query",
         "se.token-handles",
+        "se.impersonation",
     ],
     run,
     manual: false,
@@ -1617,6 +1619,215 @@ fn token_handles() -> Result<(), &'static str> {
     verdict
 }
 
+// ---- impersonation --------------------------------------------------------
+
+const NO_TOKEN: i32 = 0xC000_007Cu32 as i32;
+const BAD_TOKEN_TYPE: i32 = 0xC000_00A8u32 as i32;
+const LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
+const THREAD_IMPERSONATION_TOKEN: u32 = 5;
+const CURRENT_THREAD: *mut c_void = usize::MAX.wrapping_sub(1) as *mut c_void;
+
+/// What the calling thread impersonates, as a driver asks: the token
+/// (referenced and given up again), and the three facts, which are
+/// `0xAA` where the routine wrote nothing.
+fn wearing() -> (*mut c_void, u8, u8, u32) {
+    let (mut copy_on_open, mut effective_only, mut level) = (0xAAu8, 0xAAu8, 0xAAu32);
+    // SAFETY: the running thread; the results are locals.
+    unsafe {
+        let token = PsReferenceImpersonationToken(
+            crate::ke::thread::current().cast(),
+            &raw mut copy_on_open,
+            &raw mut effective_only,
+            &raw mut level,
+        );
+        PsDereferenceImpersonationToken(token);
+        (token, copy_on_open, effective_only, level)
+    }
+}
+
+/// `ZwSetInformationThread(ThreadImpersonationToken)` on the calling
+/// thread, with `length` bytes of a handle.
+fn wear(token: *mut c_void, length: u32) -> i32 {
+    // SAFETY: a local that outlives the call.
+    unsafe {
+        crate::ps::ZwSetInformationThread(
+            CURRENT_THREAD,
+            THREAD_IMPERSONATION_TOKEN,
+            (&raw const token).cast(),
+            length,
+        )
+    }
+}
+
+/// The calling thread's token, opened: the status and the handle,
+/// which is 1 where the routine wrote nothing.
+fn open_thread_token() -> (i32, *mut c_void) {
+    let mut opened = core::ptr::dangling_mut::<c_void>();
+    // SAFETY: the result is a local.
+    let status = unsafe {
+        ZwOpenThreadTokenEx(
+            CURRENT_THREAD,
+            TOKEN_QUERY,
+            1,
+            OBJ_KERNEL_HANDLE,
+            &raw mut opened,
+        )
+    };
+    (status, opened)
+}
+
+/// The object a token handle names; the reference taken to find it is
+/// given up again, the handle keeps the object.
+fn token_of(handle: *mut c_void) -> *mut c_void {
+    match crate::ob::handle::reference(handle as u64, None) {
+        Ok(body) => {
+            // SAFETY: the reference just taken.
+            unsafe { object::dereference(body) };
+            body.cast()
+        }
+        Err(_) => core::ptr::null_mut(),
+    }
+}
+
+/// A thread takes on a token, is seen to wear it by every routine that
+/// asks, and puts it off.
+fn impersonating() -> Result<(), &'static str> {
+    if wearing() != (core::ptr::null_mut(), 0xAA, 0xAA, 0xAA) {
+        return Err("a new thread impersonates, or was told how");
+    }
+    if open_thread_token() != (NO_TOKEN, core::ptr::dangling_mut()) {
+        return Err("a thread that impersonates nobody had a token to open");
+    }
+    let mut primary = core::ptr::null_mut();
+    // SAFETY: the result is a local.
+    let opened = unsafe {
+        ZwOpenProcessTokenEx(
+            usize::MAX as *mut c_void,
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            OBJ_KERNEL_HANDLE,
+            &raw mut primary,
+        )
+    };
+    let (made, worn) = duplicate(primary, 2, Some(2));
+    if opened != 0 || made != 0 {
+        return Err("no token to impersonate with");
+    }
+    let token = token_of(worn);
+    let verdict = (|| {
+        if wear(worn, 4) != LENGTH_MISMATCH || wear(primary, 8) != BAD_TOKEN_TYPE {
+            return Err("half a handle, or a primary token, was taken on");
+        }
+        if !wearing().0.is_null() {
+            return Err("a refused token was taken on");
+        }
+        if wear(worn, 8) != 0 || wearing() != (token, 0, 0, 2) {
+            return Err("the thread does not wear the token it took on, at its level");
+        }
+        // The thread's subject now has a client beside the process.
+        let mut subject: SECURITY_SUBJECT_CONTEXT = dirty();
+        let subject = &raw mut subject;
+        // SAFETY: a local, captured for as long as it is used.
+        let (captured, regions) = unsafe {
+            SeCaptureSubjectContext(subject);
+            let captured = subject.read();
+            SeLockSubjectContext(subject);
+            let regions = crate::ke::thread::object_field::<i16>(
+                crate::ke::thread::current(),
+                nk_ntabi::thread::KERNEL_APC_DISABLE,
+            )
+            .read();
+            SeUnlockSubjectContext(subject);
+            SeReleaseSubjectContext(subject);
+            (captured, regions)
+        };
+        let system = process::reference_primary_token();
+        // SAFETY: the reference just taken.
+        unsafe { object::dereference(system) };
+        if captured.ClientToken != token
+            || captured.ImpersonationLevel != 2
+            || captured.PrimaryToken != system.cast()
+        {
+            return Err("a captured subject does not have the thread's client token");
+        }
+        if regions != -2 || KeAreApcsDisabled() != 0 {
+            return Err("locking a subject with a client is not two critical regions");
+        }
+        // Opened, the thread's token is that token itself.
+        let (status, opened) = open_thread_token();
+        let same = token_of(opened) == token && brief(opened) == (2, 2);
+        crate::ps::ZwClose(opened);
+        if status != 0 || !same {
+            return Err("the thread's token, opened, is not the token it wears");
+        }
+        // Another token in its place; then nobody, twice.
+        let (made, other) = duplicate(primary, 2, Some(1));
+        let replaced = made == 0 && wear(other, 8) == 0 && wearing() == (token_of(other), 0, 0, 1);
+        crate::ps::ZwClose(other);
+        if !replaced {
+            return Err("a second token did not take the first one's place");
+        }
+        if wear(core::ptr::null_mut(), 8) != 0
+            || !wearing().0.is_null()
+            || wear(core::ptr::null_mut(), 8) != 0
+        {
+            return Err("the thread did not put its token off");
+        }
+        // Left on: the thread ends wearing it, and its end lets it go.
+        if wear(worn, 8) != 0 {
+            return Err("the token was not taken on again");
+        }
+        Ok(())
+    })();
+    crate::ps::ZwClose(worn);
+    crate::ps::ZwClose(primary);
+    verdict
+}
+
+/// Run `test` on a thread made for it and wait for the thread to end
+/// and be freed: whatever it left on itself goes with it.
+fn on_a_thread(test: fn() -> Result<(), &'static str>) -> Result<(), &'static str> {
+    struct Job {
+        test: fn() -> Result<(), &'static str>,
+        verdict: Result<(), &'static str>,
+    }
+    fn run(job: usize) {
+        let job = job as *mut Job;
+        // SAFETY: the creator's local, which it keeps until this
+        // thread has ended; nothing else touches it meanwhile.
+        unsafe { (&raw mut (*job).verdict).write(((*job).test)()) };
+    }
+    let mut job = Job {
+        test,
+        verdict: Err("the thread did not run"),
+    };
+    let before = crate::ke::thread::count();
+    let thread = crate::ke::thread::create_referenced(
+        run,
+        (&raw mut job).addr(),
+        crate::ke::thread::NORMAL_PRIORITY,
+        crate::ke::thread::ANYWHERE,
+    )
+    .map_err(|_| "no memory for a thread")?;
+    // SAFETY: the thread, referenced until here; the wait is for its
+    // end.
+    unsafe {
+        crate::ke::wait::wait(Some(thread.cast()), None);
+        object::dereference(thread.cast());
+    }
+    // Its last reference, the one it held on itself, goes when the
+    // processor it ran on has left its stack.
+    while crate::ke::thread::count() != before {
+        crate::ke::thread::yield_now();
+    }
+    job.verdict
+}
+
+/// Impersonation on a thread made for it: whatever it has taken on
+/// ends with it, and the group's leak check says the token went.
+fn impersonation() -> Result<(), &'static str> {
+    on_a_thread(impersonating)
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -1628,4 +1839,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.descriptor-info", descriptor_info);
     r.check("se.token-query", token_query);
     r.check("se.token-handles", token_handles);
+    r.check("se.impersonation", impersonation);
 }

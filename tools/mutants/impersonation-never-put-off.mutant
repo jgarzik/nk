@@ -1,0 +1,8 @@
+# Setting a thread's impersonation token to none gives the token up
+# and leaves the thread marked as impersonating: every later access
+# check is made as a client that is no longer there. The boot ends in
+# whatever touches the freed token first, not in a verdict.
+scenario: x86_64
+fails: scenario
+file: kernel/se/impersonate.rs
+remove:                 bits.fetch_and(!ACTIVE_IMPERSONATION_INFO, Ordering::AcqRel);

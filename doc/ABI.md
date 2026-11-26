@@ -196,6 +196,10 @@ and where its impersonation would be (`ClientSecurity`,
 thread's fields in line: they go through exports. A structure is added
 to the comparison by the commit that starts using it.
 
+A thread's impersonation is kept in `ETHREAD.ClientSecurity` (0x4A8)
+and bits 3 and 8 of `CrossThreadFlags` (0x510), as that kernel lays
+them out and its own routines read them.
+
 `AUX_ACCESS_DATA` is such a private layout that a driver nevertheless
 allocates: whoever calls `SeCreateAccessState` supplies the room, 0xE0
 bytes in this build, and the kernel writes all of it.

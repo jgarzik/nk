@@ -12,6 +12,7 @@
 //! (`SeLockSubjectContext`) is what is left of Windows' routine when
 //! the token lock cannot be contended: a critical region per token.
 
+use super::impersonate;
 use crate::ke::mutex::{KeEnterCriticalRegion, KeLeaveCriticalRegion};
 use crate::mm::pool;
 use crate::ob::object;
@@ -100,10 +101,11 @@ pub unsafe fn effective<'a>(context: *const SECURITY_SUBJECT_CONTEXT) -> &'a Tok
 }
 
 /// [`SeCaptureSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-secapturesubjectcontext):
-/// record who the calling thread acts as: its process's primary token,
-/// referenced until [`SeReleaseSubjectContext`], and the process's id
-/// for auditing. No thread has a client token, and as on Windows
-/// `ImpersonationLevel` is then left as the caller had it.
+/// record who the calling thread acts as: the token it impersonates,
+/// if any, with the level at which it does; its process's primary
+/// token; and the process's id for auditing. Both tokens are
+/// referenced until [`SeReleaseSubjectContext`]. With no client token
+/// `ImpersonationLevel` is left as the caller had it, as on Windows.
 ///
 /// # Safety
 /// `context` is writable for a `SECURITY_SUBJECT_CONTEXT`.
@@ -118,7 +120,14 @@ pub unsafe extern "C" fn SeCaptureSubjectContext(context: *mut SECURITY_SUBJECT_
             .cast::<*mut c_void>()
             .read();
         (&raw mut (*context).ProcessAuditId).write(id);
-        (&raw mut (*context).ClientToken).write(core::ptr::null_mut());
+        let client = match impersonate::reference(crate::ke::thread::current()) {
+            Some(worn) => {
+                (&raw mut (*context).ImpersonationLevel).write(worn.level);
+                worn.token
+            }
+            None => core::ptr::null_mut(),
+        };
+        (&raw mut (*context).ClientToken).write(client.cast());
         (&raw mut (*context).PrimaryToken).write(process::PsReferencePrimaryToken(current));
     }
 }

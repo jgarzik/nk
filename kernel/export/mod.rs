@@ -257,6 +257,10 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ps::silo::PsAttachSiloToCurrentThread),
     export!(Implemented, ps::process::PsChargeProcessPagedPoolQuota),
     export!(Implemented, ps::silo::PsCreateSiloContext),
+    export!(
+        Implemented,
+        se::impersonate::PsDereferenceImpersonationToken
+    ),
     export!(Implemented, ps::process::PsDereferencePrimaryToken),
     export!(Implemented, ps::silo::PsDereferenceSiloContext),
     export!(Implemented, ps::silo::PsDetachSiloFromCurrentThread),
@@ -281,6 +285,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ps::silo::PsInsertPermanentSiloContext),
     export!(Implemented, ps::silo::PsIsHostSilo),
     export_variable!(Implemented, "PsJobType", ob::object::PsJobType),
+    export!(Implemented, se::impersonate::PsReferenceImpersonationToken),
     export!(Implemented, ps::process::PsReferencePrimaryToken),
     export!(Implemented, ps::silo::PsRegisterSiloMonitor),
     export!(Implemented, ps::process::PsReturnProcessPagedPoolQuota),
@@ -381,6 +386,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
     export!(Implemented, se::zwtoken::ZwDuplicateToken),
     export!(Implemented, se::zwtoken::ZwOpenProcessTokenEx),
+    export!(Implemented, se::impersonate::ZwOpenThreadTokenEx),
     export!(Implemented, se::zwtoken::ZwQueryInformationToken),
     export!(Partial, ps::ZwSetInformationThread),
     export!(Implemented, se::ZwSetSecurityObject),

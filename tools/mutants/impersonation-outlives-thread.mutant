@@ -1,0 +1,6 @@
+# A thread that ends while it impersonates keeps its reference to the
+# token: the token is never freed, and only the leak check notices.
+scenario: aarch64
+fails: scenario
+file: kernel/se/impersonate.rs
+remove:             object::dereference(left.token);

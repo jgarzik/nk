@@ -1454,7 +1454,21 @@ A token is an object whose body is NK's own (`nk_se::token::Token`):
 drivers treat `TOKEN` as opaque and ask through routines. There is one,
 the System process's, with the user, groups and privileges of Windows'
 SYSTEM token (the table at `Token::system` says which of those facts
-Microsoft documents). No thread impersonates.
+Microsoft documents), and the copies made of it.
+
+A thread may impersonate: act with another token than its process's.
+It keeps that token where Windows does, since Microsoft's drivers are
+built against the thread's layout: `ETHREAD.ClientSecurity` holds the
+token's address, the impersonation level and "effective only", and two
+bits of `CrossThreadFlags` say that it impersonates and that opening
+its token copies it (`kernel/se/impersonate.rs`). The thread holds a
+reference to the token until it puts it off or is freed. A thread
+takes a token on through `ZwSetInformationThread`
+(`ThreadImpersonationToken`: an impersonation token by handle, or
+none), and anyone may ask what a thread wears
+(`PsReferenceImpersonationToken`, `ZwOpenThreadTokenEx`). Windows
+lowers the level of an impersonation its process is not entitled to;
+the System process, the only one, is entitled to all.
 
 A driver asks a token about itself with
 [`SeQueryInformationToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryinformationtoken)
@@ -1484,9 +1498,10 @@ file system reads it in line (`kernel/se/token.rs`):
 
 - the subject context
   ([`SeCaptureSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-secapturesubjectcontext)):
-  no client token, the primary token (referenced until the context is
-  released), the process id for auditing. With no client token the
-  impersonation level is not written, as on Windows;
+  the token the thread impersonates and at which level, the primary
+  token (both referenced until the context is released), the process
+  id for auditing. With no client token the impersonation level is not
+  written, as on Windows;
 - the access state (`SeCreateAccessState`), in the two structures its
   maker supplies, `ACCESS_STATE` and `AUX_ACCESS_DATA`: the subject, an
   operation id of its own, the access asked for as both original and

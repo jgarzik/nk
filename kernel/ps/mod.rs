@@ -135,6 +135,9 @@ pub extern "C" fn ZwAlertThread(thread_handle: *mut c_void) -> NTSTATUS {
 /// `THREAD_SET_LIMITED_INFORMATION`: the right the priority classes
 /// ask of the handle.
 const THREAD_SET_LIMITED_INFORMATION: u32 = 0x400;
+/// `THREAD_SET_THREAD_TOKEN`: the right the impersonation token class
+/// asks of the thread's handle.
+const THREAD_SET_THREAD_TOKEN: u32 = 0x80;
 
 /// Run `set` on the thread `thread_handle` names, referenced meanwhile,
 /// or say why the handle gave no thread.
@@ -169,6 +172,8 @@ fn with_thread(
 /// | --- | --- | --- |
 /// | `ThreadPriority` | the thread's priority (`KeSetPriorityThread`) | the length is 4 (`STATUS_INFO_LENGTH_MISMATCH`); the priority is 1 to 31 (`STATUS_INVALID_PARAMETER`); the handle |
 /// | `ThreadBasePriority` | the base priority, as a step from the process's, and the priority with it (`ke::thread::set_base_priority`) | the length is 4; the handle; the step is one there is (`STATUS_INVALID_PARAMETER`) |
+///
+/// | `ThreadImpersonationToken` | the token the thread impersonates, or none for a null handle (`se::impersonate`) | the length is a handle's; the thread's handle; the token's handle; the token is an impersonation token (`STATUS_BAD_TOKEN_TYPE`) |
 ///
 /// A class Windows never sets is `STATUS_INVALID_INFO_CLASS`
 /// (`nk_ps::info::can_be_set`). The classes Windows sets and NK does
@@ -216,6 +221,17 @@ pub unsafe extern "C" fn ZwSetInformationThread(
                 // process is the System process, whose base is 8.
                 unsafe { thread::set_base_priority(thread, increment) };
                 STATUS_SUCCESS
+            })
+        }
+        info::THREAD_IMPERSONATION_TOKEN => {
+            if length as usize != size_of::<*mut c_void>() {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            // SAFETY: per the contract: the length is a handle's.
+            let token = unsafe { information.cast::<*mut c_void>().read_unaligned() };
+            with_thread(thread_handle, THREAD_SET_THREAD_TOKEN, |thread| {
+                // SAFETY: a thread, referenced by the look-up.
+                unsafe { crate::se::impersonate::set_thread_impersonation_token(thread, token) }
             })
         }
         class if !info::can_be_set(class) => STATUS_INVALID_INFO_CLASS,

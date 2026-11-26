@@ -14,6 +14,7 @@
 
 pub mod access;
 pub mod descriptor;
+pub mod impersonate;
 pub mod sid;
 pub mod token;
 pub mod zwtoken;
