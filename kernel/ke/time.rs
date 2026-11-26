@@ -228,7 +228,12 @@ pub fn tick_test() -> Result<u64, &'static str> {
 /// The three times in the shared page agree with one another, and the
 /// wall clock is later than 2020. Returns the tick count read.
 pub fn shared_page_test() -> Result<u64, &'static str> {
-    // Read between two ticks: retry if a tick lands in the middle.
+    // Read between two ticks. The clock interrupt, on another
+    // processor, writes the three one after another, so a read may find
+    // some of them a tick ahead of the others, and reading one of them
+    // twice does not show it: three values that disagree are read
+    // again, a little later, and only ones that never agree are wrong.
+    let mut wrong = "could not read the shared page between ticks";
     for _ in 0..8 {
         let interrupt = shared(SHARED_INTERRUPT_TIME);
         let system = shared(SHARED_SYSTEM_TIME);
@@ -237,10 +242,14 @@ pub fn shared_page_test() -> Result<u64, &'static str> {
             continue;
         }
         if ticks != ticks_in(interrupt) {
-            return Err("the tick count is not the interrupt time in ticks");
+            wrong = "the tick count is not the interrupt time in ticks";
+            stall(2_000);
+            continue;
         }
         if system - interrupt != BOOT_TIME.load(Ordering::Relaxed) {
-            return Err("system time is not boot time plus interrupt time");
+            wrong = "system time is not boot time plus interrupt time";
+            stall(2_000);
+            continue;
         }
         // 2020-01-01, in 100 ns units since 1601.
         if system < 132_223_104_000_000_000 {
@@ -248,7 +257,7 @@ pub fn shared_page_test() -> Result<u64, &'static str> {
         }
         return Ok(ticks);
     }
-    Err("could not read the shared page between ticks")
+    Err(wrong)
 }
 
 /// Two seconds by NK's clock, marked on the console for the test harness,
