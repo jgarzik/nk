@@ -1656,10 +1656,25 @@ on Windows: NK stops, naming both.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
 (`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),
-`read`, `write`,
+`read`, `write`, `read_at`, `write_at` (`NtReadFile`, `NtWriteFile`
+without and with a byte offset), `flush` (`NtFlushBuffersFile`),
 `device_control`, `fs_control`, `close` (`NtClose`). Each builds a real
 IRP and calls the dispatch routine inside a critical region (as Windows
 does for a synchronous request).
+
+A read's or a write's buffer reaches the driver the way the device at
+the top of the stack asks for, as on Windows: through a system buffer
+(`DO_BUFFERED_IO`), as an MDL over the requestor's own buffer with its
+pages locked (`DO_DIRECT_IO`; a read locks them for writing, a write
+for reading, and final completion unlocks and frees the MDL), or as
+the address it is. A transfer of no bytes has neither system buffer nor
+MDL. Without a byte offset the transfer is where the file object's
+`CurrentByteOffset` says; NK does not move that position after a
+transfer, so a requestor that wants the next bytes says where they are.
+A flush is a request with no buffer and no parameters. A disk is read
+and written this way, with direct I/O at byte offsets: by NK's own test
+disk and by Microsoft's `disk.sys` alike (`doc/TESTING.md`, "The data
+disk").
 
 **The requestor.** A request is made on behalf of kernel mode, whose
 buffers are trusted, or of user mode (`user_control`,
