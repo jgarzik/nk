@@ -7,25 +7,35 @@
 //! provider (a driver) then registers the entry types it supplies and
 //! the callbacks it implements; a client asks for the state of a rule.
 //!
-//! NK reads no errata file. Its database declares no rule, and its
-//! entry types and callbacks are the ones providers register: a
+//! NK reads no errata file, and applies no errata. The entry types and
+//! callbacks of its database are the ones providers register: a
 //! registration is checked as the pinned kernel's `EmpProviderRegister`
-//! checks one whose GUIDs the database knows, and a client's question
-//! (`EmClientQueryRuleState`, `EmClientRuleEvaluate`) is answered as
-//! Windows answers for a rule its database lacks.
+//! checks one whose GUIDs the database knows. Every rule a client asks
+//! about (`EmClientQueryRuleState`, `EmClientRuleEvaluate`) is answered
+//! as Windows answers for a rule its database holds whose conditions do
+//! not hold on this machine: `STATUS_SUCCESS`, the state false. Windows
+//! would say `STATUS_NOT_FOUND` for a rule its file lacks; NK cannot
+//! tell which those are, and `pci.sys` does not load if a rule it asks
+//! about is not found.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 use nk_ntabi::ex::GUID;
 use nk_ntabi::status::{
-    NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER, STATUS_NOT_FOUND,
-    STATUS_OBJECT_NAME_COLLISION,
+    NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER,
+    STATUS_OBJECT_NAME_COLLISION, STATUS_SUCCESS,
 };
 
-/// `EM_RULE_STATE` `STATE_UNKNOWN`: what a client is told of a rule
-/// that could not be decided.
+/// `EM_RULE_STATE`: what a client is told of a rule. A routine sets
+/// the state to unknown before it looks at its arguments' rule; a rule
+/// whose conditions do not hold is false.
+pub const STATE_FALSE: u32 = 0;
 pub const STATE_UNKNOWN: u32 = 1;
+
+/// How many rules asked about are remembered, so that each is logged
+/// once.
+const REMEMBERED: usize = 64;
 
 /// An entry type a provider registers: its GUID, none if the provider
 /// gave no GUID, and the routine that supplies the entry when a rule
@@ -54,6 +64,9 @@ struct Registered<T> {
 
 /// What providers have registered.
 pub struct Database {
+    /// The rules clients have asked about, the first `asked` of them.
+    rules: [GUID; REMEMBERED],
+    asked: usize,
     last_provider: u64,
     entries: Vec<Registered<(usize, usize)>>,
     callbacks: Vec<Registered<(usize, usize)>>,
@@ -62,6 +75,13 @@ pub struct Database {
 impl Database {
     pub const fn new() -> Self {
         Self {
+            rules: [GUID {
+                Data1: 0,
+                Data2: 0,
+                Data3: 0,
+                Data4: [0; 8],
+            }; REMEMBERED],
+            asked: 0,
             last_provider: 0,
             entries: Vec::new(),
             callbacks: Vec::new(),
@@ -149,19 +169,37 @@ impl Database {
             .map(|c| c.what)
     }
 
+    /// Note that a client asked about the rule `guid`. Whether it is
+    /// the first time, as far as is remembered: once the memory is
+    /// full every further rule counts as new.
+    pub fn first_asked(&mut self, guid: &GUID) -> bool {
+        if self.rules[..self.asked].contains(guid) {
+            return false;
+        }
+        if let Some(slot) = self.rules.get_mut(self.asked) {
+            *slot = *guid;
+            self.asked += 1;
+        }
+        true
+    }
+
     /// How many providers supply entries of the type `guid`.
     pub fn suppliers(&self, guid: &GUID) -> usize {
         self.entries.iter().filter(|e| e.guid == *guid).count()
     }
 }
 
-/// The status of a client's question about a rule, asked with every
-/// argument it needs (`complete`) or not: the database has no rule.
-pub fn rule(complete: bool) -> NTSTATUS {
+/// The answer to a client's question about a rule, asked with every
+/// argument it needs (`complete`) or not: the status, and the state to
+/// leave in the client's variable, where there is one to leave.
+///
+/// A complete question first has its state set to unknown, as on
+/// Windows, and is then answered: the rule does not apply.
+pub fn rule(complete: bool) -> (NTSTATUS, Option<u32>) {
     if complete {
-        STATUS_NOT_FOUND
+        (STATUS_SUCCESS, Some(STATE_FALSE))
     } else {
-        STATUS_INVALID_PARAMETER
+        (STATUS_INVALID_PARAMETER, None)
     }
 }
 
@@ -272,8 +310,25 @@ mod tests {
     }
 
     #[test]
-    fn no_rule_is_found() {
-        assert_eq!(rule(true), STATUS_NOT_FOUND);
-        assert_eq!(rule(false), STATUS_INVALID_PARAMETER);
+    fn no_rule_applies() {
+        assert_eq!(rule(true), (STATUS_SUCCESS, Some(STATE_FALSE)));
+        assert_eq!(rule(false), (STATUS_INVALID_PARAMETER, None));
+        assert_ne!(STATE_FALSE, STATE_UNKNOWN);
+    }
+
+    #[test]
+    fn a_rule_is_new_once() {
+        let mut db = Database::new();
+        assert!(db.first_asked(&guid(1)));
+        assert!(!db.first_asked(&guid(1)));
+        assert!(db.first_asked(&guid(2)));
+        assert!(!db.first_asked(&guid(1)));
+        // Past what is remembered, every rule is new each time.
+        for n in 3..=REMEMBERED as u32 {
+            assert!(db.first_asked(&guid(n)));
+        }
+        assert!(!db.first_asked(&guid(REMEMBERED as u32)));
+        assert!(db.first_asked(&guid(1000)));
+        assert!(db.first_asked(&guid(1000)));
     }
 }

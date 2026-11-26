@@ -2,11 +2,12 @@
 //! supply facts for (providers) and ask about (clients).
 //!
 //! Windows reads its database from an errata file at boot. NK reads
-//! none (`nk_ex::em`): the entry types and callbacks of its database
-//! are those providers register, and it has no rule, so a client is
-//! told its rule is not found and the rule's state is unknown. Drivers
-//! treat that as "no erratum applies". With no rule, nothing calls a
-//! provider's callbacks.
+//! none and applies no errata (`nk_ex::em`): the entry types and
+//! callbacks of its database are those providers register, and every
+//! rule a client asks about is reported as defined and not applying,
+//! which is what Windows says of a rule whose conditions do not hold on
+//! the machine. Each rule asked about is logged once. With no rule to
+//! evaluate, nothing calls a provider's callbacks.
 
 #![allow(non_snake_case)]
 
@@ -151,27 +152,61 @@ pub unsafe extern "C" fn EmProviderDeregister(handle: *mut c_void) {
     let _ = pool::free(handle.cast());
 }
 
-/// `EmClientQueryRuleState` (undocumented): the state of the rule
-/// `rule`. The state is set to unknown before anything is looked up;
-/// no rule is found.
+/// Answer a client's question about `rule`, into `state`.
 ///
 /// # Safety
-/// `state` is null or points to room for a `u32`.
-pub unsafe extern "C" fn EmClientQueryRuleState(rule: *const GUID, state: *mut u32) -> NTSTATUS {
-    let complete = !rule.is_null() && !state.is_null();
-    if complete {
-        // SAFETY: per the contract.
-        unsafe { state.write_unaligned(em::STATE_UNKNOWN) };
+/// `rule` is null or points to a GUID; `state` is null or points to
+/// room for a `u32`.
+unsafe fn answer(rule: *const GUID, state: *mut u32, complete: bool) -> NTSTATUS {
+    let (status, new_state) = em::rule(complete);
+    if let Some(new_state) = new_state {
+        // SAFETY: a complete question has both.
+        let rule = unsafe { rule.read_unaligned() };
+        if DATABASE.lock().first_asked(&rule) {
+            kprintln!(
+                "em: rule {{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}} asked for: NK has no errata database, so it does not apply",
+                rule.Data1,
+                rule.Data2,
+                rule.Data3,
+                rule.Data4[0],
+                rule.Data4[1],
+                rule.Data4[2],
+                rule.Data4[3],
+                rule.Data4[4],
+                rule.Data4[5],
+                rule.Data4[6],
+                rule.Data4[7]
+            );
+        }
+        // SAFETY: as above.
+        unsafe { state.write_unaligned(new_state) };
     }
-    em::rule(complete)
+    status
+}
+
+/// `EmClientQueryRuleState` (undocumented): the state of the rule
+/// `rule`. Every rule is defined and does not apply: `STATUS_SUCCESS`,
+/// the state false. Without a rule or a place for the state,
+/// `STATUS_INVALID_PARAMETER`.
+///
+/// # Safety
+/// `rule` is null or points to a GUID; `state` is null or points to
+/// room for a `u32`.
+pub unsafe extern "C" fn EmClientQueryRuleState(rule: *const GUID, state: *mut u32) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { answer(rule, state, !rule.is_null() && !state.is_null()) }
 }
 
 /// `EmClientRuleEvaluate` (undocumented): decide the rule `rule` from
-/// `count` entries the client supplies. The state is set to unknown
-/// before anything is looked up; no rule is found.
+/// `count` entries the client supplies. Every rule is defined and does
+/// not apply, whatever the entries: `STATUS_SUCCESS`, the state false.
+/// Windows also refuses a count that is not the rule's; NK knows no
+/// rule's count. Without a rule, entries or a place for the state,
+/// `STATUS_INVALID_PARAMETER`.
 ///
 /// # Safety
-/// `state` is null or points to room for a `u32`.
+/// `rule` is null or points to a GUID; `state` is null or points to
+/// room for a `u32`.
 pub unsafe extern "C" fn EmClientRuleEvaluate(
     rule: *const GUID,
     entries: *const c_void,
@@ -179,11 +214,8 @@ pub unsafe extern "C" fn EmClientRuleEvaluate(
     state: *mut u32,
 ) -> NTSTATUS {
     let complete = !rule.is_null() && !entries.is_null() && !state.is_null() && count != 0;
-    if complete {
-        // SAFETY: per the contract.
-        unsafe { state.write_unaligned(em::STATE_UNKNOWN) };
-    }
-    em::rule(complete)
+    // SAFETY: per the contract.
+    unsafe { answer(rule, state, complete) }
 }
 
 /// For the self-tests: the routine registered for a callback, and how

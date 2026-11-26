@@ -80,7 +80,7 @@ impl Arguments for Passed {
 ///
 /// # Safety
 /// `text` points to a NUL-terminated string of `T`.
-pub(super) unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
+pub(crate) unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
     text: *const T,
 ) -> impl Iterator<Item = u16> {
     (0..)

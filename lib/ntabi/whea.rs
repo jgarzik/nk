@@ -158,3 +158,149 @@ const _: () = {
     assert!(offset_of!(D, Flags) == 36);
     assert!(offset_of!(D, Info) == 40);
 };
+
+/// `WHEA_ERROR_SOURCE_CONFIGURATION`: the routines of one kind of
+/// source, which a driver hands
+/// [`WheaConfigureErrorSource`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-wheaconfigureerrorsource).
+/// `NTSTATUS Correct(PWHEA_ERROR_SOURCE_DESCRIPTOR, PULONG)`,
+/// `NTSTATUS Initialize(ULONG Phase, PWHEA_ERROR_SOURCE_DESCRIPTOR, PVOID Context)`,
+/// `VOID Uninitialize(PVOID Context)`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WHEA_ERROR_SOURCE_CONFIGURATION {
+    pub Flags: u32,
+    pub Correct: *mut c_void,
+    pub Initialize: *mut c_void,
+    pub CreateRecord: *mut c_void,
+    pub Recover: *mut c_void,
+    pub Uninitialize: *mut c_void,
+    pub Reserved: *mut c_void,
+}
+
+/// `WHEA_ERROR_SEVERITY`.
+pub const WHEA_ERR_SEV_RECOVERABLE: u32 = 0;
+pub const WHEA_ERR_SEV_FATAL: u32 = 1;
+pub const WHEA_ERR_SEV_CORRECTED: u32 = 2;
+pub const WHEA_ERR_SEV_INFORMATIONAL: u32 = 3;
+
+/// [`WHEA_ERROR_RECORD_HEADER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_whea_error_record_header):
+/// the head of an error record, which is UEFI's common platform error
+/// record.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WHEA_ERROR_RECORD_HEADER {
+    pub Signature: u32,
+    pub Revision: u16,
+    pub SignatureEnd: u32,
+    pub SectionCount: u16,
+    pub Severity: u32,
+    pub ValidBits: u32,
+    pub Length: u32,
+    pub Timestamp: u64,
+    pub PlatformId: GUID,
+    pub PartitionId: GUID,
+    pub CreatorId: GUID,
+    pub NotifyType: GUID,
+    pub RecordId: u64,
+    pub Flags: u32,
+    pub PersistenceInfo: u64,
+    pub Reserved: [u8; 12],
+}
+
+/// `WHEA_ERROR_RECORD_SECTION_DESCRIPTOR`: one section of a record.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WHEA_ERROR_RECORD_SECTION_DESCRIPTOR {
+    pub SectionOffset: u32,
+    pub SectionLength: u32,
+    pub Revision: u16,
+    pub ValidBits: u8,
+    pub Reserved: u8,
+    pub Flags: u32,
+    pub SectionType: GUID,
+    pub FRUId: GUID,
+    pub SectionSeverity: u32,
+    pub FRUText: [u8; 20],
+}
+
+/// [`WHEA_ERROR_PACKET_V2`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_whea_error_packet_v2):
+/// what a source hands `WheaReportHwError`. The data follows.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WHEA_ERROR_PACKET_V2 {
+    pub Signature: u32,
+    pub Version: u32,
+    pub Length: u32,
+    pub Flags: u32,
+    pub ErrorType: u32,
+    pub ErrorSeverity: u32,
+    pub ErrorSourceId: u32,
+    pub ErrorSourceType: u32,
+    pub NotifyType: GUID,
+    pub Context: u64,
+    pub DataFormat: u32,
+    pub Reserved1: u32,
+    pub DataOffset: u32,
+    pub DataLength: u32,
+    pub PshedDataOffset: u32,
+    pub PshedDataLength: u32,
+}
+
+/// `WHEA_EVENT_LOG_ENTRY_HEADER`: the head of what
+/// `WheaLogInternalEvent` is handed. The payload follows.
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct WHEA_EVENT_LOG_ENTRY_HEADER {
+    pub Signature: u32,
+    pub Version: u32,
+    pub Length: u32,
+    pub Type: u32,
+    pub Owner: u32,
+    pub Id: u32,
+    pub Flags: u32,
+    pub PayloadLength: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    type C = WHEA_ERROR_SOURCE_CONFIGURATION;
+    assert!(size_of::<C>() == 0x38);
+    assert!(offset_of!(C, Correct) == 0x08);
+    assert!(offset_of!(C, Initialize) == 0x10);
+    assert!(offset_of!(C, CreateRecord) == 0x18);
+    assert!(offset_of!(C, Recover) == 0x20);
+    assert!(offset_of!(C, Uninitialize) == 0x28);
+    type H = WHEA_ERROR_RECORD_HEADER;
+    assert!(size_of::<H>() == 0x80);
+    assert!(offset_of!(H, SignatureEnd) == 0x06);
+    assert!(offset_of!(H, SectionCount) == 0x0A);
+    assert!(offset_of!(H, Severity) == 0x0C);
+    assert!(offset_of!(H, ValidBits) == 0x10);
+    assert!(offset_of!(H, Length) == 0x14);
+    assert!(offset_of!(H, Timestamp) == 0x18);
+    assert!(offset_of!(H, PlatformId) == 0x20);
+    assert!(offset_of!(H, PartitionId) == 0x30);
+    assert!(offset_of!(H, CreatorId) == 0x40);
+    assert!(offset_of!(H, NotifyType) == 0x50);
+    assert!(offset_of!(H, RecordId) == 0x60);
+    assert!(offset_of!(H, Flags) == 0x68);
+    assert!(offset_of!(H, PersistenceInfo) == 0x6C);
+    type S = WHEA_ERROR_RECORD_SECTION_DESCRIPTOR;
+    assert!(size_of::<S>() == 0x48);
+    assert!(offset_of!(S, Revision) == 0x08);
+    assert!(offset_of!(S, Flags) == 0x0C);
+    assert!(offset_of!(S, SectionType) == 0x10);
+    assert!(offset_of!(S, FRUId) == 0x20);
+    assert!(offset_of!(S, SectionSeverity) == 0x30);
+    assert!(offset_of!(S, FRUText) == 0x34);
+    type P = WHEA_ERROR_PACKET_V2;
+    assert!(size_of::<P>() == 0x50);
+    assert!(offset_of!(P, Flags) == 0x0C);
+    assert!(offset_of!(P, ErrorSeverity) == 0x14);
+    assert!(offset_of!(P, ErrorSourceId) == 0x18);
+    assert!(offset_of!(P, ErrorSourceType) == 0x1C);
+    assert!(offset_of!(P, NotifyType) == 0x20);
+    assert!(offset_of!(P, DataFormat) == 0x38);
+    assert!(offset_of!(P, DataOffset) == 0x40);
+    assert!(size_of::<WHEA_EVENT_LOG_ENTRY_HEADER>() == 0x20);
+};

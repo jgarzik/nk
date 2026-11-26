@@ -1248,7 +1248,8 @@ make that safe.
 | a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
-| a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
+| a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`, `WheaAddErrorSource`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
+| the `Correct` of a kind of hardware error source (`WheaAddErrorSource`) | nothing: the source is in the table, stopped, and stays |
 | a hardware error source's `Uninitialize` (`WheaRemoveErrorSource`) | nothing: the source stays pending removal, closed to calls |
 | bugcheck callback, as the system stops | base: kernel mode. The stop is reported already; a second error on the way ends it |
 
@@ -2389,6 +2390,37 @@ code).
   are freed there.
 - NK has no firmware or platform sources: the first source a driver
   adds has id 0.
+- A source of another kind is added with `WheaAddErrorSource`. Its
+  routines are those `WheaConfigureErrorSource` recorded for its kind:
+  `Correct(Descriptor, SectionLength)` and
+  `Initialize(1, Descriptor, Context)` when it is added,
+  `Uninitialize(Context)` when it is removed; a kind not configured
+  has none and its sources start with nothing called. The kinds the
+  firmware's tables describe are refused, as on Windows.
+- A device driver reports an error with
+  `WheaReportHwErrorDeviceDriverEx`. The report is held to the limits
+  the source registered with, an error record is made (the header of
+  `WheaInitializeRecordHeader`, the source's GUID, creator and
+  partition, one section: the driver's data, with the device's name),
+  and its summary is printed: NK has no event log, and does not keep
+  the record or the log data. Windows' record carries sections of its
+  own besides; NK's does not.
+- `WheaReportFatalHwErrorDeviceDriverEx` does the same and stops the
+  system with `0x124 WHEA_UNCORRECTABLE_ERROR`: the source's type, the
+  record, the source's GUID, the driver's word.
+- `WheaReportHwError` judges a packet as Windows does before a record
+  is made: a malformed severity is refused, an informational report
+  dropped, a report from no started source stops the system
+  (`0x122 WHEA_INTERNAL_ERROR`) when it is recoverable or fatal and is
+  `STATUS_DEVICE_DOES_NOT_EXIST` otherwise. For a started source the
+  record would come from its kind's `CreateRecord`, which NK does not
+  call: the system stops naming the kind.
+- Reports are made at or below `DISPATCH_LEVEL`: the table's lock and
+  the pool are that high and no higher.
+- `pshed.dll`, the platform's part of the error path, is loaded as a
+  library for what `pci.sys` imports from it. NK does not call its
+  `PshedInitialize`, which takes Windows' loader block, nor any other
+  of its routines.
 
 ## Stopping the system
 
@@ -2470,6 +2502,14 @@ a debugger that says "go" every time: noted on the console and passed
 over, before any handler is asked. NK has no debugger protocol; the reference
 Windows machine gets a real debugger, played by `tools/kd.py`.
 
+What a driver asks of the debugger (`kernel/kd/debugger.rs`) is
+answered as Windows answers with a debugger never set up:
+`KdDisableDebugger` and `KdEnableDebugger` are
+`STATUS_DEBUGGER_INACTIVE`, and `KdPowerTransitionEx` succeeds at once.
+The debugger's lock (`KdAcquireDebuggerLock`) is a real spin lock, and
+power handlers register and deregister (`lib/ke/kdpower.rs`); no
+transition calls them.
+
 ## What is absent
 
 No APCs, Plug and Play, power management, processes
@@ -2477,10 +2517,12 @@ other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
 publishes no arm64 binaries NK may use, so its own drivers run on x86-64
-alone. NK has run on no physical machine. NK has no errata database
-(Windows' comes from `errata.inf`, which NK does not read): a rule a
-driver asks the errata manager about is unknown, `STATUS_NOT_FOUND`,
-where Windows answers the rule's state.
+alone. NK has run on no physical machine. NK applies no errata:
+it has no errata database (Windows' comes from `errata.inf`, which NK
+does not read), and every rule a driver asks the errata manager about
+is reported as defined and not applying, where Windows evaluates the
+rules of that file; so the workarounds for the hardware it lists are
+not made.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
@@ -2501,12 +2543,13 @@ for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
 when Windows' engine is not running), no errata rules
 (`kernel/ex/em.rs`: Windows reads the errata manager's database from
 an errata file at boot; NK reads none. `pci.sys` does not load unless
-it registers as a provider, so NK's database takes its entry types and
-callbacks from the providers that register them, checked as Windows
-checks a registration whose GUIDs it knows; it has no rule, so a client
-that asks about one is told `STATUS_NOT_FOUND`, the rule's state
-unknown, and `acpi.sys` and `pci.sys` go on as on a machine no erratum
-matches. With no rule nothing calls a provider's callbacks), no
+it registers as a provider and every rule it asks about is answered,
+so NK's database takes its entry types and callbacks from the
+providers that register them, checked as Windows checks a registration
+whose GUIDs it knows, and answers every rule as Windows answers one
+whose conditions do not hold: `STATUS_SUCCESS`, the state false. Each
+rule asked about is logged once. Nothing calls a provider's
+callbacks), no
 driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
 reported to it goes nowhere), no headless terminal (the same file:
 it cannot be enabled, questions are answered with zeros, output
