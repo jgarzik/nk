@@ -45,10 +45,16 @@ const KEY_FULL: u32 = 2;
 const KEY_NAME: u32 = 3;
 const KEY_CACHED: u32 = 4;
 const KEY_FLAGS: u32 = 5;
+const KEY_VIRTUALIZATION: u32 = 6;
+const KEY_HANDLE_TAGS: u32 = 7;
+/// The last form this build of Windows has: `KeyLayerInformation`, the
+/// next in the header, is refused like a number that names none.
 const KEY_TRUST: u32 = 8;
-const KEY_LAYER: u32 = 9;
+/// `KEY_VIRTUALIZATION_INFORMATION`: its five flags; 27 bits are
+/// reserved.
+const VIRTUALIZATION_FLAGS: u32 = 0x1F;
 /// `KEY_TRUST_INFORMATION.TrustedKey`: the key is in a hive the system
-/// trusts.
+/// trusts; 31 bits are reserved.
 const TRUSTED_KEY: u32 = 1;
 /// `KEY_VALUE_INFORMATION_CLASS`: the forms a value is described in.
 const VALUE_BASIC: u32 = 0;
@@ -741,8 +747,12 @@ pub unsafe extern "C" fn ZwEnumerateKey(
 /// The forms that describe what NK has none of answer as Windows does
 /// for a key without it: no flags (there are no 32-bit programs to
 /// redirect and no keys that must stay), no virtualization, no handle
-/// tags, no layer. Every key is trusted: the registry holds the
-/// system's own hive and nothing a user loaded.
+/// tags. Every key is trusted: the registry holds the system's own hive
+/// and nothing a user loaded. Virtualization and trust are words of bit
+/// fields, of which Windows writes the flags and leaves the reserved
+/// bits as the caller had them. There is no layer form
+/// (`KeyLayerInformation`): Windows 10 refuses it,
+/// `STATUS_INVALID_PARAMETER`.
 ///
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
@@ -754,7 +764,7 @@ pub unsafe extern "C" fn ZwQueryKey(
     length: u32,
     result_length: *mut u32,
 ) -> NTSTATUS {
-    if class > KEY_LAYER {
+    if class > KEY_TRUST {
         return STATUS_INVALID_PARAMETER;
     }
     let key = match key_of(key_handle) {
@@ -770,9 +780,9 @@ pub unsafe extern "C" fn ZwQueryKey(
             KEY_CACHED => nk_cm::key_cached_information(&info, out),
             // `KEY_FLAGS_INFORMATION`: three words.
             KEY_FLAGS => nk_cm::fixed_information(&[0, 0, 0], out),
-            KEY_TRUST => nk_cm::fixed_information(&[TRUSTED_KEY], out),
-            // Virtualization, handle tags, layer: one word each.
-            _ => nk_cm::fixed_information(&[0], out),
+            KEY_VIRTUALIZATION => nk_cm::flag_information(0, VIRTUALIZATION_FLAGS, out),
+            KEY_HANDLE_TAGS => nk_cm::fixed_information(&[0], out),
+            _ => nk_cm::flag_information(TRUSTED_KEY, TRUSTED_KEY, out),
         })
     };
     // SAFETY: per the contract.

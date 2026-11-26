@@ -827,7 +827,7 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
     let gap = [UNTOUCHED; 2];
     let name = utf16("NkcTest");
     // (class, fixed part, bytes of time at the start, the structure)
-    let forms: [(u32, usize, usize, Vec<u8>); 10] = [
+    let forms: [(u32, usize, usize, Vec<u8>); 9] = [
         (0, KEY_BASIC, 8, joined(&[&TIME, &fields(&[0, 14]), &name])),
         // The class starts at the next multiple of four after the name.
         (
@@ -865,12 +865,13 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
             8,
             joined(&[&TIME, &fields(&[0, 3, 12, 5, 12, 12, 14]), &[UNTOUCHED; 4]]),
         ),
-        // Flags, virtualization, handle tags: none. Trusted. No layer.
+        // Flags, virtualization, handle tags: none. Trusted. Of a word
+        // of bit fields the flags are written (five, and one) and the
+        // reserved bits left alone.
         (5, 12, 0, fields(&[0, 0, 0])),
-        (6, 4, 0, fields(&[0])),
+        (6, 4, 0, fields(&[0xEEEE_EEE0])),
         (7, 4, 0, fields(&[0])),
-        (8, 4, 0, fields(&[1])),
-        (9, 4, 0, fields(&[0])),
+        (8, 4, 0, fields(&[0xEEEE_EEEF])),
     ];
     for (class, fixed, skip, whole) in forms {
         if !at_every_room(&whole, fixed, skip, |room| query_key_info(key, class, room)) {
@@ -878,7 +879,10 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
             return Err("an open key was not described as Windows describes it");
         }
     }
-    if !query_key_info(key, 10, ROOM).refused(INVALID_PARAMETER) {
+    // The layer form, which this Windows has not, and a number past it.
+    if !query_key_info(key, 9, ROOM).refused(INVALID_PARAMETER)
+        || !query_key_info(key, 10, ROOM).refused(INVALID_PARAMETER)
+    {
         return Err("a form there is none of was answered");
     }
     // The registry's own root, and a key of the hive or the skeleton

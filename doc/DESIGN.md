@@ -1152,9 +1152,12 @@ form (`KEY_CACHED_INFORMATION`) is all there or not at all: it wants
 room for the structure as C sizes it, 40 bytes, and writes the 36 of
 its fields. What NK has
 none of is reported as Windows reports a key without it: no flags, no
-virtualization, no handle tags, no layer. Every key is trusted
+virtualization, no handle tags. Every key is trusted
 (`KeyTrustInformation`), because the registry holds only the system's
-own hive.
+own hive. Where a form is a word of bit fields (virtualization, trust)
+the flags are written and the reserved bits stay the caller's. The
+forms are those Windows 10 answers: it has no layer form
+(`KeyLayerInformation` is `STATUS_INVALID_PARAMETER`).
 
 A key's last write time is when its values or its list of subkeys last
 changed: setting or deleting a value stamps the key, making or deleting

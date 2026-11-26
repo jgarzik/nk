@@ -375,6 +375,17 @@ pub fn fixed_information(fields: &[u32], out: &mut [u8]) -> (Fit, usize) {
     }
 }
 
+/// Write a structure that is one 32-bit word of bit fields into `out`:
+/// the bits of `mask` become those of `flags`; the others, which the
+/// structure reserves, keep what `out` held, as Windows leaves them.
+pub fn flag_information(flags: u32, mask: u32, out: &mut [u8]) -> (Fit, usize) {
+    let Some(word) = out.first_chunk_mut::<4>() else {
+        return (Fit::Nothing, 4);
+    };
+    *word = (u32::from_le_bytes(*word) & !mask | flags & mask).to_le_bytes();
+    (Fit::All, 4)
+}
+
 /// Write a value as a `KEY_VALUE_BASIC_INFORMATION` into `out`: its
 /// type and name. Returns how much fitted, and the length that holds
 /// all of it.
@@ -726,6 +737,24 @@ mod tests {
         // A structure of fixed size is there whole or not at all.
         let all = at_every_length(12, |out| fixed_information(&[1, 2, 0x0403_0201], out));
         assert_eq!(all, [1, 0, 0, 0, 2, 0, 0, 0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_word_of_flags_keeps_its_reserved_bits() {
+        let format = |out: &mut [u8]| flag_information(0b0101, 0b1111, out);
+        for len in 0..4 {
+            let mut short = vec![0xEE; len];
+            assert_eq!(format(&mut short), (Fit::Nothing, 4));
+            assert_eq!(short, vec![0xEE; len]);
+        }
+        // The four flags are written, set or clear; the rest stays.
+        let mut out = [0xEE; 6];
+        assert_eq!(format(&mut out), (Fit::All, 4));
+        assert_eq!(out, [0xE5, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE]);
+        // A flag outside the mask is not written.
+        let mut out = [0; 4];
+        assert_eq!(flag_information(0b11, 0b01, &mut out), (Fit::All, 4));
+        assert_eq!(out, [1, 0, 0, 0]);
     }
 
     #[test]
