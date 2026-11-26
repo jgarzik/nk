@@ -1197,6 +1197,126 @@ fn device_queue_matches_the_kernel() {
 }
 
 #[test]
+fn plug_and_play_structures_match_the_kernel() {
+    use crate::pnp::*;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DEVICE_RELATIONS,
+        "_DEVICE_RELATIONS",
+        [Count, Objects]
+    );
+    same_layout!(
+        types,
+        DEVICE_CAPABILITIES,
+        "_DEVICE_CAPABILITIES",
+        [
+            Size,
+            Version,
+            Address,
+            UINumber,
+            DeviceState,
+            SystemWake,
+            DeviceWake,
+            D1Latency,
+            D2Latency,
+            D3Latency,
+        ]
+    );
+    // The capability bits share the word after `Version`.
+    let capabilities = types
+        .layout("_DEVICE_CAPABILITIES")
+        .expect("_DEVICE_CAPABILITIES");
+    for (name, bit) in [
+        ("DeviceD1", DEVICE_CAPABILITY_DEVICE_D1),
+        ("Removable", DEVICE_CAPABILITY_REMOVABLE),
+        ("UniqueID", DEVICE_CAPABILITY_UNIQUE_ID),
+        ("RawDeviceOK", DEVICE_CAPABILITY_RAW_DEVICE_OK),
+        ("SurpriseRemovalOK", DEVICE_CAPABILITY_SURPRISE_REMOVAL_OK),
+        ("WakeFromD3", DEVICE_CAPABILITY_WAKE_FROM_D3),
+        ("HardwareDisabled", DEVICE_CAPABILITY_HARDWARE_DISABLED),
+        ("NoDisplayInUI", DEVICE_CAPABILITY_NO_DISPLAY_IN_UI),
+    ] {
+        let member = capabilities.member(name).expect(name);
+        assert_eq!(
+            member.offset as usize,
+            core::mem::offset_of!(DEVICE_CAPABILITIES, Flags),
+            "{name}"
+        );
+        assert_eq!(member.bits, Some((bit.trailing_zeros() as u8, 1)), "{name}");
+    }
+    same_layout!(
+        types,
+        POWER_STATE,
+        "_POWER_STATE",
+        [SystemState, DeviceState]
+    );
+    same_layout!(
+        types,
+        POWER_SEQUENCE,
+        "_POWER_SEQUENCE",
+        [SequenceD1, SequenceD2, SequenceD3]
+    );
+    same_layout!(
+        types,
+        INTERFACE,
+        "_INTERFACE",
+        [
+            Size,
+            Version,
+            Context,
+            InterfaceReference,
+            InterfaceDereference
+        ]
+    );
+    same_layout!(
+        types,
+        CM_PARTIAL_RESOURCE_DESCRIPTOR,
+        "_CM_PARTIAL_RESOURCE_DESCRIPTOR",
+        [Type, ShareDisposition, Flags, u]
+    );
+    same_layout!(
+        types,
+        CM_PARTIAL_RESOURCE_LIST,
+        "_CM_PARTIAL_RESOURCE_LIST",
+        [Version, Revision, Count, PartialDescriptors]
+    );
+    same_layout!(
+        types,
+        CM_FULL_RESOURCE_DESCRIPTOR,
+        "_CM_FULL_RESOURCE_DESCRIPTOR",
+        [InterfaceType, BusNumber, PartialResourceList]
+    );
+    same_layout!(types, CM_RESOURCE_LIST, "_CM_RESOURCE_LIST", [Count, List]);
+    same_layout!(
+        types,
+        IO_RESOURCE_DESCRIPTOR,
+        "_IO_RESOURCE_DESCRIPTOR",
+        [Option, Type, ShareDisposition, Spare1, Flags, Spare2, u]
+    );
+    same_layout!(
+        types,
+        IO_RESOURCE_LIST,
+        "_IO_RESOURCE_LIST",
+        [Version, Revision, Count, Descriptors]
+    );
+    same_layout!(
+        types,
+        IO_RESOURCE_REQUIREMENTS_LIST,
+        "_IO_RESOURCE_REQUIREMENTS_LIST",
+        [
+            ListSize,
+            InterfaceType,
+            BusNumber,
+            SlotNumber,
+            Reserved,
+            AlternativeLists,
+            List,
+        ]
+    );
+}
+
+#[test]
 fn fast_io_dispatch_matches_the_kernel() {
     use crate::io::{FAST_IO_DETACH_DEVICE, FAST_IO_DISPATCH, FAST_IO_ROUTINES};
     use core::mem::{offset_of, size_of};

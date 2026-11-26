@@ -49,3 +49,4 @@ io.error-log ok
 io.start-io.queue ok
 io.start-io.cancel ok
 io.start-io.deferred ok
+io.request.power ok

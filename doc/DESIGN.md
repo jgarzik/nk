@@ -1383,6 +1383,17 @@ other's write and a cancelled request is never completed. Cancelling a
 completed IRP whose routine is still set stops the system
 (`CANCEL_STATE_IN_COMPLETED_IRP`).
 
+**Plug and Play and power requests.** The minor function codes of
+`IRP_MJ_PNP` and `IRP_MJ_POWER`, where each request's parameters lie in
+the stack location, and the structures they point to (device relations
+and capabilities, resource lists and requirements, interfaces) are in
+`lib/ntabi/pnp.rs`, held to the kernel's symbols where those name them.
+A power request is sent as any other: `PoCallDriver` is `IofCallDriver`
+and `PoStartNextPowerIrp` does nothing, as in the pinned kernel. A
+driver's dispatch table starts out with one routine for every major
+function, these two included, which fails the request as invalid for
+the device, as Windows' does.
+
 **StartIo** (`kernel/io/startio.rs`). A driver with a `StartIo` routine
 queues its requests with
 [`IoStartPacket`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iostartpacket)
