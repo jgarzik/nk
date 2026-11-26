@@ -830,6 +830,13 @@ fn runtime_library_structures_match_the_kernel() {
     assert_eq!(offset_of!(STRING, Length), field("Length"));
     assert_eq!(offset_of!(STRING, MaximumLength), field("MaximumLength"));
     assert_eq!(offset_of!(STRING, Buffer), field("Buffer"));
+    // The prefix table's own structures are not in the public symbols.
+    let links = types.layout("_RTL_SPLAY_LINKS").expect("_RTL_SPLAY_LINKS");
+    let field = |name| offset(&links, "_RTL_SPLAY_LINKS", name);
+    assert_eq!(size_of::<RTL_SPLAY_LINKS>(), links.size as usize);
+    assert_eq!(offset_of!(RTL_SPLAY_LINKS, Parent), field("Parent"));
+    assert_eq!(offset_of!(RTL_SPLAY_LINKS, LeftChild), field("LeftChild"));
+    assert_eq!(offset_of!(RTL_SPLAY_LINKS, RightChild), field("RightChild"));
     let guid = types.layout("_GUID").expect("_GUID");
     let field = |name| offset(&guid, "_GUID", name);
     assert_eq!(size_of::<GUID>(), guid.size as usize);

@@ -964,6 +964,23 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
 - **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
   fold `A` to `Z` only and do not use that table.
 
+### The prefix table
+
+A [prefix table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlinsertunicodeprefix)
+and its entries are the driver's memory, with the fields `ntifs.h`
+declares (`nk_ntabi::rtl`), and an entry points to the caller's name
+without copying it. NK keeps nothing beside them: the routines link the
+driver's entries through the driver's own fields, as the header's names
+describe (a list of trees by number of name components, a search tree
+in each, a ring of the names that differ only in case). The algorithm
+is `nk_rtl::prefix`, written against a store of nodes: the kernel's
+store is the driver's fields behind raw pointers, the host tests' is a
+vector, checked against a plain list over random sequences. No routine
+allocates, so none can fail for want of memory. Which rotations balance
+a tree is NK's choice: a name found without regard to case is splayed
+to its tree's root. The caller serialises the calls on one table, as on
+Windows. `RtlNextUnicodePrefix` is not exported.
+
 ## Security descriptors
 
 SIDs, ACLs and descriptors are byte layouts with rules: `lib/se`, with

@@ -97,6 +97,7 @@ rtl.sid-text ok
 rtl.app-container ok
 rtl.acl ok
 rtl.owner-group ok
+rtl.prefix-table ok
 se.well-known ok
 se.descriptor ok
 se.capture ok

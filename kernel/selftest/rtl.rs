@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::ffi::CStr;
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::UNICODE_STRING;
-use nk_ntabi::rtl::ANSI_STRING;
+use nk_ntabi::rtl::{ANSI_STRING, UNICODE_PREFIX_TABLE, UNICODE_PREFIX_TABLE_ENTRY};
 
 pub static GROUP: Group = Group {
     names: &[
@@ -23,6 +23,7 @@ pub static GROUP: Group = Group {
         "rtl.app-container",
         "rtl.acl",
         "rtl.owner-group",
+        "rtl.prefix-table",
     ],
     run,
     manual: false,
@@ -944,6 +945,157 @@ fn owner_group() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A prefix table as a driver keeps one: the table, five entries and
+/// their names in one block of pool, every byte 0xEE before the
+/// routines see it.
+#[repr(C)]
+struct Prefixes {
+    table: UNICODE_PREFIX_TABLE,
+    entries: [UNICODE_PREFIX_TABLE_ENTRY; 5],
+    names: [UNICODE_STRING; 5],
+    text: [[u16; 8]; 5],
+}
+
+/// The prefix table over driver-style memory: the calls of `nkc-rtl`.
+fn prefix_table() -> Result<(), &'static str> {
+    use crate::mm::pool;
+    use crate::rtl::RtlInitUnicodeString;
+    use crate::rtl::prefix::*;
+    let block = pool::alloc(size_of::<Prefixes>(), u32::from_le_bytes(*b"Test")).cast::<Prefixes>();
+    if block.is_null() {
+        return Err("no memory for a prefix table");
+    }
+    // SAFETY: the block is the test's own, large enough for a
+    // `Prefixes`, and reached through raw pointers alone, as a driver's
+    // is; every name is NUL-terminated within its eight units.
+    let result = unsafe {
+        block.cast::<u8>().write_bytes(0xEE, size_of::<Prefixes>());
+        let table = &raw mut (*block).table;
+        let entries = (&raw mut (*block).entries).cast::<UNICODE_PREFIX_TABLE_ENTRY>();
+        let names = (&raw mut (*block).names).cast::<UNICODE_STRING>();
+        let texts = (&raw mut (*block).text).cast::<[u16; 8]>();
+        let entry = move |number: usize| entries.add(number - 1);
+        // Put `name` in the table as entry `number` (1 to 5).
+        let insert = move |number: usize, name: &str| {
+            let text = texts.add(number - 1).cast::<u16>();
+            for (at, unit) in name.encode_utf16().chain([0]).enumerate() {
+                text.add(at).write(unit);
+            }
+            let counted = names.add(number - 1);
+            RtlInitUnicodeString(counted, text);
+            RtlInsertUnicodePrefix(table, counted, entry(number))
+        };
+        // The number of the entry found for `name`; 0 for none.
+        let find = move |name: &str, index: u32| {
+            let mut text: Vec<u16> = name.encode_utf16().collect();
+            let full = counted(&mut text);
+            let found = RtlFindUnicodePrefix(table, &raw const full, index);
+            if found.is_null() {
+                0
+            } else {
+                found.offset_from(entries) + 1
+            }
+        };
+        let finds = move |wanted: &[(&str, u32, isize)]| {
+            wanted
+                .iter()
+                .all(|&(name, index, number)| find(name, index) == number)
+        };
+        'calls: {
+            RtlInitializeUnicodePrefix(table);
+            if (&raw const (*table).NodeTypeCode).read() != 0x800 || find("\\a", 0) != 0 {
+                break 'calls Err("an initialised table is not an empty table");
+            }
+            let inserted = [
+                insert(1, "\\a"),
+                insert(2, "\\a\\b"),
+                insert(3, "\\a\\b\\c"),
+                insert(4, "\\x"),
+                insert(5, "\\a"),
+            ];
+            if inserted != [1, 1, 1, 1, 0] {
+                break 'calls Err("four names did not go in, or one went in twice");
+            }
+            // An entry is what `ntifs.h` says: the count of its name's
+            // components, and the caller's name pointed to, not copied.
+            let third = entry(3);
+            if (&raw const (*third).NameLength).read() != 4
+                || (&raw const (*third).Prefix).read() != names.add(2)
+            {
+                break 'calls Err("an entry does not hold its name's length and the name");
+            }
+            if !finds(&[
+                ("\\a\\b\\c\\d", 0, 3),
+                ("\\a\\b\\c", 0, 3),
+                ("\\a\\b", 0, 2),
+                ("\\a\\bc", 0, 1),
+                ("\\a", 0, 1),
+                ("\\ab", 0, 0),
+                ("\\y", 0, 0),
+                ("\\x\\a\\b", 0, 4),
+                ("a\\b", 0, 0),
+                ("\\a\\b\\", 0, 2),
+            ]) {
+                break 'calls Err("the longest prefix on a component boundary was not found");
+            }
+            if !finds(&[
+                ("\\A\\B\\X", 0, 2),
+                ("\\A\\B\\X", 100, 0),
+                ("\\a\\B\\X", 100, 1),
+                ("\\a\\B", 3, 2),
+                ("\\a\\B", 6, 1),
+            ]) {
+                break 'calls Err("case was not regarded up to the index and disregarded after");
+            }
+            RtlRemoveUnicodePrefix(table, entry(2));
+            let after_one = [find("\\a\\b\\c\\d", 0), find("\\a\\b", 0)];
+            RtlRemoveUnicodePrefix(table, entry(3));
+            if after_one != [3, 1] || find("\\a\\b\\c\\d", 0) != 1 {
+                break 'calls Err("a removed name was found, or took others with it");
+            }
+            if insert(3, "\\") != 1
+                || !finds(&[
+                    ("\\zzz", 0, 3),
+                    ("\\x\\y", 0, 4),
+                    ("\\a\\q", 0, 1),
+                    ("zzz", 0, 0),
+                ])
+            {
+                break 'calls Err("the name `\\` does not start every name with nothing longer");
+            }
+            // A name that differs in case is another name; each is
+            // found by its own spelling, and the one first in without
+            // regard to case.
+            if insert(2, "\\X") != 1
+                || !finds(&[
+                    ("\\X", 100, 2),
+                    ("\\x", 100, 4),
+                    ("\\x", 0, 4),
+                    ("\\X", 0, 4),
+                ])
+            {
+                break 'calls Err("names that differ in case were not kept apart");
+            }
+            RtlRemoveUnicodePrefix(table, entry(4));
+            if !finds(&[("\\x\\y", 100, 3), ("\\x\\y", 0, 2)]) {
+                break 'calls Err("removing one of two names alike but for case lost the other");
+            }
+            for number in 1..=3 {
+                RtlRemoveUnicodePrefix(table, entry(number));
+            }
+            if !finds(&[("\\a", 0, 0), ("\\", 0, 0)])
+                || (&raw const (*table).NextPrefixTree).read() != table.cast()
+            {
+                break 'calls Err("a table with every name removed is not empty");
+            }
+            Ok(())
+        }
+    };
+    // SAFETY: the block came from the pool and nothing points to it.
+    unsafe { pool::ExFreePoolWithTag(block.cast(), 0) };
+    result
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.crt", crt);
     r.check("rtl.vsnwprintf", vsnwprintf);
@@ -957,4 +1109,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.app-container", app_container);
     r.check("rtl.acl", acl);
     r.check("rtl.owner-group", owner_group);
+    r.check("rtl.prefix-table", prefix_table);
 }
