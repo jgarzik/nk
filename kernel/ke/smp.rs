@@ -5,14 +5,23 @@
 //! is running, and becomes its own idle thread (`thread.rs`).
 
 use super::{irql, thread, time};
+use crate::ex::callback;
 use crate::hal::platform;
 use crate::mm::stack::Stack;
+use crate::ob::handle::OBJ_KERNEL_HANDLE;
 use crate::{arch, mm};
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ke::topology::{self, Record};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
-use nk_ntabi::ke::PROCESSOR_NUMBER;
+use nk_ntabi::io::UNICODE_STRING;
+use nk_ntabi::ke::{
+    KE_PROCESSOR_ADD_COMPLETE_NOTIFY, KE_PROCESSOR_ADD_FAILURE_NOTIFY,
+    KE_PROCESSOR_ADD_START_NOTIFY, KE_PROCESSOR_CHANGE_ADD_EXISTING,
+    KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT, PROCESSOR_CALLBACK_FUNCTION, PROCESSOR_NUMBER,
+};
+use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::{
     NTSTATUS, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER, STATUS_SUCCESS,
     STATUS_UNSUCCESSFUL,
@@ -327,6 +336,198 @@ pub unsafe extern "C" fn KeQueryLogicalProcessorRelationship(
     }
 }
 
+/// `KeProcessorGroupAffinity`: the affinity that is the one processor
+/// at `index`. Undocumented; as the pinned kernel fills it in. Windows
+/// does not look whether there is such a processor; NK stops the
+/// system if there is none.
+///
+/// # Safety
+/// `affinity` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeProcessorGroupAffinity(affinity: *mut GROUP_AFFINITY, index: u32) {
+    let Some((group, in_group)) = topology::number_from_index(index, online_count() as u32) else {
+        crate::kd::bugcheck(format_args!(
+            "KeProcessorGroupAffinity for processor {index}, which there is not"
+        ));
+    };
+    // SAFETY: per the contract.
+    unsafe {
+        affinity.write_unaligned(GROUP_AFFINITY {
+            Mask: 1 << in_group,
+            Group: group,
+            Reserved: [0; 3],
+        });
+    }
+}
+
+/// `KeReportCacheIncoherentDevice`: a device has been found whose DMA
+/// does not keep the processors' caches coherent, so buffers must be
+/// flushed for devices from now on. NK flushes them wherever the
+/// architecture needs it, whether or not this was reported
+/// (`KeFlushIoBuffers`), so there is nothing to record.
+#[allow(non_snake_case)]
+pub extern "C" fn KeReportCacheIncoherentDevice() {}
+
+/// The name of the callback object processor changes are notified
+/// through, which Windows and NK make at start.
+const PROCESSOR_ADD: [u16; 22] = {
+    let text = b"\\Callback\\ProcessorAdd";
+    let mut wide = [0u16; 22];
+    let mut i = 0;
+    while i < text.len() {
+        wide[i] = text[i] as u16;
+        i += 1;
+    }
+    wide
+};
+/// `OBJ_CASE_INSENSITIVE`, with which Windows opens it.
+const OBJ_CASE_INSENSITIVE: u32 = 0x40;
+
+/// Open `\Callback\ProcessorAdd`: the object, referenced, or null.
+fn processor_add_object() -> *mut c_void {
+    let mut text = PROCESSOR_ADD;
+    let name = UNICODE_STRING {
+        Length: size_of_val(&text) as u16,
+        MaximumLength: size_of_val(&text) as u16,
+        Buffer: (&raw mut text).cast(),
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: core::ptr::null_mut(),
+        ObjectName: &raw const name,
+        Attributes: OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+        SecurityDescriptor: core::ptr::null_mut(),
+        SecurityQualityOfService: core::ptr::null_mut(),
+    };
+    let mut object = core::ptr::null_mut();
+    // SAFETY: the attributes are whole and name a local that outlives
+    // the call; `object` is a local.
+    let status =
+        unsafe { callback::ExCreateCallback(&raw mut object, &raw const attributes, 0, 0) };
+    if status < 0 {
+        return core::ptr::null_mut();
+    }
+    object
+}
+
+/// Tell `function` of the processor at `index`: `state` and `status`
+/// in the context, and `operation` for it to set.
+///
+/// # Safety
+/// `function` may be called with `context`.
+unsafe fn notify_processor(
+    function: PROCESSOR_CALLBACK_FUNCTION,
+    context: *mut c_void,
+    index: u32,
+    state: u32,
+    status: NTSTATUS,
+    operation: &mut NTSTATUS,
+) {
+    let (group, in_group) =
+        topology::number_from_index(index, online_count() as u32).unwrap_or((0, 0));
+    let mut change = KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT {
+        State: state,
+        NtNumber: index,
+        Status: status,
+        ProcNumber: PROCESSOR_NUMBER {
+            Group: group,
+            Number: in_group,
+            Reserved: 0,
+        },
+    };
+    // SAFETY: per the contract; the two pointers are to this frame, for
+    // the length of the call. If the routine does not return, NK owes
+    // nothing: no lock is held.
+    unsafe {
+        super::seh::call(
+            function as usize,
+            [
+                context.addr(),
+                (&raw mut change).addr(),
+                core::ptr::from_mut(operation).addr(),
+                0,
+            ],
+            &super::seh::Guard::Nothing,
+        );
+    }
+}
+
+/// [`KeRegisterProcessorChangeCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keregisterprocessorchangecallback):
+/// have `function` told when a processor is added. As on Windows this
+/// registers it with the callback object `\Callback\ProcessorAdd`, and
+/// what is returned is that registration; null if it could not be made.
+/// NK adds no processor while it runs, so the object is never notified.
+///
+/// With `KE_PROCESSOR_CHANGE_ADD_EXISTING` the routine is called here
+/// for the processors there are, as the pinned kernel calls it: for
+/// each in turn that its addition starts, then for each that it is
+/// complete. If the routine refuses one, by setting the status it is
+/// given to a failure, those before it are told of the failure, the
+/// registration is undone and null is returned.
+///
+/// # Safety
+/// `function` may be called with `context` until it is unregistered.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeRegisterProcessorChangeCallback(
+    function: PROCESSOR_CALLBACK_FUNCTION,
+    context: *mut c_void,
+    flags: u32,
+) -> *mut c_void {
+    let object = processor_add_object();
+    if object.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: the object is referenced until it is let go below; the
+    // rest per the contract.
+    unsafe {
+        let registration = callback::ExRegisterCallback(object, function as *const c_void, context);
+        crate::ob::object::dereference(object.cast());
+        if registration.is_null() || flags & KE_PROCESSOR_CHANGE_ADD_EXISTING == 0 {
+            return registration;
+        }
+        let processors = online_count() as u32;
+        let mut operation = STATUS_SUCCESS;
+        for index in 0..processors {
+            operation = STATUS_SUCCESS;
+            notify_processor(
+                function,
+                context,
+                index,
+                KE_PROCESSOR_ADD_START_NOTIFY,
+                STATUS_SUCCESS,
+                &mut operation,
+            );
+            if operation < 0 {
+                callback::ExUnregisterCallback(registration);
+                let refused = operation;
+                for started in 0..index {
+                    notify_processor(
+                        function,
+                        context,
+                        started,
+                        KE_PROCESSOR_ADD_FAILURE_NOTIFY,
+                        refused,
+                        &mut operation,
+                    );
+                }
+                return core::ptr::null_mut();
+            }
+        }
+        let status = operation;
+        for index in 0..processors {
+            notify_processor(
+                function,
+                context,
+                index,
+                KE_PROCESSOR_ADD_COMPLETE_NOTIFY,
+                status,
+                &mut operation,
+            );
+        }
+        registration
+    }
+}
+
 /// [`KeGetRecommendedSharedDataAlignment`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kegetrecommendedshareddataalignment):
 /// the bytes of a cache line.
 #[allow(non_snake_case)]
@@ -364,6 +565,96 @@ pub unsafe extern "C" fn KeFlushIoBuffers(
 #[allow(non_snake_case)]
 pub extern "C" fn KeFlushWriteBuffer() {
     core::sync::atomic::fence(Ordering::SeqCst);
+}
+
+/// How often the test's processor-change routine was called, by state.
+static NOTES: [AtomicU32; 3] = [const { AtomicU32::new(0) }; 3];
+/// How often it was told something it should not have been.
+static WRONG_NOTES: AtomicU32 = AtomicU32::new(0);
+/// The status it refuses a processor with.
+const REFUSED: NTSTATUS = nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES;
+
+/// The test's processor-change routine: each state's calls come for
+/// the processors in order, each named right. Its context is one more
+/// than the processor to refuse, or zero.
+///
+/// # Safety
+/// Called as a `PROCESSOR_CALLBACK_FUNCTION`.
+unsafe extern "C" fn noted(
+    context: *mut c_void,
+    change: *mut KE_PROCESSOR_CHANGE_NOTIFY_CONTEXT,
+    operation: *mut NTSTATUS,
+) {
+    // SAFETY: per the contract.
+    let change = unsafe { change.read_unaligned() };
+    let Some(notes) = NOTES.get(change.State as usize) else {
+        WRONG_NOTES.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    let nth = notes.fetch_add(1, Ordering::Relaxed);
+    let named = PROCESSOR_NUMBER {
+        Group: 0,
+        Number: nth as u8,
+        Reserved: 0,
+    };
+    let status = if change.State == KE_PROCESSOR_ADD_FAILURE_NOTIFY {
+        REFUSED
+    } else {
+        STATUS_SUCCESS
+    };
+    if change.NtNumber != nth || change.ProcNumber != named || change.Status != status {
+        WRONG_NOTES.fetch_add(1, Ordering::Relaxed);
+    }
+    if change.State == KE_PROCESSOR_ADD_START_NOTIFY && context.addr() == nth as usize + 1 {
+        // SAFETY: per the contract.
+        unsafe { operation.write_unaligned(REFUSED) };
+    }
+}
+
+/// A processor-change routine is registered with
+/// `\Callback\ProcessorAdd`; asked to, it is told of each processor
+/// there is, start then completion; refusing one undoes it all.
+fn processor_change_test(processors: u32) -> Result<(), &'static str> {
+    let notes = || {
+        let taken = [0, 1, 2].map(|state: usize| NOTES[state].swap(0, Ordering::Relaxed));
+        (taken, WRONG_NOTES.swap(0, Ordering::Relaxed))
+    };
+    let register = |refuse: usize, flags: u32| {
+        // SAFETY: the routine takes any context.
+        unsafe {
+            KeRegisterProcessorChangeCallback(
+                noted,
+                core::ptr::without_provenance_mut(refuse),
+                flags,
+            )
+        }
+    };
+    notes();
+    // Registered only: told nothing until the object is notified.
+    let quiet = register(0, 0);
+    if quiet.is_null() || notes() != ([0, 0, 0], 0) {
+        return Err("a processor-change routine was not registered, or was called unasked");
+    }
+    // SAFETY: the registration just made; unregistering takes it off
+    // the callback object's list, where it must therefore be.
+    unsafe { callback::ExUnregisterCallback(quiet) };
+
+    let told = register(0, KE_PROCESSOR_CHANGE_ADD_EXISTING);
+    let seen = notes();
+    if !told.is_null() {
+        // SAFETY: the registration just made.
+        unsafe { callback::ExUnregisterCallback(told) };
+    }
+    if told.is_null() || seen != ([processors, processors, 0], 0) {
+        return Err("the routine was not told of each processor there is, start then completion");
+    }
+
+    // The last processor is refused: the ones before it are told.
+    let refused = register(processors as usize, KE_PROCESSOR_CHANGE_ADD_EXISTING);
+    if !refused.is_null() || notes() != ([processors, 0, processors - 1], 0) {
+        return Err("a refused processor did not undo the registration");
+    }
+    Ok(())
 }
 
 /// `KeQueryLogicalProcessorRelationship` tells the length first, then
@@ -526,6 +817,18 @@ pub fn queries_test() -> Result<u32, &'static str> {
         return Err("the groups, nodes or cache line are not NK's one of each");
     }
     relationships_test(processors)?;
+    processor_change_test(processors)?;
+    let mut one = GROUP_AFFINITY {
+        Mask: 0,
+        Group: 9,
+        Reserved: [9; 3],
+    };
+    // SAFETY: a local.
+    unsafe { KeProcessorGroupAffinity(&raw mut one, processors - 1) };
+    if (one.Mask, one.Group, one.Reserved) != (1 << (processors - 1), 0, [0; 3]) {
+        return Err("KeProcessorGroupAffinity is not the one processor asked for");
+    }
+    KeReportCacheIncoherentDevice();
     // A buffer flushed for a device still holds what was written.
     let mut buffer = [0x5Au8; 200];
     // SAFETY: a zeroed MDL is a valid one to fill in; it describes the

@@ -3,9 +3,12 @@
 //!
 //! An answer that is more than a status is memory the driver allocated
 //! from the pool and handed over in `IoStatus.Information`: the manager
-//! copies what it needs and frees the block, as on Windows. What a
-//! driver hands over is read through raw pointers, unit by unit, up to
-//! a bound: nothing here trusts a length it has not checked.
+//! copies it and frees the block, as on Windows. The copy is as long as
+//! the pool says the block is, and everything is read out of the copy:
+//! what an answer says of its own length (a list's size field, a
+//! string's terminator, a count) is believed only as far as the block
+//! reaches. An answer that is not the start of a pool block is not
+//! read at all.
 
 use crate::io::stack::{send_synchronous, send_synchronous_from};
 use crate::mm::pool;
@@ -16,8 +19,8 @@ use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
 use nk_pnp::resources::{Requirements, ResourceList};
 
-/// The longest answer, in bytes, the manager reads of a string or a
-/// list a driver hands it: far beyond what any device answers.
+/// The longest answer, in bytes, the manager copies: far beyond what
+/// any device answers.
 const LONGEST: usize = 1 << 20;
 
 /// The locale device text is asked for in: US English, the system
@@ -38,33 +41,49 @@ pub unsafe fn pnp(
     unsafe { send_synchronous(device, IRP_MJ_PNP, minor, parameters) }
 }
 
-/// Free what a driver handed over.
-fn release(block: usize) {
-    if block != 0 {
-        let _ = pool::free(block as *mut u8);
-    }
-}
-
-/// The UTF-16 units at `address`, up to and without the zero that ends
-/// them; for a list of strings (`multi`), up to the empty string that
-/// ends the list, the zeros between them kept.
+/// A copy of the pool block at `address`, as long as the block is.
+/// `None` if `address` is not the start of a live pool block, or the
+/// block is longer than any answer.
 ///
 /// # Safety
-/// `address` is a zero-terminated string (or list of them) in readable
-/// memory.
-unsafe fn units(address: usize, multi: bool) -> Vec<u16> {
+/// If `address` is a pool block, nothing frees it during the call.
+pub unsafe fn block(address: usize) -> Option<Vec<u8>> {
+    let (size, _) = pool::info(address as *const u8)?;
+    if size > LONGEST {
+        return None;
+    }
+    let mut bytes = alloc::vec![0u8; size];
+    // SAFETY: a live pool block of `size` bytes, per the pool and the
+    // contract; the copy is NK's own memory.
+    unsafe { (address as *const u8).copy_to_nonoverlapping(bytes.as_mut_ptr(), size) };
+    Some(bytes)
+}
+
+/// Copy the block a driver handed over, and free it: it is the
+/// manager's. What is not a pool block is left alone.
+///
+/// # Safety
+/// `address` is what a driver put in `IoStatus.Information` for a
+/// request whose answer is a pool block the receiver frees.
+unsafe fn take(address: usize) -> Option<Vec<u8>> {
+    // SAFETY: per the contract.
+    let bytes = unsafe { block(address) }?;
+    let _ = pool::free(address as *mut u8);
+    Some(bytes)
+}
+
+/// The string, or for `multi` the list of strings, `bytes` begin with.
+/// `None` if the bytes end before the string does.
+fn text_of(bytes: &[u8], multi: bool) -> Option<Vec<u16>> {
     let mut found = Vec::new();
-    let text = address as *const u16;
-    for at in 0..LONGEST / 2 {
-        // SAFETY: per the contract, nothing past the terminator is
-        // read. A driver may pack the string.
-        let unit = unsafe { text.add(at).read_unaligned() };
+    for unit in bytes.as_chunks::<2>().0 {
+        let unit = u16::from_le_bytes(*unit);
         if unit == 0 && (!multi || found.last().is_none_or(|last| *last == 0)) {
-            break;
+            return Some(found);
         }
         found.push(unit);
     }
-    found
+    None
 }
 
 /// What the stack of `device` answers `IRP_MN_QUERY_ID` for `kind`
@@ -86,8 +105,9 @@ pub unsafe fn id(device: *mut DEVICE_OBJECT, kind: u32) -> Result<Vec<String>, N
             };
         }
         let multi = matches!(kind, BUS_QUERY_HARDWARE_IDS | BUS_QUERY_COMPATIBLE_IDS);
-        let found = units(information, multi);
-        release(information);
+        let found = take(information)
+            .and_then(|bytes| text_of(&bytes, multi))
+            .ok_or(STATUS_PNP_INVALID_ID)?;
         Ok(if multi {
             nk_pnp::ids::multi_sz(&found)
         } else {
@@ -108,8 +128,7 @@ pub unsafe fn text(device: *mut DEVICE_OBJECT, kind: u32) -> Option<String> {
         if !nt_success(status) || information == 0 {
             return None;
         }
-        let found = units(information, false);
-        release(information);
+        let found = text_of(&take(information)?, false)?;
         Some(String::from_utf16_lossy(&found))
     }
 }
@@ -158,72 +177,37 @@ pub unsafe fn capabilities(device: *mut DEVICE_OBJECT) -> Result<(u32, u32, u32)
 /// # Safety
 /// As [`pnp`].
 pub unsafe fn bus_information(device: *mut DEVICE_OBJECT) -> Option<super::node::BusInformation> {
-    // SAFETY: a successful answer is 24 bytes from the pool.
+    // SAFETY: a successful answer is a structure from the pool.
     unsafe {
         let (status, information) = pnp(device, IRP_MN_QUERY_BUS_INFORMATION, [0; 4]);
         if !nt_success(status) || information == 0 {
             return None;
         }
-        let bytes = (information as *const [u8; 24]).read_unaligned();
-        release(information);
+        let bytes = take(information)?;
+        let bytes = bytes.get(..24)?;
         Some(super::node::BusInformation {
-            bus_type: bytes[..16].try_into().unwrap(),
-            legacy_bus_type: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
-            bus_number: u32::from_le_bytes(bytes[20..].try_into().unwrap()),
+            bus_type: bytes[..16].try_into().ok()?,
+            legacy_bus_type: u32::from_le_bytes(bytes[16..20].try_into().ok()?),
+            bus_number: u32::from_le_bytes(bytes[20..].try_into().ok()?),
         })
     }
 }
 
-/// Copy `length` bytes from `address`.
+/// The bytes of the `CM_RESOURCE_LIST` the pool block at `address`
+/// begins with; `None` if it is not a pool block or holds no whole
+/// list.
 ///
 /// # Safety
-/// The bytes are readable.
-unsafe fn copy(address: usize, length: usize) -> Vec<u8> {
-    let mut bytes = alloc::vec![0u8; length];
-    // SAFETY: per the contract; the copy is NK's own memory.
-    unsafe { (address as *const u8).copy_to_nonoverlapping(bytes.as_mut_ptr(), length) };
-    bytes
-}
-
-/// The bytes of the `IO_RESOURCE_REQUIREMENTS_LIST` at `address`, as
-/// long as the list says it is; `None` if what it says cannot be.
-///
-/// # Safety
-/// `address` is a requirements list in readable memory.
-pub unsafe fn requirements_at(address: usize) -> Option<Vec<u8>> {
-    // SAFETY: per the contract: the list is as long as its first field
-    // says.
-    unsafe {
-        let stated = (address as *const [u8; 4]).read_unaligned();
-        let size = Requirements::stated_size(stated).filter(|size| *size <= LONGEST)?;
-        let bytes = copy(address, size);
-        Requirements::parse(&bytes).map(|_| bytes)
-    }
-}
-
-/// The bytes of the `CM_RESOURCE_LIST` at `address`. A resource list
-/// does not state its length: it is walked, descriptor by descriptor.
-///
-/// # Safety
-/// `address` is a resource list in readable memory.
+/// As [`block`].
 pub unsafe fn resource_list_at(address: usize) -> Option<Vec<u8>> {
-    // Read as much as the list is found to need, a step at a time: the
-    // count, then each bus's header, then its descriptors.
-    let mut have = 4;
-    loop {
-        // SAFETY: per the contract, `have` bytes of the list are there:
-        // each step asks only for what the bytes before it promise.
-        let bytes = unsafe { copy(address, have) };
-        match ResourceList::needed(&bytes, LONGEST) {
-            Some(need) if need > have => have = need,
-            Some(_) => return ResourceList::parse(&bytes).map(|(_, used)| bytes[..used].to_vec()),
-            None => return None,
-        }
-    }
+    // SAFETY: per the contract.
+    let bytes = unsafe { block(address) }?;
+    ResourceList::parse(&bytes).map(|(_, used)| bytes[..used].to_vec())
 }
 
 /// What the stack answers `IRP_MN_QUERY_RESOURCE_REQUIREMENTS` with,
-/// as bytes; empty if it has no requirements.
+/// as bytes; empty if it has no requirements, or answered with what
+/// is not a list.
 ///
 /// # Safety
 /// As [`pnp`].
@@ -234,9 +218,9 @@ pub unsafe fn requirements(device: *mut DEVICE_OBJECT) -> Vec<u8> {
         if !nt_success(status) || information == 0 {
             return Vec::new();
         }
-        let bytes = requirements_at(information).unwrap_or_default();
-        release(information);
-        bytes
+        take(information)
+            .and_then(|bytes| Requirements::in_block(&bytes).map(<[u8]>::to_vec))
+            .unwrap_or_default()
     }
 }
 
@@ -252,48 +236,61 @@ pub unsafe fn resources(device: *mut DEVICE_OBJECT) -> Vec<u8> {
         if !nt_success(status) || information == 0 {
             return Vec::new();
         }
-        let bytes = resource_list_at(information).unwrap_or_default();
-        release(information);
-        bytes
+        take(information)
+            .and_then(|bytes| ResourceList::parse(&bytes).map(|(_, used)| bytes[..used].to_vec()))
+            .unwrap_or_default()
     }
 }
 
 /// Have the stack filter `list`, the device's requirements
 /// (`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`), and return the list as the
-/// drivers left it. The request starts out successful and holding the
-/// list, as Windows sends it; a driver that changes the list frees the
-/// one it was given and hands over its own.
+/// drivers left it; empty for none. The request is sent as Windows
+/// sends it (`IopFilterResourceRequirementsCall`): with a list, it
+/// starts out successful and holding the list; without one, as not
+/// supported and holding nothing. A driver that changes the list frees
+/// the one it was given and hands over its own.
 ///
 /// # Safety
 /// As [`pnp`].
 pub unsafe fn filtered(device: *mut DEVICE_OBJECT, list: &[u8]) -> Result<Vec<u8>, NTSTATUS> {
-    let block = pool::alloc(list.len(), super::TAG);
-    if block.is_null() {
-        return Err(STATUS_INSUFFICIENT_RESOURCES);
-    }
-    // SAFETY: a fresh block of the list's length; what comes back in
-    // `Information` is the list now in force, from the pool: the one
-    // sent, or a driver's that replaced it (which freed the one sent).
+    let sent = if list.is_empty() {
+        core::ptr::null_mut()
+    } else {
+        let sent = pool::alloc(list.len(), super::TAG);
+        if sent.is_null() {
+            return Err(STATUS_INSUFFICIENT_RESOURCES);
+        }
+        // SAFETY: a fresh block of the list's length.
+        unsafe { sent.copy_from_nonoverlapping(list.as_ptr(), list.len()) };
+        sent
+    };
+    let start = (!sent.is_null()).then_some((STATUS_SUCCESS, sent as usize));
+    // SAFETY: per the contract. What comes back in `Information` is
+    // the list now in force, from the pool: the one sent, or a
+    // driver's that replaced it (which freed the one sent).
     unsafe {
-        block.copy_from_nonoverlapping(list.as_ptr(), list.len());
         let (status, information) = send_synchronous_from(
             device,
             IRP_MJ_PNP,
             IRP_MN_FILTER_RESOURCE_REQUIREMENTS,
-            filter_resource_requirements_parameters(block as u64),
-            Some((STATUS_SUCCESS, block as usize)),
+            filter_resource_requirements_parameters(sent as u64),
+            start,
         );
-        if !nt_success(status) && status != STATUS_NOT_SUPPORTED {
-            release(information);
-            return Err(status);
-        }
         if information == 0 {
             // No list is left: the device requires nothing.
-            return Ok(Vec::new());
+            return if nt_success(status) || status == STATUS_NOT_SUPPORTED {
+                Ok(Vec::new())
+            } else {
+                Err(status)
+            };
         }
-        let bytes = requirements_at(information);
-        release(information);
-        bytes.ok_or(STATUS_INVALID_PARAMETER)
+        let bytes = take(information);
+        if !nt_success(status) && status != STATUS_NOT_SUPPORTED {
+            return Err(status);
+        }
+        bytes
+            .and_then(|bytes| Requirements::in_block(&bytes).map(<[u8]>::to_vec))
+            .ok_or(STATUS_INVALID_PARAMETER)
     }
 }
 
@@ -308,7 +305,7 @@ pub unsafe fn relations(
     relation: u32,
 ) -> Result<Option<Vec<usize>>, NTSTATUS> {
     // SAFETY: a successful answer is a `DEVICE_RELATIONS` from the
-    // pool, its count followed by that many pointers.
+    // pool.
     unsafe {
         let parameters = query_device_relations_parameters(relation);
         let (status, information) = pnp(device, IRP_MN_QUERY_DEVICE_RELATIONS, parameters);
@@ -321,14 +318,23 @@ pub unsafe fn relations(
         if information == 0 {
             return Ok(Some(Vec::new()));
         }
-        let relations = information as *const DEVICE_RELATIONS;
-        let count = (&raw const (*relations).Count).read_unaligned() as usize;
-        let objects = (&raw const (*relations).Objects).cast::<usize>();
-        let found = (0..count.min(LONGEST / 8))
-            .map(|at| objects.add(at).read_unaligned())
-            .collect();
-        release(information);
-        Ok(Some(found))
+        let bytes = take(information).ok_or(STATUS_INVALID_PARAMETER)?;
+        // The count, padded to a pointer, then that many pointers: as
+        // many as the block holds.
+        let count = bytes
+            .get(..4)
+            .map(|count| u32::from_le_bytes(count.try_into().unwrap()) as usize)
+            .ok_or(STATUS_INVALID_PARAMETER)?;
+        let objects = bytes.get(8..).unwrap_or(&[]).as_chunks::<8>().0;
+        if count > objects.len() {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        Ok(Some(
+            objects[..count]
+                .iter()
+                .map(|object| usize::from_le_bytes(*object))
+                .collect(),
+        ))
     }
 }
 

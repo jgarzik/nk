@@ -207,7 +207,10 @@ processor starts in becomes its idle thread.
 of them; one call is in progress at a time. A processor silent for five
 seconds is stuck with interrupts off, and the system stops. x86-64 uses
 this to drop a translation everywhere on unmap; arm64's invalidation
-broadcasts by itself.
+broadcasts by itself. `KeIpiGenericCall` is one such call whose routine
+holds each processor until all have been interrupted and only then runs
+the driver's function, on all at once: drivers use it to do something
+while nothing else in the system runs.
 
 The processor that stops the system stops the others first: by NMI on
 x86-64, by the most urgent software-generated interrupt on arm64 (which a
@@ -673,6 +676,13 @@ NK reads no topology from the processors or the firmware, so
 `KeQueryLogicalProcessorRelationship` states each logical processor as
 a core of its own in a package of its own, and no cache; its records
 come in Windows' order from `nk_ke::topology::relationships`.
+`KeRegisterProcessorChangeCallback` registers the routine with
+`\Callback\ProcessorAdd`, as Windows does, and tells it of the
+processors there are if asked to; no processor is added while NK runs,
+so the object is never notified, and no lock keeps a registration and
+an addition apart. `KeReportCacheIncoherentDevice` records nothing:
+NK flushes buffers for devices wherever the architecture needs it,
+reported or not.
 `KeFlushIoBuffers` does nothing on x86-64 and, on arm64, writes the
 buffer's cache lines back and drops them.
 
@@ -1904,7 +1914,13 @@ its device identifier, capabilities, description and location text,
 instance identifier, hardware and compatible identifiers, bus
 information, resource requirements and boot configuration, and is then
 told it has been enumerated. NK does not send the query for the
-extended-address interface Windows sends after the capabilities. The
+extended-address interface Windows sends after the capabilities. An
+identifier is taken by Windows' rule (`PnpFixupID`: spaces become
+underscores; a control character, a character above `0x7F`, a comma,
+or the wrong number of backslashes refuses it) and a device whose
+device or instance identifier is refused is left unstarted (problem
+9). An answer a driver hands over is copied as far as its pool block
+reaches and read from the copy, whatever lengths it states. The
 instance path, the parent prefix for a bus whose children are not
 unique (`ParentIdPrefix`, `NextParentID.<hash>.<depth>`), and the
 hash behind it are Windows' (`nk_pnp::ids`, held to the reference
