@@ -27,6 +27,9 @@ dependencies = [
 [[package]]
 name = "nk-ex"
 version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
 
 [[package]]
 name = "nk-hal"
