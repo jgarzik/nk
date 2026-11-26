@@ -23,6 +23,7 @@ pub static GROUP: Group = Group {
         "ob.current-thread",
         "io.device-list",
         "io.device-vpb",
+        "io.mdl.fixed-size",
         "io.open-delete",
         "thread.wake-at-dispatch",
         "work.queue-types",
@@ -168,6 +169,55 @@ fn device_vpb() -> Result<(), &'static str> {
         verdict = Err("a deleted device left its parameter block behind");
     }
     let _ = pool::free(driver.cast());
+    verdict
+}
+
+/// An MDL for a small buffer has room for seventeen pages, whatever
+/// the buffer it was allocated for: Windows takes such an MDL from a
+/// list of blocks of one size and marks it `MDL_ALLOCATED_FIXED_SIZE`,
+/// and Storport describes a longer buffer with an MDL it allocated for
+/// a shorter one (`MmInitializeMdl` again, then
+/// `MmBuildMdlForNonPagedPool`). Returns the pages described.
+fn mdl_fixed_size() -> Result<usize, &'static str> {
+    use crate::io::mdl::MmBuildMdlForNonPagedPool;
+    use nk_ntabi::io::MDL_ALLOCATED_FIXED_SIZE;
+    const PAGE: usize = crate::mm::PAGE_SIZE;
+    const PAGES: usize = 17;
+    let buffer = pool::alloc_zeroed(PAGES * PAGE, u32::from_le_bytes(*b"Test"));
+    if buffer.is_null() {
+        return Err("no memory for a buffer");
+    }
+    // SAFETY: the buffer just made; the MDL is the test's, and is
+    // initialised again as the header's `MmInitializeMdl` does it.
+    let verdict = unsafe {
+        let mdl = IoAllocateMdl(buffer.cast(), 16, 0, 0, core::ptr::null_mut());
+        if mdl.is_null() {
+            Err("no memory for an MDL")
+        } else {
+            let verdict = if (*mdl).Size != 0x38 {
+                Err("an MDL of one page does not state the size of one page")
+            } else if (*mdl).MdlFlags & MDL_ALLOCATED_FIXED_SIZE == 0 {
+                Err("a small MDL is not marked as one of the fixed size")
+            } else {
+                let start = buffer as usize;
+                let length = PAGES * PAGE - (start & (PAGE - 1));
+                let pages = nk_ntabi::io::span_pages(start, length);
+                (*mdl).Next = core::ptr::null_mut();
+                (*mdl).Size = (size_of::<MDL>() + pages * 8) as i16;
+                (*mdl).MdlFlags = 0;
+                (*mdl).StartVa = (start & !(PAGE - 1)) as *mut c_void;
+                (*mdl).ByteOffset = (start & (PAGE - 1)) as u32;
+                (*mdl).ByteCount = length as u32;
+                MmBuildMdlForNonPagedPool(mdl);
+                Ok(pages)
+            };
+            // An MDL too short for what was written to it stops the
+            // system here.
+            IoFreeMdl(mdl);
+            verdict
+        }
+    };
+    let _ = pool::free(buffer);
     verdict
 }
 
@@ -728,6 +778,10 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("io.device-list", format_args!("{why}")),
     }
     r.check("io.device-vpb", device_vpb);
+    match mdl_fixed_size() {
+        Ok(n) => r.ok_with("io.mdl.fixed-size", format_args!("pages described: {n}")),
+        Err(why) => r.fail("io.mdl.fixed-size", format_args!("{why}")),
+    }
     match open_delete() {
         Ok(n) => r.ok_with(
             "io.open-delete",

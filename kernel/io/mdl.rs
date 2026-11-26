@@ -36,6 +36,9 @@ use nk_ntabi::status::{
 };
 
 const TAG_MDL: u32 = u32::from_le_bytes(*b"Mdl ");
+/// The size of the block every MDL of up to seventeen pages gets, as
+/// `IoAllocateMdl` of the pinned kernel sizes its list of small MDLs.
+const FIXED_MDL_BYTES: usize = size_of::<MDL>() + 17 * 8;
 /// Largest buffer one MDL can describe: its `Size` field is 16 bits.
 const MAX_MDL_BYTES: usize = i16::MAX as usize;
 
@@ -73,13 +76,22 @@ pub unsafe extern "C" fn IoAllocateMdl(
     if size > MAX_MDL_BYTES {
         return core::ptr::null_mut();
     }
-    let mdl = pool::alloc_zeroed(size, TAG_MDL).cast::<MDL>();
+    // An MDL of up to seventeen pages is one of a fixed size, with
+    // room for all seventeen, and says so in its flags: Windows takes
+    // it from a list of such blocks. Its `Size` is still the buffer's
+    // own. Storport counts on the room: it describes a longer buffer
+    // with an MDL it allocated for a shorter one.
+    let fixed = size <= FIXED_MDL_BYTES;
+    let mdl = pool::alloc_zeroed(size.max(FIXED_MDL_BYTES), TAG_MDL).cast::<MDL>();
     if mdl.is_null() {
         return mdl;
     }
-    // SAFETY: `mdl` is a fresh zeroed block of `size` bytes; `irp` is
-    // valid per the contract.
+    // SAFETY: `mdl` is a fresh zeroed block of at least `size` bytes;
+    // `irp` is valid per the contract.
     unsafe {
+        if fixed {
+            (*mdl).MdlFlags = MDL_ALLOCATED_FIXED_SIZE;
+        }
         (*mdl).Size = size as i16;
         (*mdl).StartVa = (virtual_address as usize & !(PAGE_SIZE - 1)) as PVOID;
         (*mdl).ByteOffset = (virtual_address as usize & (PAGE_SIZE - 1)) as u32;

@@ -65,3 +65,4 @@ io.irp-extension ok
 io.activity-id.thread ok
 io.request-facts ok
 io.device-vpb ok
+io.mdl.fixed-size ok

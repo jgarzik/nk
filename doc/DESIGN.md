@@ -2000,7 +2000,11 @@ up as the two drivers' code sets them up; the
 **Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
 user range, is described by its physical pages, and a system address is
 a fresh mapping of them, so the driver works through its own view.
-Limits are at the top of `kernel/io/mdl.rs`. A partial MDL
+Limits are at the top of `kernel/io/mdl.rs`. An MDL of up to seventeen
+pages is a block with room for seventeen, marked
+`MDL_ALLOCATED_FIXED_SIZE`, as Windows' is (it takes them from a list
+of blocks of that size): Storport describes a longer buffer with an
+MDL it allocated for a shorter one. A partial MDL
 ([`IoBuildPartialMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildpartialmdl))
 shares the pages of the part of the source's buffer it names, and the
 source's system mapping if there is one; mapped on its own, it keeps
