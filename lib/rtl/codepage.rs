@@ -223,6 +223,54 @@ pub fn unicode_to_ansi_stored(
     }
 }
 
+impl CodePage {
+    /// `RtlUpperChar`: the upper case of a byte, which is the byte of
+    /// the upper case of its unit.
+    pub fn upper(&self, byte: u8) -> u8 {
+        self.from_unicode(crate::upcase_char(self.to_unicode(byte)))
+    }
+}
+
+/// `RtlxAnsiStringToUnicodeSize`: the bytes an ANSI string of `length`
+/// bytes takes in UTF-16, terminator included. A page of single bytes
+/// makes one unit of each.
+pub fn ansi_to_unicode_size(length: u16) -> u32 {
+    (u32::from(length) + 1) * 2
+}
+
+/// `RtlAnsiStringToUnicodeString`: the `Length` of the result and the
+/// `MaximumLength` it needs, terminator included, for a source of
+/// `length` bytes. `None`, for a source whose result a counted string
+/// cannot hold, is `STATUS_INVALID_PARAMETER_2`. The routine stores the
+/// `Length` first; then it allocates the `MaximumLength`, or else
+/// requires it of the caller's buffer and fails with
+/// `STATUS_BUFFER_OVERFLOW`, converting nothing, if it is not there.
+pub fn ansi_to_unicode_lengths(length: u16) -> Option<(u16, u16)> {
+    let size = ansi_to_unicode_size(length);
+    (size <= 0xFFFE).then_some(((size - 2) as u16, size as u16))
+}
+
+/// `RtlCompareString`: negative, zero or positive as `a` sorts before,
+/// with or after `b`: the difference of the first two bytes that
+/// differ, upper case against upper case if `ignore_case`, or of the
+/// lengths.
+pub fn compare_string(
+    page: &CodePage,
+    a: impl ExactSizeIterator<Item = u8>,
+    b: impl ExactSizeIterator<Item = u8>,
+    ignore_case: bool,
+) -> i32 {
+    let lengths = a.len() as i32 - b.len() as i32;
+    let fold = |byte: u8| if ignore_case { page.upper(byte) } else { byte };
+    for (x, y) in a.zip(b) {
+        let (x, y) = (fold(x), fold(y));
+        if x != y {
+            return i32::from(x) - i32::from(y);
+        }
+    }
+    lengths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +438,59 @@ mod tests {
                 "{source} into {max_bytes}"
             );
         }
+    }
+
+    #[test]
+    fn upper_case_of_a_byte_goes_through_its_unit() {
+        let page = &ANSI_1252;
+        for byte in 0..0x80u8 {
+            assert_eq!(page.upper(byte), byte.to_ascii_uppercase());
+        }
+        assert_eq!(page.upper(0xE9), 0xC9); // e acute
+        assert_eq!(page.upper(0xFF), 0x9F); // y diaeresis: its capital is in the page
+        assert_eq!(page.upper(0x9A), 0x8A); // s caron
+        assert_eq!(page.upper(0xDF), 0xDF); // sharp s has no single capital
+        assert_eq!(page.upper(0xF7), 0xF7); // the division sign
+        assert_eq!(page.upper(0xC9), 0xC9);
+    }
+
+    #[test]
+    fn ansi_to_unicode_sizes() {
+        assert_eq!(ansi_to_unicode_size(0), 2);
+        assert_eq!(ansi_to_unicode_size(5), 12);
+        assert_eq!(ansi_to_unicode_size(0xFFFF), 0x2_0000);
+        assert_eq!(ansi_to_unicode_lengths(0), Some((0, 2)));
+        assert_eq!(ansi_to_unicode_lengths(5), Some((10, 12)));
+        assert_eq!(ansi_to_unicode_lengths(0x7FFE), Some((0xFFFC, 0xFFFE)));
+        assert_eq!(ansi_to_unicode_lengths(0x7FFF), None);
+        assert_eq!(ansi_to_unicode_lengths(0xFFFF), None);
+    }
+
+    #[test]
+    fn byte_strings_compare_by_byte_then_length() {
+        let compare = |a: &[u8], b: &[u8], ignore_case| {
+            compare_string(
+                &ANSI_1252,
+                a.iter().copied(),
+                b.iter().copied(),
+                ignore_case,
+            )
+        };
+        assert_eq!(compare(b"abc", b"abc", false), 0);
+        assert_eq!(compare(b"abc", b"abd", false), -1);
+        assert_eq!(compare(b"abd", b"abc", true), 1);
+        assert_eq!(compare(b"abc", b"ABC", false), 0x20);
+        assert_eq!(compare(b"abc", b"ABC", true), 0);
+        assert_eq!(compare(b"abc", b"ab", false), 1);
+        assert_eq!(compare(b"ab", b"abcd", true), -2);
+        assert_eq!(compare(b"", b"", true), 0);
+        assert_eq!(compare(b"", b"a", false), -1);
+        // Bytes are unsigned, and upper case is the page's.
+        assert_eq!(compare(b"\xE9", b"a", false), 0xE9 - 0x61);
+        assert_eq!(compare(b"\xE9", b"\xC9", true), 0);
+        assert_eq!(compare(b"\xE9", b"\xC9", false), 0x20);
+        // Upper case, not lower: `_` sorts after `A`.
+        assert_eq!(compare(b"_", b"a", true), 0x5F - 0x41);
     }
 
     #[test]

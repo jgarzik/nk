@@ -10,6 +10,7 @@
 
 use super::{PAGE_SIZE, alloc_frames, direct_to_phys, free_frames, phys_to_virt};
 use crate::ke::{Rank, SpinLock};
+use nk_mm::frames::Within;
 use nk_mm::heap::{Arena, HeapError, Usage};
 
 const ARENA_PAGES: usize = 256;
@@ -48,12 +49,16 @@ pub enum PoolError {
     Overrun { tag: u32, size: usize },
 }
 
-fn alloc_large(pool: &mut Pool, size: usize, tag: u32) -> *mut u8 {
+fn alloc_large(pool: &mut Pool, size: usize, tag: u32, within: Option<&Within>) -> *mut u8 {
     let pages = size.div_ceil(PAGE_SIZE);
     let Some(slot) = pool.large.iter_mut().find(|s| s.is_none()) else {
         return core::ptr::null_mut();
     };
-    let Some(pa) = alloc_frames(pages) else {
+    let frames = match within {
+        Some(within) => super::alloc_frames_within(pages, within),
+        None => alloc_frames(pages),
+    };
+    let Some(pa) = frames else {
         return core::ptr::null_mut();
     };
     let addr = phys_to_virt(pa);
@@ -71,7 +76,7 @@ fn alloc_large(pool: &mut Pool, size: usize, tag: u32) -> *mut u8 {
 pub fn alloc(size: usize, tag: u32) -> *mut u8 {
     let mut pool = POOL.lock();
     if size >= LARGE_MIN {
-        return alloc_large(&mut pool, size, tag);
+        return alloc_large(&mut pool, size, tag, None);
     }
     for slot in pool.arenas.iter_mut() {
         match slot {
@@ -98,6 +103,13 @@ pub fn alloc(size: usize, tag: u32) -> *mut u8 {
         }
     }
     core::ptr::null_mut()
+}
+
+/// Allocate `size` bytes labelled `tag` as whole, zeroed pages whose
+/// frames are one run where `within` allows. Null if there is no such
+/// run free. The block is freed like any other.
+pub fn alloc_contiguous(size: usize, tag: u32, within: &Within) -> *mut u8 {
+    alloc_large(&mut POOL.lock(), size.max(1), tag, Some(within))
 }
 
 /// Free an allocation. Returns its size and tag.
@@ -261,6 +273,14 @@ pub extern "C" fn ExAllocatePoolWithTag(
         raise_no_memory();
     }
     block.cast()
+}
+
+/// [`ExAllocatePool`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool):
+/// `ExAllocatePoolWithTag` under the tag Windows gives a caller that
+/// names none, `None`.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePool(pool_type: u32, number_of_bytes: usize) -> *mut core::ffi::c_void {
+    ExAllocatePoolWithTag(pool_type, number_of_bytes, u32::from_le_bytes(*b"None"))
 }
 
 /// [`ExAllocatePoolWithQuotaTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithquotatag).

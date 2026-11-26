@@ -5,6 +5,7 @@ pub mod dpc;
 pub mod interrupt;
 pub mod ipi;
 pub mod irql;
+pub mod kinterrupt;
 pub mod kspin;
 pub mod mutex;
 pub mod object;
@@ -16,6 +17,7 @@ pub mod spinlock;
 pub mod thread;
 pub mod time;
 pub mod timer;
+pub mod timer2;
 pub mod unwind;
 pub mod wait;
 

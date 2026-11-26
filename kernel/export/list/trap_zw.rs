@@ -18,8 +18,6 @@ trap_list!(
     ZwMakeTemporaryObject,
     ZwNotifyChangeKey,
     ZwOpenFile,
-    ZwPowerInformation,
-    ZwQueryLicenseValue,
     ZwQuerySystemInformationEx,
     ZwQueryWnfStateData,
     ZwSetSystemInformation,

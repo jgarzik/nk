@@ -98,11 +98,14 @@ macro_rules! trap_list {
     ($($name:ident),* $(,)?) => {
         $(
             #[doc = concat!("`", stringify!($name), "`: not implemented; stops the system.")]
-            pub extern "C" fn $name() -> ! {
-                crate::kd::bugcheck(format_args!(concat!(
-                    stringify!($name),
-                    ": NK does not implement this routine"
-                )))
+            pub extern "C" fn $name(a: usize, b: usize, c: usize, d: usize) -> ! {
+                crate::kd::bugcheck(format_args!(
+                    concat!(
+                        stringify!($name),
+                        ": NK does not implement this routine (called with {:#x}, {:#x}, {:#x}, {:#x})"
+                    ),
+                    a, b, c, d
+                ))
             }
         )*
 
@@ -152,11 +155,18 @@ pub fn resolve_ordinal(module: &[u8], ordinal: u16) -> Option<u64> {
     resolve(module, name.as_bytes())
 }
 
-/// The API sets whose routines are the kernel's own: an import from
-/// any version of one (`ext-ms-win-ntos-ksr-l1-1-3.dll`) is an import
-/// from the kernel. Windows resolves an API-set name through a schema
-/// to the module that hosts the set; NK hosts these itself.
-const API_SETS: &[&str] = &["ext-ms-win-ntos-ksr-"];
+/// Whether `module` names an extension API set
+/// (`ext-ms-win-ntos-ksr-l1-1-3.dll`): a set of routines that a given
+/// Windows may have no module for. Windows finds the host of a set in
+/// its API-set schema; where there is none it leaves each import of the
+/// set bound to the routine the importing image carries for that case,
+/// which the linker put in the import's slot. NK hosts no extension
+/// set, so that is what its loader does with every one.
+pub fn is_extension_api_set(module: &[u8]) -> bool {
+    module
+        .get(..7)
+        .is_some_and(|start| start.eq_ignore_ascii_case(b"ext-ms-"))
+}
 
 /// Whether `module` is a name the kernel's own exports go by: an
 /// import from any other module is from a driver that exports.
@@ -164,11 +174,6 @@ pub fn is_kernel(module: &[u8]) -> bool {
     [NT, "hal.dll"]
         .iter()
         .any(|name| name.as_bytes().eq_ignore_ascii_case(module))
-        || API_SETS.iter().any(|set| {
-            module
-                .get(..set.len())
-                .is_some_and(|start| start.eq_ignore_ascii_case(set.as_bytes()))
-        })
 }
 
 /// [`MmGetSystemRoutineAddress`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemroutineaddress):

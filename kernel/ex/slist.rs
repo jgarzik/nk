@@ -86,6 +86,19 @@ pub unsafe extern "C" fn ExQueryDepthSList(header: *mut SLIST_HEADER) -> u16 {
     slist::depth(unsafe { load(header) })
 }
 
+/// `FirstEntrySList` (`wdm.h`): the entry the list would give next,
+/// without taking it; null if the list is empty.
+///
+/// # Safety
+/// `header` points to a live `SLIST_HEADER`.
+pub unsafe extern "C" fn FirstEntrySList(header: *mut SLIST_HEADER) -> *mut SLIST_ENTRY {
+    // SAFETY: per the contract.
+    match slist::first(unsafe { load(header) }) {
+        Some(first) => core::ptr::with_exposed_provenance_mut(first as usize),
+        None => core::ptr::null_mut(),
+    }
+}
+
 /// `ExpInterlockedPushEntrySList`, what
 /// [`ExInterlockedPushEntrySList`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exinterlockedpushentryslist)
 /// and `InterlockedPushEntrySList` compile to: put `entry` first.

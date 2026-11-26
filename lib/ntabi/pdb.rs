@@ -131,6 +131,57 @@ fn dpc_matches_the_kernel() {
 }
 
 #[test]
+fn interrupt_object_matches_the_kernel() {
+    use crate::interrupt::KINTERRUPT;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let interrupt = types.layout("_KINTERRUPT").expect("_KINTERRUPT");
+    let field = |name| offset(&interrupt, "_KINTERRUPT", name);
+    assert_eq!(size_of::<KINTERRUPT>(), interrupt.size as usize);
+    macro_rules! same {
+        ($($name:ident),*) => {
+            $(assert_eq!(offset_of!(KINTERRUPT, $name), field(stringify!($name)));)*
+        };
+    }
+    same!(
+        Type,
+        Size,
+        InterruptListEntry,
+        ServiceRoutine,
+        MessageServiceRoutine,
+        MessageIndex,
+        ServiceContext,
+        SpinLock,
+        TickCount,
+        ActualLock,
+        DispatchAddress,
+        Vector,
+        Irql,
+        SynchronizeIrql,
+        FloatingSave,
+        Connected,
+        Number,
+        ShareVector,
+        EmulateActiveBoth,
+        ActiveCount,
+        InternalState,
+        Mode,
+        Polarity,
+        ServiceCount,
+        DispatchCount,
+        PassiveEvent,
+        TrapFrame,
+        DisconnectData,
+        ServiceThread,
+        ConnectionData,
+        IntTrackEntry,
+        IsrDpcStats,
+        RedirectObject,
+        PhysicalDeviceObject
+    );
+}
+
+#[test]
 fn timer_matches_the_kernel() {
     use crate::ke::{DISPATCHER_HEADER, KTIMER, TIMER_INSERTED};
     use core::mem::{offset_of, size_of};
@@ -1457,4 +1508,83 @@ fn fcb_header_matches_the_kernel() {
     assert_eq!(bits("Reserved"), (0, 4));
     assert_eq!(bits("Version"), (4, 4));
     assert_eq!(with_fcb_header_version(0, 0xF), 0xF0);
+}
+
+#[test]
+fn hal_private_dispatch_table_matches_the_kernel() {
+    use crate::hal::{FIRST_SLOT, HAL_PRIVATE_DISPATCH_SLOTS};
+    let Some(types) = kernel_types() else { return };
+    let table = types
+        .layout("HAL_PRIVATE_DISPATCH")
+        .expect("HAL_PRIVATE_DISPATCH");
+    assert_eq!(
+        FIRST_SLOT + HAL_PRIVATE_DISPATCH_SLOTS.len() * 8,
+        table.size as usize
+    );
+    assert_eq!(offset(&table, "HAL_PRIVATE_DISPATCH", "Version"), 0);
+    for (i, name) in HAL_PRIVATE_DISPATCH_SLOTS.iter().enumerate() {
+        assert_eq!(
+            offset(&table, "HAL_PRIVATE_DISPATCH", name),
+            FIRST_SLOT + i * 8,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn cache_aware_rundown_matches_the_kernel() {
+    use crate::ex::EX_RUNDOWN_REF_CACHE_AWARE;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let ty = "_EX_RUNDOWN_REF_CACHE_AWARE";
+    let layout = types.layout(ty).expect(ty);
+    let field = |name| offset(&layout, ty, name);
+    assert_eq!(
+        size_of::<EX_RUNDOWN_REF_CACHE_AWARE>(),
+        layout.size as usize
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefs),
+        field("RunRefs")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, PoolToFree),
+        field("PoolToFree")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, RunRefSize),
+        field("RunRefSize")
+    );
+    assert_eq!(
+        offset_of!(EX_RUNDOWN_REF_CACHE_AWARE, Number),
+        field("Number")
+    );
+}
+
+#[test]
+fn timer2_matches_the_kernel() {
+    use crate::ke::KTIMER2;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let layout = types.layout("_KTIMER2").expect("_KTIMER2");
+    let field = |name| offset(&layout, "_KTIMER2", name);
+    assert_eq!(size_of::<KTIMER2>(), layout.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(KTIMER2, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        Header,
+        RbNodes,
+        DueTime,
+        Period,
+        Callback,
+        CallbackContext,
+        DisableCallback,
+        DisableContext,
+        AbsoluteSystemTime,
+        TypeFlags,
+        CollectionIndex
+    );
 }

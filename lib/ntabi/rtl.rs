@@ -25,6 +25,65 @@ pub struct GUID {
     pub Data4: [u8; 8],
 }
 
+/// [`TIME_FIELDS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_time_fields).
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TIME_FIELDS {
+    pub Year: i16,
+    pub Month: i16,
+    pub Day: i16,
+    pub Hour: i16,
+    pub Minute: i16,
+    pub Second: i16,
+    pub Milliseconds: i16,
+    pub Weekday: i16,
+}
+
+/// [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap):
+/// the header of a bitmap. The buffer is the caller's, a whole number
+/// of `ULONG`s.
+#[repr(C)]
+pub struct RTL_BITMAP {
+    /// In bits.
+    pub SizeOfBitMap: u32,
+    pub Buffer: *mut u32,
+}
+
+/// `RTL_RANGE_LIST` (`ntddk.h` of the Windows 2000 DDK): the header of
+/// a range list. The entries its list holds are the kernel's.
+#[repr(C)]
+pub struct RTL_RANGE_LIST {
+    pub ListHead: crate::ke::LIST_ENTRY,
+    pub Flags: u32,
+    /// How many ranges the list holds.
+    pub Count: u32,
+    /// Changes whenever the list does; an iterator is good for one
+    /// value of it.
+    pub Stamp: u32,
+}
+
+/// `RTL_RANGE`: one range of a list, as the iterator hands it out.
+#[repr(C)]
+pub struct RTL_RANGE {
+    pub Start: u64,
+    /// The last address of the range.
+    pub End: u64,
+    pub UserData: *mut core::ffi::c_void,
+    pub Owner: *mut core::ffi::c_void,
+    pub Attributes: u8,
+    /// `RTL_RANGE_SHARED`, `RTL_RANGE_CONFLICT`.
+    pub Flags: u8,
+}
+
+/// `RTL_RANGE_LIST_ITERATOR`: a place in a range list.
+#[repr(C)]
+pub struct RTL_RANGE_LIST_ITERATOR {
+    pub RangeListHead: *mut crate::ke::LIST_ENTRY,
+    pub MergedHead: *mut crate::ke::LIST_ENTRY,
+    pub Current: *mut core::ffi::c_void,
+    pub Stamp: u32,
+}
+
 /// [`RTL_SPLAY_LINKS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_rtl_splay_links):
 /// a node's place in a binary tree. A root is its own parent.
 #[repr(C)]
@@ -60,6 +119,24 @@ pub struct UNICODE_PREFIX_TABLE {
 }
 
 const _: () = {
+    assert!(size_of::<TIME_FIELDS>() == 0x10);
+    assert!(offset_of!(TIME_FIELDS, Weekday) == 0xE);
+    assert!(size_of::<RTL_RANGE_LIST>() == 0x20);
+    assert!(offset_of!(RTL_RANGE_LIST, Flags) == 0x10);
+    assert!(offset_of!(RTL_RANGE_LIST, Count) == 0x14);
+    assert!(offset_of!(RTL_RANGE_LIST, Stamp) == 0x18);
+    assert!(size_of::<RTL_RANGE>() == 0x28);
+    assert!(offset_of!(RTL_RANGE, End) == 8);
+    assert!(offset_of!(RTL_RANGE, UserData) == 0x10);
+    assert!(offset_of!(RTL_RANGE, Owner) == 0x18);
+    assert!(offset_of!(RTL_RANGE, Attributes) == 0x20);
+    assert!(offset_of!(RTL_RANGE, Flags) == 0x21);
+    assert!(size_of::<RTL_RANGE_LIST_ITERATOR>() == 0x20);
+    assert!(offset_of!(RTL_RANGE_LIST_ITERATOR, MergedHead) == 8);
+    assert!(offset_of!(RTL_RANGE_LIST_ITERATOR, Current) == 0x10);
+    assert!(offset_of!(RTL_RANGE_LIST_ITERATOR, Stamp) == 0x18);
+    assert!(size_of::<RTL_BITMAP>() == 0x10);
+    assert!(offset_of!(RTL_BITMAP, Buffer) == 8);
     assert!(size_of::<RTL_SPLAY_LINKS>() == 0x18);
     assert!(offset_of!(RTL_SPLAY_LINKS, LeftChild) == 8);
     assert!(offset_of!(RTL_SPLAY_LINKS, RightChild) == 0x10);

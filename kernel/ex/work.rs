@@ -193,6 +193,23 @@ pub unsafe extern "C" fn ExQueueWorkItem(item: *mut WORK_QUEUE_ITEM, queue_type:
     unsafe { wait::KeReleaseSemaphore(queue.semaphore(), 0, 1, 0) };
 }
 
+/// `ExTryQueueWorkItem` (exported, not documented): `ExQueueWorkItem`
+/// that says whether the item was queued. `TRUE` always: an item NK is
+/// handed is on its queue when this returns.
+///
+/// INFERRED: that Windows returns `FALSE` only when it cannot hand the
+/// item to a worker at that moment. Read from the kernel NK follows, an
+/// item already queued or a queue that does not exist stops the system
+/// here as in `ExQueueWorkItem`.
+///
+/// # Safety
+/// As [`ExQueueWorkItem`].
+pub unsafe extern "C" fn ExTryQueueWorkItem(item: *mut WORK_QUEUE_ITEM, queue_type: u32) -> u8 {
+    // SAFETY: per the contract.
+    unsafe { ExQueueWorkItem(item, queue_type) };
+    1
+}
+
 /// What an I/O work item's routine looks like to a driver.
 type IoWorkRoutine = unsafe extern "C" fn(*mut DEVICE_OBJECT, *mut c_void);
 
@@ -493,7 +510,10 @@ pub fn runs_test() -> Result<u64, &'static str> {
         return Err("a queued work item's routine did not run");
     }
     // Used once, an item is free to be queued again.
-    queue(1, 1);
+    // SAFETY: a prepared static item that is on no queue.
+    if unsafe { ExTryQueueWorkItem(WORK[1].ptr(), 1) } != 1 {
+        return Err("ExTryQueueWorkItem did not say it queued the item");
+    }
     if !finished(4) {
         return Err("a work item could not be queued a second time");
     }

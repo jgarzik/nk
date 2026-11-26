@@ -8,12 +8,15 @@ mod arch;
 mod cm;
 mod etw;
 mod ex;
+mod hal;
 mod io;
+mod kd;
 mod ke;
 mod ldr;
 mod mm;
 mod ob;
 mod own;
+mod po;
 mod ps;
 mod rtl;
 mod se;
@@ -24,13 +27,13 @@ mod trap_hal;
 mod trap_io;
 mod trap_kd;
 mod trap_ke;
-mod trap_ksr;
 mod trap_mm;
 mod trap_other;
 mod trap_po;
 mod trap_rtl;
 mod trap_whea;
 mod trap_zw;
+mod whea;
 
 /// Every list.
 pub(super) static ALL: &[&[Export]] = &[
@@ -38,11 +41,14 @@ pub(super) static ALL: &[&[Export]] = &[
     cm::EXPORTS,
     etw::EXPORTS,
     ex::EXPORTS,
+    hal::EXPORTS,
     io::EXPORTS,
+    kd::EXPORTS,
     ke::EXPORTS,
     ldr::EXPORTS,
     mm::EXPORTS,
     ob::EXPORTS,
+    po::EXPORTS,
     own::EXPORTS,
     ps::EXPORTS,
     rtl::EXPORTS,
@@ -54,11 +60,11 @@ pub(super) static ALL: &[&[Export]] = &[
     trap_io::EXPORTS,
     trap_kd::EXPORTS,
     trap_ke::EXPORTS,
-    trap_ksr::EXPORTS,
     trap_mm::EXPORTS,
     trap_other::EXPORTS,
     trap_po::EXPORTS,
     trap_rtl::EXPORTS,
     trap_whea::EXPORTS,
     trap_zw::EXPORTS,
+    whea::EXPORTS,
 ];

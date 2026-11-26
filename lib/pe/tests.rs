@@ -156,10 +156,14 @@ fn mapped(file: &[u8]) -> (Headers, Vec<u8>) {
     (pe.headers(), image)
 }
 
-fn kernel_resolver(dll: &[u8], sym: Symbol<'_>) -> Option<u64> {
+fn kernel_resolver(dll: &[u8], sym: Symbol<'_>) -> Option<Bind> {
     match (dll, sym) {
-        (b"ntoskrnl.exe", Symbol::Name(b"IoCreateDevice")) => Some(0xFFFF_F800_0000_1000),
-        (b"ntoskrnl.exe", Symbol::Name(b"IofCompleteRequest")) => Some(0xFFFF_F800_0000_2000),
+        (b"ntoskrnl.exe", Symbol::Name(b"IoCreateDevice")) => {
+            Some(Bind::Address(0xFFFF_F800_0000_1000))
+        }
+        (b"ntoskrnl.exe", Symbol::Name(b"IofCompleteRequest")) => {
+            Some(Bind::Address(0xFFFF_F800_0000_2000))
+        }
         _ => None,
     }
 }
@@ -355,12 +359,42 @@ fn bind_fills_iat() {
         }
         .build();
         let (h, mut image) = mapped(&file);
-        bind_imports(&mut image, &h, kernel_resolver).unwrap();
+        bind_imports(&mut image, &h, h.image_base, kernel_resolver).unwrap();
         let iat = u32_at(&image, IMPORTS as usize + 16).unwrap() as usize;
         assert_eq!(u64_at(&image, iat), Ok(0xFFFF_F800_0000_1000));
         assert_eq!(u64_at(&image, iat + 8), Ok(0xFFFF_F800_0000_2000));
         assert_eq!(u64_at(&image, iat + 16), Ok(0));
     }
+}
+
+/// An import the image has a routine of its own for keeps it: the slot
+/// is left alone if it holds an address inside the image, and the
+/// import is unresolved if it holds only the import's name.
+#[test]
+fn an_import_bound_to_the_images_own_routine_keeps_what_the_slot_holds() {
+    let (h, mut image) = mapped(&Builder::new().build());
+    let iat = u32_at(&image, IMPORTS as usize + 16).unwrap() as usize;
+    let own = |_: &[u8], _: Symbol<'_>| Some(Bind::Own);
+    // As linked, the slots hold the names: there is no routine to keep.
+    let before = image.clone();
+    assert!(matches!(
+        bind_imports(&mut image, &h, h.image_base, own),
+        Err(PeError::Unresolved { .. })
+    ));
+    assert_eq!(image, before);
+    // With the image's own routines in them, they stay.
+    let stub = h.image_base + 0x1000;
+    put_u64(&mut image, iat, stub).unwrap();
+    put_u64(&mut image, iat + 8, stub + 0x10).unwrap();
+    bind_imports(&mut image, &h, h.image_base, own).unwrap();
+    assert_eq!(u64_at(&image, iat), Ok(stub));
+    assert_eq!(u64_at(&image, iat + 8), Ok(stub + 0x10));
+    // An address outside the image is not the image's routine.
+    put_u64(&mut image, iat, h.image_base + u64::from(h.size_of_image)).unwrap();
+    assert!(matches!(
+        bind_imports(&mut image, &h, h.image_base, own),
+        Err(PeError::Unresolved { .. })
+    ));
 }
 
 #[test]
@@ -370,7 +404,10 @@ fn an_image_with_no_import_directory_binds_and_lists_nothing() {
     let before = image.clone();
     // The descriptors are still in the image; without the directory
     // nothing leads to them, and nobody is asked to resolve anything.
-    bind_imports(&mut image, &h, |_, _| panic!("asked to resolve an import")).unwrap();
+    bind_imports(&mut image, &h, h.image_base, |_, _| {
+        panic!("asked to resolve an import")
+    })
+    .unwrap();
     assert_eq!(image, before);
     for_each_import(&image, &h, |_, _| panic!("an import was listed")).unwrap();
 }
@@ -387,7 +424,7 @@ fn unresolved_import_is_named_and_nothing_is_bound() {
         dll_rva,
         name_rva,
         ordinal,
-    }) = bind_imports(&mut image, &h, kernel_resolver)
+    }) = bind_imports(&mut image, &h, h.image_base, kernel_resolver)
     else {
         panic!("bind must fail");
     };
@@ -409,7 +446,7 @@ fn unresolved_ordinal_is_reported() {
         }
         .build(),
     );
-    let err = bind_imports(&mut image, &h, kernel_resolver).unwrap_err();
+    let err = bind_imports(&mut image, &h, h.image_base, kernel_resolver).unwrap_err();
     assert!(matches!(
         err,
         PeError::Unresolved {
@@ -465,7 +502,7 @@ fn garbage_is_rejected_not_panicked_on() {
             if pe.map_into(&mut image).is_ok() {
                 let h = pe.headers();
                 let _ = relocate(&mut image, &h, BASE + 0x1000);
-                let _ = bind_imports(&mut image, &h, kernel_resolver);
+                let _ = bind_imports(&mut image, &h, h.image_base, kernel_resolver);
                 let _ = security_cookie_rva(&image, &h, BASE);
             }
         }

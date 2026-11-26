@@ -1,1 +1,8 @@
 hal.cpus ok
+hal.dispatch-tables ok
+hal.pci.bridge ok
+hal.pci.ahci ok
+hal.pci.write ok
+hal.pci.contract ok
+hal.pci.ports ok
+hal.interrupt.translate ok

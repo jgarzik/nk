@@ -13,7 +13,13 @@ rtl.owner-group ok
 rtl.prefix-table ok
 rtl.wildcards ok
 rtl.legal-characters ok
+rtl.feature-configuration ok
 rtl.version ok
 rtl.printf ok
 rtl.strings ok
 rtl.module-information ok
+rtl.bitmap ok
+rtl.counted ok
+rtl.crt-strings ok
+rtl.resource ok
+rtl.range-list ok

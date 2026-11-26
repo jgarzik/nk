@@ -22,12 +22,14 @@ mod ke;
 mod ldr;
 mod mm;
 mod ob;
+mod po;
 mod ps;
 mod rt;
 mod rtl;
 mod se;
 mod selftest;
 mod test;
+mod whea;
 
 use nk_bootinfo::BootInfo;
 
@@ -80,6 +82,7 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = hal::platform::init(info) {
         test::abort("hal.platform", format_args!("{why}"));
     }
+    hal::pci::init();
     if let Err(why) = arch::interrupts_init() {
         test::abort("hal.interrupts", format_args!("{why}"));
     }

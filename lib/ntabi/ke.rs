@@ -146,8 +146,38 @@ pub struct KTIMER {
     pub Period: u32,
 }
 
+/// `KTIMER2` (`wdm.h`): the storage a driver sets aside for a timer of
+/// the `KeInitializeTimer2` family. The fields are Windows' and no
+/// driver reads them; how NK uses the bytes is `ke::timer2`'s.
+#[repr(C)]
+pub struct KTIMER2 {
+    pub Header: DISPATCHER_HEADER,
+    /// A union with a `LIST_ENTRY`.
+    pub RbNodes: [[usize; 3]; 2],
+    pub DueTime: [i64; 2],
+    pub Period: i64,
+    pub Callback: *mut c_void,
+    pub CallbackContext: *mut c_void,
+    pub DisableCallback: *mut c_void,
+    pub DisableContext: *mut c_void,
+    pub AbsoluteSystemTime: u8,
+    pub TypeFlags: u8,
+    pub CollectionIndex: [u8; 2],
+}
+
 const _: () = {
     use core::mem::{offset_of, size_of};
+    assert!(size_of::<KTIMER2>() == 0x88);
+    assert!(offset_of!(KTIMER2, RbNodes) == 0x18);
+    assert!(offset_of!(KTIMER2, DueTime) == 0x48);
+    assert!(offset_of!(KTIMER2, Period) == 0x58);
+    assert!(offset_of!(KTIMER2, Callback) == 0x60);
+    assert!(offset_of!(KTIMER2, CallbackContext) == 0x68);
+    assert!(offset_of!(KTIMER2, DisableCallback) == 0x70);
+    assert!(offset_of!(KTIMER2, DisableContext) == 0x78);
+    assert!(offset_of!(KTIMER2, AbsoluteSystemTime) == 0x80);
+    assert!(offset_of!(KTIMER2, TypeFlags) == 0x81);
+    assert!(offset_of!(KTIMER2, CollectionIndex) == 0x82);
     assert!(size_of::<LIST_ENTRY>() == 0x10);
     assert!(size_of::<DISPATCHER_HEADER>() == 0x18);
     assert!(offset_of!(DISPATCHER_HEADER, SignalState) == 0x04);

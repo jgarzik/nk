@@ -4,6 +4,8 @@ mod apic;
 mod atomic;
 mod clock;
 mod cpu;
+mod ioapic;
+mod pci;
 pub mod platform;
 pub mod seh;
 pub mod seh_test;
@@ -14,6 +16,11 @@ pub mod unwind;
 mod variadic;
 
 pub use atomic::swap_pair;
+pub use ioapic::{
+    InterruptVectors, TestSource as InterruptTestSource, interrupt_message, isa_line, line_enable,
+    line_route,
+};
+pub use pci::{PCI_PORTS, PciPorts};
 
 pub use apic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,

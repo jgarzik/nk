@@ -10,22 +10,28 @@
 #![allow(non_snake_case)]
 
 /// Define, for each name, the routine a driver's import of that name is
-/// bound to: it takes whatever the driver passed, looks at none of it,
-/// and stops the system with
-/// `BUGCHECK: <name>: NK does not implement this routine`.
+/// bound to: it stops the system with
+/// `BUGCHECK: <name>: NK does not implement this routine`, and says what
+/// the first four argument registers held, which tells whoever
+/// implements the routine what was asked of it.
 ///
-/// The routine declares no parameters. Both calling conventions NK
-/// serves leave the arguments to the caller to pass and to clean up,
-/// so a routine that reads none is callable with any.
+/// The routine declares four register parameters whatever the real
+/// routine takes. Both calling conventions NK serves leave the
+/// arguments to the caller to pass and to clean up, so reading
+/// registers the caller did not set is harmless: the values are
+/// printed, never used.
 macro_rules! traps {
     ($($name:ident),* $(,)?) => {
         $(
             #[doc = concat!("`", stringify!($name), "`: not implemented; stops the system.")]
-            pub extern "C" fn $name() -> ! {
-                crate::kd::bugcheck(format_args!(concat!(
-                    stringify!($name),
-                    ": NK does not implement this routine"
-                )))
+            pub extern "C" fn $name(a: usize, b: usize, c: usize, d: usize) -> ! {
+                crate::kd::bugcheck(format_args!(
+                    concat!(
+                        stringify!($name),
+                        ": NK does not implement this routine (called with {:#x}, {:#x}, {:#x}, {:#x})"
+                    ),
+                    a, b, c, d
+                ))
             }
         )*
     };

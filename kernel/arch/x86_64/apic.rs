@@ -109,24 +109,6 @@ fn write(reg: u32, value: u32) {
     }
 }
 
-/// Mask every input of an I/O APIC. Firmware may have left some routed
-/// (its timer, for one); nothing here handles device interrupts yet.
-fn quiet_io_apic(address: u64) {
-    let base = mm::phys_to_virt(address);
-    // SAFETY: `base` is the I/O APIC's register page in the direct map:
-    // an index register at 0 and a data register at 0x10.
-    unsafe {
-        let select = |index: u32| base.cast::<u32>().write_volatile(index);
-        let data = base.add(0x10).cast::<u32>();
-        select(1);
-        let inputs = (data.read_volatile() >> 16 & 0xFF) + 1;
-        for input in 0..inputs {
-            select(0x10 + input * 2);
-            data.write_volatile(data.read_volatile() | LVT_MASKED);
-        }
-    }
-}
-
 /// Bring up this processor's local APIC with every source masked except
 /// the ones NK asks for, and silence the legacy controllers.
 pub fn init() -> Result<(), &'static str> {
@@ -135,9 +117,7 @@ pub fn init() -> Result<(), &'static str> {
     // arrive on vectors that mean something else.
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
-    for io in platform.controllers.io_apics() {
-        quiet_io_apic(io.address);
-    }
+    super::ioapic::init();
 
     MMIO.store(
         mm::phys_to_virt(platform.controllers.local_apic) as u64,

@@ -5,6 +5,10 @@ use crate::io;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, io::mdl::IoAllocateMdl),
+    export!(Implemented, io::interrupt::IoConnectInterruptEx),
+    export!(Implemented, io::interrupt::IoDisconnectInterruptEx),
+    export!(Implemented, io::interrupt::IoReportInterruptActive),
+    export!(Implemented, io::interrupt::IoReportInterruptInactive),
     export!(Implemented, io::device::IoCreateDevice),
     export!(Implemented, io::symlink::IoCreateSymbolicLink),
     export!(Implemented, io::device::IoDeleteDevice),
@@ -27,7 +31,12 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::irp::PoCallDriver),
     export!(Implemented, io::irp::PoStartNextPowerIrp),
     export!(Partial, io::mdl::MmMapLockedPagesSpecifyCache),
+    export!(Partial, io::mdl::MmAllocatePagesForMdlEx),
+    export!(Implemented, io::mdl::MmBuildMdlForNonPagedPool),
+    export!(Implemented, io::mdl::MmFreePagesFromMdl),
+    export!(Implemented, io::mdl::MmProtectMdlSystemAddress),
     export!(Implemented, io::mdl::MmUnlockPages),
+    export!(Implemented, io::mdl::MmUnmapLockedPages),
     export!(Implemented, io::fsrtl::FsRtlTeardownPerStreamContexts),
     export!(Implemented, io::csq::IoCsqInitialize),
     export!(Implemented, io::csq::IoCsqInsertIrp),

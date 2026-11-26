@@ -30,9 +30,15 @@ pub enum Rank {
     /// Devices' reference counts, delete-pending marks and attachment
     /// chains (`io::device`).
     IoDatabase = 25,
+    /// The errata manager's database (`ex::em`).
+    Errata = 26,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
+    /// The sources of hardware errors (`whea`).
+    Whea = 28,
+    /// Which interrupts each device has been given (`io::interrupt`).
+    DeviceInterrupts = 29,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).
@@ -49,10 +55,15 @@ pub enum Rank {
     Ipi = 200,
     /// A queue of work items (`ex::work`).
     WorkQueue = 210,
+    /// Connecting and disconnecting interrupt objects (`ke::kinterrupt`).
+    InterruptConnect = 212,
     /// A queue of threads waiting for push locks (`ex::pushlock`).
     PushLock = 215,
     /// What a boot's UUIDs share (`ex::uuid`).
     Uuid = 217,
+    /// Which vector each device interrupt has, and the interrupt
+    /// controllers' routing registers (`hal::interrupt`).
+    InterruptRouting = 218,
     /// A processor's ready queues (`ke::thread`).
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).
@@ -66,6 +77,9 @@ pub enum Rank {
     /// An object's own lock, a word of its header (`ob::security`):
     /// innermost of the locks held at `DISPATCH_LEVEL`.
     ObjectHeader = 235,
+    /// PCI configuration space (`hal::pci`): read and written from any
+    /// context.
+    PciConfig = 238,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
     /// The bugcheck callback records drivers registered (`ke::bugcheck`):
@@ -82,9 +96,11 @@ impl Rank {
     const fn level(self) -> u8 {
         match self {
             // Usable from any context, an interrupt included.
-            Rank::Console | Rank::Modules | Rank::BugCheckCallbacks | Rank::DpcQueue => {
-                irql::HIGH_LEVEL
-            }
+            Rank::Console
+            | Rank::Modules
+            | Rank::BugCheckCallbacks
+            | Rank::DpcQueue
+            | Rank::PciConfig => irql::HIGH_LEVEL,
             _ => irql::DISPATCH_LEVEL,
         }
     }

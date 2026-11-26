@@ -5,20 +5,28 @@
 //! not there (its fixture was not downloaded, or does not exist for this
 //! architecture) makes its tests SKIP.
 
+mod absent;
 mod base;
+mod bitmap;
 mod cancel;
 mod clock;
 mod cm;
+mod counted;
 mod csq;
 mod dpc;
 mod driver_api;
+mod em;
 mod etw;
 mod ex;
 pub mod except;
+mod exlock;
 mod fsd;
+mod hal;
+mod interrupt;
 mod iosupport;
 mod library;
 mod loader;
+mod mmio;
 mod mslib;
 mod mutex;
 mod neg;
@@ -26,9 +34,13 @@ mod null;
 mod ob;
 mod open;
 mod oracle;
+mod pci;
 mod pend;
+mod po;
+mod range;
 mod request;
 mod requestor;
+mod resource;
 mod review;
 mod rtl;
 mod se;
@@ -39,9 +51,12 @@ mod sioctl;
 mod smp;
 mod stack;
 mod startio;
+mod storage;
 mod thread;
 mod timer;
+mod timer2;
 mod wait;
+mod whea;
 mod work;
 
 use crate::io::file::{self, OpenRequest};
@@ -132,24 +147,38 @@ impl Drop for UserMemory {
 /// among them. A file lists its own groups.
 pub static GROUPS: &[&[&Group]] = &[
     base::GROUPS,
+    pci::GROUPS,
+    mmio::GROUPS,
+    interrupt::GROUPS,
     clock::GROUPS,
     smp::GROUPS,
     dpc::GROUPS,
     timer::GROUPS,
+    timer2::GROUPS,
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,
     wait::GROUPS,
     ob::GROUPS,
     rtl::GROUPS,
+    bitmap::GROUPS,
+    counted::GROUPS,
+    range::GROUPS,
+    resource::GROUPS,
     se::GROUPS,
     setoken::GROUPS,
     cm::GROUPS,
+    hal::GROUPS,
+    absent::GROUPS,
+    po::GROUPS,
+    em::GROUPS,
+    whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,
     mutex::GROUPS,
     work::GROUPS,
     ex::GROUPS,
+    exlock::GROUPS,
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,
@@ -169,6 +198,7 @@ pub static GROUPS: &[&[&Group]] = &[
     cancel::GROUPS,
     oracle::GROUPS,
     neg::GROUPS,
+    storage::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
@@ -204,9 +234,11 @@ pub fn resources() -> Resources {
     let (table_blocks, table_bytes) = crate::ob::handle::storage();
     // The registry keeps what is written to it.
     let (registry_blocks, registry_bytes) = crate::cm::storage();
+    // Hardware error sources keep their table and what they removed.
+    let (whea_blocks, whea_bytes) = crate::whea::storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes,
+        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks,
+        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),
