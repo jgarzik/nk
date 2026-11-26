@@ -157,6 +157,49 @@ nk_seh_finally_end:
     .text
     .seh_endproc
 
+    .globl nk_seh_local
+// Two `__try`/`__finally`, one inside the other, and a `goto` out of
+// the inner one to a place still inside the outer: `_local_unwind` to
+// this function's own frame, which compiled code names by the stack
+// pointer it was entered with. Only the inner `__finally` is left.
+nk_seh_local:
+    .seh_proc nk_seh_local
+    .seh_handler {c_handler}, @unwind, @except
+    stp x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    mov x29, sp
+    .seh_set_fp
+    .seh_endprologue
+nk_seh_local_outer:
+    nop
+nk_seh_local_inner:
+    add x0, sp, #16
+    adr x1, nk_seh_local_target
+    bl {local_unwind}
+    nop
+nk_seh_local_inner_end:
+    nop
+nk_seh_local_target:
+    nop
+nk_seh_local_outer_end:
+    .seh_startepilogue
+    ldp x29, x30, [sp], #16
+    .seh_save_fplr_x 16
+    .seh_endepilogue
+    ret
+    .seh_handlerdata
+    .long 2
+    .rva nk_seh_local_inner
+    .rva nk_seh_local_inner_end
+    .rva {finally}
+    .long 0
+    .rva nk_seh_local_outer
+    .rva nk_seh_local_outer_end
+    .rva {finally}
+    .long 0
+    .text
+    .seh_endproc
+
     .globl nk_seh_edge
 // A `__try` whose guarded range ends just before the call to the body:
 // x0, with argument x1. On arm64 a frame is looked up by its call
@@ -340,6 +383,7 @@ nk_seh_no_unwind:
     c_handler = sym crate::ke::seh::__C_specific_handler,
     filter = sym crate::selftest::except::filter,
     finally = sym crate::selftest::except::finally,
+    local_unwind = sym crate::ke::seh::_local_unwind,
     lost_low = const REGISTERS_LOST & 0xFFFF,
     lost_high = const REGISTERS_LOST >> 16,
 );
@@ -359,6 +403,7 @@ pub type Body = unsafe extern "C" fn(usize);
 unsafe extern "C" {
     pub fn nk_seh_try(body: Body, argument: usize, seed: usize) -> u64;
     pub fn nk_seh_finally(body: Body, argument: usize);
+    pub fn nk_seh_local();
     pub fn nk_seh_edge(body: Body, argument: usize);
     pub fn nk_seh_clobber(body: Body, argument: usize);
     pub fn nk_seh_no_unwind(body: Body, argument: usize);

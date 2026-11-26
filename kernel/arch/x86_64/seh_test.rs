@@ -139,6 +139,43 @@ nk_seh_finally_end:
     .text
     .seh_endproc
 
+    .globl nk_seh_local
+// Two `__try`/`__finally`, one inside the other, and a `goto` out of
+// the inner one to a place still inside the outer: `_local_unwind` to
+// this function's own frame. Only the inner `__finally` is left.
+nk_seh_local:
+    .seh_proc nk_seh_local
+    .seh_handler {c_handler}, @unwind, @except
+    sub rsp, 0x28
+    .seh_stackalloc 0x28
+    .seh_endprologue
+nk_seh_local_outer:
+    nop
+nk_seh_local_inner:
+    mov rcx, rsp
+    lea rdx, [rip + nk_seh_local_target]
+    call {local_unwind}
+    nop
+nk_seh_local_inner_end:
+    nop
+nk_seh_local_target:
+    nop
+nk_seh_local_outer_end:
+    add rsp, 0x28
+    ret
+    .seh_handlerdata
+    .long 2
+    .rva nk_seh_local_inner
+    .rva nk_seh_local_inner_end
+    .rva {finally}
+    .long 0
+    .rva nk_seh_local_outer
+    .rva nk_seh_local_outer_end
+    .rva {finally}
+    .long 0
+    .text
+    .seh_endproc
+
     .globl nk_seh_edge
 // A `__try` whose guarded range ends with the call to the body: rcx,
 // with argument rdx. The call's return address is the first address
@@ -335,6 +372,7 @@ nk_seh_no_unwind:
     c_handler = sym crate::ke::seh::__C_specific_handler,
     filter = sym crate::selftest::except::filter,
     finally = sym crate::selftest::except::finally,
+    local_unwind = sym crate::ke::seh::_local_unwind,
     registers_lost = const REGISTERS_LOST,
 );
 
@@ -352,6 +390,7 @@ pub type Body = unsafe extern "C" fn(usize);
 unsafe extern "C" {
     pub fn nk_seh_try(body: Body, argument: usize, seed: usize) -> u64;
     pub fn nk_seh_finally(body: Body, argument: usize);
+    pub fn nk_seh_local();
     pub fn nk_seh_edge(body: Body, argument: usize);
     pub fn nk_seh_clobber(body: Body, argument: usize);
     pub fn nk_seh_no_unwind(body: Body, argument: usize);

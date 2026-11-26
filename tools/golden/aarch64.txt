@@ -54,6 +54,7 @@ seh.raise ok
 seh.decline ok
 seh.edge ok
 seh.finally ok
+seh.local-unwind ok
 seh.cross.region ok
 seh.cross.irql ok
 seh.cross.reference ok

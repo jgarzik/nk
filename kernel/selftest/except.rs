@@ -15,7 +15,8 @@
 use crate::arch;
 use crate::arch::seh_test::{
     Body, FAULTS, REGISTERS_LOST, SEED_SLOT, nk_seh_call, nk_seh_clobber, nk_seh_edge,
-    nk_seh_finally, nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try, nk_seh_write,
+    nk_seh_finally, nk_seh_local, nk_seh_no_unwind, nk_seh_read, nk_seh_resume, nk_seh_try,
+    nk_seh_write,
 };
 use crate::ke::dpc::{KeInitializeDpc, KeInsertQueueDpc};
 use crate::ke::seh::{self, Guard, system_service};
@@ -33,6 +34,7 @@ pub static GROUP: Group = Group {
         "seh.decline",
         "seh.edge",
         "seh.finally",
+        "seh.local-unwind",
         "seh.cross.region",
         "seh.cross.irql",
         "seh.cross.reference",
@@ -285,6 +287,20 @@ fn finally_test() -> Result<(), &'static str> {
     unsafe { nk_seh_finally(nothing, 0) };
     if !happened(&[FINALLY]) {
         return Err("a __finally left normally did not run once, as a normal termination");
+    }
+    Ok(())
+}
+
+/// A `goto` out of the inner of two nested `__try` blocks to a place
+/// still inside the outer one runs the inner `__finally` alone: the
+/// frame an unwind ends in is told so, and leaves only the scopes
+/// between where it was and where it is to go on.
+fn local_unwind_test() -> Result<(), &'static str> {
+    arm([DECLINE, DECLINE]);
+    // SAFETY: the routine takes no argument and returns.
+    unsafe { nk_seh_local() };
+    if !happened(&[FINALLY | 1]) {
+        return Err("not the inner __finally alone, as an abnormal termination");
     }
     Ok(())
 }
@@ -629,6 +645,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("seh.decline", decline_test);
     r.check("seh.edge", edge_test);
     r.check("seh.finally", finally_test);
+    r.check("seh.local-unwind", local_unwind_test);
     r.check("seh.cross.region", || cross_test(REGION));
     r.check("seh.cross.irql", || cross_test(IRQL));
     r.check("seh.cross.reference", || cross_test(REFERENCE));
