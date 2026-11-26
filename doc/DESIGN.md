@@ -966,7 +966,11 @@ read and written through raw pointers, the rules run on copies.
 `SeExports` points to the well-known SIDs and privilege numbers, laid out
 as in `ntifs.h`.
 
-Nothing is enforced: there is no user mode to check. Descriptors are
+NK itself enforces none: every open it makes is a kernel-mode open,
+which Windows does not check either, and there is no user mode. A
+driver that guards its own objects asks
+[`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck)
+and gets Windows' answer (below). Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
 replaces the named parts of a device's descriptor; for other objects it
 answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
@@ -1017,6 +1021,16 @@ file system reads it in line (`kernel/se/token.rs`):
   start in the state's own set. An open NK makes itself gets both
   structures, with the file type's mapping. `SeDeleteAccessState` frees
   what the state came to own in the pool and releases the subject.
+
+`SeAccessCheck` decides by the descriptor's DACL and owner and by the
+subject's token: the client token of the captured subject if it has
+one, else the primary token. The rules, their order and their statuses
+are those of the pinned kernel's code (`lib/se/access.rs` lists them);
+what that code does beyond them (mandatory integrity labels, restricted
+tokens, object-specific and conditional entries, AppContainers) is not
+done. Generic rights are the caller's to map, as on Windows. A right
+that a privilege granted comes back in a privilege set from the pool,
+which `SeFreePrivileges` frees. Nothing audits.
 
 ## Breakpoints and the debugger
 
