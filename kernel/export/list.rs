@@ -16,6 +16,7 @@ mod ldr;
 mod mm;
 mod ob;
 mod own;
+mod po;
 mod ps;
 mod rtl;
 mod se;
@@ -47,6 +48,7 @@ pub(super) static ALL: &[&[Export]] = &[
     ldr::EXPORTS,
     mm::EXPORTS,
     ob::EXPORTS,
+    po::EXPORTS,
     own::EXPORTS,
     ps::EXPORTS,
     rtl::EXPORTS,

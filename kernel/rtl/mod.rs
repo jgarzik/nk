@@ -3,6 +3,7 @@
 #![allow(non_snake_case)]
 
 pub mod crt;
+pub mod feature;
 pub mod name;
 pub mod prefix;
 pub mod print;

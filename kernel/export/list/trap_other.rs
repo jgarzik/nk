@@ -19,7 +19,6 @@ trap_list!(
     HeadlessDispatch,
     HviGetHypervisorFeatures,
     HviIsAnyHypervisorPresent,
-    KseRegisterShim,
     ObReferenceObjectByPointer,
     VfFailDeviceNode,
     VfFailSystemBIOS,

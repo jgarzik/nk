@@ -98,11 +98,14 @@ macro_rules! trap_list {
     ($($name:ident),* $(,)?) => {
         $(
             #[doc = concat!("`", stringify!($name), "`: not implemented; stops the system.")]
-            pub extern "C" fn $name() -> ! {
-                crate::kd::bugcheck(format_args!(concat!(
-                    stringify!($name),
-                    ": NK does not implement this routine"
-                )))
+            pub extern "C" fn $name(a: usize, b: usize, c: usize, d: usize) -> ! {
+                crate::kd::bugcheck(format_args!(
+                    concat!(
+                        stringify!($name),
+                        ": NK does not implement this routine (called with {:#x}, {:#x}, {:#x}, {:#x})"
+                    ),
+                    a, b, c, d
+                ))
             }
         )*
 

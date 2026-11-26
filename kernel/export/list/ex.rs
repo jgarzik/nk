@@ -52,4 +52,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         "ZwQuerySystemInformation",
         ex::sysinfo::NtQuerySystemInformation
     ),
+    export!(Implemented, ex::license::ZwQueryLicenseValue),
+    export!(Implemented, ex::shim::KseRegisterShim),
 ];

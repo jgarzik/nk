@@ -1960,6 +1960,17 @@ does not implement this routine`. One macro makes every such routine,
 so none can return. The ledger lists them in the state `traps`, apart
 from `implemented`.
 
+**Services NK does not have.** Where Windows' own routine has an
+answer for a service that is absent, off or empty, NK gives that
+answer, found in the pinned kernel: no feature configuration
+(`kernel/rtl/feature.rs`: every feature unconfigured, change
+notifications registered and never made), no product policy
+(`kernel/ex/license.rs`: every licence value unknown, each name asked
+for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
+when Windows' engine is not running). A routine with many sub-functions
+answers those a binary reaches and stops the system naming any other
+(`kernel/po/mod.rs`, `ZwPowerInformation`).
+
 | Territory | Imported by | Why |
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |

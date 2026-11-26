@@ -5,6 +5,7 @@
 //! not there (its fixture was not downloaded, or does not exist for this
 //! architecture) makes its tests SKIP.
 
+mod absent;
 mod base;
 mod cancel;
 mod clock;
@@ -27,6 +28,7 @@ mod ob;
 mod open;
 mod oracle;
 mod pend;
+mod po;
 mod requestor;
 mod review;
 mod rtl;
@@ -144,6 +146,8 @@ pub static GROUPS: &[&[&Group]] = &[
     setoken::GROUPS,
     cm::GROUPS,
     hal::GROUPS,
+    absent::GROUPS,
+    po::GROUPS,
     csq::GROUPS,
     review::GROUPS,
     mutex::GROUPS,
