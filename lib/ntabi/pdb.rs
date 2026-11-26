@@ -1148,6 +1148,34 @@ fn device_object_extension_matches_the_kernel() {
 }
 
 #[test]
+fn driver_extension_matches_the_kernel() {
+    use crate::io::{DRIVER_EXTENSION, IO_CLIENT_EXTENSION};
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DRIVER_EXTENSION,
+        "_DRIVER_EXTENSION",
+        [
+            DriverObject,
+            AddDevice,
+            Count,
+            ServiceKeyName,
+            ClientDriverExtension,
+            FsFilterCallbacks,
+            KseCallbacks,
+            DvCallbacks,
+            VerifierContext,
+        ]
+    );
+    same_layout!(
+        types,
+        IO_CLIENT_EXTENSION,
+        "_IO_CLIENT_EXTENSION",
+        [NextExtension, ClientIdentificationAddress]
+    );
+}
+
+#[test]
 fn fast_io_dispatch_matches_the_kernel() {
     use crate::io::{FAST_IO_DETACH_DEVICE, FAST_IO_DISPATCH, FAST_IO_ROUTINES};
     use core::mem::{offset_of, size_of};

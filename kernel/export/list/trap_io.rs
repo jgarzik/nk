@@ -7,7 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    IoAllocateDriverObjectExtension,
     IoAllocateErrorLogEntry,
     IoAssignResources,
     IoClearActivityIdThread,
@@ -23,7 +22,6 @@ trap_list!(
     IoGetDeviceProperty,
     IoGetDevicePropertyData,
     IoGetDmaAdapter,
-    IoGetDriverObjectExtension,
     IoGetGenericIrpExtension,
     IoGetIoAttributionHandle,
     IoGetIoPriorityHint,

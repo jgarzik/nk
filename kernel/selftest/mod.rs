@@ -16,6 +16,7 @@ mod etw;
 mod ex;
 pub mod except;
 mod fsd;
+mod iosupport;
 mod library;
 mod loader;
 mod mslib;
@@ -153,6 +154,7 @@ pub static GROUPS: &[&[&Group]] = &[
     requestor::GROUPS,
     stack::GROUPS,
     request::GROUPS,
+    iosupport::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

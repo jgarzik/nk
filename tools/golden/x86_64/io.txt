@@ -44,3 +44,4 @@ io.request.synchronous-call ok
 io.request.cancel-built ok
 io.request.master-status ok
 io.mdl.partial ok
+io.driver-extension ok

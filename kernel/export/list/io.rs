@@ -44,4 +44,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::build::IoSetMasterIrpStatus),
     export!(Implemented, io::build::IoSynchronousCallDriver),
     export!(Implemented, io::mdl::IoBuildPartialMdl),
+    export!(Implemented, io::driver::IoAllocateDriverObjectExtension),
+    export!(Implemented, io::driver::IoGetDriverObjectExtension),
 ];

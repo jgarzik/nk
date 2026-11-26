@@ -239,7 +239,11 @@ pub static DIRECTORY_TYPE: ObjectType =
 pub static SYMBOLIC_LINK_TYPE: ObjectType =
     ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None);
 /// Drivers (`DRIVER_OBJECT`).
-pub static DRIVER_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 8, &DRIVER_NAME, None);
+pub static DRIVER_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 8,
+    &DRIVER_NAME,
+    Some(crate::io::driver::deleted),
+);
 
 /// Open files (`FILE_OBJECT`): the last handle closing sends the
 /// driver a cleanup request, the last reference going a close request

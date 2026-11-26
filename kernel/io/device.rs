@@ -220,6 +220,12 @@ pub unsafe fn replace_security(
 /// letting go.
 static DATABASE: SpinLock<()> = SpinLock::new(Rank::IoDatabase, ());
 
+/// Take the database lock, for what else of the I/O manager's Windows
+/// keeps under it: a driver object's list of extensions.
+pub(super) fn database() -> crate::ke::spinlock::Guard<'static, ()> {
+    DATABASE.lock()
+}
+
 /// [`IoDeleteDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iodeletedevice):
 /// remove a device object. If it is still referenced (files open on
 /// it, work items on their way) or another device is still attached to

@@ -1250,6 +1250,14 @@ splits a request folds the parts' statuses into the master's with
 `IoSetMasterIrpStatus`, by the pinned kernel's rule
 (`nk_ntabi::io::master_irp_status`).
 
+A driver keeps what it needs per driver object in extensions it
+allocates and finds again by an address of its choosing
+([`IoAllocateDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatedriverobjectextension),
+`IoGetDriverObjectExtension`). They hang off the driver extension's
+`ClientDriverExtension`, as on Windows, each behind an
+`IO_CLIENT_EXTENSION`, and are freed by the driver type's delete
+procedure when the driver object goes.
+
 A driver counts the requests in progress on a device with a
 [remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
 (`kernel/io/remlock.rs`): the lock is the driver's memory in the

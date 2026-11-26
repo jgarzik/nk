@@ -164,13 +164,35 @@ pub const IO_TYPE_DRIVER: i16 = 4;
 pub const IO_TYPE_FILE: i16 = 5;
 pub const IO_TYPE_IRP: i16 = 6;
 
+/// `DRIVER_OBJECT.DriverExtension`. The WDK declares it as far as
+/// `ServiceKeyName`; the rest is the I/O manager's own, laid out as the
+/// pinned kernel's.
 #[repr(C)]
 pub struct DRIVER_EXTENSION {
     pub DriverObject: *mut DRIVER_OBJECT,
     pub AddDevice: PVOID,
     pub Count: u32,
     pub ServiceKeyName: UNICODE_STRING,
+    /// The extensions the driver allocated for its driver object
+    /// (`IoAllocateDriverObjectExtension`), newest first.
+    pub ClientDriverExtension: *mut IO_CLIENT_EXTENSION,
+    pub FsFilterCallbacks: PVOID,
+    pub KseCallbacks: PVOID,
+    pub DvCallbacks: PVOID,
+    pub VerifierContext: PVOID,
 }
+
+/// What precedes each extension a driver allocates for its driver
+/// object: the next one, and the address the driver knows it by.
+#[repr(C)]
+pub struct IO_CLIENT_EXTENSION {
+    pub NextExtension: *mut IO_CLIENT_EXTENSION,
+    pub ClientIdentificationAddress: PVOID,
+}
+
+/// The largest extension `IoAllocateDriverObjectExtension` of the
+/// pinned kernel allocates: its header must still fit a 32-bit size.
+pub const MAXIMUM_DRIVER_OBJECT_EXTENSION: u32 = 0xFFFF_FFEF;
 
 #[repr(C)]
 pub struct DRIVER_OBJECT {
@@ -775,7 +797,12 @@ const _: () = {
     assert!(size_of::<KDEVICE_QUEUE>() == 0x28);
     assert!(size_of::<KDPC>() == 0x40);
     assert!(size_of::<WAIT_CONTEXT_BLOCK>() == 0x48);
-    assert!(size_of::<DRIVER_EXTENSION>() == 0x28);
+    assert!(size_of::<DRIVER_EXTENSION>() == 0x50);
+    assert!(offset_of!(DRIVER_EXTENSION, ServiceKeyName) == 0x18);
+    assert!(offset_of!(DRIVER_EXTENSION, ClientDriverExtension) == 0x28);
+    assert!(offset_of!(DRIVER_EXTENSION, VerifierContext) == 0x48);
+    assert!(size_of::<IO_CLIENT_EXTENSION>() == 0x10);
+    assert!(offset_of!(IO_CLIENT_EXTENSION, ClientIdentificationAddress) == 0x08);
     assert!(size_of::<DRIVER_OBJECT>() == 0x150);
     assert!(size_of::<DEVICE_OBJECT>() == 0x150);
     assert!(align_of::<DEVICE_OBJECT>() == 16);
