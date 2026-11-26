@@ -10,6 +10,7 @@ pub static GROUP: Group = Group {
     names: &[
         "hal.dispatch-tables",
         "hal.acpi-tables",
+        "hal.acpi-machine-states",
         "hal.system-information",
         "hal.interrupt-targets",
         "hal.description",
@@ -25,6 +26,10 @@ pub static GROUP: Group = Group {
 fn run(r: &mut Report, info: &BootInfo) {
     r.check("hal.dispatch-tables", dispatch::layout_test);
     r.check("hal.acpi-tables", crate::hal::acpi::test);
+    r.check(
+        "hal.acpi-machine-states",
+        crate::hal::acpi::machine_state_test,
+    );
     r.check("hal.system-information", crate::hal::sysinfo::test);
     r.check("hal.interrupt-targets", crate::hal::target::test);
     r.check("hal.description", crate::hal::description::test);

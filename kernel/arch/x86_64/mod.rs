@@ -134,6 +134,10 @@ pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
 /// deferred procedure calls: DISPATCH_LEVEL.
 pub const DPC: (u32, u8) = (0x2F, 2);
 
+/// The interrupt model Windows' HAL reports to `acpi.sys`, which hands
+/// it to the firmware's `_PIC` method: the APIC.
+pub const INTERRUPT_MODEL: u32 = 1;
+
 /// `(vector, IRQL)` of the interprocessor interrupt: Windows' IPI_LEVEL.
 pub const IPI: (u32, u8) = (0xE1, 14);
 

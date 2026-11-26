@@ -1398,7 +1398,13 @@ the same kind with Windows' signature, version and slot order, whose
 FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
 table the root table lists but the root tables, the DSDT and the FACS,
 as a count and pointers, made once. Both give the firmware's own
-tables where Windows gives copies. The table's remaining routines that
+tables where Windows gives copies. `HalAcpiMachineStateInit` takes
+the sleep states the firmware has and answers with the interrupt model
+for the firmware's `_PIC` method (the APIC's on x86-64, a version 3
+GIC's on arm64); Windows' HAL registers its sleep routine with the
+power manager for each state, NK registers nothing, since it never
+sleeps and powers off through the firmware's runtime services. The
+table's remaining routines that
 `acpi.sys` uses at start (`kernel/hal/pm.rs`) give it the FACS and
 ACPI's fixed hardware: whether a register block exists, and one access
 of it read or written. The blocks are set up once from the FADT by
