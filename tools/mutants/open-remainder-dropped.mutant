@@ -1,0 +1,8 @@
+# The part of a path below a device is not handed on: every file object
+# gets an empty name, so a driver that parses names (a file system) sees
+# each open as an open of the device itself.
+scenario: x86_64
+fails: io.open.remainder
+file: kernel/io/file.rs
+replace:         let named = set_name(file, &target.remainder);
+with:         let named = set_name(file, &[]);

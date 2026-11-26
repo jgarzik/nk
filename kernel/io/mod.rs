@@ -12,11 +12,13 @@ pub mod file;
 pub mod irp;
 pub mod mdl;
 pub mod remlock;
+pub mod service;
 pub mod symlink;
 
-/// Pool tags, as Windows spells its own.
-pub const TAG_DRIVER: u32 = u32::from_le_bytes(*b"Driv");
-pub const TAG_FILE: u32 = u32::from_le_bytes(*b"File");
+// Pool tags, as Windows spells its own.
+
+/// File names: the part of a path a device's driver parses.
+pub const TAG_FILE_NAME: u32 = u32::from_le_bytes(*b"IoNm");
 pub const TAG_IRP: u32 = u32::from_le_bytes(*b"Irp ");
 /// Buffers the I/O manager allocates for buffered requests.
 pub const TAG_IO_BUFFER: u32 = u32::from_le_bytes(*b"IoSB");

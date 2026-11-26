@@ -18,6 +18,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-ex"
+version = "0.0.2"
+
+[[package]]
 name = "nk-hal"
 version = "0.0.2"
 dependencies = [
@@ -75,6 +79,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-unwind"
+version = "0.0.2"
+dependencies = [
+ "nk-pe",
+]
+
+[[package]]
 name = "nkkrnl"
 version = "0.0.2"
 dependencies = [
@@ -91,6 +102,7 @@ dependencies = [
  "nk-rtl",
  "nk-se",
  "nk-selftest",
+ "nk-unwind",
 ]
 
 [[package]]

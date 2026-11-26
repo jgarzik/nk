@@ -151,6 +151,42 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: synchronous exception"
 
+# The low half of the address space is NK's own on both architectures:
+# a null pointer faults, and so does ordinary memory at its physical
+# address, which firmware's map of the low half made readable. One
+# processor for the latter, so that it is the boot processor's low half
+# that is tried: the one that was firmware's.
+
+[x86_64-neg-low-memory]
+arch = "x86_64"
+tier = "gate"
+smp = 1
+cmdline = "test=neg.low-memory"
+expect = "bugcheck"
+match = "BUGCHECK: page fault"
+
+[aarch64-neg-low-memory]
+arch = "aarch64"
+tier = "gate"
+smp = 1
+cmdline = "test=neg.low-memory"
+expect = "bugcheck"
+match = "BUGCHECK: synchronous exception"
+
+[x86_64-neg-null]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.null"
+expect = "bugcheck"
+match = "BUGCHECK: page fault"
+
+[aarch64-neg-null]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.null"
+expect = "bugcheck"
+match = "BUGCHECK: synchronous exception"
+
 # Running off the kernel stack must be named as that.
 
 [x86_64-neg-stack-overflow]
@@ -164,6 +200,22 @@ match = "BUGCHECK: kernel stack overflow"
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
+# So must running off a processor's DPC stack, in a DPC routine.
+
+[x86_64-neg-dpc-stack-overflow]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.dpc-stack-overflow"
+expect = "bugcheck"
+match = "BUGCHECK: kernel stack overflow"
+
+[aarch64-neg-dpc-stack-overflow]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.dpc-stack-overflow"
 expect = "bugcheck"
 match = "BUGCHECK: kernel stack overflow"
 
@@ -287,7 +339,7 @@ arch = "x86_64"
 tier = "gate"
 cmdline = "test=neg.wait-in-dpc"
 expect = "bugcheck"
-match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a DPC routine waited"
 
 [aarch64-neg-wait-at-dispatch]
 arch = "aarch64"
@@ -301,7 +353,24 @@ arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.wait-in-dpc"
 expect = "bugcheck"
-match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a DPC routine waited"
+
+# A DPC routine that lowers the IRQL can begin a wait; the thread switch
+# would leave the thread on the processor's DPC stack, and is refused.
+
+[x86_64-neg-switch-in-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.switch-in-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch"
+
+[aarch64-neg-switch-in-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.switch-in-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000B8 ATTEMPTED_SWITCH_FROM_DPC: a thread switch"
 
 [x86_64-neg-mutex-held-at-exit]
 arch = "x86_64"
@@ -399,3 +468,20 @@ cmdline = "test=oracle.event-debug debug=on"
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=oracle.event-debug debug=on"
+
+# Kernel code that closes a kernel handle protected from close stops
+# the system, as on Windows; user mode is refused with a status.
+
+[x86_64-neg-protected-close]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.protected-close"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
+
+[aarch64-neg-protected-close]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.protected-close"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"

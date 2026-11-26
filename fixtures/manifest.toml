@@ -176,23 +176,23 @@ note = "Windows-driver-samples d49bb7d7 general/event/wdm"
 name = "abi-probe"
 arch = "x86_64"
 file = "abi-probe.x64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.x64.txt"
-sha256 = "f5b3bd9b583d3544ce1ea5fb7412a2ebc5aef5b38453c9c50fbdb1038587e3e5"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/abi-probe.x64.txt"
+sha256 = "144e5aeb2af3149663fed74251f246d2b3554b99ec8e65ad221b95cf54ec8960"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v6 abi-probe/probe.c and probe-unwind.c, WDK 10.0.28000.2526, NT target 19041"
 
 [[fixture]]
 name = "abi-probe"
 arch = "aarch64"
 file = "abi-probe.arm64.txt"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/abi-probe.arm64.txt"
-sha256 = "22518e8a44c84fe370f12b3a370db999170a222ce1a604c99118ddf9fedb47da"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/abi-probe.arm64.txt"
+sha256 = "f71be96cdfae3416055aa0ad39bf2b327c313fbd5a9f15c2a988a5c455bcf3e2"
 status = "wdk-built"
 kind = "abi-table"
 boot = false
-note = "nk-fixtures v5 abi-probe/probe.c, WDK 10.0.28000.2526, NT target 19041"
+note = "nk-fixtures v6 abi-probe/probe.c and probe-unwind.c, WDK 10.0.28000.2526, NT target 19041"
 
 # Microsoft's public symbols for the kernel of the pinned build
 # (ntoskrnl.exe 10.0.19041.2006, the kernel of Windows 10 22H2 19045.2006).
@@ -355,3 +355,82 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v4/wdm-cancel.ar
 sha256 = "a624875c461bfb1e0ca341bfad466c9631f9132eb537556b20315ce447842b4f"
 status = "wdk-built"
 note = "Windows-driver-samples d49bb7d7 general/cancel/sys"
+
+# A registry hive written by Windows itself (the nk-fixtures build has
+# Microsoft's registry create NK-authored keys in an empty hive and save
+# it), so the hive reader is held to a file its own test writer did not
+# make. What it holds: nk-fixtures hive/system.hive.txt.
+
+[[fixture]]
+name = "system-hive"
+arch = "any"
+file = "system.hiv"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/system.hiv"
+sha256 = "b867592587a585fcad1eade7c0fe6d4b40accc2e355b3a7d7c2f160810555841"
+status = "windows-written"
+kind = "hive"
+boot = false
+note = "nk-fixtures v6 hive/system.hive.txt, saved by the registry of the Windows build runner"
+
+# An export driver and what imports from it (nk-fixtures nkc/nkc-lib*.c).
+# nkc-lib.sys is a library: loaded when a driver that imports from it is
+# loaded, never started. nkc-libuser.sys imports from it by name, by
+# ordinal and a variable. nkc-libbad.sys imports a name the library does
+# not export and must be refused, so it is not counted among the
+# fixtures the kernel loads (boot = false); the boot image carries it.
+
+[[fixture]]
+name = "nkc-lib"
+arch = "x86_64"
+file = "nkc-lib.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-lib.x64.nkc-lib.sys"
+sha256 = "3701eb7dd37708ce6bbcc9ca332a9b8463c254262898395d6973200363956b5f"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-lib.c: an export driver"
+
+[[fixture]]
+name = "nkc-lib"
+arch = "aarch64"
+file = "nkc-lib.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-lib.arm64.nkc-lib.sys"
+sha256 = "611b80a5cebac973dba998ef97a547850aacf66ca640be312201254f0e6a09e9"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-lib.c: an export driver"
+
+[[fixture]]
+name = "nkc-libuser"
+arch = "x86_64"
+file = "nkc-libuser.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-libuser.x64.nkc-libuser.sys"
+sha256 = "81b450c7ed4f6f8e6ee7247721a0e798c522d3e4bb949720130df6e422f9f36b"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-libuser.c: imports from nkc-lib.sys"
+
+[[fixture]]
+name = "nkc-libuser"
+arch = "aarch64"
+file = "nkc-libuser.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-libuser.arm64.nkc-libuser.sys"
+sha256 = "1d81b1145fe397efd3883ac9c6beb332d8cc4254e16000b7642936f1a9fa1a15"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-libuser.c: imports from nkc-lib.sys"
+
+[[fixture]]
+name = "nkc-libbad"
+arch = "x86_64"
+file = "nkc-libbad.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-libbad.x64.nkc-libbad.sys"
+sha256 = "d94c2a5209e96e441ad8baba00e3b2dbb64940519bc6de2454da0fd393cce64b"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v6 nkc/nkc-libbad.c: imports a name nkc-lib.sys lacks"
+
+[[fixture]]
+name = "nkc-libbad"
+arch = "aarch64"
+file = "nkc-libbad.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-libbad.arm64.nkc-libbad.sys"
+sha256 = "cdd23c4fa5e025f91bef406ecb1cb8692e83391b590dc3e0b282156c540542a6"
+status = "nk-authored"
+boot = false
+note = "nk-fixtures v6 nkc/nkc-libbad.c: imports a name nkc-lib.sys lacks"

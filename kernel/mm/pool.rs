@@ -163,10 +163,16 @@ pub fn usage() -> Usage {
     total
 }
 
-/// Frames held as arenas. An arena is kept once made, so a leak check
-/// must not count its frames as lost.
-pub fn arena_frames() -> u64 {
-    (POOL.lock().arenas.iter().flatten().count() * ARENA_PAGES) as u64
+/// Frames the pool holds: its arenas, which are kept once made, and the
+/// pages of each live block too large for an arena. A leak check counts
+/// blocks and bytes for what the pool hands out, so it must not count
+/// these frames as lost as well: a block that only grew past a page,
+/// and moved from an arena to pages of its own, is not a leak.
+pub fn frames() -> u64 {
+    let pool = POOL.lock();
+    let arenas = pool.arenas.iter().flatten().count() * ARENA_PAGES;
+    let large: usize = pool.large.iter().flatten().map(|l| l.pages).sum();
+    (arenas + large) as u64
 }
 
 /// Walk every arena checking headers and guard bytes.

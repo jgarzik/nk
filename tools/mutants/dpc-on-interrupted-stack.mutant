@@ -1,0 +1,7 @@
+# The DPC interrupt runs the queue where it stands, on the stack of
+# whatever thread it interrupted, instead of on the processor's DPC stack.
+scenario: x86_64
+fails: dpc.stack
+file: kernel/ke/dpc.rs
+replace:     unsafe { arch::call_on_stack(queue.stack().top, drain, argument) };
+with:     drain(argument);

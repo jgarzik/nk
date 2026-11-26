@@ -15,9 +15,10 @@ pub mod spinlock;
 pub mod thread;
 pub mod time;
 pub mod timer;
+pub mod unwind;
 pub mod wait;
 
-pub use spinlock::{Rank, SpinLock};
+pub use spinlock::{Rank, Ranked, SpinLock};
 
 use crate::arch;
 

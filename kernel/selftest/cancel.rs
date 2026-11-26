@@ -9,12 +9,12 @@
 //! reads cancelled while they wait, and loading and unloading again and
 //! again.
 
-use super::{module, resources};
-use crate::io::driver;
+use super::resources;
 use crate::io::file::{self, IoResult};
+use crate::io::service;
+use crate::ldr;
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::FILE_OBJECT;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
@@ -36,7 +36,7 @@ const DONE: [u8; 4] = [0xFF; 4];
 /// on the queue unless the thread gets to them first. Each comes back
 /// exactly once: done, with its four bytes, or cancelled, with none.
 /// Returns how many were cancelled.
-fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
+fn cancelled(opened: u64) -> Result<u32, &'static str> {
     const READS: usize = 8;
     // The sample decides by the clock whether its thread completes a
     // read at once or half a second later, the same way for reads that
@@ -53,8 +53,8 @@ fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
         let mut buffers = [[0xEEu8; 4]; READS];
         let mut pending = alloc::vec::Vec::new();
         for buffer in &mut buffers {
-            // SAFETY: an open file; each buffer outlives its request,
-            // which is waited for below.
+            // SAFETY: each buffer outlives its request, which is waited
+            // for below.
             pending.push(
                 unsafe { file::read_start(opened, buffer) }
                     .map_err(|_| "a read could not be sent")?,
@@ -83,15 +83,14 @@ fn cancelled(opened: *mut FILE_OBJECT) -> Result<u32, &'static str> {
 
 /// Load, open by both names, have a short read refused, optionally do
 /// a whole read, close and unload.
-fn cycle(image: &[u8], whole_read: bool) -> Result<(), &'static str> {
-    let object = driver::load("cancel", image).map_err(|_| "load failed")?;
+fn cycle(whole_read: bool) -> Result<(), &'static str> {
+    service::start("cancel").map_err(|_| "load failed")?;
     let verdict = (|| {
-        let by_device = file::open(DEVICE).map_err(|_| "open by device name failed")?;
-        let by_link = file::open(DOS_NAME).map_err(|_| "open by link failed");
+        let by_device = super::open(DEVICE).map_err(|_| "open by device name failed")?;
+        let by_link = super::open(DOS_NAME).map_err(|_| "open by link failed");
         let mut short = [0xEEu8; 2];
         let mut whole = [0xEEu8; 4];
-        // SAFETY: `by_device` is open until the close below.
-        let checks = unsafe {
+        let checks = {
             let refused = matches!(
                 file::read(by_device, &mut short),
                 Ok(IoResult {
@@ -111,14 +110,7 @@ fn cycle(image: &[u8], whole_read: bool) -> Result<(), &'static str> {
         };
         let mut closed = true;
         for file in [Ok(by_device), by_link].into_iter().flatten() {
-            // SAFETY: each file came from `open` and is closed once.
-            closed &= matches!(
-                unsafe { file::close(file) },
-                Ok(IoResult {
-                    status: STATUS_SUCCESS,
-                    ..
-                })
-            );
+            closed &= file::close(file) == STATUS_SUCCESS;
         }
         by_link?;
         match (checks, closed) {
@@ -128,28 +120,27 @@ fn cycle(image: &[u8], whole_read: bool) -> Result<(), &'static str> {
             _ => Ok(()),
         }
     })();
-    driver::unload(object)?;
+    service::stop("cancel")?;
     verdict
 }
 
-fn run(r: &mut Report, info: &BootInfo) {
-    let Some(image) = module(info, "cancel.sys") else {
+fn run(r: &mut Report, _: &BootInfo) {
+    if ldr::boot_file("cancel.sys").is_none() {
         return r.skip_rest(format_args!("module cancel.sys not provided"));
-    };
+    }
     let before = resources();
-    let result = driver::load("cancel", image)
+    let result = service::create("cancel", "cancel.sys")
+        .and_then(|()| service::start("cancel"))
         .map_err(|_| "load failed")
-        .and_then(|object| {
-            let result = file::open(DEVICE)
+        .and_then(|_| {
+            let result = super::open(DEVICE)
                 .map_err(|_| "open failed")
                 .and_then(|opened| {
                     let result = cancelled(opened);
-                    // SAFETY: `opened` came from `open` and is closed once; no
-                    // request of it is outstanding.
-                    let _ = unsafe { file::close(opened) };
+                    file::close(opened);
                     result
                 });
-            driver::unload(object)?;
+            service::stop("cancel")?;
             result
         });
     match result {
@@ -167,7 +158,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     // A whole read takes up to half a second, so only some cycles do
     // one; `oracle.cancel` does more.
     const CYCLES: usize = 100;
-    let failed = (0..CYCLES).find_map(|i| cycle(image, i % 20 == 0).err().map(|why| (i, why)));
+    let failed = (0..CYCLES).find_map(|i| cycle(i % 20 == 0).err().map(|why| (i, why)));
     let after = resources();
     match failed {
         Some((i, why)) => r.fail("cancel.cycles", format_args!("cycle {i}: {why}")),

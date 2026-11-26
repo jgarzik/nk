@@ -21,6 +21,55 @@ pub struct OBJECT_HEADER {
     pub SecurityDescriptor: *mut c_void,
 }
 
+/// `OBJECT_HEADER.InfoMask`: an `OBJECT_HEADER_NAME_INFO` precedes the
+/// header. Each bit of the mask stands for one optional header in front
+/// of the fixed one; NK makes only this one, which then sits directly
+/// before the header.
+pub const OB_INFOMASK_NAME: u8 = 0x02;
+
+/// `OBJECT_HEADER_NAME_INFO`: where a named object is in the namespace.
+/// Private to Windows; read by `ObQueryNameString` and by Microsoft's
+/// own binaries. The x86-64 layout is checked against the kernel's
+/// symbols.
+#[repr(C)]
+pub struct OBJECT_HEADER_NAME_INFO {
+    /// The directory object holding the name; null once the object has
+    /// lost its name.
+    pub Directory: *mut c_void,
+    /// The name within that directory: the path's last component.
+    pub Name: crate::io::UNICODE_STRING,
+    pub ReferenceCount: i32,
+    pub Reserved: u32,
+}
+
+/// Size of `OBJECT_DIRECTORY`, a directory object's body.
+pub const OBJECT_DIRECTORY_SIZE: usize = 0x158;
+
+/// `OBJECT_SYMBOLIC_LINK`: a symbolic-link object's body.
+#[repr(C)]
+pub struct OBJECT_SYMBOLIC_LINK {
+    pub CreationTime: i64,
+    /// Where the link leads. (A union with a callback and its context,
+    /// for links the kernel resolves in code.)
+    pub LinkTarget: crate::io::UNICODE_STRING,
+    pub DosDeviceDriveIndex: u32,
+    pub Flags: u32,
+    pub AccessMask: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<OBJECT_HEADER_NAME_INFO>() == 0x20);
+    assert!(offset_of!(OBJECT_HEADER_NAME_INFO, Name) == 0x08);
+    assert!(offset_of!(OBJECT_HEADER_NAME_INFO, ReferenceCount) == 0x18);
+    assert!(size_of::<OBJECT_SYMBOLIC_LINK>() == 0x28);
+    assert!(offset_of!(OBJECT_SYMBOLIC_LINK, LinkTarget) == 0x08);
+    assert!(offset_of!(OBJECT_SYMBOLIC_LINK, DosDeviceDriveIndex) == 0x18);
+    assert!(offset_of!(OBJECT_SYMBOLIC_LINK, AccessMask) == 0x20);
+    // A name-info header in front keeps the header 16-byte aligned.
+    assert!(size_of::<OBJECT_HEADER_NAME_INFO>() % 16 == 0);
+};
+
 /// [`OBJECT_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes):
 /// how a caller names the object it wants opened or created.
 #[repr(C)]
@@ -38,6 +87,93 @@ const _: () = {
     assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, RootDirectory) == 8);
     assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, ObjectName) == 16);
     assert!(core::mem::offset_of!(OBJECT_ATTRIBUTES, Attributes) == 24);
+};
+
+/// `GENERIC_MAPPING`: the specific rights each generic right stands for.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GENERIC_MAPPING {
+    pub GenericRead: u32,
+    pub GenericWrite: u32,
+    pub GenericExecute: u32,
+    pub GenericAll: u32,
+}
+
+/// What an object's type does with a body nothing refers to any more.
+pub type OB_DELETE_METHOD = unsafe extern "C" fn(object: *mut c_void);
+
+/// What an object's type does when a handle to an object is closed:
+/// the process whose handle it was, the object, and how many handles
+/// that process and the whole system had to it before this one went.
+pub type OB_CLOSE_METHOD = unsafe extern "C" fn(
+    process: *mut c_void,
+    object: *mut c_void,
+    process_handle_count: usize,
+    system_handle_count: usize,
+);
+
+/// `OBJECT_TYPE_INITIALIZER`: what a type is made from, kept inside it.
+/// Private to Windows, but handed to `ObCreateObjectType` and read back
+/// by Microsoft's own drivers, so it has Windows' layout (x86-64: checked
+/// against the kernel's symbols; arm64: the same, by NK's choice).
+#[repr(C)]
+pub struct OBJECT_TYPE_INITIALIZER {
+    pub Length: u16,
+    pub ObjectTypeFlags: u16,
+    pub ObjectTypeCode: u32,
+    pub InvalidAttributes: u32,
+    pub GenericMapping: GENERIC_MAPPING,
+    pub ValidAccessMask: u32,
+    pub RetainAccess: u32,
+    pub PoolType: i32,
+    pub DefaultPagedPoolCharge: u32,
+    pub DefaultNonPagedPoolCharge: u32,
+    pub DumpProcedure: *mut c_void,
+    pub OpenProcedure: *mut c_void,
+    pub CloseProcedure: Option<OB_CLOSE_METHOD>,
+    pub DeleteProcedure: Option<OB_DELETE_METHOD>,
+    pub ParseProcedure: *mut c_void,
+    pub SecurityProcedure: *mut c_void,
+    pub QueryNameProcedure: *mut c_void,
+    pub OkayToCloseProcedure: *mut c_void,
+    pub WaitObjectFlagMask: u32,
+    pub WaitObjectFlagOffset: u16,
+    pub WaitObjectPointerOffset: u16,
+}
+
+/// `OBJECT_TYPE`: a kind of object. A driver holds its address (the
+/// value of `*ExEventObjectType`).
+#[repr(C)]
+pub struct OBJECT_TYPE {
+    pub TypeList: crate::ke::LIST_ENTRY,
+    pub Name: crate::io::UNICODE_STRING,
+    pub DefaultObject: *mut c_void,
+    pub Index: u8,
+    pub TotalNumberOfObjects: u32,
+    pub TotalNumberOfHandles: u32,
+    pub HighWaterNumberOfObjects: u32,
+    pub HighWaterNumberOfHandles: u32,
+    pub TypeInfo: OBJECT_TYPE_INITIALIZER,
+    pub TypeLock: usize,
+    pub Key: u32,
+    pub CallbackList: crate::ke::LIST_ENTRY,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<OBJECT_TYPE_INITIALIZER>() == 0x78);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, GenericMapping) == 0xC);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, ValidAccessMask) == 0x1C);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, PoolType) == 0x24);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, OpenProcedure) == 0x38);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, DeleteProcedure) == 0x48);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, ParseProcedure) == 0x50);
+    assert!(offset_of!(OBJECT_TYPE_INITIALIZER, OkayToCloseProcedure) == 0x68);
+    assert!(size_of::<OBJECT_TYPE>() == 0xD8);
+    assert!(offset_of!(OBJECT_TYPE, Name) == 0x10);
+    assert!(offset_of!(OBJECT_TYPE, Index) == 0x28);
+    assert!(offset_of!(OBJECT_TYPE, TypeInfo) == 0x40);
+    assert!(offset_of!(OBJECT_TYPE, CallbackList) == 0xC8);
 };
 
 /// Where the object begins, from the start of its header.

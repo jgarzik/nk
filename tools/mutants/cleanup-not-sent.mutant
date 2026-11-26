@@ -1,0 +1,8 @@
+# The last handle to a file closes and the driver is not told: it gets
+# no IRP_MJ_CLEANUP, so requests it holds for the file are never
+# cancelled and it never sees its client go.
+scenario: aarch64
+fails: io.close.cleanup-then-close
+file: kernel/io/file.rs
+replace:     if system_handle_count != 1 {
+with:     if true {

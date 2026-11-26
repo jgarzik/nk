@@ -6,23 +6,24 @@
 //! produces must be the line Windows produced. `oracle/README.md` defines
 //! the formats.
 
-use super::module;
-use crate::io::driver;
-use crate::io::file::{self, IoResult};
+use crate::io::file::{self, IoResult, Kind, OpenRequest};
+use crate::io::service::{self, ServiceError};
+use crate::ldr;
 use crate::test::{Group, Report};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{DRIVER_OBJECT, FILE_OBJECT};
+use nk_ntabi::io::{FILE_OPEN, KERNEL_MODE, NAMED_PIPE_CREATE_PARAMETERS};
 use nk_oracle::{Checker, Dump, FILL, Mismatch, Outcome, Step};
 
 /// What a script has open and loaded while it runs.
 struct Replay<'a> {
-    info: &'a BootInfo,
-    files: Vec<(&'a str, *mut FILE_OBJECT)>,
-    drivers: Vec<(&'a str, *mut DRIVER_OBJECT)>,
+    /// The handles the script has open, by the names it gave them.
+    files: Vec<(&'a str, u64)>,
+    /// The services the script started and has not stopped.
+    drivers: Vec<&'a str>,
 }
 
 fn outcome(r: IoResult) -> Outcome {
@@ -33,7 +34,7 @@ fn outcome(r: IoResult) -> Outcome {
 }
 
 impl<'a> Replay<'a> {
-    fn file(&self, handle: &str) -> Result<*mut FILE_OBJECT, String> {
+    fn file(&self, handle: &str) -> Result<u64, String> {
         self.files
             .iter()
             .find(|(h, _)| *h == handle)
@@ -42,26 +43,54 @@ impl<'a> Replay<'a> {
     }
 
     fn load(&mut self, service: &'a str, file: &str) -> &'static str {
-        let Some(image) = module(self.info, file) else {
-            return "failed";
-        };
-        match driver::load(service, image) {
-            Ok(object) => {
-                self.drivers.push((service, object));
+        // What `sc create` and `sc start` do on Windows.
+        match service::create(service, file).and_then(|()| service::start(service)) {
+            Ok(_) => {
+                self.drivers.push(service);
                 "ok"
             }
             Err(e) => {
-                kprintln!("oracle: load {service}: {e:?}");
+                kprintln!("oracle: load {service}: status {:#010x}: {e:?}", e.status());
+                "failed"
+            }
+        }
+    }
+
+    /// A library put where the loader looks for what a driver imports
+    /// from. On NK that place is the boot files, which cannot be added
+    /// to: the step succeeds if the file is among them.
+    fn install(file: &str) -> &'static str {
+        if ldr::boot_file(file).is_some() {
+            "ok"
+        } else {
+            "failed"
+        }
+    }
+
+    /// A service that is part of the system: started unless it is
+    /// running, and then stopped when the script ends. Its key is made
+    /// here if the registry has none, naming `<service>.sys`.
+    fn use_service(&mut self, service: &'a str) -> &'static str {
+        match service::start(service) {
+            Ok(_) => {
+                self.drivers.push(service);
+                "ok"
+            }
+            Err(ServiceError::Running) => "ok",
+            Err(ServiceError::NoKey) => self.load(service, &format!("{service}.sys")),
+            Err(e) => {
+                kprintln!("oracle: use {service}: {e:?}");
                 "failed"
             }
         }
     }
 
     fn unload(&mut self, service: &str) -> &'static str {
-        let Some(i) = self.drivers.iter().position(|(s, _)| *s == service) else {
+        let Some(i) = self.drivers.iter().position(|s| *s == service) else {
             return "failed";
         };
-        match driver::unload(self.drivers.remove(i).1) {
+        self.drivers.remove(i);
+        match service::stop(service) {
             Ok(()) => "ok",
             Err(why) => {
                 kprintln!("oracle: unload {service}: {why}");
@@ -81,23 +110,75 @@ impl<'a> Replay<'a> {
             }
             .into(),
             Step::Load { service, file } => self.load(service, file).into(),
-            // Part of Windows there; here it is a boot module like any other.
-            Step::Use { service } => self.load(service, &format!("{service}.sys")).into(),
+            Step::Use { service } => self.use_service(service).into(),
             Step::Unload { service } => self.unload(service).into(),
-            Step::Open { handle, path } => match file::open(path) {
-                Ok(file) => {
-                    self.files.push((handle, file));
-                    format!("{:08x}", 0)
+            Step::Install { file } => Self::install(file).into(),
+            Step::IoctlAt { .. } => {
+                return Err("not yet supported on NK".into());
+            }
+            Step::Open { handle, path, args } => {
+                let root = match args.root {
+                    Some(root) => Some(self.file(root)?),
+                    None => None,
+                };
+                let opened = file::open(&OpenRequest {
+                    name: path,
+                    root,
+                    desired_access: args.access,
+                    share_access: args.share,
+                    create_options: args.options,
+                    disposition: FILE_OPEN,
+                    kind: Kind::File,
+                    requestor_mode: KERNEL_MODE,
+                });
+                match opened {
+                    Ok((file, _)) => {
+                        self.files.push((handle, file));
+                        format!("{:08x}", 0)
+                    }
+                    Err(status) => format!("{:08x}", status as u32),
                 }
-                Err(status) => format!("{:08x}", status as u32),
-            },
+            }
+            Step::Pipe { handle, path, args } => {
+                let opened = file::open(&OpenRequest {
+                    name: path,
+                    root: None,
+                    desired_access: args.access,
+                    share_access: args.share,
+                    create_options: args.options,
+                    disposition: args.disposition,
+                    kind: Kind::NamedPipe(NAMED_PIPE_CREATE_PARAMETERS {
+                        NamedPipeType: args.kind,
+                        ReadMode: args.read,
+                        CompletionMode: args.completion,
+                        MaximumInstances: args.instances,
+                        InboundQuota: args.inquota,
+                        OutboundQuota: args.outquota,
+                        // Relative, in units of 100 ns.
+                        DefaultTimeout: -10_000 * i64::from(args.timeout),
+                        TimeoutSpecified: 1,
+                    }),
+                    requestor_mode: KERNEL_MODE,
+                });
+                let (status, information) = match opened {
+                    Ok((file, information)) => {
+                        self.files.push((handle, file));
+                        (0, information)
+                    }
+                    Err(status) => (status as u32, 0),
+                };
+                format!(
+                    "{}",
+                    Outcome {
+                        status,
+                        information
+                    }
+                )
+            }
             Step::Close { handle } => {
                 let file = self.file(handle)?;
                 self.files.retain(|(h, _)| *h != handle);
-                // SAFETY: the file came from `open` and was just removed
-                // from the table, so it is closed exactly once.
-                let r = unsafe { file::close(file) }.map_err(|e| format!("{e:?}"))?;
-                format!("{:08x}", r.status as u32)
+                format!("{:08x}", file::close(file) as u32)
             }
             Step::Ioctl {
                 handle,
@@ -107,24 +188,31 @@ impl<'a> Replay<'a> {
             } => {
                 let input: Vec<u8> = input.bytes().collect();
                 let mut output = vec![FILL; output_len];
-                // SAFETY: the file is open until its `close` step.
-                let r =
-                    unsafe { file::device_control(self.file(handle)?, code, &input, &mut output) }
-                        .map_err(|e| format!("{e:?}"))?;
+                let r = file::device_control(self.file(handle)?, code, &input, &mut output)
+                    .map_err(|e| format!("{e:?}"))?;
+                format!("{} {}", outcome(r), Dump(&output))
+            }
+            Step::Fsctl {
+                handle,
+                code,
+                input,
+                output_len,
+            } => {
+                let input: Vec<u8> = input.bytes().collect();
+                let mut output = vec![FILL; output_len];
+                let r = file::fs_control(self.file(handle)?, code, &input, &mut output)
+                    .map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&output))
             }
             Step::Read { handle, len } => {
                 let mut buffer = vec![FILL; len];
-                // SAFETY: as above.
-                let r = unsafe { file::read(self.file(handle)?, &mut buffer) }
-                    .map_err(|e| format!("{e:?}"))?;
+                let r =
+                    file::read(self.file(handle)?, &mut buffer).map_err(|e| format!("{e:?}"))?;
                 format!("{} {}", outcome(r), Dump(&buffer))
             }
             Step::Write { handle, data } => {
                 let data: Vec<u8> = data.bytes().collect();
-                // SAFETY: as above.
-                let r = unsafe { file::write(self.file(handle)?, &data) }
-                    .map_err(|e| format!("{e:?}"))?;
+                let r = file::write(self.file(handle)?, &data).map_err(|e| format!("{e:?}"))?;
                 format!("{}", outcome(r))
             }
         })
@@ -134,20 +222,18 @@ impl<'a> Replay<'a> {
     /// stopped early does not also leak.
     fn finish(&mut self) {
         for (_, file) in self.files.drain(..) {
-            // SAFETY: still open, and removed from the table by `drain`.
-            let _ = unsafe { file::close(file) };
+            file::close(file);
         }
-        for (_, object) in self.drivers.drain(..).rev() {
-            let _ = driver::unload(object);
+        for service in self.drivers.drain(..).rev() {
+            let _ = service::stop(service);
         }
     }
 }
 
 /// Replay `script`; `Err` names the first line that differs from what
 /// Windows printed. Returns how many lines matched.
-fn replay(info: &BootInfo, name: &str, script: &str, windows: &str) -> Result<usize, String> {
+fn replay(name: &str, script: &str, windows: &str) -> Result<usize, String> {
     let mut replay = Replay {
-        info,
         files: Vec::new(),
         drivers: Vec::new(),
     };
@@ -190,11 +276,11 @@ fn replay(info: &BootInfo, name: &str, script: &str, windows: &str) -> Result<us
 }
 
 /// One script: skipped without its driver, else replayed and compared.
-fn check(r: &mut Report, info: &BootInfo, name: &str, driver: &str, script: &str, windows: &str) {
-    if module(info, driver).is_none() {
+fn check(r: &mut Report, name: &str, driver: &str, script: &str, windows: &str) {
+    if ldr::boot_file(driver).is_none() {
         return r.skip(name, format_args!("module {driver} not provided"));
     }
-    match replay(info, name, script, windows) {
+    match replay(name, script, windows) {
         Ok(lines) => r.ok_with(name, format_args!("{lines} lines as on Windows")),
         Err(why) => r.fail(name, format_args!("{why}")),
     }
@@ -216,15 +302,17 @@ pub static GROUP: Group = Group {
         "oracle.nkc-se",
         "oracle.nkc-reg",
         "oracle.cancel",
+        "oracle.nkc-lib",
+        "oracle.nkc-lib-twice",
+        "oracle.nkc-libbad",
     ],
     run,
     manual: false,
 };
 
-fn run(r: &mut Report, info: &BootInfo) {
+fn run(r: &mut Report, _: &BootInfo) {
     check(
         r,
-        info,
         "oracle.null",
         "null.sys",
         include_str!("../../oracle/null.script"),
@@ -232,7 +320,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.sioctl",
         "sioctl.sys",
         include_str!("../../oracle/sioctl.script"),
@@ -240,7 +327,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-irql",
         "nkc-irql.sys",
         include_str!("../../oracle/nkc-irql.script"),
@@ -248,7 +334,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-time",
         "nkc-time.sys",
         include_str!("../../oracle/nkc-time.script"),
@@ -256,7 +341,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-dpc",
         "nkc-dpc.sys",
         include_str!("../../oracle/nkc-dpc.script"),
@@ -264,7 +348,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-timer",
         "nkc-timer.sys",
         include_str!("../../oracle/nkc-timer.script"),
@@ -272,7 +355,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-thread",
         "nkc-thread.sys",
         include_str!("../../oracle/nkc-thread.script"),
@@ -280,7 +362,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-wait",
         "nkc-wait.sys",
         include_str!("../../oracle/nkc-wait.script"),
@@ -288,7 +369,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-mutex",
         "nkc-mutex.sys",
         include_str!("../../oracle/nkc-mutex.script"),
@@ -296,7 +376,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-waitn",
         "nkc-waitn.sys",
         include_str!("../../oracle/nkc-waitn.script"),
@@ -304,7 +383,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-work",
         "nkc-work.sys",
         include_str!("../../oracle/nkc-work.script"),
@@ -312,7 +390,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-se",
         "nkc-se.sys",
         include_str!("../../oracle/nkc-se.script"),
@@ -320,7 +397,6 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.nkc-reg",
         "nkc-reg.sys",
         include_str!("../../oracle/nkc-reg.script"),
@@ -328,11 +404,31 @@ fn run(r: &mut Report, info: &BootInfo) {
     );
     check(
         r,
-        info,
         "oracle.cancel",
         "cancel.sys",
         include_str!("../../oracle/cancel.script"),
         include_str!("../../oracle/cancel.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-lib",
+        "nkc-libuser.sys",
+        include_str!("../../oracle/nkc-lib.script"),
+        include_str!("../../oracle/nkc-lib.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-lib-twice",
+        "nkc-libuser.sys",
+        include_str!("../../oracle/nkc-lib-twice.script"),
+        include_str!("../../oracle/nkc-lib-twice.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-libbad",
+        "nkc-libbad.sys",
+        include_str!("../../oracle/nkc-libbad.script"),
+        include_str!("../../oracle/nkc-libbad.txt"),
     );
 }
 
@@ -345,10 +441,9 @@ pub static EVENT: Group = Group {
     manual: true,
 };
 
-fn event(r: &mut Report, info: &BootInfo) {
+fn event(r: &mut Report, _: &BootInfo) {
     check(
         r,
-        info,
         "oracle.event",
         "event.sys",
         include_str!("../../oracle/event.script"),
@@ -365,10 +460,9 @@ pub static EVENT_DEBUG: Group = Group {
     manual: true,
 };
 
-fn event_debug(r: &mut Report, info: &BootInfo) {
+fn event_debug(r: &mut Report, _: &BootInfo) {
     check(
         r,
-        info,
         "oracle.event-debug",
         "event.sys",
         include_str!("../../oracle/event-debug.script"),

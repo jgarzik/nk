@@ -199,6 +199,16 @@ fn headers_and_sections() {
     assert_eq!(h.dir(99), DataDir::default());
 }
 
+/// An image in memory answers for its headers from its first page
+/// alone, though the file's sections are not where a file has them.
+#[test]
+fn headers_are_read_from_a_mapped_image() {
+    let (h, image) = mapped(&Builder::new().build());
+    assert_eq!(image_headers(&image[..0x1000]), Ok(h));
+    assert_eq!(image_headers(&image[..0x40]), Err(PeError::BadHeader));
+    assert_eq!(image_headers(b"MZ"), Err(PeError::BadHeader));
+}
+
 #[test]
 fn page_flags_follow_sections() {
     let file = Builder::new().build();
@@ -214,6 +224,19 @@ fn page_flags_follow_sections() {
         Some(SCN_MEM_READ | SCN_MEM_WRITE)
     );
     assert_eq!(pe.page_flags(IMAGE_SIZE), None, "past the image");
+}
+
+#[test]
+fn page_flags_are_read_from_a_mapped_image_s_headers() {
+    let file = Builder::new().build();
+    let pe = Pe::parse(&file).unwrap();
+    let (_, image) = mapped(&file);
+    for rva in (0..=IMAGE_SIZE).step_by(0x1000) {
+        assert_eq!(image_page_flags(&image[..0x1000], rva), pe.page_flags(rva));
+    }
+    // Headers that end before the section table describe no page.
+    assert_eq!(image_page_flags(&image[..0x100], TEXT), None);
+    assert_eq!(image_page_flags(b"MZ", 0), None);
 }
 
 #[test]

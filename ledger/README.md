@@ -11,6 +11,9 @@ the state the kernel reports for it:
 - `traps`: bound so the driver loads, but stops the machine with a named
   bugcheck if ever called. Never counts as implemented.
 - `missing`: no such export. A driver that imports it is rejected.
+- `library`: the import is from another fixture, an export driver, which
+  exports it: the loader binds it to that image. Only an import from a
+  module that is itself a fixture can have this state.
 
 `summary` counts the distinct imports of the fixtures the kernel loads at
 boot. Fixtures with `loaded_at_boot: false` are listed to show what they
@@ -19,6 +22,14 @@ will need.
 Export states come from what the booted kernel prints, so the ledger
 describes the kernel that ran, not a hand-kept list.
 
+`looked_up_absent` lists the names `MmGetSystemRoutineAddress` was
+asked for during the boot test that the kernel does not export. A
+driver that asks this way goes on without the routine, so no import
+table shows the name and nothing rejects the driver: the list is the
+only place such a gap appears. The kernel's own test of the routine
+asks for names that exist nowhere (`NoSuchRoutineInAnyKernel`); they
+are listed too.
+
 ## The corpus
 
 `x86_64.json` also has a `corpus` section: Microsoft's own kernel-mode
@@ -26,6 +37,15 @@ binaries of the pinned Windows build, the drivers NK means to run
 unmodified, and for each how many of the names it imports from the kernel
 NK provides. Nothing in the corpus is loaded yet; the section is the
 denominator of the whole project.
+
+`microsoft_kernel` measures the other way: what Microsoft's own
+`ntoskrnl.exe` of that build exports (names, exports by ordinal only,
+forwarders), how many of those names NK exports, and any name NK exports
+that Microsoft's kernel does not. NK never loads that kernel; only its
+export directory is read, into `ntoskrnl.x86_64.txt`.
+
+`tools/ledger.py --missing <binary>...` lists, by area, the kernel names
+those corpus binaries import that NK does not yet implement.
 
 The binaries are pinned in `fixtures/corpus.toml` and never committed.
 `corpus.x86_64.txt` holds what each one imports, written by

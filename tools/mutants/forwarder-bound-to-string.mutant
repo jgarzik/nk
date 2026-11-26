@@ -1,0 +1,8 @@
+# A forwarded export is taken for code: the import is bound to the
+# address of the text that names the real export, and the driver jumps
+# into a string.
+scenario: x86_64
+fails: ldr.lib.forwarder
+file: lib/pe/exports.rs
+replace:         if (self.dir.rva..self.dir.rva + self.dir.size).contains(&rva) {
+with:         if false {

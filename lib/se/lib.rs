@@ -10,8 +10,26 @@
 //! - A security descriptor points to an owner, a group and two ACLs. An
 //!   absolute one holds pointers; a self-relative one is a single block
 //!   holding offsets, with the parts after a 20-byte header.
+//!
+//! On those layouts stand the rules, one module each: who a subject is
+//! (`token`), whether it may have an access (`access`) or holds a
+//! privilege (`privilege`), what descriptor a new object gets
+//! (`assign`), how an object's descriptor is read and changed
+//! (`descriptor`), and what a token answers about itself
+//! (`information`). Each module states which of its rules Microsoft
+//! documents and which are INFERRED from what Windows does.
 
 #![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+pub mod access;
+pub mod acl;
+pub mod assign;
+pub mod descriptor;
+pub mod information;
+pub mod privilege;
+pub mod token;
 
 /// The revision of every SID.
 pub const SID_REVISION: u8 = 1;
@@ -37,6 +55,10 @@ pub const SE_DACL_PRESENT: u16 = 0x0004;
 pub const SE_DACL_DEFAULTED: u16 = 0x0008;
 pub const SE_SACL_PRESENT: u16 = 0x0010;
 pub const SE_SACL_DEFAULTED: u16 = 0x0020;
+pub const SE_DACL_AUTO_INHERITED: u16 = 0x0400;
+pub const SE_SACL_AUTO_INHERITED: u16 = 0x0800;
+pub const SE_DACL_PROTECTED: u16 = 0x1000;
+pub const SE_SACL_PROTECTED: u16 = 0x2000;
 pub const SE_SELF_RELATIVE: u16 = 0x8000;
 
 /// Size of a self-relative descriptor's header.
@@ -247,11 +269,56 @@ impl<'a> Parts<'a> {
         Ok(())
     }
 
+    /// This descriptor as its control bits say to read it: an ACL not
+    /// marked present is not there, whatever the field holds.
+    #[must_use]
+    pub fn present(&self) -> Parts<'a> {
+        let mut parts = *self;
+        if parts.control & SE_DACL_PRESENT == 0 {
+            parts.dacl = None;
+        }
+        if parts.control & SE_SACL_PRESENT == 0 {
+            parts.sacl = None;
+        }
+        parts
+    }
+
     /// This descriptor with the parts `information` names replaced by
     /// those of `new`, control bits included: what setting an object's
     /// security does to the descriptor it has.
     #[must_use]
     pub fn replaced(&self, new: &Parts<'a>, information: u32) -> Parts<'a> {
+        self.merged(
+            new,
+            information,
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED,
+            SE_SACL_PRESENT | SE_SACL_DEFAULTED,
+        )
+    }
+
+    /// The parts `information` names and nothing else, each with every
+    /// control bit that describes it: what querying an object's security
+    /// copies out.
+    #[must_use]
+    pub fn selected(&self, information: u32) -> Parts<'a> {
+        Parts::default().merged(
+            self,
+            information,
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED,
+            SE_SACL_PRESENT | SE_SACL_DEFAULTED | SE_SACL_AUTO_INHERITED | SE_SACL_PROTECTED,
+        )
+    }
+
+    /// This descriptor with the parts `information` names taken from
+    /// `new`, along with their control bits: `dacl_bits` and `sacl_bits`
+    /// for the lists, the "defaulted" bit for owner and group.
+    fn merged(
+        &self,
+        new: &Parts<'a>,
+        information: u32,
+        dacl_bits: u16,
+        sacl_bits: u16,
+    ) -> Parts<'a> {
         let mut merged = *self;
         let mut take = |bit: u32, control: u16| {
             let chosen = information & bit != 0;
@@ -266,16 +333,10 @@ impl<'a> Parts<'a> {
         if take(GROUP_SECURITY_INFORMATION, SE_GROUP_DEFAULTED) {
             merged.group = new.group;
         }
-        if take(
-            DACL_SECURITY_INFORMATION,
-            SE_DACL_PRESENT | SE_DACL_DEFAULTED,
-        ) {
+        if take(DACL_SECURITY_INFORMATION, dacl_bits) {
             merged.dacl = new.dacl;
         }
-        if take(
-            SACL_SECURITY_INFORMATION,
-            SE_SACL_PRESENT | SE_SACL_DEFAULTED,
-        ) {
+        if take(SACL_SECURITY_INFORMATION, sacl_bits) {
             merged.sacl = new.sacl;
         }
         merged
@@ -533,6 +594,27 @@ mod tests {
             old.replaced(&new, SACL_SECURITY_INFORMATION).sacl,
             Some(&new_acl[..])
         );
+    }
+
+    #[test]
+    fn an_acl_not_marked_present_is_not_there() {
+        let acl = empty_acl(8);
+        let both = Parts {
+            control: SE_DACL_PRESENT | SE_SACL_PRESENT,
+            sacl: Some(&acl),
+            dacl: Some(&acl),
+            ..Parts::default()
+        };
+        let kept = both.present();
+        assert_eq!((kept.sacl, kept.dacl), (Some(&acl[..]), Some(&acl[..])));
+        let dacl_only = Parts {
+            control: SE_DACL_PRESENT,
+            ..both
+        }
+        .present();
+        assert_eq!((dacl_only.sacl, dacl_only.dacl), (None, Some(&acl[..])));
+        let neither = Parts { control: 0, ..both }.present();
+        assert!(neither.sacl.is_none() && neither.dacl.is_none());
     }
 
     #[test]

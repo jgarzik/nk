@@ -4,7 +4,11 @@
 //! start-up interrupt naming a page below 1 MiB, where it begins in real
 //! mode. The trampoline below is copied to that page. It climbs to
 //! protected mode, then to long mode on the kernel's own page tables, and
-//! calls into the kernel on the stack it was given.
+//! enters the kernel on the stack it was given.
+//!
+//! The trampoline is data in the image, run from its copy in low memory,
+//! partly in 16- and 32-bit mode: it has no unwind information and no
+//! stack walk passes through it.
 
 use super::{apic, cpu, trap};
 use crate::hal::platform;
@@ -64,9 +68,11 @@ nk_ap_trampoline:
     movq (0x8000 + nk_ap_argument - nk_ap_trampoline), %rcx
     movq (0x8000 + nk_ap_entry - nk_ap_trampoline), %rax
     xorl %ebp, %ebp
+    // Enter the kernel as if called from address zero: the entry never
+    // returns, and a walk of this stack ends there.
     subq $32, %rsp
-    callq *%rax
-    ud2
+    pushq $0
+    jmpq *%rax
     .balign 8
 // Flat 32-bit code and data, and 64-bit code: just enough to get out.
 8:

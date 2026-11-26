@@ -137,6 +137,8 @@ fn nk_facts() -> Vec<(&'static str, usize)> {
         off!(IO_STACK_LOCATION, FileObject),
         off!(IO_STACK_LOCATION, CompletionRoutine),
         off!(IO_STACK_LOCATION, Context),
+        sz!(IO_SECURITY_CONTEXT),
+        off!(IO_SECURITY_CONTEXT, DesiredAccess),
         sz!(MDL),
         off!(MDL, Size),
         off!(MDL, MdlFlags),
@@ -227,6 +229,187 @@ fn nk_facts_x64() -> Vec<(&'static str, usize)> {
     ]
 }
 
+/// The exception structures both architectures share.
+fn seh_facts() -> Vec<(&'static str, usize)> {
+    use crate::seh::*;
+    vec![
+        ("sizeof EXCEPTION_RECORD", size_of::<EXCEPTION_RECORD>()),
+        (
+            "offsetof EXCEPTION_RECORD ExceptionFlags",
+            offset_of!(EXCEPTION_RECORD, ExceptionFlags),
+        ),
+        (
+            "offsetof EXCEPTION_RECORD ExceptionRecord",
+            offset_of!(EXCEPTION_RECORD, ExceptionRecord),
+        ),
+        (
+            "offsetof EXCEPTION_RECORD ExceptionAddress",
+            offset_of!(EXCEPTION_RECORD, ExceptionAddress),
+        ),
+        (
+            "offsetof EXCEPTION_RECORD NumberParameters",
+            offset_of!(EXCEPTION_RECORD, NumberParameters),
+        ),
+        (
+            "offsetof EXCEPTION_RECORD ExceptionInformation",
+            offset_of!(EXCEPTION_RECORD, ExceptionInformation),
+        ),
+        ("sizeof EXCEPTION_POINTERS", size_of::<EXCEPTION_POINTERS>()),
+        (
+            "offsetof EXCEPTION_POINTERS ContextRecord",
+            offset_of!(EXCEPTION_POINTERS, ContextRecord),
+        ),
+        // A scope table is a count and then records of this size.
+        ("offsetof SCOPE_TABLE ScopeRecord", size_of::<u32>()),
+        (
+            "offsetof SCOPE_TABLE ScopeRecord[0].EndAddress",
+            4 + offset_of!(SCOPE_RECORD, EndAddress),
+        ),
+        (
+            "offsetof SCOPE_TABLE ScopeRecord[0].HandlerAddress",
+            4 + offset_of!(SCOPE_RECORD, HandlerAddress),
+        ),
+        (
+            "offsetof SCOPE_TABLE ScopeRecord[0].JumpTarget",
+            4 + offset_of!(SCOPE_RECORD, JumpTarget),
+        ),
+        (
+            "offsetof SCOPE_TABLE ScopeRecord[1]",
+            4 + size_of::<SCOPE_RECORD>(),
+        ),
+    ]
+}
+
+/// `("offsetof T Field", offset)` for each named field of one type.
+macro_rules! fields {
+    ($name:literal, $t:ty, [$($f:ident),* $(,)?]) => {
+        vec![
+            (concat!("sizeof ", $name), size_of::<$t>()),
+            $((concat!("offsetof ", $name, " ", stringify!($f)), offset_of!($t, $f)),)*
+        ]
+    };
+}
+
+/// The exception structures as x86-64 has them.
+fn seh_facts_x64() -> Vec<(&'static str, usize)> {
+    use crate::seh::x64::*;
+    let mut facts = fields!(
+        "CONTEXT",
+        CONTEXT,
+        [
+            ContextFlags,
+            MxCsr,
+            SegCs,
+            SegSs,
+            EFlags,
+            Dr0,
+            Dr7,
+            Rax,
+            Rcx,
+            Rdx,
+            Rbx,
+            Rsp,
+            Rbp,
+            Rsi,
+            Rdi,
+            R8,
+            R9,
+            R10,
+            R11,
+            R12,
+            R13,
+            R14,
+            R15,
+            Rip,
+            FltSave,
+            VectorRegister,
+            VectorControl,
+            DebugControl,
+            LastBranchToRip,
+            LastExceptionFromRip,
+        ]
+    );
+    facts.push(("offsetof CONTEXT P1Home", offset_of!(CONTEXT, PHome)));
+    facts.push((
+        "offsetof CONTEXT Xmm6",
+        offset_of!(CONTEXT, FltSave) + offset_of!(XSAVE_FORMAT, XmmRegisters) + 6 * 16,
+    ));
+    facts.extend(fields!(
+        "RUNTIME_FUNCTION",
+        RUNTIME_FUNCTION,
+        [BeginAddress, EndAddress, UnwindData]
+    ));
+    facts.extend(fields!(
+        "DISPATCHER_CONTEXT",
+        DISPATCHER_CONTEXT,
+        [
+            ControlPc,
+            ImageBase,
+            FunctionEntry,
+            EstablisherFrame,
+            TargetIp,
+            ContextRecord,
+            LanguageHandler,
+            HandlerData,
+            HistoryTable,
+            ScopeIndex,
+            Fill0,
+        ]
+    ));
+    facts.push(("sizeof M128A", size_of::<crate::seh::M128A>()));
+    facts
+}
+
+/// The exception structures as arm64 has them: the WDK's table is the
+/// only authority for these.
+fn seh_facts_arm64() -> Vec<(&'static str, usize)> {
+    use crate::seh::arm64::*;
+    let mut facts = fields!(
+        "CONTEXT",
+        CONTEXT,
+        [
+            ContextFlags,
+            Cpsr,
+            X,
+            Fp,
+            Lr,
+            Sp,
+            Pc,
+            V,
+            Fpcr,
+            Fpsr,
+            Bcr,
+            Bvr,
+            Wcr,
+            Wvr,
+        ]
+    );
+    facts.extend(fields!(
+        "RUNTIME_FUNCTION",
+        RUNTIME_FUNCTION,
+        [BeginAddress, UnwindData]
+    ));
+    facts.extend(fields!(
+        "DISPATCHER_CONTEXT",
+        DISPATCHER_CONTEXT,
+        [
+            ControlPc,
+            ImageBase,
+            FunctionEntry,
+            EstablisherFrame,
+            TargetPc,
+            ContextRecord,
+            LanguageHandler,
+            HandlerData,
+            HistoryTable,
+            ScopeIndex,
+            ControlPcIsUnwound,
+            NonVolatileRegisters,
+        ]
+    ));
+    facts
+}
+
 fn table(arch: &str) -> Option<BTreeMap<String, usize>> {
     let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "target", "fixtures"]
         .iter()
@@ -244,7 +427,9 @@ fn table(arch: &str) -> Option<BTreeMap<String, usize>> {
 /// they are checked against each architecture's table.
 #[test]
 fn layouts_match_the_wdk() {
-    for (arch, extra) in [("x64", nk_facts_x64()), ("arm64", Vec::new())] {
+    let x64 = [nk_facts_x64(), seh_facts(), seh_facts_x64()].concat();
+    let arm64 = [seh_facts(), seh_facts_arm64()].concat();
+    for (arch, extra) in [("x64", x64), ("arm64", arm64)] {
         let Some(wdk) = table(arch) else {
             eprintln!("SKIP: no WDK ABI table for {arch} (target/fixtures/abi-probe.{arch}.txt)");
             continue;

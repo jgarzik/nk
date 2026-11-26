@@ -59,9 +59,8 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
-| 20 | `ldr::LOADED` | table of loaded images | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
-| 30 | `ob::NAMESPACE` | device names and symbolic links | DISPATCH |
+| 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each kernel handle names | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
@@ -71,7 +70,9 @@ already held has a lower rank; two locks of one rank never nest.
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
+| 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
+| 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
 | 250 | `kd::CONSOLE` | the diagnostic UART | HIGH |
 
 Why this order:
@@ -80,10 +81,16 @@ Why this order:
   under the I/O database lock, so "the last reference went" and "the
   device was deleted" are seen together by whichever comes second. That
   one frees the device, after dropping the lock.
-- A device found by name is given a pointer reference under the
-  namespace lock, which a device loses its names under before it gives
-  up its own; the database lock is taken only after the namespace lock
-  is dropped, to count the open or refuse it.
+- The namespace is one lock: every directory, every entry. An object
+  found by name is given a pointer reference under it, and whoever named
+  an object takes the name away under it before giving up the reference
+  the object was made with; so a name leads to a live object. A look-up
+  returns with the lock dropped and that reference held: whatever is
+  done with the object and the rest of the path (counting an open under
+  the database lock, sending a driver the create request) happens
+  outside it.
+- No object's last reference is dropped under the namespace lock: a
+  removed symbolic link's object is released after it.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
@@ -93,7 +100,9 @@ Why this order:
   memory is read and written outside it.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. An object's last reference is never
-  dropped under the handle table's lock: freeing takes the pool's.
+  dropped under the handle table's lock, nor is its type told of a
+  closed handle there: freeing takes the pool's lock, and a file's close
+  and delete procedures call its driver.
 - The pool and the address space each take frames while holding their own
   lock (a new arena; a new page table). They never take each other.
 - An interprocessor call may be made with any of the above held:
@@ -111,9 +120,19 @@ Why this order:
   the timer's DPC. No two tables are held together: a timer moves from
   one processor's table to another's by leaving the first under its lock
   and entering the second under its own.
+- An object's header lock is the `Lock` word of its `OBJECT_HEADER`,
+  where Windows has it, not a `SpinLock`: its holder spins on the word,
+  and the hold is ranked and recorded all the same (`ke::Ranked`). It
+  ranks above every other lock held at `DISPATCH_LEVEL`, so it may be
+  taken with any of them held and none of them inside it: not the
+  pool's (a replaced descriptor is freed after the lock is dropped),
+  not a second object's.
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.
+- The table of loaded images is searched from any context, a fault
+  handler included, so it is held at `HIGH_LEVEL` and holds no memory:
+  nothing but the console is taken inside it.
 - The console is innermost and at `HIGH_LEVEL` so that anything can print
   from anywhere, a fault handler included.
 
@@ -136,7 +155,28 @@ thread can sleep on. Spin locks stand in for those; they are stricter,
 never looser.
 
 `force_lock` takes a lock regardless, without bookkeeping. Only the
-bugcheck path uses it, on the console, and never returns.
+path that stops the system uses it, on the console and on the table of
+loaded images, and never returns.
+
+### The loader's mutex
+
+Loading and unloading an image are serialised by a kernel mutex
+(`KMUTANT`), `ldr::LOADER`, not by a spin lock: a load calls a library's
+`DllInitialize` and an unload its `DllUnload`, either of which may
+wait, and a library is loaded from inside the load of the image that
+imports from it, by the same thread (a mutex may be taken again by its
+owner).
+
+- It is taken at `PASSIVE_LEVEL` with no spin lock held, since taking
+  it may sleep; whoever holds it may take any ranked lock.
+- It covers the list of libraries and the order of events: an image is
+  entered in the table of images, bound to its libraries and counted as
+  their importer, or none of it, without another load or unload in
+  between. The counts themselves are in the table of images, under its
+  own lock.
+- A library's `DllInitialize` and `DllUnload` run with it held, as on
+  Windows, where the system's load lock is held around them. A driver's
+  entry point and unload routine run without it.
 
 ### Per-processor state
 
@@ -200,7 +240,8 @@ thread) has a lock of
 its own, bit 7 of its header's type byte, as on Windows. It covers the
 object's signal state, its list of wait blocks, and the blocks linked
 there. It is taken at `DISPATCH_LEVEL`, before any ranked lock. These
-locks are in the driver's memory and are not ranked or recorded. Nothing
+locks are in the driver's memory and are not ranked or recorded. (The
+lock in an object's header is another matter: rank 235 above.) Nothing
 holds two, with one exception: a wait for all of several objects holds
 all their locks at once while it looks and takes, locking in order of
 address and unlocking in reverse.

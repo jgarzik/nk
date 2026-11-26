@@ -1,11 +1,22 @@
 //! Tests of reference-counted objects and kernel handles.
 
-use crate::ob::handle;
+use crate::ob::{handle, object};
 use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["ob.references", "ob.handles", "ob.thread"],
+    names: &[
+        "ob.types",
+        "ob.references",
+        "ob.handles",
+        "ob.thread",
+        "ps.system",
+        "ob.namespace.paths",
+        "ob.namespace.links",
+        "ob.namespace.name-info",
+        "ob.handle-access",
+        "ob.security",
+    ],
     run,
     manual: false,
 };
@@ -18,6 +29,7 @@ fn counted(r: &mut Report, name: &str, what: &str, result: Result<u32, &'static 
 }
 
 fn run(r: &mut Report, _: &BootInfo) {
+    r.check("ob.types", object::type_test);
     counted(
         r,
         "ob.references",
@@ -26,4 +38,20 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     counted(r, "ob.handles", "look-ups:", handle::handle_test());
     counted(r, "ob.thread", "waits:", handle::thread_test());
+    r.check("ps.system", crate::ps::process::self_test);
+    counted(
+        r,
+        "ob.namespace.paths",
+        "look-ups:",
+        crate::ob::paths_test(),
+    );
+    counted(
+        r,
+        "ob.namespace.links",
+        "look-ups:",
+        crate::ob::links_test(),
+    );
+    r.check("ob.namespace.name-info", crate::ob::name_info_test);
+    counted(r, "ob.handle-access", "look-ups:", handle::access_test());
+    r.check("ob.security", crate::ob::security::self_test);
 }

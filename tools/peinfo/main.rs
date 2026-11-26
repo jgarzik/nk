@@ -7,12 +7,16 @@
 //! image_base 0x1c0000000
 //! section .text rva=0x1000 size=0x200 r-x
 //! import ntoskrnl.exe IoCreateDevice
+//! export 12 ExAllocatePool rva=0x2000
+//! export 13 - forward=HAL.#4
 //! ```
 //!
 //! It goes through `nk-pe`, the same code the kernel loads drivers with,
 //! so the ledger and the kernel cannot disagree about a binary.
 
+use nk_pe::exports::{Export, Exports};
 use nk_pe::{Pe, Symbol, for_each_import};
+use std::collections::HashMap;
 use std::process::ExitCode;
 
 fn machine(m: u16) -> String {
@@ -70,7 +74,35 @@ fn dump(path: &str) -> Result<(), String> {
             Symbol::Ordinal(o) => println!("import {dll} #{o}"),
         }
     })
-    .map_err(|e| format!("{path}: imports: {e:?}"))
+    .map_err(|e| format!("{path}: imports: {e:?}"))?;
+    exports(&image, &h).map_err(|e| format!("{path}: exports: {e:?}"))
+}
+
+/// One line per export, by ordinal: its name (`-` if it has none) and
+/// where it leads.
+fn exports(image: &[u8], h: &nk_pe::Headers) -> Result<(), nk_pe::PeError> {
+    let Some(exports) = Exports::parse(image, h.dir(nk_pe::DIR_EXPORT))? else {
+        return Ok(());
+    };
+    let mut names = HashMap::new();
+    for index in 0..exports.names() {
+        let (name, ordinal) = exports.name(index)?;
+        names.insert(ordinal, String::from_utf8_lossy(name).into_owned());
+    }
+    for ordinal in exports.ordinals() {
+        let name = names.get(&ordinal).map_or("-", String::as_str);
+        match exports.by_ordinal(ordinal)? {
+            Some(Export::Rva(rva)) => println!("export {ordinal} {name} rva={rva:#x}"),
+            Some(Export::Forward(to)) => {
+                println!(
+                    "export {ordinal} {name} forward={}",
+                    String::from_utf8_lossy(to)
+                )
+            }
+            None => {}
+        }
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {

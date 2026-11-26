@@ -1,0 +1,7 @@
+# The arm64 boot processor builds NK's low half but goes on using
+# firmware's identity map, in which all of memory can
+# be read at its physical address.
+scenario: aarch64-neg-low-memory
+fails: scenario
+file: kernel/arch/aarch64/mod.rs
+remove:     adopt_low_half();

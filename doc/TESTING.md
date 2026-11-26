@@ -10,7 +10,8 @@ Microsoft's documentation, sample source and the fixture binaries.
 | `make check`, `check-arm` | one boot of the main scenario | (as part of `boot-gate`) |
 | `make boot-gate` | every gate-tier boot scenario, in parallel | yes |
 | `make ledger-check` | the committed ledger is what the boot printed | yes |
-| `make gate` | fmt, clippy (both arches), the three above; prints `GATE-OK` | |
+| `make unwind-check` | kernel code with no unwind entry is on the allow-list | yes |
+| `make gate` | fmt, clippy (both arches), the four above; prints `GATE-OK` | |
 | `make soak` | the whole list, repeated, on an overloaded host | no: long |
 | `make mutants` | each deliberate break must fail its test | no: a build and boot each |
 | `make coverage` | `lib/` line coverage, 95% per file | no: needs `cargo-llvm-cov` |
@@ -157,16 +158,20 @@ None is committed. An absent fixture makes its tests SKIP.
 
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
-| `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | read gives end-of-file, write accepts all bytes; unloads without leaks |
+| `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | started at boot from its key in the hive; read gives end-of-file, write accepts all bytes; unloads without leaks |
 | `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
 | `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
+| `\NK\SYSTEM` | a registry hive written by Windows' own registry from nk-fixtures' `hive/system.hive.txt` (one file for both architectures) | the kernel boots from it: its keys and values, of every size and name, are read back through `CurrentControlSet` (`cm.hive.*`); its boot-start services are started in group order, those without a boot file passed over (`io.service.boot-start`) |
+| `nkc-lib.sys`, `nkc-libuser.sys` | an export driver and a driver that imports from it by name, by ordinal and a variable (nk-fixtures `nkc/nkc-lib*.c`) | the library is loaded with its importer, initialised once per load, kept while an importer is left and unloaded with the last; the importer logs the values it logs on Windows |
+| `nkc-libbad.sys` | imports a name `nkc-lib.sys` does not export | refused with Windows' status, naming the import; its library is not left loaded |
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
-All but `null.sys` (from Microsoft's symbol server) are built with the
-WDK in [nk-fixtures](https://github.com/jgarzik/nk-fixtures), a separate
+All but `null.sys` (from Microsoft's symbol server) are made in
+[nk-fixtures](https://github.com/jgarzik/nk-fixtures), the drivers built
+with the WDK and the hive saved by Windows' registry: a separate
 repository so the test drivers cannot drift toward what NK supports.
 They are identified by hash and never patched or rebuilt to suit NK. `METHOD_NEITHER`
 requests are not sent (`sioctl.neither` is SKIP): the sample probes raw
@@ -209,6 +214,25 @@ checks every mutant still applies.
 A change that adds a mechanism whose failure would be silent (state
 saved and restored, an interrupt acknowledged, a wake-up delivered) adds
 the mutant that removes it.
+
+## Unwind coverage
+
+`tools/unwind_coverage.py` reads each built kernel image and its link
+map (`nkkrnl.map`, written beside the image) and finds every code
+symbol that no `.pdata` entry covers. Such a symbol must be one of:
+
+- code of a library listed in `tools/unwind/<arch>.txt`: the
+  prebuilt `core`, `alloc` and `compiler_builtins`. They are allowed
+  whole: which of their functions a build links in changes with
+  unrelated code and with the compiler's version;
+- a Rust function compiled with NK: the compiler gives an entry to
+  every function that uses the stack, so one without is a leaf;
+- a symbol listed there by name with its reason: assembly, which
+  nothing else checks.
+
+A new assembly routine without unwind directives therefore fails the
+gate until it gets them or is listed; so does a listed name that no
+longer applies. The check prints the count and bytes of each kind.
 
 ## Release images
 

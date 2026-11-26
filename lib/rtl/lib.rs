@@ -1,12 +1,26 @@
-//! Runtime-library logic with no hardware or allocator behind it: UTF-16
-//! counted-string arithmetic and object-name handling.
+//! Runtime-library logic with no hardware behind it: UTF-16
+//! counted-string arithmetic and object-name handling here; in the
+//! modules, formatted output, upper-casing and comparison, the prefix
+//! table, wildcard matching, text forms and length rules, code pages,
+//! and the C string functions. Only the prefix table and the wildcard
+//! matcher allocate.
 //!
 //! The kernel's `Rtl*` exports and its object namespace are thin wrappers
 //! over these functions, so the behaviour is tested on the build host.
 
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
+pub mod codepage;
+pub mod crt;
 pub mod format;
+pub mod prefix;
+pub mod string;
+pub mod upcase;
+pub mod wildcard;
+
+pub use upcase::upcase_char;
 
 /// Largest `Length`, in bytes, `RtlInitUnicodeString` will report: the
 /// 16-bit field must also leave room for the terminator in
@@ -21,54 +35,24 @@ pub fn init_unicode_lengths(chars: usize) -> (u16, u16) {
     (len as u16, (len + 2) as u16)
 }
 
-/// Uppercase one UTF-16 unit for case-insensitive name comparison.
-///
-/// Covers ASCII and Latin-1. Windows uses a full upcase table; names
-/// outside these ranges compare case-sensitively here, which can only
-/// make NK stricter, never match two names Windows keeps apart.
-pub fn upcase(c: u16) -> u16 {
-    match c {
-        0x61..=0x7A => c - 0x20,
-        0xE0..=0xFE if c != 0xF7 => c - 0x20,
-        _ => c,
-    }
-}
-
-/// Compare two names the way the object manager does: case-insensitively.
+/// Compare two names the way the object manager and the registry do:
+/// without regard to case, by the full upper-case table
+/// ([`upcase_char`]).
 pub fn names_equal(a: &[u16], b: &[u16]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| upcase(x) == upcase(y))
+    upcase::equal_unicode_string(a, b, true)
 }
 
-fn strip_prefix_ignore_case<'a>(name: &'a [u16], prefix: &str) -> Option<&'a [u16]> {
-    let n = prefix.len();
-    let head = name.get(..n)?;
-    head.iter()
-        .zip(prefix.bytes())
-        .all(|(&c, p)| upcase(c) == upcase(u16::from(p)))
-        .then(|| &name[n..])
-}
-
-/// The directories that hold MS-DOS device names. `\DosDevices` and
-/// `\GLOBAL??` are aliases of `\??`.
-const DOS_DEVICE_DIRS: [&str; 3] = ["\\??\\", "\\DosDevices\\", "\\GLOBAL??\\"];
-
-/// If `name` is in a DOS-devices directory, the part after the directory.
-/// `\DosDevices\Foo`, `\??\Foo` and `\GLOBAL??\Foo` all yield `Foo`, so the
-/// three spellings name one object.
-pub fn dos_device_name(name: &[u16]) -> Option<&[u16]> {
-    DOS_DEVICE_DIRS
+/// The file an image path names: what follows its last backslash, up to
+/// the terminator if the path carries one (`\\SystemRoot\\System32\\
+/// drivers\\null.sys` names `null.sys`).
+pub fn image_file(path: &[u16]) -> &[u16] {
+    let end = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+    let path = &path[..end];
+    let start = path
         .iter()
-        .find_map(|dir| strip_prefix_ignore_case(name, dir))
-}
-
-/// True if two object names refer to the same object: equal ignoring case,
-/// with the DOS-devices directory aliases folded together.
-pub fn same_object_name(a: &[u16], b: &[u16]) -> bool {
-    match (dos_device_name(a), dos_device_name(b)) {
-        (Some(x), Some(y)) => names_equal(x, y),
-        (None, None) => names_equal(a, b),
-        _ => false,
-    }
+        .rposition(|&c| c == u16::from(b'\\'))
+        .map_or(0, |i| i + 1);
+    &path[start..]
 }
 
 /// An absolute object name: starts with a backslash and names something.
@@ -110,6 +94,18 @@ mod tests {
     }
 
     #[test]
+    fn image_file_is_the_last_component() {
+        assert_eq!(
+            image_file(&w("\\SystemRoot\\System32\\drivers\\null.sys\0")),
+            &w("null.sys")[..]
+        );
+        assert_eq!(image_file(&w("null.sys")), &w("null.sys")[..]);
+        assert_eq!(image_file(&w("System32\\drivers\\")), &w("")[..]);
+        assert_eq!(image_file(&w("a\\b\0\\c")), &w("b")[..]);
+        assert_eq!(image_file(&[]), &w("")[..]);
+    }
+
+    #[test]
     fn init_lengths() {
         assert_eq!(init_unicode_lengths(0), (0, 2));
         assert_eq!(init_unicode_lengths(12), (24, 26));
@@ -127,34 +123,12 @@ mod tests {
         assert!(names_equal(&w("\\Device\\Null"), &w("\\DEVICE\\null")));
         assert!(!names_equal(&w("\\Device\\Null"), &w("\\Device\\Nul")));
         assert!(!names_equal(&w("\\Device\\Null"), &w("\\Device\\Nulls")));
-        assert_eq!(upcase(0xE9), 0xC9, "e-acute");
-        assert_eq!(upcase(0xF7), 0xF7, "division sign has no upper case");
-        assert_eq!(upcase(u16::from(b'[')), u16::from(b'['));
-    }
-
-    #[test]
-    fn dos_device_aliases() {
-        assert_eq!(
-            dos_device_name(&w("\\DosDevices\\IoctlTest")),
-            Some(&w("IoctlTest")[..])
+        assert!(names_equal(&w("caf\u{e9}"), &w("CAF\u{c9}")), "Latin-1");
+        assert!(
+            names_equal(&w("\u{3b1}\u{3b2}\u{3b3}"), &w("\u{391}\u{392}\u{393}")),
+            "beyond Latin-1"
         );
-        assert_eq!(
-            dos_device_name(&w("\\??\\IoctlTest")),
-            Some(&w("IoctlTest")[..])
-        );
-        assert_eq!(dos_device_name(&w("\\global??\\X")), Some(&w("X")[..]));
-        assert_eq!(dos_device_name(&w("\\Device\\IoctlTest")), None);
-        assert_eq!(
-            dos_device_name(&w("\\DosDevices")),
-            None,
-            "the directory itself"
-        );
-        assert!(same_object_name(
-            &w("\\DosDevices\\IoctlTest"),
-            &w("\\??\\IOCTLTEST")
-        ));
-        assert!(!same_object_name(&w("\\DosDevices\\A"), &w("\\Device\\A")));
-        assert!(same_object_name(&w("\\Device\\A"), &w("\\device\\a")));
+        assert!(!names_equal(&w("\u{f7}"), &w("\u{d7}")), "no letters");
     }
 
     #[test]

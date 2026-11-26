@@ -7,6 +7,7 @@ pub mod platform;
 mod smp;
 mod switch;
 mod trap;
+pub mod unwind;
 mod variadic;
 
 pub use apic::{
@@ -26,7 +27,8 @@ pub fn hardware_processor() -> u64 {
 }
 
 pub use switch::{
-    all_registers_survive, callee_saved_survive, context_switch, new_context, wait_for_interrupt,
+    all_registers_survive, call_on_stack, callee_saved_survive, context_switch, new_context,
+    wait_for_interrupt,
 };
 pub use trap::{breakpoint, breakpoints, driver_breakpoint, fp_trap_test};
 
@@ -89,15 +91,17 @@ pub fn switch_stack(
     info: &'static BootInfo,
 ) -> ! {
     // SAFETY: `top` is the top of a mapped stack nothing else uses, 16-byte
-    // aligned; the 32 bytes are the callee's shadow space, and the call
-    // leaves the stack as the convention requires at function entry.
+    // aligned; the 32 bytes are the callee's shadow space, and the push
+    // leaves the stack as the convention requires at function entry. The
+    // return address pushed is zero: `entry` never returns, and a walk of
+    // the new stack ends there.
     unsafe {
         core::arch::asm!(
             "mov rsp, {top}",
             "xor ebp, ebp",
             "sub rsp, 32",
-            "call {entry}",
-            "ud2",
+            "push 0",
+            "jmp {entry}",
             top = in(reg) top,
             entry = in(reg) entry,
             in("rcx") info,
@@ -144,6 +148,26 @@ pub fn cpu_init() {
 }
 
 pub fn mm_init(_info: &BootInfo) {}
+
+/// The low half is already NK's own: nkload built it, in the one table
+/// tree, holding firmware's runtime regions and nothing else.
+pub fn low_half_init() -> Result<(), &'static str> {
+    Ok(())
+}
+
+/// Physical address of the root of the table tree that translates `va`:
+/// one tree holds both halves.
+pub fn pt_root_of(_va: u64) -> u64 {
+    pt_root()
+}
+
+/// Before a call into firmware's runtime code: nothing to do. Its
+/// regions are identity-mapped in the low half of the one address space
+/// every processor runs on.
+pub fn firmware_enter() {}
+
+/// After a firmware call that returned: nothing to undo.
+pub fn firmware_leave() {}
 
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::X86_64 {

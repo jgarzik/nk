@@ -12,15 +12,19 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+mod library;
 mod loader;
 mod mutex;
 mod neg;
 mod null;
 mod ob;
+mod open;
 mod oracle;
 mod pend;
 mod review;
 mod se;
+mod seh;
+mod service;
 mod sioctl;
 mod smp;
 mod thread;
@@ -28,9 +32,16 @@ mod timer;
 mod wait;
 mod work;
 
+use crate::io::file::{self, OpenRequest};
 use crate::mm;
 use crate::test::Group;
-use nk_bootinfo::BootInfo;
+use nk_ntabi::status::NTSTATUS;
+
+/// Open `name` the way the oracle's plain `open` step does, for a
+/// handle.
+fn open(name: &str) -> Result<u64, NTSTATUS> {
+    file::open(&OpenRequest::new(name)).map(|(handle, _)| handle)
+}
 
 /// Every test group. `test=` on the command line selects among them.
 pub static GROUPS: &[&Group] = &[
@@ -40,6 +51,7 @@ pub static GROUPS: &[&Group] = &[
     &dpc::GROUP,
     &timer::GROUP,
     &thread::GROUP,
+    &seh::GROUP,
     &wait::GROUP,
     &ob::GROUP,
     &se::GROUP,
@@ -49,15 +61,21 @@ pub static GROUPS: &[&Group] = &[
     &mutex::GROUP,
     &work::GROUP,
     &pend::GROUP,
+    &open::GROUP,
+    &service::GROUP,
     &driver_api::GROUP,
     &loader::GROUP,
+    &library::GROUP,
     &null::GROUP,
     &sioctl::GROUP,
     &cancel::GROUP,
     &oracle::GROUP,
     &neg::PANIC,
     &neg::FAULT,
+    &neg::NULL,
+    &neg::LOW_MEMORY,
     &neg::STACK_OVERFLOW,
+    &neg::DPC_STACK_OVERFLOW,
     &neg::LOCK_ORDER,
     &neg::LOCK_TWICE,
     &neg::IRQL_LOWER,
@@ -69,21 +87,12 @@ pub static GROUPS: &[&Group] = &[
     &dpc::WATCHDOG,
     &wait::AT_DISPATCH,
     &wait::IN_DPC,
+    &wait::SWITCH_IN_DPC,
     &mutex::EXIT_HOLDING,
     &work::BAD_RETURN,
     &pend::OVERSTATED,
+    &neg::PROTECTED_CLOSE,
 ];
-
-/// The bytes of the boot module called `name`, if the loader supplied it.
-fn module<'a>(info: &'a BootInfo, name: &str) -> Option<&'a [u8]> {
-    let m = info
-        .modules()
-        .iter()
-        .find(|m| m.name().eq_ignore_ascii_case(name.as_bytes()))?;
-    // SAFETY: the loader read the file into reserved memory that stays
-    // mapped and unmodified for the life of the kernel.
-    Some(unsafe { core::slice::from_raw_parts(mm::phys_to_virt(m.phys), m.size as usize) })
-}
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
 /// around every test group, and before loading a driver and after
@@ -99,6 +108,9 @@ pub struct Resources {
     /// (pool arenas, page tables). Those stores grow on first use; that
     /// is not a leak, and anything else that takes frames is.
     spare_frames: u64,
+    /// Entries in the object namespace: device names, symbolic links,
+    /// driver objects. The directories made at boot are counted too,
+    /// and never change.
     names: usize,
     /// Threads that exist: a test waits for the ones it made to end.
     threads: u32,
@@ -116,7 +128,7 @@ pub fn resources() -> Resources {
         pool_blocks: pool.blocks - table_blocks - registry_blocks,
         pool_bytes: pool.bytes - table_bytes - registry_bytes,
         irql: crate::ke::irql::current(),
-        spare_frames: mm::free_frame_count() + mm::pool::arena_frames() + mm::map::table_frames(),
+        spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),
         threads: crate::ke::thread::count(),
         handles: crate::ob::handle::count(),

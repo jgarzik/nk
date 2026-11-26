@@ -60,6 +60,14 @@ pub const AFFINITY: usize = 0x240;
 pub const IDEAL_PROCESSOR: usize = 0x24C;
 /// `ETHREAD.StartAddress`.
 pub const START_ADDRESS: usize = 0x450;
+/// `ApcState.Process`: the process whose address space the thread is
+/// in.
+pub const APC_STATE_PROCESS: usize = 0xB8;
+/// `Process`: the process the thread belongs to.
+pub const PROCESS: usize = 0x220;
+/// `ETHREAD.Cid`: a `CLIENT_ID`, the process id then the thread id,
+/// each pointer-sized.
+pub const CID: usize = 0x478;
 
 /// `KTHREAD_STATE`.
 pub mod state {

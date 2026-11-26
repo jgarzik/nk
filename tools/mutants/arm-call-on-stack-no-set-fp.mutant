@@ -1,0 +1,11 @@
+# The arm64 routine that calls on another stack does not say that x29
+# holds the stack pointer it came from: a stack walk looks for the
+# saved registers on the stack it is leaving and cannot cross back.
+# (The directive is replaced, not removed: the assembler holds the
+# routine's unwind directives to its instruction count.)
+scenario: aarch64
+fails: seh.walk.dpc
+file: kernel/arch/aarch64/switch.rs
+occurrence: 1
+replace:     .seh_set_fp
+with:     .seh_nop

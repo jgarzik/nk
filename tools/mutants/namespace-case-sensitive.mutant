@@ -1,0 +1,7 @@
+# Object names are compared exactly: `\device\null` no longer finds
+# `\Device\Null`, and two names differing in case alone can coexist.
+scenario: aarch64
+fails: ob.namespace.paths
+file: kernel/ob/mod.rs
+replace: const OPTIONS: Options = Options::new(true);
+with: const OPTIONS: Options = Options::new(false);

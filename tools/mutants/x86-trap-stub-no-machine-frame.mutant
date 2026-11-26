@@ -1,0 +1,8 @@
+# The x86-64 interrupt entry stubs do not say that the CPU's frame is on
+# the stack: a stack walk takes the interrupted code's stack pointer to
+# be just above the stub's, and cannot go on beneath the interrupt.
+scenario: x86_64
+fails: seh.walk.interrupt
+file: kernel/arch/x86_64/trap.rs
+occurrence: 1
+remove:     .seh_pushframe

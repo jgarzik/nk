@@ -1,0 +1,17 @@
+[package]
+name = "nk-unwind"
+description = "Windows unwind data: .pdata lookup, x64 and arm64 virtual unwind, scope-table search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dev-dependencies]
+nk-pe = { path = "../pe" }
+
+[lints]
+workspace = true

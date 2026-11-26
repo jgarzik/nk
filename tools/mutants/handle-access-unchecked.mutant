@@ -1,0 +1,7 @@
+# A handle used on behalf of user mode is not held to the access it was
+# granted: a handle opened to query can be used to modify.
+scenario: x86_64
+fails: ob.handle-access
+file: kernel/ob/handle.rs
+replace:     let Entry(body) = table.reference(index, desired, mode).map_err(status)?;
+with:     let Entry(body) = table.reference(index, desired, Mode::Kernel).map_err(status)?;

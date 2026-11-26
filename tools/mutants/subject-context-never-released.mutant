@@ -1,0 +1,6 @@
+# Releasing a captured subject context keeps the reference it took on
+# the primary token: every open leaks one, and nothing else notices.
+scenario: aarch64
+fails: se.access-state
+file: kernel/se/token.rs
+remove:         object::dereference(token.cast());

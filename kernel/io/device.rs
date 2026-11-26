@@ -65,12 +65,19 @@ pub unsafe extern "C" fn IoCreateDevice(
     // Device object, then the driver's extension, then NK's private block.
     let ext = (extension_size as usize).next_multiple_of(16);
     let total = size_of::<DEVICE_OBJECT>() + ext + size_of::<DeviceExtra>();
-    let Some(body) = ob::object::create(&ob::object::DEVICE_TYPE, total) else {
+    // SAFETY: `name` is valid per the contract.
+    let name = unsafe { rtl::copy_unicode(name) };
+    // A device with a name is an object with a name: `\Device\Null` is
+    // `Null` in the directory `\Device`.
+    let created = if name.is_empty() {
+        ob::object::create(&ob::object::DEVICE_TYPE, total)
+    } else {
+        ob::object::create_named(&ob::object::DEVICE_TYPE, total, ob::leaf(&name))
+    };
+    let Some(body) = created else {
         return STATUS_INSUFFICIENT_RESOURCES;
     };
     let device = body.cast::<DEVICE_OBJECT>();
-    // SAFETY: `name` is valid per the contract.
-    let name = unsafe { rtl::copy_unicode(name) };
     // SAFETY: `device` is a fresh, zeroed, exclusively owned block of
     // `total` bytes, 16-byte aligned as the pool guarantees; `driver` and
     // `device_out` are valid per the contract.
@@ -106,7 +113,7 @@ pub unsafe extern "C" fn IoCreateDevice(
         (*queue).DeviceListHead.Blink = &raw mut (*queue).DeviceListHead;
 
         if !name.is_empty() {
-            let status = ob::insert(&name, ob::Target::Device(device));
+            let status = ob::insert(&name, body);
             if !nt_success(status) {
                 ob::object::dereference(body);
                 return status;
@@ -149,7 +156,7 @@ unsafe fn destroy(device: *mut DEVICE_OBJECT) {
 ///
 /// # Safety
 /// `body` is a device object nothing refers to any more.
-pub unsafe fn deleted(body: *mut u8) {
+pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
     // SAFETY: per the contract; the descriptor is a pool block of the
     // kernel's, put there by `replace_security`.
     unsafe {
@@ -207,7 +214,7 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
     // SAFETY: `device` is readable per the contract; `check` validates it.
     unsafe {
         check(device, "IoDeleteDevice");
-        ob::remove_device(device);
+        ob::remove(device.cast());
         let unreferenced = {
             let _database = DATABASE.lock();
             if (*extra(device)).delete_pending {

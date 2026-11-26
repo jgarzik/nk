@@ -10,10 +10,12 @@
 //! judge accepts a bugcheck only after that line, so a crash on the way
 //! to the test is not mistaken for the one the test meant to cause.
 
-use crate::ke::{Rank, SpinLock, irql};
+use crate::ke::{Rank, SpinLock, dpc, irql};
 use crate::mm;
-use crate::test::{Group, Report};
+use crate::test::{Group, Report, Slot};
+use core::ffi::c_void;
 use nk_bootinfo::BootInfo;
+use nk_ntabi::ke::KDPC;
 
 /// A Rust panic in the kernel must become a bugcheck.
 pub static PANIC: Group = Group {
@@ -46,6 +48,48 @@ fn fault(r: &mut Report, _: &BootInfo) {
     r.fail(
         "neg.fault",
         format_args!("read of unmapped {va:#x} returned {byte:#x}"),
+    );
+}
+
+/// A null pointer must fault: nothing of firmware's or anyone's is
+/// mapped at the bottom of the address space.
+pub static NULL: Group = Group {
+    names: &["neg.null"],
+    run: null,
+    manual: true,
+};
+
+fn null(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.null");
+    // SAFETY: not safe, by design: the read must fault. The address is
+    // hidden from the compiler, which knows a null read cannot happen.
+    let byte = unsafe { core::hint::black_box(core::ptr::null::<u8>()).read_volatile() };
+    r.fail(
+        "neg.null",
+        format_args!("read of address zero returned {byte:#x}"),
+    );
+}
+
+/// Ordinary memory must not be readable at its physical address: the
+/// low half holds firmware's runtime regions and nothing else, where
+/// firmware's own map had all of memory.
+pub static LOW_MEMORY: Group = Group {
+    names: &["neg.low-memory"],
+    run: low_memory,
+    manual: true,
+};
+
+fn low_memory(r: &mut Report, _: &BootInfo) {
+    let Some(frame) = mm::alloc_frames(1) else {
+        return r.fail("neg.low-memory", format_args!("no frames"));
+    };
+    kprintln!("NK-NEG-ARMED neg.low-memory");
+    // SAFETY: not safe, by design: the read must fault.
+    let byte = unsafe { (frame as *const u8).read_volatile() };
+    mm::free_frames(frame, 1);
+    r.fail(
+        "neg.low-memory",
+        format_args!("read of memory at its physical address {frame:#x} returned {byte:#x}"),
     );
 }
 
@@ -84,6 +128,33 @@ fn stack_overflow(r: &mut Report, _: &BootInfo) {
     r.fail(
         "neg.stack-overflow",
         format_args!("unbounded recursion returned {depth}"),
+    );
+}
+
+/// The same in a DPC routine, which runs on its processor's DPC stack,
+/// not on the thread's.
+pub static DPC_STACK_OVERFLOW: Group = Group {
+    names: &["neg.dpc-stack-overflow"],
+    run: dpc_stack_overflow,
+    manual: true,
+};
+
+fn dpc_stack_overflow(r: &mut Report, _: &BootInfo) {
+    /// # Safety
+    /// Called as a DPC routine; it dereferences none of its arguments.
+    unsafe extern "C" fn routine(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        descend(0);
+    }
+    static DPC: Slot<KDPC> = Slot::new();
+    kprintln!("NK-NEG-ARMED neg.dpc-stack-overflow");
+    // SAFETY: static storage for a `KDPC`, not queued.
+    unsafe {
+        dpc::KeInitializeDpc(DPC.ptr(), Some(routine), core::ptr::null_mut());
+        dpc::KeInsertQueueDpc(DPC.ptr(), core::ptr::null_mut(), core::ptr::null_mut());
+    }
+    r.fail(
+        "neg.dpc-stack-overflow",
+        format_args!("unbounded recursion in a DPC routine returned"),
     );
 }
 
@@ -156,4 +227,19 @@ fn breakpoint(r: &mut Report, _: &BootInfo) {
     // With `debug=on` a debugger is taken to be attached and to say go:
     // then getting here is right, and the scenario expects it.
     r.ok("neg.breakpoint");
+}
+
+/// Kernel code closing a kernel handle that is protected from close
+/// must stop the system, as on Windows; user mode is only refused.
+pub static PROTECTED_CLOSE: Group = Group {
+    names: &["neg.protected-close"],
+    run: protected_close,
+    manual: true,
+};
+
+fn protected_close(r: &mut Report, _: &BootInfo) {
+    let why = crate::ob::handle::protected_close_test(|| {
+        kprintln!("NK-NEG-ARMED neg.protected-close");
+    });
+    r.fail("neg.protected-close", format_args!("{why}"));
 }

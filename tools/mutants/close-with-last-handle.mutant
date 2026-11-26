@@ -1,0 +1,8 @@
+# IRP_MJ_CLOSE is sent when the last handle closes instead of when the
+# last reference goes: a driver frees what it keeps for a file object
+# that a request or another driver still refers to.
+scenario: x86_64
+fails: io.close.cleanup-then-close
+file: kernel/io/file.rs
+replace:         cleanup(object.cast());
+with:         cleanup(object.cast()); let _ = request(object.cast(), IRP_MJ_CLOSE, [0; 4]).and_then(|irp| submit(object.cast(), irp));

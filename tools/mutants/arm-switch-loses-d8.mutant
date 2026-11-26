@@ -1,7 +1,10 @@
 # The arm64 thread switch does not restore d8 and d9, registers a call
-# preserves.
+# preserves: it loads the saved values into scratch registers instead.
+# (The instruction is replaced, not removed: the assembler holds the
+# routine's unwind directives to its instruction count.)
 scenario: aarch64
 fails: thread.registers
 file: kernel/arch/aarch64/switch.rs
 occurrence: 1
-remove:     ldp d8, d9, [sp, #96]
+replace:     ldp d8, d9, [sp, #96]
+with:     ldp d16, d17, [sp, #96]

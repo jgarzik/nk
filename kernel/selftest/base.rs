@@ -15,6 +15,10 @@ pub static GROUP: Group = Group {
         "ke.interrupts",
         "mm.frames",
         "mm.map",
+        "mm.low-half",
+        "mm.user.map",
+        "mm.user.refused",
+        "mm.user.other-cpu",
         "mm.pool",
         "mm.stack",
         "hal.cpus",
@@ -38,6 +42,16 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("ke.interrupts", ke::interrupt::self_test);
     r.check("mm.frames", mm::frames_self_test);
     r.check("mm.map", mm::map::self_test);
+    match mm::map::low_half_test() {
+        Ok(n) => r.ok_with("mm.low-half", format_args!("{n} firmware regions")),
+        Err(why) => r.fail("mm.low-half", format_args!("{why}")),
+    }
+    r.check("mm.user.map", mm::user::map_test);
+    r.check("mm.user.refused", mm::user::refuse_test);
+    match mm::user::other_cpu_test() {
+        Ok(n) => r.ok_with("mm.user.other-cpu", format_args!("read on processor {n}")),
+        Err(why) => r.fail("mm.user.other-cpu", format_args!("{why}")),
+    }
     r.check("mm.pool", mm::pool::self_test);
     r.check("mm.stack", mm::stack::self_test);
     match hal::platform::self_test(info) {

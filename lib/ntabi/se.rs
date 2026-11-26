@@ -41,6 +41,70 @@ const _: () = {
     assert!(offset_of!(SECURITY_DESCRIPTOR, Dacl) == 32);
 };
 
+/// [`SECURITY_SUBJECT_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_security_subject_context):
+/// who is asking, as `SeCaptureSubjectContext` records it. Drivers
+/// keep one and read it in line.
+#[repr(C)]
+pub struct SECURITY_SUBJECT_CONTEXT {
+    /// The thread's impersonation token; null when it has none.
+    pub ClientToken: *mut c_void,
+    pub ImpersonationLevel: u32,
+    /// The process's primary token.
+    pub PrimaryToken: *mut c_void,
+    pub ProcessAuditId: *mut c_void,
+}
+
+/// `ACCESS_STATE.Flags`: the subject holds the privilege to pass
+/// through directories it may not list (`ntifs.h`).
+pub const TOKEN_HAS_TRAVERSE_PRIVILEGE: u32 = 0x0001;
+
+/// [`ACCESS_STATE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_access_state):
+/// an open in progress: what was asked for, what has been granted, and
+/// for whom. A create request points to one
+/// (`IO_SECURITY_CONTEXT.AccessState`) and file systems read and write
+/// it in line.
+#[repr(C)]
+pub struct ACCESS_STATE {
+    pub OperationID: LUID,
+    pub SecurityEvaluated: u8,
+    pub GenerateAudit: u8,
+    pub GenerateOnClose: u8,
+    pub PrivilegesAllocated: u8,
+    pub Flags: u32,
+    pub RemainingDesiredAccess: u32,
+    pub PreviouslyGrantedAccess: u32,
+    pub OriginalDesiredAccess: u32,
+    pub SubjectSecurityContext: SECURITY_SUBJECT_CONTEXT,
+    pub SecurityDescriptor: *mut c_void,
+    pub AuxData: *mut c_void,
+    /// A union of `INITIAL_PRIVILEGE_SET` (a count, a control word and
+    /// three privileges) and `PRIVILEGE_SET`.
+    pub Privileges: [u32; 11],
+    pub AuditPrivileges: u8,
+    pub ObjectName: crate::io::UNICODE_STRING,
+    pub ObjectTypeName: crate::io::UNICODE_STRING,
+}
+
+const _: () = {
+    assert!(size_of::<SECURITY_SUBJECT_CONTEXT>() == 0x20);
+    assert!(offset_of!(SECURITY_SUBJECT_CONTEXT, ImpersonationLevel) == 0x08);
+    assert!(offset_of!(SECURITY_SUBJECT_CONTEXT, PrimaryToken) == 0x10);
+    assert!(offset_of!(SECURITY_SUBJECT_CONTEXT, ProcessAuditId) == 0x18);
+    assert!(size_of::<ACCESS_STATE>() == 0xA0);
+    assert!(offset_of!(ACCESS_STATE, SecurityEvaluated) == 0x08);
+    assert!(offset_of!(ACCESS_STATE, Flags) == 0x0C);
+    assert!(offset_of!(ACCESS_STATE, RemainingDesiredAccess) == 0x10);
+    assert!(offset_of!(ACCESS_STATE, PreviouslyGrantedAccess) == 0x14);
+    assert!(offset_of!(ACCESS_STATE, OriginalDesiredAccess) == 0x18);
+    assert!(offset_of!(ACCESS_STATE, SubjectSecurityContext) == 0x20);
+    assert!(offset_of!(ACCESS_STATE, SecurityDescriptor) == 0x40);
+    assert!(offset_of!(ACCESS_STATE, AuxData) == 0x48);
+    assert!(offset_of!(ACCESS_STATE, Privileges) == 0x50);
+    assert!(offset_of!(ACCESS_STATE, AuditPrivileges) == 0x7C);
+    assert!(offset_of!(ACCESS_STATE, ObjectName) == 0x80);
+    assert!(offset_of!(ACCESS_STATE, ObjectTypeName) == 0x90);
+};
+
 /// `SE_EXPORTS` (`ntifs.h`): the privileges and well-known SIDs the
 /// kernel publishes through `SeExports`.
 #[repr(C)]

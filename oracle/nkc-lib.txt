@@ -1,0 +1,12 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 c56b83446d62afc3f22fc695a4f006370b50142dff9bc2e03a378cc17285f52c
+# driver nkc-lib.sys sha256 3701eb7dd37708ce6bbcc9ca332a9b8463c254262898395d6973200363956b5f
+# driver nkc-libuser.sys sha256 81b450c7ed4f6f8e6ee7247721a0e798c522d3e4bb949720130df6e422f9f36b
+install nkc-lib.sys: ok
+load nkc-libuser: ok
+open d \Device\NkcLibUser: 00000000
+ioctl d 00222000 - 64: 00000000 40 050000003744524f415441444154414401004b4e02004b4e41544144010000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222000 - 64: 00000000 40 050000003744524f415441444154414401004b4e02004b4e41544144010000000000000021434b4eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+close d: 00000000
+unload nkc-libuser: ok
+end

@@ -1,0 +1,5 @@
+# A thread is not told which process it belongs to.
+scenario: aarch64
+fails: ps.system
+file: kernel/ke/thread.rs
+remove:         field::<*mut u8>(thread, layout::PROCESS).write(process);

@@ -57,6 +57,12 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
         test::abort("mm.init", format_args!("{why}"));
     }
     kprintln!("memory: {} MiB free", mm::free_frame_count() * 4 / 1024);
+    if let Err(why) = arch::low_half_init() {
+        test::abort("mm.low-half", format_args!("{why}"));
+    }
+    if let Err(why) = ldr::init(info) {
+        test::abort("ldr.init", format_args!("{why}"));
+    }
 
     // Leave the loader's stack, which lies in the direct map with ordinary
     // memory below it, for one with nothing mapped below.
@@ -76,6 +82,11 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = arch::interrupts_init() {
         test::abort("hal.interrupts", format_args!("{why}"));
     }
+    // Threads are objects: the object manager comes first.
+    ob::object::init(arch::counter());
+    if let Err(why) = ps::process::init(info.boot_time) {
+        test::abort("ps.process", format_args!("{why}"));
+    }
     // What this processor is running becomes its idle thread.
     if let Err(why) = ke::thread::init_cpu(ke::smp::stack_of(0)) {
         test::abort("ke.thread", format_args!("{why}"));
@@ -86,13 +97,18 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
         test::abort("ke.time", format_args!("{why}"));
     }
     ke::ipi::init();
-    ke::dpc::init(info);
+    if let Err(why) = ke::dpc::init(info) {
+        test::abort("ke.dpc", format_args!("{why}"));
+    }
     match ke::smp::start_all(info) {
         Ok(running) => kprintln!("ke: {running} processors running"),
         Err(why) => test::abort("ke.smp", format_args!("{why}")),
     }
     if let Err(why) = ex::work::init() {
         test::abort("ex.work", format_args!("{why}"));
+    }
+    if let Err(why) = ob::init() {
+        test::abort("ob", format_args!("{why}"));
     }
     if let Err(why) = cm::init() {
         test::abort("cm", format_args!("{why}"));
@@ -107,11 +123,15 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     ke::thread::idle_loop()
 }
 
-/// The first thread: run the tests, then power off.
+/// The first thread: start the drivers that start at boot, run the
+/// tests, then power off.
 fn system_thread(info: usize) {
     // SAFETY: the address of the loader's hand-off block, which lives
     // for ever and is never written.
     let info = unsafe { &*(info as *const BootInfo) };
     export::print_all();
+    if let Err(why) = io::service::start_boot_services() {
+        test::abort("io.boot-start", format_args!("{why}"));
+    }
     test::run_all(selftest::GROUPS, info)
 }

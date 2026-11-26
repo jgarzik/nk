@@ -58,6 +58,11 @@ class Log:
     def exports(self):
         return [l for l in self.lines if l.startswith("NK-EXPORT ")]
 
+    def lookups(self):
+        """The names drivers asked `MmGetSystemRoutineAddress` for that the
+        kernel does not export, as it printed them."""
+        return [l for l in self.lines if l.startswith("NK-LOOKUP ")]
+
     def tail(self, count=8):
         return [l for l in self.lines if l][-count:]
 

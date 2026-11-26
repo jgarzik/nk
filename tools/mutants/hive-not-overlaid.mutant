@@ -1,0 +1,6 @@
+# The SYSTEM hive is checked and then not copied into the registry: the
+# kernel boots from its built-in keys alone and says nothing.
+scenario: x86_64
+fails: cm.hive.values
+file: kernel/cm/mod.rs
+remove:         nk_cm::import(hive, system, &regf).map_err(refusal)?;

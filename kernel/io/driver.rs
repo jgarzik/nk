@@ -1,9 +1,11 @@
 //! Driver objects: load an image, call its entry point, unload it.
+//! `io::service` decides which image and when; nothing else loads a
+//! driver.
 
-use super::{TAG_DRIVER, irp};
+use super::irp;
 use crate::ke::{Rank, SpinLock, irql};
 use crate::ldr::{self, Image, LoadError};
-use crate::mm::pool;
+use crate::ob;
 use alloc::vec::Vec;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -23,10 +25,11 @@ unsafe impl Send for Record {}
 static DRIVERS: SpinLock<Vec<Record>> = SpinLock::new(Rank::Drivers, Vec::new());
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "fields are read through Debug in test reports")]
 pub enum DriverError {
     Load(LoadError),
     NoMemory,
+    /// The driver object could not be named `\Driver\<service>`.
+    Name(NTSTATUS),
     /// The driver's own entry point refused to initialise.
     EntryFailed(NTSTATUS),
 }
@@ -48,25 +51,49 @@ fn counted(s: &mut [u16]) -> UNICODE_STRING {
     }
 }
 
-/// Load the driver in `file` and run its entry point. `name` is the
-/// service name: the file name without its extension.
-pub fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> {
+/// The running driver of the service `name`, if it is running.
+pub(super) fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
+    DRIVERS
+        .lock()
+        .iter()
+        .find(|r| {
+            // `\Driver\<name>` and its terminator.
+            let service = &r._driver_name[8..r._driver_name.len() - 1];
+            nk_rtl::names_equal(service, &name.encode_utf16().collect::<Vec<u16>>())
+        })
+        .map(|r| r.object)
+}
+
+/// Load the driver in `file`, the contents of the image called
+/// `file_name`, and run its entry point. `name` is its service, whose
+/// key exists.
+pub(super) fn load(
+    name: &str,
+    file_name: &str,
+    file: &[u8],
+) -> Result<*mut DRIVER_OBJECT, DriverError> {
     irql::expect_passive("loading a driver");
-    let image = ldr::load(file).map_err(DriverError::Load)?;
-    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
-    let object = pool::alloc_zeroed(size, TAG_DRIVER).cast::<DRIVER_OBJECT>();
-    if object.is_null() {
-        ldr::unload(&image);
-        return Err(DriverError::NoMemory);
-    }
-    // Its service key, which on Windows exists before a driver is
-    // started; the path to it is what the driver's entry is given.
-    if crate::cm::service_key(name).is_err() {
-        ldr::unload(&image);
-        let _ = pool::free(object.cast());
-        return Err(DriverError::NoMemory);
-    }
+    let image = ldr::load(file_name, file).map_err(DriverError::Load)?;
     let mut driver_name = wide("\\Driver\\", name);
+    // The driver object is an object called `\Driver\<service>`, with
+    // its extension behind it.
+    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+    let path = &driver_name[..driver_name.len() - 1];
+    let Some(body) = ob::object::create_named(&ob::object::DRIVER_TYPE, size, ob::leaf(path))
+    else {
+        ldr::unload(&image);
+        return Err(DriverError::NoMemory);
+    };
+    let object = body.cast::<DRIVER_OBJECT>();
+    // SAFETY: a named object made above; `free` takes the name away
+    // before it gives up the reference.
+    let named = unsafe { ob::insert(path, body) };
+    if !nt_success(named) {
+        // SAFETY: the creating reference of an object nothing else has.
+        unsafe { ob::object::dereference(body) };
+        ldr::unload(&image);
+        return Err(DriverError::Name(named));
+    }
     let mut registry_path = wide(
         "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\",
         name,
@@ -108,7 +135,11 @@ pub fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> 
             device = (*device).NextDevice;
         }
     }
-    DRIVERS.lock().push(Record {
+    let mut drivers = DRIVERS.lock();
+    // Room for exactly one more, as unloading leaves exactly enough: the
+    // table's memory then depends only on how many drivers are loaded.
+    drivers.reserve_exact(1);
+    drivers.push(Record {
         object,
         image,
         _driver_name: driver_name,
@@ -118,16 +149,20 @@ pub fn load(name: &str, file: &[u8]) -> Result<*mut DRIVER_OBJECT, DriverError> 
 }
 
 fn free(object: *mut DRIVER_OBJECT, image: &Image) {
-    // SAFETY: `object` is a driver object this module allocated; clearing
-    // Type makes a stale pointer recognisable.
-    unsafe { (*object).Type = 0 };
-    let _ = pool::free(object.cast());
+    // SAFETY: `object` is a driver object this module made and named;
+    // clearing Type makes a stale pointer recognisable. The name goes
+    // before the reference the object was made with.
+    unsafe {
+        ob::remove(object.cast());
+        (*object).Type = 0;
+        ob::object::dereference(object.cast());
+    }
     ldr::unload(image);
 }
 
 /// Unload a driver: call its unload routine, then free its object and
 /// image. Fails, leaving the driver loaded, if it has no unload routine.
-pub fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
+pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
     let index = DRIVERS
         .lock()
@@ -157,4 +192,15 @@ pub fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     }
     free(record.object, &record.image);
     Ok(())
+}
+
+impl DriverError {
+    /// The status Windows' `ZwLoadDriver` gives for it.
+    pub fn status(&self) -> NTSTATUS {
+        match self {
+            Self::Load(error) => error.status(),
+            Self::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            Self::Name(status) | Self::EntryFailed(status) => *status,
+        }
+    }
 }

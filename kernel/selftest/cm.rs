@@ -10,7 +10,16 @@ use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 
 pub static GROUP: Group = Group {
-    names: &["cm.keys", "cm.values", "cm.delete"],
+    names: &[
+        "cm.keys",
+        "cm.values",
+        "cm.delete",
+        "cm.namespace",
+        "cm.control-set",
+        "cm.hive.values",
+        "cm.hive.names",
+        "cm.hive.refused",
+    ],
     run,
     manual: false,
 };
@@ -102,7 +111,7 @@ fn keys() -> Result<(), &'static str> {
     let refused = [
         key("\\NkTest", services, false).0, // relative, yet from the top
         key("Registry\\Machine", null, false).0, // no root and not from the top
-        key("\\Device\\Null", null, false).0, // elsewhere in the namespace
+        key("\\Device", null, false).0,     // elsewhere in the namespace
         key("NkTest", 0x1234 as *mut c_void, false).0,
     ];
     if refused != [0xC000_003B, 0xC000_003B, 0xC000_0024, 0xC000_0008] {
@@ -316,8 +325,269 @@ fn delete() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A registry name is a path in the object namespace: it is looked up
+/// there, through symbolic links and from a directory if one is given,
+/// and must lead to the registry's root key, which walks the rest.
+fn namespace() -> Result<(), &'static str> {
+    use crate::io::file::{self, OpenRequest};
+    use crate::ob::{self, handle, object};
+    let wide = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+    let null = core::ptr::null_mut();
+    // The root key is an object called `\Registry`; a path below it
+    // stops there with the rest left over.
+    let (root, rest) = ob::lookup(None, &wide("\\REGISTRY\\Machine\\System"))
+        .map_err(|_| "\\Registry is not in the namespace")?;
+    // SAFETY: the look-up's reference, given up after the type is read.
+    let is_key = unsafe {
+        let is_key = core::ptr::eq(object::type_of(root), &raw const object::KEY_TYPE);
+        object::dereference(root);
+        is_key
+    };
+    if !is_key || rest != wide("\\Machine\\System") {
+        return Err("\\Registry is not a key object that is handed the rest of the path");
+    }
+    // A handle to the namespace's root directory, to start from.
+    let (directory, _) = ob::lookup(None, &wide("\\")).map_err(|_| "no root directory")?;
+    // SAFETY: the look-up's reference, handed to the handle.
+    let directory = unsafe {
+        let opened = handle::open(directory, 0).unwrap_or(0);
+        object::dereference(directory);
+        opened as *mut c_void
+    };
+    let made = ob::insert_link(&wide("\\??\\NkRegistry"), &wide("\\Registry\\Machine"));
+    let result = (|| {
+        if made != 0 {
+            return Err("a symbolic link to a key could not be made");
+        }
+        let (direct, system, _) = key("\\Registry\\Machine\\System", null, false);
+        let (linked, by_link, _) = key("\\DosDevices\\nkregistry\\SYSTEM", null, false);
+        let (below, by_directory, _) = key("Registry\\Machine\\System", directory, false);
+        // A key made by one path is found by the others.
+        let (created, new, disposition) = key("\\??\\NkRegistry\\System\\NkNamespace", null, true);
+        let (found, same, _) = key("NkNamespace", system, false);
+        let deleted = ZwDeleteKey(new);
+        for handle in [system, by_link, by_directory, new, same] {
+            ZwClose(handle);
+        }
+        if (direct, linked, below) != (0, 0, 0) {
+            return Err("a key was not opened through the namespace by every path to it");
+        }
+        if (created, disposition, found, deleted) != (0, 1, 0, 0) {
+            return Err("a key made through a symbolic link is not where the link leads");
+        }
+        let refused = [
+            (key("\\Registry\\Machine\\NkNone", null, false).0, NOT_FOUND),
+            (key("\\NkNoDirectory\\Machine", null, false).0, 0xC000_003A),
+            (key("\\??\\NkNoLink\\System", null, false).0, 0xC000_003A),
+            (key("\\Device", null, false).0, 0xC000_0024),
+            (key("\\", null, false).0, 0xC000_0024),
+            (key("Device", directory, false).0, 0xC000_0024),
+            (key("\\Registry", directory, false).0, 0xC000_003B),
+        ];
+        if refused.iter().any(|(status, expected)| status != expected) {
+            return Err("a name that leads to no key was not refused with its own status");
+        }
+        // A key is no file, by its name or as the root of one.
+        let (machine, opened, _) = key("\\Registry\\Machine", null, false);
+        let by_name = file::open(&OpenRequest::new("\\Registry\\Machine"));
+        let relative = file::open(&OpenRequest {
+            root: Some(opened as u64),
+            ..OpenRequest::new("System")
+        });
+        ZwClose(opened);
+        let mismatch = Err(0xC000_0024u32 as i32);
+        if machine != 0 || by_name != mismatch || relative != mismatch {
+            return Err("a key was opened as a file");
+        }
+        Ok(())
+    })();
+    ob::remove_link(&wide("\\??\\NkRegistry"));
+    ZwClose(directory);
+    result
+}
+
+const SYSTEM: &str = "\\Registry\\Machine\\System";
+const NK_TEST: &str = "\\Registry\\Machine\\System\\CurrentControlSet\\Control\\NkTest";
+
+/// The type and data of the value `name` of the key `path`, whatever
+/// its size; the status if the key or the value is not there.
+fn value_of(path: &str, name: &str) -> Result<(u32, Vec<u8>), u32> {
+    let (status, handle, _) = key(path, core::ptr::null_mut(), false);
+    if status != 0 {
+        return Err(status);
+    }
+    let text: Vec<u16> = name.encode_utf16().collect();
+    let name = counted(&text);
+    let mut needed = 0u32;
+    // SAFETY: locals that outlive the calls; the buffer is as long as
+    // the call is told.
+    let read = unsafe {
+        ZwQueryValueKey(
+            handle,
+            &raw const name,
+            2,
+            core::ptr::null_mut(),
+            0,
+            &raw mut needed,
+        );
+        let mut out = alloc::vec![0u8; needed as usize];
+        let status = ZwQueryValueKey(
+            handle,
+            &raw const name,
+            2,
+            out.as_mut_ptr(),
+            needed,
+            &raw mut needed,
+        );
+        (status as u32, out)
+    };
+    ZwClose(handle);
+    match read {
+        (0, out) if out.len() >= 12 => Ok((
+            u32::from_le_bytes([out[4], out[5], out[6], out[7]]),
+            out[12..].to_vec(),
+        )),
+        (0, _) => Err(0xC000_0001),
+        (status, _) => Err(status),
+    }
+}
+
+fn utf16(text: &str) -> Vec<u8> {
+    text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+/// `CurrentControlSet` is the control set `Select` names, by a
+/// symbolic link: what is made through one name is there through the
+/// other. The keys every system has are there, hive or no hive.
+fn control_set() -> Result<(), &'static str> {
+    let null = core::ptr::null_mut();
+    let Ok((4, current)) = value_of(&alloc::format!("{SYSTEM}\\Select"), "Current") else {
+        return Err("Select\\Current is not a number");
+    };
+    let control = alloc::format!("{SYSTEM}\\ControlSet{:03}", current[0]);
+    for path in [
+        "\\Registry\\Machine\\Hardware",
+        "\\Registry\\User",
+        &alloc::format!("{SYSTEM}\\CurrentControlSet"),
+        &alloc::format!("{SYSTEM}\\CurrentControlSet\\Control\\Class"),
+        &alloc::format!("{control}\\Services"),
+    ] {
+        let (status, handle, _) = key(path, null, false);
+        ZwClose(handle);
+        if status != 0 {
+            return Err("a key every system has is not there");
+        }
+    }
+    // Made through the link, found in the control set; and back.
+    let (made, by_link, disposition) = key(&alloc::format!("{SERVICES}\\NkLink"), null, true);
+    let (found, by_set, _) = key(&alloc::format!("{control}\\Services\\NkLink"), null, false);
+    let written = set(by_set, "Through", 4, &7u32.to_le_bytes());
+    let read = query(by_link, "Through", 2, 28);
+    let deleted = ZwDeleteKey(by_set);
+    let gone = key(&alloc::format!("{SERVICES}\\NkLink"), null, false).0;
+    for handle in [by_link, by_set] {
+        ZwClose(handle);
+    }
+    if (made, disposition, found) != (0, 1, 0) {
+        return Err("a key made through CurrentControlSet is not in the control set");
+    }
+    if written != 0 || (read.0, read.2[12]) != (0, 7) {
+        return Err("a value set in the control set is not there through CurrentControlSet");
+    }
+    if deleted != 0 || gone != NOT_FOUND {
+        return Err("a key deleted in the control set is still there through CurrentControlSet");
+    }
+    Ok(())
+}
+
+/// What only the hive holds is in the registry, read as drivers read
+/// it, through `CurrentControlSet`: values of every size, keys nested
+/// deep and in great number.
+fn hive_values() -> Result<(), &'static str> {
+    let counter = |n: usize| -> Vec<u8> { (0u32..).flat_map(u32::to_le_bytes).take(n).collect() };
+    let expected: [(&str, &str, u32, Vec<u8>); 9] = [
+        ("Types", "Dword", 4, 0x1234_5678u32.to_le_bytes().to_vec()),
+        ("Types", "Multi", 7, utf16("one\0two\0three and four\0\0")),
+        ("Types", "None", 0, Vec::new()),
+        ("Sizes", "Size4", 3, alloc::vec![0xA1, 0xA2, 0xA3, 0xA4]),
+        (
+            "Sizes",
+            "Size5",
+            3,
+            alloc::vec![0xA1, 0xA2, 0xA3, 0xA4, 0xA5],
+        ),
+        ("Sizes", "Size16345", 3, counter(16345)),
+        ("Sizes", "Size40000", 3, counter(40000)),
+        ("", "", 1, utf16("the unnamed value\0")),
+        ("Deep\\1\\2\\3\\4\\5\\6\\7\\8", "Bottom", 1, utf16("here\0")),
+    ];
+    for (below, name, kind, data) in expected {
+        if value_of(&alloc::format!("{NK_TEST}\\{below}"), name) != Ok((kind, data)) {
+            crate::kd::print(format_args!("cm.hive.values: {below} {name}\n"));
+            return Err("a value of the hive is not in the registry as the hive has it");
+        }
+    }
+    let services = value_of(&alloc::format!("{SERVICES}\\Npfs"), "Group");
+    if services != Ok((1, utf16("File System\0"))) {
+        return Err("a service key of the hive is not under CurrentControlSet\\Services");
+    }
+    let last = key(
+        &alloc::format!("{NK_TEST}\\Many\\Key1199"),
+        core::ptr::null_mut(),
+        false,
+    );
+    let past = key(
+        &alloc::format!("{NK_TEST}\\Many\\Key1200"),
+        core::ptr::null_mut(),
+        false,
+    );
+    ZwClose(last.1);
+    if (last.0, past.0) != (0, NOT_FOUND) {
+        return Err("the hive's many subkeys of one key are not all there, or too many");
+    }
+    Ok(())
+}
+
+/// Names outside ASCII are found, in whatever letter case: Latin-1,
+/// Greek, and characters that have no case.
+fn hive_names() -> Result<(), &'static str> {
+    let names = alloc::format!("{NK_TEST}\\Names");
+    for (name, number) in [
+        ("CAF\u{c9}", 3u32),
+        ("caf\u{e9}", 3),
+        ("\u{391}\u{392}\u{393}", 4),
+        ("\u{3b1}\u{3b2}\u{3b3}", 4),
+        ("\u{65e5}\u{672c}\u{8a9e}", 5),
+    ] {
+        if value_of(&names, name) != Ok((4, number.to_le_bytes().to_vec())) {
+            return Err("a value with a name outside ASCII was not found");
+        }
+        let (status, handle, _) = key(
+            &alloc::format!("{names}\\{name}"),
+            core::ptr::null_mut(),
+            false,
+        );
+        ZwClose(handle);
+        if status != 0 {
+            return Err("a key with a name outside ASCII was not found");
+        }
+    }
+    if value_of(&names, "\u{1f600}") != Ok((4, 6u32.to_le_bytes().to_vec())) {
+        return Err("a value named by a surrogate pair was not found");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.keys", keys);
     r.check("cm.values", values);
     r.check("cm.delete", delete);
+    r.check("cm.namespace", namespace);
+    r.check("cm.control-set", control_set);
+    let Some(hive) = crate::ldr::boot_file(nk_bootinfo::HIVE_MODULE) else {
+        return r.skip_rest(format_args!("no SYSTEM hive provided"));
+    };
+    r.check("cm.hive.values", hive_values);
+    r.check("cm.hive.names", hive_names);
+    r.check("cm.hive.refused", || crate::cm::refused_test(hive));
 }

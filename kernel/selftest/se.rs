@@ -10,7 +10,14 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::se::SECURITY_DESCRIPTOR;
 
 pub static GROUP: Group = Group {
-    names: &["se.well-known", "se.descriptor", "se.capture", "se.device"],
+    names: &[
+        "se.well-known",
+        "se.descriptor",
+        "se.capture",
+        "se.device",
+        "se.token",
+        "se.access-state",
+    ],
     run,
     manual: false,
 };
@@ -456,4 +463,6 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.descriptor", descriptor);
     r.check("se.capture", capture);
     r.check("se.device", device);
+    r.check("se.token", token::token_test);
+    r.check("se.access-state", token::access_state_test);
 }

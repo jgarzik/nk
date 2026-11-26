@@ -10,6 +10,9 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod exports;
+pub mod modules;
+
 /// `IMAGE_FILE_MACHINE_AMD64`
 pub const MACHINE_AMD64: u16 = 0x8664;
 /// `IMAGE_FILE_MACHINE_ARM64`
@@ -27,6 +30,7 @@ pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 pub const SCN_MEM_READ: u32 = 0x4000_0000;
 pub const SCN_MEM_WRITE: u32 = 0x8000_0000;
 
+pub const DIR_EXPORT: usize = 0;
 pub const DIR_IMPORT: usize = 1;
 pub const DIR_EXCEPTION: usize = 3;
 pub const DIR_BASERELOC: usize = 5;
@@ -157,6 +161,93 @@ impl Headers {
     }
 }
 
+/// The headers of a PE32+ image, from its first bytes: the file's, or
+/// those of an image already laid out in memory. Returns them with the
+/// offset of the section table and the number of sections.
+fn read_headers(file: &[u8]) -> Result<(Headers, usize, usize), PeError> {
+    if file.get(..2) != Some(b"MZ") {
+        return Err(PeError::BadHeader);
+    }
+    let pe = hdr(u32_at(file, 0x3C))? as usize;
+    if file.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") {
+        return Err(PeError::BadHeader);
+    }
+    let coff = pe + 4;
+    let machine = hdr(u16_at(file, coff))?;
+    let nsections = hdr(u16_at(file, coff + 2))? as usize;
+    let timestamp = hdr(u32_at(file, coff + 4))?;
+    let opt_size = hdr(u16_at(file, coff + 16))? as usize;
+    let opt = coff + 20;
+    if hdr(u16_at(file, opt))? != 0x20B {
+        return Err(PeError::NotPe32Plus);
+    }
+    let ndirs = (hdr(u32_at(file, opt + 108))? as usize).min(16);
+    let mut dirs = [DataDir::default(); 16];
+    for (i, d) in dirs.iter_mut().enumerate().take(ndirs) {
+        d.rva = hdr(u32_at(file, opt + 112 + 8 * i))?;
+        d.size = hdr(u32_at(file, opt + 116 + 8 * i))?;
+    }
+    let headers = Headers {
+        machine,
+        timestamp,
+        image_base: hdr(u64_at(file, opt + 24))?,
+        entry_rva: hdr(u32_at(file, opt + 16))?,
+        size_of_image: hdr(u32_at(file, opt + 56))?,
+        size_of_headers: hdr(u32_at(file, opt + 60))?,
+        section_alignment: hdr(u32_at(file, opt + 32))?,
+        subsystem: hdr(u16_at(file, opt + 68))?,
+        dirs,
+    };
+    Ok((headers, opt + opt_size, nsections))
+}
+
+/// The headers of an image laid out in memory, of which `image` is at
+/// least the first page.
+pub fn image_headers(image: &[u8]) -> Result<Headers, PeError> {
+    read_headers(image).map(|(headers, ..)| headers)
+}
+
+/// As [`Pe::page_flags`], for an image laid out in memory, of which
+/// `image` is at least the headers.
+pub fn image_page_flags(image: &[u8], rva: u32) -> Option<u32> {
+    let (headers, off, count) = read_headers(image).ok()?;
+    let table = image.get(off..off.checked_add(count.checked_mul(SECTION_HEADER_SIZE)?)?)?;
+    let sections = table
+        .as_chunks::<SECTION_HEADER_SIZE>()
+        .0
+        .iter()
+        .map(|h| section_at(h));
+    page_flags(&headers, sections, rva)
+}
+
+/// Decode one entry of the section table.
+fn section_at(h: &[u8]) -> Section {
+    let w = |o: usize| u32::from_le_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]]);
+    let mut name = [0; 8];
+    name.copy_from_slice(&h[..8]);
+    Section {
+        name,
+        virt_size: w(8),
+        rva: w(12),
+        raw_size: w(16),
+        raw_off: w(20),
+        characteristics: w(36),
+    }
+}
+
+fn page_flags(
+    headers: &Headers,
+    mut sections: impl Iterator<Item = Section>,
+    rva: u32,
+) -> Option<u32> {
+    if rva < headers.size_of_headers {
+        return Some(SCN_MEM_READ);
+    }
+    sections
+        .find(|s| rva >= s.rva && u64::from(rva) < u64::from(s.rva) + u64::from(s.mem_size()))
+        .map(|s| s.characteristics)
+}
+
 /// A PE32+ file, as read from disk.
 #[derive(Debug, Clone, Copy)]
 pub struct Pe<'a> {
@@ -168,40 +259,7 @@ pub struct Pe<'a> {
 
 impl<'a> Pe<'a> {
     pub fn parse(file: &'a [u8]) -> Result<Self, PeError> {
-        if file.get(..2) != Some(b"MZ") {
-            return Err(PeError::BadHeader);
-        }
-        let pe = hdr(u32_at(file, 0x3C))? as usize;
-        if file.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") {
-            return Err(PeError::BadHeader);
-        }
-        let coff = pe + 4;
-        let machine = hdr(u16_at(file, coff))?;
-        let nsections = hdr(u16_at(file, coff + 2))? as usize;
-        let timestamp = hdr(u32_at(file, coff + 4))?;
-        let opt_size = hdr(u16_at(file, coff + 16))? as usize;
-        let opt = coff + 20;
-        if hdr(u16_at(file, opt))? != 0x20B {
-            return Err(PeError::NotPe32Plus);
-        }
-        let ndirs = (hdr(u32_at(file, opt + 108))? as usize).min(16);
-        let mut dirs = [DataDir::default(); 16];
-        for (i, d) in dirs.iter_mut().enumerate().take(ndirs) {
-            d.rva = hdr(u32_at(file, opt + 112 + 8 * i))?;
-            d.size = hdr(u32_at(file, opt + 116 + 8 * i))?;
-        }
-        let headers = Headers {
-            machine,
-            timestamp,
-            image_base: hdr(u64_at(file, opt + 24))?,
-            entry_rva: hdr(u32_at(file, opt + 16))?,
-            size_of_image: hdr(u32_at(file, opt + 56))?,
-            size_of_headers: hdr(u32_at(file, opt + 60))?,
-            section_alignment: hdr(u32_at(file, opt + 32))?,
-            subsystem: hdr(u16_at(file, opt + 68))?,
-            dirs,
-        };
-        let sections_off = opt + opt_size;
+        let (headers, sections_off, nsections) = read_headers(file)?;
         let table_end = sections_off + nsections * SECTION_HEADER_SIZE;
         if table_end > file.len() || headers.size_of_headers as usize > file.len() {
             return Err(PeError::BadHeader);
@@ -240,33 +298,16 @@ impl<'a> Pe<'a> {
 
     pub fn sections(&self) -> impl Iterator<Item = Section> + 'a {
         let (file, off) = (self.file, self.sections_off);
-        (0..self.nsections).map(move |i| {
-            // Bounds were checked in `parse`.
-            let h = &file[off + i * SECTION_HEADER_SIZE..][..SECTION_HEADER_SIZE];
-            let w = |o: usize| u32::from_le_bytes([h[o], h[o + 1], h[o + 2], h[o + 3]]);
-            let mut name = [0; 8];
-            name.copy_from_slice(&h[..8]);
-            Section {
-                name,
-                virt_size: w(8),
-                rva: w(12),
-                raw_size: w(16),
-                raw_off: w(20),
-                characteristics: w(36),
-            }
-        })
+        // Bounds were checked in `parse`.
+        (0..self.nsections)
+            .map(move |i| section_at(&file[off + i * SECTION_HEADER_SIZE..][..SECTION_HEADER_SIZE]))
     }
 
     /// Section characteristics (`SCN_MEM_*`) governing the image page at
     /// `rva`: the section that covers it, or read-only for the headers.
     /// `None` for a page no section covers, which should stay unmapped.
     pub fn page_flags(&self, rva: u32) -> Option<u32> {
-        if rva < self.headers.size_of_headers {
-            return Some(SCN_MEM_READ);
-        }
-        self.sections()
-            .find(|s| rva >= s.rva && u64::from(rva) < u64::from(s.rva) + u64::from(s.mem_size()))
-            .map(|s| s.characteristics)
+        page_flags(&self.headers, self.sections(), rva)
     }
 
     /// Lay the file out as it sits in memory: headers, then each section at

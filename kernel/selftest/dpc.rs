@@ -5,7 +5,13 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["dpc.run", "dpc.order", "dpc.remove", "dpc.other-cpu"],
+    names: &[
+        "dpc.run",
+        "dpc.order",
+        "dpc.remove",
+        "dpc.other-cpu",
+        "dpc.stack",
+    ],
     run,
     manual: false,
 };
@@ -22,6 +28,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "dpc.order", "in order:", dpc::order_test());
     counted(r, "dpc.remove", "positions removed:", dpc::remove_test());
     counted(r, "dpc.other-cpu", "on processor", dpc::other_cpu_test());
+    counted(r, "dpc.stack", "also on processor", dpc::stack_test());
 }
 
 /// A DPC that runs for ever must stop the system.

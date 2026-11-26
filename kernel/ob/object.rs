@@ -6,52 +6,248 @@
 //! its last reference is dropped: handles hold references, and so does
 //! anything that was given a pointer by `ObReferenceObjectByHandle`.
 //!
-//! Types are NK's own structures. A driver names a type by the value of
-//! a variable it imports (`*ExEventObjectType`) and only ever passes it
-//! back, so a type's address is its identity and its contents are
-//! private.
+//! An object made to be named has an `OBJECT_HEADER_NAME_INFO` in front
+//! of its header, which the header's `InfoMask` says, as on Windows.
+//! One pool block holds the name information, the header, the body and
+//! the characters of the name, in that order.
+//!
+//! A type is an `OBJECT_TYPE` laid out as on Windows. A driver names a
+//! type by the value of a variable it imports (`*ExEventObjectType`),
+//! the type's address. An object's header names its type the way
+//! Windows 10 does: by the type's index, hidden behind a cookie chosen
+//! at boot and a byte of the header's own address.
 
 #![allow(non_snake_case, non_upper_case_globals)]
 
+use crate::ke::irql;
 use crate::mm::pool;
-use core::sync::atomic::{AtomicI64, Ordering};
-use nk_ntabi::ob::{OBJECT_BODY, OBJECT_HEADER};
+use core::cell::UnsafeCell;
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicI64, AtomicPtr, AtomicU8, Ordering};
+use nk_ntabi::ex::{CRITICAL_WORK_QUEUE, WORK_QUEUE_ITEM};
+use nk_ntabi::io::UNICODE_STRING;
+use nk_ntabi::ke::LIST_ENTRY;
+use nk_ntabi::ob::{
+    GENERIC_MAPPING, OB_CLOSE_METHOD, OB_DELETE_METHOD, OB_INFOMASK_NAME, OBJECT_BODY,
+    OBJECT_HEADER, OBJECT_HEADER_NAME_INFO, OBJECT_TYPE, OBJECT_TYPE_INITIALIZER,
+};
+use nk_ob::header::{FIRST_TYPE_INDEX, type_index};
 
 /// Pool tag of object-manager allocations.
 const TAG: u32 = u32::from_le_bytes(*b"ObNK");
 
 /// A kind of object.
-pub struct ObjectType {
-    /// Its place in `TYPES`; kept in each object's header.
-    index: u8,
-    /// Called with the body when the last reference has gone, before
-    /// the object's memory is freed: gives up what the object owns.
-    delete: Option<unsafe fn(*mut u8)>,
+#[repr(transparent)]
+pub struct ObjectType(OBJECT_TYPE);
+
+// SAFETY: a type is never written after it is built, and its pointers
+// name statics.
+unsafe impl Sync for ObjectType {}
+
+/// A type's name, as UTF-16.
+const fn wide<const N: usize>(name: &[u8; N]) -> [u16; N] {
+    let mut out = [0; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = name[i] as u16;
+        i += 1;
+    }
+    out
 }
 
+impl ObjectType {
+    /// The type numbered `index`, called `name`. `delete` is called
+    /// with the body when the last reference has gone, before the
+    /// object's memory is freed: it gives up what the object owns.
+    const fn new(index: u8, name: &'static [u16], delete: Option<OB_DELETE_METHOD>) -> Self {
+        const EMPTY: LIST_ENTRY = LIST_ENTRY {
+            Flink: core::ptr::null_mut(),
+            Blink: core::ptr::null_mut(),
+        };
+        Self(OBJECT_TYPE {
+            TypeList: EMPTY,
+            Name: UNICODE_STRING {
+                Length: (name.len() * 2) as u16,
+                MaximumLength: (name.len() * 2) as u16,
+                Buffer: name.as_ptr().cast_mut(),
+            },
+            DefaultObject: core::ptr::null_mut(),
+            Index: index,
+            TotalNumberOfObjects: 0,
+            TotalNumberOfHandles: 0,
+            HighWaterNumberOfObjects: 0,
+            HighWaterNumberOfHandles: 0,
+            TypeInfo: OBJECT_TYPE_INITIALIZER {
+                Length: size_of::<OBJECT_TYPE_INITIALIZER>() as u16,
+                ObjectTypeFlags: 0,
+                ObjectTypeCode: 0,
+                InvalidAttributes: 0,
+                GenericMapping: GENERIC_MAPPING {
+                    GenericRead: 0,
+                    GenericWrite: 0,
+                    GenericExecute: 0,
+                    GenericAll: 0,
+                },
+                ValidAccessMask: 0,
+                RetainAccess: 0,
+                PoolType: 0,
+                DefaultPagedPoolCharge: 0,
+                DefaultNonPagedPoolCharge: 0,
+                DumpProcedure: core::ptr::null_mut(),
+                OpenProcedure: core::ptr::null_mut(),
+                CloseProcedure: None,
+                DeleteProcedure: delete,
+                ParseProcedure: core::ptr::null_mut(),
+                SecurityProcedure: core::ptr::null_mut(),
+                QueryNameProcedure: core::ptr::null_mut(),
+                OkayToCloseProcedure: core::ptr::null_mut(),
+                WaitObjectFlagMask: 0,
+                WaitObjectFlagOffset: 0,
+                WaitObjectPointerOffset: 0,
+            },
+            TypeLock: 0,
+            Key: 0,
+            CallbackList: EMPTY,
+        })
+    }
+
+    /// The same type, whose `close` is called whenever a handle to one
+    /// of its objects is closed.
+    const fn closing(mut self, close: OB_CLOSE_METHOD) -> Self {
+        self.0.TypeInfo.CloseProcedure = Some(close);
+        self
+    }
+
+    /// The same type, for which the generic rights mean what `mapping`
+    /// says. A type without one has no meaning for them: a handle asked
+    /// for generic rights alone is granted nothing.
+    const fn rights(mut self, mapping: GENERIC_MAPPING) -> Self {
+        self.0.TypeInfo.ValidAccessMask = mapping.GenericAll;
+        self.0.TypeInfo.GenericMapping = mapping;
+        self
+    }
+
+    /// What the type does when a handle to one of its objects closes.
+    pub fn close_procedure(&self) -> Option<OB_CLOSE_METHOD> {
+        self.0.TypeInfo.CloseProcedure
+    }
+
+    /// `access` with its generic rights replaced by the rights they
+    /// stand for in this type.
+    pub fn map_generic(&self, access: u32) -> u32 {
+        let mapping = &self.0.TypeInfo.GenericMapping;
+        nk_se::access::map_generic(
+            access,
+            &nk_se::access::GenericMapping {
+                read: mapping.GenericRead,
+                write: mapping.GenericWrite,
+                execute: mapping.GenericExecute,
+                all: mapping.GenericAll,
+            },
+        )
+    }
+
+    /// Whether the type's delete procedure must run at `PASSIVE_LEVEL`:
+    /// a file's sends its driver the close request.
+    fn deletes_at_passive(&self) -> bool {
+        core::ptr::eq(self, &raw const FILE_TYPE)
+    }
+
+    /// The type's name.
+    pub fn name(&self) -> &'static [u16] {
+        // SAFETY: `new` made the counted string from a static slice.
+        unsafe {
+            core::slice::from_raw_parts(self.0.Name.Buffer, usize::from(self.0.Name.Length) / 2)
+        }
+    }
+}
+
+static EVENT_NAME: [u16; 5] = wide(b"Event");
+static THREAD_NAME: [u16; 6] = wide(b"Thread");
+static DEVICE_NAME: [u16; 6] = wide(b"Device");
+static KEY_NAME: [u16; 3] = wide(b"Key");
+static PROCESS_NAME: [u16; 7] = wide(b"Process");
+static TOKEN_NAME: [u16; 5] = wide(b"Token");
+static DIRECTORY_NAME: [u16; 9] = wide(b"Directory");
+static SYMBOLIC_LINK_NAME: [u16; 12] = wide(b"SymbolicLink");
+static DRIVER_NAME: [u16; 6] = wide(b"Driver");
+static FILE_NAME: [u16; 4] = wide(b"File");
+
 /// Events (`KEVENT`).
-pub static EVENT_TYPE: ObjectType = ObjectType {
-    index: 0,
-    delete: None,
-};
+pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
 /// Threads (`ETHREAD`).
-pub static THREAD_TYPE: ObjectType = ObjectType {
-    index: 1,
-    delete: None,
-};
+pub static THREAD_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 1, &THREAD_NAME, None);
 /// Devices (`DEVICE_OBJECT`).
-pub static DEVICE_TYPE: ObjectType = ObjectType {
-    index: 2,
-    delete: Some(crate::io::device::deleted),
-};
-
+pub static DEVICE_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 2,
+    &DEVICE_NAME,
+    Some(crate::io::device::deleted),
+);
 /// Registry keys: an open key's object names the key (`cm`).
-pub static KEY_TYPE: ObjectType = ObjectType {
-    index: 3,
-    delete: Some(crate::cm::closed),
-};
+pub static KEY_TYPE: ObjectType =
+    ObjectType::new(FIRST_TYPE_INDEX + 3, &KEY_NAME, Some(crate::cm::closed)).rights(
+        // `KEY_READ`, `KEY_WRITE`, `KEY_EXECUTE`, `KEY_ALL_ACCESS`.
+        GENERIC_MAPPING {
+            GenericRead: 0x0002_0019,
+            GenericWrite: 0x0002_0006,
+            GenericExecute: 0x0002_0019,
+            GenericAll: 0x000F_003F,
+        },
+    );
 
-static TYPES: [&ObjectType; 4] = [&EVENT_TYPE, &THREAD_TYPE, &DEVICE_TYPE, &KEY_TYPE];
+/// Processes (`EPROCESS`).
+pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None);
+
+/// Access tokens: the body is NK's own (`se::token`).
+pub static TOKEN_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 5,
+    &TOKEN_NAME,
+    Some(crate::se::token::deleted),
+);
+
+/// Directories of the namespace (`OBJECT_DIRECTORY`): what is in one
+/// is the namespace's to know (`ob`).
+pub static DIRECTORY_TYPE: ObjectType =
+    ObjectType::new(FIRST_TYPE_INDEX + 6, &DIRECTORY_NAME, None);
+/// Symbolic links (`OBJECT_SYMBOLIC_LINK`).
+pub static SYMBOLIC_LINK_TYPE: ObjectType =
+    ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None);
+/// Drivers (`DRIVER_OBJECT`).
+pub static DRIVER_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 8, &DRIVER_NAME, None);
+
+/// Open files (`FILE_OBJECT`): the last handle closing sends the
+/// driver a cleanup request, the last reference going a close request
+/// (`io::file`).
+pub static FILE_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 9,
+    &FILE_NAME,
+    Some(crate::io::file::deleted),
+)
+.closing(crate::io::file::handle_closed)
+.rights(nk_ntabi::io::FILE_GENERIC_MAPPING);
+
+/// Every type, by index from `FIRST_TYPE_INDEX`.
+static TYPES: [&ObjectType; 10] = [
+    &EVENT_TYPE,
+    &THREAD_TYPE,
+    &DEVICE_TYPE,
+    &KEY_TYPE,
+    &PROCESS_TYPE,
+    &TOKEN_TYPE,
+    &DIRECTORY_TYPE,
+    &SYMBOLIC_LINK_TYPE,
+    &DRIVER_TYPE,
+    &FILE_TYPE,
+];
+
+/// What hides type indices in object headers. Chosen once, before the
+/// first object is made.
+static COOKIE: AtomicU8 = AtomicU8::new(0);
+
+/// Choose the cookie from `seed`. Called once, before any object exists.
+pub fn init(seed: u64) {
+    COOKIE.store((seed ^ seed >> 8 ^ seed >> 16) as u8, Ordering::Relaxed);
+}
 
 /// A variable a driver imports to name a type: it holds the type's
 /// address.
@@ -86,7 +282,7 @@ impl TypeVariable {
     }
 }
 
-fn header(body: *mut u8) -> *mut OBJECT_HEADER {
+pub(super) fn header(body: *mut u8) -> *mut OBJECT_HEADER {
     body.wrapping_sub(OBJECT_BODY).cast()
 }
 
@@ -104,21 +300,118 @@ pub unsafe fn handle_count<'a>(body: *mut u8) -> &'a AtomicI64 {
     unsafe { AtomicI64::from_ptr(&raw mut (*header(body)).HandleCount) }
 }
 
+/// The name information in front of an object's header, or null for an
+/// object made without.
+///
+/// # Safety
+/// `body` is a live object from [`create`] or [`create_named`].
+pub unsafe fn name_info(body: *mut u8) -> *mut OBJECT_HEADER_NAME_INFO {
+    let header = header(body);
+    // SAFETY: per the contract; the mask was written when the object
+    // was made and never changes.
+    if unsafe { (&raw const (*header).InfoMask).read() } & OB_INFOMASK_NAME == 0 {
+        return core::ptr::null_mut();
+    }
+    header.cast::<OBJECT_HEADER_NAME_INFO>().wrapping_sub(1)
+}
+
+/// Where the pool block of an object begins: at its name information
+/// if it has any, else at its header.
+///
+/// # Safety
+/// As [`name_info`].
+unsafe fn block(body: *mut u8) -> *mut u8 {
+    // SAFETY: per the contract.
+    let info = unsafe { name_info(body) };
+    if info.is_null() {
+        header(body).cast()
+    } else {
+        info.cast()
+    }
+}
+
 /// Allocate a zeroed object of `size` bytes and type `ty`, with one
 /// reference: the caller's.
 pub fn create(ty: &'static ObjectType, size: usize) -> Option<*mut u8> {
-    let block = pool::alloc_zeroed(OBJECT_BODY + size, TAG);
+    allocate(ty, size, None)
+}
+
+/// As [`create`], for an object that will be given a name in the
+/// namespace (`ob::insert`): `name` is the name it will have in its
+/// directory, the last component of its path. The object carries
+/// Windows' name information; it is in no directory yet.
+pub fn create_named(ty: &'static ObjectType, size: usize, name: &[u16]) -> Option<*mut u8> {
+    allocate(ty, size, Some(name))
+}
+
+fn allocate(ty: &'static ObjectType, size: usize, name: Option<&[u16]>) -> Option<*mut u8> {
+    let front = match name {
+        Some(_) => size_of::<OBJECT_HEADER_NAME_INFO>(),
+        None => 0,
+    };
+    let name = name.unwrap_or(&[]);
+    // A counted string's length is 16 bits.
+    let name_bytes = u16::try_from(name.len() * 2).ok()?;
+    // The name's characters follow the body.
+    let characters = (front + OBJECT_BODY + size).next_multiple_of(align_of::<u16>());
+    let block = pool::alloc_zeroed(characters + usize::from(name_bytes), TAG);
     if block.is_null() {
         return None;
     }
-    // SAFETY: a fresh, zeroed block large enough for the header, which
-    // the pool aligns to 16 bytes.
+    // SAFETY: a fresh, zeroed block large enough for the name
+    // information, the header and the name, which the pool aligns to 16
+    // bytes; the name information's size keeps the header so aligned.
     unsafe {
-        let header = block.cast::<OBJECT_HEADER>();
+        let header = block.add(front).cast::<OBJECT_HEADER>();
         (&raw mut (*header).PointerCount).write(1);
-        (&raw mut (*header).TypeIndex).write(ty.index);
+        (&raw mut (*header).TypeIndex).write(type_index(
+            ty.0.Index,
+            COOKIE.load(Ordering::Relaxed),
+            header as u64,
+        ));
+        if front != 0 {
+            let info = block.cast::<OBJECT_HEADER_NAME_INFO>();
+            let buffer = block.add(characters).cast::<u16>();
+            buffer.copy_from_nonoverlapping(name.as_ptr(), name.len());
+            (&raw mut (*info).Name).write(UNICODE_STRING {
+                Length: name_bytes,
+                MaximumLength: name_bytes,
+                Buffer: buffer,
+            });
+            (&raw mut (*info).ReferenceCount).write(1);
+            (&raw mut (*header).InfoMask).write(OB_INFOMASK_NAME);
+        }
+        Some(block.add(front + OBJECT_BODY))
     }
-    Some(block.wrapping_add(OBJECT_BODY))
+}
+
+/// Record that a named object is now in `directory` (a directory
+/// object). The namespace calls this under its lock.
+///
+/// # Safety
+/// `body` is a live object from [`create_named`].
+pub unsafe fn entered(body: *mut u8, directory: *mut u8) {
+    // SAFETY: per the contract: the object has name information.
+    unsafe { (&raw mut (*name_info(body)).Directory).write(directory.cast()) };
+}
+
+/// Record that a named object has lost its name: it is in no
+/// directory and its name is empty, as Windows leaves it. The
+/// namespace calls this under its lock.
+///
+/// # Safety
+/// `body` is a live object from [`create_named`].
+pub unsafe fn left(body: *mut u8) {
+    // SAFETY: per the contract: the object has name information.
+    unsafe {
+        let info = name_info(body);
+        (&raw mut (*info).Directory).write(core::ptr::null_mut());
+        (&raw mut (*info).Name).write(UNICODE_STRING {
+            Length: 0,
+            MaximumLength: 0,
+            Buffer: core::ptr::null_mut(),
+        });
+    }
 }
 
 /// The type of an object.
@@ -126,8 +419,16 @@ pub fn create(ty: &'static ObjectType, size: usize) -> Option<*mut u8> {
 /// # Safety
 /// `body` is a live object from [`create`].
 pub unsafe fn type_of(body: *mut u8) -> &'static ObjectType {
-    // SAFETY: per the contract; the index was written by `create`.
-    TYPES[usize::from(unsafe { (&raw const (*header(body)).TypeIndex).read() })]
+    let header = header(body);
+    // SAFETY: per the contract; the byte was written by `create`.
+    let stored = unsafe { (&raw const (*header).TypeIndex).read() };
+    let index = type_index(stored, COOKIE.load(Ordering::Relaxed), header as u64);
+    match TYPES.get(usize::from(index.wrapping_sub(FIRST_TYPE_INDEX))) {
+        Some(ty) => ty,
+        None => crate::kd::bugcheck(format_args!(
+            "0x00000189 BAD_OBJECT_HEADER: an object's header names no type"
+        )),
+    }
 }
 
 /// Take a reference. Returns the new count.
@@ -141,8 +442,105 @@ pub unsafe fn reference(body: *mut u8) -> i64 {
     unsafe { pointer_count(body) }.fetch_add(1, Ordering::AcqRel) + 1
 }
 
+/// Delete an object: its type's procedure releases what it owns, then
+/// its memory goes.
+///
+/// # Safety
+/// `body` is an object from [`create`] that nothing refers to any more.
+unsafe fn delete(body: *mut u8) {
+    // SAFETY: per the contract; the type's procedure is given the body
+    // the object was created with.
+    unsafe {
+        if let Some(delete) = type_of(body).0.TypeInfo.DeleteProcedure {
+            delete(body.cast());
+        }
+        super::security::object_freed(body);
+    }
+    // SAFETY: still the object's memory; its block is found before it
+    // is given back.
+    let freed = pool::free(unsafe { block(body) });
+    debug_assert!(freed.is_ok());
+}
+
+/// The objects waiting to be deleted by a worker thread, newest first,
+/// linked through their headers as Windows links them: `NextToFree`
+/// shares its place with the handle count, which no longer counts
+/// anything.
+static DEFERRED: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+
+/// The work item that deletes them: queued by whoever makes the list
+/// non-empty. A worker takes an item off its queue before running it,
+/// and the routine takes the whole list, so the next object deferred
+/// finds the list empty and the item free to be queued again.
+struct DeferredWork(UnsafeCell<WORK_QUEUE_ITEM>);
+
+// SAFETY: reached only through `ExQueueWorkItem`, which locks.
+unsafe impl Sync for DeferredWork {}
+
+static DEFERRED_WORK: DeferredWork = DeferredWork(UnsafeCell::new(WORK_QUEUE_ITEM {
+    List: LIST_ENTRY {
+        Flink: core::ptr::null_mut(),
+        Blink: core::ptr::null_mut(),
+    },
+    WorkerRoutine: Some(delete_deferred),
+    Parameter: core::ptr::null_mut(),
+}));
+
+/// Where an object waiting to be deleted names the next one.
+fn next_to_free(body: *mut u8) -> *mut *mut u8 {
+    // `NextToFree` is a union with `HandleCount`.
+    header(body)
+        .wrapping_byte_add(core::mem::offset_of!(OBJECT_HEADER, HandleCount))
+        .cast()
+}
+
+/// Leave an object's deletion to a worker thread, which runs at
+/// `PASSIVE_LEVEL`. Windows does this for an object whose last
+/// reference goes where its delete procedure cannot run.
+///
+/// # Safety
+/// `body` is an object from [`create`] that nothing refers to any more;
+/// the IRQL is at most `DISPATCH_LEVEL`.
+unsafe fn defer(body: *mut u8) {
+    let mut head = DEFERRED.load(Ordering::Acquire);
+    loop {
+        // SAFETY: per the contract: the header is this function's alone
+        // until the object is on the list.
+        unsafe { next_to_free(body).write(head) };
+        match DEFERRED.compare_exchange_weak(head, body, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => break,
+            Err(now) => head = now,
+        }
+    }
+    if head.is_null() {
+        // SAFETY: the item is on no queue: see `DeferredWork`.
+        unsafe { crate::ex::work::ExQueueWorkItem(DEFERRED_WORK.0.get(), CRITICAL_WORK_QUEUE) };
+    }
+}
+
+/// The work routine: delete every object left for a worker thread.
+///
+/// # Safety
+/// Called as a work routine.
+unsafe extern "C" fn delete_deferred(_: *mut c_void) {
+    let mut body = DEFERRED.swap(core::ptr::null_mut(), Ordering::AcqRel);
+    while !body.is_null() {
+        // SAFETY: `defer` put the object there, unreferenced, and wrote
+        // the link, which is read before the object is freed.
+        unsafe {
+            let next = next_to_free(body).read();
+            delete(body);
+            body = next;
+        }
+    }
+}
+
 /// Drop a reference; the last one frees the object. Returns the new
 /// count.
+///
+/// An object whose delete procedure calls a driver (an open file) is
+/// deleted at `PASSIVE_LEVEL`: if its last reference goes above that,
+/// a worker thread deletes it later.
 ///
 /// # Safety
 /// `body` is a live object from [`create`] and the caller owns one of
@@ -151,15 +549,14 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
     // SAFETY: per the contract.
     let left = unsafe { pointer_count(body) }.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
-        // SAFETY: nothing refers to the object any more; its type's
-        // procedure is given the body it was created with.
+        // SAFETY: nothing refers to the object any more.
         unsafe {
-            if let Some(delete) = type_of(body).delete {
+            if type_of(body).deletes_at_passive() && irql::current() != irql::PASSIVE_LEVEL {
+                defer(body);
+            } else {
                 delete(body);
             }
         }
-        let freed = pool::free(header(body).cast());
-        debug_assert!(freed.is_ok());
     } else if left < 0 {
         crate::kd::bugcheck(format_args!(
             "0x00000018 REFERENCE_BY_POINTER: an object was dereferenced more often than referenced"
@@ -173,7 +570,75 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
 ///
 /// # Safety
 /// `object` is an object the caller holds a reference to.
-pub unsafe extern "C" fn ObfDereferenceObject(object: *mut core::ffi::c_void) -> isize {
+pub unsafe extern "C" fn ObfDereferenceObject(object: *mut c_void) -> isize {
     // SAFETY: per the contract.
     unsafe { dereference(object.cast()) as isize }
+}
+
+// ---- tests --------------------------------------------------------------
+
+/// A type as a driver holding its address sees it, and an object's
+/// header as Windows 10 writes it.
+pub fn type_test() -> Result<(), &'static str> {
+    for (variable, name, index) in [
+        (&ExEventObjectType, "Event", EVENT_TYPE.0.Index),
+        (&PsThreadType, "Thread", THREAD_TYPE.0.Index),
+        (&IoDeviceObjectType, "Device", DEVICE_TYPE.0.Index),
+    ] {
+        // SAFETY: the variable holds the address of a static type.
+        let ty = unsafe { &*variable.value() };
+        if !ty.name().iter().copied().eq(name.encode_utf16()) {
+            return Err("a type does not have Windows' name for it");
+        }
+        if usize::from(ty.0.TypeInfo.Length) != size_of::<OBJECT_TYPE_INITIALIZER>() {
+            return Err("a type's initializer does not state its size");
+        }
+        if ty.0.Index != index || index < FIRST_TYPE_INDEX {
+            return Err("a type has the wrong index");
+        }
+    }
+    // Objects big enough to get pages of their own, so their headers'
+    // addresses differ in the byte that takes part.
+    let mut bodies = [core::ptr::null_mut::<u8>(); 4];
+    let mut verdict = Ok(());
+    for (pages, body) in bodies.iter_mut().enumerate() {
+        match create(&EVENT_TYPE, (pages + 1) * crate::mm::PAGE_SIZE) {
+            Some(new) => *body = new,
+            None => verdict = Err("no memory"),
+        }
+    }
+    let cookie = COOKIE.load(Ordering::Relaxed);
+    let stored = bodies.map(|body| {
+        if body.is_null() {
+            return None;
+        }
+        // SAFETY: a live object made above.
+        let byte = unsafe { (&raw const (*header(body)).TypeIndex).read() };
+        Some((byte, (header(body) as u64 >> 8) as u8))
+    });
+    for (body, stored) in bodies.iter().zip(stored) {
+        let Some((byte, _)) = stored else { continue };
+        let expected = type_index(EVENT_TYPE.0.Index, cookie, header(*body) as u64);
+        // SAFETY: a live object made above.
+        if byte != expected || !core::ptr::eq(unsafe { type_of(*body) }, &raw const EVENT_TYPE) {
+            verdict = verdict.and(Err("a header does not lead back to the object's type"));
+        }
+    }
+    let differ = |pick: fn((u8, u8)) -> u8| {
+        let mut seen = stored.iter().flatten().map(|s| pick(*s));
+        seen.next().is_some_and(|first| seen.any(|b| b != first))
+    };
+    if verdict.is_ok() && !differ(|(_, address)| address) {
+        verdict = Err("the test's objects all share the address byte");
+    }
+    if verdict.is_ok() && !differ(|(byte, _)| byte) {
+        verdict = Err("the type index is stored as it is, not hidden by the header's address");
+    }
+    for body in bodies {
+        if !body.is_null() {
+            // SAFETY: the creating reference of an object made above.
+            unsafe { dereference(body) };
+        }
+    }
+    verdict
 }
