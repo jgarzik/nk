@@ -14,7 +14,9 @@
 //!
 //! The field belongs to the object's own lock, the header's `Lock`
 //! word, held with the IRQL at `DISPATCH_LEVEL` and only for as long
-//! as it takes to read or swap a pointer and count a reference
+//! as it takes to read or swap a pointer and count a reference. The
+//! word is where Windows has it; the hold is ranked and recorded like
+//! a spin lock's, innermost of the locks at that level
 //! (`doc/LOCKING.md`).
 //!
 //! Devices do not use this: a device's descriptor is in
@@ -22,7 +24,7 @@
 //! Windows (`io::device`).
 
 use super::object;
-use crate::ke::irql;
+use crate::ke::{Rank, Ranked};
 use crate::mm::pool;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -90,7 +92,7 @@ unsafe fn locked<R>(body: *mut u8, f: impl FnOnce(*mut *mut c_void) -> R) -> R {
     // header, which lives as long as the object.
     unsafe {
         let lock = AtomicUsize::from_ptr(&raw mut (*header).Lock);
-        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let hold = Ranked::enter(lock.as_ptr().addr(), Rank::ObjectHeader);
         while lock
             .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
@@ -99,7 +101,7 @@ unsafe fn locked<R>(body: *mut u8, f: impl FnOnce(*mut *mut c_void) -> R) -> R {
         }
         let result = f(&raw mut (*header).SecurityDescriptor);
         lock.store(0, Ordering::Release);
-        irql::lower(old);
+        drop(hold);
         result
     }
 }

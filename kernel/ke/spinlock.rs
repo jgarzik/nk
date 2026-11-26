@@ -49,6 +49,9 @@ pub enum Rank {
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).
     TimerTable = 230,
+    /// An object's own lock, a word of its header (`ob::security`):
+    /// innermost of the locks held at `DISPATCH_LEVEL`.
+    ObjectHeader = 235,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
     /// The table of loaded images (`ldr`): searched from any context.
@@ -82,6 +85,38 @@ fn held<R>(level: u8, update: impl FnOnce(&mut nk_ke::Held) -> R) -> R {
     let result = update(unsafe { arch::percpu().held() });
     arch::set_irql(level);
     result
+}
+
+/// A hold on a lock whose word is not a [`SpinLock`]'s: one that lies
+/// where Windows has it, in an object's header. The holder spins on the
+/// word itself; this raises the IRQL to the level of `rank` and enters
+/// the lock, known by the address `id`, in the processor's record, so
+/// the rules of rank apply to it as to any other. Dropping it does the
+/// reverse; the word is to be free again by then.
+pub struct Ranked {
+    id: usize,
+    rank: Rank,
+    old_irql: u8,
+}
+
+impl Ranked {
+    pub fn enter(id: usize, rank: Rank) -> Self {
+        let level = rank.level();
+        let old_irql = irql::raise(level);
+        if let Err(v) = held(level, |held| held.acquire(id, rank as u8)) {
+            irql::violation(v);
+        }
+        Self { id, rank, old_irql }
+    }
+}
+
+impl Drop for Ranked {
+    fn drop(&mut self) {
+        if let Err(v) = held(self.rank.level(), |held| held.release(self.id)) {
+            irql::violation(v);
+        }
+        irql::lower(self.old_irql);
+    }
 }
 
 pub struct SpinLock<T> {
