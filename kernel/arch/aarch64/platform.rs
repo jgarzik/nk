@@ -16,6 +16,18 @@ pub fn current_cpu_id() -> u64 {
     mpidr & MPIDR_AFFINITY
 }
 
+/// Whether the processor says it runs under a hypervisor. arm64 has no
+/// CPUID to say so, and NK asks no hypervisor: none.
+pub fn hypervisor_present() -> bool {
+    false
+}
+
+/// The feature words of a hypervisor that offers Microsoft's
+/// interface: none is asked, so zeros.
+pub fn hypervisor_features() -> [u32; 4] {
+    [0; 4]
+}
+
 /// What else firmware says that arm64 needs.
 pub struct Firmware {
     /// The interrupt of the generic timer's virtual timer, where firmware

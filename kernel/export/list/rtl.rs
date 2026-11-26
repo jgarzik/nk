@@ -7,6 +7,15 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
+    export_entry!(
+        Implemented,
+        "DbgPrintEx",
+        rtl::print::nk_variadic_DbgPrintEx
+    ),
+    export!(Implemented, rtl::print::DbgCommandString),
+    export!(Implemented, rtl::print::DbgPrompt),
+    export!(Implemented, rtl::print::DbgSetDebugFilterState),
+    export!(Implemented, rtl::print::vDbgPrintExWithPrefix),
     export!(Implemented, rtl::name::FsRtlIsNameInExpression),
     export_variable!(
         Implemented,

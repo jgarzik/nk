@@ -56,6 +56,7 @@ mod thread;
 mod timer;
 mod wait;
 mod whea;
+mod without;
 mod work;
 
 use crate::io::file::{self, OpenRequest};
@@ -170,6 +171,7 @@ pub static GROUPS: &[&[&Group]] = &[
     absent::GROUPS,
     po::GROUPS,
     em::GROUPS,
+    without::GROUPS,
     whea::GROUPS,
     csq::GROUPS,
     review::GROUPS,
