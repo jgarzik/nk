@@ -1631,7 +1631,12 @@ as the pinned kernel's and with nothing of NK's after it: what NK keeps
 about a device it keeps in the fields Windows keeps it in (deletion
 pending is `DOE_DELETE_PENDING` in `ExtensionFlags`). A device's
 own `ReferenceCount` decides when a deleted device stops being one, the
-object's pointer count when its memory goes.
+object's pointer count when its memory goes. A device of a type a file
+system mounts on (disk, CD-ROM, tape, virtual disk) is created with a
+volume parameter block (`VPB`), as Windows makes it, which a class
+driver writes to (`disk.sys` sets `VPB_RAW_MOUNT`); the block goes
+with the device. Nothing mounts on NK, so no block is ever another
+device's.
 
 **Stacks.** Devices are stacked as on Windows
 ([`IoAttachDeviceToDeviceStack`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioattachdevicetodevicestack),

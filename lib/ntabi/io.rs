@@ -170,6 +170,47 @@ pub const IRP_MN_REGINFO_EX: u8 = 0x0B;
 pub const IRP_MJ_MAXIMUM_FUNCTION: usize = 0x1B;
 
 pub const IO_TYPE_DEVICE: i16 = 3;
+/// `VPB.Type` (`IO_TYPE_VPB`).
+pub const IO_TYPE_VPB: i16 = 0x0A;
+
+/// The device types whose devices the I/O manager gives a volume
+/// parameter block: what a file system can be mounted on
+/// (`FILE_DEVICE_CD_ROM`, `FILE_DEVICE_DISK`, `FILE_DEVICE_TAPE`,
+/// `FILE_DEVICE_VIRTUAL_DISK`), as `IoCreateDevice` of the pinned
+/// kernel tests them.
+pub const fn device_type_has_vpb(device_type: u32) -> bool {
+    matches!(device_type, 0x02 | 0x07 | 0x1F | 0x24)
+}
+
+/// [`VPB`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_vpb):
+/// the volume parameter block of a device a file system can be mounted
+/// on. `disk.sys` sets `VPB_RAW_MOUNT` in the block of the device it
+/// creates.
+#[repr(C)]
+pub struct VPB {
+    pub Type: i16,
+    pub Size: i16,
+    pub Flags: u16,
+    pub VolumeLabelLength: u16,
+    /// The file system's volume device, once one is mounted.
+    pub DeviceObject: *mut DEVICE_OBJECT,
+    /// The device the block belongs to.
+    pub RealDevice: *mut DEVICE_OBJECT,
+    pub SerialNumber: u32,
+    pub ReferenceCount: u32,
+    pub VolumeLabel: [u16; 32],
+}
+
+const _: () = {
+    assert!(size_of::<VPB>() == 0x60);
+    assert!(core::mem::offset_of!(VPB, Flags) == 0x04);
+    assert!(core::mem::offset_of!(VPB, DeviceObject) == 0x08);
+    assert!(core::mem::offset_of!(VPB, RealDevice) == 0x10);
+    assert!(core::mem::offset_of!(VPB, SerialNumber) == 0x18);
+    assert!(core::mem::offset_of!(VPB, ReferenceCount) == 0x1C);
+    assert!(core::mem::offset_of!(VPB, VolumeLabel) == 0x20);
+};
+
 pub const IO_TYPE_DRIVER: i16 = 4;
 pub const IO_TYPE_FILE: i16 = 5;
 pub const IO_TYPE_IRP: i16 = 6;
