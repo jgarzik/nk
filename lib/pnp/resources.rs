@@ -251,38 +251,6 @@ impl ResourceList {
         Some((Self { full }, at))
     }
 
-    /// How many bytes of a list must be in hand to know more than
-    /// `bytes`, its beginning, tell: the length of the whole list once
-    /// all of it is there, else the length of the part the bytes in
-    /// hand promise. A resource list does not state its length, so a
-    /// list found through a pointer is read in such steps. `None` if
-    /// the list would be longer than `limit`.
-    pub fn needed(bytes: &[u8], limit: usize) -> Option<usize> {
-        let within = |need: usize| (need <= limit).then_some(need);
-        let Some(count) = u32_at(bytes, 0) else {
-            return within(4);
-        };
-        let mut at = 4usize;
-        for _ in 0..count {
-            let Some(partials) = u32_at(bytes, at + 12) else {
-                return within(at + FULL_HEADER);
-            };
-            at += FULL_HEADER;
-            for _ in 0..partials {
-                let Some(fixed) = bytes.get(at..at + PARTIAL) else {
-                    return within(at + PARTIAL);
-                };
-                at += PARTIAL;
-                if fixed[0] == TYPE_DEVICE_SPECIFIC {
-                    at = at.checked_add(u32_at(fixed, 4)? as usize)?;
-                }
-                within(at)?;
-            }
-            within(at)?;
-        }
-        within(at)
-    }
-
     /// The list as bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -433,12 +401,15 @@ pub struct Requirements {
 }
 
 impl Requirements {
-    /// The size the list's own `ListSize` field states: how many bytes
-    /// to read before [`parse`](Self::parse) can be given them. `None`
-    /// if it is smaller than an empty list.
-    pub fn stated_size(first_four: [u8; 4]) -> Option<usize> {
-        let size = u32::from_le_bytes(first_four) as usize;
-        (size >= REQUIREMENTS_HEADER).then_some(size)
+    /// The bytes of the list that the memory block `block` begins
+    /// with: as many as the list's own `ListSize` field states, if the
+    /// block has that many and they hold a whole list. A driver hands
+    /// the Plug and Play manager such a block; what the list says of
+    /// its own length is believed only as far as the block reaches.
+    pub fn in_block(block: &[u8]) -> Option<&[u8]> {
+        let stated = u32_at(block, 0)? as usize;
+        let list = block.get(..stated)?;
+        Self::parse(list).map(|_| list)
     }
 
     /// The requirements list in `bytes`. `None` if the bytes end before
@@ -608,42 +579,6 @@ mod tests {
         assert_eq!(ResourceList::parse(&lying), None);
     }
 
-    /// Reading a list a step at a time, as through a pointer, ends
-    /// with exactly the list.
-    #[test]
-    fn a_list_is_read_in_steps() {
-        let mut specific = Partial::new(TYPE_DEVICE_SPECIFIC, 0, 0);
-        specific.data[..4].copy_from_slice(&5u32.to_le_bytes());
-        specific.extra = vec![9; 5];
-        let mut list = ahci_raw();
-        list.full[0].partial.insert(1, specific);
-        list.full.push(list.full[0].clone());
-        let mut memory = list.to_bytes();
-        let length = memory.len();
-        memory.extend_from_slice(&[0xEE; 64]);
-        let mut have = 0;
-        let mut steps = 0;
-        loop {
-            let need = ResourceList::needed(&memory[..have], 1 << 20).unwrap();
-            if need <= have {
-                break;
-            }
-            have = need;
-            steps += 1;
-        }
-        assert_eq!(have, length);
-        assert!(steps > 4);
-        assert_eq!(ResourceList::parse(&memory[..have]), Some((list, length)));
-        // A list that would be longer than the limit is given up.
-        assert_eq!(ResourceList::needed(&memory[..length], length - 1), None);
-        let mut endless = vec![0xFF; 4];
-        endless.extend_from_slice(&[0; 12]);
-        endless.extend_from_slice(&[0xFF; 4]);
-        endless.extend_from_slice(&[0; 4096]);
-        assert_eq!(ResourceList::needed(&endless, 1024), None);
-        assert_eq!(ResourceList::needed(&[], 3), None);
-    }
-
     #[test]
     fn counts_beyond_belief_are_refused() {
         let mut bytes = ahci_raw().to_bytes();
@@ -731,15 +666,33 @@ mod tests {
         let list = ahci_requirements();
         let bytes = list.to_bytes();
         assert_eq!(bytes.len(), 32 + 8 + 6 * 32);
-        assert_eq!(
-            Requirements::stated_size(bytes[..4].try_into().unwrap()),
-            Some(bytes.len())
-        );
         assert_eq!(Requirements::parse(&bytes), Some(list));
         for cut in 0..bytes.len() {
             assert_eq!(Requirements::parse(&bytes[..cut]), None, "cut at {cut}");
         }
-        assert_eq!(Requirements::stated_size([31, 0, 0, 0]), None);
+    }
+
+    /// A list is taken out of the block a driver handed over only as
+    /// far as the block reaches, whatever the list says of itself.
+    #[test]
+    fn a_list_does_not_reach_beyond_its_block() {
+        let bytes = ahci_requirements().to_bytes();
+        let mut block = bytes.clone();
+        block.extend_from_slice(&[0xEE; 40]);
+        assert_eq!(Requirements::in_block(&block), Some(&bytes[..]));
+        assert_eq!(Requirements::in_block(&bytes), Some(&bytes[..]));
+        // A size beyond the block.
+        let mut lying = block.clone();
+        lying[..4].copy_from_slice(&(block.len() as u32 + 1).to_le_bytes());
+        assert_eq!(Requirements::in_block(&lying), None);
+        lying[..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Requirements::in_block(&lying), None);
+        // A size too small for the descriptors the list counts.
+        let mut short = block.clone();
+        short[..4].copy_from_slice(&(bytes.len() as u32 - 1).to_le_bytes());
+        assert_eq!(Requirements::in_block(&short), None);
+        assert_eq!(Requirements::in_block(&[]), None);
+        assert_eq!(Requirements::in_block(&[0; 16]), None);
     }
 
     #[test]

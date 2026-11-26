@@ -1906,7 +1906,13 @@ its device identifier, capabilities, description and location text,
 instance identifier, hardware and compatible identifiers, bus
 information, resource requirements and boot configuration, and is then
 told it has been enumerated. NK does not send the query for the
-extended-address interface Windows sends after the capabilities. The
+extended-address interface Windows sends after the capabilities. An
+identifier is taken by Windows' rule (`PnpFixupID`: spaces become
+underscores; a control character, a character above `0x7F`, a comma,
+or the wrong number of backslashes refuses it) and a device whose
+device or instance identifier is refused is left unstarted (problem
+9). An answer a driver hands over is copied as far as its pool block
+reaches and read from the copy, whatever lengths it states. The
 instance path, the parent prefix for a bus whose children are not
 unique (`ParentIdPrefix`, `NextParentID.<hash>.<depth>`), and the
 hash behind it are Windows' (`nk_pnp::ids`, held to the reference

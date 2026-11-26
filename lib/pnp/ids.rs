@@ -62,18 +62,62 @@ pub fn from_multi_sz(data: &[u8]) -> Vec<String> {
     multi_sz(&units)
 }
 
-/// Whether `c` may stand in a device identifier. Windows replaces the
-/// others (a space and everything below it, everything above `0x7F`,
-/// and the comma) with an underscore before it uses an identifier as
-/// part of a key's name.
-const fn legal(c: char) -> bool {
-    c > ' ' && (c as u32) <= 0x7F && c != ','
+/// How many backslashes an identifier may have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Separators {
+    /// Exactly this many: one for a device identifier
+    /// (`<enumerator>\<device>`), none for an instance identifier.
+    Exactly(u32),
+    /// Any number: hardware and compatible identifiers.
+    Any,
 }
 
-/// An identifier with every character that may not stand in one
-/// replaced by an underscore.
-pub fn fixed_up(id: &str) -> String {
-    id.chars().map(|c| if legal(c) { c } else { '_' }).collect()
+/// The longest device or instance identifier, and the longest list of
+/// hardware or compatible identifiers, in characters with their
+/// terminators.
+pub const MAX_ID: usize = 200;
+pub const MAX_ID_LIST: usize = 0x400;
+
+/// An identifier a bus driver answered, as Windows takes it
+/// (`PnpFixupID` in the pinned kernel): every space becomes an
+/// underscore; a character below a space or above `0x7F`, or a comma,
+/// makes the identifier invalid, as does a number of backslashes other
+/// than `separators` allows, or a length of `limit` characters or more.
+/// `None` for an invalid identifier: its device is not usable
+/// (`STATUS_PNP_INVALID_ID`).
+pub fn fixed_up(id: &str, limit: usize, separators: Separators) -> Option<String> {
+    let mut fixed = String::new();
+    let mut backslashes = 0;
+    for c in id.chars() {
+        match c {
+            ' ' => fixed.push('_'),
+            ',' => return None,
+            c if c < ' ' || c as u32 > 0x7F => return None,
+            '\\' => {
+                backslashes += 1;
+                fixed.push(c);
+            }
+            c => fixed.push(c),
+        }
+    }
+    let counted = match separators {
+        Separators::Exactly(wanted) => backslashes == wanted,
+        Separators::Any => true,
+    };
+    (counted && fixed.len() < limit).then_some(fixed)
+}
+
+/// A list of hardware or compatible identifiers, each taken as
+/// [`fixed_up`] takes it; `None` if one of them is invalid or the list
+/// is longer than Windows reads.
+pub fn fixed_up_list<S: AsRef<str>>(list: &[S]) -> Option<Vec<String>> {
+    let fixed: Option<Vec<String>> = list
+        .iter()
+        .map(|id| fixed_up(id.as_ref(), MAX_ID_LIST, Separators::Any))
+        .collect();
+    let fixed = fixed?;
+    let length: usize = fixed.iter().map(|id| id.len() + 1).sum();
+    (length < MAX_ID_LIST).then_some(fixed)
 }
 
 /// The number Windows makes of a parent's instance path for the
@@ -110,17 +154,16 @@ pub fn next_parent_id_value(level: u32, hash: u32) -> String {
 
 /// A device's instance path. `device` is what the bus answered for
 /// `BusQueryDeviceID`, `instance` for `BusQueryInstanceID` (it may have
-/// answered nothing). A bus that says the instance identifier is unique
-/// in the machine (`DEVICE_CAPABILITIES.UniqueID`) has it used as it
-/// is; otherwise the parent's prefix goes in front of it.
+/// answered nothing), both as [`fixed_up`] left them. A bus that says
+/// the instance identifier is unique in the machine
+/// (`DEVICE_CAPABILITIES.UniqueID`) has it used as it is; otherwise
+/// the parent's prefix goes in front of it.
 pub fn instance_path(
     device: &str,
     instance: Option<&str>,
     unique: bool,
     parent_prefix: &str,
 ) -> String {
-    let device = fixed_up(device);
-    let instance = instance.map(fixed_up);
     match instance {
         Some(instance) if unique => format!("{device}\\{instance}"),
         Some(instance) => format!("{device}\\{parent_prefix}&{instance}"),
@@ -198,10 +241,59 @@ mod tests {
         assert_eq!(from_multi_sz(&data), ["p", "q"]);
     }
 
+    /// Windows' rule for an identifier: spaces become underscores, as
+    /// in the reference machine's disk (`SCSI\DiskQEMU____...`); other
+    /// characters that may not stand in a key's name refuse it.
     #[test]
-    fn illegal_characters_become_underscores() {
-        assert_eq!(fixed_up("SCSI\\Disk QEMU,x\u{e9}"), "SCSI\\Disk_QEMU_x_");
-        assert_eq!(fixed_up("PCI\\VEN_8086&DEV_2922"), "PCI\\VEN_8086&DEV_2922");
+    fn identifiers_are_fixed_up_or_refused() {
+        let any = Separators::Any;
+        assert_eq!(
+            fixed_up("SCSI\\DiskQEMU    HARDDISK", MAX_ID_LIST, any).as_deref(),
+            Some("SCSI\\DiskQEMU____HARDDISK")
+        );
+        assert_eq!(fixed_up("a,b", MAX_ID, any), None);
+        assert_eq!(fixed_up("a\u{1f}b", MAX_ID, any), None);
+        assert_eq!(fixed_up("a\u{e9}b", MAX_ID, any), None);
+        assert_eq!(
+            fixed_up("a\u{7f}b", MAX_ID, any).as_deref(),
+            Some("a\u{7f}b")
+        );
+    }
+
+    /// A device identifier is an enumerator and a device, with one
+    /// backslash between; an instance identifier has none. Anything
+    /// else would name other keys than the device's own.
+    #[test]
+    fn backslashes_are_counted() {
+        let device = Separators::Exactly(1);
+        let instance = Separators::Exactly(0);
+        assert_eq!(
+            fixed_up("PCI\\VEN_8086&DEV_2922", MAX_ID, device).as_deref(),
+            Some("PCI\\VEN_8086&DEV_2922")
+        );
+        assert_eq!(fixed_up("PCI", MAX_ID, device), None);
+        assert_eq!(fixed_up("PCI\\A\\B", MAX_ID, device), None);
+        assert_eq!(fixed_up("FA", MAX_ID, instance).as_deref(), Some("FA"));
+        assert_eq!(fixed_up("1\\..\\Other", MAX_ID, instance), None);
+        assert_eq!(fixed_up("1\\Control", MAX_ID, instance), None);
+    }
+
+    #[test]
+    fn identifiers_have_a_longest() {
+        let long = "x".repeat(MAX_ID - 1);
+        assert_eq!(
+            fixed_up(&long, MAX_ID, Separators::Any).as_deref(),
+            Some(&long[..])
+        );
+        assert_eq!(fixed_up(&"x".repeat(MAX_ID), MAX_ID, Separators::Any), None);
+        assert_eq!(
+            fixed_up_list(&["PCI\\CC_0106", "GEN DISK"]),
+            Some(vec!["PCI\\CC_0106".to_string(), "GEN_DISK".to_string()])
+        );
+        assert_eq!(fixed_up_list(&["ok", "not,ok"]), None);
+        let many: Vec<String> = (0..20).map(|_| "y".repeat(60)).collect();
+        assert_eq!(fixed_up_list(&many), None);
+        assert_eq!(fixed_up_list::<&str>(&[]), Some(vec![]));
     }
 
     /// The prefixes the reference Windows gave the devices of the path

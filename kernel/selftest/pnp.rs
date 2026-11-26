@@ -39,6 +39,7 @@ pub static GROUP: Group = Group {
         "pnp.start-resources",
         "pnp.invalidate-relations",
         "pnp.failed-start",
+        "pnp.invalid-instance-id",
         "pnp.removed",
     ],
     run,
@@ -91,8 +92,8 @@ struct Extension {
 }
 
 /// The children the bus has, and how many of them it reports.
-static CHILDREN: [AtomicPtr<DEVICE_OBJECT>; 2] =
-    [const { AtomicPtr::new(core::ptr::null_mut()) }; 2];
+static CHILDREN: [AtomicPtr<DEVICE_OBJECT>; 3] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; 3];
 static PRESENT: AtomicU32 = AtomicU32::new(0);
 /// The interrupt line the children require; `u32::MAX` for none.
 static LINE: AtomicU32 = AtomicU32::new(u32::MAX);
@@ -231,6 +232,9 @@ unsafe fn child_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
             IRP_MN_QUERY_ID => {
                 let text = match parameters[0] as u32 {
                     BUS_QUERY_DEVICE_ID => wide(DEVICE_ID),
+                    // The third child's would name a key below another
+                    // device's: not an instance identifier.
+                    BUS_QUERY_INSTANCE_ID if number == 3 => wide("1\\Control"),
                     BUS_QUERY_INSTANCE_ID => wide(&format!("{number}")),
                     BUS_QUERY_HARDWARE_IDS => wide(HARDWARE_IDS),
                     BUS_QUERY_COMPATIBLE_IDS => wide(COMPATIBLE_IDS),
@@ -1004,6 +1008,26 @@ fn run(r: &mut Report, _: &BootInfo) {
             .ok_or("the child reported after IoInvalidateDeviceRelations was not found")
     });
     r.check("pnp.failed-start", failed_start);
+    // A third child, whose bus driver answers an instance identifier
+    // with a backslash in it: Windows takes no such identifier.
+    bench.report(3);
+    pnp::settle();
+    r.check("pnp.invalid-instance-id", || {
+        let found = child(3).ok_or("the third child has no node")?;
+        if found.state != State::Failed || found.problem != node::CM_PROB_INVALID_DATA {
+            return Err("the child is not failed with CM_PROB_INVALID_DATA");
+        }
+        let first = child(1).ok_or("the first child has no node")?;
+        let key = registry::enum_key(&first.instance);
+        if cm::values(&format!("{key}\\Control"))
+            .iter()
+            .any(|(name, _, _)| name == "Capabilities")
+            || cm::subkeys(&key).len() != 4
+        {
+            return Err("the identifier was used as a path into the first child's key");
+        }
+        Ok(())
+    });
     // The bus loses its children: each is removed, and what it held is
     // free again.
     let vector = started.ok().map(|(_, vector)| vector);
