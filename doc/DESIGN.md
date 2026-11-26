@@ -1883,6 +1883,71 @@ source's system mapping if there is one; mapped on its own, it keeps
 that mapping until it is freed. A part outside the source's buffer
 stops the system.
 
+## Power
+
+The machine is on and stays on: the system is in S0 and every device in
+D0, always. NK never sleeps, hibernates, powers a device down for
+being idle, or wakes. What is left of a power manager is what a driver
+must be able to ask of one and get Windows' answer to (`kernel/po`;
+rules in `lib/po`).
+
+**Power requests.**
+[`PoRequestPowerIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-porequestpowerirp)
+builds a request as the pinned kernel does: an IRP one stack location
+deeper than the stack, whose topmost location is the power manager's
+own, starting out as `STATUS_NOT_SUPPORTED`, sent to the top of the
+stack. A wait-wake is sent at once and stays where the bus driver
+holds it: nothing on NK ever wakes, and the driver that asked cancels
+it with `IoCancelIrp`. Queries and sets of a device's power state are
+sent to one stack one at a time, in the order asked for; the next goes
+down from the thread that completed the one before, after that one's
+completion function has run. The power manager's completion routine
+calls the driver's completion function at whatever IRQL the request was
+completed, and frees the IRP. A stack whose bottom device has no device
+node (`DEVOBJ_EXTENSION.DeviceNode`, the Plug and Play manager's) is
+refused, as on Windows. NK runs no watchdog on a request
+(`PoQueryWatchdogTime` says so), and there is no platform extension to
+tell.
+
+Windows sends a device no power request when it is started: a driver
+is in D0 when its start request arrives and says so itself
+(`PoSetPowerState`). The state a driver reports is recorded where
+Windows records it, in the device object's `PowerFlags`, and nobody is
+told, as nobody is by the pinned kernel. What else the power manager
+keeps about a device is in a block of NK's own that the extension's
+`Dope` points to, as Windows' own block is; it goes with the device
+object's memory.
+
+**Power settings.** A driver registers for a setting by GUID
+([`PoRegisterPowerSettingCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-poregisterpowersettingcallback))
+and Windows calls it, from a worker thread, with the value the setting
+has. Two settings have a value on NK, the two the pinned kernel itself
+sets as it starts: the power source is AC, the console's display is on.
+Every other setting gets its value on Windows from something NK lacks
+(the power scheme, which user mode's power service applies; the
+platform's idle driver; a session), so a registration for one is kept
+and never called, which is Windows' behaviour for a setting that has
+not been given a value. No setting changes, so no callback is called
+twice. Taking a registration back waits for its callback if another
+thread is in it.
+
+**Registered and never acted on.** Coalescing callbacks
+(`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
+platform's low-power idle state) and a device's flags for that state
+(`PoDirectedDripsSetDeviceFlags`).
+
+**Absent.** Hibernation: `PoSetHiberRange` stops the system with the
+bugcheck the pinned kernel raises when it is called and no hibernation
+is in progress. An ordered shutdown before a bugcheck:
+`PoShutdownBugCheck` stops at once with the code it is given. Thermal
+requests are traps.
+
+The tests `po.*` run a bus driver and a function driver of their own:
+requests of each kind go down their stack and come back to the
+completion function, a held set keeps the next query waiting, a
+wait-wake is marked and cancelled; settings callbacks are registered,
+called and taken back, from another thread and from inside.
+
 ## Plug and Play
 
 `kernel/pnp` is the Plug and Play manager; the rules it applies are
@@ -2013,71 +2078,6 @@ is no query-remove, no eject, no stop and no rebalance.
 not bring up yet because their `AddDevice` or start stops the system
 over something NK lacks, with the reason beside each name: at present
 `ACPI`, so nothing below the HAL's ACPI device is enumerated.
-
-## Power
-
-The machine is on and stays on: the system is in S0 and every device in
-D0, always. NK never sleeps, hibernates, powers a device down for
-being idle, or wakes. What is left of a power manager is what a driver
-must be able to ask of one and get Windows' answer to (`kernel/po`;
-rules in `lib/po`).
-
-**Power requests.**
-[`PoRequestPowerIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-porequestpowerirp)
-builds a request as the pinned kernel does: an IRP one stack location
-deeper than the stack, whose topmost location is the power manager's
-own, starting out as `STATUS_NOT_SUPPORTED`, sent to the top of the
-stack. A wait-wake is sent at once and stays where the bus driver
-holds it: nothing on NK ever wakes, and the driver that asked cancels
-it with `IoCancelIrp`. Queries and sets of a device's power state are
-sent to one stack one at a time, in the order asked for; the next goes
-down from the thread that completed the one before, after that one's
-completion function has run. The power manager's completion routine
-calls the driver's completion function at whatever IRQL the request was
-completed, and frees the IRP. A stack whose bottom device has no device
-node (`DEVOBJ_EXTENSION.DeviceNode`, the Plug and Play manager's) is
-refused, as on Windows. NK runs no watchdog on a request
-(`PoQueryWatchdogTime` says so), and there is no platform extension to
-tell.
-
-Windows sends a device no power request when it is started: a driver
-is in D0 when its start request arrives and says so itself
-(`PoSetPowerState`). The state a driver reports is recorded where
-Windows records it, in the device object's `PowerFlags`, and nobody is
-told, as nobody is by the pinned kernel. What else the power manager
-keeps about a device is in a block of NK's own that the extension's
-`Dope` points to, as Windows' own block is; it goes with the device
-object's memory.
-
-**Power settings.** A driver registers for a setting by GUID
-([`PoRegisterPowerSettingCallback`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-poregisterpowersettingcallback))
-and Windows calls it, from a worker thread, with the value the setting
-has. Two settings have a value on NK, the two the pinned kernel itself
-sets as it starts: the power source is AC, the console's display is on.
-Every other setting gets its value on Windows from something NK lacks
-(the power scheme, which user mode's power service applies; the
-platform's idle driver; a session), so a registration for one is kept
-and never called, which is Windows' behaviour for a setting that has
-not been given a value. No setting changes, so no callback is called
-twice. Taking a registration back waits for its callback if another
-thread is in it.
-
-**Registered and never acted on.** Coalescing callbacks
-(`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
-platform's low-power idle state) and a device's flags for that state
-(`PoDirectedDripsSetDeviceFlags`).
-
-**Absent.** Hibernation: `PoSetHiberRange` stops the system with the
-bugcheck the pinned kernel raises when it is called and no hibernation
-is in progress. An ordered shutdown before a bugcheck:
-`PoShutdownBugCheck` stops at once with the code it is given. Thermal
-requests are traps.
-
-The tests `po.*` run a bus driver and a function driver of their own:
-requests of each kind go down their stack and come back to the
-completion function, a held set keeps the next query waiting, a
-wait-wake is marked and cancelled; settings callbacks are registered,
-called and taken back, from another thread and from inside.
 
 ## The registry
 
