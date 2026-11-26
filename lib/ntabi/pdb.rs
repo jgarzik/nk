@@ -1560,3 +1560,31 @@ fn cache_aware_rundown_matches_the_kernel() {
         field("Number")
     );
 }
+
+#[test]
+fn timer2_matches_the_kernel() {
+    use crate::ke::KTIMER2;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let layout = types.layout("_KTIMER2").expect("_KTIMER2");
+    let field = |name| offset(&layout, "_KTIMER2", name);
+    assert_eq!(size_of::<KTIMER2>(), layout.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(KTIMER2, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        Header,
+        RbNodes,
+        DueTime,
+        Period,
+        Callback,
+        CallbackContext,
+        DisableCallback,
+        DisableContext,
+        AbsoluteSystemTime,
+        TypeFlags,
+        CollectionIndex
+    );
+}

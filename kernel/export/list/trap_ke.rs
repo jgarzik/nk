@@ -11,7 +11,6 @@ trap_list!(
     KeAcquireInStackQueuedSpinLockAtDpcLevel,
     KeAcquireInStackQueuedSpinLockForDpc,
     KeBugCheck,
-    KeCancelTimer2,
     KeClearEvent,
     KeExpandKernelStackAndCalloutEx,
     KeFlushIoBuffers,
@@ -25,7 +24,6 @@ trap_list!(
     KeGetRecommendedSharedDataAlignment,
     KeInitializeGuardedMutex,
     KeInitializeThreadedDpc,
-    KeInitializeTimer2,
     KeIpiGenericCall,
     KeProcessorGroupAffinity,
     KeQueryActiveGroupCount,
@@ -48,6 +46,5 @@ trap_list!(
     KeSetImportanceDpc,
     KeSetSystemGroupAffinityThread,
     KeSetTargetProcessorDpcEx,
-    KeSetTimer2,
     KeStartDynamicProcessor,
 );

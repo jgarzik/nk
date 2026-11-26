@@ -64,4 +64,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::thread::KeSetPriorityThread),
     export!(Implemented, ke::seh::_local_unwind),
     export!(Implemented, ke::time::ExQueryTimerResolution),
+    export!(Partial, ke::timer2::KeInitializeTimer2),
+    export!(Partial, ke::timer2::KeSetTimer2),
+    export!(Partial, ke::timer2::KeCancelTimer2),
 ];

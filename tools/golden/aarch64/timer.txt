@@ -4,3 +4,4 @@ timer.cancel ok
 timer.periodic ok
 timer.chain ok
 timer.other-cpu ok
+timer.timer2 ok
