@@ -15,3 +15,4 @@ workspace = true
 
 [dependencies]
 nk-acpi = { path = "../acpi" }
+nk-ntabi = { path = "../ntabi" }

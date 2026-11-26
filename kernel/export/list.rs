@@ -22,12 +22,10 @@ mod ps;
 mod rtl;
 mod se;
 mod trap;
-mod trap_hal;
 mod trap_io;
 mod trap_ke;
 mod trap_mm;
 mod trap_po;
-mod trap_zw;
 mod whea;
 
 /// Every list.
@@ -50,11 +48,9 @@ pub(super) static ALL: &[&[Export]] = &[
     rtl::EXPORTS,
     se::EXPORTS,
     trap::EXPORTS,
-    trap_hal::EXPORTS,
     trap_io::EXPORTS,
     trap_ke::EXPORTS,
     trap_mm::EXPORTS,
     trap_po::EXPORTS,
-    trap_zw::EXPORTS,
     whea::EXPORTS,
 ];

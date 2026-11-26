@@ -15,6 +15,7 @@ pub mod description;
 pub mod dma;
 pub mod interrupt;
 pub mod pci;
+pub mod variables;
 pub mod x86;
 
 /// MADT tables for the tests, built entry by entry.
