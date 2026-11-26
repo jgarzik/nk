@@ -523,22 +523,34 @@ pub unsafe extern "C" fn ZwOpenKey(
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
+    let mut asked = Vec::new();
     // SAFETY: per the contract.
     let found = unsafe { named(attributes) }.and_then(|(start, path)| {
+        if crate::kd::trace_registry() {
+            asked.clone_from(&path);
+        }
         // `start` outlives the lock: a parameter goes after the locals.
         let mut hive = HIVE.lock();
         let key = hive.open(start.key(), &path).map_err(status)?;
         hive.opened(key);
         Ok(key)
     });
-    match found.and_then(|key| open(key, desired_access)) {
+    let status = match found.and_then(|key| open(key, desired_access)) {
         Ok(handle) => {
             // SAFETY: per the contract.
             unsafe { key_handle.write_unaligned(handle) };
             STATUS_SUCCESS
         }
         Err(status) => status,
+    };
+    if crate::kd::trace_registry() {
+        kprintln!(
+            "cm: open key {}: {:#x}",
+            alloc::string::String::from_utf16_lossy(&asked),
+            status as u32
+        );
     }
+    status
 }
 
 /// The bytes of the counted string `class`; none if it is null.
@@ -933,7 +945,15 @@ pub unsafe extern "C" fn ZwQueryValueKey(
         Ok(value_information(class, stored_name, kind, data, out))
     };
     // SAFETY: per the contract.
-    unsafe { inform(information, length, result_length, format) }
+    let status = unsafe { inform(information, length, result_length, format) };
+    if crate::kd::trace_registry() {
+        kprintln!(
+            "cm: query value {}: {:#x}",
+            alloc::string::String::from_utf16_lossy(&name),
+            status as u32
+        );
+    }
+    status
 }
 
 // ---- tests --------------------------------------------------------------
