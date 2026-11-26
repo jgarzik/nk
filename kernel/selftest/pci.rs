@@ -13,6 +13,7 @@ pub static GROUP: Group = Group {
         "hal.pci.write",
         "hal.pci.contract",
         "hal.pci.ports",
+        "hal.pci.interface",
     ],
     run,
     manual: false,
@@ -202,6 +203,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         ),
     }
     r.check("hal.pci.write", write);
+    r.check("hal.pci.interface", pci::interface_test);
     match contract() {
         Ok((device, function)) => r.ok_with(
             "hal.pci.contract",
