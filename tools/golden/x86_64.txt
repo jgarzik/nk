@@ -100,6 +100,7 @@ se.privileges ok
 se.privileges.append ok
 se.assign ok
 se.descriptor-info ok
+se.token-query ok
 cm.keys ok
 cm.values ok
 cm.delete ok

@@ -233,10 +233,12 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, se::access::SeFreePrivileges),
     export!(Implemented, se::token::SeLockSubjectContext),
     export!(Implemented, se::access::SePrivilegeCheck),
+    export!(Implemented, se::token::SeQueryInformationToken),
     export!(Implemented, se::descriptor::SeQuerySecurityDescriptorInfo),
     export!(Implemented, se::token::SeReleaseSubjectContext),
     export!(Implemented, se::descriptor::SeSetSecurityDescriptorInfo),
     export!(Implemented, se::access::SeSinglePrivilegeCheck),
+    export!(Implemented, se::token::SeTokenType),
     export!(Implemented, se::token::SeUnlockSubjectContext),
     export_variable!(
         Implemented,

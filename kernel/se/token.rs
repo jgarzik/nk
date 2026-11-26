@@ -24,6 +24,7 @@ use nk_ntabi::se::{
     ACCESS_STATE, AUX_ACCESS_DATA, LUID, SECURITY_SUBJECT_CONTEXT, TOKEN_HAS_TRAVERSE_PRIVILEGE,
 };
 use nk_ntabi::status::*;
+use nk_se::information::{Information, QueryError, token_information};
 use nk_se::token::{SE_CHANGE_NOTIFY_PRIVILEGE, Token};
 
 /// The next locally unique identifier. Windows keeps the values below
@@ -266,6 +267,68 @@ pub unsafe extern "C" fn SeDeleteAccessState(state: *mut ACCESS_STATE) {
             }
         }
         SeReleaseSubjectContext(&raw mut (*state).SubjectSecurityContext);
+    }
+}
+
+/// Pool tag of what a token query hands out, Windows' own (`Se  `).
+const TAG_INFORMATION: u32 = u32::from_le_bytes(*b"Se  ");
+
+/// [`SeTokenType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-setokentype):
+/// whether a token is a primary token (1) or an impersonation token
+/// (2).
+///
+/// # Safety
+/// `token` is a token object the caller holds a reference to.
+pub unsafe extern "C" fn SeTokenType(token: *mut c_void) -> u32 {
+    // SAFETY: per the contract.
+    unsafe { of(token.cast()) }.token_type as u32
+}
+
+/// [`SeQueryInformationToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryinformationtoken):
+/// what a token answers for `class` (`nk_se::information`). Most
+/// classes come back in a pool block the caller frees with
+/// `ExFreePool`, whose address `*information` receives; the session
+/// id, the integrity level and "is an app container" are 32-bit values
+/// written where that address would go, as on Windows. A class NK does
+/// not answer, and the impersonation level of a primary token, fail
+/// with `STATUS_INVALID_INFO_CLASS` and write nothing.
+///
+/// # Safety
+/// `token` is a token object the caller holds a reference to;
+/// `information` is writable for a pointer.
+pub unsafe extern "C" fn SeQueryInformationToken(
+    token: *mut c_void,
+    class: u32,
+    information: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        let token = of(token.cast());
+        // Once for the length, then again with the address the block
+        // has: its pointers are made from it.
+        let length = match token_information(token, class, 0) {
+            Ok(Information::Value(value)) => {
+                information.cast::<u32>().write_unaligned(value);
+                return STATUS_SUCCESS;
+            }
+            Ok(Information::Block(block)) => block.len(),
+            Err(QueryError::InvalidInfoClass) => return STATUS_INVALID_INFO_CLASS,
+        };
+        let block = pool::alloc(length, TAG_INFORMATION);
+        if block.is_null() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        match token_information(token, class, block as u64) {
+            Ok(Information::Block(bytes)) if bytes.len() == length => {
+                block.copy_from_nonoverlapping(bytes.as_ptr(), length);
+                information.write_unaligned(block.cast());
+                STATUS_SUCCESS
+            }
+            // A token does not change between the two questions.
+            _ => crate::kd::bugcheck(format_args!(
+                "a token answered a query differently the second time"
+            )),
+        }
     }
 }
 

@@ -15,13 +15,16 @@
 //! ([TOKEN_INFORMATION_CLASS] links each one): a count or pointers
 //! first, the SIDs or the ACL packed after them in order.
 //!
+//! Which classes are values, that `TokenIsAppContainer` is one of them,
+//! that a block is exactly as long as its parts, and that
+//! `TokenImpersonationLevel` of a primary token fails with
+//! `STATUS_INVALID_INFO_CLASS` are the pinned kernel's, read from its
+//! code.
+//!
 //! INFERRED, for the conformance drivers: the variable parts follow the
-//! fixed part with no gap and in the order of the array;
-//! `TokenIsAppContainer` is a value like the session id;
-//! `TokenImpersonationLevel` of a primary token and every class not
-//! listed here fail with `STATUS_INVALID_INFO_CLASS`; a token without a
-//! default DACL answers a null pointer; `TokenGroups` includes the
-//! integrity label.
+//! fixed part in the order of the array; a token without a default
+//! DACL answers a null pointer; `TokenGroups` includes the integrity
+//! label.
 //!
 //! Not done: every other class (`TokenSource`, restricted SIDs, linked
 //! tokens, claims, capabilities, ...).
@@ -267,7 +270,11 @@ mod tests {
         assert_eq!(u32_at(&statistics, 0), 0x3EA, "TokenId.LowPart");
         assert_eq!(u32_at(&statistics, 4), 1, "TokenId.HighPart");
         assert_eq!(u64_at(&statistics, 8), 0x3E7, "AuthenticationId");
-        assert_eq!(u64_at(&statistics, 16), i64::MAX as u64, "ExpirationTime");
+        assert_eq!(
+            u64_at(&statistics, 16),
+            crate::token::SYSTEM_TOKEN_EXPIRATION as u64,
+            "ExpirationTime"
+        );
         assert_eq!(u32_at(&statistics, 24), 1, "TokenType");
         assert_eq!(u32_at(&statistics, 28), 0, "ImpersonationLevel");
         assert_eq!(u32_at(&statistics, 32), 0x1000, "DynamicCharged");

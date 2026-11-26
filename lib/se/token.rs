@@ -64,6 +64,11 @@ pub const SE_TIME_ZONE_PRIVILEGE: Luid = 34;
 pub const SE_CREATE_SYMBOLIC_LINK_PRIVILEGE: Luid = 35;
 pub const SE_DELEGATE_SESSION_USER_IMPERSONATE_PRIVILEGE: Luid = 36;
 
+/// When the tokens Windows makes for itself expire: 1 January 3000,
+/// 01:01:01.001, in 100 ns since 1601. The pinned kernel builds the
+/// System token with these time fields.
+pub const SYSTEM_TOKEN_EXPIRATION: i64 = 0x0620_7526_B64C_EB90;
+
 /// `SECURITY_IMPERSONATION_LEVEL`.
 pub const SECURITY_ANONYMOUS: u32 = 0;
 pub const SECURITY_IDENTIFICATION: u32 = 1;
@@ -183,7 +188,7 @@ impl Token {
     /// | Authentication id `SYSTEM_LUID` (0x3E7) | CONFIRMED: `SYSTEM_LUID` in `ntifs.h`, [well-known LUIDs] |
     /// | Session 0 | CONFIRMED: [SeQueryInformationToken] ("the console session ... is zero") |
     /// | Primary token; impersonation level stored as `SecurityAnonymous` | INFERRED |
-    /// | Never expires: expiration time `i64::MAX` | INFERRED |
+    /// | Expires on 1 January 3000 ([`SYSTEM_TOKEN_EXPIRATION`]) | read from the pinned kernel's code |
     /// | `DynamicCharged`, `DynamicAvailable` | unknown: zero until recorded |
     ///
     /// [LocalSystem account]: https://learn.microsoft.com/en-us/windows/win32/services/localsystem-account
@@ -263,7 +268,7 @@ impl Token {
             token_id: 0,
             authentication_id: SYSTEM_LUID,
             modified_id: 0,
-            expiration_time: i64::MAX,
+            expiration_time: SYSTEM_TOKEN_EXPIRATION,
             session_id: 0,
             dynamic_charged: 0,
             dynamic_available: 0,
@@ -381,7 +386,7 @@ mod tests {
         assert_eq!(token.token_type, TokenType::Primary);
         assert_eq!(token.impersonation_level, SECURITY_ANONYMOUS);
         assert_eq!((token.authentication_id, token.session_id), (0x3E7, 0));
-        assert_eq!(token.expiration_time, i64::MAX);
+        assert_eq!(token.expiration_time, SYSTEM_TOKEN_EXPIRATION);
         assert_eq!((token.token_id, token.modified_id), (0, 0));
         assert_eq!((token.dynamic_charged, token.dynamic_available), (0, 0));
         assert_eq!(token.integrity_level(), 0x4000);

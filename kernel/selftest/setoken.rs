@@ -29,6 +29,7 @@ pub static GROUP: Group = Group {
         "se.privileges.append",
         "se.assign",
         "se.descriptor-info",
+        "se.token-query",
     ],
     run,
     manual: false,
@@ -1260,6 +1261,170 @@ fn descriptor_info() -> Result<(), &'static str> {
     Ok(())
 }
 
+// ---- what a token answers -------------------------------------------------
+
+static SYSTEM_LABEL: Sid = sid(16, &[0x4000]);
+const INVALID_INFO_CLASS: i32 = 0xC000_0003u32 as i32;
+/// What a query's result variable holds before the call.
+const UNTOUCHED: usize = 0xAAAA_AAAA_AAAA_AAAA;
+
+/// One query of a token: the status, and what is where the block's
+/// address goes.
+///
+/// # Safety
+/// `token` is a token object the caller holds a reference to.
+unsafe fn query(token: *mut u8, class: u32) -> (i32, usize) {
+    let mut answer = UNTOUCHED as *mut c_void;
+    // SAFETY: per the contract; the result is a local.
+    let status = unsafe { SeQueryInformationToken(token.cast(), class, &raw mut answer) };
+    (status, answer as usize)
+}
+
+/// The block a query handed out, read as 64-bit words and then freed.
+/// `None` if the query failed or handed out nothing.
+///
+/// # Safety
+/// As [`query`]; `words` is no more than the block holds.
+unsafe fn block_of(token: *mut u8, class: u32, words: usize) -> Option<(usize, Vec<u64>)> {
+    // SAFETY: per the contract.
+    unsafe {
+        let (status, block) = query(token, class);
+        if status != 0 || block == UNTOUCHED || block == 0 {
+            return None;
+        }
+        let read = (0..words)
+            .map(|i| (block as *const u64).add(i).read_unaligned())
+            .collect();
+        Some((block, read))
+    }
+}
+
+/// The SID at `address`.
+///
+/// # Safety
+/// `address` points to a SID.
+unsafe fn sid_at(address: u64) -> Vec<u8> {
+    // SAFETY: per the contract.
+    unsafe {
+        let sid = address as *const u8;
+        core::slice::from_raw_parts(sid, crate::se::RtlLengthSid(sid) as usize).to_vec()
+    }
+}
+
+fn free(block: usize) {
+    // SAFETY: a pool block a query handed out, freed once.
+    unsafe { pool::ExFreePoolWithTag(block as *mut c_void, 0) };
+}
+
+/// The System process's token, class by class, as
+/// `SeQueryInformationToken` tells it.
+fn token_query() -> Result<(), &'static str> {
+    let (token, before) = primary();
+    // SAFETY: the token is referenced until the last line; each block
+    // is read within its length and freed once.
+    let verdict = unsafe {
+        (|| {
+            if SeTokenType(token.cast()) != 1 {
+                return Err("the System token is not a primary token");
+            }
+            // The user: one SID_AND_ATTRIBUTES, then the SID.
+            let (block, user) = block_of(token, 1, 2).ok_or("no user")?;
+            let right = user[0] == block as u64 + 16
+                && user[1] as u32 == 0
+                && sid_at(user[0]) == SYSTEM.bytes();
+            free(block);
+            if !right {
+                return Err("the token's user is not the system, in a block of its own");
+            }
+            // The groups: a count, then SID_AND_ATTRIBUTES each.
+            let (block, groups) = block_of(token, 2, 9).ok_or("no groups")?;
+            let expected: [(&Sid, u32); 4] = [
+                (&ADMINS, 0xE),
+                (&WORLD, 7),
+                (&AUTHENTICATED, 7),
+                (&SYSTEM_LABEL, 0x60),
+            ];
+            let right = groups[0] as u32 == 4
+                && expected.iter().enumerate().all(|(i, &(sid, attributes))| {
+                    let (pointer, its) = (groups[1 + 2 * i], groups[2 + 2 * i] as u32);
+                    pointer > block as u64 && its == attributes && sid_at(pointer) == sid.bytes()
+                });
+            free(block);
+            if !right {
+                return Err("the token's groups are not the System token's");
+            }
+            // The privileges: a count, then 12 bytes each.
+            let (block, privileges) = block_of(token, 3, 2).ok_or("no privileges")?;
+            let right = privileges[0] as u32 == 31
+                && (privileges[0] >> 32) as u32 == 2
+                && privileges[1] == 0;
+            free(block);
+            if !right {
+                return Err("the token's privileges do not begin as the System token's");
+            }
+            // Owner, primary group, default list: a pointer, then it.
+            for (class, sid) in [(4, &ADMINS), (5, &SYSTEM)] {
+                let (block, part) = block_of(token, class, 1).ok_or("no owner or group")?;
+                let right = part[0] == block as u64 + 8 && sid_at(part[0]) == sid.bytes();
+                free(block);
+                if !right {
+                    return Err("the token's owner or primary group is not as on Windows");
+                }
+            }
+            let (block, list) = block_of(token, 6, 2).ok_or("no default list")?;
+            // An ACL header: revision 2, 52 bytes, two entries.
+            let right = list[0] == block as u64 + 8 && list[1] == 0x0002_0034_0002;
+            free(block);
+            if !right {
+                return Err("the token's default list is not the System token's");
+            }
+            // The type, in a block of its own; no level for a primary.
+            let (status, block) = query(token, 8);
+            if status != 0 || block == UNTOUCHED {
+                return Err("no type");
+            }
+            let kind = (block as *const u32).read();
+            free(block);
+            if kind != 1 || query(token, 9) != (INVALID_INFO_CLASS, UNTOUCHED) {
+                return Err("the type is not primary, or a primary token told a level");
+            }
+            let (block, statistics) = block_of(token, 10, 7).ok_or("no statistics")?;
+            free(block);
+            if statistics[1] != 0x3E7
+                || statistics[2] != 0x0620_7526_B64C_EB90
+                || statistics[3] != 1
+                || statistics[5] != 4 | 31 << 32
+            {
+                return Err("the statistics are not the system logon's");
+            }
+            // Three classes answered with a number, four bytes of it,
+            // where the address would go.
+            let low = |value: u32| UNTOUCHED & !0xFFFF_FFFF | value as usize;
+            if query(token, 12) != (0, low(0))
+                || query(token, 25) != (0, low(0x4000))
+                || query(token, 29) != (0, low(0))
+            {
+                return Err("the session, integrity level or container answer is not a number");
+            }
+            if query(token, 0x7F) != (INVALID_INFO_CLASS, UNTOUCHED) {
+                return Err("a class there is not was answered");
+            }
+            Ok(())
+        })()
+    };
+    // SAFETY: the reference `primary` took.
+    let left = unsafe {
+        let left = references(token);
+        object::dereference(token);
+        left
+    };
+    verdict?;
+    if left != before {
+        return Err("a query kept a reference to the token");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -1269,4 +1434,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.privileges.append", append_privileges);
     r.check("se.assign", assign_security);
     r.check("se.descriptor-info", descriptor_info);
+    r.check("se.token-query", token_query);
 }

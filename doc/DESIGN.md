@@ -1010,6 +1010,14 @@ the System process's, with the user, groups and privileges of Windows'
 SYSTEM token (the table at `Token::system` says which of those facts
 Microsoft documents). No thread impersonates.
 
+A driver asks a token about itself with
+[`SeQueryInformationToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryinformationtoken)
+(`lib/se/information.rs` lists the classes answered; the others fail
+with `STATUS_INVALID_INFO_CLASS`) and `SeTokenType`. An answer with
+parts of variable length is a pool block the driver frees; the session
+id, the integrity level and "is an app container" are numbers written
+in place of the block's address, as on Windows.
+
 A token never changes once it is made: NK exports nothing that adjusts
 one. So a token has no lock, and
 [`SeLockSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-selocksubjectcontext)
