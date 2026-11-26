@@ -183,6 +183,7 @@ pub static GROUPS: &[&Group] = &[
     &mutex::EXIT_HOLDING,
     &work::BAD_RETURN,
     &pend::OVERSTATED,
+    &requestor::CREATE_NOT_COMPLETED,
     &neg::PROTECTED_CLOSE,
 ];
 

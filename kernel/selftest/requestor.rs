@@ -1,8 +1,8 @@
 //! Tests of what the I/O manager does for a requestor before a driver
 //! sees the request and after the driver is done with it: the access a
 //! user-mode request needs of its handle, the memory it may name as
-//! its buffers, and what becomes of results that cannot be copied to
-//! it.
+//! its buffers, what becomes of results that cannot be copied to it,
+//! and an open whose create request the driver pends.
 //!
 //! The driver is here, in Rust, as in `pend`: what is under test is the
 //! I/O manager's side.
@@ -10,12 +10,15 @@
 use super::USER_OUTPUT;
 use crate::io::file::{self, IoError, IoResult, OpenRequest};
 use crate::io::{device, irp};
+use crate::ke::{dpc, time, timer};
 use crate::mm::{self, pool, user};
-use crate::test::{Group, Report};
+use crate::test::{Group, Report, Slot};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::*;
+use nk_ntabi::ke::{KDPC, KTIMER};
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
@@ -23,6 +26,7 @@ pub static GROUP: Group = Group {
         "io.user.access",
         "io.user.firmware-buffer",
         "io.user.copy-out-fault",
+        "io.open.pended",
     ],
     run,
     manual: false,
@@ -49,18 +53,89 @@ unsafe fn succeed(irp: *mut IRP) -> NTSTATUS {
     STATUS_SUCCESS
 }
 
+/// What the last character of a file's name asks of its create
+/// request: pended, and completed 20 ms later by a timer's DPC, with
+/// success or as refused; or left uncompleted, the dispatch routine
+/// returning success all the same.
+const LATER: u16 = b'+' as u16;
+const LATER_REFUSED: u16 = b'-' as u16;
+const NEVER: u16 = b'!' as u16;
+/// What a pended create that succeeds reports for the open.
+const OPENED_LATER: usize = 0x5A;
+
+/// The create request the driver holds, its timer and the timer's DPC.
+static HELD: AtomicPtr<IRP> = AtomicPtr::new(core::ptr::null_mut());
+static TIMER: Slot<KTIMER> = Slot::new();
+static DPC: Slot<KDPC> = Slot::new();
+/// The access the held create asked for, as its security context and
+/// access state said when the request was completed.
+static ASKED_AT_COMPLETION: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+/// Cleanup and close requests the driver was sent.
+static CLEANUPS: AtomicU32 = AtomicU32::new(0);
+static CLOSES: AtomicU32 = AtomicU32::new(0);
+
+/// Complete the held create request.
+///
+/// # Safety
+/// Called as a DPC routine; it dereferences none of its arguments.
+unsafe extern "C" fn complete_held(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
+    let irp = HELD.swap(core::ptr::null_mut(), Ordering::AcqRel);
+    if irp.is_null() {
+        return;
+    }
+    // SAFETY: the driver's own pended create request: what it points to
+    // is the I/O manager's and stays until the request is completed.
+    unsafe {
+        let location = (*irp).CurrentStackLocation;
+        let context = (*location).Parameters[0] as *const IO_SECURITY_CONTEXT;
+        ASKED_AT_COMPLETION[0].store((*context).DesiredAccess, Ordering::Release);
+        ASKED_AT_COMPLETION[1].store(
+            (*(*context).AccessState).OriginalDesiredAccess,
+            Ordering::Release,
+        );
+        let name = (*(*location).FileObject).FileName;
+        let last = name.Buffer.add(usize::from(name.Length) / 2 - 1).read();
+        let (status, information) = if last == LATER {
+            (STATUS_SUCCESS, OPENED_LATER)
+        } else {
+            (STATUS_ACCESS_DENIED, 0)
+        };
+        (*irp).IoStatus.Status = status;
+        (*irp).IoStatus.Information = information;
+        irp::IofCompleteRequest(irp, 0);
+    }
+}
+
 /// A file opened by a name below the device is a named pipe, marked as
 /// a pipe's file system marks it.
 ///
 /// # Safety
 /// Called as a dispatch routine for a create, cleanup or close request.
 unsafe extern "C" fn open_or_close(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
-    // SAFETY: a live IRP being dispatched, and its file object.
+    // SAFETY: a live IRP being dispatched, and its file object; the
+    // statics are the driver's.
     unsafe {
         let location = (*irp).CurrentStackLocation;
         let file = (*location).FileObject;
-        if (*location).MajorFunction == IRP_MJ_CREATE && (*file).FileName.Length != 0 {
+        match (*location).MajorFunction {
+            IRP_MJ_CLEANUP => drop(CLEANUPS.fetch_add(1, Ordering::AcqRel)),
+            IRP_MJ_CLOSE => drop(CLOSES.fetch_add(1, Ordering::AcqRel)),
+            _ => {}
+        }
+        let name = (*file).FileName;
+        if (*location).MajorFunction == IRP_MJ_CREATE && name.Length != 0 {
             (*file).Flags |= FO_NAMED_PIPE;
+            let last = name.Buffer.add(usize::from(name.Length) / 2 - 1).read();
+            if last == NEVER {
+                return STATUS_SUCCESS;
+            }
+            if last == LATER || last == LATER_REFUSED {
+                // `IoMarkIrpPending`.
+                (*location).Control |= SL_PENDING_RETURNED;
+                HELD.store(irp, Ordering::Release);
+                timer::KeSetTimer(TIMER.ptr(), -20 * 10_000, DPC.ptr());
+                return STATUS_PENDING;
+            }
         }
         succeed(irp)
     }
@@ -134,6 +209,8 @@ fn with_driver(test: impl FnOnce() -> Result<u32, &'static str>) -> Result<u32, 
         ] {
             (*driver).MajorFunction[usize::from(major)] = Some(serve);
         }
+        dpc::KeInitializeDpc(DPC.ptr(), Some(complete_held), core::ptr::null_mut());
+        timer::KeInitializeTimer(TIMER.ptr());
         if device::IoCreateDevice(
             driver,
             0,
@@ -348,6 +425,83 @@ fn copy_out_fault() -> Result<u32, &'static str> {
     Ok(2)
 }
 
+/// A driver may pend a create request and complete it later. The open
+/// waits, as `IoCreateFile` does: what the request points to (the
+/// security context, the access state) is there until then, and the
+/// open ends as the request was completed. Returns the opens made.
+fn pended_open() -> Result<u32, &'static str> {
+    const READ: u32 = 0x0012_0089;
+    let open = |name| {
+        ASKED_AT_COMPLETION[0].store(0, Ordering::Release);
+        ASKED_AT_COMPLETION[1].store(0, Ordering::Release);
+        let request = OpenRequest {
+            desired_access: READ,
+            ..OpenRequest::new(name)
+        };
+        let before = time::interrupt_time();
+        let opened = file::open(&request);
+        let asked = [
+            ASKED_AT_COMPLETION[0].load(Ordering::Acquire),
+            ASKED_AT_COMPLETION[1].load(Ordering::Acquire),
+        ];
+        // The timer's 20 ms is the least the open can have waited.
+        (opened, time::interrupt_time() - before >= 200_000, asked)
+    };
+    CLEANUPS.store(0, Ordering::Release);
+    CLOSES.store(0, Ordering::Release);
+    let (opened, waited, asked) = open("\\Device\\NkRequestor\\pended+");
+    let Ok((handle, information)) = opened else {
+        return Err("a create the driver pended and then completed did not open the file");
+    };
+    let closed = file::close(handle);
+    if information != OPENED_LATER || !waited {
+        return Err("the open did not wait for the pended create and return what it reported");
+    }
+    if asked != [READ; 2] {
+        return Err("a pended create's security context was not there when it was completed");
+    }
+    let requests = |cleanups, closes| {
+        CLEANUPS.load(Ordering::Acquire) == cleanups && CLOSES.load(Ordering::Acquire) == closes
+    };
+    if closed != STATUS_SUCCESS || !requests(1, 1) {
+        return Err("a file opened by a pended create was not cleaned up and closed, once");
+    }
+    let (opened, waited, asked) = open("\\Device\\NkRequestor\\pended-");
+    if opened != Err(STATUS_ACCESS_DENIED) || !waited || asked != [READ; 2] {
+        return Err("a create pended and then refused did not fail the open with its status");
+    }
+    if !requests(1, 1) {
+        return Err("the driver heard more of a file whose pended create it refused");
+    }
+    Ok(2)
+}
+
+/// A dispatch routine that returns success for a create request it has
+/// not completed breaks the driver's contract, and the driver may still
+/// hold the IRP, which points at the opener's stack. The system stops,
+/// naming the routine.
+pub static CREATE_NOT_COMPLETED: Group = Group {
+    names: &["neg.create-not-completed"],
+    run: create_not_completed,
+    manual: true,
+};
+
+fn create_not_completed(r: &mut Report, _: &BootInfo) {
+    kprintln!("NK-NEG-ARMED neg.create-not-completed");
+    let opened = with_driver(|| {
+        Ok(
+            file::open(&OpenRequest::new("\\Device\\NkRequestor\\abandoned!"))
+                .map_or_else(|s| s as u32, |_| 0),
+        )
+    });
+    r.fail(
+        "neg.create-not-completed",
+        format_args!(
+            "a driver returned success for a create it had not completed, and the open came back: {opened:x?}"
+        ),
+    );
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     let mut counted = |name, result: Result<u32, &'static str>| match result {
         Ok(n) => r.ok_with(name, format_args!("requests: {n}")),
@@ -356,4 +510,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted("io.user.access", with_driver(access));
     counted("io.user.firmware-buffer", with_driver(firmware_buffer));
     counted("io.user.copy-out-fault", with_driver(copy_out_fault));
+    counted("io.open.pended", with_driver(pended_open));
 }

@@ -401,8 +401,36 @@ unsafe fn set_name(file: *mut FILE_OBJECT, name: &[u16]) -> bool {
     true
 }
 
+/// A create request came back from its dispatch routine neither
+/// completed nor pending. The driver may still hold the IRP, which
+/// points at the file object and at the opener's stack (the security
+/// context, the access state, a pipe's parameters), so the open can
+/// neither go on nor be given up: the system stops, naming the routine.
+/// Windows goes on to finish the IRP as if it had been completed.
+///
+/// # Safety
+/// `device` is a live device object.
+unsafe fn create_not_completed(device: *mut DEVICE_OBJECT, major: u8, status: NTSTATUS) -> ! {
+    // SAFETY: per the contract; a device's driver object outlives it.
+    let routine = unsafe { (*(*device).DriverObject).MajorFunction[usize::from(major)] }
+        .map_or(0, |routine| routine as usize as u64);
+    match crate::ldr::module_containing(routine) {
+        Some(module) => crate::kd::bugcheck(format_args!(
+            "a driver's dispatch routine at {}+{:#x} returned {status:#x} for a create request \
+             it had not completed",
+            core::str::from_utf8(module.name()).unwrap_or("?"),
+            routine - module.base
+        )),
+        None => crate::kd::bugcheck(format_args!(
+            "a driver's dispatch routine at {routine:#x} returned {status:#x} for a create \
+             request it had not completed"
+        )),
+    }
+}
+
 /// Open a name: find the device it leads to, make a file object, and
-/// send the device's driver the create request. Returns a handle to the
+/// send the device's driver the create request. The open waits for a
+/// create the driver pends, as `IoCreateFile` does. Returns a handle to the
 /// file object and what the driver reported as the result of the create
 /// (`IoStatus.Information`: `FILE_OPENED`, `FILE_CREATED`, ...), or the
 /// status the open failed with.
@@ -489,7 +517,12 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         let result = if named {
             self::request(file, major, parameters).and_then(|irp| {
                 (*irp).Flags = IRP_CREATE_OPERATION | IRP_SYNCHRONOUS_API | IRP_DEFER_IO_COMPLETION;
-                start(file, irp, request.requestor_mode).wait()
+                match start(file, irp, request.requestor_mode).wait() {
+                    Err(IoError::NotCompleted { dispatch_status }) => {
+                        create_not_completed(device, major, dispatch_status)
+                    }
+                    result => result,
+                }
             })
         } else {
             Err(IoError::NoMemory)

@@ -1062,7 +1062,10 @@ the System process, generic rights mapped to the file rights in both;
 the requestor's mode in the IRP. What the driver leaves in
 `IoStatus.Information` is the open's result. A create the driver fails
 leaves a file object with no device, about which the driver hears no
-more.
+more. The opener waits for a create the driver pends; what the request
+points to is on the opener's stack until then. A dispatch routine that
+returns anything but `STATUS_PENDING` for a create it has not completed
+may still hold that IRP: the system stops, naming the routine.
 
 **Cleanup and close.** A file object is an object of the file type, and
 the open returns a handle to it. The type's close procedure sends
