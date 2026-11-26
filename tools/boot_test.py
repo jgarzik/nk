@@ -13,6 +13,10 @@ Usage:
                                      an overloaded host (`make soak`)
   boot_test.py <scenario> --bless    rewrite the scenario's golden list from
                                      this run
+  boot_test.py --failures <log>      from the saved output of a tier, print
+                                     what the boots that failed said, and
+                                     the tier's last line; status 1 if the
+                                     log names no failed boot
 
 What passing means is the scenario's `expect` (see tools/judge.py). A hung
 boot is killed at the timeout, after every CPU's registers are saved.
@@ -384,6 +388,10 @@ def run_tier(tier, scenarios, repeat=1):
             else:
                 failed.append(name)
                 print(out.rstrip())
+                # A boot that died without a verdict still gets the line
+                # `failures` finds it by.
+                if not any(is_failed_line(line) for line in out.splitlines()):
+                    print(f"boot test {name}: FAILED (exit status {status}, no verdict)")
     finally:
         # Reached on Ctrl-C or SIGTERM too: each child then cleans up its
         # own QEMU and files.
@@ -402,6 +410,31 @@ def run_tier(tier, scenarios, repeat=1):
     return 0
 
 
+def is_failed_line(line):
+    return line.startswith("boot test ") and ": FAILED" in line
+
+
+def failures(text):
+    """From the output of a tier, the lines of the boots that failed: each
+    one's `boot test <name>: FAILED` line and what follows it, up to the
+    next boot's line; then the tier's own last line and anything after
+    it. Empty if no boot is reported as failed: the output is then of
+    something else that went wrong (a build, say).
+
+    The boots of a tier are printed in the order they were listed, so the
+    one that failed can be far from the end of a long output."""
+    kept, showing, any_failed = [], False, False
+    for line in text.splitlines():
+        if line.startswith("boot test "):
+            showing = is_failed_line(line)
+            any_failed |= showing
+        elif line.startswith("tier "):
+            showing = True
+        if showing:
+            kept.append(line)
+    return kept if any_failed else []
+
+
 def main():
     argv = sys.argv[1:]
 
@@ -415,6 +448,14 @@ def main():
         del argv[i:i + 2]
         return value
 
+    log = option("--failures")
+    if log:
+        if argv:
+            sys.exit(__doc__)
+        lines = failures(Path(log).read_text(errors="replace"))
+        for line in lines:
+            print(line)
+        return 0 if lines else 1
     image, tier = option("--image"), option("--tier")
     repeat, instance = int(option("--repeat") or 1), option("--instance")
     flags = {a for a in argv if a.startswith("--")}

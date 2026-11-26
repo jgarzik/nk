@@ -171,6 +171,11 @@ reaches the timeout is a hang: the harness saves every CPU's registers
 to `hang-registers.txt` and, on x86-64, sends an NMI so the kernel
 prints its own state.
 
+A tier prints its boots in the order they are listed, a line for each
+that passed and everything a failed one said. When the boots fail,
+`make gate` shows the failed ones and the tier's last line
+(`tools/boot_test.py --failures <log>`), not the end of the output.
+
 Knobs: `BOOT_TEST_TIMEOUT` (seconds), `QEMU_SMP`, `QEMU_MEM`,
 `NO_KVM=1`, `JOBS` (boots at once), `KEEP=1` (keep every scenario
 directory).
