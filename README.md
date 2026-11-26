@@ -12,11 +12,14 @@ Today, under QEMU on both architectures, NK boots from UEFI through its
 own loader, runs every processor with preemptive threads, waits, timers,
 DPCs and work items, and loads real driver binaries: Microsoft's
 `null.sys` and Microsoft's WDM samples `sioctl`, `event` and `cancel`.
-It sends them real IRPs, which they may pend, complete later or have
-cancelled, and what they answer matches a recording made on real
-Windows 10, request by request. Their `__try` blocks work: exceptions,
-kernel-raised or from a processor fault, are dispatched and unwound as
-on Windows.
+It reads its registry from a hive file Windows wrote and starts the
+boot drivers that hive names. Drivers and the files they open are
+objects in an NT object namespace, opened by handle; a driver may
+import from another driver, and send it requests. NK sends drivers
+real IRPs, which they may pend, complete later or have cancelled, and
+what they answer matches a recording made on real Windows 10, request
+by request. Their `__try` blocks work: exceptions, kernel-raised or
+from a processor fault, are dispatched and unwound as on Windows.
 
 Not yet: APCs, device interrupts, Plug and Play, user mode, physical
 hardware.

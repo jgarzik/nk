@@ -85,7 +85,7 @@ predecessors, so work can alternate; 9 and 10 need both lines.
 | --- | --- | --- | --- |
 | 0 | Ground truth (done) | exact Windows build pinned; reference Windows VM that runs the same test drivers; the corpus pinned by hash and counted in the ledger; private structure layouts checked against public symbols | every later proof has a Windows result to match; the ledger carries the denominator |
 | 1 | Kernel core (done: release 0.0.2) | interrupt controllers, clock, every CPU online, IRQL as a real mask, threads, priority scheduler, waits, DPCs, timers, work queues, cancellable requests; a registry in memory and security descriptors, as far as Microsoft's samples ask | Microsoft's `event` and `cancel` samples and the conformance drivers answer as on Windows; the tests pass on 1 to 8 CPUs, repeated under load |
-| 2 | **Exceptions, objects, registry** (next) | SEH on both architectures; the Ex families its binaries import, with resources and timers; object manager with types, directories and handles; a System process, its token and access checks; registry read from a hive, drivers started from its service keys; export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's `wmilib`, `wpprecorder` and `msrpc` libraries load; a named-pipe round trip through `npfs.sys` |
+| 2 | **Exceptions, objects, registry** (in progress) | SEH on both architectures; the Ex families its binaries import, with resources and timers; object manager with types, directories and handles; a System process, its token and access checks; registry read from a hive, drivers started from its service keys; export drivers; trace-provider registration | `sioctl` `METHOD_NEITHER`; Microsoft's `wmilib`, `wpprecorder` and `msrpc` libraries load; a named-pipe round trip through `npfs.sys` |
 | 3 | Plug and Play, first hardware | PnP and power managers, interrupt connection, DMA, the HAL's private contracts; imports by ordinal and from API sets | `acpi.sys` and `pci.sys` enumerate the machine; sectors read and written through `storport` + `storahci`/`stornvme` + `disk`; first boot on the OptiPlex |
 | 4 | Memory, cache, file systems | sections, fault path, paging I/O, cache manager, FsRtl, mounting; APCs | `fastfat.sys` then `ntfs.sys` mount a volume; files read and written; the image checked afterwards by host tools |
 | 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond phase 3 | KMDF echo sample; `usbxhci` + hub + HID keyboard on the OptiPlex; `serial.sys` |
@@ -103,23 +103,29 @@ logon.
 
 ## Next step: phase 2
 
-Phase 2 completes the trunk. Structured exception handling comes first:
-it needs no hardware, file systems use it on every path, and
-`METHOD_NEITHER` requests cannot be tested without it.
+Phase 2 completes the trunk. Built: structured exception handling on
+both architectures (`sioctl`'s `METHOD_NEITHER` answers as on Windows),
+the object namespace and handles, the System process and its token, the
+registry read from a hive, boot drivers started from their service
+keys, export drivers. To come: the Ex families, registry enumeration,
+trace-provider registration, the access check and the exports over
+processes, tokens and objects that the proof binaries import, then the
+proofs themselves: Microsoft's libraries load, and a named-pipe round
+trip.
 
 Its scope follows what its proof binaries import:
 
 - `npfs.sys` needs no cache manager but does need a process, a token and
   a real access check, so that slice of Ps and Se is built here; user
   processes stay in phase 6.
-- No phase-2 binary queues an APC, imports by ordinal or imports from an
+- No phase-2 binary queues an APC, imports from the kernel by ordinal or from an
   API set; each waits for the phase whose binaries do.
 - `ksecdd.sys` and `cng.sys` are full drivers that need virtual memory
   and secure-kernel answers; they load in phase 6.
 - Drivers are started the way Windows starts them, from their service
   keys, and boot-start drivers from the hive.
 
-Gaps phase 1 leaves, each described in `doc/DESIGN.md`: no APCs; the
+Gaps that stay, each described in `doc/DESIGN.md`: no APCs; the
 clock always ticks, at 64 Hz; no priority boosts; a thread can change
 only its own priority; the registry is never written back to a file; nothing enforces
 a security descriptor; no arm64 `null.sys` (no source; stays SKIP);
