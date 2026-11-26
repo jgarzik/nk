@@ -830,4 +830,11 @@ fn runtime_library_structures_match_the_kernel() {
     assert_eq!(offset_of!(STRING, Length), field("Length"));
     assert_eq!(offset_of!(STRING, MaximumLength), field("MaximumLength"));
     assert_eq!(offset_of!(STRING, Buffer), field("Buffer"));
+    let guid = types.layout("_GUID").expect("_GUID");
+    let field = |name| offset(&guid, "_GUID", name);
+    assert_eq!(size_of::<GUID>(), guid.size as usize);
+    assert_eq!(offset_of!(GUID, Data1), field("Data1"));
+    assert_eq!(offset_of!(GUID, Data2), field("Data2"));
+    assert_eq!(offset_of!(GUID, Data3), field("Data3"));
+    assert_eq!(offset_of!(GUID, Data4), field("Data4"));
 }

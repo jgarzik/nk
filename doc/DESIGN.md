@@ -942,6 +942,28 @@ deleted: gone by name at once, open handles good only for closing. No
 access checks or notification. Leak checks leave out the
 registry's memory, as they do the handle table's.
 
+## Strings
+
+The rules are `lib/rtl`; the exports in `kernel/rtl` read and write a
+driver's strings where they lie. A routine that cannot fail (a
+comparison, a search, `RtlCompareMemory`) takes its input one unit at a
+time and stops at the unit that decides the answer, so it needs neither
+a copy nor memory for one. Strings the routines allocate come from the
+pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
+
+- **The ANSI code page is Windows-1252**, the page of the reference
+  machine's English (United States) installation, compiled in
+  (`nk_rtl::codepage`); the registry's `Nls\CodePage` key is not
+  consulted. A character the page lacks becomes `?`: Windows' "best fit"
+  table (a fullwidth or accented letter to its plain form) is absent.
+- **Upper case** is one table, `nk_rtl::upcase`, built from the Unicode
+  character database. `RtlUpcaseUnicodeChar`, the string comparisons,
+  the object namespace and the registry all use it. Windows carries a
+  table of its own; the units where the two may differ are listed in
+  that module.
+- **The C runtime's comparisons** (`_stricmp`, `_wcsicmp`, `_wcsnicmp`)
+  fold `A` to `Z` only and do not use that table.
+
 ## Security descriptors
 
 SIDs, ACLs and descriptors are byte layouts with rules: `lib/se`, with

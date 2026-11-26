@@ -1,6 +1,7 @@
 //! Conversion between the 8-bit code pages and UTF-16: the content and
 //! size rules of
 //! [`RtlMultiByteToUnicodeN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlmultibytetounicoden),
+//! [`RtlUnicodeToMultiByteN`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlunicodetomultibyten),
 //! [`RtlAnsiStringToUnicodeString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlansistringtounicodestring)
 //! and
 //! [`RtlUnicodeStringToAnsiString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlunicodestringtoansistring).
@@ -108,10 +109,30 @@ impl CodePage {
 }
 
 /// How many characters `RtlMultiByteToUnicodeN` converts: as many as
-/// the source has, or as fit. It truncates without an error;
-/// `BytesInUnicodeString` is twice this, and no terminator is written.
-pub fn multibyte_to_unicode_chars(max_bytes_in_unicode: u32, bytes_in_multibyte: u32) -> u32 {
-    bytes_in_multibyte.min(max_bytes_in_unicode / 2)
+/// the source has, or as fit; and whether that is all of them. If it
+/// is not the status is `STATUS_BUFFER_OVERFLOW`. An odd last byte of
+/// room is no room; `BytesInUnicodeString` is twice the count, and no
+/// terminator is written.
+pub fn multibyte_to_unicode_chars(
+    max_bytes_in_unicode: u32,
+    bytes_in_multibyte: u32,
+) -> (u32, bool) {
+    let room = max_bytes_in_unicode / 2;
+    (bytes_in_multibyte.min(room), bytes_in_multibyte <= room)
+}
+
+/// How many characters `RtlUnicodeToMultiByteN` converts, and whether
+/// that is all of them, likewise. An odd last byte of the source is
+/// not a character; `BytesInMultiByteString` is the count.
+pub fn unicode_to_multibyte_chars(
+    max_bytes_in_multibyte: u32,
+    bytes_in_unicode: u32,
+) -> (u32, bool) {
+    let chars = bytes_in_unicode / 2;
+    (
+        chars.min(max_bytes_in_multibyte),
+        chars <= max_bytes_in_multibyte,
+    )
 }
 
 /// `RtlAnsiStringToUnicodeString`: the `Length` of the result and the
@@ -249,19 +270,36 @@ mod tests {
 
     #[test]
     fn multibyte_to_unicode_truncates() {
-        for (max_bytes, source, chars) in [
-            (0, 0, 0),
-            (10, 5, 5),
-            (10, 3, 3),
-            (10, 8, 5),
-            (11, 8, 5),
-            (1, 8, 0),
-            (0, 8, 0),
-            (u32::MAX, u32::MAX, u32::MAX / 2),
+        for (max_bytes, source, chars, all) in [
+            (0, 0, 0, true),
+            (10, 5, 5, true),
+            (10, 3, 3, true),
+            (10, 8, 5, false),
+            (11, 8, 5, false),
+            (4, 3, 2, false),
+            (5, 3, 2, false),
+            (1, 8, 0, false),
+            (0, 8, 0, false),
+            (u32::MAX, u32::MAX, u32::MAX / 2, false),
         ] {
             assert_eq!(
                 multibyte_to_unicode_chars(max_bytes, source),
-                chars,
+                (chars, all),
+                "{source} into {max_bytes}"
+            );
+        }
+        for (max_bytes, source, chars, all) in [
+            (0, 0, 0, true),
+            (4, 2, 1, true),
+            (4, 8, 4, true),
+            (4, 9, 4, true),
+            (4, 10, 4, false),
+            (0, 2, 0, false),
+            (u32::MAX, u32::MAX, u32::MAX / 2, true),
+        ] {
+            assert_eq!(
+                unicode_to_multibyte_chars(max_bytes, source),
+                (chars, all),
                 "{source} into {max_bytes}"
             );
         }

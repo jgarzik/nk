@@ -87,6 +87,11 @@ ob.handle-access ok
 ob.security ok
 rtl.crt ok
 rtl.vsnwprintf ok
+rtl.compare ok
+rtl.upcase ok
+rtl.multibyte ok
+rtl.ansi-string ok
+rtl.guid ok
 se.well-known ok
 se.descriptor ok
 se.capture ok

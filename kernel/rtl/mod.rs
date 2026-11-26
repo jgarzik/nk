@@ -4,6 +4,7 @@
 
 pub mod crt;
 pub mod print;
+pub mod string;
 
 use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};
 use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
