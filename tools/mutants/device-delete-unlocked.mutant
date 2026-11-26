@@ -4,5 +4,5 @@
 scenario: x86_64
 fails: work.delete-race
 file: kernel/io/device.rs
-replace:             (*device).ReferenceCount == 0
-with:             (*device).ReferenceCount == 0 && false
+replace:             ((*device).ReferenceCount == 0).then_some(database)
+with:             ((*device).ReferenceCount == 0 && false).then_some(database)

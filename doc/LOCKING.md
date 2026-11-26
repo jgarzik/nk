@@ -59,8 +59,9 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
-| 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
+| 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
+| 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
@@ -77,6 +78,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 233 | `ps::silo::HOST` | which silo context slots are allocated, and the context the host silo holds in each | DISPATCH |
 | 234 | `se::impersonate::IMPERSONATION` | what every thread impersonates: `ETHREAD.ClientSecurity` and the two flags that go with it | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
+| 238 | `hal::pci::CONFIG` | PCI configuration space: the configuration ports' address register, and the registers of one request as a group | HIGH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 242 | `ke::bugcheck::RECORDS` | the list of bugcheck callback records drivers registered, and each record's links and state | HIGH |
 | 245 | `ldr::MODULES` | which image an address is in; how many images import from each library | HIGH |
@@ -88,6 +90,15 @@ Why this order:
   under the I/O database lock, so "the last reference went" and "the
   device was deleted" are seen together by whichever comes second. That
   one frees the device, after dropping the lock.
+- The attachment chain of every stack is under the same lock, as
+  Windows keeps it under its one database lock: a device is attached,
+  detached, and the top or bottom of its stack found and referenced,
+  with the lock held, so a walk of the chain never meets a device that
+  is being unlinked. "Nothing is attached any more" joins the two
+  conditions above: the last of the three to come true, seen under the
+  lock, frees the device after dropping it. A driver's
+  `FastIoDetachDevice` is called with the lock dropped and the deleted
+  device counted.
 - The namespace is one lock: every directory, every entry. An object
   found by name is given a pointer reference under it, and whoever named
   an object takes the name away under it before giving up the reference
@@ -107,6 +118,12 @@ Why this order:
   is queued after the lock is dropped, and a driver is sent its
   registration request with no lock held. Like the tables above the
   pool, the lists allocate from it under the lock.
+- The table of hardware error sources is locked only around a look-up
+  or a change of one entry, and allocates from the pool under the lock
+  when it grows. A source's routines (`Initialize`, `Uninitialize`) are
+  the driver's and are called with the lock dropped: the entry counts
+  the calls in progress instead, and a removal waits for the count to
+  reach zero.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
   memory is read and written outside it. The key object the handle
@@ -171,6 +188,9 @@ Why this order:
   taken with any of them held and none of them inside it: not the
   pool's (a replaced descriptor is freed after the lock is dropped),
   not a second object's.
+- PCI configuration space is read and written at any IRQL, so its lock
+  is held at `HIGH_LEVEL`, around register accesses and nothing else:
+  the caller's buffer is copied under it, no lock is taken inside it.
 - A DPC is queued from any IRQL, an interrupt handler's included, so the
   queue's lock is held at `HIGH_LEVEL` and nothing but the console is
   taken inside it. No DPC routine runs with it held.

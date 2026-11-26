@@ -27,6 +27,7 @@ nk-ob = { path = "../lib/ob" }
 nk-oracle = { path = "../lib/oracle" }
 nk-pe = { path = "../lib/pe" }
 nk-ps = { path = "../lib/ps" }
+nk-whea = { path = "../lib/whea" }
 nk-rtl = { path = "../lib/rtl" }
 nk-cm = { path = "../lib/cm" }
 nk-se = { path = "../lib/se" }

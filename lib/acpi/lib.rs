@@ -325,6 +325,145 @@ pub fn census(
     Ok((n, more))
 }
 
+/// One entry of the MCFG table: the memory-mapped configuration space
+/// (ECAM) of the buses `start_bus..=end_bus` of one PCI segment group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ecam {
+    /// Physical address of the configuration space of bus 0 of the
+    /// segment, whether or not bus 0 is in the range.
+    pub base: u64,
+    pub segment: u16,
+    pub start_bus: u8,
+    pub end_bus: u8,
+}
+
+/// Bytes of configuration space per function, per device and per bus.
+pub const ECAM_FUNCTION: u64 = 0x1000;
+const ECAM_DEVICE: u64 = 8 * ECAM_FUNCTION;
+/// Bytes of configuration space per bus.
+pub const ECAM_BUS: u64 = 32 * ECAM_DEVICE;
+
+impl Ecam {
+    /// Whether this entry holds the configuration space of `bus` of
+    /// `segment`.
+    pub const fn covers(&self, segment: u16, bus: u8) -> bool {
+        self.segment == segment && self.start_bus <= bus && bus <= self.end_bus
+    }
+
+    /// Physical address of the first bus the entry covers, and the bytes
+    /// its buses take.
+    pub const fn span(&self) -> (u64, u64) {
+        (
+            self.base + self.start_bus as u64 * ECAM_BUS,
+            (self.end_bus as u64 - self.start_bus as u64 + 1) * ECAM_BUS,
+        )
+    }
+
+    /// Where, from the address [`span`](Self::span) starts at, the
+    /// configuration space of a function begins. `None` for a bus the
+    /// entry does not cover or a device or function number out of range.
+    pub const fn function_offset(&self, bus: u8, device: u8, function: u8) -> Option<u64> {
+        if !self.covers(self.segment, bus) || device >= 32 || function >= 8 {
+            return None;
+        }
+        Some(
+            (bus - self.start_bus) as u64 * ECAM_BUS
+                + device as u64 * ECAM_DEVICE
+                + function as u64 * ECAM_FUNCTION,
+        )
+    }
+}
+
+const MCFG_ENTRIES: usize = 44;
+const MCFG_ENTRY: usize = 16;
+
+/// The entries of an MCFG table
+/// ([PCI Firmware Specification](https://pcisig.com/specifications), "MCFG
+/// Table Description"). An entry whose bus range runs backwards, or whose
+/// buses would lie past the end of the address space, is left out; a
+/// table too short for its header has none.
+pub fn mcfg(table: &[u8]) -> impl Iterator<Item = Ecam> + '_ {
+    table
+        .get(MCFG_ENTRIES..)
+        .unwrap_or(&[])
+        .as_chunks::<MCFG_ENTRY>()
+        .0
+        .iter()
+        .filter_map(|e| {
+            let entry = Ecam {
+                base: u64_at(e, 0)?,
+                segment: u16::from_le_bytes([e[8], e[9]]),
+                start_bus: e[10],
+                end_bus: e[11],
+            };
+            let fits = entry.start_bus <= entry.end_bus
+                && entry
+                    .base
+                    .checked_add((u64::from(entry.end_bus) + 1) * ECAM_BUS)
+                    .is_some();
+            fits.then_some(entry)
+        })
+}
+
+/// How a MADT interrupt source override, or a GSI's own default, says a
+/// line signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    /// As the bus the source is on defines it.
+    BusDefault,
+    /// Active high (polarity) or edge triggered (trigger mode).
+    HighOrEdge,
+    /// Active low (polarity) or level triggered (trigger mode).
+    LowOrLevel,
+}
+
+fn signal(bits: u16) -> Option<Signal> {
+    match bits & 3 {
+        0 => Some(Signal::BusDefault),
+        1 => Some(Signal::HighOrEdge),
+        3 => Some(Signal::LowOrLevel),
+        _ => None,
+    }
+}
+
+/// A MADT interrupt source override: ISA interrupt `source` arrives as
+/// global system interrupt `gsi`, signalling as stated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceOverride {
+    pub source: u8,
+    pub gsi: u32,
+    pub polarity: Signal,
+    pub trigger: Signal,
+}
+
+impl<'a> Madt<'a> {
+    /// The interrupt source overrides (entry type 2) of the table. One
+    /// with a reserved polarity or trigger value is left out.
+    pub fn source_overrides(&self) -> impl Iterator<Item = SourceOverride> + 'a {
+        let mut rest = self.entries;
+        core::iter::from_fn(move || {
+            loop {
+                let len = usize::from(*rest.get(1)?);
+                let (this, next) = rest.split_at_checked(len.max(2))?;
+                rest = next;
+                if this[0] == 2 && this.len() >= 10 {
+                    let flags = u16::from_le_bytes([this[8], this[9]]);
+                    if let (Some(gsi), Some(polarity), Some(trigger)) =
+                        (u32_at(this, 4), signal(flags), signal(flags >> 2))
+                    {
+                        return Some(SourceOverride {
+                            source: this[3],
+                            gsi,
+                            polarity,
+                            trigger,
+                        });
+                    }
+                }
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,6 +873,136 @@ mod tests {
             virtual_timer_interrupt(&sdt(b"GTDT", &[0; 44])),
             None,
             "no interrupt"
+        );
+    }
+
+    fn mcfg_entry(base: u64, segment: u16, start: u8, end: u8) -> Vec<u8> {
+        let mut e = base.to_le_bytes().to_vec();
+        e.extend_from_slice(&segment.to_le_bytes());
+        e.extend_from_slice(&[start, end, 0, 0, 0, 0]);
+        e
+    }
+
+    fn mcfg_table(entries: &[Vec<u8>]) -> Vec<u8> {
+        let mut body = vec![0u8; 8];
+        for e in entries {
+            body.extend_from_slice(e);
+        }
+        sdt(b"MCFG", &body)
+    }
+
+    #[test]
+    fn mcfg_entries_come_from_the_table() {
+        // q35's table, and a second segment whose buses start at 0x40.
+        let t = mcfg_table(&[
+            mcfg_entry(0xB000_0000, 0, 0, 0xFF),
+            mcfg_entry(0x40_1000_0000, 1, 0x40, 0x7F),
+        ]);
+        let e: Vec<Ecam> = mcfg(&t).collect();
+        assert_eq!(
+            e,
+            [
+                Ecam {
+                    base: 0xB000_0000,
+                    segment: 0,
+                    start_bus: 0,
+                    end_bus: 0xFF
+                },
+                Ecam {
+                    base: 0x40_1000_0000,
+                    segment: 1,
+                    start_bus: 0x40,
+                    end_bus: 0x7F
+                },
+            ]
+        );
+        assert_eq!(e[0].span(), (0xB000_0000, 0x1000_0000));
+        // The base is bus 0's even when bus 0 is not covered.
+        assert_eq!(e[1].span(), (0x40_1400_0000, 0x400_0000));
+        assert!(e[0].covers(0, 0) && e[0].covers(0, 0xFF) && !e[0].covers(1, 0));
+        assert!(e[1].covers(1, 0x40) && e[1].covers(1, 0x7F));
+        assert!(!e[1].covers(1, 0x3F) && !e[1].covers(1, 0x80));
+    }
+
+    #[test]
+    fn a_function_s_configuration_space_is_found_by_bus_device_and_function() {
+        let q35 = Ecam {
+            base: 0xB000_0000,
+            segment: 0,
+            start_bus: 0,
+            end_bus: 0xFF,
+        };
+        assert_eq!(q35.function_offset(0, 0, 0), Some(0));
+        // 00:1f.2, the AHCI controller of an ICH9.
+        assert_eq!(q35.function_offset(0, 0x1F, 2), Some(0xF_A000));
+        assert_eq!(q35.function_offset(1, 0, 0), Some(0x10_0000));
+        assert_eq!(q35.function_offset(0xFF, 31, 7), Some(0xFFF_F000));
+        assert_eq!(q35.function_offset(0, 32, 0), None);
+        assert_eq!(q35.function_offset(0, 0, 8), None);
+        let part = Ecam {
+            start_bus: 0x40,
+            end_bus: 0x7F,
+            ..q35
+        };
+        assert_eq!(part.function_offset(0x40, 0, 0), Some(0));
+        assert_eq!(part.function_offset(0x41, 1, 1), Some(0x10_9000));
+        assert_eq!(part.function_offset(0x3F, 0, 0), None);
+        assert_eq!(part.function_offset(0x80, 0, 0), None);
+    }
+
+    #[test]
+    fn a_malformed_mcfg_entry_is_left_out() {
+        // Bus range backwards; buses past the end of the address space.
+        let t = mcfg_table(&[
+            mcfg_entry(0xB000_0000, 0, 9, 8),
+            mcfg_entry(u64::MAX - 0xFFF, 0, 0, 0xFF),
+            mcfg_entry(0xC000_0000, 2, 3, 3),
+        ]);
+        let e: Vec<Ecam> = mcfg(&t).collect();
+        assert_eq!(e.len(), 1);
+        assert_eq!((e[0].segment, e[0].start_bus), (2, 3));
+        // A truncated last entry is not an entry; nor is a short table.
+        assert_eq!(mcfg(&t[..t.len() - 1]).count(), 0);
+        assert_eq!(mcfg(&t[..40]).count(), 0);
+        assert_eq!(mcfg(&mcfg_table(&[])).count(), 0);
+    }
+
+    #[test]
+    fn interrupt_source_overrides_come_from_the_madt() {
+        let iso = |source: u8, gsi: u32, flags: u16| {
+            let mut e = vec![2, 10, 0, source];
+            e.extend_from_slice(&gsi.to_le_bytes());
+            e.extend_from_slice(&flags.to_le_bytes());
+            e
+        };
+        // QEMU's: the timer on GSI 2, and the PCI lines level, active high.
+        let t = madt_table(
+            0xFEE0_0000,
+            &[
+                lapic(0, 0, 1),
+                iso(0, 2, 0),
+                iso(5, 5, 0b1101),
+                iso(9, 9, 0b1111),
+                iso(10, 10, 0b0101),
+                iso(11, 11, 0b0010), // reserved polarity value
+                x2apic(1, 1, 1),
+            ],
+        );
+        let o: Vec<SourceOverride> = madt(&t).unwrap().source_overrides().collect();
+        let over = |source, gsi, polarity, trigger| SourceOverride {
+            source,
+            gsi,
+            polarity,
+            trigger,
+        };
+        assert_eq!(
+            o,
+            [
+                over(0, 2, Signal::BusDefault, Signal::BusDefault),
+                over(5, 5, Signal::HighOrEdge, Signal::LowOrLevel),
+                over(9, 9, Signal::LowOrLevel, Signal::LowOrLevel),
+                over(10, 10, Signal::HighOrEdge, Signal::HighOrEdge),
+            ]
         );
     }
 }

@@ -1,7 +1,7 @@
 //! What the hardware layer works out before it touches a register:
 //! which interrupt controllers and processors firmware's MADT describes,
 //! and how an IRQL, a processor or a period is encoded for an interrupt
-//! controller or a timer.
+//! controller or a timer; how PCI configuration space is addressed.
 //!
 //! Both architectures are built on every host, so the arm64 arithmetic
 //! is tested where the kernel is developed. The registers themselves are
@@ -10,6 +10,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod arm;
+pub mod pci;
 pub mod x86;
 
 /// MADT tables for the tests, built entry by entry.

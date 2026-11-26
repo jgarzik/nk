@@ -239,7 +239,11 @@ pub static DIRECTORY_TYPE: ObjectType =
 pub static SYMBOLIC_LINK_TYPE: ObjectType =
     ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None);
 /// Drivers (`DRIVER_OBJECT`).
-pub static DRIVER_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 8, &DRIVER_NAME, None);
+pub static DRIVER_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 8,
+    &DRIVER_NAME,
+    Some(crate::io::driver::deleted),
+);
 
 /// Open files (`FILE_OBJECT`): the last handle closing sends the
 /// driver a cleanup request, the last reference going a close request
@@ -326,6 +330,10 @@ pub static PsThreadType: TypeVariable = TypeVariable(&raw const THREAD_TYPE);
 /// `IoDeviceObjectType` (`wdm.h`): what a driver passes to insist on a
 /// device.
 pub static IoDeviceObjectType: TypeVariable = TypeVariable(&raw const DEVICE_TYPE);
+
+/// [`IoFileObjectType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle):
+/// what a driver passes to insist on an open file.
+pub static IoFileObjectType: TypeVariable = TypeVariable(&raw const FILE_TYPE);
 
 /// [`PsJobType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetjobsilo):
 /// what a driver passes to insist on a job. A file system asks for the
@@ -695,6 +703,37 @@ fn referenced(count: i64) -> isize {
 pub unsafe extern "C" fn ObfReferenceObject(object: *mut c_void) -> isize {
     // SAFETY: per the contract.
     referenced(unsafe { reference(object.cast()) })
+}
+
+/// [`ObReferenceObjectByPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbypointer):
+/// take a reference to an object the caller already has a pointer to,
+/// if it is of the type named. As the pinned kernel decides it: an
+/// object of another type is `STATUS_OBJECT_TYPE_MISMATCH` for either
+/// mode; no type named is accepted for kernel mode only. The desired
+/// access is not looked at, as on Windows.
+///
+/// # Safety
+/// `object` is an object the caller holds a reference to; `object_type`
+/// is null or what an exported type variable holds.
+pub unsafe extern "C" fn ObReferenceObjectByPointer(
+    object: *mut c_void,
+    _desired_access: u32,
+    object_type: *const ObjectType,
+    access_mode: i8,
+) -> nk_ntabi::status::NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        let acceptable = if object_type.is_null() {
+            access_mode == nk_ntabi::io::KERNEL_MODE
+        } else {
+            core::ptr::eq(type_of(object.cast()), object_type)
+        };
+        if !acceptable {
+            return nk_ntabi::status::STATUS_OBJECT_TYPE_MISMATCH;
+        }
+        referenced(reference(object.cast()));
+    }
+    nk_ntabi::status::STATUS_SUCCESS
 }
 
 /// [`ObfReferenceObjectWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obfreferenceobjectwithtag).

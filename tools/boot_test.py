@@ -308,7 +308,8 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             esp.symlink_to(image.resolve())
             missing = ["(prebuilt image)"]
         else:
-            missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc))
+            missing = mkesp.build(arch, esp, cmdline=kernel_cmdline(sc),
+                                  registry=sc.get("registry", ()))
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
         if disk:
             datadisk.create(data, disk_mib)

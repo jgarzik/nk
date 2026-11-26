@@ -27,11 +27,14 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
-    /// Devices' reference counts and delete-pending marks (`io::device`).
+    /// Devices' reference counts, delete-pending marks and attachment
+    /// chains (`io::device`).
     IoDatabase = 25,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
+    /// The sources of hardware errors (`whea`).
+    Whea = 28,
     /// The object namespace (`ob`).
     Namespace = 30,
     /// The registry (`cm`).
@@ -65,6 +68,9 @@ pub enum Rank {
     /// An object's own lock, a word of its header (`ob::security`):
     /// innermost of the locks held at `DISPATCH_LEVEL`.
     ObjectHeader = 235,
+    /// PCI configuration space (`hal::pci`): read and written from any
+    /// context.
+    PciConfig = 238,
     /// A processor's queue of deferred procedure calls (`ke::dpc`).
     DpcQueue = 240,
     /// The bugcheck callback records drivers registered (`ke::bugcheck`):
@@ -81,9 +87,11 @@ impl Rank {
     const fn level(self) -> u8 {
         match self {
             // Usable from any context, an interrupt included.
-            Rank::Console | Rank::Modules | Rank::BugCheckCallbacks | Rank::DpcQueue => {
-                irql::HIGH_LEVEL
-            }
+            Rank::Console
+            | Rank::Modules
+            | Rank::BugCheckCallbacks
+            | Rank::DpcQueue
+            | Rank::PciConfig => irql::HIGH_LEVEL,
             _ => irql::DISPATCH_LEVEL,
         }
     }

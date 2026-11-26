@@ -273,6 +273,69 @@ boot = false
 note = "public symbols of ntoskrnl.exe 10.0.19041.2006 (sha256 cc9b3a6c057ca31d0886c8efb7965a4c47e2d80fd0185d9b9fa55c5dc1d0dc55)"
 
 [[fixture]]
+name = "acpi"
+arch = "x86_64"
+file = "acpi.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/acpi.sys/CAFA7F8Bcc000/acpi.sys"
+sha256 = "546616469ee88d22c9b23cbcbedc5a5206a321a90cb246ac461b6eb595fb3478"
+status = "microsoft-inbox"
+note = "acpi.sys 10.0.19041.1741, the ACPI driver: namespace, the root of the device tree below the HAL"
+
+[[fixture]]
+name = "pci"
+arch = "x86_64"
+file = "pci.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/pci.sys/F80BD6C577000/pci.sys"
+sha256 = "20363e0035d5788b89b416d6a41757715af4338aa91effb059fde73bc2b8eb2d"
+status = "microsoft-inbox"
+note = "pci.sys 10.0.19041.1949, the PCI bus driver"
+
+[[fixture]]
+name = "pshed"
+arch = "x86_64"
+file = "pshed.x64.dll"
+url = "https://msdl.microsoft.com/download/symbols/pshed.dll/4C55DC991a000/pshed.dll"
+sha256 = "3b479d66b3db14103bf0589809929fb3d07e7a427c9005501e630d7e1d4df662"
+status = "microsoft-inbox"
+note = "pshed.dll 10.0.19041.1, the platform-specific hardware error driver: a library pci.sys imports from"
+
+[[fixture]]
+name = "storport"
+arch = "x86_64"
+file = "storport.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/storport.sys/678B50D1b5000/storport.sys"
+sha256 = "a127777bfb1c0d42e98f41f302171b16619bc81165ad009629052410c5a24541"
+status = "microsoft-inbox"
+note = "storport.sys 10.0.19041.1949, the storage port driver: the library storage miniports import from"
+
+[[fixture]]
+name = "storahci"
+arch = "x86_64"
+file = "storahci.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/storahci.sys/6A1B92AB32000/storahci.sys"
+sha256 = "366a4b86334f11f53fb41be3040a761df008b53236d3ec7ddecc380c6fdf0c16"
+status = "microsoft-inbox"
+note = "storahci.sys 10.0.19041.1889, the AHCI miniport, which imports from storport.sys alone"
+
+[[fixture]]
+name = "classpnp"
+arch = "x86_64"
+file = "classpnp.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/classpnp.sys/9F3B3C5A6f000/classpnp.sys"
+sha256 = "bee09603b73f9293dd4f2fd921f8b45e41fb1a43b965fa4f63eaa00e4c6f30bc"
+status = "microsoft-inbox"
+note = "classpnp.sys 10.0.19041.1865, the storage class library disk.sys imports from"
+
+[[fixture]]
+name = "disk"
+arch = "x86_64"
+file = "disk.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/disk.sys/0CCB67861f000/disk.sys"
+sha256 = "00c1a4bfc8cef76d961de8c9b71fd8538b5852b2fb1d1b43bba50d8ac5ffda9c"
+status = "microsoft-inbox"
+note = "disk.sys 10.0.19041.1865, the disk class driver"
+
+[[fixture]]
 name = "nkc-thread"
 arch = "x86_64"
 file = "nkc-thread.x64.sys"

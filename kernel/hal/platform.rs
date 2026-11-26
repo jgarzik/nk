@@ -14,6 +14,9 @@ use nk_bootinfo::{BootInfo, described};
 /// One processor group, as on Windows: at most 64 logical processors.
 pub const MAX_CPUS: usize = 64;
 
+/// How many stretches of memory-mapped PCI configuration space are kept.
+pub const MAX_ECAM: usize = 16;
+
 pub use nk_acpi::Cpu;
 
 pub struct Platform {
@@ -22,12 +25,22 @@ pub struct Platform {
     pub controllers: Controllers,
     /// What else firmware says that this architecture needs.
     pub firmware: arch_platform::Firmware,
+    /// Memory-mapped PCI configuration space, from the ACPI MCFG.
+    ecam: [Option<nk_acpi::Ecam>; MAX_ECAM],
 }
 
 impl Platform {
     /// Usable processors; index 0 is the boot processor.
     pub fn cpus(&self) -> &[Cpu] {
         &self.cpus[..self.ncpus]
+    }
+
+    /// The stretches of memory-mapped PCI configuration space.
+    pub fn ecam(&self) -> impl Iterator<Item = (usize, nk_acpi::Ecam)> + '_ {
+        self.ecam
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| Some((i, (*e)?)))
     }
 }
 
@@ -82,6 +95,12 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     if more {
         kprintln!("hal: more than {MAX_CPUS} processors; the rest stay off");
     }
+    let mut ecam = [None; MAX_ECAM];
+    if let Some(table) = nk_acpi::find_table(&mem, info.rsdp, b"MCFG") {
+        for (slot, entry) in ecam.iter_mut().zip(nk_acpi::mcfg(table)) {
+            *slot = Some(entry);
+        }
+    }
     let platform = Box::leak(Box::new(Platform {
         cpus,
         ncpus: n,
@@ -89,6 +108,7 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
         firmware: arch_platform::firmware(|signature| {
             nk_acpi::find_table(&mem, info.rsdp, signature)
         }),
+        ecam,
     }));
     kprintln!("hal: {n} processors; {}", platform.controllers);
     PLATFORM.store(platform, Ordering::Release);

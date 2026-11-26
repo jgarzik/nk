@@ -58,7 +58,8 @@ fn nk_facts() -> Vec<(&'static str, usize)> {
         sz!(KDEVICE_QUEUE),
         sz!(KDPC),
         sz!(WAIT_CONTEXT_BLOCK),
-        sz!(DRIVER_EXTENSION),
+        // The WDK declares the head of the driver extension only; its
+        // whole size is held to the kernel's symbols (`pdb.rs`).
         off!(DRIVER_EXTENSION, AddDevice),
         off!(DRIVER_EXTENSION, ServiceKeyName),
         sz!(DRIVER_OBJECT),

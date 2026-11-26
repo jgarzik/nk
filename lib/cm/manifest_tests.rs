@@ -519,3 +519,22 @@ fn the_overlay_wins_over_the_hive() {
         .values;
     assert_eq!(before, after, "replaced, not added");
 }
+
+/// The storage stack's registry file reads, and lies over the hive
+/// after the overlay as a boot that asks for it has it.
+#[test]
+fn the_storage_registry_file_is_well_formed() {
+    let mut text = std::fs::read(repository().join("fixtures/registry-overlay.txt")).unwrap();
+    text.extend(std::fs::read(repository().join("fixtures/registry-storage.txt")).unwrap());
+    let ops = parse(&text).unwrap_or_else(|e| panic!("fixtures/registry-storage.txt: {e}"));
+    let (mut hive, system) = tree();
+    apply(&mut hive, system, &ops, 0).unwrap();
+    assert_eq!(
+        read(&hive, system, "ControlSet001\\Services\\ACPI", "Group"),
+        (1, utf16("Core\0"))
+    );
+    assert_eq!(
+        read(&hive, system, "ControlSet001\\Services\\storahci", "Start"),
+        (4, 0u32.to_le_bytes().to_vec())
+    );
+}

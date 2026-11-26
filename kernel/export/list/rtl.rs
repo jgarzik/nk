@@ -40,6 +40,20 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::crt::strrchr),
     export!(Implemented, rtl::print::wcschr),
     export!(Implemented, rtl::crt::wcsstr),
+    export!(Implemented, rtl::feature::RtlNotifyFeatureUsage),
+    export!(Implemented, rtl::feature::RtlQueryFeatureConfiguration),
+    export!(
+        Implemented,
+        rtl::feature::RtlQueryFeatureConfigurationChangeStamp
+    ),
+    export!(
+        Implemented,
+        rtl::feature::RtlRegisterFeatureConfigurationChangeNotification
+    ),
+    export!(
+        Implemented,
+        rtl::feature::RtlUnregisterFeatureConfigurationChangeNotification
+    ),
     export!(Implemented, rtl::bitmap::RtlInitializeBitMap),
     export!(Implemented, rtl::bitmap::RtlClearAllBits),
     export!(Implemented, rtl::bitmap::RtlSetAllBits),

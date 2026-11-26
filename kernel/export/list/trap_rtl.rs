@@ -11,12 +11,7 @@ trap_list!(
     RtlCreateRegistryKey,
     RtlDeleteRegistryValue,
     RtlFindMessage,
-    RtlNotifyFeatureUsage,
     RtlPcToFileName,
-    RtlQueryFeatureConfiguration,
-    RtlQueryFeatureConfigurationChangeStamp,
-    RtlRegisterFeatureConfigurationChangeNotification,
     RtlRunOnceExecuteOnce,
-    RtlUnregisterFeatureConfigurationChangeNotification,
     RtlWriteRegistryValue,
 );
