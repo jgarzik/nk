@@ -170,13 +170,16 @@ fn free(object: *mut DRIVER_OBJECT, image: &Image) {
 
 /// Unload a driver: call its unload routine, then free its object and
 /// image. Fails, leaving the driver loaded, if it has no unload routine.
+///
+/// The routine runs with no lock held, and other drivers are loaded and
+/// unloaded meanwhile: where the driver's record is in the table is
+/// looked up afterwards, under the lock hold that removes it.
 pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
-    let index = DRIVERS
-        .lock()
-        .iter()
-        .position(|r| r.object == object)
-        .ok_or("not a loaded driver")?;
+    let listed = |drivers: &[Record]| drivers.iter().position(|r| r.object == object);
+    if listed(&DRIVERS.lock()).is_none() {
+        return Err("not a loaded driver");
+    }
     // SAFETY: `object` is a live driver object (it has a record), and its
     // unload routine, if set, was set by the driver itself.
     let leftover = unsafe {
@@ -192,6 +195,7 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     };
     let record = {
         let mut drivers = DRIVERS.lock();
+        let index = listed(&drivers).ok_or("not a loaded driver")?;
         let record = drivers.swap_remove(index);
         // An empty table holds no memory, so leak checks see none.
         drivers.shrink_to_fit();

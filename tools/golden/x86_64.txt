@@ -226,6 +226,7 @@ rtl.module-information ok
 ps.version ok
 dbgk.live-dump ok
 ldr.module.kernel ok
+io.driver.unload-reentered ok
 ldr.module.driver ok
 ldr.reject.wrong-machine ok
 ldr.reject.unresolved-import ok

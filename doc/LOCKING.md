@@ -109,6 +109,10 @@ Why this order:
   memory is read and written outside it. No routine of a driver's runs
   under it: a query table takes it for each read and gives the routine
   copies.
+- A driver's entry point and unload routine run with the driver
+  table's lock released, so the table changes under them: an unload
+  finds its driver's record again once the routine has returned, under
+  the lock hold that removes it.
 - The tables above the pool hold `Vec`s, which allocate from the pool
   while the table's lock is held. A new handle takes its reference and
   its place in the object's handle count under the handle table's lock,
