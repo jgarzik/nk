@@ -3,6 +3,7 @@
 pub mod absent;
 pub mod callback;
 pub mod em;
+pub mod firmware;
 pub mod license;
 pub mod lookaside;
 pub mod pushlock;

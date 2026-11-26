@@ -4,6 +4,7 @@ use super::super::{Export, NT, State};
 use crate::po;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Partial, po::action::ZwInitiatePowerAction),
     export!(Implemented, po::absent::PoSetHiberRange),
     export!(Implemented, po::absent::PoShutdownBugCheck),
     export!(Implemented, po::fx::PoFxActivateComponent),

@@ -25,3 +25,5 @@ rtl.resource ok
 rtl.range-list ok
 rtl.debug-filter ok
 rtl.run-once ok
+rtl.find-message ok
+rtl.pc-to-file-name ok

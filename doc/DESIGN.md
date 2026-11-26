@@ -1395,8 +1395,10 @@ table of routines and gives it the HAL's ACPI table, a third table of
 the same kind with Windows' signature, version and slot order, whose
 `HalAcpiGetTable` finds a firmware table by signature (`RSDT` and
 `XSDT` both name the root table there is; `DSDT` is found through the
-FADT; `nk_acpi::lookup`). It returns the firmware's own table where
-Windows returns a copy. `HalQuerySystemInformation`
+FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
+table the root table lists but the root tables, the DSDT and the FACS,
+as a count and pointers, made once. Both give the firmware's own
+tables where Windows gives copies. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other. One is the list of I/O
 ports the ACPI driver must keep firmware's AML code away from: on
@@ -1525,6 +1527,20 @@ idle and to take that back, change nothing: NK never pages kernel
 memory out, so an image is resident from load to unload, which is
 within what both promise. The first still answers the base of the image
 an address is in, or null.
+
+**An image's messages.** A driver reads text from a message table in
+an image's resources with
+[`RtlFindMessage`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlfindmessage)
+(`pci.sys` takes its device descriptions from its own). The resource
+directory and the table are read through the image's view
+(`nk_pe::resources`, `kernel/rtl/image.rs`), and the entry is handed
+out at its address in the image. The languages tried are the pinned
+kernel's: the one asked for and its parents, and for a request without
+a language the system's languages, then US English, then whichever the
+table has first. NK is a US English system. A language's parent is its
+primary language (Windows asks its locale data, which for a few
+languages names a script instead), and no language files stand beside
+an image. `RtlPcToFileName` names the loaded image an address is in.
 
 ## Starting a driver
 
@@ -1982,6 +1998,14 @@ away a registration its drivers left behind).
 (`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
 platform's low-power idle state) and a device's flags for that state
 (`PoDirectedDripsSetDeviceFlags`).
+
+**Shutting down.** A driver's request for a shutdown that ends with
+the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button
+and for a critical temperature) powers the machine off at once, by the
+path the kernel ends a run by: there is no user mode to ask and nothing
+to flush. What the pinned kernel refuses outright is refused; every
+other action is its policy manager's, which NK lacks, and stops the
+system naming the action.
 
 **Absent.** Hibernation: `PoSetHiberRange` stops the system with the
 bugcheck the pinned kernel raises when it is called and no hibernation
@@ -2751,6 +2775,13 @@ routine: every caller is in kernel mode. It answers the classes the
 binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
 Lengths, and what is reported as the length needed, are the pinned
 kernel's, class by class.
+
+`ZwSetSystemInformation` takes one class, the one `acpi.sys` sets:
+the registration of a firmware table provider (75), kept by the pinned
+kernel's rules with a reference to the provider's driver object
+(`kernel/ex/firmware.rs`, `nk_ex::firmware`). Nothing asks a provider
+for a table: the class that would is not among those answered. Any
+other class set stops the system naming it.
 
 | Class | Answer |
 | --- | --- |

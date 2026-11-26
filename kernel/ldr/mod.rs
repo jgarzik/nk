@@ -793,6 +793,35 @@ impl Drop for TestImporter {
     }
 }
 
+/// Run `f` with a test's own image in the table of images: one that
+/// exists only as `image`, laid out as in memory, standing there as
+/// `name` at `base` for as long as `f` takes. `None` if the table has
+/// no room.
+///
+/// # Safety
+/// `base` is the start of `image.len()` bytes of address space that are
+/// nothing else's.
+pub unsafe fn with_image_for_test<R>(
+    name: &str,
+    base: u64,
+    image: &[u8],
+    f: impl FnOnce() -> R,
+) -> Option<R> {
+    let module = Module::new(
+        name.as_bytes(),
+        base,
+        image.len() as u64,
+        nk_pe::DataDir::default(),
+        image.as_ptr() as u64,
+    )?;
+    serialised(|| {
+        MODULES.lock().insert(module).ok()?;
+        let result = f();
+        MODULES.lock().remove(base);
+        Some(result)
+    })
+}
+
 /// What an import of `symbol` from an image is bound to, for a test's
 /// own image: one that exists only as `image`, the bytes of its export
 /// directory `exports`, standing in the table of images as the library

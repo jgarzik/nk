@@ -24,12 +24,14 @@
 //! due times are `nk_ke::wait`'s.
 
 //!
-//! [`em`] is the errata manager's database. [`headless`] is the headless
+//! [`em`] is the errata manager's database. [`firmware`] is who
+//! provides firmware tables. [`headless`] is the headless
 //! terminal's answers when there is no terminal.
 
 #![cfg_attr(not(test), no_std)]
 
 pub mod em;
+pub mod firmware;
 pub mod headless;
 pub mod lookaside;
 pub mod pushlock;

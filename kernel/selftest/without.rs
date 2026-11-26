@@ -7,8 +7,8 @@ use crate::test::{Group, Report};
 use core::sync::atomic::{AtomicU32, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::status::{
-    STATUS_DEBUGGER_INACTIVE, STATUS_DEVICE_NOT_CONNECTED, STATUS_INVALID_PARAMETER,
-    STATUS_NOT_FOUND, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
+    STATUS_DEBUGGER_INACTIVE, STATUS_DEVICE_NOT_CONNECTED, STATUS_INFO_LENGTH_MISMATCH,
+    STATUS_INVALID_PARAMETER, STATUS_NOT_FOUND, STATUS_SUCCESS, STATUS_UNSUCCESSFUL,
 };
 
 pub static GROUP: Group = Group {
@@ -22,6 +22,7 @@ pub static GROUP: Group = Group {
         "cpu.stack-probe",
         "kd.no-debugger",
         "ex.sysinfo.with-input",
+        "ex.sysinfo.firmware-provider",
         "etw.nobody-listens",
         "ex.no-notification-states",
     ],
@@ -471,6 +472,82 @@ fn no_notification_states() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A driver registers the routine that serves a provider's firmware
+/// tables, as `acpi.sys` does, and takes it back: once per signature,
+/// by its own driver object, which is referenced meanwhile.
+fn firmware_provider() -> Result<(), &'static str> {
+    use crate::ex::firmware::{ZwSetSystemInformation, test_provider};
+    use crate::ob::object;
+    use nk_ntabi::sysinfo::{
+        SYSTEM_FIRMWARE_TABLE_HANDLER, SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS,
+    };
+    const SIGNATURE: u32 = u32::from_le_bytes(*b"TSKN");
+    const CLASS: u32 = SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS;
+    let driver = super::stack::make_driver(crate::io::irp::invalid_device_request)?;
+    let other = match super::stack::make_driver(crate::io::irp::invalid_device_request) {
+        Ok(other) => other,
+        Err(why) => {
+            // SAFETY: the driver object made above.
+            unsafe { super::stack::free_driver(driver) };
+            return Err(why);
+        }
+    };
+    // SAFETY: driver objects of the test's.
+    let references = || unsafe {
+        let count = object::reference(driver.cast());
+        object::dereference(driver.cast());
+        count
+    };
+    let before = references();
+    let set = |register: bool, by: *mut nk_ntabi::io::DRIVER_OBJECT, length: u32| {
+        let mut request = SYSTEM_FIRMWARE_TABLE_HANDLER {
+            ProviderSignature: SIGNATURE,
+            Register: u8::from(register),
+            FirmwareTableHandler: core::ptr::without_provenance_mut(0x5000),
+            DriverObject: by.cast(),
+        };
+        // SAFETY: a request in a local, of the length said or longer.
+        unsafe { ZwSetSystemInformation(CLASS, (&raw mut request).cast(), length) }
+    };
+    let result = (|| {
+        // SAFETY: no buffer.
+        if unsafe { ZwSetSystemInformation(CLASS, core::ptr::null_mut(), 0x18) }
+            != STATUS_INFO_LENGTH_MISMATCH
+            || set(true, driver, 0x17) != STATUS_INFO_LENGTH_MISMATCH
+        {
+            return Err("a request too short to be one was not refused");
+        }
+        if set(false, driver, 0x18) != STATUS_INVALID_PARAMETER {
+            return Err("a provider that was never registered was taken back");
+        }
+        if set(true, driver, 0x18) != STATUS_SUCCESS
+            || test_provider(SIGNATURE) != Some((0x5000, driver.addr()))
+            || references() != before + 1
+        {
+            return Err("a provider was not registered with a reference to its driver");
+        }
+        if set(true, other, 0x18) != nk_ntabi::status::STATUS_OBJECT_NAME_EXISTS
+            || set(false, other, 0x18) != STATUS_INVALID_PARAMETER
+            || test_provider(SIGNATURE) != Some((0x5000, driver.addr()))
+        {
+            return Err("another driver could replace or take back a provider");
+        }
+        if set(false, driver, 0x18) != STATUS_SUCCESS
+            || test_provider(SIGNATURE).is_some()
+            || references() != before
+        {
+            return Err("a provider was not taken back by its driver");
+        }
+        Ok(())
+    })();
+    // SAFETY: the driver objects made above, which have no devices.
+    unsafe {
+        super::stack::free_driver(other);
+        super::stack::free_driver(driver);
+    }
+    result
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ex.verifier-off", verifier_off);
     r.check("ex.headless-off", headless_off);
@@ -481,6 +558,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("cpu.stack-probe", crate::arch::chkstk_test);
     r.check("kd.no-debugger", no_debugger);
     r.check("ex.sysinfo.with-input", sysinfo_with_input);
+    r.check("ex.sysinfo.firmware-provider", firmware_provider);
     r.check("etw.nobody-listens", etw_nobody_listens);
     r.check("ex.no-notification-states", no_notification_states);
 }

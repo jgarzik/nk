@@ -4,13 +4,15 @@
 //! The system is in S0 and every device in D0, always (`doc/DESIGN.md`,
 //! "Power"). [`request`] makes the power requests a driver asks for,
 //! [`setting`] keeps the registrations for power settings and for
-//! coalescing, [`fx`] is the runtime power framework, [`absent`]
+//! coalescing, [`fx`] is the runtime power framework, [`action`] takes
+//! a request to shut the system down, [`absent`]
 //! answers for what a machine that never sleeps or hibernates does not
 //! have. The rules are `nk_po`'s.
 
 #![allow(non_snake_case)]
 
 pub mod absent;
+pub mod action;
 pub mod fx;
 pub mod request;
 pub mod setting;

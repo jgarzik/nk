@@ -6,9 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    NtGetEnvironmentVariableEx,
-    NtQueryEnvironmentVariableInfoEx,
-    ZwInitiatePowerAction,
-    ZwSetSystemInformation,
-);
+trap_list!(NtGetEnvironmentVariableEx, NtQueryEnvironmentVariableInfoEx,);

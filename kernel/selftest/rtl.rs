@@ -27,6 +27,8 @@ pub static GROUP: Group = Group {
         "rtl.wildcards",
         "rtl.legal-characters",
         "rtl.feature-configuration",
+        "rtl.find-message",
+        "rtl.pc-to-file-name",
     ],
     run,
     manual: false,
@@ -1279,6 +1281,14 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("rtl.wildcards", wildcards);
     r.check("rtl.legal-characters", legal_characters);
     r.check("rtl.feature-configuration", crate::rtl::feature::test);
+    match crate::rtl::image::find_message_test() {
+        Ok(n) => r.ok_with("rtl.find-message", format_args!("messages: {n}")),
+        Err(why) => r.fail("rtl.find-message", format_args!("{why}")),
+    }
+    r.check(
+        "rtl.pc-to-file-name",
+        crate::rtl::image::pc_to_file_name_test,
+    );
 }
 
 /// This file's test groups, in the order they run.
