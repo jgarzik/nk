@@ -1,0 +1,7 @@
+# RtlUnicodeStringToAnsiString leaves out the terminator it promises
+# after the converted bytes: a driver that passes the buffer to a C
+# string routine runs on into whatever follows.
+scenario: aarch64
+fails: rtl.ansi-string
+file: kernel/rtl/string.rs
+remove:         to.add(usize::from(length)).write(0);

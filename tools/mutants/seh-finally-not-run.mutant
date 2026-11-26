@@ -1,0 +1,6 @@
+# Unwinding runs no `__finally` block: a driver's cleanup is skipped
+# whenever an exception passes it.
+scenario: x86_64
+fails: seh.finally
+file: kernel/ke/seh.rs
+remove:                     finally(1, cpu::block_frame(&given, frame));

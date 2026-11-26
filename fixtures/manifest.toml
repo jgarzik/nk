@@ -1,4 +1,6 @@
-# Windows driver binaries used as test fixtures.
+# The files the tests are held to: Windows driver binaries, the registry
+# hive NK boots from, and what the host tests compare layouts with (the
+# tables Microsoft's compiler recorded, the kernel's symbol file).
 #
 # None of these files are in the repository. `tools/fetch_fixtures.py`
 # downloads each one into target/fixtures/ and rejects any file whose
@@ -12,6 +14,11 @@
 #                    by github.com/jgarzik/nk-fixtures
 #   nk-authored      NK's own test driver source, built with the WDK by
 #                    github.com/jgarzik/nk-fixtures
+#   windows-written  content of NK's choosing, written by Windows itself
+#                    (the hive, saved by Windows' registry)
+# kind (absent for a driver): `abi-table`, `pdb` or `hive`. Only drivers
+#   and the hive go into a boot image, and only drivers are in the ledger.
+# boot = false: a driver that is fetched but left out of the boot image.
 # The drivers that oracle/ has a script for are also run on real Windows,
 # and NK must reproduce what they did there; see oracle/README.md.
 
@@ -23,6 +30,51 @@ url = "https://msdl.microsoft.com/download/symbols/null.sys/01FE6381a000/null.sy
 sha256 = "876185b0fc0e802ff7954d84d6255fd61eeff217ace56e61510e1fa1f56cdef1"
 status = "microsoft-inbox"
 note = "null.sys 10.0.19041.1; the same binary ships in Windows 10 2004 through 22H2"
+
+[[fixture]]
+name = "wpprecorder"
+arch = "x86_64"
+file = "wpprecorder.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wpprecorder.sys/15060D0011000/wpprecorder.sys"
+sha256 = "7b4e4c2c0f70836e5117d04f819cd928b73b1aa7f3051b0079e298ba902dca21"
+status = "microsoft-inbox"
+note = "WppRecorder.sys 10.0.19041.1, the WPP trace recorder: an export driver"
+
+[[fixture]]
+name = "wmilib"
+arch = "x86_64"
+file = "wmilib.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wmilib.sys/CD518505c000/wmilib.sys"
+sha256 = "0241160ae1e5635d8e12c517c50b327471ec9ae6af08538751892cbe467ba7ff"
+status = "microsoft-inbox"
+note = "wmilib.sys 10.0.19041.1, the WMI library drivers import from: an export driver"
+
+[[fixture]]
+name = "msrpc"
+arch = "x86_64"
+file = "msrpc.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/msrpc.sys/A79D353E61000/msrpc.sys"
+sha256 = "25ec79b44ff2f02a814d7c320fb27e2fa515403814069ecd0b6cb745f7d9389f"
+status = "microsoft-inbox"
+note = "msrpc.sys 10.0.19041.1706, the kernel RPC run-time: an export driver"
+
+[[fixture]]
+name = "npfs"
+arch = "x86_64"
+file = "npfs.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/npfs.sys/733C49801c000/npfs.sys"
+sha256 = "9e3c3e5e7c33dacc77d347dad2cd37043f47e0dd93dbb6ee7710bd68aee0b30b"
+status = "microsoft-inbox"
+note = "npfs.sys 10.0.19041.1526, the named pipe file system"
+
+[[fixture]]
+name = "msfs"
+arch = "x86_64"
+file = "msfs.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/msfs.sys/95155DF111000/msfs.sys"
+sha256 = "57e77f84241e43388a239775d069497403d9d3ec298a35d81b86db2b0f3b78bb"
+status = "microsoft-inbox"
+note = "msfs.sys 10.0.19041.1, the mailslot file system"
 
 # null.sys for arm64: BLOCKED. The symbol server needs the PE timestamp and
 # image size of the Windows 10 ARM64 build, which no public index lists.
@@ -306,37 +358,109 @@ note = "nk-fixtures v4 nkc/nkc-work.c: work items"
 name = "nkc-se"
 arch = "x86_64"
 file = "nkc-se.x64.sys"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-se.x64.nkc-se.sys"
-sha256 = "611de4cc0c244700999ff7ee3b893dc5628d7d7ab73ed6800cb14ca6115305e2"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-se.x64.nkc-se.sys"
+sha256 = "a2b8d536f63dfd98fee2386898ba9b0fc1b9f548763afffcba99181f0f8a2cf6"
 status = "nk-authored"
-note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
+note = "nk-fixtures v9 nkc/nkc-se.c: security descriptors, the access check, privileges, tokens and impersonation"
 
 [[fixture]]
 name = "nkc-se"
 arch = "aarch64"
 file = "nkc-se.arm64.sys"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-se.arm64.nkc-se.sys"
-sha256 = "8970edb14de5ff8712ac2eecc9cee5e16dbfccf52882a94d6e8019919f1e4484"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-se.arm64.nkc-se.sys"
+sha256 = "4b4a10da9620e69421a85efa13bc34ff737f0d9e56f194e180e59b2d93745483"
 status = "nk-authored"
-note = "nk-fixtures v5 nkc/nkc-se.c: security descriptors"
+note = "nk-fixtures v9 nkc/nkc-se.c: security descriptors, the access check, privileges, tokens and impersonation"
 
 [[fixture]]
 name = "nkc-reg"
 arch = "x86_64"
 file = "nkc-reg.x64.sys"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.x64.nkc-reg.sys"
-sha256 = "2e787bfe049656183b992ccf837df14d1e1c6ca7047eef1031036e613123ddb9"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-reg.x64.nkc-reg.sys"
+sha256 = "05b57b25658590ff0b305c565e2784db3bbb87c0c2bebd585dc9901b0bdcc2c7"
 status = "nk-authored"
-note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+note = "nk-fixtures v8 nkc/nkc-reg.c: the registry, enumeration and query tables"
 
 [[fixture]]
 name = "nkc-reg"
 arch = "aarch64"
 file = "nkc-reg.arm64.sys"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v5/nkc-reg.arm64.nkc-reg.sys"
-sha256 = "914fa4358c1caab2bdc9aa8dda2608a55b557b4b1f6e7fd483e425f00a3654fc"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-reg.arm64.nkc-reg.sys"
+sha256 = "73c4ab227875adfdb1f3c34dfb447f87bd933699f742b7ff6317bd8a8c9255da"
 status = "nk-authored"
-note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
+note = "nk-fixtures v8 nkc/nkc-reg.c: the registry, enumeration and query tables"
+
+[[fixture]]
+name = "nkc-seh"
+arch = "x86_64"
+file = "nkc-seh.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh.x64.nkc-seh.sys"
+sha256 = "c1c8471189e5b53fe38a894a7ad5ac5767a559da3e85344b72d58a9f20ec588c"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh.c: structured exception handling"
+
+[[fixture]]
+name = "nkc-seh"
+arch = "aarch64"
+file = "nkc-seh.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh.arm64.nkc-seh.sys"
+sha256 = "cd7d3e7d3291f31003acca9caaf4c7ee1f4b37ae572d9cd4591528c627470ad3"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh.c: structured exception handling"
+
+[[fixture]]
+name = "nkc-seh-fatal"
+arch = "x86_64"
+file = "nkc-seh-fatal.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh-fatal.x64.nkc-seh-fatal.sys"
+sha256 = "4c3784101ecf3d5aa0c9a9ea108279c100ba2a74e70c68d5862a46614592e537"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh-fatal.c: exceptions nothing handles, each a bugcheck"
+
+[[fixture]]
+name = "nkc-seh-fatal"
+arch = "aarch64"
+file = "nkc-seh-fatal.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh-fatal.arm64.nkc-seh-fatal.sys"
+sha256 = "802516f940c0fb46a6291fc78e45e3de3ffd572f6bca92cb9832f65688b3b0fe"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh-fatal.c: exceptions nothing handles, each a bugcheck"
+
+[[fixture]]
+name = "nkc-cross"
+arch = "x86_64"
+file = "nkc-cross.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross.x64.nkc-cross.sys"
+sha256 = "79f9950b58a77f86442d01ec9bf5c0ebd27d843b98f2f4879ac8800c9c8ce66f"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross.c: exceptions that cross the kernel, the sending side"
+
+[[fixture]]
+name = "nkc-cross"
+arch = "aarch64"
+file = "nkc-cross.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross.arm64.nkc-cross.sys"
+sha256 = "232eed9f5a538f0d1462255e14126af50f4e4cf4b66f01633e72eff409f6263e"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross.c: exceptions that cross the kernel, the sending side"
+
+[[fixture]]
+name = "nkc-cross-b"
+arch = "x86_64"
+file = "nkc-cross-b.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross-b.x64.nkc-cross-b.sys"
+sha256 = "5c97ba9d4498233704d0d61c3691a07810bd454e05e27921c2bd6d75595a2a9e"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross-b.c: exceptions that cross the kernel, the far side"
+
+[[fixture]]
+name = "nkc-cross-b"
+arch = "aarch64"
+file = "nkc-cross-b.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v7/nkc-cross-b.arm64.nkc-cross-b.sys"
+sha256 = "fc2a0664c4441975149635049f8727f086587689949a7c28bac7e9856b1f85b2"
+status = "nk-authored"
+note = "nk-fixtures v7 nkc/nkc-cross-b.c: exceptions that cross the kernel, the far side"
 
 [[fixture]]
 name = "cancel"
@@ -365,12 +489,12 @@ note = "Windows-driver-samples d49bb7d7 general/cancel/sys"
 name = "system-hive"
 arch = "any"
 file = "system.hiv"
-url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/system.hiv"
-sha256 = "b867592587a585fcad1eade7c0fe6d4b40accc2e355b3a7d7c2f160810555841"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/system.hiv"
+sha256 = "253c9e65fc97b816bbb299c42febea1b4d34e9953583693cb3b3ca012e3ffd96"
 status = "windows-written"
 kind = "hive"
 boot = false
-note = "nk-fixtures v6 hive/system.hive.txt, saved by the registry of the Windows build runner"
+note = "nk-fixtures v8 hive/system.hive.txt, saved by the registry of the Windows build runner"
 
 # An export driver and what imports from it (nk-fixtures nkc/nkc-lib*.c).
 # nkc-lib.sys is a library: loaded when a driver that imports from it is
@@ -434,3 +558,93 @@ sha256 = "cdd23c4fa5e025f91bef406ecb1cb8692e83391b590dc3e0b282156c540542a6"
 status = "nk-authored"
 boot = false
 note = "nk-fixtures v6 nkc/nkc-libbad.c: imports a name nkc-lib.sys lacks"
+
+[[fixture]]
+name = "nkc-ob"
+arch = "x86_64"
+file = "nkc-ob.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-ob.x64.nkc-ob.sys"
+sha256 = "518838556fcd47e327566ef00a054174f447df8ef1a2b84bd5c47ea1fe429b91"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-ob.c: object references, references through handles, the security-descriptor store"
+
+[[fixture]]
+name = "nkc-ob"
+arch = "aarch64"
+file = "nkc-ob.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-ob.arm64.nkc-ob.sys"
+sha256 = "5778d0132dc80a780ed0dcdabab3866520a3f82d59f9523d068aa0688cbb08fb"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-ob.c: object references, references through handles, the security-descriptor store"
+
+[[fixture]]
+name = "nkc-etw"
+arch = "x86_64"
+file = "nkc-etw.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-etw.x64.nkc-etw.sys"
+sha256 = "1399a84fd62c67b5f2adb04b4aedfc24566bcdb55f8acdec617500525a9e16d1"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-etw.c: trace providers, WMI registration, bugcheck callbacks, system information"
+
+[[fixture]]
+name = "nkc-etw"
+arch = "aarch64"
+file = "nkc-etw.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-etw.arm64.nkc-etw.sys"
+sha256 = "2163446ec2ff0c00673c9f040e3109c6c247f33d1a1ed00dbc3a36507164d655"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-etw.c: trace providers, WMI registration, bugcheck callbacks, system information"
+
+[[fixture]]
+name = "nkc-rtl"
+arch = "x86_64"
+file = "nkc-rtl.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.x64.nkc-rtl.sys"
+sha256 = "5c80d7181c541582fc7ee651b94756499516fbc87c103c0afe16b8d70aad9b97"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"
+
+[[fixture]]
+name = "nkc-rtl"
+arch = "aarch64"
+file = "nkc-rtl.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v8/nkc-rtl.arm64.nkc-rtl.sys"
+sha256 = "0b2faf232c39383d1f677b9aeefabb7f52d766734d379add0898b9b2a1af15b5"
+status = "nk-authored"
+note = "nk-fixtures v8 nkc/nkc-rtl.c: C string routines, counted strings, SIDs and ACLs, the prefix table, wildcards"
+
+[[fixture]]
+name = "nkc-ex"
+arch = "x86_64"
+file = "nkc-ex.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ex.x64.nkc-ex.sys"
+sha256 = "0d87db80b86d7ddfb3fb1bb1a7a726f56fff3f2108f1fad48fe370d37ab33144"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ex.c: push locks, sequenced lists, lookaside lists, ERESOURCE, executive timers, UUIDs, pool"
+
+[[fixture]]
+name = "nkc-ex"
+arch = "aarch64"
+file = "nkc-ex.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ex.arm64.nkc-ex.sys"
+sha256 = "61518426beebcb1b5443a8fbc690525079d5dfaaf28527d1e7c5d95dc341b502"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ex.c: push locks, sequenced lists, lookaside lists, ERESOURCE, executive timers, UUIDs, pool"
+
+[[fixture]]
+name = "nkc-ps"
+arch = "x86_64"
+file = "nkc-ps.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ps.x64.nkc-ps.sys"
+sha256 = "3b91b47073f908706a0533e13d49b58e4de20d46b5f09e0ce37cff2fb00a5ab0"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ps.c: the System process and its threads, waits and alerts by handle, silos"
+
+[[fixture]]
+name = "nkc-ps"
+arch = "aarch64"
+file = "nkc-ps.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ps.arm64.nkc-ps.sys"
+sha256 = "8c26ad9fbb65cac0b31d93b7c7ed07d1520e85bb60f38f1797d5956c438fc0c4"
+status = "nk-authored"
+note = "nk-fixtures v9 nkc/nkc-ps.c: the System process and its threads, waits and alerts by handle, silos"

@@ -1,0 +1,7 @@
+# An executive timer allocated without EX_TIMER_NOTIFICATION is left a
+# notification timer: satisfying a wait does not reset it, and a thread
+# that waits again does not wait.
+scenario: aarch64
+fails: ex.timer.wait
+file: kernel/ex/timer.rs
+remove:             (&raw mut (*timer).timer.Header.Type).write(TIMER_SYNCHRONIZATION_OBJECT);

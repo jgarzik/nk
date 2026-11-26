@@ -1,0 +1,7 @@
+# PsCreateSystemThread starts the thread only once its creator has the
+# handle: a thread that could not be given one never runs.
+scenario: x86_64
+fails: ps.thread.no-handle
+file: kernel/ps/mod.rs
+replace:         if nt_success(status) {
+with:         if true {

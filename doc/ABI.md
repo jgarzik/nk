@@ -32,8 +32,13 @@ Consequences:
   word (round to nearest, exceptions masked), not the interrupted code's.
   `cpu.fp-preserved` checks this with a handler that overwrites every
   register it is entitled to.
+- A fault that becomes an exception needs the faulting code's whole
+  `CONTEXT`. On x86-64 XMM6-XMM15 are not in the trap frame: they are
+  read from the processor, where they still are because nothing NK ran
+  in between uses them, and loaded back if a handler changed them.
 - x18 holds the processor control region on arm64 Windows; the target
   leaves it alone, so the kernel can set it once per CPU.
+
 How to re-measure: compile a small `#![no_std]` library for each target
 with `rustc --emit asm` and read the argument registers.
 
@@ -60,7 +65,8 @@ TSS 0x40). That is a debugging convenience, not a driver dependency.
 
 ## What is a call and what is not
 
-The import tables of the conformance drivers, built with the current WDK,
+The import tables of the conformance drivers, built with the WDK the
+fixture manifest names,
 show which routines a driver calls and which the headers compile in line:
 
 | | x86-64 | arm64 |
@@ -90,10 +96,40 @@ call's arguments one array and pass its address on:
   point included, then on the stack; pushing the eight registers
   directly below the stack arguments completes it.
 
+A `va_list` is the address of such an array on both architectures:
+Windows declares it `char *`, `va_start` points it at the first unnamed
+argument, and every argument takes eight bytes. So `_vsnwprintf`, which
+takes one, is an ordinary function, and `_snwprintf` calls it with the
+address of what follows its three named arguments.
+
 The formatting itself is `nk_rtl::format`, tested on the host: flags,
 width, precision, the Microsoft size prefixes (`I64`, `w`, `h`), `%p` as
 sixteen upper-case digits, strings of either width, counted strings.
 No floating point.
+
+## Exception handling
+
+What a driver's compiled code and its handlers can observe of an
+exception (`doc/DESIGN.md`, "Exceptions"):
+
+| | x86-64 | arm64 |
+| --- | --- | --- |
+| A language handler's arguments | rcx record, rdx frame, r8 context, r9 dispatcher context | x0-x3, likewise |
+| The frame it is given | the function's stack pointer after its prologue, or its frame register less the offset its unwind record states | the stack pointer the function was entered with |
+| A filter's arguments | rcx `EXCEPTION_POINTERS`, rdx the frame | x0 `EXCEPTION_POINTERS`, x1 the function's frame pointer (x29), not the frame its handler is given: a compiled filter begins `mov x29, x1` |
+| A `__finally` block's arguments | cl whether the termination is abnormal, rdx the frame | w0 likewise, x1 the function's frame pointer |
+| At an `__except` block | rax the exception's code; rbx, rbp, rsi, rdi, r12-r15, xmm6-xmm15 and the stack pointer as the function had them | x0 the code; x19-x30, the low halves of v8-v15 and the stack pointer |
+| A frame's program counter, for looking its function and scopes up | the return address as it is | the instruction before the return address, when the frame was left by a call (`ControlPcIsUnwound`) |
+
+The other registers at an `__except` block are whatever the dispatcher
+left: compiled code expects nothing of them. The context a routine that
+raises records for its caller marks its program counter as a return
+address the way Windows does on arm64, with `CONTEXT_UNWOUND_TO_CALL`
+in the context's flags.
+
+`EXCEPTION_RECORD`, `CONTEXT` and `DISPATCHER_CONTEXT` are in
+`lib/ntabi/seh.rs`, checked against the WDK's table on both
+architectures and against the kernel's symbols on x86-64.
 
 ## What the fixture binaries show
 
@@ -151,31 +187,65 @@ it on the fields they share.
 the KPCR's size, 0xB080, are what `lib/ntabi/pcr.rs` states, so
 `gs:[0x188]` is the current thread and `gs:[0x1A4]` the processor number.
 Security descriptors (absolute and self-relative), ACL and SID headers
-agree too. A structure is added to the
-comparison by the commit that starts using it.
+agree too. So do the fields of the thread and process blocks that NK
+keeps (`lib/ntabi/thread.rs`, `process.rs`): among them a thread's
+alert state (`Alerted`, `MiscFlags.Alertable`, `WaitMode`), its base
+priority and `Saturation`, the silo it is attached to (`ETHREAD.Silo`)
+and where its impersonation would be (`ClientSecurity`,
+`CrossThreadFlags.ActiveImpersonationInfo`); a process's base priority,
+`Session`, `Job` and `ServerSilo`; and `KAPC_STATE`.
+The FCB header a file system shares with the kernel
+(`FSRTL_ADVANCED_FCB_HEADER`, `lib/ntabi/fsrtl.rs`) agrees, its
+`Version` bits included; the symbols do not have
+`FSRTL_PER_STREAM_CONTEXT`, which is as `ntifs.h` declares it and as
+the kernel's code reads it. Microsoft's
+`npfs.sys`, `msfs.sys` and `msrpc.sys` read none of the current
+thread's fields in line: they go through exports. A structure is added
+to the comparison by the commit that starts using it.
+
+A thread's impersonation is kept in `ETHREAD.ClientSecurity` (0x4A8)
+and bits 3 and 8 of `CrossThreadFlags` (0x510), as that kernel lays
+them out and its own routines read them.
+
+`AUX_ACCESS_DATA` is such a private layout that a driver nevertheless
+allocates: whoever calls `SeCreateAccessState` supplies the room, 0xE0
+bytes in this build, and the kernel writes all of it.
 
 There is nothing to compare arm64 with: NK has no source of Windows 10
 arm64 kernels or symbols. arm64 uses the documented structures, the facts
 the WDK compiles into the probe, and layouts of NK's own for whatever no
 available binary can observe.
 
-## Not yet verified
+The executive's structures that live in a driver's memory (`ERESOURCE`,
+`OWNER_ENTRY`, the lookaside lists, `SLIST_HEADER`) are documented ones:
+the probe states them for both architectures and the symbols agree on
+x86-64. The bits of a push lock's word are the symbols'
+(`_EX_PUSH_LOCK`), on both architectures: no header declares them, and
+only the kernel's routines look inside the word. `EX_TIMER` is in
+neither the headers nor the symbols; all a driver may do with one is
+wait on its address, so NK's begins with a `KTIMER` and is otherwise
+its own.
+
+## Unverified
 
 - `SE_EXPORTS` past `SeUserModeDriversSid` (0x210). Up to there, the
   offsets are the ones the WDK probe records and Microsoft's
   device-security library, linked into the `cancel` fixture, reads SIDs
   from. The two SIDs and one privilege after it, and the structure's
   size (0x230), are what NK takes the Windows 10 kernel to publish; the
-  current WDK's header has grown further (0x260), so the probe cannot
-  say, and no fixture reads them yet.
+  WDK's header is larger (0x260), so the probe cannot say, and no
+  fixture reads them.
+- `SILO_MONITOR_REGISTRATION` (`lib/ntabi/silo.rs`). Its layout is
+  `ntddk.h`'s and agrees with the offsets the Windows 10 kernel reads
+  it at; the WDK probe has no line for it.
 
 - The PCR on arm64. The current-thread offset (`[x18, #0x988]`) is the
   documented convention; no symbol file, probe fact or fixture driver
-  confirms it yet. Where the processor number sits, and the PCR's size,
+  confirms it. Where the processor number sits, and the PCR's size,
   are NK's own until something shows what Windows uses.
 - Behaviour beyond the oracle scripts. What `oracle/` replays on real
   Windows is verified line for line (`doc/TESTING.md`); every other
-  expectation still comes from documentation, sample source and the
+  expectation comes from documentation, sample source and the
   binaries themselves.
 - Pointer authentication on arm64: WDK-built arm64 drivers contain
   `pacibsp`/`autibsp`. They execute as no-ops on the emulated CPU used

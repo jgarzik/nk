@@ -1,5 +1,7 @@
 //! The registry, as drivers reach it: `ZwCreateKey`, `ZwOpenKey`,
-//! `ZwQueryValueKey`, `ZwSetValueKey`.
+//! `ZwDeleteKey`, `ZwEnumerateKey`, `ZwEnumerateValueKey`, `ZwQueryKey`,
+//! `ZwQueryValueKey`, `ZwSetValueKey`, `ZwDeleteValueKey`, and the
+//! query tables of `RtlQueryRegistryValues` (`table.rs`).
 //!
 //! One tree in memory (`nk_cm`), under one lock. It starts with the
 //! keys every system has and, laid over `Machine\System`, the SYSTEM
@@ -14,6 +16,10 @@
 //! the registry's to walk.
 
 #![allow(non_snake_case)]
+
+mod table;
+
+pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
 use crate::ke::{Rank, SpinLock};
 use crate::ob::{handle, object};
@@ -32,20 +38,43 @@ static HIVE: SpinLock<Hive> = SpinLock::new(Rank::Registry, Hive::new());
 /// `REG_CREATED_NEW_KEY`, `REG_OPENED_EXISTING_KEY`.
 const CREATED: u32 = 1;
 const OPENED: u32 = 2;
-/// `KeyValueFullInformation`, `KeyValuePartialInformation`.
+/// `KEY_INFORMATION_CLASS`: the forms a key is described in.
+const KEY_BASIC: u32 = 0;
+const KEY_NODE: u32 = 1;
+const KEY_FULL: u32 = 2;
+const KEY_NAME: u32 = 3;
+const KEY_CACHED: u32 = 4;
+const KEY_FLAGS: u32 = 5;
+const KEY_VIRTUALIZATION: u32 = 6;
+const KEY_HANDLE_TAGS: u32 = 7;
+/// The last form this build of Windows has: `KeyLayerInformation`, the
+/// next in the header, is refused like a number that names none.
+const KEY_TRUST: u32 = 8;
+/// `KEY_VIRTUALIZATION_INFORMATION`: its five flags; 27 bits are
+/// reserved.
+const VIRTUALIZATION_FLAGS: u32 = 0x1F;
+/// `KEY_TRUST_INFORMATION.TrustedKey`: the key is in a hive the system
+/// trusts; 31 bits are reserved.
+const TRUSTED_KEY: u32 = 1;
+/// `KEY_VALUE_INFORMATION_CLASS`: the forms a value is described in.
+const VALUE_BASIC: u32 = 0;
 const FULL: u32 = 1;
 const PARTIAL: u32 = 2;
+const VALUE_FULL_ALIGN64: u32 = 3;
+const VALUE_PARTIAL_ALIGN64: u32 = 4;
 
 /// `REG_DWORD`.
 const REG_DWORD: u32 = 4;
 
-/// The keys every Windows system has before any hive is read.
+/// The keys every Windows system has before any hive is read, spelled
+/// as Windows spells them: a key's full name (`KeyNameInformation`)
+/// shows the letter case each was made in.
 const SKELETON: &[&str] = &[
-    "Machine",
-    "Machine\\Hardware",
-    "Machine\\System",
-    "Machine\\System\\Select",
-    "User",
+    "MACHINE",
+    "MACHINE\\HARDWARE",
+    "MACHINE\\SYSTEM",
+    "MACHINE\\SYSTEM\\Select",
+    "USER",
 ];
 
 /// `Select`'s values on a system that has always booted its first
@@ -64,6 +93,21 @@ const CONTROL_SET: &[&str] = &["", "\\Control", "\\Control\\Class", "\\Services"
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().collect()
+}
+
+/// The time a change to the registry is stamped with: now. A key's
+/// last write time is when its values or its list of subkeys last
+/// changed; a key copied from a hive file keeps the file's.
+fn now() -> u64 {
+    crate::ke::time::system_time()
+}
+
+/// Stamp `key`, just made, and the key it was made under, whose list
+/// of subkeys changed with it.
+fn stamp_new(hive: &mut Hive, key: KeyId, time: u64) -> Result<(), Error> {
+    hive.set_last_write(key, time)?;
+    let parent = hive.parent(key)?;
+    hive.set_last_write(parent, time)
 }
 
 /// Why a hive file was refused, for the boot log.
@@ -85,9 +129,18 @@ fn refusal(error: ImportError) -> &'static str {
 /// `Select\Current` names, as on Windows. Returns the root.
 fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
     const NO_MEMORY: &str = "no memory for the registry";
+    let now = now();
+    // Make a key if it is not there, stamped as made now.
+    let make = |hive: &mut Hive, from: KeyId, path: &str| {
+        let (key, new) = hive.create(from, &wide(path))?;
+        if new {
+            stamp_new(hive, key, now)?;
+        }
+        Ok::<KeyId, Error>(key)
+    };
     let root = hive.root().map_err(|_| NO_MEMORY)?;
     for path in SKELETON {
-        hive.create(root, &wide(path)).map_err(|_| NO_MEMORY)?;
+        make(hive, root, path).map_err(|_| NO_MEMORY)?;
     }
     let system = hive
         .open(root, &wide("Machine\\System"))
@@ -108,12 +161,9 @@ fn build(hive: &mut Hive, file: Option<&[u8]>) -> Result<KeyId, &'static str> {
     };
     let set = alloc::format!("ControlSet{current:03}");
     for below in CONTROL_SET {
-        hive.create(system, &wide(&alloc::format!("{set}{below}")))
-            .map_err(|_| NO_MEMORY)?;
+        make(hive, system, &alloc::format!("{set}{below}")).map_err(|_| NO_MEMORY)?;
     }
-    let (link, _) = hive
-        .create(system, &wide("CurrentControlSet"))
-        .map_err(|_| NO_MEMORY)?;
+    let link = make(hive, system, "CurrentControlSet").map_err(|_| NO_MEMORY)?;
     hive.link_to(
         link,
         &wide(&alloc::format!("\\Registry\\Machine\\System\\{set}")),
@@ -176,16 +226,44 @@ fn status(error: Error) -> NTSTATUS {
     }
 }
 
-/// The key a key handle names.
-fn key_of(handle: *mut c_void) -> Result<KeyId, NTSTATUS> {
+/// A key found through its key object, and the reference to that
+/// object, held for as long as this lives.
+///
+/// A key's number names it only while the key is counted as open: the
+/// registry gives the place of a deleted key nobody has open to the
+/// next key made. A key object counts as one open until it is freed, so
+/// whoever holds a reference to it may take the registry's lock and
+/// find that key there, or find it deleted, whatever has been done with
+/// the handle meanwhile; never another key.
+///
+/// Dropped with the registry's lock released: the object's last
+/// reference going takes that lock ([`closed`]).
+struct Held {
+    body: *mut u8,
+    key: KeyId,
+}
+
+impl Held {
+    fn key(&self) -> KeyId {
+        self.key
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: the reference this was made with.
+        unsafe { object::dereference(self.body) };
+    }
+}
+
+/// The key a key handle names, held open until the call that asked has
+/// done with it.
+fn key_of(handle: *mut c_void) -> Result<Held, NTSTATUS> {
     let body = handle::reference(handle as u64, Some(&raw const object::KEY_TYPE))?;
     // SAFETY: a key object, referenced by the look-up: its body is the
     // key's number, written once when it was made.
-    unsafe {
-        let key = KeyId::from_index(body.cast::<usize>().read());
-        object::dereference(body);
-        Ok(key)
-    }
+    let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
+    Ok(Held { body, key })
 }
 
 /// The key the name in `attributes` starts at, and the path from
@@ -195,12 +273,13 @@ fn key_of(handle: *mut c_void) -> Result<KeyId, NTSTATUS> {
 /// relative to an open key starts at that key.
 ///
 /// Reads the driver's memory and resolves its handle, so it is called
-/// before the registry's lock is taken.
+/// before the registry's lock is taken; the key it starts at is held
+/// until the caller lets go of it, after that lock is released.
 ///
 /// # Safety
 /// `attributes` points to an `OBJECT_ATTRIBUTES` whose name is null or
 /// a counted string.
-unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(KeyId, Vec<u16>), NTSTATUS> {
+unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>), NTSTATUS> {
     if attributes.is_null() {
         return Err(STATUS_INVALID_PARAMETER);
     }
@@ -212,37 +291,59 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(KeyId, Vec<u16>
             crate::rtl::copy_unicode((&raw const (*attributes).ObjectName).read_unaligned()),
         )
     };
-    let is = |body: *mut u8, ty: &'static object::ObjectType| {
-        // SAFETY: called with objects this function holds a reference to.
-        core::ptr::eq(unsafe { object::type_of(body) }, ty)
-    };
-    let (body, path) = if root.is_null() {
-        crate::ob::lookup(None, &path)?
-    } else {
-        let root = handle::reference(root as u64, None)?;
-        if is(root, &object::DIRECTORY_TYPE) {
-            let found = crate::ob::lookup(Some(root), &path);
-            // SAFETY: the reference taken above.
-            unsafe { object::dereference(root) };
-            found?
-        } else if path.first() == Some(&u16::from(b'\\')) {
-            // Relative to an open object: not from the top.
-            // SAFETY: the reference taken above.
-            unsafe { object::dereference(root) };
-            return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
-        } else {
-            (root, path)
-        }
-    };
-    // SAFETY: the reference the look-up took, given up here; a key
-    // object's body is the key's number, written once when it was made.
-    unsafe {
-        let key =
-            is(body, &object::KEY_TYPE).then(|| KeyId::from_index(body.cast::<usize>().read()));
-        object::dereference(body);
-        // What leads elsewhere in the namespace names no key.
-        Ok((key.ok_or(STATUS_OBJECT_TYPE_MISMATCH)?, path))
+    if root.is_null() {
+        return absolute(&path);
     }
+    let root = handle::reference(root as u64, None)?;
+    let (body, path) = if is(root, &object::DIRECTORY_TYPE) {
+        let found = crate::ob::lookup(Some(root), &path);
+        // SAFETY: the reference taken above.
+        unsafe { object::dereference(root) };
+        found?
+    } else if path.first() == Some(&u16::from(b'\\')) {
+        // Relative to an open object: not from the top.
+        // SAFETY: the reference taken above.
+        unsafe { object::dereference(root) };
+        return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
+    } else {
+        (root, path)
+    };
+    // SAFETY: the reference the look-up or the handle gave.
+    Ok((unsafe { key_object(body) }?, path))
+}
+
+/// Whether the object `body` is of the type `ty`.
+fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
+    // SAFETY: called with objects the caller holds a reference to.
+    core::ptr::eq(unsafe { object::type_of(body) }, ty)
+}
+
+/// The key the object `body` is, held by the caller's reference. What
+/// leads elsewhere in the namespace names no key.
+///
+/// # Safety
+/// The caller holds a reference to `body`, which is given up here or
+/// when what is returned is dropped.
+unsafe fn key_object(body: *mut u8) -> Result<Held, NTSTATUS> {
+    if !is(body, &object::KEY_TYPE) {
+        // SAFETY: per the contract.
+        unsafe { object::dereference(body) };
+        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+    }
+    // SAFETY: per the contract; a key object's body is the key's
+    // number, written once when it was made.
+    let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
+    Ok(Held { body, key })
+}
+
+/// The key the absolute name `path` starts at, and the path from
+/// there: the name is looked up in the object namespace, where it must
+/// lead to a key, the registry's root, with the rest of the path left
+/// over.
+fn absolute(path: &[u16]) -> Result<(Held, Vec<u16>), NTSTATUS> {
+    let (body, rest) = crate::ob::lookup(None, path)?;
+    // SAFETY: the reference the look-up took.
+    Ok((unsafe { key_object(body) }?, rest))
 }
 
 /// A handle to `key`, granted `access`. The caller has counted the key
@@ -280,12 +381,17 @@ pub unsafe extern "C" fn closed(body: *mut c_void) {
 /// if it is not there. For the kernel's own use.
 pub fn write(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> {
     let path: Vec<u16> = path.encode_utf16().collect();
+    let now = now();
     let mut hive = HIVE.lock();
     let root = hive.root().map_err(status)?;
-    let (key, _) = hive.create(root, &path).map_err(status)?;
+    let (key, new) = hive.create(root, &path).map_err(status)?;
+    if new {
+        stamp_new(&mut hive, key, now).map_err(status)?;
+    }
     for (name, kind, data) in values {
         let name: Vec<u16> = name.encode_utf16().collect();
         hive.set_value(key, &name, *kind, data).map_err(status)?;
+        hive.set_last_write(key, now).map_err(status)?;
     }
     Ok(())
 }
@@ -336,6 +442,17 @@ pub fn boot_start() -> Result<Vec<(String, u32)>, &'static str> {
     Ok(services)
 }
 
+/// How many handles are open to the key at `path` (from the
+/// registry's root), a query table at work counting as one; `None` if
+/// there is no such key. For the tests.
+pub fn open_count(path: &str) -> Option<u32> {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    let root = hive.root().ok()?;
+    let key = hive.open(root, &path).ok()?;
+    hive.handles(key).ok()
+}
+
 /// Whether there is a key at `path` (from the registry's root). For
 /// the kernel's own use.
 pub fn exists(path: &str) -> bool {
@@ -349,11 +466,20 @@ pub fn exists(path: &str) -> bool {
 /// handles still open to it, this one included, are good only for
 /// closing.
 pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
-    match HIVE.lock().delete(key) {
+    let key = held.key();
+    let now = now();
+    let mut hive = HIVE.lock();
+    // The key it was a subkey of has changed with it.
+    let deleted = hive.parent(key).and_then(|parent| {
+        hive.delete(key)?;
+        hive.set_last_write(parent, now)
+    });
+    match deleted {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
@@ -373,8 +499,9 @@ pub unsafe extern "C" fn ZwOpenKey(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     let found = unsafe { named(attributes) }.and_then(|(start, path)| {
+        // `start` outlives the lock: a parameter goes after the locals.
         let mut hive = HIVE.lock();
-        let key = hive.open(start, &path).map_err(status)?;
+        let key = hive.open(start.key(), &path).map_err(status)?;
         hive.opened(key);
         Ok(key)
     });
@@ -388,27 +515,62 @@ pub unsafe extern "C" fn ZwOpenKey(
     }
 }
 
+/// The bytes of the counted string `class`; none if it is null.
+/// `None` without memory for them.
+///
+/// # Safety
+/// `class` is null or points to a counted string.
+unsafe fn class_of(class: *const UNICODE_STRING) -> Option<Vec<u8>> {
+    if class.is_null() {
+        return Some(Vec::new());
+    }
+    // SAFETY: per the contract; the structure is the driver's, read
+    // field by field.
+    unsafe {
+        let buffer = (&raw const (*class).Buffer).read_unaligned();
+        let length = (&raw const (*class).Length).read_unaligned();
+        crate::se::copied(buffer.cast(), usize::from(length))
+    }
+}
+
 /// [`ZwCreateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatekey):
-/// open a key, making it if it is not there. Every key lives in memory,
-/// so the options (volatile or not) change nothing; the class is not
-/// kept.
+/// open a key, making it if it is not there. A new key is given the
+/// class; one that exists keeps its own. Every key lives in memory, so
+/// the options (volatile or not) change nothing.
 ///
 /// # Safety
 /// `key_handle` is writable; `attributes` points to an
-/// `OBJECT_ATTRIBUTES`; `disposition` is null or writable.
+/// `OBJECT_ATTRIBUTES`; `class` is null or a counted string;
+/// `disposition` is null or writable.
 pub unsafe extern "C" fn ZwCreateKey(
     key_handle: *mut *mut c_void,
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
     _title_index: u32,
-    _class: *const UNICODE_STRING,
+    class: *const UNICODE_STRING,
     _create_options: u32,
     disposition: *mut u32,
 ) -> NTSTATUS {
+    // SAFETY: per the contract. The class is the driver's memory: the
+    // registry is given a copy, made before its lock is taken.
+    let Some(class) = (unsafe { class_of(class) }) else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
     // SAFETY: per the contract.
     let made = unsafe { named(attributes) }.and_then(|(start, path)| {
+        let now = now();
+        // `start` outlives the lock: a parameter goes after the locals.
         let mut hive = HIVE.lock();
-        let (key, new) = hive.create(start, &path).map_err(status)?;
+        let (key, new) = hive.create(start.key(), &path).map_err(status)?;
+        if new {
+            let classed = hive.set_class(key, &class);
+            if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
+                // Without its class it is not the key that was asked
+                // for: nothing has seen it yet, and it has no subkeys.
+                let _ = hive.delete(key);
+                return Err(status(error));
+            }
+        }
         hive.opened(key);
         Ok((key, new))
     });
@@ -440,10 +602,12 @@ pub unsafe extern "C" fn ZwSetValueKey(
     data: *const u8,
     data_size: u32,
 ) -> NTSTATUS {
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     // SAFETY: per the contract. Name and data are the driver's memory:
     // the registry is given copies.
     let (name, data) = unsafe {
@@ -452,20 +616,272 @@ pub unsafe extern "C" fn ZwSetValueKey(
         };
         (crate::rtl::copy_unicode(value_name), data)
     };
-    match HIVE.lock().set_value(key, &name, kind, &data) {
+    let now = now();
+    let mut hive = HIVE.lock();
+    let set = hive.set_value(key, &name, kind, &data);
+    match set.and_then(|()| hive.set_last_write(key, now)) {
         Ok(()) => STATUS_SUCCESS,
         Err(error) => status(error),
     }
 }
 
-/// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey),
-/// for `KeyValueFullInformation` (name, type and data) and
-/// `KeyValuePartialInformation` (type and data). The other forms are
-/// not implemented.
+/// [`ZwDeleteValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletevaluekey):
+/// take a value away from a key. The values after it move up one place
+/// in the order they are enumerated in; set again, the value is the
+/// key's last.
 ///
 /// # Safety
-/// `value_name` is null or a counted string; `information` is writable
-/// for `length` bytes and `result_length` for four.
+/// `value_name` is null or a counted string.
+pub unsafe extern "C" fn ZwDeleteValueKey(
+    key_handle: *mut c_void,
+    value_name: *const UNICODE_STRING,
+) -> NTSTATUS {
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
+        Err(status) => return status,
+    };
+    let key = held.key();
+    // SAFETY: per the contract. The name is the driver's memory: the
+    // registry is given a copy.
+    let name = unsafe { crate::rtl::copy_unicode(value_name) };
+    let now = now();
+    let mut hive = HIVE.lock();
+    let deleted = hive.delete_value(key, &name);
+    match deleted.and_then(|()| hive.set_last_write(key, now)) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(error) => status(error),
+    }
+}
+
+/// Answer a query for an information structure. `format` writes the
+/// structure into the buffer it is given, holding the registry's lock
+/// while it does, and says how much fitted and how long the whole is;
+/// or it fails, and the caller's memory is left as it was.
+///
+/// The structure is laid over a copy of what the caller's buffer holds
+/// and the copy is written back: the bytes a structure leaves alone
+/// (between a name and what is aligned after it) keep the caller's
+/// values, as on Windows. The caller's memory is read and written with
+/// the lock released, so the structure is formatted again if the
+/// registry changed its length meanwhile.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+unsafe fn inform(
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+    mut format: impl FnMut(&mut [u8]) -> Result<(Fit, usize), NTSTATUS>,
+) -> NTSTATUS {
+    let mut out = Vec::new();
+    let (fit, needed) = loop {
+        let (fit, needed) = match format(&mut out) {
+            Ok(answer) => answer,
+            Err(status) => return status,
+        };
+        let room = (length as usize).min(needed);
+        if out.len() == room {
+            break (fit, needed);
+        }
+        out.clear();
+        if out.try_reserve_exact(room).is_err() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        // SAFETY: per the contract; `room` is at most `length`.
+        out.extend((0..room).map(|i| unsafe { information.add(i).read() }));
+    };
+    // SAFETY: per the contract; `out` is no longer than `length`.
+    unsafe {
+        result_length.write_unaligned(needed as u32);
+        if fit != Fit::Nothing {
+            for (i, &byte) in out.iter().enumerate() {
+                information.add(i).write(byte);
+            }
+        }
+    }
+    match fit {
+        Fit::All => STATUS_SUCCESS,
+        Fit::Part => STATUS_BUFFER_OVERFLOW,
+        Fit::Nothing => STATUS_BUFFER_TOO_SMALL,
+    }
+}
+
+/// Write a key in the form `class`, one of [`KEY_BASIC`], [`KEY_NODE`]
+/// and [`KEY_FULL`].
+fn key_information(class: u32, key: &nk_cm::KeyInfo<'_>, out: &mut [u8]) -> (Fit, usize) {
+    match class {
+        KEY_BASIC => nk_cm::key_basic_information(key, out),
+        KEY_NODE => nk_cm::key_node_information(key, out),
+        _ => nk_cm::key_full_information(key, out),
+    }
+}
+
+/// Write a value in the form `class`, one of the five up to
+/// [`VALUE_PARTIAL_ALIGN64`]. The full form's data start at a multiple
+/// of eight bytes in either of its classes.
+fn value_information(
+    class: u32,
+    name: &[u16],
+    kind: u32,
+    data: &[u8],
+    out: &mut [u8],
+) -> (Fit, usize) {
+    match class {
+        VALUE_BASIC => nk_cm::value_basic_information(name, kind, out),
+        FULL | VALUE_FULL_ALIGN64 => nk_cm::full_information(name, kind, data, out),
+        PARTIAL => nk_cm::partial_information(kind, data, out),
+        _ => nk_cm::partial_align64_information(kind, data, out),
+    }
+}
+
+/// [`ZwEnumerateKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratekey):
+/// describe subkey `index` of a key, counting in the order of the
+/// subkeys' names, letter case disregarded. A subkey is described in
+/// the basic, node and full forms only, as on Windows; past the last,
+/// `STATUS_NO_MORE_ENTRIES`, whatever the buffer.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+pub unsafe extern "C" fn ZwEnumerateKey(
+    key_handle: *mut c_void,
+    index: u32,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    if class > KEY_FULL {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
+        Err(status) => return status,
+    };
+    let key = held.key();
+    let format = |out: &mut [u8]| {
+        let hive = HIVE.lock();
+        let subkey = hive
+            .subkey(key, index as usize)
+            .map_err(status)?
+            .ok_or(STATUS_NO_MORE_ENTRIES)?;
+        let info = hive.info(subkey).map_err(status)?;
+        Ok(key_information(class, &info, out))
+    };
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
+}
+
+/// [`ZwQueryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerykey):
+/// describe an open key, in every form of `KEY_INFORMATION_CLASS`.
+///
+/// The name form gives the key's full name from `\REGISTRY`, each part
+/// in the letter case it was created in and with any symbolic link
+/// followed: the key the handle is open to, not the path it was opened
+/// by. The cached form is the counts of the full form and the length
+/// of the key's name, without the name: 40 bytes are wanted, the size
+/// of the structure, and 36 written.
+///
+/// The forms that describe what NK has none of answer as Windows does
+/// for a key without it: no flags (there are no 32-bit programs to
+/// redirect and no keys that must stay), no virtualization, no handle
+/// tags. Every key is trusted: the registry holds the system's own hive
+/// and nothing a user loaded. Virtualization and trust are words of bit
+/// fields, of which Windows writes the flags and leaves the reserved
+/// bits as the caller had them. There is no layer form
+/// (`KeyLayerInformation`): Windows 10 refuses it,
+/// `STATUS_INVALID_PARAMETER`.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+pub unsafe extern "C" fn ZwQueryKey(
+    key_handle: *mut c_void,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    if class > KEY_TRUST {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
+        Err(status) => return status,
+    };
+    let key = held.key();
+    let format = |out: &mut [u8]| {
+        let hive = HIVE.lock();
+        let info = hive.info(key).map_err(status)?;
+        Ok(match class {
+            KEY_BASIC | KEY_NODE | KEY_FULL => key_information(class, &info, out),
+            KEY_NAME => nk_cm::key_name_information(&hive.path(key).map_err(status)?, out),
+            KEY_CACHED => nk_cm::key_cached_information(&info, out),
+            // `KEY_FLAGS_INFORMATION`: three words.
+            KEY_FLAGS => nk_cm::fixed_information(&[0, 0, 0], out),
+            KEY_VIRTUALIZATION => nk_cm::flag_information(0, VIRTUALIZATION_FLAGS, out),
+            KEY_HANDLE_TAGS => nk_cm::fixed_information(&[0], out),
+            _ => nk_cm::flag_information(TRUSTED_KEY, TRUSTED_KEY, out),
+        })
+    };
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
+}
+
+/// [`ZwEnumerateValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwenumeratevaluekey):
+/// describe value `index` of a key, counting in the order the values
+/// were first set, in the basic, full and partial forms: Windows 10
+/// enumerates in no other, the two aligned for 64 bits included
+/// (`STATUS_INVALID_PARAMETER`). Past the last,
+/// `STATUS_NO_MORE_ENTRIES`, whatever the buffer.
+///
+/// # Safety
+/// `information` is readable and writable for `length` bytes and
+/// `result_length` writable for four.
+pub unsafe extern "C" fn ZwEnumerateValueKey(
+    key_handle: *mut c_void,
+    index: u32,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> NTSTATUS {
+    if class > PARTIAL {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
+        Err(status) => return status,
+    };
+    let key = held.key();
+    let format = |out: &mut [u8]| {
+        let hive = HIVE.lock();
+        let (name, kind, data) = hive
+            .value_at(key, index as usize)
+            .map_err(status)?
+            .ok_or(STATUS_NO_MORE_ENTRIES)?;
+        Ok(value_information(class, name, kind, data, out))
+    };
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
+}
+
+/// [`ZwQueryValueKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwqueryvaluekey):
+/// describe the value of that name, in the forms `ZwEnumerateValueKey`
+/// has and the two aligned for 64 bits. There are no layered keys, and
+/// a value is not described as part of one (`KeyValueLayerInformation`).
+/// The name is matched whatever its letter case and reported as it was
+/// set.
+///
+/// # Safety
+/// `value_name` is null or a counted string; `information` is readable
+/// and writable for `length` bytes and `result_length` writable for
+/// four.
 pub unsafe extern "C" fn ZwQueryValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
@@ -474,55 +890,24 @@ pub unsafe extern "C" fn ZwQueryValueKey(
     length: u32,
     result_length: *mut u32,
 ) -> NTSTATUS {
-    if class != PARTIAL && class != FULL {
-        return STATUS_NOT_IMPLEMENTED;
+    if class > VALUE_PARTIAL_ALIGN64 {
+        return STATUS_INVALID_PARAMETER;
     }
-    let key = match key_of(key_handle) {
-        Ok(key) => key,
+    // Held to the end of the call: longer than the registry's lock.
+    let held = match key_of(key_handle) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let key = held.key();
     // SAFETY: per the contract.
     let name = unsafe { crate::rtl::copy_unicode(value_name) };
-    // The answer is put together in the kernel's own memory, under the
-    // lock, and copied to the driver's afterwards.
-    let answer = {
+    let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
-        let (stored_name, kind, data) = match hive.value(key, &name) {
-            Ok(value) => value,
-            Err(error) => return status(error),
-        };
-        // Sized first, with no room at all, so that the copy made is
-        // no larger than the answer.
-        let write = |out: &mut [u8]| match class {
-            FULL => nk_cm::full_information(stored_name, kind, data, out),
-            _ => nk_cm::partial_information(kind, data, out),
-        };
-        let room = (length as usize).min(write(&mut []).1);
-        let mut out = Vec::new();
-        if out.try_reserve_exact(room).is_err() {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-        out.resize(room, 0);
-        let (fit, needed) = write(&mut out);
-        (fit, needed, out)
+        let (stored_name, kind, data) = hive.value(key, &name).map_err(status)?;
+        Ok(value_information(class, stored_name, kind, data, out))
     };
-    let (fit, needed, out) = answer;
-    // SAFETY: per the contract; `out` is no longer than `length`.
-    unsafe {
-        result_length.write_unaligned(needed as u32);
-        match fit {
-            Fit::Nothing => return STATUS_BUFFER_TOO_SMALL,
-            Fit::All | Fit::Part => {
-                for (i, &byte) in out.iter().enumerate() {
-                    information.add(i).write(byte);
-                }
-            }
-        }
-    }
-    match fit {
-        Fit::All => STATUS_SUCCESS,
-        _ => STATUS_BUFFER_OVERFLOW,
-    }
+    // SAFETY: per the contract.
+    unsafe { inform(information, length, result_length, format) }
 }
 
 // ---- tests --------------------------------------------------------------

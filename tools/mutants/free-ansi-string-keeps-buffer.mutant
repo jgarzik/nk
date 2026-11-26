@@ -1,0 +1,6 @@
+# RtlFreeAnsiString empties the string and never frees its buffer:
+# every conversion a driver frees this way leaks a pool block.
+scenario: x86_64
+fails: rtl.ansi-string
+file: kernel/rtl/string.rs
+remove:             pool::ExFreePoolWithTag(buffer.cast::<c_void>(), 0);

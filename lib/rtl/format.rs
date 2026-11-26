@@ -367,10 +367,20 @@ mod tests {
     const WIDE: &[&str] = &["wide", "CancelSamp"];
 
     fn run(wide_format: bool, fmt: &str, values: &[u64]) -> String {
+        run_with(wide_format, fmt, values, NARROW, WIDE)
+    }
+
+    fn run_with(
+        wide_format: bool,
+        fmt: &str,
+        values: &[u64],
+        narrow: &[&str],
+        wide: &[&str],
+    ) -> String {
         let mut args = Test {
             values: values.iter().copied(),
-            narrow: NARROW,
-            wide: WIDE,
+            narrow,
+            wide,
         };
         let mut out = Vec::new();
         format(&mut fmt.encode_utf16(), wide_format, &mut args, &mut |c| {
@@ -535,6 +545,73 @@ mod tests {
     #[test]
     fn what_is_not_a_specification_is_printed() {
         assert_eq!(narrow("%y %q", &[]), "y q");
+    }
+
+    /// Every format the conformance driver `nkc-rtl` passes to
+    /// `_vsnwprintf`, with the text its source predicts of Windows.
+    #[test]
+    fn the_formats_of_the_conformance_driver() {
+        // A string argument is its index, from 1, in these tables; a
+        // counted string shows three characters of its entry.
+        let narrow = ["narrow", "hs", "ansi", "n"];
+        let wide = ["wide", "ws", "unicode", "abcdef", "right", "left", "xyz"];
+        let minus = |n: i64| n as u64;
+        for (fmt, values, expected) in [
+            ("%s|%S|%ws|%hs", &[1, 1, 2, 2][..], "wide|narrow|ws|hs"),
+            ("%wZ|%Z", &[3, 3], "uni|ans"),
+            (
+                "%d|%i|%u|%x|%X|%o|%x",
+                &[minus(-5), 7, 4_000_000_000, 0xBEEF, 0xBEEF, 8, minus(-1)],
+                "-5|7|4000000000|beef|BEEF|10|ffffffff",
+            ),
+            (
+                "%5d|%-5d|%05d|%+d|% d",
+                &[42, 42, 42, 42, 42],
+                "   42|42   |00042|+42| 42",
+            ),
+            (
+                "%8x|%08X|%#x|%#X",
+                &[0xAB, 0xAB, 0xAB, 0xAB],
+                "      ab|000000AB|0xab|0XAB",
+            ),
+            ("%.5d|%8.3d|%.0d", &[42, 42, 0], "00042|     042|"),
+            ("%p", &[0x1234_ABCD], "000000001234ABCD"),
+            (
+                "%I64d|%I64u|%I64x",
+                &[u64::MAX, u64::MAX, 0x0123_4567_89AB_CDEF],
+                "-1|18446744073709551615|123456789abcdef",
+            ),
+            (
+                "%llx|%Ix|%I32d",
+                &[0x0123_4567_89AB_CDEF, 0xAB_CDEF_0123, 77],
+                "123456789abcdef|abcdef0123|77",
+            ),
+            (
+                "%ld|%lu|%lx|%hd|%hu",
+                &[
+                    minus(-100_000),
+                    3_000_000_000,
+                    0xDEAD_BEEF,
+                    0xFFFF_FFFE,
+                    0x1_FFFF,
+                ],
+                "-100000|3000000000|deadbeef|-2|65535",
+            ),
+            (
+                "%.3s|%10s|%-10s|%.*s|%*d",
+                &[4, 5, 6, 2, 7, 4, 7],
+                "abc|     right|left      |xy|   7",
+            ),
+            ("%c|%C|%wc|%hc|%%", &[0x77, 0x6E, 0x57, 0x68], "w|n|W|h|%"),
+            ("%s|%wZ", &[0, 0], "(null)|(null)"),
+            ("", &[], ""),
+        ] {
+            assert_eq!(
+                run_with(true, fmt, values, &narrow, &wide),
+                expected,
+                "{fmt}"
+            );
+        }
     }
 
     #[test]

@@ -12,4 +12,3 @@ pub mod pt;
 pub mod space;
 
 pub const PAGE_SIZE: u64 = 4096;
-pub const PAGE_SHIFT: u32 = 12;

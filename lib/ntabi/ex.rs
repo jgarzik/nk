@@ -1,7 +1,124 @@
-//! Executive structures drivers see: work items.
+//! Executive structures drivers see: work items, push locks, sequenced
+//! lists, lookaside lists and resources.
 
-use crate::ke::LIST_ENTRY;
+use crate::ke::{KSPIN_LOCK, LIST_ENTRY};
 use core::ffi::c_void;
+
+/// `EX_PUSH_LOCK`: one word the driver owns, zero when the lock is
+/// free. Its bits are `nk_ex::pushlock`'s.
+pub type EX_PUSH_LOCK = usize;
+
+/// `SLIST_ENTRY`: an entry of a sequenced list; 16-byte aligned, which
+/// is what leaves the header four bits to spare.
+#[repr(C, align(16))]
+pub struct SLIST_ENTRY {
+    pub Next: *mut SLIST_ENTRY,
+}
+
+/// `SLIST_HEADER`: the head of a sequenced list, as its two quadwords.
+/// The fields inside them (`HeaderX64`, and `HeaderArm64`, which has the
+/// same ones at the same bits) are `nk_ex::slist`'s.
+#[repr(C, align(16))]
+pub struct SLIST_HEADER {
+    pub Alignment: u64,
+    pub Region: u64,
+}
+
+/// `GUID`, which `UUID` is another name for.
+#[repr(C)]
+pub struct GUID {
+    pub Data1: u32,
+    pub Data2: u16,
+    pub Data3: u16,
+    pub Data4: [u8; 8],
+}
+
+/// `EXT_DELETE_CALLBACK`: what a driver may ask `ExDeleteTimer` to call
+/// once the timer is gone.
+pub type EXT_DELETE_CALLBACK = unsafe extern "C" fn(*mut c_void);
+
+/// `EXT_DELETE_PARAMETERS`: the optional last argument of
+/// `ExDeleteTimer`, set up by the header's
+/// `ExInitializeDeleteTimerParameters`.
+#[repr(C)]
+pub struct EXT_DELETE_PARAMETERS {
+    pub Version: u32,
+    pub Reserved: u32,
+    pub DeleteCallback: Option<EXT_DELETE_CALLBACK>,
+    pub DeleteContext: *mut c_void,
+}
+
+/// `ALLOCATE_FUNCTION`: a lookaside list's routine for a block it does
+/// not have: pool type, size, tag.
+pub type ALLOCATE_FUNCTION = unsafe extern "C" fn(u32, usize, u32) -> *mut c_void;
+
+/// `FREE_FUNCTION`: a lookaside list's routine for a block it will not
+/// keep.
+pub type FREE_FUNCTION = unsafe extern "C" fn(*mut c_void);
+
+/// `GENERAL_LOOKASIDE`: a lookaside list. The driver's in-line code
+/// pops and pushes `ListHead`, counts in the four counters and calls
+/// `Allocate` and `Free` itself; the kernel fills the structure in and
+/// empties it.
+#[repr(C, align(64))]
+pub struct GENERAL_LOOKASIDE {
+    pub ListHead: SLIST_HEADER,
+    pub Depth: u16,
+    pub MaximumDepth: u16,
+    pub TotalAllocates: u32,
+    pub AllocateMisses: u32,
+    pub TotalFrees: u32,
+    pub FreeMisses: u32,
+    pub Type: u32,
+    pub Tag: u32,
+    pub Size: u32,
+    pub Allocate: Option<ALLOCATE_FUNCTION>,
+    pub Free: Option<FREE_FUNCTION>,
+    pub ListEntry: LIST_ENTRY,
+    pub LastTotalAllocates: u32,
+    pub LastAllocateMisses: u32,
+    pub Future: [u32; 2],
+}
+
+/// `PAGED_LOOKASIDE_LIST`.
+#[repr(C)]
+pub struct PAGED_LOOKASIDE_LIST {
+    pub L: GENERAL_LOOKASIDE,
+}
+
+/// `NPAGED_LOOKASIDE_LIST`.
+#[repr(C)]
+pub struct NPAGED_LOOKASIDE_LIST {
+    pub L: GENERAL_LOOKASIDE,
+}
+
+/// `OWNER_ENTRY`: one owner of a resource. `Bits` is three flag bits
+/// and, from bit 3, `OwnerCount`; in the first entry of an owner table
+/// the same word is `TableSize`, the number of entries.
+#[repr(C)]
+pub struct OWNER_ENTRY {
+    pub OwnerThread: usize,
+    pub Bits: u32,
+}
+
+/// `ERESOURCE`: an executive resource, in the driver's memory.
+#[repr(C)]
+pub struct ERESOURCE {
+    pub SystemResourcesList: LIST_ENTRY,
+    pub OwnerTable: *mut OWNER_ENTRY,
+    pub ActiveCount: i16,
+    pub Flag: u16,
+    pub SharedWaiters: *mut c_void,
+    pub ExclusiveWaiters: *mut c_void,
+    pub OwnerEntry: OWNER_ENTRY,
+    pub ActiveEntries: u32,
+    pub ContentionCount: u32,
+    pub NumberOfSharedWaiters: u32,
+    pub NumberOfExclusiveWaiters: u32,
+    pub Reserved2: *mut c_void,
+    pub Address: *mut c_void,
+    pub SpinLock: KSPIN_LOCK,
+}
 
 /// `WORKER_THREAD_ROUTINE`.
 pub type WORKER_THREAD_ROUTINE = unsafe extern "C" fn(*mut c_void);
@@ -66,6 +183,54 @@ const _: () = {
     assert!(offset_of!(IO_WORKITEM, Routine) == 0x20);
     assert!(offset_of!(IO_WORKITEM, Context) == 0x30);
     assert!(offset_of!(IO_WORKITEM, ActivityId) == 0x44);
+
+    assert!(size_of::<GUID>() == 0x10);
+    assert!(offset_of!(GUID, Data2) == 0x04);
+    assert!(offset_of!(GUID, Data3) == 0x06);
+    assert!(offset_of!(GUID, Data4) == 0x08);
+    assert!(size_of::<EXT_DELETE_PARAMETERS>() == 0x18);
+    assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteCallback) == 0x08);
+    assert!(offset_of!(EXT_DELETE_PARAMETERS, DeleteContext) == 0x10);
+
+    assert!(size_of::<EX_PUSH_LOCK>() == 8);
+    assert!(size_of::<SLIST_ENTRY>() == 0x10);
+    assert!(size_of::<SLIST_HEADER>() == 0x10);
+    assert!(align_of::<SLIST_HEADER>() == 0x10);
+    assert!(offset_of!(SLIST_HEADER, Region) == 0x08);
+
+    assert!(size_of::<GENERAL_LOOKASIDE>() == 0x80);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Depth) == 0x10);
+    assert!(offset_of!(GENERAL_LOOKASIDE, MaximumDepth) == 0x12);
+    assert!(offset_of!(GENERAL_LOOKASIDE, TotalAllocates) == 0x14);
+    assert!(offset_of!(GENERAL_LOOKASIDE, AllocateMisses) == 0x18);
+    assert!(offset_of!(GENERAL_LOOKASIDE, TotalFrees) == 0x1C);
+    assert!(offset_of!(GENERAL_LOOKASIDE, FreeMisses) == 0x20);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Type) == 0x24);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Tag) == 0x28);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Size) == 0x2C);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Allocate) == 0x30);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Free) == 0x38);
+    assert!(offset_of!(GENERAL_LOOKASIDE, ListEntry) == 0x40);
+    assert!(offset_of!(GENERAL_LOOKASIDE, LastTotalAllocates) == 0x50);
+    assert!(offset_of!(GENERAL_LOOKASIDE, Future) == 0x58);
+    assert!(size_of::<PAGED_LOOKASIDE_LIST>() == 0x80);
+    assert!(size_of::<NPAGED_LOOKASIDE_LIST>() == 0x80);
+
+    assert!(size_of::<OWNER_ENTRY>() == 0x10);
+    assert!(offset_of!(OWNER_ENTRY, Bits) == 0x08);
+    assert!(size_of::<ERESOURCE>() == 0x68);
+    assert!(offset_of!(ERESOURCE, OwnerTable) == 0x10);
+    assert!(offset_of!(ERESOURCE, ActiveCount) == 0x18);
+    assert!(offset_of!(ERESOURCE, Flag) == 0x1A);
+    assert!(offset_of!(ERESOURCE, SharedWaiters) == 0x20);
+    assert!(offset_of!(ERESOURCE, ExclusiveWaiters) == 0x28);
+    assert!(offset_of!(ERESOURCE, OwnerEntry) == 0x30);
+    assert!(offset_of!(ERESOURCE, ActiveEntries) == 0x40);
+    assert!(offset_of!(ERESOURCE, ContentionCount) == 0x44);
+    assert!(offset_of!(ERESOURCE, NumberOfSharedWaiters) == 0x48);
+    assert!(offset_of!(ERESOURCE, NumberOfExclusiveWaiters) == 0x4C);
+    assert!(offset_of!(ERESOURCE, Address) == 0x58);
+    assert!(offset_of!(ERESOURCE, SpinLock) == 0x60);
 };
 
 #[cfg(test)]

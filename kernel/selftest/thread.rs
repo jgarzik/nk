@@ -7,9 +7,13 @@ use nk_bootinfo::BootInfo;
 pub static GROUP: Group = Group {
     names: &[
         "thread.lifecycle",
+        "thread.buried",
         "thread.turns",
         "thread.priority",
         "thread.set-priority",
+        "thread.set-priority-other",
+        "thread.raise-ready",
+        "thread.raise-preempted",
         "thread.other-cpu",
         "thread.registers",
         "thread.preempt",
@@ -17,6 +21,7 @@ pub static GROUP: Group = Group {
         "thread.preempt-registers",
         "thread.migrate",
         "thread.affinity",
+        "thread.steal-behind",
         "thread.identity",
     ],
     run,
@@ -42,9 +47,33 @@ fn run(r: &mut Report, _: &BootInfo) {
         "threads run and reaped:",
         thread::lifecycle_test(),
     );
+    counted(
+        r,
+        "thread.buried",
+        "threads seen off:",
+        thread::buried_test(),
+    );
     r.check("thread.turns", thread::turns_test);
     r.check("thread.priority", thread::priority_test);
     r.check("thread.set-priority", thread::set_priority_test);
+    counted(
+        r,
+        "thread.set-priority-other",
+        "changes of other threads' priorities:",
+        thread::set_other_priority_test(),
+    );
+    counted(
+        r,
+        "thread.raise-ready",
+        "ready threads raised:",
+        thread::raise_ready_test(),
+    );
+    counted(
+        r,
+        "thread.raise-preempted",
+        "threads raised while put aside:",
+        thread::raise_preempted_test(),
+    );
     counted(
         r,
         "thread.other-cpu",
@@ -77,5 +106,11 @@ fn run(r: &mut Report, _: &BootInfo) {
         thread::migrate_test(),
     );
     counted(r, "thread.affinity", "checks:", thread::affinity_test());
+    counted(
+        r,
+        "thread.steal-behind",
+        "taken by processor",
+        thread::steal_behind_test(),
+    );
     counted(r, "thread.identity", "checks:", thread::identity_test());
 }

@@ -5,7 +5,9 @@ use super::resources;
 use crate::io::service;
 use crate::ldr::{self, LoadError};
 use crate::test::{Group, Report};
+use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use nk_bootinfo::BootInfo;
+use nk_ntabi::io::{DRIVER_OBJECT, DRIVER_UNLOAD};
 use nk_pe::PeError;
 
 /// Load `file`, expecting a refusal that `expected` recognises, and
@@ -46,6 +48,7 @@ pub static GROUP: Group = Group {
         "ldr.reject.unresolved-import",
         "ldr.module.kernel",
         "ldr.module.driver",
+        "io.driver.unload-reentered",
     ],
     run,
     manual: false,
@@ -102,8 +105,73 @@ fn driver_module() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// The unload routine of the driver being unloaded, and whether the
+/// other driver was stopped and started while it was.
+static ITS_UNLOAD: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static RESTARTED: AtomicBool = AtomicBool::new(false);
+
+/// What another thread may do while a driver's unload routine runs:
+/// unload the driver loaded before it, and load it again. Then the
+/// driver's own routine.
+///
+/// # Safety
+/// Called as the unload routine of the driver whose routine is in
+/// `ITS_UNLOAD`.
+unsafe extern "C" fn unload_meanwhile(driver: *mut DRIVER_OBJECT) {
+    RESTARTED.store(
+        service::stop("SIoctl").is_ok() && service::start("SIoctl").is_ok(),
+        Ordering::Release,
+    );
+    // SAFETY: per the contract: the routine the driver set for itself.
+    unsafe {
+        let unload: DRIVER_UNLOAD = core::mem::transmute(ITS_UNLOAD.load(Ordering::Acquire));
+        unload(driver);
+    }
+}
+
+/// A driver's unload routine runs with no lock held, so other drivers
+/// are loaded and unloaded meanwhile and the table of drivers changes.
+/// The unload then removes its own driver's record and frees its own
+/// driver's image, wherever the record has got to.
+fn unload_reentered() -> Result<(), &'static str> {
+    service::create("SIoctl", "sioctl.sys").map_err(|_| "no service key")?;
+    service::create("cancel", "cancel.sys").map_err(|_| "no service key")?;
+    service::start("SIoctl").map_err(|_| "load failed")?;
+    let Ok(second) = service::start("cancel") else {
+        service::stop("SIoctl")?;
+        return Err("load failed");
+    };
+    RESTARTED.store(false, Ordering::Release);
+    // SAFETY: a running driver's object; the field is the driver's to
+    // set, and it set it in its entry point.
+    unsafe {
+        let Some(unload) = (&raw const (*second).DriverUnload).read() else {
+            return Err("the driver has no unload routine");
+        };
+        ITS_UNLOAD.store(unload as *mut (), Ordering::Release);
+        (&raw mut (*second).DriverUnload).write(Some(unload_meanwhile));
+    }
+    let stopped = service::stop("cancel");
+    if !RESTARTED.load(Ordering::Acquire) {
+        return Err("another driver could not be unloaded and loaded during an unload routine");
+    }
+    if service::running("cancel") || !service::running("SIoctl") {
+        return Err("unloading a driver took another driver's record and left its own");
+    }
+    stopped?;
+    service::stop("SIoctl")
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("ldr.module.kernel", kernel_module);
+    if ldr::boot_file("sioctl.sys").is_some() && ldr::boot_file("cancel.sys").is_some() {
+        r.check("io.driver.unload-reentered", unload_reentered);
+    } else {
+        r.skip(
+            "io.driver.unload-reentered",
+            format_args!("modules sioctl.sys and cancel.sys not provided"),
+        );
+    }
     if ldr::boot_file("sioctl.sys").is_some() {
         r.check("ldr.module.driver", driver_module);
     } else {

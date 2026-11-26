@@ -1,0 +1,7 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 49cad0f5434cc7977710908ad9bbda50f137f8d0c6e01cc3202afb25d0f4d422
+# driver nkc-seh-fatal.sys sha256 4c3784101ecf3d5aa0c9a9ea108279c100ba2a74e70c68d5862a46614592e537
+load nkc-seh-fatal: ok
+open d \Device\NkcSehFatal: 00000000
+ioctl d 00222000 - 16: 00000000 4 21434b4eeeeeeeeeeeeeeeeeeeeeeeee
+ioctl d 00222408 - 16: stopped 0000001e e04e4b13

@@ -11,6 +11,8 @@
 //!   absolute one holds pointers; a self-relative one is a single block
 //!   holding offsets, with the parts after a 20-byte header.
 //!
+//! `sid` takes SIDs apart and tells app-container SIDs from others.
+//!
 //! On those layouts stand the rules, one module each: who a subject is
 //! (`token`), whether it may have an access (`access`) or holds a
 //! privilege (`privilege`), what descriptor a new object gets
@@ -29,6 +31,7 @@ pub mod assign;
 pub mod descriptor;
 pub mod information;
 pub mod privilege;
+pub mod sid;
 pub mod token;
 
 /// The revision of every SID.
@@ -55,6 +58,7 @@ pub const SE_DACL_PRESENT: u16 = 0x0004;
 pub const SE_DACL_DEFAULTED: u16 = 0x0008;
 pub const SE_SACL_PRESENT: u16 = 0x0010;
 pub const SE_SACL_DEFAULTED: u16 = 0x0020;
+pub const SE_DACL_AUTO_INHERIT_REQ: u16 = 0x0100;
 pub const SE_DACL_AUTO_INHERITED: u16 = 0x0400;
 pub const SE_SACL_AUTO_INHERITED: u16 = 0x0800;
 pub const SE_DACL_PROTECTED: u16 = 0x1000;
@@ -210,6 +214,19 @@ impl Parts<'_> {
     /// (`RtlAbsoluteToSelfRelativeSD`): the header, then SACL, DACL,
     /// owner and group. `Err` with the length needed if `out` is short.
     pub fn write_relative(&self, out: &mut [u8]) -> Result<usize, usize> {
+        self.write_ordered(out, false)
+    }
+
+    /// Write the self-relative form into `out` as a query of an
+    /// object's security lays it out (`SeQuerySecurityDescriptorInfo`):
+    /// the header, then owner, group, DACL and SACL. `Err` with the
+    /// length needed if `out` is short.
+    pub fn write_queried(&self, out: &mut [u8]) -> Result<usize, usize> {
+        self.write_ordered(out, true)
+    }
+
+    /// The self-relative form, the SIDs before the lists or after.
+    fn write_ordered(&self, out: &mut [u8], sids_first: bool) -> Result<usize, usize> {
         let total = self.relative_length();
         let Some(out) = out.get_mut(..total) else {
             return Err(total);
@@ -219,12 +236,14 @@ impl Parts<'_> {
         out[2..4].copy_from_slice(&(self.control | SE_SELF_RELATIVE).to_le_bytes());
         let mut at = RELATIVE_HEADER;
         // (the part, where in the header its offset goes)
-        for (part, field) in [
-            (self.sacl, 12),
-            (self.dacl, 16),
-            (self.owner, 4),
-            (self.group, 8),
-        ] {
+        let (owner, group) = ((self.owner, 4), (self.group, 8));
+        let (sacl, dacl) = ((self.sacl, 12), (self.dacl, 16));
+        let order = if sids_first {
+            [owner, group, dacl, sacl]
+        } else {
+            [sacl, dacl, owner, group]
+        };
+        for (part, field) in order {
             if let Some(part) = part {
                 out[at..at + part.len()].copy_from_slice(part);
                 out[field..field + 4].copy_from_slice(&(at as u32).to_le_bytes());

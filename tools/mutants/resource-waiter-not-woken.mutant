@@ -1,0 +1,6 @@
+# A release that lets waiters in to a resource records them as owners
+# and never wakes them: they own it in their sleep.
+scenario: x86_64
+fails: ex.resource.hand-over
+file: kernel/ex/resource.rs
+remove:             wait::KeSetEvent(&raw mut (*waiters).event, 0, 0);

@@ -24,12 +24,15 @@
 
 #![allow(non_snake_case)]
 
+use super::seh::{self, Guard, Unhandled};
 use super::{Rank, SpinLock, interrupt, irql, time};
 use crate::arch;
+use crate::hal::platform::MAX_CPUS;
 use crate::mm::stack::{self, Stack};
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
-use core::mem::offset_of;
-use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use core::mem::{MaybeUninit, offset_of};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ke::{DPC_TIME_LIMIT_TICKS, Fifo, Link, TIME_INCREMENT};
 use nk_ntabi::ke::{DPC_OBJECT, KDEFERRED_ROUTINE, KDPC, MEDIUM_IMPORTANCE};
@@ -163,8 +166,22 @@ extern "C" fn drain(queue: usize) {
             .running_since
             .store(time::interrupt_time().max(1), Ordering::Relaxed);
         // SAFETY: calling the routine the driver registered, at
-        // DISPATCH_LEVEL, with the arguments it queued.
-        unsafe { routine(dpc, context, argument1, argument2) };
+        // DISPATCH_LEVEL, with the arguments it queued. An exception
+        // it lets out is unhandled: the search for a handler ends
+        // here, and does not go on into whatever this processor was
+        // doing when the queue was run.
+        unsafe {
+            seh::call(
+                routine as usize,
+                [
+                    dpc.addr(),
+                    context.addr(),
+                    argument1.addr(),
+                    argument2.addr(),
+                ],
+                &Guard::Base(Unhandled::KernelMode),
+            )
+        };
         queue.running_since.store(0, Ordering::Relaxed);
         let level = irql::current();
         if level != irql::DISPATCH_LEVEL {
@@ -297,10 +314,121 @@ pub unsafe extern "C" fn KeRemoveQueueDpc(dpc: *mut KDPC) -> u8 {
     }
 }
 
+/// What one [`flush`] waits for: a DPC for each processor and the count
+/// of those that have yet to run.
+struct Barrier {
+    dpcs: [UnsafeCell<MaybeUninit<KDPC>>; MAX_CPUS],
+    left: AtomicU32,
+}
+
+/// Queue this processor's DPC of the barrier at address `barrier`.
+fn plant(barrier: usize) {
+    // SAFETY: the address of the `Barrier` of a `flush` that does not
+    // return before every processor has run this and its DPC; each
+    // processor touches its own DPC only.
+    unsafe {
+        let barrier = &*(barrier as *const Barrier);
+        let dpc = barrier.dpcs[super::pcr::current_processor() as usize]
+            .get()
+            .cast::<KDPC>();
+        KeInitializeDpc(
+            dpc,
+            Some(passed),
+            (&raw const barrier.left).cast_mut().cast(),
+        );
+        KeInsertQueueDpc(dpc, core::ptr::null_mut(), core::ptr::null_mut());
+    }
+}
+
+/// A barrier's DPC: everything queued here before it has run.
+///
+/// # Safety
+/// Called as a DPC routine, with the address of its barrier's count.
+unsafe extern "C" fn passed(_: *mut KDPC, left: *mut c_void, _: *mut c_void, _: *mut c_void) {
+    // SAFETY: per the contract; the count outlives the DPCs it counts.
+    unsafe { &*left.cast::<AtomicU32>() }.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// Return once every DPC that was queued or running on any processor
+/// when this was called has finished: what Windows' `KeFlushQueuedDpcs`
+/// promises. A queue runs in order, so a DPC queued now on each
+/// processor runs after all of those.
+///
+/// For a caller below `DISPATCH_LEVEL`, where its own processor's queue
+/// can run.
+pub fn flush() {
+    let level = irql::current();
+    if level >= irql::DISPATCH_LEVEL {
+        crate::kd::bugcheck(format_args!(
+            "0x0000000A IRQL_NOT_LESS_OR_EQUAL: waiting for queued DPCs to run at IRQL {level}"
+        ));
+    }
+    let barrier = Barrier {
+        dpcs: [const { UnsafeCell::new(MaybeUninit::uninit()) }; MAX_CPUS],
+        left: AtomicU32::new(super::smp::online_count() as u32),
+    };
+    super::ipi::call_all(plant, core::ptr::from_ref(&barrier) as usize);
+    while barrier.left.load(Ordering::Acquire) != 0 {
+        core::hint::spin_loop();
+    }
+}
+
 // ---- tests --------------------------------------------------------------
 
-use core::cell::UnsafeCell;
-use core::sync::atomic::AtomicU32;
+/// One slow DPC per processor, for the test of `flush`.
+struct Slow([UnsafeCell<MaybeUninit<KDPC>>; MAX_CPUS]);
+
+// SAFETY: each processor touches its own DPC only, through the DPC
+// routines.
+unsafe impl Sync for Slow {}
+
+static SLOW: Slow = Slow([const { UnsafeCell::new(MaybeUninit::uninit()) }; MAX_CPUS]);
+static SLOW_DONE: AtomicU32 = AtomicU32::new(0);
+
+/// # Safety
+/// Called as a DPC routine; it dereferences none of its arguments.
+unsafe extern "C" fn dawdle(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
+    // Slow everywhere but on the processor of the thread that will
+    // flush: its own DPC must not be what keeps it.
+    if super::pcr::current_processor() != SLOW_ORIGIN.load(Ordering::Acquire) {
+        time::stall(5_000);
+    }
+    SLOW_DONE.fetch_add(1, Ordering::AcqRel);
+}
+
+/// The processor the test's thread queued the slow DPCs from.
+static SLOW_ORIGIN: AtomicU32 = AtomicU32::new(0);
+
+fn plant_slow(_: usize) {
+    let dpc = SLOW.0[super::pcr::current_processor() as usize]
+        .get()
+        .cast::<KDPC>();
+    // SAFETY: static storage, this processor's own; the DPC is not
+    // queued, the last test's having run before its flush returned.
+    unsafe {
+        KeInitializeDpc(dpc, Some(dawdle), core::ptr::null_mut());
+        KeInsertQueueDpc(dpc, core::ptr::null_mut(), core::ptr::null_mut());
+    }
+}
+
+/// A flush returns only when the DPCs queued before it, on every
+/// processor, have run to their end. Returns how many it waited for.
+pub fn flush_test() -> Result<u32, &'static str> {
+    SLOW_DONE.store(0, Ordering::Release);
+    // Raised while the DPCs are queued: the thread stays on its
+    // processor, whose DPC runs, at once, only when the level comes
+    // down again. The others are then still dawdling.
+    let old = irql::raise(irql::DISPATCH_LEVEL);
+    SLOW_ORIGIN.store(super::pcr::current_processor(), Ordering::Release);
+    super::ipi::call_all(plant_slow, 0);
+    irql::lower(old);
+    flush();
+    let done = SLOW_DONE.load(Ordering::Acquire);
+    if done as usize != super::smp::online_count() {
+        return Err("a flush returned before a DPC queued ahead of it had finished");
+    }
+    Ok(done)
+}
 
 /// A DPC of the kernel's own, for the tests.
 struct TestDpc(UnsafeCell<core::mem::MaybeUninit<KDPC>>);
@@ -578,16 +706,7 @@ pub fn stack_test() -> Result<u32, &'static str> {
     super::thread::create(waiter, 0, super::thread::NORMAL_PRIORITY + 1, 1 << me)?;
     let queued = insert(0);
     let woken = WOKEN.load(Ordering::Acquire);
-    for _ in 0..2000 {
-        if super::thread::count() == threads {
-            break;
-        }
-        super::thread::yield_now();
-        time::stall(1000);
-    }
-    if super::thread::count() != threads {
-        return Err("the thread a DPC routine woke did not end");
-    }
+    super::thread::settle(threads);
     if !queued || woken != 1 {
         return Err("a thread woken by a DPC routine did not run before the interrupted thread");
     }

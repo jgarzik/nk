@@ -36,6 +36,49 @@ ioctl dos 9c402406 - 16
 ioctl dos 9c402406 78 0
 ioctl dos 9c402410 78 16
 
+# METHOD_NEITHER: the driver is handed the caller's two addresses and
+# probes and locks them itself, as user memory, inside __try.
+ioctl dos 9c40240f 68656c6c6f2066726f6d204e4b00 38
+ioctl dos 9c40240f 68656c6c6f2066726f6d204e4b00 10
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 38
+
+# A buffer that is not there: at null, in the lowest 64 KiB, which is
+# never mapped, and in the kernel's half of the address space. The
+# driver's __try takes what its probe or its lock raises, and the
+# request fails; with a good output buffer, nothing was written to it.
+ioctlat dos 9c40240f @0:14 38
+ioctlat dos 9c40240f @1000:14 38
+ioctlat dos 9c40240f @ffff800000000000:14 38
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @0:38
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @1000:38
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38
+ioctlat dos 9c40240f @ffff800000000000:14 @ffff800000000000:38
+
+# A length of zero is refused before either address is looked at.
+ioctl dos 9c40240f - 38
+ioctl dos 9c40240f 68656c6c6f2066726f6d204e4b00 0
+ioctlat dos 9c40240f @ffff800000000000:0 38
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @ffff800000000000:0
+
+# The same addresses by the methods where the I/O manager, not the
+# driver, reads and writes the caller's memory: buffered, in-direct,
+# out-direct. A null buffer reaches the driver as no buffer.
+ioctlat dos 9c402408 @0:14 38
+ioctlat dos 9c402408 @1000:14 38
+ioctlat dos 9c402408 @ffff800000000000:14 38
+ioctlat dos 9c402408 68656c6c6f2066726f6d204e4b00 @0:38
+ioctlat dos 9c402408 68656c6c6f2066726f6d204e4b00 @1000:38
+ioctlat dos 9c402408 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38
+ioctlat dos 9c402401 @0:14 38
+ioctlat dos 9c402401 @1000:14 38
+ioctlat dos 9c402401 68656c6c6f2066726f6d204e4b00 @0:38
+ioctlat dos 9c402401 68656c6c6f2066726f6d204e4b00 @1000:38
+ioctlat dos 9c402401 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38
+ioctlat dos 9c402406 @0:14 38
+ioctlat dos 9c402406 68656c6c6f2066726f6d204e4b00 @0:38
+ioctlat dos 9c402406 68656c6c6f2066726f6d204e4b00 @1000:38
+ioctlat dos 9c402406 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38
+
 # The driver has no read or write routine.
 read dos 16
 write dos 616263

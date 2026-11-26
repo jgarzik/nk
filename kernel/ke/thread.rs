@@ -39,9 +39,11 @@
 //!   elsewhere; so no ring of processors can form, each waiting for the
 //!   thread the next is leaving.
 //! - A thread that exits is buried by the thread that runs after it:
-//!   its stack is freed, it is signalled (a thread is an object others
-//!   can wait on), and the reference it held on itself while it ran is
-//!   dropped. The block itself lives until the last reference goes.
+//!   its stack is freed, the reference it held on itself while it ran
+//!   is dropped, and it is signalled (a thread is an object others can
+//!   wait on), in that order as far as anyone can see: whoever learns
+//!   that a thread has ended finds it buried. The block itself lives
+//!   until the last reference goes.
 
 use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
@@ -80,6 +82,11 @@ pub struct Thread {
     wait: WaitRegister,
     /// The next thread in a waker's list of threads to make ready.
     wake_link: *mut Thread,
+    /// The processor whose ready queue the thread is on, plus one; zero
+    /// while it is on none. Written under that queue's lock.
+    queued_on: AtomicU32,
+    /// The priority it is queued at. That queue's lock.
+    queued_at: AtomicU8,
 }
 
 /// One processor's dispatcher state.
@@ -130,11 +137,78 @@ fn thread_of(link: *mut ListEntry) -> *mut Thread {
     link.wrapping_byte_sub(layout::WAIT_LIST_ENTRY).cast()
 }
 
+/// The thread's priority, where Windows keeps it. Another thread may
+/// change it at any moment (`set_priority`), so it is only ever read
+/// and written whole.
+///
+/// # Safety
+/// `thread` is a live thread.
+unsafe fn priority_of<'a>(thread: *mut Thread) -> &'a AtomicU8 {
+    // SAFETY: per the contract: a byte of the thread's block.
+    unsafe { AtomicU8::from_ptr(field(thread, layout::PRIORITY)) }
+}
+
 /// # Safety
 /// `thread` is a live thread.
 unsafe fn priority(thread: *mut Thread) -> u8 {
     // SAFETY: per the contract.
-    unsafe { field::<u8>(thread, layout::PRIORITY).read() }
+    unsafe { priority_of(thread) }.load(Ordering::SeqCst)
+}
+
+/// The processor whose ready queue the thread uses, where Windows
+/// keeps it.
+///
+/// # Safety
+/// `thread` is a live thread.
+unsafe fn next_processor<'a>(thread: *mut Thread) -> &'a AtomicU32 {
+    // SAFETY: per the contract: an aligned field of the thread's block.
+    unsafe { AtomicU32::from_ptr(field(thread, layout::NEXT_PROCESSOR)) }
+}
+
+/// Put `thread` on `ready`, the queues of processor `processor`, at
+/// its priority, which is returned.
+///
+/// Where it is queued is published before its priority is read, and
+/// whoever changes a thread's priority writes it before looking where
+/// the thread is queued (`apply_priority`): one of the two sees the
+/// other, so a thread is never left queued at a priority it no longer
+/// has. A change that finds the thread on no queue leaves the rest to
+/// whoever queues it: the caller has that processor look at its queues
+/// afterwards, or has decided what runs there on the priority returned.
+///
+/// # Safety
+/// `ready` is that processor's, locked; `thread` is live and on no
+/// queue.
+unsafe fn enqueue(
+    ready: &mut ReadyQueues,
+    processor: usize,
+    thread: *mut Thread,
+    front: bool,
+) -> u8 {
+    // SAFETY: per the contract.
+    unsafe {
+        (*thread)
+            .queued_on
+            .store(processor as u32 + 1, Ordering::SeqCst);
+        let level = priority(thread);
+        (*thread).queued_at.store(level, Ordering::Relaxed);
+        ready.insert(link_of(thread), level, front);
+        level
+    }
+}
+
+/// Take the best thread off `ready` whose priority is at least `floor`.
+///
+/// # Safety
+/// `ready` is locked; every queued thread is live.
+unsafe fn dequeue(ready: &mut ReadyQueues, floor: u8) -> Option<*mut Thread> {
+    // SAFETY: per the contract.
+    unsafe {
+        let (link, _) = ready.take(floor)?;
+        let thread = thread_of(link);
+        (*thread).queued_on.store(0, Ordering::SeqCst);
+        Some(thread)
+    }
 }
 
 /// # Safety
@@ -189,16 +263,19 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).quantum).write(AtomicU8::new(QUANTUM_TICKS));
         (&raw mut (*thread).wait).write(WaitRegister::new());
         (&raw mut (*thread).wake_link).write(core::ptr::null_mut());
+        (&raw mut (*thread).queued_on).write(AtomicU32::new(0));
+        (&raw mut (*thread).queued_at).write(AtomicU8::new(0));
         super::wait::init_thread(thread);
         super::mutex::init_thread(thread);
         field::<u8>(thread, 0).write(layout::THREAD_OBJECT);
         field::<u64>(thread, layout::INITIAL_STACK).write(stack.top);
         field::<u64>(thread, layout::STACK_BASE).write(stack.top);
         field::<u64>(thread, layout::STACK_LIMIT).write(stack.base);
-        field::<u8>(thread, layout::PRIORITY).write(thread_priority);
+        priority_of(thread).store(thread_priority, Ordering::Relaxed);
         field::<u8>(thread, layout::BASE_PRIORITY).write(thread_priority);
-        field::<u32>(thread, layout::NEXT_PROCESSOR).write(pcr::current_processor());
+        next_processor(thread).store(pcr::current_processor(), Ordering::Relaxed);
         let process = crate::ps::process::system();
+        field::<usize>(thread, layout::SILO).write(nk_ntabi::silo::THREAD_NOT_ATTACHED);
         field::<*mut u8>(thread, layout::PROCESS).write(process);
         field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
         field::<[u64; 2]>(thread, layout::CID).write([
@@ -240,6 +317,68 @@ fn create_thread(
     affinity: u64,
     keep: bool,
 ) -> Result<*mut Thread, &'static str> {
+    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    // SAFETY: the thread is whole and on no queue. The caller's
+    // reference is taken first: the thread may run and end at once.
+    unsafe {
+        if keep {
+            ob::object::reference(thread.cast());
+        }
+        make_ready(thread);
+    }
+    Ok(thread)
+}
+
+/// Create a thread as [`create_referenced`] does, but do not make it
+/// ready: it runs once [`begin`] has started it, or never, if
+/// [`discard`] takes it back. For a creator that has something to do
+/// that may fail before the thread may run.
+pub fn create_unstarted(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    // SAFETY: a live thread nothing else has.
+    unsafe { ob::object::reference(thread.cast()) };
+    Ok(thread)
+}
+
+/// Start a thread from [`create_unstarted`].
+///
+/// # Safety
+/// `thread` came from `create_unstarted` and has been neither started
+/// nor discarded.
+pub unsafe fn begin(thread: *mut Thread) {
+    // SAFETY: per the contract: whole, and on no queue.
+    unsafe { make_ready(thread) };
+}
+
+/// Take back a thread from [`create_unstarted`] that will never run:
+/// its stack, its count, and the reference it holds on itself. The
+/// caller's reference stays the caller's to drop.
+///
+/// # Safety
+/// As [`begin`].
+pub unsafe fn discard(thread: *mut Thread) {
+    // SAFETY: per the contract: the thread is on no queue and never
+    // ran, so nothing waits on it and nothing uses its stack.
+    unsafe {
+        mm::stack::free((*thread).stack);
+        ob::object::dereference(thread.cast());
+    }
+    THREADS.fetch_sub(1, Ordering::AcqRel);
+}
+
+/// A new thread that will run `entry(argument)`, whole, counted and on
+/// no queue: not yet ready.
+fn new_thread(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
     let allowed = affinity & super::smp::online();
     if allowed == 0 {
         return Err("a thread's affinity names no running processor");
@@ -262,14 +401,6 @@ fn create_thread(
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
     }
     THREADS.fetch_add(1, Ordering::AcqRel);
-    // SAFETY: the thread is whole and on no queue. The caller's
-    // reference is taken first: the thread may run and end at once.
-    unsafe {
-        if keep {
-            ob::object::reference(thread.cast());
-        }
-        make_ready(thread);
-    }
     Ok(thread)
 }
 
@@ -318,7 +449,11 @@ fn wake_an_idle(allowed: u64) {
 }
 
 /// Take a thread this processor may run from another processor's queues:
-/// the best that one has, if its affinity allows.
+/// the best there that its affinity allows here, which need not be the
+/// best there is. Each thread is looked at where it is, under its
+/// queue's lock, and only the one taken leaves its queue: whoever
+/// changes a thread's priority meanwhile finds it there
+/// (`apply_priority`).
 fn steal() -> Option<*mut Thread> {
     let me = pcr::current_processor() as usize;
     let processors = super::smp::online_count();
@@ -330,15 +465,16 @@ fn steal() -> Option<*mut Thread> {
         // SAFETY: queued threads are live, and while queued their
         // affinity and processor belong to the queue's lock.
         unsafe {
-            let Some((link, found)) = ready.take(0) else {
+            let allowed = ready.first_where(|link| {
+                field::<u64>(thread_of(link), layout::AFFINITY).read() & 1 << me != 0
+            });
+            let Some((link, level)) = allowed else {
                 continue;
             };
+            ready.remove(link, level);
             let thread = thread_of(link);
-            if field::<u64>(thread, layout::AFFINITY).read() & 1 << me == 0 {
-                ready.insert(link, found, true);
-                continue;
-            }
-            field::<u32>(thread, layout::NEXT_PROCESSOR).write(me as u32);
+            (*thread).queued_on.store(0, Ordering::SeqCst);
+            next_processor(thread).store(me as u32, Ordering::Relaxed);
             return Some(thread);
         }
     }
@@ -421,7 +557,7 @@ pub unsafe fn make_ready(thread: *mut Thread) {
             field::<u32>(thread, layout::IDEAL_PROCESSOR).read() as usize,
             idling,
         );
-        field::<u32>(thread, layout::NEXT_PROCESSOR).write(processor as u32);
+        next_processor(thread).store(processor as u32, Ordering::Relaxed);
         processor
     };
     let dispatcher = arch::percpu_of(processor)
@@ -433,7 +569,7 @@ pub unsafe fn make_ready(thread: *mut Thread) {
         // the queue's lock from here on.
         unsafe {
             set_state(thread, layout::state::READY);
-            ready.insert(link_of(thread), priority(thread), false);
+            enqueue(&mut ready, processor, thread, false);
         }
     }
     // The new thread may outrank what that processor is running. Have
@@ -514,21 +650,22 @@ fn dispatch(leaving: Leaving) {
             // Whether or not anyone is waiting, a new turn begins.
             quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
         }
+        let here = pcr::current_processor() as usize;
         // SAFETY: queued threads are live.
-        let taken = unsafe { ready.take(floor) };
-        let busy = taken.is_some_and(|(link, _)| {
+        let taken = unsafe { dequeue(&mut ready, floor) };
+        let busy = taken.is_some_and(|thread| {
             // SAFETY: as above.
-            unsafe { (*thread_of(link)).swap_busy.load(Ordering::Acquire) }
+            unsafe { (*thread).swap_busy.load(Ordering::Acquire) }
         });
         let next = match taken {
             // Still leaving its last stack on another processor: only
             // the idle thread may wait for it.
-            Some((link, found)) if !idle_thread && busy => {
-                // SAFETY: as above; back where it was.
-                unsafe { ready.insert(link, found, true) };
+            Some(thread) if !idle_thread && busy => {
+                // SAFETY: as above; back at the front.
+                unsafe { enqueue(&mut ready, here, thread, true) };
                 dispatcher.idle.load(Ordering::Acquire)
             }
-            Some((link, _)) => thread_of(link),
+            Some(thread) => thread,
             None if leaving.stops() => dispatcher.idle.load(Ordering::Acquire),
             None if idle_thread => {
                 drop(ready);
@@ -558,7 +695,14 @@ fn dispatch(leaving: Leaving) {
                 _ => {
                     set_state(me, layout::state::READY);
                     let front = leaving.requeue_in_front(spent);
-                    ready.insert(link_of(me), my_priority, front);
+                    // The thread taken was chosen against the priority
+                    // this one came in with. If another processor has
+                    // raised it since, it found this thread on no queue
+                    // and left the rest to this processor: look again
+                    // once the switch is made.
+                    if enqueue(&mut ready, here, me, front) > my_priority {
+                        reconsider(here);
+                    }
                 }
             }
         }
@@ -630,21 +774,49 @@ fn after_switch() {
             );
             super::mutex::check_none_held(previous);
             mm::stack::free((*previous).stack);
-            // It has ended: whoever waits for it may go on.
-            let woken = {
+            // It has ended: whoever waits for it may go on. They are
+            // to find it gone, so the reference it held on itself while
+            // it could run is dropped and it is counted out before its
+            // lock is let go, which is when its end can first be seen.
+            // Others may then drop the last reference at any moment:
+            // `deleted` waits for the lock, so the block outlives this
+            // hold of it.
+            let (woken, buried) = {
                 let _lock = super::object::ObjectLock::take(header);
                 super::object::signal(header).store(1, Ordering::Release);
-                super::object::satisfy(header)
+                let woken = super::object::satisfy(header);
+                let buried = ob::object::dereference_unless_last(previous.cast());
+                if buried {
+                    THREADS.fetch_sub(1, Ordering::AcqRel);
+                }
+                (woken, buried)
             };
             woken.ready();
-            // The reference it held on itself while it could run. Only
-            // then is it counted gone: whoever waits for the count to
-            // fall finds the memory already returned.
-            ob::object::dereference(previous.cast());
-            THREADS.fetch_sub(1, Ordering::AcqRel);
+            if !buried {
+                // Its own reference was the only one: nobody holds the
+                // thread to see it end. Counted out once the memory is
+                // back, for whoever waits for the count to fall.
+                ob::object::dereference(previous.cast());
+                THREADS.fetch_sub(1, Ordering::AcqRel);
+            }
         } else {
             (*previous).swap_busy.store(false, Ordering::Release);
         }
+    }
+}
+
+/// The object manager's call when the last reference to a thread has
+/// gone. The processor that buried the thread may have dropped the
+/// thread's own reference a moment ago and still hold the thread's
+/// lock (`after_switch`): the block is not freed under it.
+///
+/// # Safety
+/// `body` is a thread object nothing refers to any more.
+pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
+    // SAFETY: per the contract: the block is live until this returns.
+    unsafe {
+        drop(super::object::ObjectLock::take(body.cast()));
+        crate::se::impersonate::thread_deleted(body);
     }
 }
 
@@ -709,18 +881,17 @@ fn note(tag: u64) {
     let _ = TRACE.try_update(Ordering::AcqRel, Ordering::Acquire, |t| Some(t << 4 | tag));
 }
 
-/// Wait, yielding, until only `threads` threads exist; `false` after two
-/// seconds.
-fn settle(threads: u32) -> bool {
-    let deadline = super::time::interrupt_time() + 20_000_000;
+/// Wait, yielding, until only `threads` threads exist: how a test waits
+/// for the threads it started to end. There is no time limit, and a test
+/// does not return while a thread of its own can still run: the threads
+/// use what the test would tear down. A thread that never ends is a
+/// hang, which the boot harness reports with every processor's
+/// registers; a limit here would only turn a slow host into a failure.
+pub fn settle(threads: u32) {
     while count() != threads {
-        if super::time::interrupt_time() > deadline {
-            return false;
-        }
         yield_now();
         core::hint::spin_loop();
     }
-    true
 }
 
 /// Threads are created, run on their own stacks at PASSIVE_LEVEL as the
@@ -749,9 +920,7 @@ pub fn lifecycle_test() -> Result<u32, &'static str> {
         create(body, 0x1234, NORMAL_PRIORITY, 1 << me)?;
         yield_now();
     }
-    if !settle(before) {
-        return Err("threads that returned from their entry were not reaped");
-    }
+    settle(before);
     if RAN.load(Ordering::Acquire) != ROUNDS {
         return Err("not every thread ran once");
     }
@@ -760,6 +929,72 @@ pub fn lifecycle_test() -> Result<u32, &'static str> {
     }
     if mm::free_frame_count() < frames {
         return Err("threads leaked memory");
+    }
+    Ok(ROUNDS)
+}
+
+/// A thread whose end has been seen is gone: whoever waited for it, or
+/// asked and was told it had ended, finds it no longer counted, its
+/// stack returned and its own reference dropped, so that its memory
+/// goes with the caller's reference. Returns the threads seen off.
+pub fn buried_test() -> Result<u32, &'static str> {
+    fn body(_: usize) {}
+    const ROUNDS: u32 = 600;
+    let me = pcr::current_processor() as usize;
+    let processors = super::smp::online_count();
+    for round in 0..ROUNDS {
+        // On another processor when there is one, so that its end and
+        // this thread's look at it can happen at the same moment.
+        let step = 1 + round as usize % processors.saturating_sub(1).max(1);
+        let there = (me + step) % processors;
+        let (threads, blocks, frames) = (count(), mm::pool::usage().blocks, mm::free_frame_count());
+        let thread = create_referenced(body, 0, NORMAL_PRIORITY, 1 << there)?;
+        // SAFETY: a thread this test holds a reference to, which it
+        // gives up here.
+        let (counted, freed) = unsafe {
+            let counted = match round % 3 {
+                // Asleep until it ends.
+                0 => {
+                    super::wait::wait(Some(thread.cast()), None);
+                    count()
+                }
+                // Asking again and again, to catch it just ended.
+                1 => {
+                    while super::wait::wait(Some(thread.cast()), Some(0)) != 0 {
+                        if there == me {
+                            yield_now();
+                        }
+                        core::hint::spin_loop();
+                    }
+                    count()
+                }
+                // Looking under its lock, where its end first shows:
+                // the closest anyone can come to the moment itself.
+                _ => loop {
+                    let seen = {
+                        let _lock = super::object::ObjectLock::take(thread.cast());
+                        let ended = super::object::signal(thread.cast()).load(Ordering::Acquire);
+                        (ended > 0).then(count)
+                    };
+                    if let Some(counted) = seen {
+                        break counted;
+                    }
+                    if there == me {
+                        yield_now();
+                    }
+                    core::hint::spin_loop();
+                },
+            };
+            let stack_back = mm::free_frame_count() >= frames;
+            ob::object::dereference(thread.cast());
+            (counted, stack_back && mm::pool::usage().blocks == blocks)
+        };
+        if counted != threads {
+            return Err("a thread whose end was seen was still counted");
+        }
+        if !freed {
+            return Err("a thread whose end was seen still held its stack or a reference");
+        }
     }
     Ok(ROUNDS)
 }
@@ -778,9 +1013,7 @@ pub fn turns_test() -> Result<(), &'static str> {
     for tag in 1..=3 {
         create(body, tag, NORMAL_PRIORITY, 1 << me)?;
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     // 1, 2, 3 each run to their yield, then each finishes, in order.
     if TRACE.load(Ordering::Acquire) != 0x123_9AB {
         return Err("threads of one priority did not take turns in order");
@@ -809,9 +1042,7 @@ pub fn priority_test() -> Result<(), &'static str> {
     // SAFETY: only the tag-1 thread is left; it is on this processor's
     // queue, which is not running while this thread is.
     let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if after_yield != 0x32 {
         return Err("a yield did not run the higher then the equal thread, and only those");
     }
@@ -821,52 +1052,140 @@ pub fn priority_test() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// [`KeSetPriorityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetprioritythread):
-/// give the calling thread another priority; returns the old one. A
-/// thread that lowers itself below a ready thread gives way at once.
+/// Have processor `number` reconsider what it runs, at the end of an
+/// interrupt: its own DISPATCH-level one here, the interprocessor one
+/// there. Called at `DISPATCH_LEVEL`.
+fn reconsider(number: usize) {
+    let Some(there) = arch::percpu_of(number) else {
+        return;
+    };
+    there
+        .dispatcher()
+        .switch_wanted
+        .store(true, Ordering::Release);
+    if number == pcr::current_processor() as usize {
+        arch::self_interrupt(arch::DPC.0);
+    } else {
+        arch::ipi_send(number);
+    }
+}
+
+/// Give `thread` the priority `new` in place of `old`, wherever the
+/// thread is: running here or on another processor, on a ready queue,
+/// waiting, or on its way between those.
 ///
-/// Only the calling thread can be changed: another thread's priority
-/// belongs to whichever queue it is on or is about to join, and NK has
-/// no lock yet that covers a thread wherever it is. Asking for it stops
-/// the system rather than doing half the job.
+/// The priority is written first and the queue looked for second; a
+/// processor queueing the thread does the two in the other order
+/// (`enqueue`). A thread found queued is moved to the back of its new
+/// priority's queue under that queue's lock, and its processor looks
+/// again. A thread found on no queue is running, waiting or about to
+/// be queued, and whoever queues it next reads the new priority; if it
+/// was lowered, the processor it runs on is asked to look for a better
+/// thread. That processor is read without a lock and may be out of
+/// date for a thread that is just then moving: the thread then gives
+/// way at its next clock tick instead of at once.
+///
+/// # Safety
+/// `thread` is a live thread whose lock (its header's) the caller
+/// holds, at `DISPATCH_LEVEL`.
+unsafe fn apply_priority(thread: *mut Thread, old: u8, new: u8) {
+    // SAFETY: per the contract throughout.
+    unsafe {
+        priority_of(thread).store(new, Ordering::SeqCst);
+        (*thread).quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
+        let on = (*thread).queued_on.load(Ordering::SeqCst);
+        if on != 0 {
+            let there = on as usize - 1;
+            if let Some(dispatcher) = arch::percpu_of(there).map(|p| p.dispatcher()) {
+                let mut ready = dispatcher.ready.lock();
+                // Unless that processor took it off meanwhile.
+                if (*thread).queued_on.load(Ordering::SeqCst) == on {
+                    let level = (*thread).queued_at.load(Ordering::Relaxed);
+                    if level != new {
+                        ready.remove(link_of(thread), level);
+                        (*thread).queued_at.store(new, Ordering::Relaxed);
+                        ready.insert(link_of(thread), new, false);
+                    }
+                }
+            }
+            reconsider(there);
+        } else if new < old {
+            if thread == current() {
+                reconsider(pcr::current_processor() as usize);
+            } else {
+                reconsider(next_processor(thread).load(Ordering::Relaxed) as usize);
+            }
+        }
+    }
+}
+
+/// Give `thread` the priority `new`, as `KeSetPriorityThread` does;
+/// returns the one it had. Changes of one thread's priority are made
+/// one at a time, under the thread's own lock.
+///
+/// # Safety
+/// `thread` is a live thread; `new` is below 32.
+pub unsafe fn set_priority(thread: *mut Thread, new: u8) -> u8 {
+    // SAFETY: per the contract; the lock is held to the end, at
+    // `DISPATCH_LEVEL`.
+    unsafe {
+        let _lock = super::object::ObjectLock::take(thread.cast());
+        let old = priority(thread);
+        let base = field::<u8>(thread, layout::BASE_PRIORITY).read();
+        if let Some(new) = sched::priority_to_set(base, new) {
+            apply_priority(thread, old, new);
+        }
+        old
+    }
+}
+
+/// Set `thread`'s base priority `increment` away from its process's,
+/// as Windows' `KeSetBasePriorityThread` does, and move its priority
+/// with it (`nk_ps::info::set_base_priority`); returns the step the
+/// thread was at. Under the thread's own lock, like any change of its
+/// priority.
+///
+/// # Safety
+/// `thread` is a live thread of a process that is not real-time.
+pub unsafe fn set_base_priority(thread: *mut Thread, increment: i32) -> i32 {
+    // SAFETY: per the contract; the lock is held to the end, at
+    // `DISPATCH_LEVEL`. A thread's process outlives it.
+    unsafe {
+        let _lock = super::object::ObjectLock::take(thread.cast());
+        let process = field::<*mut u8>(thread, layout::PROCESS).read();
+        let old = priority(thread);
+        let change = nk_ps::info::set_base_priority(
+            process.add(nk_ntabi::process::BASE_PRIORITY).read(),
+            field::<u8>(thread, layout::BASE_PRIORITY).read(),
+            old,
+            field::<i8>(thread, layout::SATURATION).read(),
+            increment,
+        );
+        field::<u8>(thread, layout::BASE_PRIORITY).write(change.base);
+        field::<i8>(thread, layout::SATURATION).write(change.saturation);
+        if change.priority != old {
+            apply_priority(thread, old, change.priority);
+        }
+        change.was
+    }
+}
+
+/// [`KeSetPriorityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetprioritythread):
+/// give a thread another priority; returns the old one. A thread that
+/// is lowered below a ready thread gives way, and one raised above a
+/// running thread takes its processor. The thread's base priority is
+/// not changed. What is asked for is adjusted as Windows adjusts it
+/// (`nk_ke::sched::priority_to_set`).
 ///
 /// # Safety
 /// `thread` is a thread object.
 #[allow(non_snake_case)]
 pub unsafe extern "C" fn KeSetPriorityThread(thread: *mut core::ffi::c_void, new: i32) -> i32 {
-    let thread = thread.cast::<Thread>();
     if !(0..32).contains(&new) {
         crate::kd::bugcheck(format_args!("KeSetPriorityThread: {new} is not a priority"));
     }
-    // At DISPATCH_LEVEL the thread stays on this processor and is not
-    // switched away from between the comparison and the change.
-    let old = irql::current();
-    if old < irql::DISPATCH_LEVEL {
-        arch::set_irql(irql::DISPATCH_LEVEL);
-    }
-    if thread != current() {
-        crate::kd::bugcheck(format_args!(
-            "KeSetPriorityThread: changing the priority of a thread other than the caller is not implemented"
-        ));
-    }
-    // SAFETY: the running thread; its priority is its own while it runs.
-    let before = unsafe {
-        let before = priority(thread);
-        field::<u8>(thread, layout::PRIORITY).write(new as u8);
-        (*thread).quantum.store(QUANTUM_TICKS, Ordering::Relaxed);
-        before
-    };
-    if (new as u8) < before {
-        // Something ready may now outrank it: look, as soon as the
-        // IRQL allows.
-        arch::percpu()
-            .dispatcher()
-            .switch_wanted
-            .store(true, Ordering::Release);
-        arch::self_interrupt(arch::DPC.0);
-    }
-    arch::set_irql(old);
-    i32::from(before)
+    // SAFETY: per the contract.
+    i32::from(unsafe { set_priority(thread.cast(), new as u8) })
 }
 
 /// A thread that changes its own priority gets the old one back, and
@@ -894,9 +1213,7 @@ pub fn set_priority_test() -> Result<(), &'static str> {
         let from_10 = KeSetPriorityThread(this, i32::from(NORMAL_PRIORITY));
         (from_16, after_first, from_10, TRACE.load(Ordering::Acquire))
     };
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if (was, from_16, from_10) != (i32::from(NORMAL_PRIORITY), 16, 10) {
         return Err("setting a priority did not return the one before");
     }
@@ -921,17 +1238,363 @@ unsafe fn raise_ready(from: u8, to: u8) -> bool {
     // SAFETY: queued threads are live, and their priority belongs to
     // the queue's lock while they are queued.
     unsafe {
-        let Some((link, found)) = ready.take(from) else {
+        let here = pcr::current_processor() as usize;
+        let Some(thread) = dequeue(&mut ready, from) else {
             return false;
         };
-        if found != from {
-            ready.insert(link, found, true);
-            return false;
+        if priority(thread) == from {
+            priority_of(thread).store(to, Ordering::SeqCst);
         }
-        field::<u8>(thread_of(link), layout::PRIORITY).write(to);
-        ready.insert(link, to, false);
+        let moved = priority(thread) == to;
+        enqueue(&mut ready, here, thread, !moved);
+        moved
     }
-    true
+}
+
+static OTHER: crate::test::Slot<nk_ntabi::ke::KEVENT> = crate::test::Slot::new();
+
+/// Another thread's priority is changed wherever that thread is: while
+/// it waits, while it is ready, while it runs on another processor, and
+/// while it moves between all three. Returns the changes made.
+pub fn set_other_priority_test() -> Result<u32, &'static str> {
+    use super::wait;
+    fn waits(tag: usize) {
+        // SAFETY: a static, initialised event.
+        unsafe { wait::wait(Some(OTHER.ptr().cast()), None) };
+        note(tag as u64);
+    }
+    fn notes(tag: usize) {
+        note(tag as u64);
+    }
+    fn spins(_: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    fn churns(_: usize) {
+        // Ready, running and waiting by turns, on every processor.
+        while !STOP.load(Ordering::Acquire) {
+            yield_now();
+            // SAFETY: no object is involved.
+            unsafe { wait::wait(None, Some(-1_000)) };
+            RAN.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let set = |thread: *mut Thread, new: u8| {
+        // SAFETY: a thread this test holds a reference to.
+        unsafe { KeSetPriorityThread(thread.cast(), i32::from(new)) }
+    };
+    let before = count();
+    let me = pcr::current_processor() as usize;
+    let mut changes = 0;
+    TRACE.store(0, Ordering::Relaxed);
+    // SAFETY: static storage nothing waits on.
+    unsafe { wait::KeInitializeEvent(OTHER.ptr(), 0, 0) };
+
+    // Waiting: the new priority is the one it wakes with, here above
+    // this thread's, so it runs before the setting of the event
+    // returns.
+    let waiting = create_referenced(waits, 1, NORMAL_PRIORITY, 1 << me)?;
+    // SAFETY: no object is involved.
+    unsafe { wait::wait(None, Some(-100_000)) };
+    let was = set(waiting, NORMAL_PRIORITY + 4);
+    let not_yet = TRACE.load(Ordering::Acquire);
+    // SAFETY: a static, initialised event.
+    unsafe { wait::KeSetEvent(OTHER.ptr(), 0, 0) };
+    let woke = TRACE.load(Ordering::Acquire);
+    changes += 1;
+
+    // Ready, below this thread: raised above it, it runs at once.
+    let ready = create_referenced(notes, 2, NORMAL_PRIORITY - 1, 1 << me)?;
+    let idle = TRACE.load(Ordering::Acquire);
+    let was_ready = set(ready, NORMAL_PRIORITY + 1);
+    let ran = TRACE.load(Ordering::Acquire);
+    changes += 1;
+
+    // Ready, raised and lowered again without ever outranking this
+    // thread: it stays queued, at the priority it was left with.
+    let parked = create_referenced(notes, 3, NORMAL_PRIORITY - 2, 1 << me)?;
+    let steps = [
+        set(parked, NORMAL_PRIORITY - 1),
+        set(parked, NORMAL_PRIORITY - 3),
+        set(parked, 0),
+        set(parked, NORMAL_PRIORITY - 1),
+    ];
+    let parked_ran = TRACE.load(Ordering::Acquire);
+    changes += 4;
+
+    // Running on another processor with a lesser thread ready behind
+    // it: lowered below that one, it gives way there.
+    let processors = super::smp::online_count();
+    let mut gave_way = true;
+    STOP.store(false, Ordering::Release);
+    if processors > 1 {
+        let there = (me + 1) % processors;
+        let spinner = create_referenced(spins, 0, NORMAL_PRIORITY + 2, 1 << there)?;
+        // SAFETY: no object is involved.
+        unsafe { wait::wait(None, Some(-100_000)) };
+        let behind = create_referenced(notes, 4, NORMAL_PRIORITY + 1, 1 << there)?;
+        // SAFETY: no object is involved.
+        unsafe { wait::wait(None, Some(-200_000)) };
+        let starved = TRACE.load(Ordering::Acquire) & 0xF != 4;
+        let was_running = set(spinner, NORMAL_PRIORITY);
+        // SAFETY: a thread this test holds a reference to.
+        let ended = unsafe { wait::wait(Some(behind.cast()), Some(-20_000_000)) };
+        gave_way = starved && was_running == i32::from(NORMAL_PRIORITY + 2) && ended == 0;
+        STOP.store(true, Ordering::Release);
+        // SAFETY: threads this test holds references to, which it gives
+        // up here.
+        unsafe {
+            wait::wait(Some(spinner.cast()), None);
+            ob::object::dereference(spinner.cast());
+            ob::object::dereference(behind.cast());
+        }
+        changes += 1;
+    }
+
+    // Moving: threads that are ready, running and waiting by turns on
+    // every processor, each set to one priority after another all the
+    // while. They must all still be there to be stopped, at the
+    // priority last set.
+    STOP.store(false, Ordering::Release);
+    RAN.store(0, Ordering::Relaxed);
+    let mut movers = [core::ptr::null_mut::<Thread>(); 4];
+    for mover in &mut movers {
+        *mover = create_referenced(churns, 0, NORMAL_PRIORITY, ANYWHERE)?;
+    }
+    let until = super::time::interrupt_time() + 5_000_000;
+    let mut round = 0u32;
+    while super::time::interrupt_time() < until {
+        for (n, &mover) in movers.iter().enumerate() {
+            set(mover, NORMAL_PRIORITY - 2 + ((round + n as u32) % 5) as u8);
+            changes += 1;
+        }
+        round += 1;
+        if round % 64 == 0 {
+            yield_now();
+        }
+    }
+    let last: [i32; 4] = core::array::from_fn(|n| set(movers[n], NORMAL_PRIORITY));
+    let expected: [i32; 4] = core::array::from_fn(|n| {
+        i32::from(NORMAL_PRIORITY - 2 + ((round - 1 + n as u32) % 5) as u8)
+    });
+    let turns = RAN.load(Ordering::Relaxed);
+    STOP.store(true, Ordering::Release);
+    // SAFETY: threads this test holds references to, which it gives up
+    // here; each wait is for that thread's end.
+    unsafe {
+        for thread in movers.into_iter().chain([waiting, ready, parked]) {
+            wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    settle(before);
+    if was != i32::from(NORMAL_PRIORITY) || not_yet != 0 || woke != 0x1 {
+        return Err("a waiting thread did not wake with the priority it was given");
+    }
+    if idle != 0x1 || was_ready != i32::from(NORMAL_PRIORITY - 1) || ran != 0x12 {
+        return Err("a ready thread raised above the running one did not run at once");
+    }
+    let (n, low) = (i32::from(NORMAL_PRIORITY), i32::from(NORMAL_PRIORITY - 3));
+    // Asked for 0, a thread with a base priority gets 1.
+    if steps != [n - 2, n - 1, low, 1] || parked_ran != 0x12 {
+        return Err("a ready thread moved below the running one ran, or lost its priority");
+    }
+    if !gave_way {
+        return Err("a thread lowered while running elsewhere did not give way there");
+    }
+    if last != expected || turns == 0 {
+        return Err("threads on the move lost a priority that was set, or stopped moving");
+    }
+    Ok(changes)
+}
+
+/// A ready thread raised above the running one runs at once, whatever
+/// the other processors are doing: here they are kept looking through
+/// this processor's queue for a thread to take, where the one about to
+/// be raised is the best there is and not theirs to have. Returns the
+/// threads raised.
+pub fn raise_ready_test() -> Result<u32, &'static str> {
+    fn body(_: usize) {
+        RAN.fetch_add(1, Ordering::Release);
+    }
+    const ROUNDS: u32 = 3000;
+    let before = count();
+    let me = pcr::current_processor() as usize;
+    let processors = super::smp::online_count();
+    RAN.store(0, Ordering::Release);
+    let mut late = 0;
+    for round in 0..ROUNDS {
+        let thread = create_referenced(body, 0, NORMAL_PRIORITY - 1, 1 << me)?;
+        // An idle processor that is interrupted looks for work: a
+        // run of interrupts, of a length that differs from round to
+        // round, keeps them looking while the priority changes.
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        for _ in 0..1 + round % 24 {
+            for other in (0..processors).filter(|&other| other != me) {
+                reconsider(other);
+            }
+        }
+        irql::lower(old);
+        // A halted processor takes longer to start looking.
+        for _ in 0..round % 509 {
+            core::hint::spin_loop();
+        }
+        let waiting = RAN.load(Ordering::Acquire);
+        // SAFETY: a thread this test holds a reference to, which it
+        // gives up here; the wait is for that thread's end.
+        unsafe {
+            KeSetPriorityThread(thread.cast(), i32::from(NORMAL_PRIORITY + 1));
+            let ran = RAN.load(Ordering::Acquire);
+            if (waiting, ran) != (round, round + 1) {
+                late += 1;
+            }
+            super::wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    if count() != before {
+        return Err("the threads did not finish");
+    }
+    if late != 0 {
+        return Err("a ready thread raised above the running one did not run at once");
+    }
+    Ok(ROUNDS)
+}
+
+/// The round `raise_preempted_test` is in.
+static ROUND: AtomicU32 = AtomicU32::new(0);
+/// The round its pusher is waiting to be woken for, plus one.
+static PARKED: AtomicU32 = AtomicU32::new(0);
+/// The round its pusher has been woken for, plus one.
+static AWAKE: AtomicU32 = AtomicU32::new(0);
+/// Its runner has been raised above its pusher, and the raise is over.
+static RAISED: AtomicBool = AtomicBool::new(false);
+
+/// A thread raised while a higher thread is taking its processor from
+/// it keeps the processor, or has it back at once: the processor that
+/// puts it back on its queue finds the new priority there and looks
+/// again. On another processor a runner spins and a pusher of higher
+/// priority is woken to push it aside, round after round, while this
+/// thread raises the runner above the pusher at that moment; the pusher
+/// counts how long it runs while outranked. Returns the rounds.
+pub fn raise_preempted_test() -> Result<u32, &'static str> {
+    use super::wait;
+    const ROUNDS: u32 = 3000;
+    const PUSHER: u8 = NORMAL_PRIORITY + 2;
+    const TOP: u8 = NORMAL_PRIORITY + 4;
+    /// Looks the pusher may take while outranked: an interrupt from
+    /// another processor is on its way, and arrives well within them.
+    const PATIENCE: u32 = 1000;
+    fn runner(_: usize) {
+        while !STOP.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    fn pusher(runner: usize) {
+        let runner = runner as *mut Thread;
+        for round in 0.. {
+            PARKED.store(round + 1, Ordering::Release);
+            // SAFETY: a static, initialised event.
+            unsafe { wait::wait(Some(OTHER.ptr().cast()), None) };
+            if STOP.load(Ordering::Acquire) {
+                return;
+            }
+            AWAKE.store(round + 1, Ordering::Release);
+            let mut outranked = 0;
+            while ROUND.load(Ordering::Acquire) == round && !STOP.load(Ordering::Acquire) {
+                // SAFETY: the test holds the runner until this thread
+                // has ended.
+                let above = unsafe { priority(runner) } > PUSHER;
+                if RAISED.load(Ordering::Acquire) && above {
+                    outranked += 1;
+                    if outranked == PATIENCE {
+                        WRONG.fetch_add(1, Ordering::Relaxed);
+                    }
+                } else {
+                    outranked = 0;
+                }
+                core::hint::spin_loop();
+            }
+        }
+    }
+    let processors = super::smp::online_count();
+    if processors < 2 {
+        // Nothing can raise a thread while its processor is busy
+        // putting it aside.
+        return Ok(0);
+    }
+    let before = count();
+    let there = (pcr::current_processor() as usize + 1) % processors;
+    STOP.store(false, Ordering::Release);
+    RAISED.store(false, Ordering::Release);
+    WRONG.store(0, Ordering::Relaxed);
+    ROUND.store(0, Ordering::Release);
+    PARKED.store(0, Ordering::Release);
+    AWAKE.store(0, Ordering::Release);
+    // SAFETY: static storage nothing waits on; a synchronization event.
+    unsafe { wait::KeInitializeEvent(OTHER.ptr(), 1, 0) };
+    let running = create_referenced(runner, 0, NORMAL_PRIORITY, 1 << there)?;
+    let pushing = create_referenced(pusher, running as usize, PUSHER, 1 << there)?;
+    let set = |new: u8| {
+        // SAFETY: a thread this test holds a reference to.
+        unsafe { KeSetPriorityThread(running.cast(), i32::from(new)) };
+    };
+    // Wait for the pusher to say it has got as far as `round`.
+    let reached = |stage: &AtomicU32, round: u32| {
+        while stage.load(Ordering::Acquire) != round + 1 {
+            core::hint::spin_loop();
+        }
+    };
+    for round in 0..ROUNDS {
+        reached(&PARKED, round);
+        // The pusher wakes there and the runner is put aside for it: a
+        // little later each round, and over a wider span every so
+        // often, the raise meets that moment.
+        // SAFETY: a static, initialised event.
+        unsafe { wait::KeSetEvent(OTHER.ptr(), 0, 0) };
+        for _ in 0..(round % 128) << (round / 128 % 7) {
+            core::hint::spin_loop();
+        }
+        set(TOP);
+        RAISED.store(true, Ordering::Release);
+        // Time for the pusher to be seen running, if it is: four
+        // times what it needs, in looks like its own.
+        for _ in 0..4 * PATIENCE {
+            // SAFETY: a thread this test holds a reference to.
+            let above = unsafe { priority(running) } > PUSHER;
+            core::hint::black_box(
+                above
+                    && RAISED.load(Ordering::Acquire)
+                    && ROUND.load(Ordering::Acquire) == round
+                    && !STOP.load(Ordering::Acquire),
+            );
+            core::hint::spin_loop();
+        }
+        RAISED.store(false, Ordering::Release);
+        // Below the pusher again, the runner gives way to it; the
+        // pusher has then run this round, and may go back to wait.
+        set(NORMAL_PRIORITY);
+        reached(&AWAKE, round);
+        ROUND.store(round + 1, Ordering::Release);
+    }
+    STOP.store(true, Ordering::Release);
+    // SAFETY: a static, initialised event; threads this test holds
+    // references to, which it gives up here.
+    unsafe {
+        wait::KeSetEvent(OTHER.ptr(), 0, 0);
+        for thread in [pushing, running] {
+            wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    settle(before);
+    if WRONG.load(Ordering::Relaxed) != 0 {
+        return Err(
+            "a thread raised while it was put aside did not get its processor back at once",
+        );
+    }
+    Ok(ROUNDS)
 }
 
 /// A thread created for another processor runs there. Returns that
@@ -944,9 +1607,7 @@ pub fn other_cpu_test() -> Result<u32, &'static str> {
     let target = super::smp::online_count() - 1;
     TRACE.store(0, Ordering::Relaxed);
     create(body, 0, NORMAL_PRIORITY, 1 << target)?;
-    if !settle(before) {
-        return Err("a thread created for another processor did not run and exit");
-    }
+    settle(before);
     if TRACE.load(Ordering::Acquire) != target as u64 + 1 {
         return Err("the thread did not run on the processor it was created for");
     }
@@ -974,8 +1635,9 @@ pub fn registers_test() -> Result<u32, &'static str> {
     for seed in 1..=3 {
         create(body, seed, NORMAL_PRIORITY, 1 << me)?;
     }
-    if !settle(before) || RAN.load(Ordering::Acquire) != 3 {
-        return Err("the threads did not finish");
+    settle(before);
+    if RAN.load(Ordering::Acquire) != 3 {
+        return Err("not all three threads ran to their end");
     }
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a register a call preserves changed across a thread switch");
@@ -998,8 +1660,9 @@ pub fn preempt_test() -> Result<(), &'static str> {
     let after_higher = TRACE.load(Ordering::Acquire);
     // SAFETY: the lower thread is still on this processor's queue.
     let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
-    if !moved || !settle(before) {
-        return Err("the threads did not finish");
+    settle(before);
+    if !moved {
+        return Err("the ready thread of lower priority was not on this processor's queue");
     }
     if after_lower != 0 {
         return Err("a thread of lower priority ran ahead of its creator");
@@ -1037,9 +1700,7 @@ pub fn quantum_test() -> Result<u64, &'static str> {
     super::time::stall(2_000_000);
     STOP.store(true, Ordering::Release);
     let switches = dispatcher.switches.load(Ordering::Relaxed) - switches;
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     let spins = SPINS.each_ref().map(|s| s.load(Ordering::Relaxed));
     let (least, most) = (
         spins.iter().min().unwrap_or(&0),
@@ -1081,9 +1742,7 @@ pub fn preempt_registers_test() -> Result<u64, &'static str> {
     for seed in 1..=3 {
         create(body, seed, NORMAL_PRIORITY, 1 << me)?;
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a register changed under a thread that was preempted");
     }
@@ -1154,9 +1813,7 @@ pub fn migrate_test() -> Result<u64, &'static str> {
         }
     }
     STOP.store(true, Ordering::Release);
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a register a call preserves changed when a thread moved");
     }
@@ -1197,13 +1854,83 @@ pub fn affinity_test() -> Result<u64, &'static str> {
     if create(body, 0, NORMAL_PRIORITY, 1 << 63).is_ok() {
         return Err("a thread was created for a processor that does not exist");
     }
-    if !settle(before) {
-        return Err("the threads did not finish");
-    }
+    settle(before);
     if WRONG.load(Ordering::Relaxed) != 0 {
         return Err("a thread ran on a processor outside its affinity");
     }
     Ok(SPINS[0].load(Ordering::Relaxed))
+}
+
+/// A processor with nothing to run takes a thread it may run from
+/// another's queue even when that queue's best thread is one it may
+/// not. On another processor a thread spins above everything; behind it
+/// wait a thread pinned there and then one this processor may run too.
+/// This thread sleeps, its processor has nothing left, and the second
+/// must run here, at once: nothing else would ever give it a processor.
+/// Returns the processor it ran on.
+pub fn steal_behind_test() -> Result<u32, &'static str> {
+    use super::wait;
+    fn spinner(_: usize) {
+        RUNNER_ON.store(pcr::current_processor(), Ordering::Release);
+        while !STOP.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    fn pinned(_: usize) {}
+    fn free(_: usize) {
+        RAN.store(pcr::current_processor() + 1, Ordering::Release);
+    }
+    let processors = super::smp::online_count();
+    if processors < 2 {
+        // No other processor to take from.
+        return Ok(0);
+    }
+    let before = count();
+    let me = pcr::current_processor() as usize;
+    let there = (me + 1) % processors;
+    STOP.store(false, Ordering::Release);
+    RAN.store(0, Ordering::Release);
+    RUNNER_ON.store(u32::MAX, Ordering::Release);
+    create(spinner, 0, NORMAL_PRIORITY + 1, 1 << there)?;
+    while RUNNER_ON.load(Ordering::Acquire) == u32::MAX {
+        core::hint::spin_loop();
+    }
+    // Both wait behind the spinner, the pinned one first. The second
+    // may run here as well, but this processor is busy with this
+    // thread, so it is queued there, where it would rather be.
+    let made = create(pinned, 0, NORMAL_PRIORITY, 1 << there)
+        .and_then(|_| create_unstarted(free, 0, NORMAL_PRIORITY, 1 << there | 1 << me));
+    let waited = made.map(|thread| {
+        // SAFETY: a thread this test holds a reference to, not yet
+        // started; then waited for, and let go of.
+        unsafe {
+            field::<u32>(thread, layout::IDEAL_PROCESSOR).write(there as u32);
+            begin(thread);
+            let queued_there = (*thread).queued_on.load(Ordering::SeqCst) == there as u32 + 1;
+            // This processor goes idle for as long as the wait lasts.
+            let status = wait::wait(Some(thread.cast()), Some(-100_000_000));
+            (queued_there, status)
+        }
+    });
+    let ran = RAN.load(Ordering::Acquire);
+    STOP.store(true, Ordering::Release);
+    if let Ok(thread) = made {
+        // SAFETY: the reference `create_unstarted` gave; the thread
+        // has run by now or runs once the spinner has gone.
+        unsafe {
+            wait::wait(Some(thread.cast()), None);
+            ob::object::dereference(thread.cast());
+        }
+    }
+    settle(before);
+    let (queued_there, status) = waited?;
+    if !queued_there {
+        return Err("the thread was not queued behind the pinned one on the busy processor");
+    }
+    if status != wait::STATUS_SUCCESS || ran != me as u32 + 1 {
+        return Err("an idle processor left a thread it may run waiting behind one it may not run");
+    }
+    Ok(ran - 1)
 }
 
 /// A thread is itself, on the processor it is on, wherever it runs and
@@ -1270,11 +1997,9 @@ pub fn identity_test() -> Result<u64, &'static str> {
         create(spinner, 0, NORMAL_PRIORITY, ANYWHERE)?;
         create(sleeper, 0, NORMAL_PRIORITY, ANYWHERE)?;
     }
-    let deadline = super::time::interrupt_time() + 300_000_000;
+    // Asleep between looks: the threads are as many as two to a
+    // processor, and this one would take a turn from them.
     while count() != before {
-        if super::time::interrupt_time() > deadline {
-            return Err("the threads did not finish");
-        }
         // SAFETY: no object is involved.
         unsafe { super::wait::wait(None, Some(-100_000)) };
     }

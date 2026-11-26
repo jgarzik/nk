@@ -1,0 +1,7 @@
+# Setting a value no longer stamps its key: the key goes on saying it
+# was last written when it was made.
+scenario: aarch64
+fails: cm.times
+file: kernel/cm/mod.rs
+replace:     match set.and_then(|()| hive.set_last_write(key, now)) {
+with:     match set {

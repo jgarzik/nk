@@ -7,7 +7,7 @@
 
 load nkc-reg nkc-reg.sys
 open d \Device\NkcReg
-ioctl d 00222000 - 512
+ioctl d 00222000 - 16384
 ioctl d 00222000 - 8
 close d
 unload nkc-reg

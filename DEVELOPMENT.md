@@ -2,7 +2,8 @@
 
 NK is developed on Ubuntu LTS on x86-64. Any Linux with QEMU, UEFI
 firmware images and a stable Rust toolchain should work; only the firmware
-paths in `tools/boot_test.py` are distribution-specific.
+paths in `tools/boot_test.py` and `tools/oracle.py` are
+distribution-specific.
 
 ## Packages
 
@@ -40,7 +41,7 @@ make check      # boot x86-64 under QEMU and run the kernel self-tests
 make check-arm  # the same for arm64 (emulated, a little slower)
 make run        # boot with the serial console attached (Ctrl-A X quits)
 make gate       # everything a commit must pass; prints GATE-OK
-make help       # the other targets (soak, mutants, coverage, oracle, ledger)
+make help       # the other targets
 make dist       # release boot images in target/dist/
 make clean      # remove target/
 ```

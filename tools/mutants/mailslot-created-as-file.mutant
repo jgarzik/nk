@@ -1,0 +1,8 @@
+# A mailslot is created with a plain create request: the driver is not
+# told that a mailslot is wanted, and reads its parameters where a
+# file's extended-attribute length is.
+scenario: x86_64
+fails: io.open.mailslot
+file: kernel/io/file.rs
+replace:             IRP_MJ_CREATE_MAILSLOT,
+with:             IRP_MJ_CREATE,

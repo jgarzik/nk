@@ -37,6 +37,12 @@ const NK_VALUE_COUNT: usize = 0x24;
 const NK_VALUE_LIST: usize = 0x28;
 const NK_SECURITY: usize = 0x2C;
 const NK_CLASS: usize = 0x30;
+/// The longest subkey name (16 bits; the rest of the word holds
+/// flags), subkey class, value name and value data, in bytes.
+const NK_MAX_NAME: usize = 0x34;
+const NK_MAX_CLASS: usize = 0x38;
+const NK_MAX_VALUE_NAME: usize = 0x3C;
+const NK_MAX_VALUE_DATA: usize = 0x40;
 const NK_NAME_LENGTH: usize = 0x48;
 const NK_CLASS_LENGTH: usize = 0x4A;
 const NK_NAME: usize = 0x4C;
@@ -165,6 +171,9 @@ pub struct KeyNode<'a> {
     pub flags: u16,
     /// When it was last written, as a `FILETIME`.
     pub last_write: u64,
+    /// The longest subkey name, subkey class, value name and value
+    /// data the key says it has held.
+    pub longest: crate::Longest,
     pub name: Name<'a>,
     record: &'a [u8],
 }
@@ -322,6 +331,12 @@ impl<'a> Regf<'a> {
                 .iter()
                 .rev()
                 .fold(0, |value, &byte| value << 8 | u64::from(byte)),
+            longest: crate::Longest {
+                name: u32::from(u16_at(record, NK_MAX_NAME)?),
+                class: u32_at(record, NK_MAX_CLASS)?,
+                value_name: u32_at(record, NK_MAX_VALUE_NAME)?,
+                value_data: u32_at(record, NK_MAX_VALUE_DATA)?,
+            },
             name: Name::new(name, flags & KEY_COMP_NAME == 0)?,
             record,
         })

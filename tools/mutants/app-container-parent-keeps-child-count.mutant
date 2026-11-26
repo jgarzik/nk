@@ -1,0 +1,6 @@
+# The parent SID RtlGetAppContainerParent returns still says it has
+# the child's twelve sub-authorities, in a block that holds eight.
+scenario: x86_64
+fails: rtl.app-container
+file: lib/se/sid.rs
+remove:     parent[1] = APP_PACKAGE_RID_COUNT as u8;

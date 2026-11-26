@@ -8,16 +8,24 @@ NK replaces the Windows 10 kernel and HAL, and nothing else. Its rule: an
 unmodified Windows kernel-mode driver cannot tell NK from Windows. The
 same `.sys` file that loads on Windows 10 (2004-22H2) loads on NK.
 
-Today, under QEMU on both architectures, NK boots from UEFI through its
-own loader, runs every processor with preemptive threads, waits, timers,
-DPCs and work items, and loads real driver binaries: Microsoft's
-`null.sys` and Microsoft's WDM samples `sioctl`, `event` and `cancel`.
-It sends them real IRPs, which they may pend, complete later or have
-cancelled, and what they answer matches a recording made on real
-Windows 10, request by request.
+Under QEMU on x86-64 and arm64, NK boots from UEFI through its own
+loader, runs every processor with preemptive threads, waits, timers,
+DPCs and work items, and loads unmodified driver binaries: on x86-64
+Microsoft's own, among them the named pipe and mailslot file systems
+and the libraries drivers import from; on both architectures
+Microsoft's WDM samples and NK's conformance drivers
+([ledger/](ledger/README.md) lists them). It reads its registry from a
+hive file Windows wrote and starts the boot drivers that hive names.
+Drivers and the files they open are objects in an NT object namespace,
+opened by handle, with tokens and access checks behind them; a driver
+may import from another driver and send it requests. NK sends drivers
+real IRPs, which they may pend, complete later or have cancelled, and
+what they answer matches a recording made on real Windows 10, request
+by request. Their `__try` blocks work: exceptions, kernel-raised or
+from a processor fault, are dispatched and unwound as on Windows.
 
-Not yet: APCs, device interrupts, structured exception handling, Plug
-and Play, user mode, physical hardware.
+Absent: APCs, device interrupts, Plug and Play, user mode, physical
+hardware ([doc/DESIGN.md](doc/DESIGN.md), "What is absent").
 
 ## What it intends to do
 

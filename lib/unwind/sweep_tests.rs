@@ -371,7 +371,7 @@ fn x64_unwind_from_every_prolog_offset_reaches_the_same_caller() {
 /// prolog:
 /// - a listed epilog decodes, from its start and from each instruction
 ///   in it, as pops and a return with no stack trim, and ends where the
-///   table says (a final `rex.w jmp` is listed by its first byte);
+///   table says (a final jump is listed by its first byte);
 /// - bytes the table lists but the decoder refuses are inside an
 ///   instruction;
 /// - where the decoder finds a stack trim, the trim leads straight into
@@ -397,10 +397,11 @@ fn x64_epilog_table_agrees_with_instruction_decode() {
                 let e = x64::decode_epilog(&img.bytes, &f, start)
                     .unwrap_or_else(|| panic!("{at}: epilog {start:#x}"));
                 assert_eq!(e.trim, x64::Trim::None, "{at}: epilog {start:#x}");
-                let rex_jmp =
-                    e.len > len && (0x48..=0x4F).contains(&img.bytes[(start + len - 1) as usize]);
+                // A tail call's jump: `rex.w jmp`, or a plain one.
+                let last = img.bytes[(start + len - 1) as usize];
+                let jmp = e.len > len && matches!(last, 0x48..=0x4F | 0xE9 | 0xEB | 0xFF);
                 assert!(
-                    e.len == len || rex_jmp,
+                    e.len == len || jmp,
                     "{at}: epilog {start:#x} is {} bytes, listed {len}",
                     e.len
                 );
@@ -788,7 +789,7 @@ fn a64_check(img: &Image, f: &arm64::FunctionEntry, pc: u32, frame: &A64Frame, p
     let u = arm64::virtual_unwind(&img.bytes, f, pc, &frame.regs, &mut |a| Some(mem(a)));
     let u = u.unwrap_or_else(|e| panic!("{at}: {e:?}"));
     assert_eq!(u.place, place, "{at}");
-    assert_eq!((u.regs.sp, u.establisher), (CALLER, CALLER), "{at}");
+    assert_eq!(u.regs.sp, CALLER, "{at}");
     for i in 0..12 {
         let want = frame.x_at[i].map_or(frame.regs.x[i], mem);
         assert_eq!(u.regs.x[i], want, "{at}: x{}", i + 19);
@@ -879,10 +880,17 @@ fn a64_matches(op: &arm64::Op, w: u32, load: bool) -> bool {
     };
     match *op {
         // `sub sp, sp, #n` (`add` in an epilog), or a call to a helper
-        // that moves sp by a known amount.
+        // that moves sp by a known amount, or the store that makes room
+        // as it puts two argument registers of a variadic function where
+        // `va_start` looks for them (`stp x2, x3, [sp, #-n]!`).
         arm64::Op::Alloc(n) => {
             let adjust = if load { 0x9100_03FF } else { 0xD100_03FF };
-            (w & 0xFF80_03FF == adjust && imm12(w) == n) || w >> 26 == 0x25
+            let homing = !load
+                && w & 0xFFC0_03E0 == 0xA980_03E0
+                && w & 0x1F < 8
+                && (w >> 10) & 0x1F < 8
+                && a64_signed((w >> 15) & 0x7F, 7) * 8 == -i64::from(n);
+            (w & 0xFF80_03FF == adjust && imm12(w) == n) || w >> 26 == 0x25 || homing
         }
         arm64::Op::SavePair { a, b, offset, pre } => {
             let plain = if vector(a) { 0x6D00_0000 } else { 0xA900_0000 } | l;

@@ -31,7 +31,7 @@ impl From<Error> for ImportError {
 }
 
 /// Copy what `node` holds itself onto `key`: class, security, last
-/// write time, link flag and values.
+/// write time, link flag, values, and the longest lengths it remembers.
 fn copy(
     hive: &mut Hive,
     key: KeyId,
@@ -56,6 +56,7 @@ fn copy(
         unpack(data, pieces.len(), pieces.flatten().flatten().copied())?;
         hive.set_value(key, name, value.kind, data)?;
     }
+    hive.raise_longest(key, node.longest)?;
     Ok(())
 }
 
@@ -74,7 +75,9 @@ fn unpack<T>(buffer: &mut Vec<T>, len: usize, items: impl Iterator<Item = T>) ->
 /// The file is laid over what is there. Keys that exist stay, with
 /// their subkeys and values; a key the file also has takes the file's
 /// class, security descriptor, last write time and link flag, and the
-/// file's values, which replace values of the same names.
+/// file's values, which replace values of the same names. The longest
+/// lengths a key remembers are the file's or the tree's, whichever are
+/// longer.
 ///
 /// On an error the keys copied so far remain.
 pub fn import(hive: &mut Hive, under: KeyId, regf: &Regf<'_>) -> Result<(), ImportError> {
@@ -181,6 +184,18 @@ mod tests {
         );
         assert_eq!(hive.value(system, &w("BIG")).unwrap().2, big_data());
         assert_eq!(hive.value(system, &w("text")).unwrap().2, wide("regf\0"));
+        // The longest lengths are what the tree counted: the file's
+        // keys say nothing longer.
+        let info = hive.info(system).unwrap();
+        assert_eq!(
+            (info.max_name_len, info.max_class_len),
+            (10, 6),
+            "Alpha, Gamma; Cls"
+        );
+        assert_eq!(
+            (info.max_value_name_len, info.max_value_data_len),
+            (10, 40000)
+        );
         // Copied again, nothing is added.
         let once = hive.storage();
         assert_eq!(import_file(&mut hive, system, &file), Ok(()));
@@ -224,6 +239,29 @@ mod tests {
         );
         assert_eq!(hive.open(system, &w("existing")), Ok(existing));
         assert_eq!(hive.open(system, &w("Alpha")), Ok(alpha));
+    }
+
+    #[test]
+    fn a_key_remembers_the_longest_lengths_its_file_says_it_held() {
+        let (mut writer, cells) = sample();
+        // Longest subkey name (in a word whose upper half is flags),
+        // subkey class, value name, value data: longer than anything
+        // the key holds now, but for the value data.
+        writer.patch(cells.root, 0x34, 0x00AB_0064);
+        writer.patch(cells.root, 0x38, 200);
+        writer.patch(cells.root, 0x3C, 300);
+        writer.patch(cells.root, 0x40, 5);
+        let (mut hive, system) = tree();
+        assert_eq!(
+            import_file(&mut hive, system, &writer.finish(cells.root)),
+            Ok(())
+        );
+        let info = hive.info(system).unwrap();
+        assert_eq!((info.max_name_len, info.max_class_len), (100, 200));
+        assert_eq!(
+            (info.max_value_name_len, info.max_value_data_len),
+            (300, 40000)
+        );
     }
 
     #[test]

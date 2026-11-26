@@ -1,0 +1,7 @@
+# A filter asked about an exception raised inside itself is not told so:
+# the record lacks EXCEPTION_NESTED_CALL, which Windows sets until the
+# search has passed the frame.
+scenario: x86_64
+fails: oracle.nkc-seh
+file: kernel/ke/seh.rs
+remove:                     flags |= EXCEPTION_NESTED_CALL;

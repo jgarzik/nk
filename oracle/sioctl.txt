@@ -1,5 +1,5 @@
 # Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
-# script sha256 df374c30add8f0b9be59399ec95641e350523760be1ee4de2b41177990ebcb06
+# script sha256 8395a187c67d4a1c80de0ce108ebc1e580aed3e0d761de5b143e314d26057e96
 # driver sioctl.sys sha256 068db52604e5373cc34faa343438cdfb56c1dcf3a222096e3546cd7528bd76ac
 load sioctl: ok
 open dev \Device\SIOCTL: 00000000
@@ -22,6 +22,35 @@ ioctl dos 9c402401 78 0: c000000d - -
 ioctl dos 9c402406 - 16: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 ioctl dos 9c402406 78 0: c000000d - -
 ioctl dos 9c402410 78 16: c0000010 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c40240f 68656c6c6f2066726f6d204e4b00 38: 00000000 38 5468697320537472696e672069732066726f6d20446576696365204472697665722021212100
+ioctl dos 9c40240f 68656c6c6f2066726f6d204e4b00 10: 00000000 10 5468697320537472696e
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 38: 00000000 38 5468697320537472696e672069732066726f6d20446576696365204472697665722021212100
+ioctlat dos 9c40240f @0:14 38: c0000005 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c40240f @1000:14 38: c0000005 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c40240f @ffff800000000000:14 38: c0000005 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @0:38: c0000005 - -
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @1000:38: c0000005 - -
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38: c0000005 - -
+ioctlat dos 9c40240f @ffff800000000000:14 @ffff800000000000:38: c0000005 - -
+ioctl dos 9c40240f - 38: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctl dos 9c40240f 68656c6c6f2066726f6d204e4b00 0: c000000d - -
+ioctlat dos 9c40240f @ffff800000000000:0 38: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c40240f 68656c6c6f2066726f6d204e4b00 @ffff800000000000:0: c000000d - -
+ioctlat dos 9c402408 @0:14 38: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c402408 @1000:14 38: c0000005 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c402408 @ffff800000000000:14 38: c0000005 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c402408 68656c6c6f2066726f6d204e4b00 @0:38: c000000d - -
+ioctlat dos 9c402408 68656c6c6f2066726f6d204e4b00 @1000:38: c0000005 - -
+ioctlat dos 9c402408 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38: c0000005 - -
+ioctlat dos 9c402401 @0:14 38: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c402401 @1000:14 38: c0000005 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c402401 68656c6c6f2066726f6d204e4b00 @0:38: c0000005 - -
+ioctlat dos 9c402401 68656c6c6f2066726f6d204e4b00 @1000:38: c0000005 - -
+ioctlat dos 9c402401 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38: c0000005 - -
+ioctlat dos 9c402406 @0:14 38: c000000d - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+ioctlat dos 9c402406 68656c6c6f2066726f6d204e4b00 @0:38: c0000005 - -
+ioctlat dos 9c402406 68656c6c6f2066726f6d204e4b00 @1000:38: c0000005 - -
+ioctlat dos 9c402406 68656c6c6f2066726f6d204e4b00 @ffff800000000000:38: c0000005 - -
 read dos 16: c0000010 - eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 write dos 616263: c0000010 -
 close alias: 00000000

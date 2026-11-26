@@ -6,8 +6,10 @@
 //! requests return a fixed string (with its NUL) truncated to the output
 //! length; the in-direct request reports the length of the direct buffer.
 //!
-//! `METHOD_NEITHER` is not sent: the driver probes the raw buffers as user
-//! memory inside `__try`, which needs user address space and SEH.
+//! `METHOD_NEITHER` hands the driver the requestor's addresses, which it
+//! probes and locks as user memory inside `__try`: the request is made
+//! as user mode with buffers in the user range, and with addresses
+//! where nothing is, which the driver must survive and report.
 
 use super::resources;
 use crate::io::file::{self, IoError, IoResult};
@@ -43,6 +45,7 @@ fn ioctl(file: u64, code: u32, input: &[u8], output: &mut [u8]) -> Result<IoResu
         IoError::StatusMismatch { .. } => "dispatch status differs from completion status",
         IoError::NoMemory => "out of memory",
         IoError::UnsupportedMethod => "buffer method not supported by the kernel",
+        IoError::Refused(_) => "the I/O manager refused a kernel buffer",
     })
 }
 
@@ -184,6 +187,7 @@ pub static GROUP: Group = Group {
         "sioctl.in-direct",
         "sioctl.bad-requests",
         "sioctl.neither",
+        "sioctl.user-buffers",
         "sioctl.close",
         "sioctl.unload",
         "sioctl.no-leak",
@@ -192,6 +196,105 @@ pub static GROUP: Group = Group {
     run,
     manual: false,
 };
+
+/// `METHOD_NEITHER` on behalf of user mode. With both buffers in user
+/// memory the driver answers as for the other methods. With either at
+/// an address where nothing is mapped, at null, or in the kernel's half,
+/// its probe or its lock raises, its `__except` takes that, and the
+/// request fails with the access violation: nothing stops. A length of
+/// zero is refused before any address is looked at.
+fn neither(file: u64) -> Check {
+    use super::{USER_INPUT, USER_OUTPUT, UserMemory};
+    use crate::io::file::Buffer;
+    let input = UserMemory::new(USER_INPUT, b"hello from NK\0")?;
+    let output = UserMemory::new(USER_OUTPUT, &[FILL; 100])?;
+    let ask = |input: Buffer, output: Buffer| {
+        file::user_control(file, IRP_MJ_DEVICE_CONTROL, NEITHER, input, output)
+            .map_err(|_| "the driver did not complete the request")
+    };
+    let good = ask(input.buffer(), output.buffer())?;
+    expect_reply(good, &output.contents())?;
+    let failed = |status| IoResult {
+        status,
+        information: 0,
+    };
+    for address in [0, 0x1000, 0xFFFF_8000_0000_0000] {
+        let absent = |len| Buffer { address, len };
+        if ask(absent(14), output.buffer())? != failed(STATUS_ACCESS_VIOLATION) {
+            return Err("an input buffer that is not there did not fail with an access violation");
+        }
+        if ask(input.buffer(), absent(38))? != failed(STATUS_ACCESS_VIOLATION) {
+            return Err("an output buffer that is not there did not fail with an access violation");
+        }
+        if ask(absent(0), output.buffer())? != failed(STATUS_INVALID_PARAMETER)
+            || ask(input.buffer(), absent(0))? != failed(STATUS_INVALID_PARAMETER)
+        {
+            return Err("a buffer of no length was not refused as an invalid parameter");
+        }
+    }
+    Ok(())
+}
+
+/// The buffered and direct methods on behalf of user mode: the I/O
+/// manager itself reads and writes the requestor's buffers, and the
+/// driver never sees one that is not there. A buffer at an unmapped
+/// address or in the kernel's half fails the request with the access
+/// violation of the I/O manager's own probe; a null one that it would
+/// copy is no buffer, which this driver refuses as an invalid
+/// parameter. These are what Windows answers (`oracle/sioctl.txt`).
+fn user_buffers(file: u64) -> Check {
+    use super::{USER_INPUT, USER_OUTPUT, UserMemory};
+    use crate::io::file::Buffer;
+    let input = UserMemory::new(USER_INPUT, b"hello from NK\0")?;
+    let output = UserMemory::new(USER_OUTPUT, &[FILL; 100])?;
+    let ask = |code, input: Buffer, output: Buffer| {
+        file::user_control(file, IRP_MJ_DEVICE_CONTROL, code, input, output)
+            .map(|r| r.status)
+            .map_err(|_| "the driver did not complete the request")
+    };
+    for code in [BUFFERED, OUT_DIRECT] {
+        let good = file::user_control(
+            file,
+            IRP_MJ_DEVICE_CONTROL,
+            code,
+            input.buffer(),
+            output.buffer(),
+        )
+        .map_err(|_| "the driver did not complete the request")?;
+        expect_reply(good, &output.contents())?;
+    }
+    let before = output.contents();
+    for code in [BUFFERED, IN_DIRECT, OUT_DIRECT] {
+        for address in [0x1000, 0xFFFF_8000_0000_0000] {
+            let absent = |len| Buffer { address, len };
+            if ask(code, absent(14), output.buffer())? != STATUS_ACCESS_VIOLATION
+                || ask(code, input.buffer(), absent(38))? != STATUS_ACCESS_VIOLATION
+            {
+                return Err("a buffer that is not there did not fail with an access violation");
+            }
+        }
+        let null = Buffer {
+            address: 0,
+            len: 14,
+        };
+        // A null buffer the I/O manager would copy is no buffer; a
+        // direct method's second buffer is locked, and null cannot be.
+        let null_output = if code == BUFFERED {
+            STATUS_INVALID_PARAMETER
+        } else {
+            STATUS_ACCESS_VIOLATION
+        };
+        if ask(code, null, output.buffer())? != STATUS_INVALID_PARAMETER
+            || ask(code, input.buffer(), null)? != null_output
+        {
+            return Err("a null buffer was not treated as Windows treats it");
+        }
+    }
+    if output.contents() != before {
+        return Err("a refused request wrote to the output buffer");
+    }
+    Ok(())
+}
 
 fn run(r: &mut Report, _: &BootInfo) {
     if ldr::boot_file("sioctl.sys").is_none() {
@@ -220,15 +323,17 @@ fn run(r: &mut Report, _: &BootInfo) {
         r.check("sioctl.out-direct", || out_direct(file));
         r.check("sioctl.in-direct", || in_direct(file));
         r.check("sioctl.bad-requests", || bad_requests(file));
-        match file::device_control(file, NEITHER, b"x", &mut [0u8; 8]) {
-            Err(IoError::UnsupportedMethod) => r.skip(
-                "sioctl.neither",
-                format_args!("METHOD_NEITHER needs user memory and SEH"),
-            ),
-            other => r.fail(
-                "sioctl.neither",
-                format_args!("expected the kernel to decline: {other:?}"),
-            ),
+        // Requests made as user mode go by a handle opened for it.
+        match super::open_as_user(DOS_NAME) {
+            Ok(user) => {
+                r.check("sioctl.neither", || neither(user));
+                r.check("sioctl.user-buffers", || user_buffers(user));
+                file::close(user);
+            }
+            Err(_) => {
+                r.fail("sioctl.neither", format_args!("no open for user mode"));
+                r.fail("sioctl.user-buffers", format_args!("no open for user mode"));
+            }
         }
     } else {
         r.fail(

@@ -1,0 +1,7 @@
+# A fault inside the kernel's own copy to or from memory that may not
+# be there is treated like any other, not turned into the copy's error.
+scenario: aarch64
+fails: scenario
+file: kernel/arch/aarch64/trap.rs
+replace:             if let Some(resume) = seh::fixup(frame.elr) {
+with:             if let Some(resume) = seh::fixup(0) {

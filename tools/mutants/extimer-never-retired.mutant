@@ -1,0 +1,6 @@
+# A timer deleted without waiting is never handed to the worker that
+# frees it: its memory is lost and its owner is never told it is gone.
+scenario: x86_64
+fails: ex.timer.delete
+file: kernel/ex/timer.rs
+remove:         work::ExQueueWorkItem(item, DELAYED_WORK_QUEUE);

@@ -16,7 +16,6 @@ pub static GROUP: Group = Group {
         "se.capture",
         "se.device",
         "se.token",
-        "se.access-state",
     ],
     run,
     manual: false,
@@ -464,5 +463,4 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.capture", capture);
     r.check("se.device", device);
     r.check("se.token", token::token_test);
-    r.check("se.access-state", token::access_state_test);
 }

@@ -9,7 +9,7 @@
 //! | --- | --- |
 //! | `*` | zero or more characters |
 //! | `?` | one character |
-//! | `<` (`DOS_STAR`) | zero or more characters, but never the name's last period |
+//! | `<` (`DOS_STAR`) | zero or more characters, the name's last period only as its last |
 //! | `>` (`DOS_QM`) | one character; at a period or at the end of the name, nothing |
 //! | `"` (`DOS_DOT`) | a period; at the end of the name, nothing |
 //!
@@ -17,23 +17,32 @@
 //! empty there is no match, so `*` does not match the empty name; two
 //! empty strings match.
 //!
+//! # As Windows matches
+//!
+//! Windows offers each character of the name to the expression, which
+//! goes on from every place it has reached for as long as a wildcard
+//! there may match nothing. Two things follow that the wording above
+//! does not say, and Windows 10 answers accordingly (the conformance
+//! driver `nkc-rtl` asks it):
+//!
+//! - `<` takes the name's last period too, but then it is done: `a<c`
+//!   matches `a.c`, `<` does not match `a.b`;
+//! - an expression that runs out while a character is on offer has
+//!   taken that character: `>` matches `.`, although at a period `>`
+//!   matches nothing, and `a<` matches `a.`.
+//!
 //! # INFERRED
 //!
-//! The table above is the documentation's wording made exact. Where the
-//! wording leaves a choice, this is NK's reading, to be checked against
-//! Windows:
+//! NK's reading where Windows was not asked:
 //!
-//! - `>` never consumes a period: at one it only steps aside;
-//! - `"` in the middle of a name matches a period and nothing else;
-//! - `<` consumes any character after the last period, and every
-//!   character of a name without one;
-//! - with `ignore_case` only the name is upper-cased, by the system
-//!   table; an expression with a lower-case letter then matches nothing
-//!   that letter stands against.
+//! - without regard to case only the name is upper-cased, by the
+//!   system's table or the caller's; an expression with a lower-case
+//!   letter then matches nothing that letter stands against;
+//! - the name's last period is found before its units are upper-cased;
+//!   whether a unit is a period for `>` and `"` is asked of the
+//!   upper-cased unit.
 
-use crate::upcase::upcase_char;
-use alloc::collections::TryReserveError;
-use alloc::vec::Vec;
+use crate::Text;
 
 const STAR: u16 = b'*' as u16;
 const QUESTION: u16 = b'?' as u16;
@@ -42,82 +51,118 @@ const DOS_QM: u16 = b'>' as u16;
 const DOS_DOT: u16 = b'"' as u16;
 const PERIOD: u16 = b'.' as u16;
 
-/// Whether `name` matches `expression`. With `ignore_case` the name is
-/// compared in upper case and the expression must already be.
+/// Units in the longest expression: the longest counted string.
+pub const MAX_EXPRESSION: usize = 0x7FFF;
+
+/// One bit for each place in an expression, its end included.
+struct Reached([u64; MAX_EXPRESSION / 64 + 1]);
+
+impl Reached {
+    fn get(&self, at: usize) -> bool {
+        self.0[at / 64] >> (at % 64) & 1 != 0
+    }
+    fn set(&mut self, at: usize, reached: bool) {
+        let bit = 1 << (at % 64);
+        if reached {
+            self.0[at / 64] |= bit;
+        } else {
+            self.0[at / 64] &= !bit;
+        }
+    }
+}
+
+/// Offer one character of the name, `c`, or its end (`None`), to every
+/// place the expression has reached. `reached.get(i)` says the first
+/// `i` expression characters have matched the name so far.
+fn offer(
+    expression: &(impl Text + ?Sized),
+    reached: &mut Reached,
+    c: Option<u16>,
+    last_period: bool,
+) {
+    let end = expression.length();
+    // `taken`: the expression character before this place took `c`.
+    // `passed`: it matched nothing, and `c` is on offer here too.
+    let (mut taken, mut passed) = (false, false);
+    for i in 0..end {
+        let (stays, takes, passes) = if reached.get(i) || passed {
+            match (expression.unit(i), c) {
+                (STAR, _) => (true, true, true),
+                // The last period is the last character it takes.
+                (DOS_STAR, _) => (!last_period, true, true),
+                (DOS_QM, None | Some(PERIOD)) | (DOS_DOT, None) => (false, false, true),
+                (_, None) => (false, false, false),
+                (QUESTION | DOS_QM, Some(_)) | (DOS_DOT, Some(PERIOD)) => (false, true, false),
+                (literal, Some(c)) => (false, literal == c, false),
+            }
+        } else {
+            (false, false, false)
+        };
+        reached.set(i, stays || taken);
+        (taken, passed) = (takes, passes);
+    }
+    // An expression that runs out with `c` on offer has taken it.
+    reached.set(end, taken || passed);
+}
+
+/// Whether `name` matches `expression`. Each unit of the name is
+/// compared as `fold` gives it: the identity for a match that regards
+/// case, an upper-case table for one that does not, and then the
+/// expression must be in upper case already.
 ///
 /// The expression is run as a state machine over the name, one state
 /// per expression character: time is bounded by the product of the two
-/// lengths and memory by the expression's, whatever the pattern. The
-/// error is the allocator refusing that memory, for which Windows
-/// raises `STATUS_NO_MEMORY`.
+/// lengths, whatever the pattern, and memory by four kilobytes of the
+/// caller's stack. Nothing is allocated, so the match cannot fail,
+/// where Windows raises `STATUS_NO_MEMORY`. None if the expression is
+/// longer than a counted string can be.
 pub fn is_name_in_expression(
-    expression: &[u16],
-    name: &[u16],
-    ignore_case: bool,
-) -> Result<bool, TryReserveError> {
-    if expression.is_empty() || name.is_empty() {
-        return Ok(expression.is_empty() && name.is_empty());
+    expression: &(impl Text + ?Sized),
+    name: &(impl Text + ?Sized),
+    fold: impl Fn(u16) -> u16,
+) -> Option<bool> {
+    let (end, length) = (expression.length(), name.length());
+    if end > MAX_EXPRESSION {
+        return None;
     }
-    let last_period = name.iter().rposition(|&c| c == PERIOD);
-    let end = expression.len();
-    // `reached[i]`: the first `i` expression characters can match the
-    // name read so far.
-    let mut reached = Vec::new();
-    reached.try_reserve_exact(end + 1)?;
-    reached.resize(end + 1, false);
-    reached[0] = true;
-    for at in 0..=name.len() {
-        let c = name
-            .get(at)
-            .map(|&c| if ignore_case { upcase_char(c) } else { c });
-        // What an expression character may match without consuming.
-        for i in 0..end {
-            let nothing = match expression[i] {
-                STAR | DOS_STAR => true,
-                DOS_QM => c.is_none() || c == Some(PERIOD),
-                DOS_DOT => c.is_none(),
-                _ => false,
-            };
-            if reached[i] && nothing {
-                reached[i + 1] = true;
-            }
-        }
-        let Some(c) = c else { break };
-        // Consume `c`. Downwards, so that each state is read before it
-        // is written.
-        for i in (0..=end).rev() {
-            let stays = i < end
-                && reached[i]
-                && match expression[i] {
-                    STAR => true,
-                    DOS_STAR => Some(at) != last_period,
-                    _ => false,
-                };
-            let steps = i > 0
-                && reached[i - 1]
-                && match expression[i - 1] {
-                    STAR | DOS_STAR => false,
-                    QUESTION => true,
-                    DOS_QM => c != PERIOD,
-                    DOS_DOT => c == PERIOD,
-                    literal => literal == c,
-                };
-            reached[i] = stays || steps;
-        }
+    if end == 0 || length == 0 {
+        return Some(end == 0 && length == 0);
     }
-    Ok(reached[end])
+    let last_period = (0..length).rev().find(|&at| name.unit(at) == PERIOD);
+    let mut reached = Reached([0; MAX_EXPRESSION / 64 + 1]);
+    reached.set(0, true);
+    for at in 0..length {
+        let c = fold(name.unit(at));
+        offer(expression, &mut reached, Some(c), Some(at) == last_period);
+    }
+    // The end of the name: what is left of the expression must match
+    // nothing.
+    if !reached.get(end) {
+        offer(expression, &mut reached, None, false);
+    }
+    Some(reached.get(end))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::upcase::upcase_char;
 
     fn w(s: &str) -> Vec<u16> {
         s.encode_utf16().collect()
     }
 
+    fn fold(ignore_case: bool) -> fn(u16) -> u16 {
+        if ignore_case { upcase_char } else { |c| c }
+    }
+
     fn matches(expression: &str, name: &str, ignore_case: bool) -> bool {
-        is_name_in_expression(&w(expression), &w(name), ignore_case).unwrap()
+        is_name_in_expression(
+            w(expression).as_slice(),
+            w(name).as_slice(),
+            fold(ignore_case),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -166,13 +211,19 @@ mod tests {
             ("<\"", "foo.txt", false),
             ("<\"*", "foo.txt", true),
             ("<.", "a.", true),
-            ("a<", "a.", false),
+            ("a<", "a.", true),
+            ("a<c", "a.c", true),
+            ("a<", "a.b", false),
             // After the last period it is a `*` again.
             (".<", ".abc", true),
             ("<.<", "a.b", true),
             // `>`: one character, or nothing at a period or the end.
             (">", "a", true),
-            (">", ".", false),
+            // The expression runs out on the period, and so takes it.
+            (">", ".", true),
+            ("a>", "a.", true),
+            (">", "..", false),
+            (">a", ".", false),
             (">>>", "ab", true),
             (">>>", "abcd", false),
             ("a>.txt", "a.txt", true),
@@ -214,23 +265,35 @@ mod tests {
     }
 
     /// The same rules by trying every way to match: exponential.
+    /// Whether `expression` matches the name from `at` on.
     fn slow(expression: &[u16], name: &[u16], at: usize) -> bool {
         let Some((&e, rest)) = expression.split_first() else {
             return at == name.len();
         };
-        let c = name.get(at).copied();
+        let Some(&c) = name.get(at) else {
+            // The name has ended: only what may match nothing is left.
+            return matches!(e, STAR | DOS_STAR | DOS_QM | DOS_DOT) && slow(rest, name, at);
+        };
         let last_period = name.iter().rposition(|&c| c == PERIOD);
-        match e {
-            STAR => slow(rest, name, at) || (c.is_some() && slow(expression, name, at + 1)),
-            DOS_STAR => {
+        // The rest of the expression, offered `c` as well: if there is
+        // no rest, `c` is taken.
+        let passed = || {
+            if rest.is_empty() {
+                at + 1 == name.len()
+            } else {
                 slow(rest, name, at)
-                    || (c.is_some() && Some(at) != last_period && slow(expression, name, at + 1))
             }
-            DOS_QM if c.is_none() || c == Some(PERIOD) => slow(rest, name, at),
-            DOS_DOT if c.is_none() => slow(rest, name, at),
-            DOS_DOT => c == Some(PERIOD) && slow(rest, name, at + 1),
-            QUESTION | DOS_QM => c.is_some() && slow(rest, name, at + 1),
-            literal => c == Some(literal) && slow(rest, name, at + 1),
+        };
+        let taken = || slow(rest, name, at + 1);
+        match e {
+            STAR => slow(expression, name, at + 1) || taken() || passed(),
+            DOS_STAR => {
+                (Some(at) != last_period && slow(expression, name, at + 1)) || taken() || passed()
+            }
+            DOS_QM if c == PERIOD => passed(),
+            QUESTION | DOS_QM => taken(),
+            DOS_DOT if c == PERIOD => taken(),
+            literal => c == literal && taken(),
         }
     }
 
@@ -264,7 +327,9 @@ mod tests {
                 } else {
                     slow(expression, name, 0)
                 };
-                let got = is_name_in_expression(expression, name, false).unwrap();
+                let got =
+                    is_name_in_expression(expression.as_slice(), name.as_slice(), fold(false))
+                        .unwrap();
                 assert_eq!(got, expected, "{expression:?} against {name:?}");
                 matched += usize::from(got);
             }
@@ -283,13 +348,157 @@ mod tests {
             let mut expression: Vec<u16> = w(wildcard).repeat(3000 / wildcard.len());
             expression.push(u16::from(b'b'));
             assert_eq!(
-                is_name_in_expression(&expression, &name, true),
-                Ok(false),
+                is_name_in_expression(expression.as_slice(), name.as_slice(), fold(true)),
+                Some(false),
                 "{wildcard}"
             );
         }
         // And one that does match, the long way round.
         let expression = w("*a").repeat(3000);
-        assert_eq!(is_name_in_expression(&expression, &name, false), Ok(true));
+        assert_eq!(
+            is_name_in_expression(expression.as_slice(), name.as_slice(), fold(false)),
+            Some(true)
+        );
+    }
+
+    /// Every line of the conformance driver `nkc-rtl`'s table: the
+    /// expression, the name, whether case is disregarded, and what
+    /// Windows 10 answers.
+    #[test]
+    fn the_conformance_drivers_expressions() {
+        for (expression, name, ignore_case, expected) in [
+            ("*", "anything", false, true),
+            ("*", "", false, false),
+            ("", "", false, true),
+            ("", "a", false, false),
+            ("abc", "abc", false, true),
+            ("abc", "ABC", false, false),
+            ("ABC", "abc", true, true),
+            ("abc", "ABC", true, false),
+            ("abc", "abcd", false, false),
+            ("abcd", "abc", false, false),
+            ("*abc", "xxabc", false, true),
+            ("*abc", "xxabd", false, false),
+            ("*abc", "abc", false, true),
+            ("*abcd", "bcd", false, false),
+            ("*ABC", "xxabc", true, true),
+            ("*.txt", "file.txt", false, true),
+            ("*.txt", "file.txt.bak", false, false),
+            ("*.TXT", "file.txt", true, true),
+            ("*.TXT", "file.txt", false, false),
+            ("a*", "a", false, true),
+            ("a*", "abc", false, true),
+            ("a*", "ba", false, false),
+            ("a*c", "ac", false, true),
+            ("a*c", "abcbc", false, true),
+            ("a*c", "abcb", false, false),
+            ("*a*", "xax", false, true),
+            ("*a*", "xxx", false, false),
+            ("**", "x", false, true),
+            ("a*b*c", "aXbYc", false, true),
+            ("a*b*c", "acb", false, false),
+            ("*a*a*a", "aaa", false, true),
+            ("*a*a*a*a", "aaa", false, false),
+            ("*.", "file.", false, true),
+            ("*.", "file", false, false),
+            ("*.*", "file", false, false),
+            ("*.*", "file.txt", false, true),
+            ("*.*", ".", false, true),
+            ("a?c", "abc", false, true),
+            ("a?c", "ac", false, false),
+            ("a?c", "abbc", false, false),
+            ("a?c", "a.c", false, true),
+            ("???", "ab", false, false),
+            ("???", "abc", false, true),
+            ("?", "", false, false),
+            ("a?", "a", false, false),
+            ("?*", "a", false, true),
+            ("<", "abc", false, true),
+            ("<", "a.b", false, false),
+            ("<.txt", "file.txt", false, true),
+            ("<.txt", "a.b.txt", false, true),
+            ("<.txt", "file.txt.bak", false, false),
+            ("<.b", "a.b.c", false, false),
+            ("a<", "a.b", false, false),
+            ("a<c", "a.c", false, true),
+            ("a<c", "abc", false, true),
+            ("<\"*", "file", false, true),
+            ("<\"*", "file.txt", false, true),
+            ("<\"*", "a.b.c", false, true),
+            ("<\"", "file.", false, true),
+            ("a>", "a", false, true),
+            ("a>", "ab", false, true),
+            ("a>", "abc", false, false),
+            ("a>>", "a", false, true),
+            ("a>c", "ac", false, false),
+            ("a>c", "abc", false, true),
+            ("a>.c", "a.c", false, true),
+            (">>>.txt", "ab.txt", false, true),
+            (">>>.txt", "abcd.txt", false, false),
+            (">", ".", false, true),
+            (">>>>>>>>\">>>", "abc.de", false, true),
+            (">>>>>>>>\">>>", "abc", false, true),
+            (">>>>>>>>\">>>", "abcdefghi.x", false, false),
+            (">>>>>>>>\">>>", "abc.defg", false, false),
+            ("a\"b", "a.b", false, true),
+            ("a\"b", "axb", false, false),
+            ("a\"b", "ab", false, false),
+            ("a\"", "a", false, true),
+            ("a\"", "a.", false, true),
+            ("a\"", "ab", false, false),
+            ("\"", ".", false, true),
+            ("file\"*", "file", false, true),
+            ("file\"*", "file.c", false, true),
+            ("file\"*", "filex", false, false),
+            ("A?C*", "abcdef", true, true),
+            ("A?C*", "abcdef", false, false),
+            ("<.TXT", "File.Txt", true, true),
+            ("\u{C9}*", "\u{E9}x", true, true),
+            ("\u{C9}*", "\u{E9}x", false, false),
+            ("\u{391}?", "\u{3B1}\u{3B2}", true, true),
+        ] {
+            assert_eq!(
+                matches(expression, name, ignore_case),
+                expected,
+                "{expression:?} against {name:?}, case disregarded: {ignore_case}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_name_is_compared_through_the_callers_table() {
+        let through = |expression: &str, name: &str, fold: fn(u16) -> u16| {
+            is_name_in_expression(w(expression).as_slice(), w(name).as_slice(), fold)
+        };
+        // A table that makes every character `X`.
+        assert_eq!(through("X?X", "abc", |_| 0x58), Some(true));
+        assert_eq!(through("abc", "abc", |_| 0x58), Some(false));
+        // The name's last period is where it was before the table.
+        // `<` takes nothing after the second unit, though it reads as
+        // `X`.
+        assert_eq!(through("<X", "a.bc", |_| 0x58), Some(false));
+        assert_eq!(through("<XX", "a.bc", |_| 0x58), Some(true));
+        assert_eq!(through("<X", "abbc", |_| 0x58), Some(true));
+    }
+
+    #[test]
+    fn the_longest_expression_is_matched_and_a_longer_one_refused() {
+        let star = vec![STAR; MAX_EXPRESSION];
+        let name = w("a");
+        assert_eq!(
+            is_name_in_expression(star.as_slice(), name.as_slice(), fold(false)),
+            Some(true)
+        );
+        let mut literal = vec![STAR; MAX_EXPRESSION - 1];
+        literal.push(0x62);
+        assert_eq!(
+            is_name_in_expression(literal.as_slice(), name.as_slice(), fold(false)),
+            Some(false)
+        );
+        let longer = vec![STAR; MAX_EXPRESSION + 1];
+        assert_eq!(
+            is_name_in_expression(longer.as_slice(), name.as_slice(), fold(false)),
+            None
+        );
     }
 }

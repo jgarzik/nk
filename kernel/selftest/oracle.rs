@@ -5,9 +5,18 @@
 //! same script runs against the same driver binary on NK, and each line NK
 //! produces must be the line Windows produced. `oracle/README.md` defines
 //! the formats.
+//!
+//! On Windows the requests are system services made by a user-mode
+//! program. Here each is made as one ([`system_service`]): an exception
+//! that nothing handles while it is served stops the system as it does
+//! there. And each is made on behalf of user mode, with its buffers in
+//! the user range ([`UserMemory`]) or, for `ioctlat`, wherever the
+//! script says.
 
-use crate::io::file::{self, IoResult, Kind, OpenRequest};
+use super::{USER_INPUT, USER_OUTPUT, UserMemory};
+use crate::io::file::{self, Buffer, IoResult, Kind, OpenRequest};
 use crate::io::service::{self, ServiceError};
+use crate::ke::seh::system_service;
 use crate::ldr;
 use crate::test::{Group, Report};
 use alloc::format;
@@ -15,8 +24,11 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{FILE_OPEN, KERNEL_MODE, NAMED_PIPE_CREATE_PARAMETERS};
-use nk_oracle::{Checker, Dump, FILL, Mismatch, Outcome, Step};
+use nk_ntabi::io::{
+    FILE_OPEN, IRP_MJ_DEVICE_CONTROL, IRP_MJ_FILE_SYSTEM_CONTROL, IRP_MJ_READ, IRP_MJ_WRITE,
+    MAILSLOT_CREATE_PARAMETERS, NAMED_PIPE_CREATE_PARAMETERS, USER_MODE,
+};
+use nk_oracle::{Checker, Dump, FILL, Input, Mismatch, Outcome, Output, Step};
 
 /// What a script has open and loaded while it runs.
 struct Replay<'a> {
@@ -113,15 +125,12 @@ impl<'a> Replay<'a> {
             Step::Use { service } => self.use_service(service).into(),
             Step::Unload { service } => self.unload(service).into(),
             Step::Install { file } => Self::install(file).into(),
-            Step::IoctlAt { .. } => {
-                return Err("not yet supported on NK".into());
-            }
             Step::Open { handle, path, args } => {
                 let root = match args.root {
                     Some(root) => Some(self.file(root)?),
                     None => None,
                 };
-                let opened = file::open(&OpenRequest {
+                let request = OpenRequest {
                     name: path,
                     root,
                     desired_access: args.access,
@@ -129,8 +138,9 @@ impl<'a> Replay<'a> {
                     create_options: args.options,
                     disposition: FILE_OPEN,
                     kind: Kind::File,
-                    requestor_mode: KERNEL_MODE,
-                });
+                    requestor_mode: USER_MODE,
+                };
+                let opened = system_service(|| file::open(&request));
                 match opened {
                     Ok((file, _)) => {
                         self.files.push((handle, file));
@@ -140,7 +150,7 @@ impl<'a> Replay<'a> {
                 }
             }
             Step::Pipe { handle, path, args } => {
-                let opened = file::open(&OpenRequest {
+                let request = OpenRequest {
                     name: path,
                     root: None,
                     desired_access: args.access,
@@ -158,8 +168,45 @@ impl<'a> Replay<'a> {
                         DefaultTimeout: -10_000 * i64::from(args.timeout),
                         TimeoutSpecified: 1,
                     }),
-                    requestor_mode: KERNEL_MODE,
-                });
+                    requestor_mode: USER_MODE,
+                };
+                let opened = system_service(|| file::open(&request));
+                let (status, information) = match opened {
+                    Ok((file, information)) => {
+                        self.files.push((handle, file));
+                        (0, information)
+                    }
+                    Err(status) => (status as u32, 0),
+                };
+                format!(
+                    "{}",
+                    Outcome {
+                        status,
+                        information
+                    }
+                )
+            }
+            Step::Mailslot { handle, path, args } => {
+                let request = OpenRequest {
+                    name: path,
+                    root: None,
+                    desired_access: args.access,
+                    // What `NtCreateMailslotFile` asks of the I/O
+                    // manager whatever its caller says: shared for
+                    // reading and writing (3), and only if the name is
+                    // free (2, `FILE_CREATE`).
+                    share_access: 3,
+                    create_options: args.options,
+                    disposition: 2,
+                    kind: Kind::Mailslot(MAILSLOT_CREATE_PARAMETERS {
+                        MailslotQuota: args.quota,
+                        MaximumMessageSize: args.maxmessage,
+                        ReadTimeout: args.timeout.unwrap_or(0),
+                        TimeoutSpecified: u8::from(args.timeout.is_some()),
+                    }),
+                    requestor_mode: USER_MODE,
+                };
+                let opened = system_service(|| file::open(&request));
                 let (status, information) = match opened {
                     Ok((file, information)) => {
                         self.files.push((handle, file));
@@ -178,43 +225,95 @@ impl<'a> Replay<'a> {
             Step::Close { handle } => {
                 let file = self.file(handle)?;
                 self.files.retain(|(h, _)| *h != handle);
-                format!("{:08x}", file::close(file) as u32)
+                format!("{:08x}", system_service(|| file::close(file)) as u32)
             }
             Step::Ioctl {
                 handle,
                 code,
                 input,
                 output_len,
-            } => {
-                let input: Vec<u8> = input.bytes().collect();
-                let mut output = vec![FILL; output_len];
-                let r = file::device_control(self.file(handle)?, code, &input, &mut output)
-                    .map_err(|e| format!("{e:?}"))?;
-                format!("{} {}", outcome(r), Dump(&output))
-            }
+            } => self.control(
+                handle,
+                IRP_MJ_DEVICE_CONTROL,
+                code,
+                Input::Bytes(input),
+                Output::Len(output_len),
+            )?,
+            Step::IoctlAt {
+                handle,
+                code,
+                input,
+                output,
+            } => self.control(handle, IRP_MJ_DEVICE_CONTROL, code, input, output)?,
             Step::Fsctl {
                 handle,
                 code,
                 input,
                 output_len,
-            } => {
-                let input: Vec<u8> = input.bytes().collect();
-                let mut output = vec![FILL; output_len];
-                let r = file::fs_control(self.file(handle)?, code, &input, &mut output)
-                    .map_err(|e| format!("{e:?}"))?;
-                format!("{} {}", outcome(r), Dump(&output))
-            }
+            } => self.control(
+                handle,
+                IRP_MJ_FILE_SYSTEM_CONTROL,
+                code,
+                Input::Bytes(input),
+                Output::Len(output_len),
+            )?,
             Step::Read { handle, len } => {
-                let mut buffer = vec![FILL; len];
-                let r =
-                    file::read(self.file(handle)?, &mut buffer).map_err(|e| format!("{e:?}"))?;
-                format!("{} {}", outcome(r), Dump(&buffer))
+                let file = self.file(handle)?;
+                let buffer = UserMemory::new(USER_OUTPUT, &vec![FILL; len])?;
+                let r = system_service(|| file::user_transfer(file, IRP_MJ_READ, buffer.buffer()))
+                    .map_err(|e| format!("{e:?}"))?;
+                format!("{} {}", outcome(r), Dump(&buffer.contents()))
             }
             Step::Write { handle, data } => {
+                let file = self.file(handle)?;
                 let data: Vec<u8> = data.bytes().collect();
-                let r = file::write(self.file(handle)?, &data).map_err(|e| format!("{e:?}"))?;
+                let buffer = UserMemory::new(USER_INPUT, &data)?;
+                let r = system_service(|| file::user_transfer(file, IRP_MJ_WRITE, buffer.buffer()))
+                    .map_err(|e| format!("{e:?}"))?;
                 format!("{}", outcome(r))
             }
+        })
+    }
+
+    /// A control request. A buffer the script gives as bytes or as a
+    /// length is the replayer's own, in the user range; one it gives as
+    /// an address is that address, whatever is or is not there. The
+    /// text shows the replayer's output buffer, or `-` for one that is
+    /// not its to show.
+    fn control(
+        &self,
+        handle: &str,
+        major: u8,
+        code: u32,
+        input: Input<'_>,
+        output: Output<'_>,
+    ) -> Result<String, String> {
+        let file = self.file(handle)?;
+        let at = |at: nk_oracle::At<'_>| Buffer {
+            address: at.address as usize,
+            len: at.len,
+        };
+        let (input, own_input) = match input {
+            Input::Bytes(bytes) => {
+                let bytes: Vec<u8> = bytes.bytes().collect();
+                let memory = UserMemory::new(USER_INPUT, &bytes)?;
+                (memory.buffer(), Some(memory))
+            }
+            Input::At(address) => (at(address), None),
+        };
+        let (output, own_output) = match output {
+            Output::Len(len) => {
+                let memory = UserMemory::new(USER_OUTPUT, &vec![FILL; len])?;
+                (memory.buffer(), Some(memory))
+            }
+            Output::At(address) => (at(address), None),
+        };
+        let r = system_service(|| file::user_control(file, major, code, input, output))
+            .map_err(|e| format!("{e:?}"))?;
+        drop(own_input);
+        Ok(match own_output {
+            Some(memory) => format!("{} {}", outcome(r), Dump(&memory.contents())),
+            None => format!("{} -", outcome(r)),
         })
     }
 
@@ -301,10 +400,20 @@ pub static GROUP: Group = Group {
         "oracle.nkc-work",
         "oracle.nkc-se",
         "oracle.nkc-reg",
+        "oracle.nkc-rtl",
+        "oracle.nkc-rtl-tables",
         "oracle.cancel",
         "oracle.nkc-lib",
         "oracle.nkc-lib-twice",
         "oracle.nkc-libbad",
+        "oracle.nkc-seh",
+        "oracle.nkc-cross",
+        "oracle.nkc-ob",
+        "oracle.nkc-etw",
+        "oracle.npfs",
+        "oracle.msfs",
+        "oracle.nkc-ex",
+        "oracle.nkc-ps",
     ],
     run,
     manual: false,
@@ -404,6 +513,20 @@ fn run(r: &mut Report, _: &BootInfo) {
     );
     check(
         r,
+        "oracle.nkc-rtl",
+        "nkc-rtl.sys",
+        include_str!("../../oracle/nkc-rtl.script"),
+        include_str!("../../oracle/nkc-rtl.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-rtl-tables",
+        "nkc-rtl.sys",
+        include_str!("../../oracle/nkc-rtl-tables.script"),
+        include_str!("../../oracle/nkc-rtl-tables.txt"),
+    );
+    check(
+        r,
         "oracle.cancel",
         "cancel.sys",
         include_str!("../../oracle/cancel.script"),
@@ -429,6 +552,112 @@ fn run(r: &mut Report, _: &BootInfo) {
         "nkc-libbad.sys",
         include_str!("../../oracle/nkc-libbad.script"),
         include_str!("../../oracle/nkc-libbad.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-seh",
+        "nkc-seh.sys",
+        include_str!("../../oracle/nkc-seh.script"),
+        include_str!("../../oracle/nkc-seh.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-cross",
+        "nkc-cross.sys",
+        include_str!("../../oracle/nkc-cross.script"),
+        include_str!("../../oracle/nkc-cross.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-ob",
+        "nkc-ob.sys",
+        include_str!("../../oracle/nkc-ob.script"),
+        include_str!("../../oracle/nkc-ob.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-etw",
+        "nkc-etw.sys",
+        include_str!("../../oracle/nkc-etw.script"),
+        include_str!("../../oracle/nkc-etw.txt"),
+    );
+    check(
+        r,
+        "oracle.npfs",
+        "npfs.sys",
+        include_str!("../../oracle/npfs.script"),
+        include_str!("../../oracle/npfs.txt"),
+    );
+    check(
+        r,
+        "oracle.msfs",
+        "msfs.sys",
+        include_str!("../../oracle/msfs.script"),
+        include_str!("../../oracle/msfs.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-ex",
+        "nkc-ex.sys",
+        include_str!("../../oracle/nkc-ex.script"),
+        include_str!("../../oracle/nkc-ex.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-ps",
+        "nkc-ps.sys",
+        include_str!("../../oracle/nkc-ps.script"),
+        include_str!("../../oracle/nkc-ps.txt"),
+    );
+}
+
+/// The conformance driver `nkc-seh-fatal`: each script makes one request
+/// that Windows answers with a bugcheck, for an exception nothing
+/// handles or a fault that is none. Each is run alone: it ends the
+/// boot, and the boot's scenario names the bugcheck.
+macro_rules! fatal {
+    ($group:ident, $run:ident, $name:literal) => {
+        pub static $group: Group = Group {
+            names: &[concat!("oracle.nkc-seh-fatal-", $name)],
+            run: $run,
+            manual: true,
+        };
+
+        fn $run(r: &mut Report, _: &BootInfo) {
+            check(
+                r,
+                concat!("oracle.nkc-seh-fatal-", $name),
+                "nkc-seh-fatal.sys",
+                include_str!(concat!("../../oracle/nkc-seh-fatal-", $name, ".script")),
+                include_str!(concat!("../../oracle/nkc-seh-fatal-", $name, ".txt")),
+            );
+        }
+    };
+}
+
+fatal!(FATAL_DISPATCH, fatal_dispatch, "dispatch");
+fatal!(FATAL_WORK, fatal_work, "work");
+fatal!(FATAL_DPC, fatal_dpc, "dpc");
+fatal!(FATAL_KERNEL_READ, fatal_kernel_read, "kernel-read");
+fatal!(FATAL_THREAD, fatal_thread, "thread");
+
+/// The conformance drivers `nkc-cross` and `nkc-cross-b`: a DPC routine
+/// raises while the thread that queued it is inside a `__try`, which is
+/// not offered the exception; Windows stops. Run alone: it ends the
+/// boot.
+pub static CROSS_DPC: Group = Group {
+    names: &["oracle.nkc-cross-dpc"],
+    run: cross_dpc,
+    manual: true,
+};
+
+fn cross_dpc(r: &mut Report, _: &BootInfo) {
+    check(
+        r,
+        "oracle.nkc-cross-dpc",
+        "nkc-cross.sys",
+        include_str!("../../oracle/nkc-cross-dpc.script"),
+        include_str!("../../oracle/nkc-cross-dpc.txt"),
     );
 }
 

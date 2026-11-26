@@ -18,6 +18,8 @@ pub static GROUP: Group = Group {
         "wait.all",
         "wait.many-blocking",
         "wait.all-race",
+        "wait.alert",
+        "wait.alert-race",
     ],
     run,
     manual: false,
@@ -66,6 +68,13 @@ fn run(r: &mut Report, _: &BootInfo) {
         "wait.all-race",
         "waits for both satisfied:",
         wait::all_race_test(),
+    );
+    counted(r, "wait.alert", "waits:", wait::alert_test());
+    counted(
+        r,
+        "wait.alert-race",
+        "alerts that took:",
+        wait::alert_race_test(),
     );
 }
 

@@ -352,6 +352,11 @@ fn lookup_finds_packed_and_xdata_entries() {
     );
     assert_eq!(img.lookup(0x10FC), Ok(None));
     assert_eq!(img.lookup(0x1100), Ok(Some(b)));
+    assert_eq!(
+        locate(&img.bytes, PDATA, 24, 0x1100),
+        Ok(Some((PDATA + 8, b))),
+        "where the entry itself is"
+    );
     assert_eq!(img.lookup(0x117C), Ok(Some(b)));
     assert_eq!(img.lookup(0x1180), Ok(Some(c)));
     assert_eq!(img.lookup(0x11A0), Ok(None));

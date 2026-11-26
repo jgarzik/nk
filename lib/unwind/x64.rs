@@ -90,18 +90,31 @@ pub fn lookup(
     dir_size: u32,
     rva: u32,
 ) -> Result<Option<RuntimeFunction>, UnwindError> {
+    Ok(locate(image, dir_rva, dir_size, rva)?.map(|(_, f)| f))
+}
+
+/// As [`lookup`], with the RVA of the entry itself: what a language
+/// handler is handed as `DISPATCHER_CONTEXT.FunctionEntry`.
+pub fn locate(
+    image: &[u8],
+    dir_rva: u32,
+    dir_size: u32,
+    rva: u32,
+) -> Result<Option<(u32, RuntimeFunction)>, UnwindError> {
     let Some(index) = last_at_or_below(image, dir_rva, dir_size, ENTRY_SIZE, rva)? else {
         return Ok(None);
     };
+    let mut at = (index * ENTRY_SIZE) as u32 + dir_rva;
     let mut f = entry(image, dir_rva, index)?;
     if rva >= f.end {
         return Ok(None);
     }
     for _ in 0..MAX_CHAIN {
         if f.unwind & 1 == 0 {
-            return Ok(Some(f));
+            return Ok(Some((at, f)));
         }
-        f = entry_at(image, (f.unwind & !1) as usize)?;
+        at = f.unwind & !1;
+        f = entry_at(image, at as usize)?;
     }
     Err(UnwindError::ChainTooDeep)
 }

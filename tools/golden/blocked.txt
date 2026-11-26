@@ -1,4 +1,3 @@
 # Tests that no scenario can run yet, and why. Every other test must have
 # verdict "ok" in at least one golden list (tools/test_scenarios.py), so a
 # test cannot be skipped everywhere without being named here.
-sioctl.neither	METHOD_NEITHER needs structured exception handling (roadmap phase 2)

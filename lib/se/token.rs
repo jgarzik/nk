@@ -15,6 +15,8 @@ pub type Luid = u64;
 
 /// `SYSTEM_LUID`: the logon session of the system itself.
 pub const SYSTEM_LUID: Luid = 0x3E7;
+/// `ANONYMOUS_LOGON_LUID`: the logon session of the anonymous logon.
+pub const ANONYMOUS_LOGON_LUID: Luid = 0x3E6;
 
 /// Group attributes (`SE_GROUP_*`).
 pub const SE_GROUP_MANDATORY: u32 = 0x1;
@@ -64,6 +66,16 @@ pub const SE_TIME_ZONE_PRIVILEGE: Luid = 34;
 pub const SE_CREATE_SYMBOLIC_LINK_PRIVILEGE: Luid = 35;
 pub const SE_DELEGATE_SESSION_USER_IMPERSONATE_PRIVILEGE: Luid = 36;
 
+/// When the tokens Windows makes for itself expire: 1 January 3000,
+/// 01:01:01.001, in 100 ns since 1601. The pinned kernel builds the
+/// System token with these time fields.
+pub const SYSTEM_TOKEN_EXPIRATION: i64 = 0x0620_7526_B64C_EB90;
+
+/// What a token is charged for its dynamic part, the default DACL and
+/// the primary group: their size and no less than this, by the pinned
+/// kernel's code. No token made here needs more.
+pub const DYNAMIC_CHARGE: u32 = 0x1000;
+
 /// `SECURITY_IMPERSONATION_LEVEL`.
 pub const SECURITY_ANONYMOUS: u32 = 0;
 pub const SECURITY_IDENTIFICATION: u32 = 1;
@@ -96,10 +108,14 @@ pub const CREATOR_GROUP: [u8; 12] = known(3, &[1]);
 pub const OWNER_RIGHTS: [u8; 12] = known(3, &[4]);
 /// S-1-5-11.
 pub const AUTHENTICATED_USERS: [u8; 12] = known(5, &[11]);
+/// S-1-5-7, the anonymous logon.
+pub const ANONYMOUS_LOGON: [u8; 12] = known(5, &[7]);
 /// S-1-5-18.
 pub const LOCAL_SYSTEM: [u8; 12] = known(5, &[18]);
 /// S-1-5-32-544.
 pub const ADMINISTRATORS: [u8; 16] = known(5, &[32, 544]);
+/// S-1-16-0, the untrusted integrity level.
+pub const UNTRUSTED_LABEL: [u8; 12] = known(16, &[0]);
 /// S-1-16-16384, the system integrity level.
 pub const SYSTEM_LABEL: [u8; 12] = known(16, &[0x4000]);
 
@@ -123,6 +139,11 @@ pub enum TokenType {
     Primary = 1,
     Impersonation = 2,
 }
+
+/// `STATUS_BAD_IMPERSONATION_LEVEL`: a token cannot be copied to the
+/// type and level asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BadImpersonationLevel;
 
 /// An access token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,8 +175,9 @@ pub struct Token {
     pub expiration_time: i64,
     pub session_id: u32,
     /// `TOKEN_STATISTICS.DynamicCharged` and `DynamicAvailable`: the
-    /// bytes set aside for the default DACL and primary group, and how
-    /// many are free.
+    /// bytes set aside for the default DACL and primary group
+    /// ([`DYNAMIC_CHARGE`]), and how many are free, which Windows
+    /// reports as none.
     pub dynamic_charged: u32,
     pub dynamic_available: u32,
 }
@@ -176,15 +198,15 @@ impl Token {
     /// | System mandatory label S-1-16-16384 with `SE_GROUP_INTEGRITY` and `SE_GROUP_INTEGRITY_ENABLED` | INFERRED |
     /// | The order of the groups: Administrators, Everyone, Authenticated Users, label | INFERRED |
     /// | Default owner Administrators, primary group S-1-5-18 | INFERRED |
-    /// | Default DACL: SYSTEM `GENERIC_ALL`, then Administrators `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL`; revision 2, no spare room | INFERRED |
+    /// | Default DACL: SYSTEM `GENERIC_ALL`, then Administrators `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL`; revision 2, 60 bytes of which 8 are spare | INFERRED |
     /// | The 24 privileges [LocalSystem account] lists, with the enabled state it gives each | CONFIRMED for the LocalSystem logon; INFERRED to be the same in the System process's own token |
     /// | `SeSystemProfilePrivilege`, `SeIncreaseWorkingSetPrivilege`, `SeTimeZonePrivilege`, `SeCreateSymbolicLinkPrivilege`, `SeDelegateSessionUserImpersonatePrivilege` held and enabled; `SeTrustedCredManAccessPrivilege`, `SeRelabelPrivilege` held and disabled | INFERRED |
     /// | Every enabled privilege is also enabled by default; the privileges are ordered by number | INFERRED |
     /// | Authentication id `SYSTEM_LUID` (0x3E7) | CONFIRMED: `SYSTEM_LUID` in `ntifs.h`, [well-known LUIDs] |
     /// | Session 0 | CONFIRMED: [SeQueryInformationToken] ("the console session ... is zero") |
     /// | Primary token; impersonation level stored as `SecurityAnonymous` | INFERRED |
-    /// | Never expires: expiration time `i64::MAX` | INFERRED |
-    /// | `DynamicCharged`, `DynamicAvailable` | unknown: zero until recorded |
+    /// | Expires on 1 January 3000 ([`SYSTEM_TOKEN_EXPIRATION`]) | read from the pinned kernel's code |
+    /// | `DynamicCharged` 0x1000 ([`DYNAMIC_CHARGE`]), `DynamicAvailable` 0 | INFERRED |
     ///
     /// [LocalSystem account]: https://learn.microsoft.com/en-us/windows/win32/services/localsystem-account
     /// [well-known LUIDs]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryauthenticationidtoken
@@ -230,7 +252,9 @@ impl Token {
             attributes,
         };
         // GENERIC_ALL; GENERIC_READ | GENERIC_EXECUTE | READ_CONTROL.
-        let mut dacl = [0u8; ACL_HEADER + 20 + 24];
+        // Windows sizes the list with four bytes more than each entry
+        // takes, as it does the anonymous token's.
+        let mut dacl = [0u8; ACL_HEADER + 20 + 24 + 8];
         dacl[0] = ACL_REVISION;
         dacl[2] = dacl.len() as u8;
         let added = add_access_allowed(&mut dacl, 2, 0x1000_0000, &LOCAL_SYSTEM)
@@ -263,18 +287,69 @@ impl Token {
             token_id: 0,
             authentication_id: SYSTEM_LUID,
             modified_id: 0,
-            expiration_time: i64::MAX,
+            expiration_time: SYSTEM_TOKEN_EXPIRATION,
             session_id: 0,
-            dynamic_charged: 0,
+            dynamic_charged: DYNAMIC_CHARGE,
             dynamic_available: 0,
         }
     }
 
-    /// Whether the token holds `privilege` and it is enabled.
+    /// The token of the anonymous logon, which a thread takes on to act
+    /// as nobody in particular (`NtImpersonateAnonymousToken`). The
+    /// pinned kernel builds two at boot; this is the one it uses unless
+    /// the registry says that everyone includes anonymous
+    /// (`EveryoneIncludesAnonymous`), which NK's does not. As that
+    /// kernel builds it:
+    ///
+    /// - user S-1-5-7, no group but the untrusted mandatory label
+    ///   (S-1-16-0), no privilege;
+    /// - new objects are owned by the user, with S-1-5-7 as their
+    ///   group, and get a list that allows everyone and the anonymous
+    ///   logon `0xF01FF` each, in 56 bytes of which 8 are spare;
+    /// - a primary token, logon session `ANONYMOUS_LOGON_LUID`, session
+    ///   0, expiring when the System token does.
+    pub fn anonymous() -> Token {
+        let mut dacl = [0u8; ACL_HEADER + 20 + 20 + 8];
+        dacl[0] = ACL_REVISION;
+        dacl[2] = dacl.len() as u8;
+        let added = add_access_allowed(&mut dacl, 2, 0x000F_01FF, &WORLD)
+            .and_then(|()| add_access_allowed(&mut dacl, 2, 0x000F_01FF, &ANONYMOUS_LOGON));
+        debug_assert_eq!(added, Ok(()));
+        Token {
+            user: SidAndAttributes {
+                sid: ANONYMOUS_LOGON.to_vec(),
+                attributes: 0,
+            },
+            groups: [SidAndAttributes {
+                sid: UNTRUSTED_LABEL.to_vec(),
+                attributes: SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED,
+            }]
+            .into(),
+            privileges: Vec::new(),
+            owner: ANONYMOUS_LOGON.to_vec(),
+            primary_group: ANONYMOUS_LOGON.to_vec(),
+            default_dacl: Some(dacl.to_vec()),
+            token_type: TokenType::Primary,
+            impersonation_level: SECURITY_ANONYMOUS,
+            token_id: 0,
+            authentication_id: ANONYMOUS_LOGON_LUID,
+            modified_id: 0,
+            expiration_time: SYSTEM_TOKEN_EXPIRATION,
+            session_id: 0,
+            dynamic_charged: DYNAMIC_CHARGE,
+            dynamic_available: 0,
+        }
+    }
+
+    /// Whether the token holds `privilege` and it is enabled. A
+    /// privilege is known by the low six bits of its number, as on
+    /// Windows, which keeps a token's privileges as the bits of a
+    /// 64-bit word and never looks at the rest of the LUID.
     pub fn privilege_enabled(&self, privilege: Luid) -> bool {
+        let number = privilege & 63;
         self.privileges
             .iter()
-            .any(|held| held.luid == privilege && held.attributes & SE_PRIVILEGE_ENABLED != 0)
+            .any(|held| held.luid == number && held.attributes & SE_PRIVILEGE_ENABLED != 0)
     }
 
     /// Whether an access-list entry naming `sid` applies to this token.
@@ -306,6 +381,67 @@ impl Token {
                     && group.attributes & SE_GROUP_OWNER != 0
                     && !deny_only(group.attributes)
             })
+    }
+
+    /// Whether this token may name `sid` the owner of an object: one
+    /// it may own with, or any at all with `SeRestorePrivilege`
+    /// enabled.
+    pub fn valid_owner(&self, sid: &[u8]) -> bool {
+        self.may_own(sid) || self.privilege_enabled(SE_RESTORE_PRIVILEGE)
+    }
+
+    /// The impersonation level a duplicate of this token gets
+    /// (`NtDuplicateToken`): the one asked for, or this token's own
+    /// when none is. A duplicate of an impersonation token cannot
+    /// impersonate at a higher level than it, and cannot be a primary
+    /// token unless it impersonates at `SecurityImpersonation` or
+    /// above.
+    pub fn duplicate_level(
+        &self,
+        new_type: TokenType,
+        requested: Option<u32>,
+    ) -> Result<u32, BadImpersonationLevel> {
+        let level = requested.unwrap_or(self.impersonation_level);
+        if self.token_type == TokenType::Impersonation {
+            let refused = match new_type {
+                TokenType::Impersonation => level > self.impersonation_level,
+                TokenType::Primary => self.impersonation_level < SECURITY_IMPERSONATION,
+            };
+            if refused {
+                return Err(BadImpersonationLevel);
+            }
+        }
+        Ok(level)
+    }
+
+    /// A copy of this token of another type and level. The kernel
+    /// gives it ids of its own.
+    ///
+    /// `effective_only` leaves out what is not in effect, as the pinned
+    /// kernel does: privileges that are not enabled, and groups that
+    /// are neither enabled, nor deny-only, nor the integrity label. A
+    /// group that goes has its place taken by the last one. NK's
+    /// decision: the default owner stays even when it is a group not
+    /// enabled.
+    pub fn duplicate(&self, new_type: TokenType, level: u32, effective_only: bool) -> Token {
+        let mut copy = self.clone();
+        copy.token_type = new_type;
+        copy.impersonation_level = level;
+        if effective_only {
+            copy.privileges
+                .retain(|held| held.attributes & SE_PRIVILEGE_ENABLED != 0);
+            const KEPT: u32 = SE_GROUP_ENABLED | SE_GROUP_USE_FOR_DENY_ONLY | SE_GROUP_INTEGRITY;
+            let mut at = 0;
+            while at < copy.groups.len() {
+                let group = &copy.groups[at];
+                if group.attributes & KEPT != 0 || group.sid == copy.owner {
+                    at += 1;
+                } else {
+                    copy.groups.swap_remove(at);
+                }
+            }
+        }
+        copy
     }
 
     /// The integrity level: the last number of the label's SID
@@ -370,9 +506,16 @@ mod tests {
         assert_eq!(token.token_type, TokenType::Primary);
         assert_eq!(token.impersonation_level, SECURITY_ANONYMOUS);
         assert_eq!((token.authentication_id, token.session_id), (0x3E7, 0));
-        assert_eq!(token.expiration_time, i64::MAX);
+        assert_eq!(token.expiration_time, SYSTEM_TOKEN_EXPIRATION);
         assert_eq!((token.token_id, token.modified_id), (0, 0));
-        assert_eq!((token.dynamic_charged, token.dynamic_available), (0, 0));
+        assert_eq!(
+            (token.dynamic_charged, token.dynamic_available),
+            (0x1000, 0)
+        );
+        // A copy is charged what its source is.
+        let copy = token.duplicate(TokenType::Impersonation, SECURITY_IDENTIFICATION, false);
+        assert_eq!((copy.dynamic_charged, copy.dynamic_available), (0x1000, 0));
+        assert_eq!(Token::anonymous().dynamic_charged, 0x1000);
         assert_eq!(token.integrity_level(), 0x4000);
     }
 
@@ -408,16 +551,107 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_is_the_same_subject_of_another_type() {
+        let system = Token::system();
+        let copy = system.duplicate(TokenType::Impersonation, SECURITY_IDENTIFICATION, false);
+        assert_eq!(copy.token_type, TokenType::Impersonation);
+        assert_eq!(copy.impersonation_level, SECURITY_IDENTIFICATION);
+        let mut back = copy.clone();
+        back.token_type = TokenType::Primary;
+        back.impersonation_level = SECURITY_ANONYMOUS;
+        assert_eq!(back, system, "nothing else changed");
+    }
+
+    #[test]
+    fn an_effective_only_duplicate_holds_what_is_in_effect() {
+        let mut token = Token::system();
+        // A disabled group in the middle, and one that only denies.
+        token.groups[1].attributes = SE_GROUP_MANDATORY;
+        token.groups[2].attributes = SE_GROUP_USE_FOR_DENY_ONLY;
+        let copy = token.duplicate(TokenType::Primary, 0, true);
+        assert!(
+            copy.privileges
+                .iter()
+                .all(|p| p.attributes & SE_PRIVILEGE_ENABLED != 0)
+        );
+        assert_eq!(copy.privileges.len(), 16);
+        // Everyone went; the label, last, took its place.
+        let sids: Vec<&[u8]> = copy.groups.iter().map(|g| &g.sid[..]).collect();
+        assert_eq!(
+            sids,
+            [&ADMINISTRATORS[..], &SYSTEM_LABEL, &AUTHENTICATED_USERS]
+        );
+        assert_eq!(copy.integrity_level(), 0x4000);
+        // The default owner stays though not enabled.
+        token.groups[0].attributes = SE_GROUP_OWNER;
+        let copy = token.duplicate(TokenType::Primary, 0, true);
+        assert_eq!(copy.groups[0].sid, ADMINISTRATORS);
+    }
+
+    #[test]
+    fn the_anonymous_token_is_nobody() {
+        let token = Token::anonymous();
+        assert_eq!(token.user.sid, ANONYMOUS_LOGON);
+        assert_eq!(valid_sid(&ANONYMOUS_LOGON), Some(12));
+        assert_eq!(token.token_type, TokenType::Primary);
+        assert_eq!(token.authentication_id, 0x3E6);
+        assert!(token.privileges.is_empty());
+        // Nobody's groups: not even everyone.
+        assert!(token.has_sid(&ANONYMOUS_LOGON, false));
+        assert!(!token.has_sid(&WORLD, false));
+        assert!(!token.has_sid(&AUTHENTICATED_USERS, false));
+        assert_eq!(token.integrity_level(), 0, "untrusted");
+        assert_eq!(token.groups[0].sid, UNTRUSTED_LABEL);
+        assert!(token.may_own(&ANONYMOUS_LOGON) && !token.may_own(&WORLD));
+        // The default list: two entries in 56 bytes, 48 of them used.
+        let dacl = token.default_dacl.unwrap();
+        assert_eq!(dacl[..8], [2, 0, 56, 0, 2, 0, 0, 0]);
+        assert_eq!(acl_used(&dacl), Some(48));
+    }
+
+    #[test]
+    fn the_level_of_a_duplicate() {
+        let system = Token::system();
+        let (primary, impersonation) = (TokenType::Primary, TokenType::Impersonation);
+        // Of a primary token: whatever is asked; its own level if none.
+        assert_eq!(system.duplicate_level(impersonation, Some(3)), Ok(3));
+        assert_eq!(system.duplicate_level(impersonation, None), Ok(0));
+        assert_eq!(system.duplicate_level(primary, None), Ok(0));
+        // Of an impersonation token: no higher, and primary only from
+        // the impersonation level up.
+        let identifying = system.duplicate(impersonation, SECURITY_IDENTIFICATION, false);
+        assert_eq!(identifying.duplicate_level(impersonation, Some(1)), Ok(1));
+        assert_eq!(identifying.duplicate_level(impersonation, Some(0)), Ok(0));
+        assert_eq!(identifying.duplicate_level(impersonation, None), Ok(1));
+        assert_eq!(
+            identifying.duplicate_level(impersonation, Some(2)),
+            Err(BadImpersonationLevel)
+        );
+        assert_eq!(
+            identifying.duplicate_level(primary, None),
+            Err(BadImpersonationLevel)
+        );
+        let impersonating = system.duplicate(impersonation, SECURITY_IMPERSONATION, false);
+        assert_eq!(impersonating.duplicate_level(primary, Some(0)), Ok(0));
+        assert_eq!(
+            impersonating.duplicate_level(impersonation, Some(3)),
+            Err(BadImpersonationLevel)
+        );
+    }
+
+    #[test]
     fn the_system_token_has_a_default_dacl() {
         let token = Token::system();
         let dacl = token.default_dacl.unwrap();
-        assert_eq!(dacl.len(), 52);
-        assert_eq!(dacl[..8], [2, 0, 52, 0, 2, 0, 0, 0]);
+        // Two entries in 60 bytes, 52 of them used.
+        assert_eq!(dacl.len(), 60);
+        assert_eq!(dacl[..8], [2, 0, 60, 0, 2, 0, 0, 0]);
         assert_eq!(acl_used(&dacl), Some(52));
         assert_eq!(dacl[8..16], [0, 0, 20, 0, 0, 0, 0, 0x10]);
         assert_eq!(dacl[16..28], LOCAL_SYSTEM);
         assert_eq!(dacl[28..36], [0, 0, 24, 0, 0, 0, 0x02, 0xA0]);
-        assert_eq!(dacl[36..], ADMINISTRATORS);
+        assert_eq!(dacl[36..52], ADMINISTRATORS);
+        assert_eq!(dacl[52..], [0; 8]);
     }
 
     #[test]

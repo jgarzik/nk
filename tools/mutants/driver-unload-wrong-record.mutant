@@ -1,0 +1,10 @@
+# An unload removes its own driver's record, wherever in the table it
+# is once the unload routine has returned: not the record at some place
+# it was expected to be (here: the last). io.driver.unload-reentered
+# unloads a driver that is not the last; taking the last frees the
+# image of a driver whose unload routine is still running.
+scenario: x86_64
+fails: scenario
+file: kernel/io/driver.rs
+replace:         let index = listed(&drivers).ok_or("not a loaded driver")?;
+with:         let index = drivers.len() - 1;

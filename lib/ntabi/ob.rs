@@ -203,9 +203,56 @@ pub const fn kernel_handle_index(handle: u64) -> Option<usize> {
     }
 }
 
+/// The handle by which the System process itself names entry `index`
+/// of its table: the kernel handle without the kernel bits. The
+/// kernel's handle table is that process's own, as on Windows, so both
+/// handles name one entry.
+pub const fn process_handle(index: usize) -> u64 {
+    (index as u64 + 1) << 2
+}
+
+/// The table entry `handle` names for a caller in the System process.
+/// A kernel handle is one only for kernel mode: for user mode it is a
+/// number like any other, too large to be an entry. Anything else is a
+/// handle of the process's own. The low two bits are ignored.
+pub const fn handle_index(handle: u64, kernel_mode: bool) -> Option<usize> {
+    if handle & KERNEL_HANDLE == KERNEL_HANDLE {
+        return if kernel_mode {
+            kernel_handle_index(handle)
+        } else {
+            None
+        };
+    }
+    match handle >> 2 {
+        0 => None,
+        n => Some((n - 1) as usize),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_handle_names_the_entry_its_kernel_handle_names() {
+        for index in [0, 1, 2, 1000] {
+            let (kernel, own) = (kernel_handle(index), process_handle(index));
+            assert_eq!(own, kernel & !KERNEL_HANDLE);
+            assert!((own as i64) > 0 && own % 4 == 0);
+            assert_eq!(handle_index(kernel, true), Some(index));
+            assert_eq!(handle_index(own, true), Some(index));
+            assert_eq!(handle_index(own | 3, false), Some(index));
+            assert_eq!(
+                handle_index(kernel, false),
+                None,
+                "no handle at all for user mode"
+            );
+        }
+        assert_eq!(handle_index(0, true), None);
+        assert_eq!(handle_index(3, false), None);
+        // Not sign-extended: a process handle far past any table.
+        assert_eq!(handle_index(0x0000_0000_8000_0004, true), Some(0x2000_0000));
+    }
 
     #[test]
     fn kernel_handles_round_trip() {

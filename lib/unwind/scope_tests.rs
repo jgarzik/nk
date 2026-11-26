@@ -414,3 +414,20 @@ fn frames_are_checked_against_the_stack_and_the_target() {
         FrameCheck::BadStack
     );
 }
+
+#[test]
+fn only_a_user_address_below_dispatch_level_faults_as_an_exception() {
+    assert_eq!(memory_fault(0, false), MemoryFault::Exception);
+    assert_eq!(
+        memory_fault(0x7FFF_FFFF_0000, false),
+        MemoryFault::Exception
+    );
+    assert_eq!(memory_fault(KERNEL_HALF - 1, false), MemoryFault::Exception);
+    assert_eq!(memory_fault(KERNEL_HALF, false), MemoryFault::KernelAddress);
+    assert_eq!(
+        memory_fault(0xFFFF_F780_4E4B_0000, false),
+        MemoryFault::KernelAddress
+    );
+    assert_eq!(memory_fault(0x8000, true), MemoryFault::RaisedIrql);
+    assert_eq!(memory_fault(u64::MAX, true), MemoryFault::RaisedIrql);
+}

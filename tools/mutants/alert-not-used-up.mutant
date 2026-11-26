@@ -1,0 +1,7 @@
+# An alert that ends a wait stays set: every alertable wait the thread
+# makes from then on returns STATUS_ALERTED at once.
+scenario: x86_64
+fails: wait.alert
+file: kernel/ke/wait.rs
+replace:         if alerted(me, mode).swap(0, Ordering::Relaxed) != 0
+with:         if alerted(me, mode).load(Ordering::Relaxed) != 0

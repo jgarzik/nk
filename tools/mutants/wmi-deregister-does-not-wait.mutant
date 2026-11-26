@@ -1,0 +1,7 @@
+# Deregistering a device returns while its registration request is still
+# with the driver, which goes on to delete the device under it.
+scenario: x86_64
+fails: wmi.deregister-waits
+file: lib/etw/wmi.rs
+replace:         if busy {
+with:         if busy && self.made == 0 {

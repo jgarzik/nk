@@ -16,6 +16,7 @@
 
 #![allow(non_snake_case)]
 
+use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{Rank, SpinLock, mutex, wait};
 use crate::mm::{self, PAGE_SIZE, map};
 use crate::{arch, export};
@@ -162,11 +163,6 @@ struct Library {
     /// Its `DllUnload`, if it exports one.
     unload: Option<u64>,
 }
-
-/// What a library exports for the loader to call
-/// ([Creating Export Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/creating-export-drivers)).
-type DllInitialize = unsafe extern "C" fn(*mut UNICODE_STRING) -> NTSTATUS;
-type DllUnload = unsafe extern "C" fn() -> NTSTATUS;
 
 /// What serialises loading and unloading, and the libraries, which
 /// belong to whoever holds it.
@@ -379,6 +375,10 @@ fn library(name: &[u8], depth: usize, held: &mut Vec<u64>) -> Result<Module, Loa
                     module: lossy(name),
                 });
             };
+            // Room to count the importer before the library is loaded:
+            // one loaded and then not counted would have nobody to
+            // unload it.
+            held.try_reserve_exact(1).map_err(|_| LoadError::NoMemory)?;
             load_library(name, file, depth + 1).inspect_err(|error| refused(name, error))?
         }
     };
@@ -408,12 +408,31 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
     let Some(module) = MODULES.lock().named(name.as_bytes()) else {
         unreachable!("an image just loaded is in the table of images");
     };
+    // Its place in the list of libraries, before any of its code runs:
+    // without one it is unloaded as an image that was never initialised.
+    let give_up = |image: &Image| {
+        unload_image(image);
+        with_libraries(Vec::shrink_to_fit);
+    };
+    if with_libraries(|libraries| libraries.try_reserve_exact(1)).is_err() {
+        unload_image(&image);
+        return Err(LoadError::NoMemory);
+    }
     if let Some(initialize) = own_export(&module, b"DllInitialize") {
-        let mut path: Vec<u16> = "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\"
-            .encode_utf16()
-            .chain(String::from_utf8_lossy(module.stem()).encode_utf16())
-            .chain([0])
-            .collect();
+        const SERVICES: &str = "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+        // The file name without its extension, as `Module::stem`.
+        let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        let mut path: Vec<u16> = Vec::new();
+        // No string is longer in UTF-16 units than in UTF-8 bytes.
+        if path
+            .try_reserve_exact(SERVICES.len() + stem.len() + 1)
+            .is_err()
+        {
+            give_up(&image);
+            return Err(LoadError::NoMemory);
+        }
+        path.extend(SERVICES.encode_utf16().chain(stem.encode_utf16()));
+        path.push(0);
         let bytes = (path.len() - 1) * 2;
         let mut registry = UNICODE_STRING {
             Length: bytes as u16,
@@ -422,13 +441,19 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
         };
         // SAFETY: the export of that name of an image just mapped,
         // relocated and bound, which has the signature every library's
-        // `DllInitialize` has; the string outlives the call.
+        // `DllInitialize` has; the string outlives the call. The load
+        // mutex is held, so nothing may be unwound through the call:
+        // an exception the library lets out is unhandled, in the system
+        // thread that loads images.
         let status = unsafe {
-            let initialize: DllInitialize = core::mem::transmute(initialize as usize);
-            initialize(&raw mut registry)
+            seh::call(
+                initialize as usize,
+                [(&raw mut registry).addr(), 0, 0, 0],
+                &Guard::Base(Unhandled::SystemThread),
+            ) as u32 as NTSTATUS
         };
         if !nt_success(status) {
-            unload_image(&image);
+            give_up(&image);
             return Err(LoadError::LibraryFailed {
                 module: name.into(),
                 status,
@@ -436,10 +461,8 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
         }
     }
     let unload = own_export(&module, b"DllUnload");
-    with_libraries(|libraries| {
-        libraries.reserve_exact(1);
-        libraries.push(Library { image, unload });
-    });
+    // In the room made above.
+    with_libraries(|libraries| libraries.push(Library { image, unload }));
     Ok(module)
 }
 
@@ -628,10 +651,14 @@ fn drop_importer(base: u64) {
         return;
     };
     // SAFETY: the export called `DllUnload` of a loaded library, which
-    // has the signature every library's `DllUnload` has.
+    // has the signature every library's `DllUnload` has. As for
+    // `DllInitialize`, the load mutex is held and the call is a base.
     let status = unsafe {
-        let routine: DllUnload = core::mem::transmute(routine as usize);
-        routine()
+        seh::call(
+            routine as usize,
+            [0; 4],
+            &Guard::Base(Unhandled::SystemThread),
+        ) as u32 as NTSTATUS
     };
     if !nt_success(status) {
         kprintln!("ldr: a library's DllUnload failed, status {status:#010x}: it stays loaded");
@@ -644,6 +671,29 @@ fn drop_importer(base: u64) {
         library
     });
     unload_image(&library.image);
+}
+
+/// Every image in memory, the kernel's own first and the rest in the
+/// order they were loaded; `None` without memory for the list.
+pub fn modules() -> Option<Vec<Module>> {
+    let mut list = Vec::new();
+    loop {
+        // Nothing is allocated under the lock: the list takes what it
+        // has room for, and room for all of them is made outside. More
+        // may be loaded by the time the lock is taken again.
+        let count = MODULES.lock().in_load_order(|module| {
+            let fits = list.len() < list.capacity();
+            if fits {
+                list.push(module);
+            }
+            fits
+        });
+        if count == list.len() {
+            return Some(list);
+        }
+        list.clear();
+        list.try_reserve_exact(count).ok()?;
+    }
 }
 
 /// The loaded image whose file name is `name`.
@@ -695,6 +745,21 @@ pub unsafe extern "C" fn MmPageEntireDriver(address_within_section: *mut c_void)
     module_containing(address_within_section as u64)
         .map_or(core::ptr::null_mut(), |module| module.base as *mut c_void)
 }
+
+/// [`MmResetDriverPaging`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmresetdriverpaging):
+/// undo `MmPageEntireDriver` for the image the address is in: its
+/// sections are again pageable or not as the image was built, and what
+/// is not pageable is resident when this returns. It returns nothing.
+///
+/// NK never pages kernel memory out, and `MmPageEntireDriver` changed
+/// nothing, so every section of every image is resident already: what
+/// the routine promises holds without anything being done. Windows
+/// looks the address up and does nothing either for one that is in no
+/// driver; so no address has anything to be looked up for.
+///
+/// # Safety
+/// Callable with any pointer value; it is not used.
+pub unsafe extern "C" fn MmResetDriverPaging(_address_within_section: *mut c_void) {}
 
 // ---- tests --------------------------------------------------------------
 

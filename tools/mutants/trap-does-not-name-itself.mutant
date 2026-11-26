@@ -1,0 +1,7 @@
+# A trap stops the system without saying which routine the driver
+# called: the report names no import, so nobody learns what to implement.
+scenario: x86_64-neg-trap
+fails: scenario
+file: kernel/export/trap.rs
+replace:                     stringify!($name),
+with:                     "a routine",

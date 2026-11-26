@@ -1,0 +1,7 @@
+# A user-mode probe of an MDL accepts any mapped page: a driver that
+# locks a requestor's "buffer" in the kernel's half is given it.
+scenario: aarch64
+fails: sioctl.neither
+file: kernel/io/mdl.rs
+replace:             let found = if access_mode == KERNEL_MODE || user::frame_of(va).is_some() {
+with:             let found = if true {

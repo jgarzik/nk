@@ -243,3 +243,44 @@ fn protected_close(r: &mut Report, _: &BootInfo) {
     });
     r.fail("neg.protected-close", format_args!("{why}"));
 }
+
+/// A routine NK exports as a trap must stop the system naming itself
+/// when a driver calls it: a driver that reaches one is not let go on
+/// with an answer NK never worked out.
+pub static TRAP: Group = Group {
+    names: &["neg.trap"],
+    run: trap,
+    manual: true,
+};
+
+/// Call `ZwCreateIoCompletion` as `msrpc.sys` would: through the
+/// address its import of the name is bound to, with the routine's four
+/// arguments.
+fn trap(r: &mut Report, _: &BootInfo) {
+    let Some(bound) = crate::export::resolve(b"ntoskrnl.exe", b"ZwCreateIoCompletion") else {
+        return r.fail(
+            "neg.trap",
+            format_args!("ZwCreateIoCompletion is not exported"),
+        );
+    };
+    type CreateIoCompletion = unsafe extern "C" fn(*mut *mut c_void, u32, *mut c_void, u32) -> i32;
+    // SAFETY: the address of a function of the driver calling
+    // convention, which is what the export table holds for a name.
+    let routine = unsafe { core::mem::transmute::<usize, CreateIoCompletion>(bound as usize) };
+    let mut port = core::ptr::null_mut();
+    const IO_COMPLETION_ALL_ACCESS: u32 = 0x001F_0003;
+    kprintln!("NK-NEG-ARMED neg.trap");
+    // SAFETY: the routine's documented arguments; a trap reads none.
+    let status = unsafe {
+        routine(
+            &raw mut port,
+            IO_COMPLETION_ALL_ACCESS,
+            core::ptr::null_mut(),
+            0,
+        )
+    };
+    r.fail(
+        "neg.trap",
+        format_args!("a trap returned {status:#x} and handle {port:p}"),
+    );
+}

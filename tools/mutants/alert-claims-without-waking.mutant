@@ -1,0 +1,7 @@
+# An alert claims a sleeping thread's wait and does not make the thread
+# ready: the wait is over and the thread never learns of it.
+scenario: x86_64
+fails: wait.alert
+file: kernel/ke/wait.rs
+replace:         if asleep {
+with:         if false {

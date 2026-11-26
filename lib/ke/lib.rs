@@ -3,9 +3,14 @@
 //!
 //! The kernel wraps these with the per-processor state and the IRQL
 //! register; see `kernel/ke`. `doc/LOCKING.md` states the rules.
+//!
+//! This crate uses `unsafe`: its queues link entries that live in the
+//! caller's memory (a thread's block), reached by raw pointer. Each
+//! such routine says what the caller owes it.
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod bugcheck;
 pub mod sched;
 pub mod wait;
 
@@ -457,6 +462,34 @@ impl ReadyQueues {
         }
     }
 
+    /// The first thread `admit` accepts, with its priority, left where
+    /// it is: for whoever may have only some of the threads, and must
+    /// look at each before deciding to have it. The threads are offered
+    /// in the order they would be served: the highest priority first,
+    /// and each queue from its front.
+    ///
+    /// # Safety
+    /// Every queued link is valid.
+    pub unsafe fn first_where(
+        &self,
+        mut admit: impl FnMut(*mut ListEntry) -> bool,
+    ) -> Option<(*mut ListEntry, u8)> {
+        let mut left = self.summary;
+        while left != 0 {
+            let priority = 31 - left.leading_zeros() as u8;
+            let mut entry = self.queues[usize::from(priority)].0;
+            while !entry.is_null() {
+                if admit(entry) {
+                    return Some((entry, priority));
+                }
+                // SAFETY: per the contract.
+                entry = unsafe { (&raw const (*entry).next).read() };
+            }
+            left &= !(1 << priority);
+        }
+        None
+    }
+
     /// Take the first thread of the highest non-empty queue, if its
     /// priority is at least `floor`. Returns it with its priority.
     ///
@@ -902,6 +935,54 @@ mod tests {
             ready.insert(p[0], 4, false);
             assert_eq!(ready.take(0), Some((p[5], 4)));
             assert_eq!(ready.take(0), Some((p[0], 4)));
+        }
+    }
+
+    #[test]
+    fn ready_queues_offer_every_thread_in_the_order_it_would_be_served() {
+        let mut nodes = entries(6);
+        let p: Vec<*mut ListEntry> = nodes.iter_mut().map(core::ptr::from_mut).collect();
+        let mut ready = ReadyQueues::new();
+        // SAFETY: the nodes outlive the queues' use of them.
+        unsafe {
+            assert_eq!(ready.first_where(|_| true), None);
+            ready.insert(p[0], 8, false);
+            ready.insert(p[1], 8, false);
+            ready.insert(p[2], 8, false);
+            ready.insert(p[3], 12, false);
+            ready.insert(p[4], 12, false);
+            ready.insert(p[5], 3, false);
+            // Whoever may have any of them is offered the one `take`
+            // would take, and a look takes nothing.
+            assert_eq!(ready.first_where(|_| true), Some((p[3], 12)));
+            assert_eq!(ready.first_where(|_| true), Some((p[3], 12)));
+            // Not the best: the next behind it in its queue.
+            assert_eq!(ready.first_where(|e| e != p[3]), Some((p[4], 12)));
+            // None of the best queue: the next queue down, from its
+            // front, and past those refused there to the one behind.
+            let low = |e| e != p[3] && e != p[4];
+            assert_eq!(ready.first_where(low), Some((p[0], 8)));
+            assert_eq!(ready.first_where(|e| low(e) && e != p[0]), Some((p[1], 8)));
+            assert_eq!(ready.first_where(|e| e == p[2]), Some((p[2], 8)));
+            assert_eq!(ready.first_where(|e| e == p[5]), Some((p[5], 3)));
+            assert_eq!(ready.first_where(|_| false), None);
+            // Each thread is offered once, in the order of service.
+            let mut offered = Vec::new();
+            let none = ready.first_where(|e| {
+                offered.push(e);
+                false
+            });
+            assert_eq!(none, None);
+            assert_eq!(offered, [p[3], p[4], p[0], p[1], p[2], p[5]]);
+            // What was found behind others comes out, and they stay.
+            let (found, priority) = ready.first_where(|e| e == p[1]).unwrap();
+            ready.remove(found, priority);
+            assert_eq!(ready.take(0), Some((p[3], 12)));
+            assert_eq!(ready.take(0), Some((p[4], 12)));
+            assert_eq!(ready.take(0), Some((p[0], 8)));
+            assert_eq!(ready.take(0), Some((p[2], 8)));
+            assert_eq!(ready.take(0), Some((p[5], 3)));
+            assert_eq!(ready.first_where(|_| true), None);
         }
     }
 

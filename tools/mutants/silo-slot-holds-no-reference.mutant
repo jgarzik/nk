@@ -1,0 +1,7 @@
+# The host silo keeps a context in a slot without a reference of its
+# own: the context is cleaned up when its maker lets go, and the slot
+# points at freed memory, which the next use of the slot stops on.
+scenario: x86_64
+fails: scenario
+file: kernel/ps/silo.rs
+remove:     unsafe { object::reference(body) };

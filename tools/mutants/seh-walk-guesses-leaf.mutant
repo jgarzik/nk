@@ -1,0 +1,9 @@
+# A function with no unwind entry is taken for a leaf wherever it is
+# met: the search goes on from a return address read off the wrong
+# stack slot instead of stopping.
+scenario: x86_64-neg-seh-no-entry
+fails: scenario
+file: kernel/ke/seh.rs
+occurrence: 2
+replace:         if !interrupted {
+with:         if false {

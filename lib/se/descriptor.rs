@@ -12,21 +12,40 @@
 //! - Query: a part that is not named, or that the object lacks, is left
 //!   out and its control bits are clear; a part named brings every
 //!   control bit that describes it (defaulted, present, auto-inherited,
-//!   protected). An object with no descriptor yields an empty one. The
-//!   parts are laid out SACL, DACL, owner, group, as
-//!   `RtlAbsoluteToSelfRelativeSD` does.
-//! - Set: naming the owner without supplying one is
-//!   `STATUS_INVALID_OWNER`; a group named and not supplied leaves the
-//!   object without a group; an ACL named and not marked present leaves
-//!   it without that ACL. The "present" and "defaulted" bits follow the
-//!   new part; "protected" and "auto-inherited" are left as they were
-//!   (they are `SeSetSecurityDescriptorInfoEx`'s to change). Generic
-//!   rights in the new ACLs' effective entries are mapped; creator SIDs
-//!   are not replaced. A new ACL is stored exactly as long as its
-//!   entries.
+//!   protected). An object with no descriptor yields an empty one.
+//! - Query: the parts are laid out owner, group, DACL, SACL: the order
+//!   Windows shows for the first three, and the pinned kernel's code
+//!   for the SACL.
+//! - Set: a SACL named and not marked present leaves the object
+//!   without one. Its "present" and "defaulted" bits follow the new
+//!   list; "protected" and "auto-inherited" are left as they were.
 //!
-//! Not done: whether the caller may set what it names (the caller's
-//! access check and the owner's validity are the kernel's to ask).
+//! Set, as Windows shows a driver and the pinned kernel's code
+//! (`RtlpSetSecurityObject`) decides:
+//! - The descriptor that results must have an owner and a group, the
+//!   new one if it is named and else the object's: without the owner
+//!   `STATUS_INVALID_OWNER`, then without the group
+//!   `STATUS_INVALID_PRIMARY_GROUP`. So naming either and not supplying
+//!   it is refused, and so is any change to an object that lacks one.
+//! - An owner or group that is set is not marked defaulted.
+//! - A DACL that is named is always marked present afterwards: with the
+//!   new list, or null (which allows everyone everything) when the
+//!   modification has none marked present. It is not marked defaulted;
+//!   it is protected if the modification says so, and auto-inherited if
+//!   the modification says both that and "auto-inherit required".
+//! - Generic rights in the new ACLs' effective entries are mapped;
+//!   creator SIDs are not replaced. A new ACL is stored whole, as long
+//!   as it says it is (`acl::applied`).
+//! - Control bits that describe none of the four parts are not kept.
+//!
+//! Not done: Windows also maps the lists it keeps, and merges into a
+//! SACL the label, attribute and policy entries that the other
+//! `SECURITY_INFORMATION` bits name.
+//!
+//! Not here: whether the caller may set what it names. The kernel asks
+//! the caller's token whether a new owner is valid
+//! (`Token::valid_owner`); the access check is the object's owner's to
+//! make.
 //!
 //! [Query]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequerysecuritydescriptorinfo
 //! [Set]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sesetsecuritydescriptorinfo
@@ -34,8 +53,10 @@
 use crate::access::GenericMapping;
 use crate::acl::applied;
 use crate::{
-    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, Parts, SACL_SECURITY_INFORMATION,
-    parse_relative,
+    DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, Parts,
+    SACL_SECURITY_INFORMATION, SE_DACL_AUTO_INHERIT_REQ, SE_DACL_AUTO_INHERITED, SE_DACL_DEFAULTED,
+    SE_DACL_PRESENT, SE_DACL_PROTECTED, SE_GROUP_DEFAULTED, SE_OWNER_DEFAULTED,
+    SE_SACL_AUTO_INHERITED, SE_SACL_DEFAULTED, SE_SACL_PRESENT, SE_SACL_PROTECTED, parse_relative,
 };
 use alloc::vec;
 use alloc::vec::Vec;
@@ -50,6 +71,8 @@ pub enum SetError {
     BadDescriptorFormat,
     /// `STATUS_INVALID_OWNER`
     InvalidOwner,
+    /// `STATUS_INVALID_PRIMARY_GROUP`
+    InvalidPrimaryGroup,
     /// `STATUS_INVALID_ACL`
     InvalidAcl,
 }
@@ -66,7 +89,7 @@ pub fn query_security(
     object
         .map(|object| object.present().selected(information))
         .unwrap_or_default()
-        .write_relative(out)
+        .write_queried(out)
 }
 
 /// `SeSetSecurityDescriptorInfo`: the descriptor `object` (a
@@ -82,23 +105,62 @@ pub fn set_security(
         .ok_or(SetError::BadDescriptorFormat)?
         .present();
     let new = modification.present();
-    if information & OWNER_SECURITY_INFORMATION != 0 && new.owner.is_none() {
+    let named = |bit: u32| information & bit != 0;
+    // The part to end up with, and the control bits that come with it.
+    let (owner, owner_bits) = if named(OWNER_SECURITY_INFORMATION) {
+        (new.owner, 0)
+    } else {
+        (old.owner, old.control & SE_OWNER_DEFAULTED)
+    };
+    let (group, group_bits) = if named(GROUP_SECURITY_INFORMATION) {
+        (new.group, 0)
+    } else {
+        (old.group, old.control & SE_GROUP_DEFAULTED)
+    };
+    if owner.is_none() {
         return Err(SetError::InvalidOwner);
     }
-    // The new lists as this object holds them, if they are asked for.
-    let mapped = |acl: Option<&[u8]>, bit: u32| {
-        acl.filter(|_| information & bit != 0)
-            .map(|acl| applied(acl, mapping, None).ok_or(SetError::InvalidAcl))
+    if group.is_none() {
+        return Err(SetError::InvalidPrimaryGroup);
+    }
+    // A new list as this object holds it.
+    let mapped = |acl: Option<&[u8]>| {
+        acl.map(|acl| applied(acl, mapping).ok_or(SetError::InvalidAcl))
             .transpose()
     };
-    let dacl = mapped(new.dacl, DACL_SECURITY_INFORMATION)?;
-    let sacl = mapped(new.sacl, SACL_SECURITY_INFORMATION)?;
-    let new = Parts {
-        dacl: dacl.as_deref(),
-        sacl: sacl.as_deref(),
-        ..new
+    let new_dacl = mapped(new.dacl.filter(|_| named(DACL_SECURITY_INFORMATION)))?;
+    let new_sacl = mapped(new.sacl.filter(|_| named(SACL_SECURITY_INFORMATION)))?;
+    let (dacl, dacl_bits) = if named(DACL_SECURITY_INFORMATION) {
+        const INHERITS: u16 = SE_DACL_AUTO_INHERIT_REQ | SE_DACL_AUTO_INHERITED;
+        let inherited = if new.control & INHERITS == INHERITS {
+            SE_DACL_AUTO_INHERITED
+        } else {
+            0
+        };
+        let bits = SE_DACL_PRESENT | new.control & SE_DACL_PROTECTED | inherited;
+        (new_dacl.as_deref(), bits)
+    } else {
+        const DACL: u16 =
+            SE_DACL_PRESENT | SE_DACL_DEFAULTED | SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED;
+        (old.dacl, old.control & DACL)
     };
-    let merged = old.replaced(&new, information);
+    let (sacl, sacl_bits) = {
+        const LIST: u16 = SE_SACL_PRESENT | SE_SACL_DEFAULTED;
+        const INHERITANCE: u16 = SE_SACL_AUTO_INHERITED | SE_SACL_PROTECTED;
+        if named(SACL_SECURITY_INFORMATION) {
+            let bits = new.control & LIST | old.control & INHERITANCE;
+            (new_sacl.as_deref(), bits)
+        } else {
+            (old.sacl, old.control & (LIST | INHERITANCE))
+        }
+    };
+    let merged = Parts {
+        control: owner_bits | group_bits | dacl_bits | sacl_bits,
+        owner,
+        group,
+        sacl,
+        dacl,
+    };
     let mut block = vec![0; merged.relative_length()];
     let written = merged.write_relative(&mut block);
     debug_assert_eq!(written, Ok(block.len()));
@@ -113,9 +175,9 @@ mod tests {
     use crate::acl::tests::{entry, list};
     use crate::token::{ADMINISTRATORS, CREATOR_OWNER, LOCAL_SYSTEM, WORLD};
     use crate::{
-        GROUP_SECURITY_INFORMATION, SE_DACL_AUTO_INHERITED, SE_DACL_DEFAULTED, SE_DACL_PRESENT,
-        SE_DACL_PROTECTED, SE_GROUP_DEFAULTED, SE_OWNER_DEFAULTED, SE_SACL_AUTO_INHERITED,
-        SE_SACL_DEFAULTED, SE_SACL_PRESENT, SE_SACL_PROTECTED, SE_SELF_RELATIVE,
+        SE_DACL_AUTO_INHERITED, SE_DACL_DEFAULTED, SE_DACL_PRESENT, SE_DACL_PROTECTED,
+        SE_GROUP_DEFAULTED, SE_OWNER_DEFAULTED, SE_SACL_AUTO_INHERITED, SE_SACL_DEFAULTED,
+        SE_SACL_PRESENT, SE_SACL_PROTECTED, SE_SELF_RELATIVE,
     };
 
     const OWNER: u32 = OWNER_SECURITY_INFORMATION;
@@ -198,6 +260,19 @@ mod tests {
             assert_eq!(copy.group, asked(GROUP).then_some(&LOCAL_SYSTEM[..]));
             assert_eq!(copy.dacl, asked(DACL).then_some(&dacl[..]));
             assert_eq!(copy.sacl, asked(SACL).then_some(&sacl[..]));
+            // Laid out owner, group, DACL, SACL, each where the one
+            // before it ends.
+            let mut at = 20;
+            for (index, field) in [(0, 4), (1, 8), (2, 16), (3, 12)] {
+                let (bit, _, bytes) = parts[index];
+                let offset = u32::from_le_bytes(out[field..field + 4].try_into().unwrap());
+                if asked(bit) {
+                    assert_eq!(offset as usize, at, "{information:#x}: part {bit}");
+                    at += bytes;
+                } else {
+                    assert_eq!(offset, 0, "{information:#x}: part {bit}");
+                }
+            }
         }
     }
 
@@ -262,7 +337,12 @@ mod tests {
     fn a_set_replaces_the_parts_named() {
         let (old_dacl, old_sacl) = (dacl(), sacl());
         let old = Parts {
-            control: SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED | SE_OWNER_DEFAULTED,
+            control: SE_DACL_PRESENT
+                | SE_SACL_PRESENT
+                | SE_DACL_PROTECTED
+                | SE_DACL_AUTO_INHERITED
+                | SE_OWNER_DEFAULTED
+                | SE_GROUP_DEFAULTED,
             ..full(&old_dacl, &old_sacl)
         };
         let object = block(&old);
@@ -271,7 +351,9 @@ mod tests {
         let new = Parts {
             control: SE_DACL_PRESENT
                 | SE_DACL_DEFAULTED
+                | SE_DACL_AUTO_INHERITED
                 | SE_SACL_PRESENT
+                | SE_OWNER_DEFAULTED
                 | SE_GROUP_DEFAULTED
                 | SE_SACL_PROTECTED,
             owner: Some(&WORLD),
@@ -291,8 +373,8 @@ mod tests {
         );
         assert_eq!(
             got.control,
-            SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT | SE_DACL_PROTECTED,
-            "the owner is no longer defaulted"
+            SE_SELF_RELATIVE | old.control & !SE_OWNER_DEFAULTED,
+            "an owner that is set is not defaulted"
         );
         let changed = set(GROUP);
         let got = parse_relative(&changed).unwrap();
@@ -302,16 +384,47 @@ mod tests {
         );
         assert_eq!(
             got.control,
-            SE_SELF_RELATIVE | old.control | SE_GROUP_DEFAULTED
+            SE_SELF_RELATIVE | old.control & !SE_GROUP_DEFAULTED,
+            "nor is a group"
         );
         let changed = set(DACL);
         let got = parse_relative(&changed).unwrap();
         assert_eq!((got.dacl, got.sacl), (Some(&new_dacl[..]), old.sacl));
         assert_eq!(
             got.control,
-            SE_SELF_RELATIVE | old.control | SE_DACL_DEFAULTED,
-            "protected stays as it was"
+            SE_SELF_RELATIVE
+                | SE_DACL_PRESENT
+                | SE_SACL_PRESENT
+                | SE_OWNER_DEFAULTED
+                | SE_GROUP_DEFAULTED,
+            "the list is the modification's: not defaulted, protected or auto-inherited"
         );
+        // Protected if the modification says so; auto-inherited if it
+        // also says that it must be.
+        for (bits, kept) in [
+            (SE_DACL_PROTECTED, SE_DACL_PROTECTED),
+            (SE_DACL_AUTO_INHERIT_REQ, 0),
+            (
+                SE_DACL_AUTO_INHERIT_REQ | SE_DACL_AUTO_INHERITED,
+                SE_DACL_AUTO_INHERITED,
+            ),
+        ] {
+            let marked = Parts {
+                control: SE_DACL_PRESENT | bits,
+                ..new
+            };
+            let changed = set_security(Some(&object), &marked, DACL, &MAPPING).unwrap();
+            assert_eq!(
+                parse_relative(&changed).unwrap().control,
+                SE_SELF_RELATIVE
+                    | SE_DACL_PRESENT
+                    | SE_SACL_PRESENT
+                    | SE_OWNER_DEFAULTED
+                    | SE_GROUP_DEFAULTED
+                    | kept,
+                "{bits:#x}"
+            );
+        }
         let changed = set(SACL);
         let got = parse_relative(&changed).unwrap();
         assert_eq!((got.sacl, got.dacl), (Some(&new_sacl[..]), old.dacl));
@@ -323,10 +436,15 @@ mod tests {
             (new.owner, new.group, new.sacl, new.dacl)
         );
 
-        // What was set is what a query then reads.
+        // What was set is what a query then reads, laid out its own way.
         let mut out = [0u8; 200];
         let length = query_security(Some(&got), 0xF, &mut out).unwrap();
-        assert_eq!(out[..length], changed[..]);
+        assert_eq!(length, changed.len());
+        let read = parse_relative(&out[..length]).unwrap();
+        assert_eq!(
+            (read.control, read.owner, read.group, read.sacl, read.dacl),
+            (got.control, got.owner, got.group, got.sacl, got.dacl)
+        );
     }
 
     #[test]
@@ -340,29 +458,39 @@ mod tests {
         let nothing = Parts::default();
         let set =
             |new: &Parts<'_>, information| set_security(Some(&object), new, information, &MAPPING);
+        // No owner, no group: refused, the owner first.
         assert_eq!(set(&nothing, OWNER), Err(SetError::InvalidOwner));
         assert_eq!(set(&nothing, 0xF), Err(SetError::InvalidOwner));
-        // No group: the object loses its group.
-        let changed = set(&nothing, GROUP).unwrap();
-        let got = parse_relative(&changed).unwrap();
-        assert_eq!((got.group, got.owner), (None, old.owner));
-        // No DACL, or one not marked present: the object has none.
+        assert_eq!(set(&nothing, GROUP), Err(SetError::InvalidPrimaryGroup));
+        let owner_only = Parts {
+            owner: Some(&WORLD),
+            ..nothing
+        };
+        assert_eq!(
+            set(&owner_only, OWNER | GROUP),
+            Err(SetError::InvalidPrimaryGroup)
+        );
+        // No DACL, one not marked present, or a null one: the object
+        // has a null DACL, marked present.
         let unmarked = Parts {
             dacl: Some(&old_dacl),
             ..nothing
         };
-        for new in [&nothing, &unmarked] {
-            let changed = set(new, DACL).unwrap();
-            let got = parse_relative(&changed).unwrap();
-            assert_eq!(got.dacl, None);
-            assert_eq!(got.control, SE_SELF_RELATIVE | SE_SACL_PRESENT);
-            assert_eq!(got.sacl, old.sacl);
-        }
-        // A null DACL, present: the object has a null DACL.
         let null = Parts {
             control: SE_DACL_PRESENT,
             ..nothing
         };
+        for new in [&nothing, &unmarked, &null] {
+            let changed = set(new, DACL).unwrap();
+            let got = parse_relative(&changed).unwrap();
+            assert_eq!(got.dacl, None);
+            assert_eq!(
+                got.control,
+                SE_SELF_RELATIVE | SE_DACL_PRESENT | SE_SACL_PRESENT
+            );
+            assert_eq!(got.sacl, old.sacl);
+        }
+        // No SACL: the object has none.
         let changed = set(&null, DACL | SACL).unwrap();
         let got = parse_relative(&changed).unwrap();
         assert_eq!((got.dacl, got.sacl), (None, None));
@@ -371,16 +499,45 @@ mod tests {
     }
 
     #[test]
+    fn an_object_without_an_owner_or_a_group_cannot_be_changed() {
+        let (dacl, sacl) = (dacl(), sacl());
+        let whole = full(&dacl, &sacl);
+        let no_owner = block(&Parts {
+            owner: None,
+            ..whole
+        });
+        let no_group = block(&Parts {
+            group: None,
+            ..whole
+        });
+        let set = |object: &[u8], information| {
+            set_security(Some(object), &whole, information, &MAPPING).map(|_| ())
+        };
+        assert_eq!(set(&no_owner, DACL), Err(SetError::InvalidOwner));
+        assert_eq!(set(&no_owner, GROUP), Err(SetError::InvalidOwner));
+        assert_eq!(set(&no_owner, OWNER), Ok(()));
+        assert_eq!(set(&no_group, 0), Err(SetError::InvalidPrimaryGroup));
+        assert_eq!(set(&no_group, OWNER), Err(SetError::InvalidPrimaryGroup));
+        assert_eq!(set(&no_group, GROUP), Ok(()));
+        // Other control bits do not survive a change.
+        let mut odd = block(&whole);
+        odd[3] |= 0x40;
+        let changed = set_security(Some(&odd), &whole, 0, &MAPPING).unwrap();
+        assert_eq!(changed, block(&whole));
+    }
+
+    #[test]
     fn a_set_maps_generic_rights_in_what_it_stores() {
         let object = block(&Parts {
             owner: Some(&LOCAL_SYSTEM),
+            group: Some(&LOCAL_SYSTEM),
             ..Parts::default()
         });
         let mut generic = list(&[
             entry(0, 0, GENERIC_READ, &CREATOR_OWNER),
             entry(0, INHERIT_ONLY_ACE, GENERIC_READ, &WORLD),
         ]);
-        // Spare room, which is not stored.
+        // Spare room, which is stored too.
         generic.extend([0; 8]);
         generic[2] += 8;
         let new = Parts {
@@ -389,10 +546,12 @@ mod tests {
             dacl: Some(&generic),
             ..Parts::default()
         };
-        let stored = list(&[
+        let mut stored = list(&[
             entry(0, 0, MAPPING.read, &CREATOR_OWNER),
             entry(0, INHERIT_ONLY_ACE, GENERIC_READ, &WORLD),
         ]);
+        stored.extend([0; 8]);
+        stored[2] += 8;
         let changed = set_security(Some(&object), &new, DACL | SACL, &MAPPING).unwrap();
         let got = parse_relative(&changed).unwrap();
         assert_eq!((got.dacl, got.sacl), (Some(&stored[..]), Some(&stored[..])));
@@ -405,7 +564,11 @@ mod tests {
 
     #[test]
     fn a_set_that_is_refused() {
-        let object = block(&Parts::default());
+        let object = block(&Parts {
+            owner: Some(&LOCAL_SYSTEM),
+            group: Some(&LOCAL_SYSTEM),
+            ..Parts::default()
+        });
         let new = Parts::default();
         assert_eq!(
             set_security(None, &new, 0, &MAPPING),
@@ -435,9 +598,6 @@ mod tests {
                 Err(SetError::InvalidAcl)
             );
         }
-        assert_eq!(
-            set_security(Some(&object), &new, GROUP, &MAPPING),
-            Ok(object)
-        );
+        assert_eq!(set_security(Some(&object), &new, 0, &MAPPING), Ok(object));
     }
 }

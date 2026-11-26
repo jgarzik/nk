@@ -8,14 +8,6 @@
 
 use alloc::vec::Vec;
 
-/// `DUPLICATE_CLOSE_SOURCE`: close the source handle.
-pub const DUPLICATE_CLOSE_SOURCE: u32 = 0x1;
-/// `DUPLICATE_SAME_ACCESS`: the new handle gets the source's access.
-pub const DUPLICATE_SAME_ACCESS: u32 = 0x2;
-/// `DUPLICATE_SAME_ATTRIBUTES`: the new handle gets the source's
-/// attributes.
-pub const DUPLICATE_SAME_ATTRIBUTES: u32 = 0x4;
-
 /// On whose behalf a handle is used (`KPROCESSOR_MODE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -145,53 +137,6 @@ impl<T> Handles<T> {
     /// most handles ever open at once and is kept.
     pub fn storage(&self) -> usize {
         self.slots.capacity() * size_of::<Option<Slot<T>>>()
-    }
-}
-
-/// What duplicating a handle produces.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Duplicate {
-    /// The new handle's access.
-    pub granted: u32,
-    /// The part of it the source handle did not have. The kernel must
-    /// check these rights against the object before granting them to a
-    /// user-mode caller.
-    pub added: u32,
-    /// The new handle's attributes.
-    pub attributes: Attributes,
-    /// Close the source handle, whether or not the new one is made.
-    pub close_source: bool,
-}
-
-/// What
-/// [`ZwDuplicateObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwduplicateobject)
-/// makes of a source handle with `source_granted` access and
-/// `source_attributes`, asked for `desired` access and `attributes`
-/// under `options` (`DUPLICATE_*`; other bits are not looked at).
-/// `DUPLICATE_SAME_ACCESS` overrides `desired`, and
-/// `DUPLICATE_SAME_ATTRIBUTES` overrides `attributes`.
-pub fn duplicate(
-    source_granted: u32,
-    source_attributes: Attributes,
-    desired: u32,
-    attributes: Attributes,
-    options: u32,
-) -> Duplicate {
-    let granted = if options & DUPLICATE_SAME_ACCESS != 0 {
-        source_granted
-    } else {
-        desired
-    };
-    let attributes = if options & DUPLICATE_SAME_ATTRIBUTES != 0 {
-        source_attributes
-    } else {
-        attributes
-    };
-    Duplicate {
-        granted,
-        added: granted & !source_granted,
-        attributes,
-        close_source: options & DUPLICATE_CLOSE_SOURCE != 0,
     }
 }
 
@@ -335,64 +280,5 @@ mod tests {
             handles.insert(n, 0, PLAIN).unwrap();
         }
         assert_eq!(handles.storage(), storage);
-    }
-
-    #[test]
-    fn a_duplicate_takes_its_access_and_attributes_as_asked() {
-        const SAME: u32 = DUPLICATE_SAME_ACCESS;
-        const ATTRIBUTES: u32 = DUPLICATE_SAME_ATTRIBUTES;
-        const CLOSE: u32 = DUPLICATE_CLOSE_SOURCE;
-        let source = READ | SYNCHRONIZE;
-        // (source attributes, desired, attributes, options) ->
-        // (granted, added, attributes, close source)
-        let cases = [
-            // The source's access, whatever was asked for.
-            ((INHERIT, 0, PLAIN, SAME), (source, 0, PLAIN, false)),
-            ((INHERIT, WRITE, PLAIN, SAME), (source, 0, PLAIN, false)),
-            // An explicit mask: fewer rights, none, the same, or more.
-            ((PLAIN, READ, PLAIN, 0), (READ, 0, PLAIN, false)),
-            ((PLAIN, 0, PLAIN, 0), (0, 0, PLAIN, false)),
-            ((PLAIN, source, PLAIN, 0), (source, 0, PLAIN, false)),
-            (
-                (PLAIN, READ | WRITE, PLAIN, 0),
-                (READ | WRITE, WRITE, PLAIN, false),
-            ),
-            ((PLAIN, WRITE, PLAIN, 0), (WRITE, WRITE, PLAIN, false)),
-            // Attributes: as given, or the source's.
-            ((PLAIN, READ, INHERIT, 0), (READ, 0, INHERIT, false)),
-            ((INHERIT, READ, PROTECTED, 0), (READ, 0, PROTECTED, false)),
-            (
-                (INHERIT, READ, PROTECTED, ATTRIBUTES),
-                (READ, 0, INHERIT, false),
-            ),
-            (
-                (PROTECTED, READ, PLAIN, ATTRIBUTES),
-                (READ, 0, PROTECTED, false),
-            ),
-            // Closing the source changes nothing else.
-            ((PLAIN, READ, PLAIN, CLOSE), (READ, 0, PLAIN, true)),
-            (
-                (PLAIN, WRITE, INHERIT, CLOSE | SAME),
-                (source, 0, INHERIT, true),
-            ),
-            (
-                (INHERIT, WRITE, PLAIN, CLOSE | SAME | ATTRIBUTES),
-                (source, 0, INHERIT, true),
-            ),
-            // Bits that are no option do nothing.
-            ((PLAIN, WRITE, PLAIN, 0xFFF8), (WRITE, WRITE, PLAIN, false)),
-        ];
-        for (given, expected) in cases {
-            let (source_attributes, desired, attributes, options) = given;
-            let got = duplicate(source, source_attributes, desired, attributes, options);
-            let (granted, added, attributes, close_source) = expected;
-            let expected = Duplicate {
-                granted,
-                added,
-                attributes,
-                close_source,
-            };
-            assert_eq!(got, expected, "{given:?}");
-        }
     }
 }

@@ -1,0 +1,8 @@
+# The bugcheck for an exception in a system service widens the
+# exception's code with its sign, as the other two do and Windows does
+# not for this one.
+scenario: aarch64-neg-seh-service
+fails: scenario
+file: kernel/ke/seh.rs
+replace:         Unhandled::SystemService => (0x3Bu32, "SYSTEM_SERVICE_EXCEPTION", u64::from(code)),
+with:         Unhandled::SystemService => (0x3Bu32, "SYSTEM_SERVICE_EXCEPTION", extended),

@@ -1,0 +1,56 @@
+# Recorded on Windows 10.0.19045.2006 (x86-64) by tools/oracle.py. Do not edit.
+# script sha256 fd9e508e344c494955a498d52890883d3d133d71ae182ac5fedc4fcd710b197b
+use npfs: ok
+open root \Device\NamedPipe\ options=20: 00000000
+close root: 00000000
+open plain \Device\NamedPipe\: 00000000
+close plain: 00000000
+open dev \Device\NamedPipe options=20: 00000000
+close dev: 00000000
+open c \Device\NamedPipe\nk-oracle-test share=3: c0000034
+pipe s \Device\NamedPipe\nk-oracle-test: 00000000 2
+pipe s2 \Device\NamedPipe\nk-oracle-test: c00000ab -
+open c \Device\NamedPipe\nk-oracle-test share=3: 00000000
+open c2 \Device\NamedPipe\nk-oracle-test share=3: c00000ac
+fsctl s 00110008 - 0: c00000b2 - -
+write s 68656c6c6f: 00000000 5
+fsctl c 0011400c - 24: 00000000 21 0300000005000000000000000000000068656c6c6feeeeee
+read c 16: 00000000 5 68656c6c6feeeeeeeeeeeeeeeeeeeeee
+write s 616263: 00000000 3
+read c 2: 00000000 2 6162
+read c 2: 00000000 1 63ee
+write c 776f726c64: 00000000 5
+read s 5: 00000000 5 776f726c64
+write s -: 00000000 0
+fsctl c 0011400c - 24: 00000000 16 03000000000000000000000000000000eeeeeeeeeeeeeeee
+write c -: 00000000 0
+fsctl s 0011400c - 24: 00000000 16 03000000000000000000000000000000eeeeeeeeeeeeeeee
+write c 6279: 00000000 2
+close c: 00000000
+fsctl s 0011400c - 24: 00000000 18 040000000200000000000000000000006279eeeeeeeeeeee
+read s 8: 00000000 2 6279eeeeeeeeeeee
+read s 8: c000014b - eeeeeeeeeeeeeeee
+write s 78: c00000b1 -
+fsctl s 00110008 - 0: c00000b1 - -
+fsctl s 00110004 - 0: 00000000 0 -
+fsctl s 00110004 - 0: c00000b0 - -
+close s: 00000000
+open root \Device\NamedPipe\ options=20: 00000000
+pipe m \Device\NamedPipe\nk-oracle-test type=1 read=1 disposition=2: 00000000 2
+pipe m2 \Device\NamedPipe\nk-oracle-test type=1 read=1 disposition=2: c00000ab -
+open c nk-oracle-test root=root share=3: 00000000
+write c 6f6e65: 00000000 3
+write c 74776f: 00000000 3
+fsctl m 0011400c - 24: 00000000 19 030000000600000002000000030000006f6e65eeeeeeeeee
+read m 2: 80000005 2 6f6e
+read m 8: 00000000 1 65eeeeeeeeeeeeee
+read m 8: 00000000 3 74776feeeeeeeeee
+write m 7265706c79: 00000000 5
+read c 16: 00000000 5 7265706c79eeeeeeeeeeeeeeeeeeeeee
+write c -: 00000000 0
+fsctl m 0011400c - 24: 00000000 16 03000000000000000100000000000000eeeeeeeeeeeeeeee
+read m 8: 00000000 0 eeeeeeeeeeeeeeee
+close c: 00000000
+close m: 00000000
+close root: 00000000
+end

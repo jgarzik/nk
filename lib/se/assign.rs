@@ -16,11 +16,22 @@
 //!   inherit and on another object if object-inherit; still inheritable
 //!   on a directory unless no-propagate; inherit-only on a directory
 //!   when only object-inherit.
-//! - An entry that takes effect has its generic rights mapped and the
-//!   creator-owner and creator-group SIDs replaced by the new owner and
-//!   group; an inherit-only entry keeps both. A directory's entry that
-//!   is effective and inheritable and would change that way becomes two:
-//!   the effective one, changed, then an inherit-only one, unchanged.
+//! - An inherited entry that takes effect has its generic rights mapped
+//!   and the creator-owner and creator-group SIDs replaced by the new
+//!   owner and group; an inherit-only entry keeps both. A directory's
+//!   entry that is effective and inheritable and would change that way
+//!   becomes two: the effective one, changed, then an inherit-only one,
+//!   unchanged.
+//! - A supplied ACL, or the token's default, is assigned as the pinned
+//!   kernel's code copies it (`acl::applied`), which Windows shows a
+//!   driver: the whole list, as long as it says it is, the masks of its
+//!   effective entries mapped, and no SID replaced: a creator-owner
+//!   entry of a supplied list stays one.
+//!
+//! - A supplied owner the token may not own with is refused
+//!   (`STATUS_INVALID_OWNER`, [SeAssignSecurity]) unless
+//!   `SeRestorePrivilege` is enabled, and only for a creator whose
+//!   previous mode is user mode: so the pinned kernel's code.
 //!
 //! INFERRED, for the conformance drivers:
 //! - "Inherited from the parent" means at least one entry reaches this
@@ -32,18 +43,16 @@
 //!   always.
 //! - The result's control bits are `SE_SELF_RELATIVE` and the two
 //!   "present" bits; no "defaulted" bit is carried or set.
-//! - Entries of a supplied or default ACL are mapped and have creator
-//!   SIDs replaced like inherited ones ([MS-DTYP] `PostProcessACL`).
 //! - Of the two entries a directory may get for one, the effective one
 //!   comes first.
-//! - An assigned ACL is exactly as long as its entries.
-//! - A supplied owner the token may not own with is refused
-//!   (`STATUS_INVALID_OWNER`, [SeAssignSecurity]) for a user-mode
-//!   creator only, and not when `SeRestorePrivilege` is enabled.
+//! - An inherited ACL is exactly as long as its entries.
 //! - Entries that are not allow, deny, audit or alarm are inherited by
 //!   their flags and never changed.
 //!
-//! Not done: object-specific entries are not inherited (their
+//! Not done: when the parent's DACL (or SACL) is marked auto-inherited
+//! and the creator supplies none, Windows' `SeAssignSecurity` inherits
+//! with the auto-inherit rules of `SeAssignSecurityEx`; here the rules
+//! above apply all the same. Object-specific entries are not inherited (their
 //! inheritance depends on object-type GUIDs); a supplied SACL is copied
 //! and a parent's inherited like a DACL, with no mandatory-label rules.
 //!
@@ -56,7 +65,7 @@ use crate::acl::{
     Ace, CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, INHERITED_ACE, NO_PROPAGATE_INHERIT_ACE,
     OBJECT_INHERIT_ACE, aces, applied, build, object_specific, resolved, with_flags,
 };
-use crate::token::{SE_RESTORE_PRIVILEGE, SE_SECURITY_PRIVILEGE, Token};
+use crate::token::{SE_SECURITY_PRIVILEGE, Token};
 use crate::{
     Parts, SE_DACL_DEFAULTED, SE_DACL_PRESENT, SE_SACL_DEFAULTED, SE_SACL_PRESENT, acl_used,
 };
@@ -109,8 +118,7 @@ pub fn assign_security(creation: &Creation<'_>) -> Result<Vec<u8>, AssignError> 
     let explicit = creation.explicit.map(Parts::present).unwrap_or_default();
     let owner = match explicit.owner {
         Some(owner) => {
-            if user_mode && !token.may_own(owner) && !token.privilege_enabled(SE_RESTORE_PRIVILEGE)
-            {
+            if user_mode && !token.valid_owner(owner) {
                 return Err(AssignError::InvalidOwner);
             }
             owner
@@ -183,10 +191,9 @@ impl Object<'_> {
         }
     }
 
-    /// A supplied or default ACL as it is assigned: every entry that
-    /// takes effect on this object resolved.
+    /// A supplied or default ACL as it is assigned.
     fn effective(&self, acl: &[u8]) -> Result<Vec<u8>, AssignError> {
-        applied(acl, self.mapping, Some((self.owner, self.group))).ok_or(AssignError::InvalidAcl)
+        applied(acl, self.mapping).ok_or(AssignError::InvalidAcl)
     }
 
     /// The ACL this object inherits from its parent's. `None` if no
@@ -330,9 +337,9 @@ mod tests {
     }
 
     /// The token's default DACL as an object gets it: generic rights
-    /// mapped.
+    /// mapped, and its 8 spare bytes.
     fn default_dacl() -> Vec<u8> {
-        acl(&[
+        let mut dacl = acl(&[
             (ALLOW, 0, MAPPING.all, &LOCAL_SYSTEM),
             (
                 ALLOW,
@@ -340,7 +347,10 @@ mod tests {
                 0x0002_0000 | MAPPING.read | MAPPING.execute,
                 &ADMINISTRATORS,
             ),
-        ])
+        ]);
+        dacl.extend([0; 8]);
+        dacl[2] += 8;
+        dacl
     }
 
     /// What a parent's entry with these flags gives a directory and
@@ -571,8 +581,8 @@ mod tests {
         assert_eq!(made.group, Some(&LOCAL_SYSTEM[..]));
         assert_eq!(made.dacl.unwrap(), default_dacl());
         assert_eq!(made.sacl, None);
-        // DACL (52), owner (16), group (12) after the header.
-        assert_eq!(block.len(), 20 + 52 + 16 + 12);
+        // DACL (60), owner (16), group (12) after the header.
+        assert_eq!(block.len(), 20 + 60 + 16 + 12);
         // A parent with nothing to inherit changes nothing.
         let parent = acl(&[(ALLOW, 0, 1, USERS)]);
         assert_eq!(
@@ -620,24 +630,24 @@ mod tests {
         let block = assign(Some(&parent), Some(&explicit), &token, true, false).unwrap();
         let made = parse_relative(&block).unwrap();
         assert_eq!(made.control, SE_SELF_RELATIVE | SE_DACL_PRESENT);
-        // Mapped and named where effective; inherit-only left alone.
+        // Mapped where effective, the creator owner not named;
+        // inherit-only left alone.
         assert_eq!(
             made.dacl.unwrap(),
             acl(&[
-                (ALLOW, 0, MAPPING.read, &ADMINISTRATORS),
+                (ALLOW, 0, MAPPING.read, &CREATOR_OWNER),
                 (ALLOW, CI | IO, GENERIC_READ, &CREATOR_OWNER),
                 (DENY, ID, 2, USERS),
             ])
         );
-        // Spare room in a supplied ACL is not kept.
+        // Spare room in a supplied ACL is kept.
         let mut roomy = acl(&[(ALLOW, 0, 1, USERS)]);
         roomy.extend([0; 16]);
         roomy[2] += 16;
         let block = assign(None, Some(&with_dacl(&roomy)), &token, false, false).unwrap();
-        assert_eq!(
-            parse_relative(&block).unwrap().dacl.unwrap(),
-            acl(&[(ALLOW, 0, 1, USERS)])
-        );
+        assert_eq!(parse_relative(&block).unwrap().dacl.unwrap(), roomy);
+        // DACL (48), owner (16), group (12) after the header.
+        assert_eq!(block.len(), 20 + 48 + 16 + 12);
     }
 
     #[test]
@@ -716,7 +726,7 @@ mod tests {
         }
         // The restore privilege, enabled, allows any owner.
         for held in &mut token.privileges {
-            if held.luid == SE_RESTORE_PRIVILEGE {
+            if held.luid == crate::token::SE_RESTORE_PRIVILEGE {
                 held.attributes = SE_PRIVILEGE_ENABLED;
             }
         }
@@ -817,12 +827,12 @@ mod tests {
             assign(Some(&with_dacl(&many)), None, &token, true, true),
             Err(AssignError::InvalidAcl)
         );
-        // Supplied, with a longer SID for each creator owner: too long.
+        // Inherited, with a longer SID for each creator owner: too long.
         let mut long = Token::system();
         long.owner = crate::sid(5, &[21; 15]).0.to_vec();
-        let many = acl(&vec![(ALLOW, 0, 1, CREATOR); 3000]);
+        let many = acl(&vec![(ALLOW, CI | NP, 1, CREATOR); 3000]);
         assert_eq!(
-            assign(None, Some(&with_dacl(&many)), &long, false, true),
+            assign(Some(&with_dacl(&many)), None, &long, true, true),
             Err(AssignError::InvalidAcl)
         );
     }

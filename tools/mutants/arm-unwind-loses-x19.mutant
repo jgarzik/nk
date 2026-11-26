@@ -1,0 +1,7 @@
+# The end of an unwind does not put back x19 and x20, registers a call
+# preserves: a handler runs with whatever the dispatcher left there.
+scenario: aarch64
+fails: seh.raise
+file: kernel/arch/aarch64/seh.rs
+replace:     ldp x19, x20, [x16, #0xA0]
+with:     nop

@@ -1,0 +1,8 @@
+# RtlFindUnicodePrefix compares the whole name without regard to case,
+# whatever index the driver gave: a name is found for a file system
+# that asked for its spelling to be respected.
+scenario: aarch64
+fails: rtl.prefix-table
+file: kernel/rtl/prefix.rs
+replace:     prefix::find(&mut table, &full_name, case_insensitive_index as usize)
+with:     prefix::find(&mut table, &full_name, 0)

@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: oracle.nkc-mutex
 file: kernel/io/file.rs
-replace:             ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp));
-with:             irp::call_driver(device_object, irp);
+replace:             ke::mutex::in_critical_region(|| irp::call_driver(device_object, irp, &guard));
+with:             irp::call_driver(device_object, irp, &guard);

@@ -45,6 +45,21 @@ pub fn online_count() -> usize {
     ONLINE.load(Ordering::Acquire).count_ones() as usize
 }
 
+/// `ALL_PROCESSOR_GROUPS`.
+const ALL_PROCESSOR_GROUPS: u16 = 0xFFFF;
+
+/// [`KeQueryActiveProcessorCountEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryactiveprocessorcountex):
+/// the processors running in a group, or in all groups. There is one
+/// group, number 0, as on any Windows system of up to 64 processors;
+/// another group has none.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryActiveProcessorCountEx(group: u16) -> u32 {
+    match group {
+        ALL_PROCESSOR_GROUPS | 0 => online_count() as u32,
+        _ => 0,
+    }
+}
+
 pub fn is_online(number: usize) -> bool {
     ONLINE.load(Ordering::Acquire) & 1 << number != 0
 }
@@ -100,6 +115,12 @@ pub fn self_test() -> Result<usize, &'static str> {
     let cpus = platform::get().cpus().len();
     if online_count() != cpus {
         return Err("not every processor firmware listed is running");
+    }
+    if KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS) as usize != online_count()
+        || KeQueryActiveProcessorCountEx(0) as usize != online_count()
+        || KeQueryActiveProcessorCountEx(1) != 0
+    {
+        return Err("the active processor count is not the processors running, all in group 0");
     }
     let before: [u64; platform::MAX_CPUS] =
         core::array::from_fn(|n| arch::percpu_of(n).map_or(0, |p| p.ticks()));

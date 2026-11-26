@@ -1,0 +1,82 @@
+# Microsoft's named pipe file system (npfs.sys): a round trip through
+# a pipe, server end and client end. Every handle is synchronous, so a read is
+# only made when there is something to read: one with nothing queued
+# would wait for ever.
+#
+# FSCTLs: 00110008 FSCTL_PIPE_LISTEN, 0011400c FSCTL_PIPE_PEEK,
+# 00110004 FSCTL_PIPE_DISCONNECT.
+
+use npfs
+
+# The file system's root directory, and the device itself.
+open root \Device\NamedPipe\ options=20
+close root
+open plain \Device\NamedPipe\
+close plain
+open dev \Device\NamedPipe options=20
+close dev
+
+# No such pipe yet.
+open c \Device\NamedPipe\nk-oracle-test share=3
+
+# The server end: one instance of a byte-stream pipe; then the client end.
+pipe s \Device\NamedPipe\nk-oracle-test
+pipe s2 \Device\NamedPipe\nk-oracle-test
+open c \Device\NamedPipe\nk-oracle-test share=3
+open c2 \Device\NamedPipe\nk-oracle-test share=3
+
+# The client is connected already: listening has nothing to wait for.
+fsctl s 00110008 - 0
+
+# Server to client. A read takes what is queued, up to its length.
+write s 68656c6c6f
+fsctl c 0011400c - 24
+read c 16
+write s 616263
+read c 2
+read c 2
+
+# Client to server.
+write c 776f726c64
+read s 5
+
+# A write of nothing queues nothing on a byte stream.
+write s -
+fsctl c 0011400c - 24
+write c -
+fsctl s 0011400c - 24
+
+# Unread data, then the client goes away.
+write c 6279
+close c
+fsctl s 0011400c - 24
+read s 8
+read s 8
+write s 78
+fsctl s 00110008 - 0
+fsctl s 00110004 - 0
+fsctl s 00110004 - 0
+close s
+
+# The same by a path relative to the root directory, with a pipe of
+# messages read as messages.
+open root \Device\NamedPipe\ options=20
+pipe m \Device\NamedPipe\nk-oracle-test type=1 read=1 disposition=2
+pipe m2 \Device\NamedPipe\nk-oracle-test type=1 read=1 disposition=2
+open c nk-oracle-test root=root share=3
+write c 6f6e65
+write c 74776f
+fsctl m 0011400c - 24
+read m 2
+read m 8
+read m 8
+write m 7265706c79
+read c 16
+
+# A write of nothing is a message of nothing: it can be read.
+write c -
+fsctl m 0011400c - 24
+read m 8
+close c
+close m
+close root

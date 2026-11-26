@@ -17,6 +17,7 @@
 #![allow(non_snake_case)]
 
 use crate::io::device;
+use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{Rank, SpinLock, irql, mutex, thread, wait};
 use crate::mm::pool;
 use core::cell::UnsafeCell;
@@ -130,8 +131,16 @@ fn worker(index: usize) {
             ));
         };
         // SAFETY: the routine the driver registered, at PASSIVE_LEVEL in
-        // a system thread, with the parameter it gave.
-        unsafe { routine(parameter) };
+        // a system thread, with the parameter it gave. Nothing lies
+        // beneath a worker: an exception the routine lets out is
+        // unhandled in a system thread.
+        unsafe {
+            seh::call(
+                routine as usize,
+                [parameter.addr(), 0, 0, 0],
+                &Guard::Base(Unhandled::SystemThread),
+            )
+        };
         let level = irql::current();
         if level != irql::PASSIVE_LEVEL || mutex::KeAreApcsDisabled() != 0 {
             crate::kd::bugcheck(format_args!(
@@ -222,6 +231,16 @@ pub unsafe extern "C" fn IoFreeWorkItem(item: *mut IO_WORKITEM) {
     debug_assert!(freed.is_ok());
 }
 
+/// What a queued I/O work item owes its device if its routine is
+/// unwound: the reference taken when it was queued.
+///
+/// # Safety
+/// `device` is a device object referenced by `IoQueueWorkItem`.
+unsafe fn release_device(device: *mut c_void) {
+    // SAFETY: per the contract.
+    unsafe { device::dereference(device.cast()) };
+}
+
 /// [`IoQueueWorkItem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioqueueworkitem).
 ///
 /// # Safety
@@ -247,8 +266,22 @@ pub unsafe extern "C" fn IoQueueWorkItem(
             let object = (&raw const (*item).IoObject).read();
             let context = (&raw const (*item).Context).read();
             let referenced = is_device(object);
+            // The device's reference is given back whether the routine
+            // returns or is unwound.
+            let guard = if referenced {
+                Guard::Undo {
+                    undo: release_device,
+                    context: object,
+                }
+            } else {
+                Guard::Nothing
+            };
             if let Some(routine) = routine {
-                routine(object.cast(), context);
+                seh::call(
+                    routine as usize,
+                    [object.addr(), context.addr(), 0, 0],
+                    &guard,
+                );
             }
             if referenced {
                 device::dereference(object.cast());
@@ -392,6 +425,7 @@ pub fn many_test() -> Result<u64, &'static str> {
         prepare(index);
     }
     // 192 items from six threads, 64 from four DPCs.
+    let threads = thread::count();
     for n in 0..6 {
         thread::create(
             from_thread,
@@ -410,6 +444,10 @@ pub fn many_test() -> Result<u64, &'static str> {
     if !finished(ITEMS as u64) {
         return Err("not every queued work item ran");
     }
+    // The items have run; the threads that queued them end in their
+    // own time, and are waited for, so that none is left to end under
+    // the next test.
+    super::stress::ended(threads);
     // SAFETY: no object is involved. Time for a second run to show.
     unsafe { wait::wait(None, Some(-200_000)) };
     if RAN.iter().any(|ran| ran.load(Ordering::Acquire) != 1) {

@@ -11,14 +11,15 @@ Microsoft's documentation, sample source and the fixture binaries.
 | `make boot-gate` | every gate-tier boot scenario, in parallel | yes |
 | `make ledger-check` | the committed ledger is what the boot printed | yes |
 | `make unwind-check` | kernel code with no unwind entry is on the allow-list | yes |
-| `make gate` | fmt, clippy (both arches), the four above; prints `GATE-OK` | |
+| `make gate` | fmt, clippy (both arches), the gated targets above; prints `GATE-OK` | |
 | `make soak` | the whole list, repeated, on an overloaded host | no: long |
 | `make mutants` | each deliberate break must fail its test | no: a build and boot each |
 | `make coverage` | `lib/` line coverage, 95% per file | no: needs `cargo-llvm-cov` |
 | `make oracle` | re-record the transcripts on Windows | no: needs KVM and the VM |
 
-The ungated targets run when the code they cover changes and at the end
-of a phase. CI (`.github/workflows/ci.yml`) runs `make gate` with both
+`make help` lists the targets that test nothing themselves (`fixtures`,
+`ledger`, `corpus`). The ungated targets run when the code they cover
+changes and at the end of a phase. CI (`.github/workflows/ci.yml`) runs `make gate` with both
 architectures emulated and `NK_REQUIRE_FIXTURES=1`, which turns a
 fixture that cannot be downloaded from a SKIP into a failure.
 
@@ -62,6 +63,11 @@ A declared verdict never reported is a FAIL, as is one reported twice,
 one not declared, and a group that does not give back what it took
 (`NK-TEST leak:FAIL`).
 
+A test reaches what the kernel does without memory by watching its own
+thread's allocations from the kernel's heap (`kernel/rt.rs`): it counts
+those a call makes, then repeats the call with each of them refused in
+turn.
+
 The kernel command line is `\NK\cmdline.txt` on the boot volume:
 
 | Word | Meaning |
@@ -98,6 +104,19 @@ scenario must be listed with its reason in `tools/golden/blocked.txt`.
 When driver fixtures are not downloaded the harness says so and accepts
 SKIP where the golden list says OK.
 
+### Time in a test
+
+A test does not limit by the clock what the kernel promises only
+eventually. It waits for the threads it started to end for as long as
+that takes (`ke::thread::settle`), and never returns while one of them
+can still run: they use what the test is about to tear down. A thread
+that never ends is a hang, and the harness's time limit for the whole
+boot is the hang detector: it reports where every processor was. A
+limit inside the test would only turn a slow host, an emulated machine
+on a busy one, into a failure. A limit stays where the time is the
+promise: a wait that must time out, a step one thread owes another at
+once.
+
 ### Scenarios
 
 `tools/scenarios.toml` lists the boots and documents their fields. The
@@ -107,11 +126,17 @@ gate tier has, for each architecture:
   processors; and `*-smp1`: on one;
 - `*-neg-*`: boots that break a rule on purpose (a panic, a stack
   overflow, a lock taken out of order, a wait at `DISPATCH_LEVEL`, a
-  driver breakpoint with no debugger, ...) and must end in the named
-  bugcheck;
+  driver breakpoint with no debugger, an exception nothing handles, a
+  driver's `KeBugCheckEx`, ...) and must end in the named bugcheck;
+  `*-neg-bugcheck-callback` also requires the line a bugcheck callback
+  prints after it (the scenario's `then`);
 - `*-oracle-event*`, `*-debugger-breakpoint`: Microsoft's event sample,
   whose first act is a breakpoint, stops NK with Windows' bugcheck at
   the same step, and with `debug=on` runs as on Windows with a debugger;
+- `*-oracle-nkc-seh-fatal-*`: each request of the conformance driver
+  `nkc-seh-fatal` stops NK with the bugcheck it stopped Windows with;
+- `*-oracle-nkc-cross-dpc`: likewise the conformance driver `nkc-cross`,
+  whose DPC routine raises over a thread inside a `__try`;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
 All but the first are tests of the tests. An expected bugcheck counts
@@ -159,24 +184,29 @@ None is committed. An absent fixture makes its tests SKIP.
 | File on the ESP | What it is | Expected |
 | --- | --- | --- |
 | `null.sys` | Microsoft's inbox Null driver (x86-64 only: no arm64 source) | started at boot from its key in the hive; read gives end-of-file, write accepts all bytes; unloads without leaks |
-| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered and direct control requests return the sample's data; bad requests fail with its status codes; repeated load/exercise/unload cycles leak nothing |
+| `npfs.sys` | Microsoft's named pipe file system (x86-64 only) | started at boot from its key in the hive; a pipe is created, a client connects, both ends read and write, peek, disconnect and close, each request answered as on Windows |
+| `msfs.sys` | Microsoft's mailslot file system (x86-64 only) | started at boot from its key in the hive; a mailslot is created, clients write messages, its creator peeks at and reads them, and names, sharing, sizes and closing behave as on Windows |
+| `wpprecorder.sys` | Microsoft's WPP trace recorder, an export driver (x86-64 only) | loads as a library, its `DllInitialize` succeeds with every routine it looks up by name found, and it unloads without leaks |
+| `wmilib.sys` | Microsoft's WMI library, an export driver (x86-64 only) | likewise loads as a library, initialises and unloads without leaks |
+| `msrpc.sys` | Microsoft's kernel RPC run-time, an export driver (x86-64 only) | likewise loads as a library, initialises and unloads without leaks; its ALPC and completion-port imports are bound to traps it does not reach |
+| `sioctl.sys` | Microsoft's WDM IOCTL sample | opens by device name and symbolic link; buffered, direct and `METHOD_NEITHER` control requests return the sample's data; bad requests fail with its status codes, and buffers that are not there with an access violation its `__try` catches; repeated load/exercise/unload cycles leak nothing |
 | `event.sys` | Microsoft's WDM event sample | with a debugger, its timer's DPC completes pended requests; without, its opening breakpoint stops the system |
 | `cancel.sys` | Microsoft's WDM cancel sample | creates its device through Microsoft's device-security library (SDDL, registry, descriptor); its own thread serves a cancel-safe queue; reads are cancelled while queued; repeated cycles leak nothing |
-| `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
+| the other `nkc-*.sys` | NK's conformance drivers (nk-fixtures `nkc/`), one per kernel area | each returns the values it observed, the same list as on Windows |
 | `\NK\SYSTEM` | a registry hive written by Windows' own registry from nk-fixtures' `hive/system.hive.txt` (one file for both architectures) | the kernel boots from it: its keys and values, of every size and name, are read back through `CurrentControlSet` (`cm.hive.*`); its boot-start services are started in group order, those without a boot file passed over (`io.service.boot-start`) |
 | `nkc-lib.sys`, `nkc-libuser.sys` | an export driver and a driver that imports from it by name, by ordinal and a variable (nk-fixtures `nkc/nkc-lib*.c`) | the library is loaded with its importer, initialised once per load, kept while an importer is left and unloaded with the last; the importer logs the values it logs on Windows |
 | `nkc-libbad.sys` | imports a name `nkc-lib.sys` does not export | refused with Windows' status, naming the import; its library is not left loaded |
 | `wrongarch.sys` | `sioctl` built for the other architecture | refused: wrong machine |
 | `unresolved.sys` | Microsoft's KMDF echo sample | refused: unresolved import, named in the log |
 
-All but `null.sys` (from Microsoft's symbol server) are made in
+All but Microsoft's own binaries (from its symbol server) are made in
 [nk-fixtures](https://github.com/jgarzik/nk-fixtures), the drivers built
 with the WDK and the hive saved by Windows' registry: a separate
 repository so the test drivers cannot drift toward what NK supports.
-They are identified by hash and never patched or rebuilt to suit NK. `METHOD_NEITHER`
-requests are not sent (`sioctl.neither` is SKIP): the sample probes raw
-buffers as user memory inside `__try`, which needs user address space
-and SEH.
+They are identified by hash and never patched or rebuilt to suit NK.
+The manifest pins what no boot loads as well: the layout tables the
+WDK's compiler recorded and the kernel's symbol file, which the host
+tests compare `lib/ntabi` with (`doc/ABI.md`).
 
 ## The Windows oracle
 

@@ -1,0 +1,7 @@
+# The room to count an importer is not taken before its library is
+# loaded: when there is none afterwards, the import fails and the
+# library stays loaded with nobody to unload it.
+scenario: x86_64
+fails: ldr.lib.no-memory
+file: kernel/ldr/mod.rs
+remove:             held.try_reserve_exact(1).map_err(|_| LoadError::NoMemory)?;

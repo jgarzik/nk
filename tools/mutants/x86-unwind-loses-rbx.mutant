@@ -1,0 +1,6 @@
+# The end of an unwind does not put back rbx, a register a call
+# preserves: a handler runs with whatever the dispatcher left there.
+scenario: x86_64
+fails: seh.raise
+file: kernel/arch/x86_64/seh.rs
+remove:     mov rbx, [rcx + 0x90]

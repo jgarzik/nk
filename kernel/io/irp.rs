@@ -3,6 +3,7 @@
 #![allow(non_snake_case)]
 
 use super::TAG_IRP;
+use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
 use crate::{kd, ke};
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
@@ -62,12 +63,13 @@ pub unsafe fn next_location(irp: *mut IRP) -> *mut IO_STACK_LOCATION {
 }
 
 /// Send `irp` to the driver that owns `device`: what `IofCallDriver` does.
-/// Returns the dispatch routine's status.
+/// Returns the dispatch routine's status. `guard` is what the caller
+/// owes if an exception unwinds the dispatch routine.
 ///
 /// # Safety
 /// `device` must be a live device object and `irp` a live IRP whose next
 /// stack location has been set up.
-pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP, guard: &Guard) -> NTSTATUS {
     // SAFETY: per the contract. The dispatch table always holds a routine:
     // `driver::load` fills every slot with the invalid-request handler.
     unsafe {
@@ -83,7 +85,10 @@ pub unsafe fn call_driver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS
         let driver = (*device).DriverObject;
         let major = usize::from((*location).MajorFunction);
         match (*driver).MajorFunction.get(major).copied().flatten() {
-            Some(dispatch) => dispatch(device, irp),
+            Some(dispatch) => {
+                seh::call(dispatch as usize, [device.addr(), irp.addr(), 0, 0], guard) as u32
+                    as NTSTATUS
+            }
             None => kd::bugcheck(format_args!(
                 "IoCallDriver: no dispatch routine for major function {major:#x}"
             )),
@@ -151,7 +156,14 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
                 } else {
                     (*(*irp).CurrentStackLocation).DeviceObject
                 };
-                if routine(device, irp, context) == STATUS_MORE_PROCESSING_REQUIRED {
+                // Nothing is held across the routine: an unwind
+                // through it leaves the IRP as the routine left it.
+                let status = seh::call(
+                    routine as usize,
+                    [device.addr(), irp.addr(), context.addr(), 0],
+                    &Guard::Nothing,
+                );
+                if status as u32 as NTSTATUS == STATUS_MORE_PROCESSING_REQUIRED {
                     return; // the routine took the IRP back
                 }
             } else if (*irp).PendingReturned != 0 && (*irp).CurrentLocation <= (*irp).StackCount {
@@ -172,12 +184,18 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
 /// does it wherever the request was completed, which is at
 /// `DISPATCH_LEVEL` or below.
 ///
+/// The requestor's status block gets the request's final status, which
+/// is the fault if the results could not be copied to a user-mode
+/// requestor. The IRP keeps the status its driver completed it with:
+/// the requestor holds the driver to that one.
+///
 /// # Safety
 /// `irp` must be a live IRP whose stack has fully unwound.
 unsafe fn finish(irp: *mut IRP) {
     // SAFETY: per the contract.
     unsafe {
-        let status = (*irp).IoStatus.Status;
+        let mut result = (*irp).IoStatus;
+        let status = result.Status;
         let flags = (*irp).Flags;
         if flags & IRP_BUFFERED_IO != 0 {
             let buffer = (*irp).SystemBuffer.cast::<u8>();
@@ -203,7 +221,16 @@ unsafe fn finish(irp: *mut IRP) {
                         "a driver completed a buffered request with Information={count:#x}, more than the {room:#x} bytes its requestor has room for"
                     ));
                 }
-                core::ptr::copy_nonoverlapping(buffer, (*irp).UserBuffer.cast::<u8>(), count);
+                let requestor = (*irp).UserBuffer.cast::<u8>();
+                if (*irp).RequestorMode == KERNEL_MODE {
+                    core::ptr::copy_nonoverlapping(buffer, requestor, count);
+                } else if crate::mm::user::copy(requestor, buffer, count).is_err() {
+                    // User mode's buffer was probed when the request was
+                    // made and may be gone by now: the request ends
+                    // with the fault, as the exception Windows catches
+                    // here becomes its final status.
+                    result.Status = STATUS_ACCESS_VIOLATION;
+                }
             }
             if flags & IRP_DEALLOCATE_BUFFER != 0
                 && !buffer.is_null()
@@ -214,7 +241,7 @@ unsafe fn finish(irp: *mut IRP) {
         }
         super::mdl::release_chain(irp);
         if !(*irp).UserIosb.is_null() {
-            (*irp).UserIosb.write((*irp).IoStatus);
+            (*irp).UserIosb.write(result);
         }
         if (*irp).UserEvent.is_null() {
             free(irp);
@@ -236,6 +263,82 @@ pub unsafe fn free(irp: *mut IRP) {
     if let Err(e) = pool::free(irp.cast()) {
         kd::bugcheck(format_args!("freeing IRP {irp:p}: {e:?}"));
     }
+}
+
+/// [`IoAllocateIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateirp):
+/// an IRP of a driver's own, with `stack_size` stack locations, or null.
+/// Nothing is charged to a process: NK keeps no quota.
+pub extern "C" fn IoAllocateIrp(stack_size: i8, _charge_quota: u8) -> *mut IRP {
+    if stack_size <= 0 {
+        return core::ptr::null_mut();
+    }
+    alloc(stack_size)
+}
+
+/// [`IoFreeIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iofreeirp).
+///
+/// # Safety
+/// `irp` is an IRP from `IoAllocateIrp` that no driver still holds.
+pub unsafe extern "C" fn IoFreeIrp(irp: *mut IRP) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*irp).Type != IO_TYPE_IRP {
+            kd::bugcheck(format_args!("IoFreeIrp: {irp:p} is not an IRP"));
+        }
+        free(irp);
+    }
+}
+
+/// [`IoGetRequestorProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetrequestorprocess):
+/// the process of the thread that made the request, or null for a
+/// request no thread made (`Tail.Overlay.Thread` null: an IRP a driver
+/// allocated itself). Read as the pinned kernel reads it:
+///
+/// | The IRP | Answer |
+/// | --- | --- |
+/// | marked [`IRP_ISSUING_PROCESS_IN_OVERLAY`] | `Overlay`'s first word, less its low three bits, whatever the thread |
+/// | no thread | null |
+/// | `ApcEnvironment` original | the thread's own process (`KTHREAD.Process`) |
+/// | `ApcEnvironment` attached | the process the thread is attached to (`KTHREAD.ApcState.Process`), as it stands now |
+/// | any other `ApcEnvironment` | null |
+///
+/// Every thread of NK's is in the System process, so a request NK
+/// sends for a thread answers `PsInitialSystemProcess`. No reference is
+/// taken, as on Windows.
+///
+/// # Safety
+/// `irp` is a live IRP, and its thread, if it names one, a live thread.
+pub unsafe extern "C" fn IoGetRequestorProcess(irp: *mut IRP) -> *mut core::ffi::c_void {
+    use nk_ntabi::thread as thread_layout;
+    // SAFETY: per the contract; both are read field by field.
+    unsafe {
+        if (*irp).Flags & IRP_ISSUING_PROCESS_IN_OVERLAY != 0 {
+            return ((*irp).Overlay[0] as usize & !7) as *mut core::ffi::c_void;
+        }
+        let thread = (*irp).Thread.cast::<u8>();
+        if thread.is_null() {
+            return core::ptr::null_mut();
+        }
+        let process = match (*irp).ApcEnvironment {
+            ORIGINAL_APC_ENVIRONMENT => thread_layout::PROCESS,
+            ATTACHED_APC_ENVIRONMENT => thread_layout::APC_STATE_PROCESS,
+            _ => return core::ptr::null_mut(),
+        };
+        thread.add(process).cast::<*mut core::ffi::c_void>().read()
+    }
+}
+
+/// [`IofCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iofcalldriver):
+/// what `IoCallDriver` compiles to. A driver sends a request to another.
+/// An exception the other's dispatch routine lets out passes through to
+/// the sender's handlers, and NK holds nothing across the call.
+///
+/// # Safety
+/// `device` is a live device object and `irp` a live IRP whose next
+/// stack location the caller has set up.
+pub unsafe extern "C" fn IofCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { call_driver(device, irp, &Guard::Nothing) }
 }
 
 /// The cancel spin lock: one lock for the whole system, which a driver's
@@ -316,8 +419,14 @@ pub unsafe extern "C" fn IoCancelIrp(irp: *mut IRP) -> u8 {
             ));
         }
         (*irp).CancelIrql = old;
-        let routine: DRIVER_CANCEL = core::mem::transmute(routine);
-        routine((*(*irp).CurrentStackLocation).DeviceObject, irp);
+        // The cancel lock and the IRQL it raised are the routine's to
+        // give back; nothing else is held across it.
+        let device = (*(*irp).CurrentStackLocation).DeviceObject;
+        seh::call(
+            routine.addr(),
+            [device.addr(), irp.addr(), 0, 0],
+            &Guard::Nothing,
+        );
         1
     }
 }

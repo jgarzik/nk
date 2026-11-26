@@ -1,0 +1,19 @@
+# NK conformance drivers nkc-cross and nkc-cross-b (exceptions that
+# cross the kernel).
+#
+# nkc-cross sends requests of its own making to nkc-cross-b with a __try
+# around IoCallDriver; the far side raises in its dispatch routine, or
+# completes the request so that the sender's completion routine raises
+# inside IoCompleteRequest. One request returns what the sender's
+# filters, __finally blocks and handlers saw, 32 bits each, ending with
+# 0x4E4B4321. What each value means is written beside it in nk-fixtures
+# nkc/nkc-cross.c. The second request gets the same list.
+
+load nkc-cross-b nkc-cross-b.sys
+load nkc-cross nkc-cross.sys
+open d \Device\NkcCross
+ioctl d 00222000 - 256
+ioctl d 00222000 - 256
+close d
+unload nkc-cross
+unload nkc-cross-b

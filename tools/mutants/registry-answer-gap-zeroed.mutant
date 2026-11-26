@@ -1,0 +1,8 @@
+# An information structure is laid over zeros instead of over what the
+# caller's buffer held: the bytes between a name and the data aligned
+# after it, which Windows leaves alone, are overwritten.
+scenario: x86_64
+fails: cm.enumerate.values
+file: kernel/cm/mod.rs
+replace:         out.extend((0..room).map(|i| unsafe { information.add(i).read() }));
+with:         out.resize(room, 0);

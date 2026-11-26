@@ -1,0 +1,7 @@
+# When the name at the root of a tree is removed and a name that
+# differs from it in case takes its place, the table's list of trees
+# still points at the removed entry: it goes on being found.
+scenario: x86_64
+fails: rtl.prefix-table
+file: lib/rtl/prefix.rs
+remove:                 nodes.set_next_tree(tree, Some(heir));

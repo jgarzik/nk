@@ -315,7 +315,6 @@ pub unsafe extern "C" fn ExReleaseFastMutex(mutex: *mut FAST_MUTEX) {
 
 // ---- tests --------------------------------------------------------------
 
-use super::time;
 use crate::test::Slot;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
@@ -363,14 +362,9 @@ fn in_another_thread(entry: thread::Entry) -> Result<(), &'static str> {
         wait::wait(Some(other.cast()), None);
         crate::ob::object::dereference(other.cast());
     }
-    // It is signalled as it is buried; wait for the burial to be over,
-    // so that what it used is seen to be returned.
-    let deadline = time::interrupt_time() + 50_000_000;
-    while thread::count() != before {
-        if time::interrupt_time() > deadline {
-            return Err("a thread that ended was not buried");
-        }
-        thread::yield_now();
+    // A thread seen to have ended is buried: what it used is back.
+    if thread::count() != before {
+        return Err("a thread that ended was not buried");
     }
     Ok(())
 }
@@ -456,13 +450,9 @@ fn exclusion(enter: fn(), leave: fn()) -> Result<u64, &'static str> {
     for _ in 0..THREADS {
         thread::create(body, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
     }
-    // Generous: an emulated machine on a busy host hands a contended
-    // lock over slowly, and slow is not wrong.
-    let deadline = time::interrupt_time() + 600_000_000;
+    // However long it takes: an emulated machine on a busy host hands
+    // a contended lock over slowly, and a waiter never let in hangs.
     while thread::count() != before {
-        if time::interrupt_time() > deadline {
-            return Err("the threads did not finish: a waiter was never let in");
-        }
         // SAFETY: no object is involved.
         unsafe { wait::wait(None, Some(-10_000)) };
     }

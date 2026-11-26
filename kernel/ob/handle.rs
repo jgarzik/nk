@@ -1,11 +1,19 @@
-//! Kernel handles: small numbers that stand for references to objects.
+//! Handles: small numbers that stand for references to objects.
 //!
 //! One table for the whole kernel: the System process's, which is where
 //! Windows keeps kernel handles too. A handle holds a reference to its
 //! object until it is closed, and remembers the access it was opened
-//! with and its attributes (`nk_ob::handles`). Kernel handles have
-//! their high bits set (`nk_ntabi::ob`), as on Windows; there are no
-//! per-process tables yet.
+//! with and its attributes (`nk_ob::handles`).
+//!
+//! An entry has two names (`nk_ntabi::ob`). The kernel handle has its
+//! high bits set, as on Windows, and is a handle for kernel mode only.
+//! The same number without those bits is the System process's own
+//! handle to the entry, good in that process for either mode; every
+//! thread is in that process. A driver's open always gives the kernel
+//! handle, with `OBJ_KERNEL_HANDLE` or without: on Windows a handle
+//! made in the System process is in the kernel's table whatever was
+//! asked. The other name is what NK's own requests on behalf of user
+//! mode go by. There are no other processes and so no other tables.
 //!
 //! The access is checked when a handle is used on behalf of user mode
 //! and never for kernel mode, as
@@ -19,7 +27,7 @@ use super::object::{self, ObjectType};
 use crate::ke::{Rank, SpinLock};
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
-use nk_ntabi::ob::{kernel_handle, kernel_handle_index};
+use nk_ntabi::ob::{handle_index, kernel_handle, process_handle};
 use nk_ntabi::status::*;
 use nk_ob::handles::{Attributes, HandleError, Handles, Mode};
 
@@ -35,6 +43,8 @@ const ALL_ACCESS: u32 = 0x001F_FFFF;
 /// `OBJECT_HANDLE_INFORMATION` spell them.
 const OBJ_PROTECT_CLOSE: u32 = 0x1;
 const OBJ_INHERIT: u32 = 0x2;
+/// `OBJ_KERNEL_HANDLE`: the opener wants the kernel handle.
+pub const OBJ_KERNEL_HANDLE: u32 = 0x200;
 
 /// An object in the table.
 struct Entry(*mut u8);
@@ -68,36 +78,50 @@ fn status(error: HandleError) -> NTSTATUS {
     }
 }
 
-/// Open a handle to an object, granted `access` (generic rights are
-/// turned into what they mean for the object's type). The handle takes
-/// its own reference.
+/// Open a kernel handle to an object, granted `access` (generic rights
+/// are turned into what they mean for the object's type). The handle
+/// takes its own reference.
 ///
 /// # Safety
 /// `body` is an object from `object::create` that the caller holds a
 /// reference to.
 pub unsafe fn open(body: *mut u8, access: u32) -> Result<u64, NTSTATUS> {
     // SAFETY: per the contract.
-    unsafe { open_with(body, access, Attributes::default()) }
+    unsafe { open_with(body, access, Attributes::default(), true) }
 }
 
-/// As [`open`], with the handle's attributes.
+/// As [`open`], with the handle's attributes; `kernel` says which of
+/// the entry's two names comes back, the kernel handle or the System
+/// process's own.
 ///
 /// # Safety
 /// As [`open`].
-unsafe fn open_with(body: *mut u8, access: u32, attributes: Attributes) -> Result<u64, NTSTATUS> {
+pub unsafe fn open_with(
+    body: *mut u8,
+    access: u32,
+    attributes: Attributes,
+    kernel: bool,
+) -> Result<u64, NTSTATUS> {
     // SAFETY: per the contract.
     let granted = unsafe { object::type_of(body) }.map_generic(access);
-    let index = TABLE
-        .lock()
+    let mut table = TABLE.lock();
+    let index = table
         .insert(Entry(body), granted, attributes)
         .map_err(status)?;
-    // SAFETY: per the contract. The handle is in the table before it
-    // has its reference, but nobody knows its number yet.
+    // SAFETY: per the contract. The handle gets its reference and its
+    // place in the object's handle count before the table's lock is
+    // released, at the end: its number is the lowest free slot's, which
+    // anyone can guess, and a close takes the entry out under the same
+    // lock before it gives either back.
     unsafe {
         object::reference(body);
         object::handle_count(body).fetch_add(1, Ordering::AcqRel);
     }
-    Ok(kernel_handle(index))
+    Ok(if kernel {
+        kernel_handle(index)
+    } else {
+        process_handle(index)
+    })
 }
 
 /// What a handle is, besides its object: the access it was granted and
@@ -116,8 +140,9 @@ pub fn reference(handle: u64, ty: Option<*const ObjectType>) -> Result<*mut u8, 
 }
 
 /// As [`reference`], on behalf of `mode`: user mode gets the object
-/// only if the handle was granted every right in `desired`. Also says
-/// what the handle is.
+/// only if the handle was granted every right in `desired`, and a
+/// kernel handle is no handle for it (`STATUS_INVALID_HANDLE`). Also
+/// says what the handle is.
 pub fn reference_for(
     handle: u64,
     ty: Option<*const ObjectType>,
@@ -148,7 +173,7 @@ pub fn reference_for(
         };
         return Ok((body, information));
     }
-    let index = kernel_handle_index(handle).ok_or(STATUS_INVALID_HANDLE)?;
+    let index = handle_index(handle, mode == Mode::Kernel).ok_or(STATUS_INVALID_HANDLE)?;
     let table = TABLE.lock();
     let Entry(body) = table.reference(index, desired, mode).map_err(status)?;
     // SAFETY: the table holds a reference, and its lock is held, so the
@@ -189,7 +214,7 @@ pub fn close(handle: u64) -> NTSTATUS {
 /// [`INVALID_KERNEL_HANDLE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x93--invalid-kernel-handle),
 /// whose parameters are the handle, then zeros.
 pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
-    let Some(index) = kernel_handle_index(handle) else {
+    let Some(index) = handle_index(handle, mode == Mode::Kernel) else {
         return STATUS_INVALID_HANDLE;
     };
     let closed = TABLE.lock().close(index);
@@ -266,11 +291,40 @@ pub unsafe extern "C" fn ObReferenceObjectByHandle(
     }
 }
 
+/// [`ObReferenceObjectByHandleWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandlewithtag):
+/// [`ObReferenceObjectByHandle`], whose reference the tag would name
+/// for object reference tracing (`object::ObfReferenceObjectWithTag`).
+///
+/// # Safety
+/// As [`ObReferenceObjectByHandle`].
+pub unsafe extern "C" fn ObReferenceObjectByHandleWithTag(
+    handle: *mut c_void,
+    desired_access: u32,
+    object_type: *const ObjectType,
+    access_mode: i8,
+    _tag: u32,
+    object: *mut *mut c_void,
+    handle_information: *mut [u32; 2],
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        ObReferenceObjectByHandle(
+            handle,
+            desired_access,
+            object_type,
+            access_mode,
+            object,
+            handle_information,
+        )
+    }
+}
+
 /// [`ObOpenObjectByPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-obopenobjectbypointer):
 /// a handle to an object the caller has a pointer to, granted the
-/// desired access and given the attributes asked for. Every handle is
-/// a kernel handle, and no access is checked: the access state and the
-/// access mode are not looked at.
+/// desired access and given the attributes asked for. It is a kernel
+/// handle with `OBJ_KERNEL_HANDLE` or without, as every handle made in
+/// the System process is on Windows. No access is checked: the access
+/// state and the access mode are not looked at.
 ///
 /// # Safety
 /// `object` is an object-manager object the caller holds a reference
@@ -294,7 +348,7 @@ pub unsafe extern "C" fn ObOpenObjectByPointer(
             handle.write_unaligned(core::ptr::null_mut());
             return STATUS_OBJECT_TYPE_MISMATCH;
         }
-        match open_with(object.cast(), desired_access, attributes) {
+        match open_with(object.cast(), desired_access, attributes, true) {
             Ok(opened) => {
                 handle.write_unaligned(opened as *mut c_void);
                 STATUS_SUCCESS
@@ -347,6 +401,20 @@ pub fn reference_test() -> Result<u32, &'static str> {
         if up != [2, 3] || down != [2, 1] {
             return Err("reference counts did not go 2, 3, 2, 1");
         }
+        // As a driver takes and drops them, with a tag and without:
+        // each returns the count it made, and a tag changes no count.
+        const TAG: u32 = u32::from_le_bytes(*b"NKob");
+        let up = [
+            object::ObfReferenceObject(body.cast()),
+            object::ObfReferenceObjectWithTag(body.cast(), TAG),
+        ];
+        let down = [
+            object::ObfDereferenceObject(body.cast()),
+            object::ObfDereferenceObjectWithTag(body.cast(), TAG),
+        ];
+        if up != [2, 3] || down != [2, 1] {
+            return Err("a driver's references did not count 2, 3, 2, 1");
+        }
         if blocks() != before + 1 {
             return Err("an object was freed while still referenced");
         }
@@ -354,7 +422,56 @@ pub fn reference_test() -> Result<u32, &'static str> {
             return Err("dropping the last reference did not free the object");
         }
     }
-    Ok(6)
+    Ok(10)
+}
+
+static SHARED: core::sync::atomic::AtomicPtr<u8> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+static SHARED_WRONG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Threads on every processor take and drop references to one object
+/// at once, as drivers do; none is lost and none invented. Returns the
+/// references taken.
+pub fn shared_reference_test() -> Result<u32, &'static str> {
+    const ROUNDS: u32 = 5000;
+    fn body(_: usize) {
+        let shared = SHARED.load(Ordering::Acquire);
+        for round in 0..ROUNDS {
+            // SAFETY: the test holds a reference to the object until
+            // every thread has ended.
+            unsafe {
+                let up = if round % 2 == 0 {
+                    object::ObfReferenceObject(shared.cast())
+                } else {
+                    object::ObfReferenceObjectWithTag(shared.cast(), 1)
+                };
+                let down = object::ObfDereferenceObjectWithTag(shared.cast(), 1);
+                // The test's own reference is always there besides.
+                if up < 2 || down < 1 {
+                    SHARED_WRONG.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+    let (pool_before, threads_before) = (blocks(), thread::count());
+    let shared = new_event()?;
+    SHARED.store(shared, Ordering::Release);
+    SHARED_WRONG.store(0, Ordering::Relaxed);
+    let processors = crate::ke::smp::online_count();
+    let threads = processors.max(2) as u32;
+    for n in 0..threads as usize {
+        thread::create(body, 0, thread::NORMAL_PRIORITY, 1 << (n % processors))?;
+    }
+    thread::settle(threads_before);
+    // SAFETY: the creating reference, which must be the last.
+    let left = unsafe { object::dereference(shared) };
+    if SHARED_WRONG.load(Ordering::Relaxed) != 0 {
+        return Err("a reference returned a count below what was certainly held");
+    }
+    if left != 0 || blocks() != pool_before {
+        return Err("references taken on several processors were lost or invented");
+    }
+    Ok(threads * ROUNDS)
 }
 
 /// A handle names its object until closed, keeps it alive, and is
@@ -382,7 +499,7 @@ pub fn handle_test() -> Result<u32, &'static str> {
     // SAFETY: `body` is a live object this test holds references to.
     unsafe {
         let handle = open(body, 0).map_err(|_| "no memory for a handle")?;
-        if kernel_handle_index(handle).is_none() || handle % 4 != 0 {
+        if handle_index(handle, true).is_none() || (handle as i64) >= 0 || handle % 4 != 0 {
             return Err("a kernel handle does not look like one");
         }
         if count() != before + 1 || object::handle_count(body).load(Ordering::Acquire) != 1 {
@@ -405,12 +522,24 @@ pub fn handle_test() -> Result<u32, &'static str> {
         if status != STATUS_OBJECT_TYPE_MISMATCH || !found.is_null() {
             return Err("a handle to an event was accepted as a thread");
         }
-        for bogus in [0, 4, handle + 4096, handle & 0xFFFF_FFFF] {
+        // Nothing is a job: there are none.
+        let (status, found, _) = by_handle(handle, object::PsJobType.value());
+        if status != STATUS_OBJECT_TYPE_MISMATCH || !found.is_null() {
+            return Err("a handle to an event was accepted as a job");
+        }
+        for bogus in [0, handle + 4096, handle & 0xFFFF_FFFF] {
             let (status, found, _) = by_handle(bogus, core::ptr::null());
             if status != STATUS_INVALID_HANDLE || !found.is_null() {
                 return Err("something that is not an open handle was accepted");
             }
         }
+        // The entry's other name: the System process's own handle.
+        let own = handle & !nk_ntabi::ob::KERNEL_HANDLE;
+        let (status, found, _) = by_handle(own, event_type);
+        if status != STATUS_SUCCESS || found != body {
+            return Err("the System process's own handle does not name the kernel handle's entry");
+        }
+        object::dereference(body);
         // The creator lets go: the handle alone keeps the object.
         object::dereference(body);
         if wait::KeSetEvent(body.cast(), 0, 0) != 0 {
@@ -426,7 +555,7 @@ pub fn handle_test() -> Result<u32, &'static str> {
     if count() != before || blocks() != pool_before {
         return Err("closing the last handle did not free the object");
     }
-    Ok(10)
+    Ok(12)
 }
 
 /// A thread is an object: it can be waited for, it stays valid after it
@@ -476,13 +605,9 @@ pub fn thread_test() -> Result<u32, &'static str> {
             return Err("the thread's handle could not be closed");
         }
     }
-    // A thread is signalled as it is buried, a moment before its own
-    // reference goes: wait for the burial to be over.
-    let deadline = time::interrupt_time() + 50_000_000;
-    while thread::count() != threads_before && time::interrupt_time() < deadline {
-        thread::yield_now();
-    }
-    if blocks() != pool_before {
+    // A thread seen to have ended is buried: its own reference went
+    // before the waits for it returned.
+    if thread::count() != threads_before || blocks() != pool_before {
         return Err("threads that ended and were let go of were not freed");
     }
     Ok(5)
@@ -490,7 +615,8 @@ pub fn thread_test() -> Result<u32, &'static str> {
 
 /// A handle remembers the access it was opened with and its
 /// attributes; user mode gets the object only for access the handle
-/// has, kernel mode always. Returns the look-ups made.
+/// has, kernel mode always; and a kernel handle is no handle for user
+/// mode. Returns the look-ups made.
 pub fn access_test() -> Result<u32, &'static str> {
     use nk_ntabi::io::{KERNEL_MODE, USER_MODE};
     // `EVENT_QUERY_STATE`, `EVENT_MODIFY_STATE`, `SYNCHRONIZE`.
@@ -524,7 +650,28 @@ pub fn access_test() -> Result<u32, &'static str> {
     // until the end.
     let verdict = unsafe {
         (|| {
-            let handle = open(body, QUERY).map_err(|_| "no memory for a handle")?;
+            let handle = open_with(body, QUERY, Attributes::default(), false)
+                .map_err(|_| "no memory for a handle")?;
+            if (handle as i64) <= 0 || handle % 4 != 0 {
+                return Err("the System process's own handle is not a small positive number");
+            }
+            // The same entry as a kernel handle: nothing for user mode,
+            // whatever it asks; the object for kernel mode.
+            let kernel = handle | nk_ntabi::ob::KERNEL_HANDLE;
+            for desired in [0, QUERY] {
+                looked += 1;
+                let (status, found, information) = by_handle(kernel, desired, USER_MODE);
+                if status != STATUS_INVALID_HANDLE
+                    || !found.is_null()
+                    || information != [u32::MAX; 2]
+                {
+                    return Err("a kernel handle was a handle for user mode");
+                }
+            }
+            looked += 1;
+            if by_handle(kernel, MODIFY, KERNEL_MODE) != (STATUS_SUCCESS, body, [0, QUERY]) {
+                return Err("kernel mode did not get the object through the kernel handle");
+            }
             // Kernel mode is not held to the handle's access.
             for desired in [0, QUERY, MODIFY, QUERY | MODIFY | SYNCHRONIZE] {
                 looked += 1;
@@ -550,7 +697,7 @@ pub fn access_test() -> Result<u32, &'static str> {
             let mut second = core::ptr::null_mut();
             let status = ObOpenObjectByPointer(
                 body.cast(),
-                0x200 | OBJ_INHERIT,
+                OBJ_INHERIT,
                 core::ptr::null_mut(),
                 QUERY | MODIFY,
                 object::ExEventObjectType.value(),
@@ -558,9 +705,39 @@ pub fn access_test() -> Result<u32, &'static str> {
                 &raw mut second,
             );
             let second = second as u64;
+            // Asked for with `OBJ_KERNEL_HANDLE` or without, the kernel
+            // handle comes back.
+            let mut third = core::ptr::null_mut();
+            let opened = ObOpenObjectByPointer(
+                body.cast(),
+                OBJ_KERNEL_HANDLE,
+                core::ptr::null_mut(),
+                QUERY,
+                object::ExEventObjectType.value(),
+                KERNEL_MODE,
+                &raw mut third,
+            );
+            let third = third as u64;
+            looked += 1;
+            let kinds = ((second as i64) < 0, (third as i64) < 0);
+            let refused = (
+                by_handle(second, 0, USER_MODE).0,
+                by_handle(third, 0, USER_MODE).0,
+            );
+            if opened != STATUS_SUCCESS || close(third) != STATUS_SUCCESS {
+                return Err("a kernel handle could not be opened by pointer and closed");
+            }
+            if kinds != (true, true) || refused != (STATUS_INVALID_HANDLE, STATUS_INVALID_HANDLE) {
+                return Err(
+                    "an open by pointer did not give a kernel handle, which user mode has no use of",
+                );
+            }
+            // The System process's own name for the second handle's
+            // entry: by it user mode gets what the handle was granted.
+            let own = second & !nk_ntabi::ob::KERNEL_HANDLE;
             let through = (
-                by_handle(second, MODIFY, USER_MODE),
-                by_handle(second, SYNCHRONIZE, USER_MODE).0,
+                by_handle(own, MODIFY, USER_MODE),
+                by_handle(own, SYNCHRONIZE, USER_MODE).0,
                 by_handle(handle, MODIFY, USER_MODE).0,
             );
             looked += 3;
@@ -610,8 +787,10 @@ pub fn access_test() -> Result<u32, &'static str> {
     let mut key = core::ptr::null_mut();
     // SAFETY: locals that outlive the call.
     let opened = unsafe { crate::cm::ZwOpenKey(&raw mut key, 0x8000_0000, &raw const attributes) };
-    let information = by_handle(key as u64, 0x0002_0019, USER_MODE);
-    let refused = by_handle(key as u64, 0x2, USER_MODE).0;
+    // Asked of the entry by the name user mode can use.
+    let own = key as u64 & !nk_ntabi::ob::KERNEL_HANDLE;
+    let information = by_handle(own, 0x0002_0019, USER_MODE);
+    let refused = by_handle(own, 0x2, USER_MODE).0;
     looked += 2;
     close(key as u64);
     drop(path);
@@ -653,7 +832,8 @@ pub fn protected_close_test(armed: impl FnOnce()) -> &'static str {
     if status != STATUS_SUCCESS {
         return "a protected handle could not be opened";
     }
-    if close_for(handle, Mode::User) != STATUS_HANDLE_NOT_CLOSABLE {
+    // User mode knows the entry by the System process's own name for it.
+    if close_for(handle & !nk_ntabi::ob::KERNEL_HANDLE, Mode::User) != STATUS_HANDLE_NOT_CLOSABLE {
         return "user mode was not told that a protected handle cannot be closed";
     }
     match reference(handle, None) {

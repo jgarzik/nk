@@ -14,6 +14,7 @@
 #![allow(non_snake_case)]
 
 use super::irp::IoReleaseCancelSpinLock;
+use crate::ke::seh::{self, Guard};
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use nk_ntabi::io::*;
@@ -86,6 +87,67 @@ struct Callbacks {
     complete: CSQ_COMPLETE,
 }
 
+/// Each calls the driver's callback. The I/O manager holds nothing of
+/// its own across one (the queue's lock is the driver's, taken and
+/// released by its callbacks), so an unwind through it owes nothing.
+impl Callbacks {
+    /// # Safety
+    /// `routine` is one of the queue's callbacks and `args` are what it
+    /// takes.
+    unsafe fn call(routine: usize, args: [usize; 4]) -> usize {
+        // SAFETY: per the contract.
+        unsafe { seh::call(routine, args, &Guard::Nothing) }
+    }
+
+    /// # Safety
+    /// As the driver's `CsqInsertIrp`.
+    unsafe fn insert(&self, csq: *mut IO_CSQ, irp: *mut IRP) {
+        // SAFETY: per the contract.
+        unsafe { Self::call(self.insert as usize, [csq.addr(), irp.addr(), 0, 0]) };
+    }
+
+    /// # Safety
+    /// As the driver's `CsqRemoveIrp`.
+    unsafe fn remove(&self, csq: *mut IO_CSQ, irp: *mut IRP) {
+        // SAFETY: per the contract.
+        unsafe { Self::call(self.remove as usize, [csq.addr(), irp.addr(), 0, 0]) };
+    }
+
+    /// # Safety
+    /// As the driver's `CsqPeekNextIrp`.
+    unsafe fn peek(&self, csq: *mut IO_CSQ, irp: *mut IRP, context: *mut c_void) -> *mut IRP {
+        // SAFETY: per the contract.
+        let next = unsafe {
+            Self::call(
+                self.peek as usize,
+                [csq.addr(), irp.addr(), context.addr(), 0],
+            )
+        };
+        next as *mut IRP
+    }
+
+    /// # Safety
+    /// As the driver's `CsqAcquireLock`.
+    unsafe fn acquire(&self, csq: *mut IO_CSQ, irql: *mut u8) {
+        // SAFETY: per the contract.
+        unsafe { Self::call(self.acquire as usize, [csq.addr(), irql.addr(), 0, 0]) };
+    }
+
+    /// # Safety
+    /// As the driver's `CsqReleaseLock`.
+    unsafe fn release(&self, csq: *mut IO_CSQ, irql: u8) {
+        // SAFETY: per the contract.
+        unsafe { Self::call(self.release as usize, [csq.addr(), usize::from(irql), 0, 0]) };
+    }
+
+    /// # Safety
+    /// As the driver's `CsqCompleteCanceledIrp`.
+    unsafe fn complete(&self, csq: *mut IO_CSQ, irp: *mut IRP) {
+        // SAFETY: per the contract.
+        unsafe { Self::call(self.complete as usize, [csq.addr(), irp.addr(), 0, 0]) };
+    }
+}
+
 /// # Safety
 /// `csq` is a queue set up by `IoCsqInitialize`.
 unsafe fn callbacks(csq: *mut IO_CSQ) -> Callbacks {
@@ -133,11 +195,11 @@ unsafe extern "C" fn cancelled(_device: *mut DEVICE_OBJECT, irp: *mut IRP) {
         };
         let queue = callbacks(csq);
         let mut irql = 0;
-        (queue.acquire)(csq, &raw mut irql);
-        (queue.remove)(csq, irp);
+        queue.acquire(csq, &raw mut irql);
+        queue.remove(csq, irp);
         unmark(irp);
-        (queue.release)(csq, irql);
-        (queue.complete)(csq, irp);
+        queue.release(csq, irql);
+        queue.complete(csq, irp);
     }
 }
 
@@ -168,8 +230,8 @@ pub unsafe extern "C" fn IoCsqInsertIrp(
             (*irp).DriverContext[3] = context.cast();
         }
         let mut irql = 0;
-        (queue.acquire)(csq, &raw mut irql);
-        (queue.insert)(csq, irp);
+        queue.acquire(csq, &raw mut irql);
+        queue.insert(csq, irp);
         // `IoMarkIrpPending`.
         (*(*irp).CurrentStackLocation).Control |= SL_PENDING_RETURNED;
         // Install the routine, then look at the cancel flag; the
@@ -188,12 +250,12 @@ pub unsafe extern "C" fn IoCsqInsertIrp(
                 .swap(core::ptr::null_mut(), Ordering::SeqCst)
                 .is_null()
         {
-            (queue.remove)(csq, irp);
+            queue.remove(csq, irp);
             unmark(irp);
-            (queue.release)(csq, irql);
-            (queue.complete)(csq, irp);
+            queue.release(csq, irql);
+            queue.complete(csq, irp);
         } else {
-            (queue.release)(csq, irql);
+            queue.release(csq, irql);
         }
     }
 }
@@ -213,10 +275,10 @@ pub unsafe extern "C" fn IoCsqRemoveNextIrp(
     unsafe {
         let queue = callbacks(csq);
         let mut irql = 0;
-        (queue.acquire)(csq, &raw mut irql);
+        queue.acquire(csq, &raw mut irql);
         let mut irp = core::ptr::null_mut();
         loop {
-            irp = (queue.peek)(csq, irp, peek_context);
+            irp = queue.peek(csq, irp, peek_context);
             if irp.is_null() {
                 break;
             }
@@ -228,11 +290,11 @@ pub unsafe extern "C" fn IoCsqRemoveNextIrp(
             {
                 continue;
             }
-            (queue.remove)(csq, irp);
+            queue.remove(csq, irp);
             unmark(irp);
             break;
         }
-        (queue.release)(csq, irql);
+        queue.release(csq, irql);
         irp
     }
 }

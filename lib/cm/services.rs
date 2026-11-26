@@ -4,7 +4,9 @@
 //! ones (`Start` 1). Within each, the groups listed in
 //! `Control\ServiceGroupOrder` go first, in that order; inside a group,
 //! `Control\GroupOrderList` may order the services by `Tag`; services
-//! in no listed group go last. A service that depends on another
+//! in no listed group go last. Group names are compared without regard
+//! to case: Windows' own keys spell one group `File system` where the
+//! list of groups has `File System`. A service that depends on another
 //! (`DependOnService`) or on a group (`DependOnGroup`) starts after it.
 //! See [`Services` registry tree](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree).
 
@@ -491,8 +493,9 @@ mod tests {
     }
 
     /// A control set whose service keys are `lines`, written as for
-    /// [`order`] with the key's `Type` in front; the names of the
-    /// services [`boot_start`] finds, in order.
+    /// [`order`] with the key's `Type` in front and `_` for a space in
+    /// a group's name; the names of the services [`boot_start`] finds,
+    /// in order.
     fn from_keys(lines: &[&str], groups: &[&str], tags: &[(&str, &[u32])]) -> String {
         let mut hive = Hive::new();
         let root = hive.root().unwrap();
@@ -518,7 +521,7 @@ mod tests {
                 }
             }
             if fields[3] != "-" {
-                let group = crate::writer::wide(&format!("{}\0", fields[3]));
+                let group = crate::writer::wide(&format!("{}\0", fields[3].replace('_', " ")));
                 hive.set_value(key, &w("Group"), 1, &group).unwrap();
             }
             for (name, field) in [("DependOnService", fields[5]), ("DependOnGroup", fields[6])] {
@@ -585,6 +588,42 @@ mod tests {
         // A tag list that claims more tags than it holds, or is empty.
         assert_eq!(tag_list(&[5, 0, 0, 0, 7, 0, 0, 0]).unwrap(), [7]);
         assert!(tag_list(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_group_is_found_whatever_its_case_and_its_tag_list_orders_it() {
+        // As a Windows installation has it: the list of groups says
+        // `File System` and the keys of its drivers `File system`;
+        // `Base` has a tag list, which does not go by number.
+        let lines = [
+            "2 Npfs 1 File_system - - -",
+            "2 Msfs 1 File_system - - -",
+            "1 Null 1 Base 1 - -",
+            "1 msrpc 3 - 1 - -",
+            "1 Beep 1 base 2 - -",
+            "1 Zeta 1 Base 14 - -",
+            "1 Untagged 1 BASE - - -",
+            "1 Odd 1 Base 99 - -",
+        ];
+        let groups = ["Boot Bus Extender", "Base", "Video", "File System"];
+        let tags: &[(&str, &[u32])] = &[("Base", &[14, 1, 2, 3]), ("Video", &[1])];
+        // `Base` in its tag list's order, then its drivers with a tag
+        // the list has not, or with none, as the keys come; then
+        // `File System`, which has no tag list, as the keys come.
+        assert_eq!(
+            from_keys(&lines, &groups, tags),
+            "Zeta Null Beep Odd Untagged Msfs Npfs"
+        );
+        // Without the tag list, `Base` too is as its keys come.
+        assert_eq!(
+            from_keys(&lines, &groups, &[]),
+            "Beep Null Odd Untagged Zeta Msfs Npfs"
+        );
+        // A group the list does not have, in any case, goes last.
+        assert_eq!(
+            from_keys(&lines[..3], &["File Systems", "Base"], &[]),
+            "Null Msfs Npfs"
+        );
     }
 
     #[test]

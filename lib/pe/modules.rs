@@ -26,6 +26,9 @@ pub struct Module {
     /// How many loaded images import from it: what keeps a library
     /// loaded.
     pub references: u32,
+    /// Its place in the order images were loaded in, given when it is
+    /// entered in a table.
+    order: u64,
 }
 
 impl Module {
@@ -47,6 +50,7 @@ impl Module {
             exports: DataDir::default(),
             library: false,
             references: 0,
+            order: 0,
         })
     }
 
@@ -83,14 +87,19 @@ pub enum InsertError {
 #[derive(Debug)]
 pub struct Modules<const N: usize> {
     slots: [Option<Module>; N],
+    /// How many images were ever entered.
+    entered: u64,
 }
 
 impl<const N: usize> Modules<N> {
     pub const fn new() -> Self {
-        Self { slots: [None; N] }
+        Self {
+            slots: [None; N],
+            entered: 0,
+        }
     }
 
-    pub fn insert(&mut self, module: Module) -> Result<(), InsertError> {
+    pub fn insert(&mut self, mut module: Module) -> Result<(), InsertError> {
         let end = module.base + module.size;
         if self
             .slots
@@ -105,6 +114,8 @@ impl<const N: usize> Modules<N> {
             .iter_mut()
             .find(|s| s.is_none())
             .ok_or(InsertError::Full)?;
+        self.entered += 1;
+        module.order = self.entered;
         *slot = Some(module);
         Ok(())
     }
@@ -143,6 +154,28 @@ impl<const N: usize> Modules<N> {
         let module = self.slots.iter_mut().flatten().find(|m| m.base == base)?;
         module.references = module.references.checked_add_signed(by)?;
         Some(module.references)
+    }
+
+    /// Hand the images to `take`, oldest load first, for as long as it
+    /// takes them (it says so by returning `true`), and return how many
+    /// there are. Nothing is allocated here.
+    pub fn in_load_order(&self, mut take: impl FnMut(Module) -> bool) -> usize {
+        let mut count = 0;
+        let mut after = 0;
+        let mut taking = true;
+        // Each pass finds the oldest image not yet handed over.
+        while let Some(next) = self
+            .slots
+            .iter()
+            .flatten()
+            .filter(|m| m.order > after)
+            .min_by_key(|m| m.order)
+        {
+            taking = taking && take(*next);
+            after = next.order;
+            count += 1;
+        }
+        count
     }
 
     /// The image `address` is in.
@@ -187,6 +220,44 @@ mod tests {
         assert!(Module::new(b"empty", 0x1000, 0, dir, 0).is_none());
         assert!(Module::new(b"wraps", u64::MAX, 2, dir, 0).is_none());
         assert!(Module::new(b"last", u64::MAX, 1, dir, 0).is_none());
+    }
+
+    #[test]
+    fn images_are_listed_in_the_order_they_were_loaded() {
+        let mut table = Modules::<4>::new();
+        table.insert(module("kernel", 0x9000, 0x1000)).unwrap();
+        table.insert(module("a.sys", 0x1000, 0x1000)).unwrap();
+        table.insert(module("b.sys", 0x2000, 0x1000)).unwrap();
+        // An unloaded image's slot goes to the next one loaded, which is
+        // still the newest.
+        table.remove(0x1000).unwrap();
+        table.insert(module("c.sys", 0x5000, 0x1000)).unwrap();
+        let mut out = Vec::new();
+        let all = |out: &mut Vec<Module>, room: usize, table: &Modules<4>| {
+            out.clear();
+            table.in_load_order(|module| {
+                let fits = out.len() < room;
+                if fits {
+                    out.push(module);
+                }
+                fits
+            })
+        };
+        assert_eq!(all(&mut out, 4, &table), 3);
+        let names: Vec<&[u8]> = out.iter().map(|m| m.name()).collect();
+        assert_eq!(names, [&b"kernel"[..], b"b.sys", b"c.sys"]);
+        // With too little room the count is still all of them, and
+        // nothing is offered once one was declined.
+        assert_eq!(all(&mut out, 1, &table), 3);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name(), b"kernel");
+        let mut offered = 0;
+        let count = table.in_load_order(|_| {
+            offered += 1;
+            false
+        });
+        assert_eq!((count, offered), (3, 1));
+        assert_eq!(all(&mut out, 4, &Modules::<4>::new()), 0);
     }
 
     #[test]

@@ -1,0 +1,7 @@
+# RtlValidSecurityDescriptor does not look at the owner and group it
+# finds: a descriptor whose owner is no SID is called valid.
+scenario: aarch64
+fails: rtl.owner-group
+file: kernel/se/mod.rs
+replace:                 nk_se::sid::valid_header(part.read(), part.add(1).read())
+with:                 true

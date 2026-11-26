@@ -96,6 +96,9 @@ writable, which relies on firmware having left `SCTLR_EL1.WXN` clear.
   because runtime driver images mix code and data.
 - The direct map is a writable alias of all RAM, kernel text included, so
   the image's read-only mappings stop accidents, not a determined write.
+- The stack cookie the loader gives each driver image, and the node of
+  the UUIDs NK makes, have no entropy but the cycle counter and the
+  clock (`doc/DESIGN.md`, "Loading a driver").
 - The loader's boot stack has ordinary memory below it. The kernel
   leaves it for a guarded stack of its own as soon as it can allocate
   one; until then an overflow is caught on arm64 (by the alignment rule)

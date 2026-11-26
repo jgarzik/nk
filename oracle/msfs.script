@@ -1,0 +1,99 @@
+# Microsoft's mailslot file system (msfs.sys): a mailslot is created,
+# clients write messages to it, and its creator reads them.
+use msfs
+
+# The server end: a read returns at once (timeout=0, the default).
+mailslot s \Device\Mailslot\nk-oracle-test
+# The name is taken, in either case.
+mailslot s2 \Device\Mailslot\nk-oracle-test
+mailslot s3 \Device\Mailslot\NK-ORACLE-TEST
+
+# A client of a mailslot nobody created, and clients of this one: for
+# writing, shared for reading and writing; shared with nobody; by its
+# name in the other case.
+open nobody \Device\Mailslot\nk-oracle-none access=40100000 share=3
+open c \Device\Mailslot\nk-oracle-test access=40100000 share=3
+open alone \Device\Mailslot\nk-oracle-test access=40100000
+open upper \Device\Mailslot\NK-ORACLE-TEST access=40100000 share=3
+
+# Nothing is queued: a peek (FSCTL_MAILSLOT_PEEK), the same function
+# with no access in its code, and a read.
+fsctl s 000c4003 000000000000000000000000 16
+fsctl s 000c0003 000000000000000000000000 16
+read s 16
+
+# Two messages and an empty one.
+write c 68656c6c6f
+write c 776f726c642121
+write c -
+
+# A peek shows the first message and takes nothing: into a buffer with
+# room, one too small, none; with no peek buffer; from the client end.
+fsctl s 000c4003 000000000000000000000000 16
+fsctl s 000c4003 000000000000000000000000 2
+fsctl s 000c4003 000000000000000000000000 0
+fsctl s 000c4003 - 16
+fsctl c 000c4003 000000000000000000000000 16
+
+# A read takes one whole message, and none of one that does not fit.
+read s 2
+read s 16
+read s 7
+read s 16
+read s 16
+fsctl s 000c4003 000000000000000000000000 16
+
+# Each end the wrong way round, with handles that were not granted it.
+write s 78
+read c 4
+
+# The same with handles granted both, on a mailslot whose messages are
+# four bytes at most and whose quota is eight.
+mailslot small \Device\Mailslot\nk-oracle-small access=c0100000 maxmessage=4 quota=8
+open cs \Device\Mailslot\nk-oracle-small access=c0100000 share=3
+write small 7a
+read cs 4
+write cs 3132333435
+write cs 31323334
+write cs 35363738
+write cs 39
+read small 4
+read small 4
+read small 4
+read small 4
+close cs
+close small
+
+# Read timeouts: a tenth of a second, for ever, and none given.
+mailslot timed \Device\Mailslot\nk-oracle-timed timeout=100
+read timed 4
+close timed
+mailslot ever \Device\Mailslot\nk-oracle-ever timeout=forever
+fsctl ever 000c4003 000000000000000000000000 4
+close ever
+mailslot untimed \Device\Mailslot\nk-oracle-untimed timeout=none
+fsctl untimed 000c4003 000000000000000000000000 4
+close untimed
+
+# Create options: one a mailslot may not have, and none.
+mailslot nondir \Device\Mailslot\nk-oracle-nondir options=60
+mailslot async \Device\Mailslot\nk-oracle-async options=0
+close async
+
+# The device itself and its root directory.
+open dev \Device\Mailslot access=80100000 share=3
+open root \Device\Mailslot\ access=80100000 share=3 options=20
+close root
+close dev
+
+# With the server end closed a client's write has nowhere to go and
+# the name is gone, though clients remain; then it is free again.
+close s
+write c 79
+open late \Device\Mailslot\nk-oracle-test access=40100000 share=3
+close c
+close alone
+close upper
+open gone \Device\Mailslot\nk-oracle-test access=40100000 share=3
+mailslot again \Device\Mailslot\nk-oracle-test
+close again

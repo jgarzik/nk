@@ -183,7 +183,7 @@ def corpus(exports, lists):
     return {
         "note": "Microsoft's kernel-mode binaries of the pinned build (fixtures/corpus.toml): "
                 "distinct names they import from ntoskrnl.exe and hal.dll, by what NK does "
-                "about each. Nothing here is loaded yet.",
+                "about each. Those that are fixtures too are loaded; the rest are not.",
         "binaries": len(binaries),
         "kernel_names": {"total": len(union),
                          **{s: sum(1 for v in union.values() if v == s) for s in STATES}},

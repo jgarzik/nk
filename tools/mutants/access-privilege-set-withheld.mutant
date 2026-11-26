@@ -1,0 +1,8 @@
+# SeAccessCheck grants a right by a privilege and does not hand the
+# caller the set that says so: a file system then audits and records
+# nothing, and the grant itself looks right.
+scenario: aarch64
+fails: se.access-check.privileges
+file: kernel/se/access.rs
+replace:         if !privileges.is_null() && !used.is_empty() {
+with:         if !privileges.is_null() && used.len() > 1 {

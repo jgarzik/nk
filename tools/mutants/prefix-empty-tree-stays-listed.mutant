@@ -1,0 +1,7 @@
+# Removing the last name of its length leaves its tree in the table's
+# list: the removed entry, memory the driver may have freed, is still
+# searched and found.
+scenario: x86_64
+fails: rtl.prefix-table
+file: lib/rtl/prefix.rs
+remove:                     nodes.set_next_tree(tree, next);

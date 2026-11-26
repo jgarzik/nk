@@ -7,9 +7,10 @@
 //! whatever the tables describe: compiled functions, the assembly
 //! stubs, the change of stack around DPC routines, interrupt frames.
 //!
-//! The walk ends at a frame whose program counter is zero: every stack
+//! The walk ends at a frame that returns to address zero: every stack
 //! is entered as if called from address zero (`doc/DESIGN.md`, "Unwind
-//! tables").
+//! tables"). Code an interrupt stopped at address zero is not the end:
+//! it was called through a null pointer, and is in no image.
 //!
 //! Three things make it fail instead of guess:
 //!
@@ -94,7 +95,7 @@ impl fmt::Display for WalkError {
 }
 
 /// The stacks code on this processor can be running on right now.
-fn stacks() -> [Option<Stack>; 2] {
+pub(super) fn stacks() -> [Option<Stack>; 2] {
     // The DPC stack is the processor's, and a thread below
     // DISPATCH_LEVEL can change processors; but it is not on any DPC
     // stack either.
@@ -103,7 +104,7 @@ fn stacks() -> [Option<Stack>; 2] {
 }
 
 /// Read the stack slot at `address`, if it is one.
-fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
+pub(super) fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
     let on = |stack: &Stack| {
         address
             .checked_add(8)
@@ -121,16 +122,20 @@ fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
 /// innermost first. Returns the number of frames once the walk reaches
 /// the end of the stack.
 ///
-/// `start` is a capture, and the frames it describes must still be
-/// live: call this from the function that captured, or from one it
-/// calls.
-pub fn walk(start: &Regs, mut visit: impl FnMut(&Frame)) -> Result<usize, WalkError> {
+/// `start` is a capture, or the registers of code an interrupt stopped
+/// (`interrupted`); the frames it describes must still be live: call
+/// this from the function that captured, or from one it calls.
+pub fn walk(
+    start: &Regs,
+    interrupted: bool,
+    mut visit: impl FnMut(&Frame),
+) -> Result<usize, WalkError> {
     let stacks = stacks();
     let mut read = |address| read_slot(&stacks, address);
-    let (mut regs, mut interrupted) = (*start, false);
+    let (mut regs, mut interrupted) = (*start, interrupted);
     for count in 0..MAX_FRAMES {
         let (pc, sp) = (unwind::pc(&regs), unwind::sp(&regs));
-        if pc == 0 {
+        if pc == 0 && !interrupted {
             return Ok(count);
         }
         let module = ldr::module_containing(pc).ok_or(WalkError::NoImage { pc })?;

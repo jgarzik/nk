@@ -1,0 +1,7 @@
+# RtlCopySid does not compare the room it is given with the SID's
+# length: a SID is written past the end of a buffer too small for it.
+scenario: x86_64
+fails: rtl.sid
+file: kernel/se/sid.rs
+replace:         if (length as usize) < needed {
+with:         if false {

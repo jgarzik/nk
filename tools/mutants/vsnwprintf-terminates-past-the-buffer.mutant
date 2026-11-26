@@ -1,0 +1,7 @@
+# _vsnwprintf writes a terminator after text that exactly fills the
+# buffer: one character past the room the driver said it has.
+scenario: x86_64
+fails: rtl.vsnwprintf
+file: kernel/rtl/print.rs
+replace:         if produced < count {
+with:         if produced <= count {

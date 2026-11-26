@@ -5,5 +5,5 @@
 scenario: x86_64
 fails: scenario
 file: kernel/ob/object.rs
-replace:     if info.is_null() {
-with:     if true {
+replace:         let headers: *mut u8 = if info.is_null() {
+with:         let headers: *mut u8 = if true {

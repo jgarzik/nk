@@ -1,0 +1,8 @@
+# A driver is held to the status it completed its request with, not to
+# the final status, which is a fault of the requestor's buffer when the
+# results could not be copied out.
+scenario: x86_64
+fails: io.user.copy-out-fault
+file: kernel/io/file.rs
+replace:             completed = (*self.irp).IoStatus.Status;
+with:             completed = self.waiting.iosb.Status;

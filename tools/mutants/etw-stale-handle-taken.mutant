@@ -1,0 +1,8 @@
+# A registration handle is taken by the slot it names alone: one whose
+# registration has ended writes through whatever provider has the slot
+# now.
+scenario: x86_64
+fails: etw.handles
+file: lib/etw/provider.rs
+replace:         (handle != 0 && handle & TRAITS_SET == 0 && word & !TRAITS_SET == handle)
+with:         (handle != 0 && handle & TRAITS_SET == 0 && word != 0)

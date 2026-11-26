@@ -1,0 +1,8 @@
+# The search for a handler goes on from a DPC routine into the code the
+# DPC interrupted, whose `__try` then takes an exception Windows stops
+# the system for.
+scenario: x86_64-neg-seh-dpc
+fails: scenario
+file: kernel/ke/dpc.rs
+replace:                 &Guard::Base(Unhandled::KernelMode),
+with:                 &Guard::Nothing,

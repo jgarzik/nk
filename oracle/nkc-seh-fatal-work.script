@@ -1,0 +1,12 @@
+# NK conformance driver nkc-seh-fatal, control code 00222404:
+# an exception raised in a work item's routine, in a system
+# worker thread. Nothing handles it; see the top of
+# nk-fixtures nkc/nkc-seh-fatal.c. The request stops the system. If it
+# completes instead, its status says what went wrong.
+
+load nkc-seh-fatal nkc-seh-fatal.sys
+open d \Device\NkcSehFatal
+ioctl d 00222000 - 16
+ioctl d 00222404 - 16
+close d
+unload nkc-seh-fatal

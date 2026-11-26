@@ -88,6 +88,24 @@ pub struct Step {
     /// The frame was an interrupt's: the frame beneath was stopped at
     /// its `pc`, not waiting for a call to return there.
     pub interrupted: bool,
+    /// RVA of the function's entry in the function table.
+    pub entry: u32,
+    /// The frame's base, as its language handler is given it.
+    pub establisher: u64,
+    /// The function's language handler, when the frame is in its body.
+    pub handler: Option<Handler>,
+}
+
+/// A language handler a function's unwind record names.
+#[derive(Clone, Copy)]
+pub struct Handler {
+    pub rva: u32,
+    /// RVA of the handler's data.
+    pub data_rva: u32,
+    /// Called while a handler for the exception is searched for.
+    pub search: bool,
+    /// Called while the frame is unwound.
+    pub unwind: bool,
 }
 
 /// Undo the frame of the function that holds `rva` in the image `image`,
@@ -108,14 +126,27 @@ pub fn step(
     } else {
         rva
     };
-    let Some(function) = arm64::lookup(image, pdata.rva, pdata.size, rva)? else {
+    let Some((entry, function)) = arm64::locate(image, pdata.rva, pdata.size, rva)? else {
         return Ok(None);
     };
     let unwound = arm64::virtual_unwind(image, &function, rva, regs, read)?;
+    // An arm64 record names one handler for both passes.
+    let handler = unwound
+        .handler
+        .filter(|_| unwound.place == nk_unwind::Place::Body)
+        .map(|h| Handler {
+            rva: h.rva,
+            data_rva: h.data_rva,
+            search: true,
+            unwind: true,
+        });
     Ok(Some(Step {
         regs: unwound.regs,
         function: function.begin,
         interrupted: !unwound.unwound_to_call,
+        entry,
+        establisher: unwound.establisher,
+        handler,
     }))
 }
 

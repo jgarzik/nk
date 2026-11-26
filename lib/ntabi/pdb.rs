@@ -196,10 +196,36 @@ fn thread_matches_the_kernel() {
     assert_eq!(KERNEL_STACK, field("KernelStack"));
     assert_eq!(RUNNING, field("Running"));
     assert_eq!(PRIORITY, field("Priority"));
+    assert_eq!(ALERTED, field("Alerted"));
+    assert_eq!(MISC_FLAGS, field("MiscFlags"));
+    let alertable = kthread.member("Alertable").expect("_KTHREAD.Alertable");
+    assert_eq!(alertable.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        alertable.bits,
+        Some((MISC_FLAG_ALERTABLE.trailing_zeros() as u8, 1))
+    );
+    assert_eq!(WAIT_MODE, field("WaitMode"));
     assert_eq!(WAIT_LIST_ENTRY, field("WaitListEntry"));
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
+    assert_eq!(SATURATION, field("Saturation"));
+    assert_eq!(
+        CLIENT_SECURITY,
+        offset(&ethread, "_ETHREAD", "ClientSecurity")
+    );
+    assert_eq!(
+        CROSS_THREAD_FLAGS,
+        offset(&ethread, "_ETHREAD", "CrossThreadFlags")
+    );
+    let impersonating = ethread
+        .member("ActiveImpersonationInfo")
+        .expect("_ETHREAD.ActiveImpersonationInfo");
+    assert_eq!(impersonating.offset as usize, CROSS_THREAD_FLAGS);
+    assert_eq!(
+        impersonating.bits,
+        Some((ACTIVE_IMPERSONATION_INFO.trailing_zeros() as u8, 1))
+    );
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
@@ -224,11 +250,32 @@ fn thread_matches_the_kernel() {
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));
     assert_eq!(PROCESS, field("Process"));
     let apc_state = types.layout("_KAPC_STATE").expect("_KAPC_STATE");
+    {
+        use crate::ke::KAPC_STATE;
+        use core::mem::{offset_of, size_of};
+        let saved = |name| offset(&apc_state, "_KAPC_STATE", name);
+        assert_eq!(size_of::<KAPC_STATE>(), apc_state.size as usize);
+        assert_eq!(offset_of!(KAPC_STATE, ApcListHead), saved("ApcListHead"));
+        assert_eq!(offset_of!(KAPC_STATE, Process), saved("Process"));
+        assert_eq!(
+            offset_of!(KAPC_STATE, InProgressFlags),
+            saved("InProgressFlags")
+        );
+        assert_eq!(
+            offset_of!(KAPC_STATE, KernelApcPending),
+            saved("KernelApcPending")
+        );
+        assert_eq!(
+            offset_of!(KAPC_STATE, UserApcPendingAll),
+            saved("UserApcPendingAll")
+        );
+    }
     assert_eq!(
         APC_STATE_PROCESS,
         field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")
     );
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
+    assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueThread"), 8);
@@ -244,9 +291,17 @@ fn process_matches_the_kernel() {
     assert_eq!(EPROCESS_SIZE, eprocess.size as usize);
     assert_eq!(field("Pcb"), 0);
     assert_eq!(offset(&kprocess, "_KPROCESS", "Header"), 0);
+    assert_eq!(
+        BASE_PRIORITY,
+        offset(&kprocess, "_KPROCESS", "BasePriority")
+    );
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
+    assert_eq!(SESSION, field("Session"));
+    assert_eq!(JOB, field("Job"));
+    assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));
+    assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.
@@ -608,6 +663,177 @@ fn work_items_match_the_kernel() {
 }
 
 #[test]
+fn push_lock_matches_the_kernel() {
+    use nk_ex::pushlock::{LOCKED, MULTIPLE_SHARED, SHARE_SHIFT, WAITING, WAKING};
+    let Some(types) = kernel_types() else { return };
+    let lock = types.layout("_EX_PUSH_LOCK").expect("_EX_PUSH_LOCK");
+    assert_eq!(size_of::<crate::ex::EX_PUSH_LOCK>(), lock.size as usize);
+    let bits = |name: &str| {
+        let member = lock.member(name).expect(name);
+        assert_eq!(member.offset, 0, "{name}");
+        member.bits.expect(name)
+    };
+    for (name, mask) in [
+        ("Locked", LOCKED),
+        ("Waiting", WAITING),
+        ("Waking", WAKING),
+        ("MultipleShared", MULTIPLE_SHARED),
+    ] {
+        assert_eq!(bits(name), (mask.trailing_zeros() as u8, 1), "{name}");
+    }
+    assert_eq!(bits("Shared"), (SHARE_SHIFT as u8, 60));
+}
+
+#[test]
+fn guid_matches_the_kernel() {
+    use crate::ex::GUID;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let guid = types.layout("_GUID").expect("_GUID");
+    let field = |name| offset(&guid, "_GUID", name);
+    assert_eq!(size_of::<GUID>(), guid.size as usize);
+    assert_eq!(offset_of!(GUID, Data1), field("Data1"));
+    assert_eq!(offset_of!(GUID, Data2), field("Data2"));
+    assert_eq!(offset_of!(GUID, Data3), field("Data3"));
+    assert_eq!(offset_of!(GUID, Data4), field("Data4"));
+}
+
+#[test]
+fn timer_delete_parameters_match_the_kernel() {
+    use crate::ex::EXT_DELETE_PARAMETERS;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let parameters = types
+        .layout("_EXT_DELETE_PARAMETERS")
+        .expect("_EXT_DELETE_PARAMETERS");
+    let field = |name| offset(&parameters, "_EXT_DELETE_PARAMETERS", name);
+    assert_eq!(size_of::<EXT_DELETE_PARAMETERS>(), parameters.size as usize);
+    assert_eq!(offset_of!(EXT_DELETE_PARAMETERS, Version), field("Version"));
+    assert_eq!(
+        offset_of!(EXT_DELETE_PARAMETERS, DeleteCallback),
+        field("DeleteCallback")
+    );
+    assert_eq!(
+        offset_of!(EXT_DELETE_PARAMETERS, DeleteContext),
+        field("DeleteContext")
+    );
+}
+
+#[test]
+fn lists_match_the_kernel() {
+    use crate::ex::{GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST, PAGED_LOOKASIDE_LIST, SLIST_HEADER};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let header = types.layout("_SLIST_HEADER").expect("_SLIST_HEADER");
+    let field = |name| offset(&header, "_SLIST_HEADER", name);
+    assert_eq!(size_of::<SLIST_HEADER>(), header.size as usize);
+    assert_eq!(offset_of!(SLIST_HEADER, Alignment), field("Alignment"));
+    assert_eq!(offset_of!(SLIST_HEADER, Region), field("Region"));
+
+    let list = types
+        .layout("_GENERAL_LOOKASIDE")
+        .expect("_GENERAL_LOOKASIDE");
+    let field = |name| offset(&list, "_GENERAL_LOOKASIDE", name);
+    assert_eq!(size_of::<GENERAL_LOOKASIDE>(), list.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(GENERAL_LOOKASIDE, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        ListHead,
+        Depth,
+        MaximumDepth,
+        TotalAllocates,
+        AllocateMisses,
+        TotalFrees,
+        FreeMisses,
+        Type,
+        Tag,
+        Size,
+        Allocate,
+        Free,
+        ListEntry,
+        LastTotalAllocates,
+        LastAllocateMisses,
+        Future
+    );
+    for (name, size, l) in [
+        (
+            "_PAGED_LOOKASIDE_LIST",
+            size_of::<PAGED_LOOKASIDE_LIST>(),
+            offset_of!(PAGED_LOOKASIDE_LIST, L),
+        ),
+        (
+            "_NPAGED_LOOKASIDE_LIST",
+            size_of::<NPAGED_LOOKASIDE_LIST>(),
+            offset_of!(NPAGED_LOOKASIDE_LIST, L),
+        ),
+    ] {
+        let layout = types.layout(name).expect(name);
+        assert_eq!(size, layout.size as usize, "{name}");
+        assert_eq!(l, offset(&layout, name, "L"));
+    }
+}
+
+#[test]
+fn resource_matches_the_kernel() {
+    use crate::ex::{ERESOURCE, OWNER_ENTRY};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let entry = types.layout("_OWNER_ENTRY").expect("_OWNER_ENTRY");
+    assert_eq!(size_of::<OWNER_ENTRY>(), entry.size as usize);
+    assert_eq!(
+        offset_of!(OWNER_ENTRY, OwnerThread),
+        offset(&entry, "_OWNER_ENTRY", "OwnerThread")
+    );
+    assert_eq!(
+        offset_of!(OWNER_ENTRY, Bits),
+        offset(&entry, "_OWNER_ENTRY", "TableSize")
+    );
+    let count = entry.member("OwnerCount").expect("OwnerCount");
+    assert_eq!(count.offset as usize, offset_of!(OWNER_ENTRY, Bits));
+    assert_eq!(
+        count.bits,
+        Some((nk_ex::resource::OWNER_COUNT_SHIFT as u8, 29))
+    );
+    // The logic's entry is this one, field for field.
+    assert_eq!(
+        size_of::<nk_ex::resource::OwnerEntry>(),
+        size_of::<OWNER_ENTRY>()
+    );
+    assert_eq!(
+        offset_of!(nk_ex::resource::OwnerEntry, thread),
+        offset_of!(OWNER_ENTRY, OwnerThread)
+    );
+
+    let resource = types.layout("_ERESOURCE").expect("_ERESOURCE");
+    let field = |name| offset(&resource, "_ERESOURCE", name);
+    assert_eq!(size_of::<ERESOURCE>(), resource.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(ERESOURCE, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        SystemResourcesList,
+        OwnerTable,
+        ActiveCount,
+        Flag,
+        SharedWaiters,
+        ExclusiveWaiters,
+        OwnerEntry,
+        ActiveEntries,
+        ContentionCount,
+        NumberOfSharedWaiters,
+        NumberOfExclusiveWaiters,
+        Reserved2,
+        Address,
+        SpinLock
+    );
+}
+
+#[test]
 fn remove_lock_matches_the_kernel() {
     use crate::io::IO_REMOVE_LOCK;
     use core::mem::{offset_of, size_of};
@@ -742,9 +968,91 @@ fn access_state_matches_the_kernel() {
     );
 }
 
+/// Hold a structure of this crate to the pinned kernel's layout of the
+/// same name: its size and the offset of each field named.
+macro_rules! same_layout {
+    ($types:expr, $ty:path, $name:literal, [$($field:ident),* $(,)?]) => {{
+        let layout = $types.layout($name).expect($name);
+        assert_eq!(core::mem::size_of::<$ty>(), layout.size as usize, $name);
+        $(
+            assert_eq!(
+                core::mem::offset_of!($ty, $field),
+                offset(&layout, $name, stringify!($field)),
+                concat!($name, ".", stringify!($field))
+            );
+        )*
+    }};
+}
+
+#[test]
+fn privilege_sets_match_the_kernel() {
+    use crate::se::{
+        AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_CLIENT_CONTEXT,
+        SECURITY_QUALITY_OF_SERVICE,
+    };
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        SECURITY_CLIENT_CONTEXT,
+        "_SECURITY_CLIENT_CONTEXT",
+        [
+            SecurityQos,
+            ClientToken,
+            DirectlyAccessClientToken,
+            DirectAccessEffectiveOnly,
+            ServerIsRemote,
+            ClientTokenControl,
+        ]
+    );
+    same_layout!(
+        types,
+        SECURITY_QUALITY_OF_SERVICE,
+        "_SECURITY_QUALITY_OF_SERVICE",
+        [
+            Length,
+            ImpersonationLevel,
+            ContextTrackingMode,
+            EffectiveOnly
+        ]
+    );
+    same_layout!(
+        types,
+        LUID_AND_ATTRIBUTES,
+        "_LUID_AND_ATTRIBUTES",
+        [Luid, Attributes]
+    );
+    same_layout!(
+        types,
+        PRIVILEGE_SET,
+        "_PRIVILEGE_SET",
+        [PrivilegeCount, Control, Privilege]
+    );
+    same_layout!(
+        types,
+        AUX_ACCESS_DATA,
+        "_AUX_ACCESS_DATA",
+        [
+            PrivilegesUsed,
+            GenericMapping,
+            AccessesToAudit,
+            MaximumAuditMask,
+            TransactionId,
+            NewSecurityDescriptor,
+            ExistingSecurityDescriptor,
+            ParentSecurityDescriptor,
+            DeRefSecurityDescriptor,
+            SDLock,
+            AccessReasons,
+            GenerateStagingEvents,
+        ]
+    );
+}
+
 #[test]
 fn create_requests_match_the_kernel() {
-    use crate::io::{IO_SECURITY_CONTEXT, NAMED_PIPE_CREATE_PARAMETERS};
+    use crate::io::{
+        IO_SECURITY_CONTEXT, MAILSLOT_CREATE_PARAMETERS, NAMED_PIPE_CREATE_PARAMETERS,
+    };
     use core::mem::{offset_of, size_of};
     let Some(types) = kernel_types() else { return };
     let context = types
@@ -785,6 +1093,29 @@ fn create_requests_match_the_kernel() {
         DefaultTimeout,
         TimeoutSpecified
     );
+
+    let mailslot = types
+        .layout("_MAILSLOT_CREATE_PARAMETERS")
+        .expect("_MAILSLOT_CREATE_PARAMETERS");
+    let field = |name| offset(&mailslot, "_MAILSLOT_CREATE_PARAMETERS", name);
+    assert_eq!(
+        size_of::<MAILSLOT_CREATE_PARAMETERS>(),
+        mailslot.size as usize
+    );
+    macro_rules! same_mailslot {
+        ($($name:ident),*) => {$(
+            assert_eq!(
+                offset_of!(MAILSLOT_CREATE_PARAMETERS, $name),
+                field(stringify!($name))
+            );
+        )*};
+    }
+    same_mailslot!(
+        MailslotQuota,
+        MaximumMessageSize,
+        ReadTimeout,
+        TimeoutSpecified
+    );
 }
 
 #[test]
@@ -817,4 +1148,91 @@ fn object_attributes_match_the_kernel() {
         offset_of!(OBJECT_ATTRIBUTES, SecurityQualityOfService),
         field("SecurityQualityOfService")
     );
+}
+
+#[test]
+fn runtime_library_structures_match_the_kernel() {
+    use crate::rtl::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let string = types.layout("_STRING").expect("_STRING");
+    let field = |name| offset(&string, "_STRING", name);
+    assert_eq!(size_of::<STRING>(), string.size as usize);
+    assert_eq!(offset_of!(STRING, Length), field("Length"));
+    assert_eq!(offset_of!(STRING, MaximumLength), field("MaximumLength"));
+    assert_eq!(offset_of!(STRING, Buffer), field("Buffer"));
+    // The prefix table's own structures are not in the public symbols.
+    let links = types.layout("_RTL_SPLAY_LINKS").expect("_RTL_SPLAY_LINKS");
+    let field = |name| offset(&links, "_RTL_SPLAY_LINKS", name);
+    assert_eq!(size_of::<RTL_SPLAY_LINKS>(), links.size as usize);
+    assert_eq!(offset_of!(RTL_SPLAY_LINKS, Parent), field("Parent"));
+    assert_eq!(offset_of!(RTL_SPLAY_LINKS, LeftChild), field("LeftChild"));
+    assert_eq!(offset_of!(RTL_SPLAY_LINKS, RightChild), field("RightChild"));
+    let guid = types.layout("_GUID").expect("_GUID");
+    let field = |name| offset(&guid, "_GUID", name);
+    assert_eq!(size_of::<GUID>(), guid.size as usize);
+    assert_eq!(offset_of!(GUID, Data1), field("Data1"));
+    assert_eq!(offset_of!(GUID, Data2), field("Data2"));
+    assert_eq!(offset_of!(GUID, Data3), field("Data3"));
+    assert_eq!(offset_of!(GUID, Data4), field("Data4"));
+}
+
+#[test]
+fn fcb_header_matches_the_kernel() {
+    use crate::fsrtl::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    // The symbols have the advanced header as one flat structure, the
+    // common header's fields at its front; they have neither the common
+    // header nor the per-stream context by name.
+    let header = types
+        .layout("_FSRTL_ADVANCED_FCB_HEADER")
+        .expect("_FSRTL_ADVANCED_FCB_HEADER");
+    let field = |name| offset(&header, "_FSRTL_ADVANCED_FCB_HEADER", name);
+    assert_eq!(size_of::<FSRTL_ADVANCED_FCB_HEADER>(), header.size as usize);
+    macro_rules! common {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(FSRTL_COMMON_FCB_HEADER, $name), field(stringify!($name)));
+        )*};
+    }
+    common!(
+        NodeTypeCode,
+        NodeByteSize,
+        Flags,
+        IsFastIoPossible,
+        Flags2,
+        Resource,
+        PagingIoResource,
+        AllocationSize,
+        FileSize,
+        ValidDataLength
+    );
+    macro_rules! advanced {
+        ($($name:ident),*) => {$(
+            assert_eq!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, $name), field(stringify!($name)));
+        )*};
+    }
+    advanced!(
+        FastMutex,
+        FilterContexts,
+        PushLock,
+        FileContextSupportPointer,
+        Oplock,
+        ReservedContext
+    );
+    assert_eq!(
+        offset_of!(FSRTL_ADVANCED_FCB_HEADER, Oplock),
+        field("ReservedForRemote")
+    );
+    // `Reserved` and `Version` share the byte after `Flags2`, four bits
+    // each, the version above.
+    let at = offset_of!(FSRTL_COMMON_FCB_HEADER, ReservedAndVersion) as u64;
+    let bits = |name: &str| {
+        let member = header.member(name).expect(name);
+        assert_eq!(member.offset, at, "{name}");
+        member.bits.expect(name)
+    };
+    assert_eq!(bits("Reserved"), (0, 4));
+    assert_eq!(bits("Version"), (4, 4));
+    assert_eq!(with_fcb_header_version(0, 0xF), 0xF0);
 }

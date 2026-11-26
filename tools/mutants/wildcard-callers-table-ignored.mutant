@@ -1,0 +1,8 @@
+# FsRtlIsNameInExpression upper-cases the name by the system's table
+# even when the file system passes its own: a volume whose table
+# differs matches names it should not.
+scenario: x86_64
+fails: rtl.wildcards
+file: kernel/rtl/name.rs
+replace:         } else if upcase_table.is_null() {
+with:         } else if true {

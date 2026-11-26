@@ -102,6 +102,22 @@ pub fn free_frames(pa: u64, count: usize) {
     assert!(ok, "free of frames not allocated: {pa:#x} x{count}");
 }
 
+/// The memory NK uses as RAM, in frames: how many there are, and the
+/// numbers of the lowest and the highest.
+pub fn physical_memory() -> (u64, u64, u64) {
+    let frame = PAGE_SIZE as u64;
+    memory_map()
+        .filter(|r| r.kind == EFI_CONVENTIONAL && r.pages != 0)
+        .fold((0, u64::MAX, 0), |(pages, lowest, highest), r| {
+            let first = r.phys / frame;
+            (
+                pages + r.pages,
+                lowest.min(first),
+                highest.max(first + r.pages - 1),
+            )
+        })
+}
+
 pub fn free_frame_count() -> u64 {
     FRAMES.lock().as_ref().map_or(0, |f| f.free_frames())
 }

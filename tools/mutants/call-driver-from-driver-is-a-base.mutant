@@ -1,0 +1,8 @@
+# A request one driver sends another is called as if no driver's frame
+# lay beneath it: an exception the far dispatch routine lets out stops
+# the system instead of reaching the sender's handlers.
+scenario: x86_64
+fails: scenario
+file: kernel/io/irp.rs
+replace:     unsafe { call_driver(device, irp, &Guard::Nothing) }
+with:     unsafe { call_driver(device, irp, &Guard::Base(seh::Unhandled::KernelMode)) }

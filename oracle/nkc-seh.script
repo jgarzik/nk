@@ -1,0 +1,13 @@
+# NK conformance driver nkc-seh (structured exception handling).
+#
+# One request runs the driver's checks and returns the values it logged,
+# 32 bits each, ending with 0x4E4B4321. What each value means is written
+# beside it in nk-fixtures nkc/nkc-seh.c. The second request has a buffer
+# too small for the list and must be refused whole.
+
+load nkc-seh nkc-seh.sys
+open d \Device\NkcSeh
+ioctl d 00222000 - 2048
+ioctl d 00222000 - 8
+close d
+unload nkc-seh

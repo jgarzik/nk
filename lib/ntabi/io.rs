@@ -146,6 +146,12 @@ pub const IRP_MJ_WRITE: u8 = 0x04;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_CLEANUP: u8 = 0x12;
+pub const IRP_MJ_CREATE_MAILSLOT: u8 = 0x13;
+pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
+/// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
+/// its registration, the older way and the newer.
+pub const IRP_MN_REGINFO: u8 = 0x08;
+pub const IRP_MN_REGINFO_EX: u8 = 0x0B;
 pub const IRP_MJ_MAXIMUM_FUNCTION: usize = 0x1B;
 
 pub const IO_TYPE_DEVICE: i16 = 3;
@@ -283,6 +289,17 @@ pub struct NAMED_PIPE_CREATE_PARAMETERS {
     pub TimeoutSpecified: u8,
 }
 
+/// [`MAILSLOT_CREATE_PARAMETERS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_mailslot_create_parameters):
+/// what `Parameters.CreateMailslot.Parameters` points to.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MAILSLOT_CREATE_PARAMETERS {
+    pub MailslotQuota: u32,
+    pub MaximumMessageSize: u32,
+    pub ReadTimeout: i64,
+    pub TimeoutSpecified: u8,
+}
+
 #[repr(C)]
 pub struct FILE_OBJECT {
     pub Type: i16,
@@ -325,6 +342,19 @@ pub const IRP_INPUT_OPERATION: u32 = 0x0000_0040;
 pub const IRP_CREATE_OPERATION: u32 = 0x0000_0080;
 pub const IRP_CLOSE_OPERATION: u32 = 0x0000_0400;
 pub const IRP_DEFER_IO_COMPLETION: u32 = 0x0000_0800;
+/// The bit `IoGetRequestorProcess` of the pinned kernel tests first:
+/// set, the first word of `Overlay` holds the process the request was
+/// issued for (`IssuingProcess`), with flags in its low three bits. The
+/// I/O manager sets it for a request a user-mode driver's host makes;
+/// NK never does.
+pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
+
+/// `IRP.ApcEnvironment`: the thread was in its own process when the
+/// request was made (`OriginalApcEnvironment`).
+pub const ORIGINAL_APC_ENVIRONMENT: i8 = 0;
+/// `IRP.ApcEnvironment`: the thread was attached to another process
+/// (`AttachedApcEnvironment`).
+pub const ATTACHED_APC_ENVIRONMENT: i8 = 1;
 
 /// `KPROCESSOR_MODE`
 pub const KERNEL_MODE: i8 = 0;
@@ -350,7 +380,9 @@ pub struct IRP {
     pub AllocationFlags: u8,
     pub UserIosb: *mut IO_STATUS_BLOCK,
     pub UserEvent: *mut KEVENT,
-    /// `Overlay`: APC routine and context, or an allocation size.
+    /// `Overlay`: APC routine and context, or an allocation size. The
+    /// first word is `IssuingProcess` instead in a request marked
+    /// [`IRP_ISSUING_PROCESS_IN_OVERLAY`].
     pub Overlay: [u64; 2],
     pub CancelRoutine: PVOID,
     pub UserBuffer: PVOID,
@@ -448,9 +480,10 @@ pub const fn create_parameters(
     ]
 }
 
-/// `Parameters.CreatePipe`: as `Parameters.Create`, with a reserved
-/// word where the file attributes are and a pointer to the
-/// `NAMED_PIPE_CREATE_PARAMETERS` where the EA length is.
+/// `Parameters.CreatePipe` and `Parameters.CreateMailslot`, which are
+/// laid out alike: as `Parameters.Create`, with a reserved word where
+/// the file attributes are and, where the EA length is, a pointer to
+/// the `NAMED_PIPE_CREATE_PARAMETERS` or `MAILSLOT_CREATE_PARAMETERS`.
 pub const fn create_pipe_parameters(
     security_context: u64,
     options: u32,
@@ -475,6 +508,42 @@ pub const METHOD_NEITHER: u32 = 3;
 pub const fn ctl_code(device_type: u32, function: u32, method: u32, access: u32) -> u32 {
     device_type << 16 | access << 14 | function << 2 | method
 }
+
+/// File access rights a request needs of the handle it is made through.
+pub const FILE_READ_DATA: u32 = 0x1;
+pub const FILE_WRITE_DATA: u32 = 0x2;
+/// For a named pipe the same bit is `FILE_CREATE_PIPE_INSTANCE`.
+pub const FILE_APPEND_DATA: u32 = 0x4;
+/// `FILE_OBJECT.Flags`: the file is a named pipe (its file system sets
+/// it).
+pub const FO_NAMED_PIPE: u32 = 0x0000_0080;
+
+/// The access a control code says its requestor's handle must have:
+/// bits 14 and 15 of the code, `FILE_READ_ACCESS` and
+/// `FILE_WRITE_ACCESS`, which are `FILE_READ_DATA` and
+/// `FILE_WRITE_DATA`. `FILE_ANY_ACCESS` is none.
+pub const fn ctl_access(code: u32) -> u32 {
+    (code >> 14) & 3
+}
+
+/// Whether user mode may write through a handle granted `granted` to a
+/// file object with `file_flags`: the handle may write data, or append
+/// it, as `NtWriteFile` asks. A named pipe has no appending: the bit
+/// means something else there.
+pub const fn may_write(granted: u32, file_flags: u32) -> bool {
+    let append = if file_flags & FO_NAMED_PIPE == 0 {
+        FILE_APPEND_DATA
+    } else {
+        0
+    };
+    granted & (FILE_WRITE_DATA | append) != 0
+}
+
+/// `LOCK_OPERATION`: what the caller of `MmProbeAndLockPages` means to
+/// do with the pages.
+pub const IO_READ_ACCESS: u32 = 0;
+pub const IO_WRITE_ACCESS: u32 = 1;
+pub const IO_MODIFY_ACCESS: u32 = 2;
 
 /// `MDL.MdlFlags`
 pub const MDL_MAPPED_TO_SYSTEM_VA: i16 = 0x0001;
@@ -580,7 +649,9 @@ const _: () = {
     assert!(offset_of!(IRP, StackCount) == 0x42);
     assert!(offset_of!(IRP, CurrentLocation) == 0x43);
     assert!(offset_of!(IRP, Cancel) == 0x44);
+    assert!(offset_of!(IRP, ApcEnvironment) == 0x46);
     assert!(offset_of!(IRP, UserIosb) == 0x48);
+    assert!(offset_of!(IRP, Overlay) == 0x58);
     assert!(offset_of!(IRP, UserEvent) == 0x50);
     assert!(offset_of!(IRP, CancelRoutine) == 0x68);
     assert!(offset_of!(IRP, UserBuffer) == 0x70);
@@ -610,6 +681,10 @@ const _: () = {
     assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, OutboundQuota) == 0x14);
     assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, DefaultTimeout) == 0x18);
     assert!(offset_of!(NAMED_PIPE_CREATE_PARAMETERS, TimeoutSpecified) == 0x20);
+    assert!(size_of::<MAILSLOT_CREATE_PARAMETERS>() == 0x18);
+    assert!(offset_of!(MAILSLOT_CREATE_PARAMETERS, MaximumMessageSize) == 0x04);
+    assert!(offset_of!(MAILSLOT_CREATE_PARAMETERS, ReadTimeout) == 0x08);
+    assert!(offset_of!(MAILSLOT_CREATE_PARAMETERS, TimeoutSpecified) == 0x10);
     assert!(offset_of!(DISPATCHER_HEADER, SignalState) == 0x04);
     assert!(offset_of!(DISPATCHER_HEADER, WaitListHead) == 0x08);
 };
@@ -652,6 +727,33 @@ mod layout {
         assert_eq!(ctl_code(40000, 0x901, METHOD_OUT_DIRECT, 0), 0x9C40_2406);
         assert_eq!(ctl_code(40000, 0x902, METHOD_BUFFERED, 0), 0x9C40_2408);
         assert_eq!(ctl_code(40000, 0x903, METHOD_NEITHER, 0), 0x9C40_240F);
+    }
+
+    #[test]
+    fn a_control_code_names_the_access_its_handle_needs() {
+        assert_eq!(ctl_access(ctl_code(40000, 0x900, METHOD_BUFFERED, 0)), 0);
+        assert_eq!(
+            ctl_access(ctl_code(0xFFFF, 0xFFF, METHOD_NEITHER, 1)),
+            FILE_READ_DATA
+        );
+        assert_eq!(
+            ctl_access(ctl_code(0x22, 0, METHOD_BUFFERED, 2)),
+            FILE_WRITE_DATA
+        );
+        assert_eq!(ctl_access(ctl_code(0x22, 0x801, METHOD_IN_DIRECT, 3)), 3);
+        // FSCTL_PIPE_PEEK and FSCTL_PIPE_TRANSCEIVE, from the SDK.
+        assert_eq!(ctl_access(0x0011_400C), FILE_READ_DATA);
+        assert_eq!(ctl_access(0x0011_C017), 3);
+    }
+
+    #[test]
+    fn writing_needs_write_or_append_and_a_pipe_has_no_append() {
+        assert!(may_write(FILE_WRITE_DATA, 0));
+        assert!(may_write(FILE_APPEND_DATA, 0));
+        assert!(may_write(FILE_WRITE_DATA | FILE_READ_DATA, FO_NAMED_PIPE));
+        assert!(!may_write(FILE_APPEND_DATA, FO_NAMED_PIPE));
+        assert!(!may_write(FILE_READ_DATA | 0x0010_0000, 0));
+        assert!(!may_write(0, FO_SYNCHRONOUS_IO));
     }
 
     #[test]

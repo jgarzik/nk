@@ -1,0 +1,8 @@
+# A processor looking for work is offered only the first thread of each
+# queue: one it may run that waits behind one it may not is never
+# taken, and waits while the processor sits idle.
+scenario: x86_64
+fails: thread.steal-behind
+file: lib/ke/lib.rs
+replace:                 entry = unsafe { (&raw const (*entry).next).read() };
+with:                 entry = core::ptr::null_mut();

@@ -1,0 +1,7 @@
+# The table behind FsRtlLegalAnsiCharacterArray marks no character as
+# a wildcard: a file system that lets wildcards through on a directory
+# query refuses every pattern.
+scenario: aarch64
+fails: rtl.legal-characters
+file: lib/rtl/legal.rs
+remove:         flags |= WILD_CHARACTER;

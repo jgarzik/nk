@@ -1,0 +1,7 @@
+# A class whose structure must be given its exact length takes any
+# buffer at least that long.
+scenario: x86_64
+fails: ex.sysinfo.basic
+file: lib/ex/sysinfo.rs
+replace:             Fixed::Exactly(size) => (given == size, size),
+with:             Fixed::Exactly(size) => (given >= size, size),

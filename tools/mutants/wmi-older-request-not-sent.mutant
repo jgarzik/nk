@@ -1,0 +1,7 @@
+# A driver that fails IRP_MN_REGINFO_EX is not sent IRP_MN_REGINFO: one
+# written before the newer request existed is never asked.
+scenario: x86_64
+fails: wmi.refused
+file: kernel/io/wmi.rs
+replace:                 (status, _) if !nt_success(status) && status != STATUS_BUFFER_TOO_SMALL => {
+with:                 (status, _) if !nt_success(status) && status == STATUS_BUFFER_TOO_SMALL => {

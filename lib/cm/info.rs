@@ -8,7 +8,7 @@
 //! Each formatter answers as the value formatters in the crate root do:
 //! how much fitted ([`Fit`]) and the length that holds everything.
 
-use crate::{Error, Fit, Hive, KeyId, exact, same};
+use crate::{Error, Fit, Hive, KeyId, Longest, exact, same};
 use alloc::vec::Vec;
 
 /// What the key information structures are made from.
@@ -20,14 +20,16 @@ pub struct KeyInfo<'a> {
     /// When the key was last written, as a `FILETIME`.
     pub last_write: u64,
     pub subkeys: u32,
-    /// The longest subkey name, in bytes.
+    /// The longest subkey name, in bytes: the longest there has been
+    /// since the key last had no subkeys, as Windows counts.
     pub max_name_len: u32,
-    /// The longest subkey class, in bytes.
+    /// The longest subkey class, in bytes, counted the same way.
     pub max_class_len: u32,
     pub values: u32,
-    /// The longest value name, in bytes.
+    /// The longest value name, in bytes: the longest there has been
+    /// since the key last had no values.
     pub max_value_name_len: u32,
-    /// The longest value data, in bytes.
+    /// The longest value data, in bytes, counted the same way.
     pub max_value_data_len: u32,
 }
 
@@ -66,25 +68,36 @@ impl Hive {
             .ok_or(Error::NotFound)?;
         values.remove(at);
         values.shrink_to_fit();
+        if values.is_empty() {
+            let longest = &mut self.keys[index].longest;
+            longest.value_name = 0;
+            longest.value_data = 0;
+        }
         Ok(())
     }
 
     /// What `key` holds, for the key information structures.
     pub fn info(&self, key: KeyId) -> Result<KeyInfo<'_>, Error> {
         let key = &self.keys[self.live(key)?];
-        let longest = |lengths: &mut dyn Iterator<Item = usize>| lengths.max().unwrap_or(0) as u32;
-        let children = || key.children.iter().map(|&child| &self.keys[child]);
         Ok(KeyInfo {
             name: &key.name,
             class: &key.class,
             last_write: key.last_write,
             subkeys: key.children.len() as u32,
-            max_name_len: longest(&mut children().map(|child| child.name.len() * 2)),
-            max_class_len: longest(&mut children().map(|child| child.class.len())),
+            max_name_len: key.longest.name,
+            max_class_len: key.longest.class,
             values: key.values.len() as u32,
-            max_value_name_len: longest(&mut key.values.iter().map(|value| value.name.len() * 2)),
-            max_value_data_len: longest(&mut key.values.iter().map(|value| value.data.len())),
+            max_value_name_len: key.longest.value_name,
+            max_value_data_len: key.longest.value_data,
         })
+    }
+
+    /// Have `key` remember lengths at least as long as `longest`: what
+    /// a hive file says the key has held.
+    pub fn raise_longest(&mut self, key: KeyId, longest: Longest) -> Result<(), Error> {
+        let index = self.live(key)?;
+        self.keys[index].longest.raise(longest);
+        Ok(())
     }
 
     /// The full name of `key`, from the root: `\REGISTRY\...`, each
@@ -128,6 +141,14 @@ impl Hive {
     pub fn set_class(&mut self, key: KeyId, class: &[u8]) -> Result<(), Error> {
         let index = self.live(key)?;
         self.keys[index].class = exact(class)?;
+        // The root is no key's subkey.
+        if index != 0 {
+            let parent = self.keys[index].parent;
+            self.keys[parent].longest.raise(Longest {
+                class: class.len() as u32,
+                ..Longest::default()
+            });
+        }
         Ok(())
     }
 
@@ -136,6 +157,11 @@ impl Hive {
         let index = self.live(key)?;
         self.keys[index].security = exact(descriptor)?;
         Ok(())
+    }
+
+    /// The key `key` is a subkey of; the root, for the root.
+    pub fn parent(&self, key: KeyId) -> Result<KeyId, Error> {
+        Ok(KeyId(self.keys[self.live(key)?].parent))
     }
 
     /// Say when `key` was last written, as a `FILETIME`.
@@ -178,6 +204,13 @@ pub const KEY_NODE_HEADER: usize = 24;
 pub const KEY_FULL_HEADER: usize = 44;
 /// Size of a `KEY_NAME_INFORMATION` before the name: its length.
 pub const KEY_NAME_HEADER: usize = 4;
+/// Size of a `KEY_CACHED_INFORMATION` as C counts it: last write time,
+/// title index, five counts and the name's length, 36 bytes, then the
+/// first character of a name it never holds and padding to the
+/// structure's alignment of eight.
+pub const KEY_CACHED_SIZE: usize = 40;
+/// How much of a `KEY_CACHED_INFORMATION` is written: its fields.
+const KEY_CACHED_FIELDS: usize = 36;
 /// Size of a `KEY_VALUE_BASIC_INFORMATION` before the name: title
 /// index, type, name length.
 pub const VALUE_BASIC_HEADER: usize = 12;
@@ -303,6 +336,54 @@ pub fn key_name_information(path: &[u16], out: &mut [u8]) -> (Fit, usize) {
     }
     put(out, KEY_NAME_HEADER, wide(path));
     fit(out, needed)
+}
+
+/// Write a key as a `KEY_CACHED_INFORMATION` into `out`: the counts of
+/// the full form and the length of the key's name, without name or
+/// class. It is all there or not at all: Windows wants room for the
+/// whole structure ([`KEY_CACHED_SIZE`]) and writes its fields, leaving
+/// the four bytes after them alone.
+pub fn key_cached_information(key: &KeyInfo<'_>, out: &mut [u8]) -> (Fit, usize) {
+    let [low, high] = time(key.last_write);
+    let fields = [
+        low,
+        high,
+        0,
+        key.subkeys,
+        key.max_name_len,
+        key.values,
+        key.max_value_name_len,
+        key.max_value_data_len,
+        key.name.len() as u32 * 2,
+    ];
+    const { assert!(size_of::<[u32; 9]>() == KEY_CACHED_FIELDS) };
+    if out.len() >= KEY_CACHED_SIZE && fixed(out, &fields) {
+        (Fit::All, KEY_CACHED_SIZE)
+    } else {
+        (Fit::Nothing, KEY_CACHED_SIZE)
+    }
+}
+
+/// Write a structure that is `fields` and nothing more, 32 bits each,
+/// into `out`: all of it or nothing.
+pub fn fixed_information(fields: &[u32], out: &mut [u8]) -> (Fit, usize) {
+    let needed = 4 * fields.len();
+    if fixed(out, fields) {
+        (Fit::All, needed)
+    } else {
+        (Fit::Nothing, needed)
+    }
+}
+
+/// Write a structure that is one 32-bit word of bit fields into `out`:
+/// the bits of `mask` become those of `flags`; the others, which the
+/// structure reserves, keep what `out` held, as Windows leaves them.
+pub fn flag_information(flags: u32, mask: u32, out: &mut [u8]) -> (Fit, usize) {
+    let Some(word) = out.first_chunk_mut::<4>() else {
+        return (Fit::Nothing, 4);
+    };
+    *word = (u32::from_le_bytes(*word) & !mask | flags & mask).to_le_bytes();
+    (Fit::All, 4)
 }
 
 /// Write a value as a `KEY_VALUE_BASIC_INFORMATION` into `out`: its
@@ -473,9 +554,61 @@ mod tests {
         assert_eq!(hive.set_class(long, &[1]), Err(Error::Deleted));
         assert_eq!(hive.set_security(long, &[1]), Err(Error::Deleted));
         assert_eq!(hive.set_last_write(long, 1), Err(Error::Deleted));
+        assert_eq!(hive.parent(long), Err(Error::Deleted));
         assert_eq!(hive.set_link(long, true), Err(Error::Deleted));
         assert_eq!(hive.security(long), Err(Error::Deleted));
         assert_eq!(hive.is_link(long), Err(Error::Deleted));
+    }
+
+    #[test]
+    fn the_longest_lengths_are_kept_until_nothing_is_left() {
+        let (mut hive, key) = hive();
+        let longest = |hive: &Hive| {
+            let info = hive.info(key).unwrap();
+            [
+                info.max_name_len,
+                info.max_class_len,
+                info.max_value_name_len,
+                info.max_value_data_len,
+            ]
+        };
+        hive.set_value(key, &w("Longest"), 3, &[0; 9]).unwrap();
+        hive.set_value(key, &w("V"), 3, &[0; 20]).unwrap();
+        let (long, _) = hive.create(key, &w("LongName")).unwrap();
+        let (short, _) = hive.create(key, &w("S")).unwrap();
+        hive.set_class(long, &[0; 6]).unwrap();
+        hive.set_class(short, &[0; 2]).unwrap();
+        assert_eq!(longest(&hive), [16, 6, 14, 20]);
+        // The longest of each goes; the numbers stay, as on Windows.
+        hive.delete_value(key, &w("Longest")).unwrap();
+        hive.set_value(key, &w("V"), 3, &[0; 3]).unwrap();
+        hive.delete(long).unwrap();
+        assert_eq!(longest(&hive), [16, 6, 14, 20]);
+        // With the last value, and the last subkey, they start again.
+        hive.delete_value(key, &w("V")).unwrap();
+        assert_eq!(longest(&hive), [16, 6, 0, 0]);
+        hive.delete(short).unwrap();
+        assert_eq!(longest(&hive), [0; 4]);
+        hive.set_value(key, &w("ab"), 3, &[1]).unwrap();
+        hive.create(key, &w("abc")).unwrap();
+        assert_eq!(longest(&hive), [6, 0, 4, 1]);
+        // What a hive file says a key held raises them, never lowers.
+        let said = Longest {
+            name: 2,
+            class: 8,
+            value_name: 40,
+            value_data: 0,
+        };
+        hive.raise_longest(key, said).unwrap();
+        assert_eq!(longest(&hive), [6, 8, 40, 1]);
+        // The root's class is no subkey's.
+        let root = hive.root().unwrap();
+        hive.set_class(root, &[0; 4]).unwrap();
+        assert_eq!(hive.info(root).unwrap().max_class_len, 0);
+        let (gone, _) = hive.create(key, &w("gone")).unwrap();
+        hive.opened(gone);
+        hive.delete(gone).unwrap();
+        assert_eq!(hive.raise_longest(gone, said), Err(Error::Deleted));
     }
 
     #[test]
@@ -483,6 +616,7 @@ mod tests {
         let (mut hive, key) = hive();
         let root = hive.root().unwrap();
         assert_eq!(hive.path(root), Ok(w("\\REGISTRY")));
+        assert_eq!((hive.parent(key), hive.parent(root)), (Ok(root), Ok(root)));
         assert_eq!(hive.path(key), Ok(w("\\REGISTRY\\K")));
         let (sub, _) = hive.create(key, &w("Sub Key")).unwrap();
         let path = hive.path(sub).unwrap();
@@ -583,6 +717,44 @@ mod tests {
         let all = at_every_length(KEY_FULL_HEADER, |out| key_full_information(&plain, out));
         assert_eq!(all.len(), 44);
         assert_eq!(all[12..20], [0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn cached_information_is_the_counts_and_no_name() {
+        let all = at_every_length(KEY_CACHED_SIZE, |out| key_cached_information(&KEY, out));
+        // The structure's size, of which the last four bytes are left
+        // alone.
+        assert_eq!(all.len(), 40);
+        assert_eq!(all[36..], [0xEE; 4]);
+        assert_eq!(all[..8], TIME);
+        let fields: Vec<u32> = all[8..36]
+            .chunks(4)
+            .map(|field| u32::from_le_bytes(field.try_into().unwrap()))
+            .collect();
+        // Title index, subkeys, longest name, values, longest value
+        // name and data, the length of the key's own name.
+        assert_eq!(fields, [0, 2, 10, 3, 8, 100, 6]);
+        // A structure of fixed size is there whole or not at all.
+        let all = at_every_length(12, |out| fixed_information(&[1, 2, 0x0403_0201], out));
+        assert_eq!(all, [1, 0, 0, 0, 2, 0, 0, 0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_word_of_flags_keeps_its_reserved_bits() {
+        let format = |out: &mut [u8]| flag_information(0b0101, 0b1111, out);
+        for len in 0..4 {
+            let mut short = vec![0xEE; len];
+            assert_eq!(format(&mut short), (Fit::Nothing, 4));
+            assert_eq!(short, vec![0xEE; len]);
+        }
+        // The four flags are written, set or clear; the rest stays.
+        let mut out = [0xEE; 6];
+        assert_eq!(format(&mut out), (Fit::All, 4));
+        assert_eq!(out, [0xE5, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE]);
+        // A flag outside the mask is not written.
+        let mut out = [0; 4];
+        assert_eq!(flag_information(0b11, 0b01, &mut out), (Fit::All, 4));
+        assert_eq!(out, [1, 0, 0, 0]);
     }
 
     #[test]

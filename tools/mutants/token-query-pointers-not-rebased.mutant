@@ -1,0 +1,8 @@
+# What a token query hands out points into the block as if the block
+# were at address zero: the lengths and the counts are right, and every
+# pointer a driver follows is wild.
+scenario: aarch64
+fails: se.token-query
+file: kernel/se/token.rs
+replace:         match token_information(token, class, block as u64) {
+with:         match token_information(token, class, 0) {

@@ -1,12 +1,17 @@
 //! Exceptions and interrupts: the vector table and the handler.
 //!
 //! Every vector funnels into one handler with a full register frame. A
-//! breakpoint is counted and resumed (the boot self-test uses it to prove
-//! the path works). Anything else is a fatal bugcheck with a register dump:
-//! there is no SEH yet, so no driver or kernel code can handle a fault.
+//! fault that Windows turns into an exception (an access violation on a
+//! user address, an undefined instruction, a breakpoint with no
+//! debugger, the breakpoint compiled code executes for a division by
+//! zero) is handed to the exception dispatcher with the interrupted
+//! code's `CONTEXT`, and the code is resumed with whatever a handler
+//! made of it. The rest are fatal: a bugcheck with a register dump.
 
+use super::seh::{self, Context};
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use nk_ntabi::seh::arm64::CONTEXT_FULL;
 
 /// Registers saved by the entry stub, lowest address first.
 ///
@@ -34,10 +39,28 @@ const _: () = assert!(size_of::<Frame>() == 816);
 const _: () = assert!(core::mem::offset_of!(Frame, q) == 256);
 const _: () = assert!(core::mem::offset_of!(Frame, sp) == 768);
 
-/// Exception class (ESR_EL1 bits 31:26) of a `brk` instruction.
+/// Exception classes (ESR_EL1 bits 31:26): an instruction the processor
+/// does not know; an instruction fetch and a data access that faulted,
+/// taken from this exception level; a `brk` instruction.
+const EC_UNKNOWN: u64 = 0x00;
+const EC_INSTRUCTION_ABORT: u64 = 0x21;
+const EC_DATA_ABORT: u64 = 0x25;
 const EC_BRK: u64 = 0x3C;
+/// ESR_EL1 of an abort: bits 5:0 say why, and below this value the page
+/// tables did: no translation, no permission, or an address they do not
+/// cover. Bit 6: the access was a write.
+const ABORT_STATUS: u64 = 0x3F;
+const ABORT_BY_TABLES: u64 = 0x10;
+const ABORT_WRITE: u64 = 1 << 6;
+/// SPSR_EL1: interrupts were masked; the condition flags, which are all
+/// of it a handler's context may change.
+const SPSR_I: u64 = 1 << 7;
+const SPSR_NZCV: u64 = 0xF000_0000;
 /// `brk` immediates, as Windows on arm64 assigns them.
 const BRK_BREAKPOINT: u64 = 0xF000;
+/// What a compiler for Windows puts after a division it found to be by
+/// zero, the processor having no trap for one.
+const BRK_DIVIDE_BY_ZERO: u64 = 0xF004;
 /// `__fastfail`: how MSVC-built code reports fatal corruption (a failed
 /// stack-cookie check, for one). The reason code is in x0.
 const BRK_FAST_FAIL: u64 = 0xF003;
@@ -441,8 +464,18 @@ nk_trap_common:
     ldp x22, x23, [sp, #176]
     ldp x24, x25, [sp, #192]
     ldp x26, x27, [sp, #208]
-    ldp x28, x29, [sp, #224]
-    add sp, sp, #816
+    // The stack pointer comes from the frame: an exception handler may
+    // have changed it. Nothing can be loaded into it from memory, and no
+    // register is free, so x28 and x29 make the trip through the two
+    // words below where it will point: the frame's last, already used,
+    // unless it was changed.
+    ldr x29, [sp, #768]
+    ldr x28, [sp, #224]
+    str x28, [x29, #-16]
+    ldr x28, [sp, #232]
+    str x28, [x29, #-8]
+    mov sp, x29
+    ldp x28, x29, [sp, #-16]
     eret
     .seh_endproc
 
@@ -634,24 +667,106 @@ pub fn fp_trap_test() -> Result<(), &'static str> {
     Ok(())
 }
 
-extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
-    let brk = (vector & 3 == 0 && frame.esr >> 26 == EC_BRK).then_some(frame.esr & 0xFFFF);
-    if brk == Some(BRK_BREAKPOINT) {
-        // Whether to go on is not this layer's to say. `brk` is a
-        // fault: going on means stepping past the 4-byte instruction.
-        crate::kd::breakpoint(frame.elr);
-        BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
-        frame.elr += 4;
-        if FP_CLOBBER.load(Ordering::Relaxed) {
-            // SAFETY: the routine only writes registers, as any function
-            // may.
-            HANDLER_FPCR.store(unsafe { nk_fp_clobber() }, Ordering::Relaxed);
-        }
-        return;
+/// The interrupted code as a `CONTEXT`.
+fn context_of(frame: &Frame) -> Context {
+    let mut c = seh::empty_context();
+    c.ContextFlags = CONTEXT_FULL;
+    c.Cpsr = frame.spsr as u32;
+    c.X.copy_from_slice(&frame.x[..29]);
+    (c.Fp, c.Lr, c.Sp, c.Pc) = (frame.x[29], frame.x[30], frame.sp, frame.elr);
+    for (v, [low, high]) in c.V.iter_mut().zip(frame.q) {
+        (v.Low, v.High) = (low, high as i64);
     }
+    (c.Fpcr, c.Fpsr) = (frame.fpcr as u32, frame.fpsr as u32);
+    c
+}
+
+/// Make the interrupted code resume as `c` says: every register (x18,
+/// which is the processor's, excepted on the way out), the program
+/// counter, the stack pointer and the condition flags.
+fn resume_as(frame: &mut Frame, c: &Context) {
+    frame.x[..29].copy_from_slice(&c.X);
+    (frame.x[29], frame.x[30], frame.sp, frame.elr) = (c.Fp, c.Lr, c.Sp, c.Pc);
+    frame.spsr = frame.spsr & !SPSR_NZCV | u64::from(c.Cpsr) & SPSR_NZCV;
+    for (slot, v) in frame.q.iter_mut().zip(&c.V) {
+        *slot = [v.Low, v.High as u64];
+    }
+    (frame.fpcr, frame.fpsr) = (u64::from(c.Fpcr), u64::from(c.Fpsr));
+}
+
+/// Hand the fault to the exception dispatcher as `code`. Returns if a
+/// handler has the code continue; a handler that takes the exception
+/// unwinds, and this frame is gone with the rest.
+fn deliver(frame: &mut Frame, code: u32, parameters: &[u64]) {
+    let mut context = context_of(frame);
+    // Handlers run as the interrupted code did: with interrupts on, if
+    // it had them on.
+    let enabled = frame.spsr & SPSR_I == 0;
+    if enabled {
+        super::enable_interrupts();
+    }
+    // SAFETY: the context is the interrupted code's, whose frames lie
+    // beneath this one; this function and its callers hold nothing a
+    // destructor would have to give back.
+    unsafe { crate::ke::seh::fault(&raw mut context, code, parameters) };
+    if enabled {
+        super::disable_interrupts();
+    }
+    resume_as(frame, &context);
+}
+
+extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
+    use crate::ke::seh::{
+        ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE, STATUS_ACCESS_VIOLATION, STATUS_BREAKPOINT,
+        STATUS_ILLEGAL_INSTRUCTION, STATUS_INTEGER_DIVIDE_BY_ZERO,
+    };
     // Vectors come in fours: synchronous, IRQ, FIQ, SError.
+    let class = (vector & 3 == 0).then_some(frame.esr >> 26);
+    let brk = (class == Some(EC_BRK)).then_some(frame.esr & 0xFFFF);
+    if brk == Some(BRK_BREAKPOINT) {
+        if crate::kd::breakpoint(frame.elr) {
+            BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
+            // `brk` is a fault: going on means stepping past the 4-byte
+            // instruction.
+            frame.elr += 4;
+            if FP_CLOBBER.load(Ordering::Relaxed) {
+                // SAFETY: the routine only writes registers, as any
+                // function may.
+                HANDLER_FPCR.store(unsafe { nk_fp_clobber() }, Ordering::Relaxed);
+            }
+            return;
+        }
+        return deliver(frame, STATUS_BREAKPOINT, &[0]);
+    }
     if vector & 3 == 1 {
         return super::gic::interrupt();
+    }
+    let mut stop = None;
+    match class {
+        Some(EC_BRK) if brk == Some(BRK_DIVIDE_BY_ZERO) => {
+            return deliver(frame, STATUS_INTEGER_DIVIDE_BY_ZERO, &[]);
+        }
+        Some(EC_UNKNOWN) => return deliver(frame, STATUS_ILLEGAL_INSTRUCTION, &[]),
+        Some(abort @ (EC_DATA_ABORT | EC_INSTRUCTION_ABORT))
+            if frame.esr & ABORT_STATUS < ABORT_BY_TABLES =>
+        {
+            let access = match abort {
+                EC_INSTRUCTION_ABORT => ACCESS_EXECUTE,
+                _ if frame.esr & ABORT_WRITE != 0 => ACCESS_WRITE,
+                _ => ACCESS_READ,
+            };
+            // The kernel's own access to memory that may not be there:
+            // the routine returns an error instead.
+            if let Some(resume) = seh::fixup(frame.elr) {
+                (frame.elr, frame.x[9], frame.x[10]) = (resume, frame.far, access);
+                return;
+            }
+            stop = crate::ke::seh::memory_fault(frame.far, access, frame.elr);
+            if stop.is_none() {
+                return deliver(frame, STATUS_ACCESS_VIOLATION, &[access, frame.far]);
+            }
+        }
+        _ => {}
     }
     let kind = match brk {
         Some(BRK_FAST_FAIL) => "driver fast-fail (reason code in x0)",
@@ -659,8 +774,9 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
     };
     let x = &frame.x;
     let image = crate::ldr::locate_fatal(frame.elr);
+    let stop = crate::ke::seh::StopLine(stop);
     crate::kd::bugcheck(format_args!(
-        "{kind} (vector {vector}, esr {:#x}) at pc={:#018x} in {image}\n\
+        "{stop}{kind} (vector {vector}, esr {:#x}) at pc={:#018x} in {image}\n\
          far={:#018x} sp={:#018x} spsr={:#x} x18={:#018x}\n\
          x0 ={:#018x} x1 ={:#018x} x2 ={:#018x} x3 ={:#018x}\n\
          x4 ={:#018x} x5 ={:#018x} x6 ={:#018x} x7 ={:#018x}\n\

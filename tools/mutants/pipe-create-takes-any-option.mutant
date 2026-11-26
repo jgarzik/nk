@@ -1,0 +1,7 @@
+# A pipe or a mailslot is created with whatever options the opener
+# gives: the driver is sent a create Windows' I/O manager refuses.
+scenario: x86_64
+fails: io.open.mailslot
+file: kernel/io/file.rs
+replace:         return Err(STATUS_INVALID_PARAMETER);
+with:         let _ = STATUS_INVALID_PARAMETER;

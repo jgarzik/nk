@@ -1,8 +1,12 @@
-//! Formatted output for drivers: `DbgPrint`, `_snwprintf`.
+//! Formatted output for drivers: `DbgPrint`, `_snwprintf`,
+//! `_vsnwprintf`.
 //!
-//! The functions drivers call take a variable number of arguments. Each
+//! `DbgPrint` and `_snwprintf` take a variable number of arguments. Each
 //! is entered through an assembly stub (`arch::variadic`) that passes
 //! the arguments here as an array; `nk_rtl::format` does the formatting.
+//! A `va_list` is the address of such an array (`doc/ABI.md`), so
+//! `_vsnwprintf` is an ordinary function and `_snwprintf` is a call of
+//! it.
 
 #![allow(non_snake_case)]
 
@@ -56,10 +60,11 @@ impl Arguments for Passed {
     fn counted(&mut self, address: u64, wide: bool) -> (u64, usize) {
         // `ANSI_STRING` and `UNICODE_STRING` share a shape: length in
         // bytes, capacity, buffer.
+        let string = address as *const nk_ntabi::rtl::STRING;
         // SAFETY: the driver passed a counted string.
         unsafe {
-            let bytes = usize::from((address as *const u16).read_unaligned());
-            let buffer = ((address + 8) as *const u64).read_unaligned();
+            let bytes = usize::from((&raw const (*string).Length).read_unaligned());
+            let buffer = (&raw const (*string).Buffer).read_unaligned() as u64;
             (buffer, if wide { bytes / 2 } else { bytes })
         }
     }
@@ -70,7 +75,7 @@ impl Arguments for Passed {
 ///
 /// # Safety
 /// `text` points to a NUL-terminated string of `T`.
-unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
+pub(super) unsafe fn characters<T: Copy + Into<u16> + PartialEq + Default>(
     text: *const T,
 ) -> impl Iterator<Item = u16> {
     (0..)
@@ -118,15 +123,41 @@ unsafe extern "C" fn nk_dbg_print(args: *const u64) -> u32 {
 /// `args` is the argument array of an `_snwprintf` call.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn nk_snwprintf(args: *const u64) -> i32 {
-    // SAFETY: per the contract; the buffer has room for `count`
-    // characters.
+    // SAFETY: per the contract. What follows the three named arguments
+    // is what `va_start` would point a `va_list` at.
     unsafe {
-        let buffer = args.read() as *mut u16;
-        let count = args.add(1).read() as usize;
-        let mut passed = Passed(args.add(3));
+        _vsnwprintf(
+            args.read() as *mut u16,
+            args.add(1).read() as usize,
+            args.add(2).read() as *const u16,
+            args.add(3),
+        )
+    }
+}
+
+/// [`_vsnwprintf`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/vsnprintf-vsnprintf-vsnprintf-l-vsnwprintf-vsnwprintf-l):
+/// format into `buffer`, which has room for `count` characters, taking
+/// the format's arguments from a `va_list`. Returns the number of
+/// characters written, or -1 when they do not all fit: then the buffer
+/// is full. A terminator is written only if there is room for one after
+/// the text; nothing is written past `count` characters.
+///
+/// # Safety
+/// `buffer` is writable for `count` characters, `format` is
+/// NUL-terminated, and `arguments` is a `va_list` of at least the
+/// arguments the format names.
+pub unsafe extern "C" fn _vsnwprintf(
+    buffer: *mut u16,
+    count: usize,
+    format_string: *const u16,
+    arguments: *const u64,
+) -> i32 {
+    // SAFETY: per the contract.
+    unsafe {
+        let mut passed = Passed(arguments);
         let mut produced = 0;
         format(
-            &mut characters(args.add(2).read() as *const u16),
+            &mut characters(format_string),
             true,
             &mut passed,
             &mut |c| {

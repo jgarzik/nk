@@ -9,6 +9,8 @@
 #   expect    "ok" (default), "bugcheck" or "fail"
 #   match     expect = "bugcheck": regular expression the BUGCHECK line
 #             must contain
+#   then      expect = "bugcheck": regular expression a line printed after
+#             the BUGCHECK line must contain (a bugcheck callback's)
 #   must_fail expect = "fail": exactly these tests fail
 #   accel     "tcg": emulate the processor even where the host could run
 #             it directly (x86-64 only; arm64 is always emulated)
@@ -121,7 +123,9 @@ smp = 8
 golden = "x86_64"
 
 # The harness must tell a kernel bug from a pass: a Rust panic and a stray
-# memory access each have to end the boot with a bugcheck.
+# memory access each have to end the boot with a bugcheck. A stray access
+# to kernel memory is Windows' page-fault bugcheck; one to the user half
+# is an access violation nothing handles.
 
 [x86_64-neg-panic]
 arch = "x86_64"
@@ -142,14 +146,14 @@ arch = "x86_64"
 tier = "gate"
 cmdline = "test=neg.fault"
 expect = "bugcheck"
-match = "BUGCHECK: page fault"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
 [aarch64-neg-fault]
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.fault"
 expect = "bugcheck"
-match = "BUGCHECK: synchronous exception"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
 # The low half of the address space is NK's own on both architectures:
 # a null pointer faults, and so does ordinary memory at its physical
@@ -163,7 +167,7 @@ tier = "gate"
 smp = 1
 cmdline = "test=neg.low-memory"
 expect = "bugcheck"
-match = "BUGCHECK: page fault"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 [aarch64-neg-low-memory]
 arch = "aarch64"
@@ -171,21 +175,21 @@ tier = "gate"
 smp = 1
 cmdline = "test=neg.low-memory"
 expect = "bugcheck"
-match = "BUGCHECK: synchronous exception"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 [x86_64-neg-null]
 arch = "x86_64"
 tier = "gate"
 cmdline = "test=neg.null"
 expect = "bugcheck"
-match = "BUGCHECK: page fault"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 [aarch64-neg-null]
 arch = "aarch64"
 tier = "gate"
 cmdline = "test=neg.null"
 expect = "bugcheck"
-match = "BUGCHECK: synchronous exception"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xC0000005"
 
 # Running off the kernel stack must be named as that.
 
@@ -414,6 +418,23 @@ cmdline = "test=neg.information-overstated"
 expect = "bugcheck"
 match = "BUGCHECK: a driver completed a buffered request with Information=0x40"
 
+# A dispatch routine returns success for a create request it has not
+# completed.
+
+[x86_64-neg-create-not-completed]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.create-not-completed"
+expect = "bugcheck"
+match = "BUGCHECK: a driver's dispatch routine at ntoskrnl.exe\\+0x[0-9a-f]+ returned 0x0 for a create request it had not completed"
+
+[aarch64-neg-create-not-completed]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.create-not-completed"
+expect = "bugcheck"
+match = "BUGCHECK: a driver's dispatch routine at ntoskrnl.exe\\+0x[0-9a-f]+ returned 0x0 for a create request it had not completed"
+
 [x86_64-neg-breakpoint]
 arch = "x86_64"
 tier = "gate"
@@ -485,3 +506,277 @@ tier = "gate"
 cmdline = "test=neg.protected-close"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000093 INVALID_KERNEL_HANDLE"
+
+# A routine exported as a trap (kernel/export/trap.rs) stops the system
+# naming itself when called through the address an import of it binds to.
+
+[x86_64-neg-trap]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.trap"
+expect = "bugcheck"
+match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
+
+[aarch64-neg-trap]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.trap"
+expect = "bugcheck"
+match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
+
+# FsRtlTeardownPerStreamContexts stops the system at a list of contexts
+# whose links do not lead back, as Windows' fast fail does.
+
+[x86_64-neg-stream-context-list]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.stream-context-list"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"
+
+[aarch64-neg-stream-context-list]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.stream-context-list"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"
+
+# A driver's KeBugCheckEx stops the system with its code and parameters.
+# A stop calls the bugcheck callbacks Windows calls on a system that
+# writes no crash dump, and the last of them says what was called.
+
+[x86_64-neg-bugcheck-ex]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-ex"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000000011, parameter 2 0x0000000000000022, parameter 3 0x0000000000000033, parameter 4 0xfffff88000000044\\)"
+
+[aarch64-neg-bugcheck-ex]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-ex"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000000011, parameter 2 0x0000000000000022, parameter 3 0x0000000000000033, parameter 4 0xfffff88000000044\\)"
+
+[x86_64-neg-bugcheck-callback]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-callback"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000001001,"
+then = "^NK-STOP-CALLBACK reserved1=2 order=21 triage=1 finished=3 wrong=0 others=0$"
+
+[aarch64-neg-bugcheck-callback]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.bugcheck-callback"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000E2 MANUALLY_INITIATED_CRASH: KeBugCheckEx \\(parameter 1 0x0000000000001001,"
+then = "^NK-STOP-CALLBACK reserved1=2 order=21 triage=1 finished=3 wrong=0 others=0$"
+
+# A trace provider unregistered twice stops the system: the second
+# handle is no registration.
+
+[x86_64-neg-etw-unregister-twice]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.etw-unregister-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
+
+[aarch64-neg-etw-unregister-twice]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.etw-unregister-twice"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000011D EVENT_TRACING_FATAL_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004,"
+
+# An exception no handler takes stops the system with Windows' bugcheck
+# for where it was raised: in a system thread, in a system service made
+# for user mode (the exception's code not widened with its sign), in a
+# DPC routine, whose exception is not offered to the code the DPC
+# interrupted.
+
+[x86_64-neg-seh-thread]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
+
+[x86_64-neg-seh-service]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-service"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
+
+[x86_64-neg-seh-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
+
+[aarch64-neg-seh-thread]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B21 \\(parameter 1 0xffffffffe04e4b21\\)"
+
+[aarch64-neg-seh-service]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-service"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B22 \\(parameter 1 0x00000000e04e4b22\\)"
+
+[aarch64-neg-seh-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B23 \\(parameter 1 0xffffffffe04e4b23\\)"
+
+# A function with no unwind entry between a raise and a willing handler
+# stops the system, named: never a guess at its frame.
+
+[x86_64-neg-seh-no-entry]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-no-entry"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"
+
+[aarch64-neg-seh-no-entry]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-no-entry"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B24 .*the stack cannot be searched: ntoskrnl\\.exe\\+0x[0-9a-f]+ has no unwind entry"
+
+# A memory fault that is no exception on Windows is none here, whatever
+# `__try` surrounds it: on a kernel address, and at DISPATCH_LEVEL.
+
+[x86_64-neg-seh-kernel-fault]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-kernel-fault"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x[0-9A-F]{8} \\(parameter 1 0xfffff88[0-9a-f]{9}, parameter 2 0x0\\)"
+
+[x86_64-neg-seh-fault-at-dispatch]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.seh-fault-at-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"
+
+[aarch64-neg-seh-kernel-fault]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-kernel-fault"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x[0-9A-F]{8} \\(parameter 1 0xfffff88[0-9a-f]{9}, parameter 2 0x0\\)"
+
+[aarch64-neg-seh-fault-at-dispatch]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.seh-fault-at-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000000A IRQL_NOT_LESS_OR_EQUAL: 0x00008000 .*at IRQL 2"
+
+# The conformance driver nkc-seh-fatal: each request stops Windows
+# (oracle/nkc-seh-fatal-*.txt) with the bugcheck for where its exception
+# was raised, or for the fault that is no exception. NK must stop the
+# same way at the same step; arm64 is held to the x86-64 recording.
+
+[x86_64-oracle-nkc-seh-fatal-dispatch]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B11 \\(parameter 1 0x00000000e04e4b11\\)"
+
+[aarch64-oracle-nkc-seh-fatal-dispatch]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dispatch"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000003B SYSTEM_SERVICE_EXCEPTION: 0xE04E4B11 \\(parameter 1 0x00000000e04e4b11\\)"
+
+[x86_64-oracle-nkc-seh-fatal-work]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-work"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B12 \\(parameter 1 0xffffffffe04e4b12\\)"
+
+[aarch64-oracle-nkc-seh-fatal-work]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-work"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B12 \\(parameter 1 0xffffffffe04e4b12\\)"
+
+[x86_64-oracle-nkc-seh-fatal-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B13 \\(parameter 1 0xffffffffe04e4b13\\)"
+
+[aarch64-oracle-nkc-seh-fatal-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B13 \\(parameter 1 0xffffffffe04e4b13\\)"
+
+[x86_64-oracle-nkc-seh-fatal-kernel-read]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-kernel-read"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x4E4B0000 \\(parameter 1 0xfffff7804e4b0000, parameter 2 0x0\\)"
+
+[aarch64-oracle-nkc-seh-fatal-kernel-read]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-kernel-read"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA: 0x4E4B0000 \\(parameter 1 0xfffff7804e4b0000, parameter 2 0x0\\)"
+
+[x86_64-oracle-nkc-seh-fatal-thread]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B15 \\(parameter 1 0xffffffffe04e4b15\\)"
+
+[aarch64-oracle-nkc-seh-fatal-thread]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-seh-fatal-thread"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000007E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED: 0xE04E4B15 \\(parameter 1 0xffffffffe04e4b15\\)"
+
+# A DPC routine of nkc-cross raises while the thread that queued the DPC
+# is inside a __try: the exception is the DPC's, nothing handles it, and
+# NK stops as Windows did.
+
+[x86_64-oracle-nkc-cross-dpc]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=oracle.nkc-cross-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(parameter 1 0xffffffffe04e4b41\\)"
+
+[aarch64-oracle-nkc-cross-dpc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=oracle.nkc-cross-dpc"
+expect = "bugcheck"
+match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(parameter 1 0xffffffffe04e4b41\\)"
