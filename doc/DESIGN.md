@@ -1013,7 +1013,15 @@ sees it. A null buffer that it would copy is no buffer, and its length
 goes to the driver as zero; a direct method's second buffer keeps its
 length, and null fails the probe. For `METHOD_NEITHER` the driver is handed both addresses as they
 are, and what is there is the driver's to find out. The oracle's
-requests are user mode's, their buffers pages of the user range. Completion follows the Windows
+requests are user mode's, their buffers pages of the user range.
+
+A request for user mode is also held to what its handle was granted,
+before any driver sees it (`STATUS_ACCESS_DENIED`): `FILE_READ_DATA` to
+read; `FILE_WRITE_DATA` to write, or `FILE_APPEND_DATA` unless the file
+is a named pipe; for a control request the access its code names (bits
+14 and 15). Kernel mode's handle is asked for nothing.
+
+Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
 copy results to the requestor and signal its event. A buffered request's
 results are copied only as far as the requestor asked; a driver that

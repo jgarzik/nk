@@ -34,6 +34,7 @@ use core::ffi::c_void;
 use nk_ntabi::io::*;
 use nk_ntabi::se::ACCESS_STATE;
 use nk_ntabi::status::*;
+use nk_ob::handles::Mode;
 
 /// What a request came back with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +46,8 @@ pub struct IoResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoError {
     NoMemory,
-    /// The handle does not name an open file.
+    /// The handle does not name an open file, or (for user mode) was
+    /// not granted the access the request needs: the status says which.
     Handle(NTSTATUS),
     /// The driver returned something other than `STATUS_PENDING` without
     /// having completed the request, which the driver contract forbids.
@@ -654,9 +656,45 @@ pub unsafe extern "C" fn IoGetDeviceObjectPointer(
 /// The open file `handle` names, with a reference for a request to
 /// hold.
 fn file_of(handle: u64) -> Result<*mut FILE_OBJECT, IoError> {
-    handle::reference(handle, Some(&raw const object::FILE_TYPE))
-        .map(<*mut u8>::cast)
-        .map_err(IoError::Handle)
+    file_for(handle, KERNEL_MODE, Needs::All(0))
+}
+
+/// What a request made for user mode needs its handle to have been
+/// granted, as the system service that makes the request on Windows
+/// asks. Kernel mode's handle is asked for nothing.
+#[derive(Clone, Copy)]
+enum Needs {
+    /// Every right of the mask: `FILE_READ_DATA` to read, and for a
+    /// control request what its code says (`ctl_access`).
+    All(u32),
+    /// To write (`may_write`).
+    Write,
+}
+
+/// The open file `handle` names, with a reference, for a request made
+/// on behalf of `mode` that needs `needs` of the handle. User mode's
+/// handle without it is refused: `STATUS_ACCESS_DENIED`.
+fn file_for(handle: u64, mode: i8, needs: Needs) -> Result<*mut FILE_OBJECT, IoError> {
+    let (mode, all) = match (mode, needs) {
+        (KERNEL_MODE, _) => (Mode::Kernel, 0),
+        (_, Needs::All(mask)) => (Mode::User, mask),
+        (_, Needs::Write) => (Mode::User, 0),
+    };
+    let (body, information) =
+        handle::reference_for(handle, Some(&raw const object::FILE_TYPE), all, mode)
+            .map_err(IoError::Handle)?;
+    let file = body.cast::<FILE_OBJECT>();
+    // SAFETY: an open file, referenced just above.
+    unsafe {
+        if mode == Mode::User
+            && matches!(needs, Needs::Write)
+            && !may_write(information.granted, (*file).Flags)
+        {
+            object::dereference(body);
+            return Err(IoError::Handle(STATUS_ACCESS_DENIED));
+        }
+    }
+    Ok(file)
 }
 
 /// A requestor's buffer, as a system service is given it: an address
@@ -753,8 +791,9 @@ unsafe fn discard(irp: *mut IRP) {
 }
 
 /// Build a request for the open file `handle` names and send it on
-/// behalf of `mode`. The request holds the file object until it has
-/// been waited for. A request `build` gives up on is freed.
+/// behalf of `mode`, which if it is user mode needs `needs` of the
+/// handle. The request holds the file object until it has been waited
+/// for. A request `build` gives up on is freed.
 ///
 /// # Safety
 /// `build` sets up the fresh IRP it is given for the file's device;
@@ -765,9 +804,10 @@ unsafe fn send(
     major: u8,
     parameters: impl FnOnce(*mut FILE_OBJECT) -> [u64; 4],
     mode: i8,
+    needs: Needs,
     build: impl FnOnce(*mut FILE_OBJECT, *mut IRP) -> Result<(), IoError>,
 ) -> Result<Pending, IoError> {
-    let file = file_of(handle)?;
+    let file = file_for(handle, mode, needs)?;
     // SAFETY: `file` is an open file, referenced.
     let built = unsafe { request(file, major, parameters(file)) }.and_then(|irp| {
         build(file, irp).map(|()| irp).inspect_err(|_| {
@@ -846,8 +886,13 @@ unsafe fn transfer(handle: u64, major: u8, buffer: Buffer, mode: i8) -> Result<P
         }
         Ok(())
     };
+    let needs = if major == IRP_MJ_READ {
+        Needs::All(FILE_READ_DATA)
+    } else {
+        Needs::Write
+    };
     // SAFETY: per the contract.
-    unsafe { send(handle, major, parameters, mode, build) }
+    unsafe { send(handle, major, parameters, mode, needs, build) }
 }
 
 /// Read up to `buffer.len()` bytes.
@@ -878,6 +923,8 @@ pub fn write(handle: u64, buffer: &[u8]) -> Result<IoResult, IoError> {
 /// Read or write (`major`) on behalf of user mode, as `NtReadFile` and
 /// `NtWriteFile` do: `buffer` is wherever the requestor says. One the
 /// I/O manager cannot use fails the request with the access violation.
+/// The handle must have been granted the access to read, or to write or
+/// append.
 pub fn user_transfer(handle: u64, major: u8, buffer: Buffer) -> Result<IoResult, IoError> {
     // SAFETY: a user-mode buffer is only used through checks.
     let pending = unsafe { transfer(handle, major, buffer, USER_MODE) };
@@ -953,7 +1000,8 @@ pub fn fs_control(
 /// requestor says. For the buffered and direct methods the I/O manager
 /// probes and copies them, and one it cannot use fails the request with
 /// the access violation; for `METHOD_NEITHER` the driver is handed the
-/// addresses as they are.
+/// addresses as they are. The handle must have been granted the access
+/// the control code names.
 pub fn user_control(
     handle: u64,
     major: u8,
@@ -1069,6 +1117,7 @@ unsafe fn control(
         }
         Ok(())
     };
+    let needs = Needs::All(ctl_access(code));
     // SAFETY: per the contract.
-    unsafe { send(handle, major, parameters, mode, build) }
+    unsafe { send(handle, major, parameters, mode, needs, build) }
 }
