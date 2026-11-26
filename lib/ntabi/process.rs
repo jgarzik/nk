@@ -38,6 +38,10 @@ pub const SERVER_SILO: usize = 0x870;
 /// null for a process in none, which reads as session 0. The System
 /// process is in none.
 pub const SESSION: usize = 0x558;
+/// `QuotaBlock`: what the process's pool and page-file use is charged
+/// to. Windows never charges the System process and never looks at its
+/// block for that; NK leaves the field null.
+pub const QUOTA_BLOCK: usize = 0x568;
 /// `ImageFileName`: the image's name, 15 bytes, zero padded.
 pub const IMAGE_FILE_NAME: usize = 0x5A8;
 pub const IMAGE_FILE_NAME_LEN: usize = 15;

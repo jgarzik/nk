@@ -14,6 +14,7 @@ use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use nk_ntabi::ke::{KAPC_STATE, KAPC_STATE_NOT_ATTACHED};
 use nk_ntabi::process as layout;
+use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
 use nk_ntabi::thread as thread_layout;
 
 /// A variable a driver imports that holds a process: the import is
@@ -155,6 +156,43 @@ pub unsafe extern "C" fn KeUnstackDetachProcess(apc_state: *mut KAPC_STATE) {
              attached (saved process {saved:p})"
         ));
     }
+}
+
+/// Stop unless `process` is the System process: quota is asked about
+/// a process, and there is no other.
+fn only_the_system_process(routine: &str, process: *mut c_void) {
+    if process != system().cast() {
+        crate::kd::bugcheck(format_args!(
+            "{routine}: {process:p} is not the System process, and there is no other"
+        ));
+    }
+}
+
+/// `PsChargeProcessPagedPoolQuota` (`ntoskrnl.exe` exports it; the
+/// kit's headers do not declare it): charge `amount` bytes of paged
+/// pool to a process's quota. The System process is charged nothing,
+/// whatever the amount: Windows compares the process with
+/// `PsInitialSystemProcess` and answers success without looking at a
+/// quota block, and so does NK, which has no other process to charge.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsChargeProcessPagedPoolQuota(
+    process: *mut c_void,
+    _amount: usize,
+) -> NTSTATUS {
+    only_the_system_process("PsChargeProcessPagedPoolQuota", process);
+    STATUS_SUCCESS
+}
+
+/// `PsReturnProcessPagedPoolQuota` (exported, not in the kit's
+/// headers): give back quota [`PsChargeProcessPagedPoolQuota`] charged.
+/// Nothing was charged to the System process, and nothing is returned.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsReturnProcessPagedPoolQuota(process: *mut c_void, _amount: usize) {
+    only_the_system_process("PsReturnProcessPagedPoolQuota", process);
 }
 
 /// The running thread's client id: its process's id, then its own.
@@ -454,6 +492,29 @@ pub fn attach_test() -> Result<(), &'static str> {
     unsafe { KeUnstackDetachProcess(state.as_mut_ptr().cast()) };
     if PsGetCurrentProcess() != process || crate::ke::irql::current() != before {
         return Err("a detach moved the thread or the IRQL");
+    }
+    Ok(())
+}
+
+/// The System process is charged no quota: any amount is fine, giving
+/// it back is too, and neither touches the process's quota block,
+/// which it does not have.
+pub fn quota_test() -> Result<(), &'static str> {
+    let process = system();
+    let pool = crate::mm::pool::usage().blocks;
+    // SAFETY: the System process, here and below.
+    let block = || unsafe { process.add(layout::QUOTA_BLOCK).cast::<usize>().read() };
+    for amount in [0, 4096, usize::MAX] {
+        // SAFETY: as above.
+        unsafe {
+            if PsChargeProcessPagedPoolQuota(process.cast(), amount) != STATUS_SUCCESS {
+                return Err("the System process was refused quota");
+            }
+            PsReturnProcessPagedPoolQuota(process.cast(), amount);
+        }
+    }
+    if block() != 0 || crate::mm::pool::usage().blocks != pool {
+        return Err("charging the System process left something behind");
     }
     Ok(())
 }

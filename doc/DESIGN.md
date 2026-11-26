@@ -289,6 +289,12 @@ The id routines read those fields (`PsGetCurrentProcessId`,
 `Session` is null, which Windows reads as session 0, and so do
 `PsGetProcessSessionId` and `PsGetThreadSessionId`.
 
+The System process is charged no quota, as on Windows, where the quota
+routines know it by `PsInitialSystemProcess` and answer success
+without a look at a quota block: `PsChargeProcessPagedPoolQuota`
+succeeds for any amount and `PsReturnProcessPagedPoolQuota` does
+nothing. Its `QuotaBlock` is null.
+
 A thread attaching to a process (`KeStackAttachProcess`) can only name
 the one it is in. Windows saves nothing then and marks the caller's
 `KAPC_STATE` with a 1 where the process would be; NK does exactly that,

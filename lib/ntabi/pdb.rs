@@ -300,6 +300,7 @@ fn process_matches_the_kernel() {
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
     assert_eq!(SESSION, field("Session"));
     assert_eq!(JOB, field("Job"));
+    assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));
     assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
     // The token pointer is a fast reference: one pointer-sized word

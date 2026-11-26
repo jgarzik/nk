@@ -15,6 +15,7 @@ pub static GROUP: Group = Group {
         "ps.identity",
         "ps.attach",
         "ps.thread-information",
+        "ps.quota",
         "ps.token",
         "ob.namespace.paths",
         "ps.silo",
@@ -69,6 +70,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         "calls:",
         crate::ps::thread_information_test(),
     );
+    r.check("ps.quota", crate::ps::process::quota_test);
     counted(
         r,
         "ps.token",
