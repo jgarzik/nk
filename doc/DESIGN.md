@@ -2704,6 +2704,13 @@ code).
   library for what `pci.sys` imports from it. NK does not call its
   `PshedInitialize`, which takes Windows' loader block, nor any other
   of its routines.
+- `HalBugCheckSystem` (`kernel/hal/fatal.rs`), which `pshed.dll` calls
+  for a fatal error, stops the system as Windows does: by the record's
+  first section that is an NMI not the hypervisor's
+  (`0x80 NMI_HARDWARE_FAILURE`) or a machine check
+  (`0x124 WHEA_UNCORRECTABLE_ERROR`: the source's type, the record, the
+  two halves of the bank's status), and with `0x124` and no status for
+  a record with neither.
 
 ## Stopping the system
 
