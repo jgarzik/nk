@@ -1,0 +1,8 @@
+# A thread whose priority another processor raised while its own was
+# putting it aside for a higher thread is queued at the new priority
+# and left there: the lesser thread keeps the processor until its
+# quantum ends.
+scenario: x86_64
+fails: thread.raise-preempted
+file: kernel/ke/thread.rs
+remove:                         reconsider(here);

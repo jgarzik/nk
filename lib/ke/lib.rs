@@ -462,14 +462,21 @@ impl ReadyQueues {
         }
     }
 
+    /// The thread [`take`](Self::take) would take, with its priority,
+    /// left where it is: for whoever must look at a thread before
+    /// deciding to have it.
+    pub fn first(&self, floor: u8) -> Option<(*mut ListEntry, u8)> {
+        let priority = self.highest().filter(|&p| p >= floor)?;
+        Some((self.queues[usize::from(priority)].0, priority))
+    }
+
     /// Take the first thread of the highest non-empty queue, if its
     /// priority is at least `floor`. Returns it with its priority.
     ///
     /// # Safety
     /// Every queued link is valid.
     pub unsafe fn take(&mut self, floor: u8) -> Option<(*mut ListEntry, u8)> {
-        let priority = self.highest().filter(|&p| p >= floor)?;
-        let entry = self.queues[usize::from(priority)].0;
+        let (entry, priority) = self.first(floor)?;
         // SAFETY: per the contract; the summary bit says the queue is
         // not empty.
         unsafe { self.remove(entry, priority) };
@@ -885,13 +892,19 @@ mod tests {
         // SAFETY: the nodes outlive the queues' use of them.
         unsafe {
             assert_eq!((ready.highest(), ready.take(0)), (None, None));
+            assert_eq!(ready.first(0), None);
             ready.insert(p[0], 8, false);
             ready.insert(p[1], 8, false);
             ready.insert(p[2], 31, false);
             ready.insert(p[3], 0, false);
             ready.insert(p[4], 8, true);
             assert_eq!(ready.highest(), Some(31));
+            // A look takes nothing: the same thread is there to take.
+            assert_eq!(ready.first(0), Some((p[2], 31)));
+            assert_eq!(ready.first(31), Some((p[2], 31)));
             assert_eq!(ready.take(0), Some((p[2], 31)));
+            assert_eq!(ready.first(9), None);
+            assert_eq!(ready.first(8), Some((p[4], 8)));
             // At the front goes first; the rest in order of arrival.
             assert_eq!(ready.take(0), Some((p[4], 8)));
             assert_eq!(ready.take(0), Some((p[0], 8)));

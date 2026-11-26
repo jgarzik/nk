@@ -276,8 +276,12 @@ rules stand in for the lock:
   processors each waiting for the thread the next is leaving. No two
   processors' ready queues are ever locked together.
 - **The next thread cleans up.** The thread switched to clears the flag
-  of the one before it, or frees it if it exited. A thread never frees
-  its own stack.
+  of the one before it, or buries it if it exited. A thread never frees
+  its own stack. The burial signals the thread and drops the thread's
+  reference to itself under the thread's lock (its header's object
+  lock, below), so that nobody sees the one without the other; the last
+  reference may then go from anywhere, and the thread's delete
+  procedure takes and releases that lock before the block is freed.
 
 A thread's priority can be changed by another thread while the thread
 runs, waits or is queued, and no one lock covers all three. Two rules
@@ -294,6 +298,15 @@ do:
   the changer finds the thread queued and moves it, under that queue's
   lock. So a thread is never left queued at a priority it no longer
   has.
+- **Whoever queues, answers for the queue.** A changer that finds the
+  thread on no queue does nothing more about a raise. So a processor
+  looking for work reads another's best thread where it is, under that
+  queue's lock, and takes it off only to run it. And a processor that
+  queues a thread has the queue's processor look again: always, for a
+  thread made ready; for the thread it is itself leaving, when the
+  priority it queued the thread at is above the one it chose the next
+  thread against. (A thread put back because it is still leaving its
+  last stack is put back for the idle thread, which looks at once.)
 
 A thread at `DISPATCH_LEVEL` or above is never switched away from:
 preemption happens only at the end of an interrupt that returns below
@@ -323,7 +336,9 @@ the timer's own lock to signal it; a timer that was set again in
 between is left alone.
 
 A thread's lock also serialises changes of its priority ("Switching
-threads" above): a ready queue's lock is taken inside it. And it
+threads" above): a ready queue's lock is taken inside it. A thread's
+delete procedure takes it as a barrier, whatever its caller holds: the
+burial it waits out takes nothing inside it but wait registers. And it
 covers the thread's alert state (`Alerted`, `Alertable`, `WaitMode`).
 A thread takes its own lock, holding no other, to say its wait is
 alertable, after looking for an alert left for it, and again to say

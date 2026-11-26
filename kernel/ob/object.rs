@@ -201,7 +201,7 @@ pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAM
 pub static THREAD_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 1,
     &THREAD_NAME,
-    Some(crate::se::impersonate::thread_deleted),
+    Some(crate::ke::thread::deleted),
 );
 /// Devices (`DEVICE_OBJECT`).
 pub static DEVICE_TYPE: ObjectType = ObjectType::new(
@@ -646,6 +646,22 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
         ));
     }
     left
+}
+
+/// Drop a reference unless it is the last one; says whether it was
+/// dropped. For an owner that must give its reference up while it
+/// still holds a lock inside the object.
+///
+/// # Safety
+/// As [`dereference`], except that the caller still owns the reference
+/// when the answer is `false`.
+pub unsafe fn dereference_unless_last(body: *mut u8) -> bool {
+    // SAFETY: per the contract.
+    unsafe { pointer_count(body) }
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            (count > 1).then(|| count - 1)
+        })
+        .is_ok()
 }
 
 /// [`ObfDereferenceObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obfdereferenceobject):

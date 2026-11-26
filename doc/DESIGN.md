@@ -287,8 +287,13 @@ switch is not left to whatever interrupt comes next.
 The preempted thread resumes inside that interrupt's frame on its own
 stack. The switch saves what a call preserves on the outgoing stack
 (xmm6-15 and MXCSR, or d8-d15 and FPCR, included) and the stack pointer
-in the thread's `KernelStack`. An exited thread is freed by the thread
-that runs next. The SMP rules are in `doc/LOCKING.md`.
+in the thread's `KernelStack`. An exited thread is buried by the thread
+that runs next: its stack is freed, the reference it held on itself is
+dropped, and it is signalled. Its end cannot be seen before the burial:
+a wait for a thread returns, and a look at one finds it signalled, only
+once the thread is no longer counted and holds nothing, so its memory
+goes with the last reference of whoever watched. The SMP rules are in
+`doc/LOCKING.md`.
 
 `PsCreateSystemThread` makes the thread, opens the creator's handle and
 writes it out, and only then makes the thread ready, as Windows does.
