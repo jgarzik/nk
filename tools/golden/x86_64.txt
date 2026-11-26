@@ -270,6 +270,7 @@ ldr.lib.bind ok
 ldr.lib.counts ok
 ldr.lib.refused ok
 ldr.lib.as-service ok
+ldr.lib.no-memory ok
 io.requestor-process ok
 io.file-generic-mapping ok
 fsrtl.teardown-stream-contexts ok

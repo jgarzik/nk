@@ -375,6 +375,10 @@ fn library(name: &[u8], depth: usize, held: &mut Vec<u64>) -> Result<Module, Loa
                     module: lossy(name),
                 });
             };
+            // Room to count the importer before the library is loaded:
+            // one loaded and then not counted would have nobody to
+            // unload it.
+            held.try_reserve_exact(1).map_err(|_| LoadError::NoMemory)?;
             load_library(name, file, depth + 1).inspect_err(|error| refused(name, error))?
         }
     };
@@ -404,12 +408,31 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
     let Some(module) = MODULES.lock().named(name.as_bytes()) else {
         unreachable!("an image just loaded is in the table of images");
     };
+    // Its place in the list of libraries, before any of its code runs:
+    // without one it is unloaded as an image that was never initialised.
+    let give_up = |image: &Image| {
+        unload_image(image);
+        with_libraries(Vec::shrink_to_fit);
+    };
+    if with_libraries(|libraries| libraries.try_reserve_exact(1)).is_err() {
+        unload_image(&image);
+        return Err(LoadError::NoMemory);
+    }
     if let Some(initialize) = own_export(&module, b"DllInitialize") {
-        let mut path: Vec<u16> = "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\"
-            .encode_utf16()
-            .chain(String::from_utf8_lossy(module.stem()).encode_utf16())
-            .chain([0])
-            .collect();
+        const SERVICES: &str = "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+        // The file name without its extension, as `Module::stem`.
+        let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        let mut path: Vec<u16> = Vec::new();
+        // No string is longer in UTF-16 units than in UTF-8 bytes.
+        if path
+            .try_reserve_exact(SERVICES.len() + stem.len() + 1)
+            .is_err()
+        {
+            give_up(&image);
+            return Err(LoadError::NoMemory);
+        }
+        path.extend(SERVICES.encode_utf16().chain(stem.encode_utf16()));
+        path.push(0);
         let bytes = (path.len() - 1) * 2;
         let mut registry = UNICODE_STRING {
             Length: bytes as u16,
@@ -430,7 +453,7 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
             ) as u32 as NTSTATUS
         };
         if !nt_success(status) {
-            unload_image(&image);
+            give_up(&image);
             return Err(LoadError::LibraryFailed {
                 module: name.into(),
                 status,
@@ -438,10 +461,8 @@ fn load_library(name: &str, file: &[u8], depth: usize) -> Result<Module, LoadErr
         }
     }
     let unload = own_export(&module, b"DllUnload");
-    with_libraries(|libraries| {
-        libraries.reserve_exact(1);
-        libraries.push(Library { image, unload });
-    });
+    // In the room made above.
+    with_libraries(|libraries| libraries.push(Library { image, unload }));
     Ok(module)
 }
 

@@ -1032,7 +1032,10 @@ not load its target.
   the next importer loads it afresh. As Microsoft documents, a library
   without `DllUnload`, or whose `DllUnload` fails, stays loaded.
 - **A refused importer leaves nothing.** Its libraries lose it as an
-  importer again, and one loaded for it alone is unloaded.
+  importer again, and one loaded for it alone is unloaded. The memory
+  to count an importer and to list a library is taken before the
+  library is loaded and before its code runs, so a load that runs out
+  of memory fails with nothing loaded and nothing to undo.
 
 What a refused load is called is what Windows' `NtLoadDriver` returns
 on the reference system; the transcripts (`oracle/nkc-lib*.txt`) show

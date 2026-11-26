@@ -25,6 +25,7 @@ pub static GROUP: Group = Group {
         "ldr.lib.as-service",
         "ldr.lib.absent",
         "ldr.lib.forwarder",
+        "ldr.lib.no-memory",
     ],
     run,
     manual: false,
@@ -236,6 +237,41 @@ fn absent() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Importing from a library takes memory at several points: to count
+/// the importer, to list the library, to tell it its name. Whichever
+/// of them the pool refuses, the import fails for lack of memory and
+/// the library is not left loaded with nobody to unload it.
+fn no_memory() -> Result<(), &'static str> {
+    let before = resources();
+    // How many allocations an import takes when all are granted.
+    crate::rt::watch(0);
+    let importer = TestImporter::of(LIBRARY);
+    let granted = crate::rt::unwatch();
+    drop(importer.map_err(|_| "the library could not be imported from")?);
+    if granted == 0 || ldr::module_named(LIBRARY).is_some() {
+        return Err("an import allocated nothing, or its library outlived it");
+    }
+    // The last first: the one made once the library is loaded.
+    for refuse in (1..=granted).rev() {
+        crate::rt::watch(refuse);
+        let importer = TestImporter::of(LIBRARY);
+        crate::rt::unwatch();
+        let left = ldr::module_named(LIBRARY).is_some();
+        match importer {
+            Err(LoadError::NoMemory) => {}
+            Err(_) => return Err("an import refused memory failed for another reason"),
+            Ok(_) => return Err("an import went through without the memory it asked for"),
+        }
+        if left {
+            return Err("a library whose importer was not counted for lack of memory stays loaded");
+        }
+    }
+    if resources() != before {
+        return Err("imports that failed for lack of memory left something behind");
+    }
+    Ok(())
+}
+
 /// The export directory of an image that exists only in this test, at
 /// RVA `DIR`: `addresses` from ordinal `BASE`, the `named` exports
 /// (name and slot, sorted by name), and forwarders in the slots
@@ -371,4 +407,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("ldr.lib.counts", counts);
     r.check("ldr.lib.refused", refused);
     r.check("ldr.lib.as-service", as_service);
+    r.check("ldr.lib.no-memory", no_memory);
 }
