@@ -1,12 +1,14 @@
 //! Tests of what the I/O manager does for a requestor before a driver
 //! sees the request and after the driver is done with it: the access a
-//! user-mode request needs of its handle, and the memory it may name as
-//! its buffers.
+//! user-mode request needs of its handle, the memory it may name as
+//! its buffers, and what becomes of results that cannot be copied to
+//! it.
 //!
 //! The driver is here, in Rust, as in `pend`: what is under test is the
 //! I/O manager's side.
 
-use crate::io::file::{self, IoError, OpenRequest};
+use super::USER_OUTPUT;
+use crate::io::file::{self, IoError, IoResult, OpenRequest};
 use crate::io::{device, irp};
 use crate::mm::{self, pool, user};
 use crate::test::{Group, Report};
@@ -17,7 +19,11 @@ use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["io.user.access", "io.user.firmware-buffer"],
+    names: &[
+        "io.user.access",
+        "io.user.firmware-buffer",
+        "io.user.copy-out-fault",
+    ],
     run,
     manual: false,
 };
@@ -60,12 +66,43 @@ unsafe extern "C" fn open_or_close(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTST
     }
 }
 
+/// Buffered control requests during which the requestor's output
+/// buffer, the page at `USER_OUTPUT`, goes away: answered in full, at
+/// once, or marked pending first.
+const GONE: u32 = ctl_code(0x22, 0x810, METHOD_BUFFERED, 0);
+const GONE_PENDED: u32 = ctl_code(0x22, 0x811, METHOD_BUFFERED, 0);
+
 /// # Safety
 /// Called as a dispatch routine for a read, write or control request.
 unsafe extern "C" fn serve(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
     SERVED.fetch_add(1, Ordering::AcqRel);
-    // SAFETY: a live IRP being dispatched.
-    unsafe { succeed(irp) }
+    // SAFETY: a live IRP being dispatched; a buffered request's system
+    // buffer is as long as the output asked for.
+    unsafe {
+        let location = (*irp).CurrentStackLocation;
+        let code = match (*location).MajorFunction {
+            IRP_MJ_DEVICE_CONTROL => (*location).Parameters[2] as u32,
+            _ => 0,
+        };
+        if code != GONE && code != GONE_PENDED {
+            return succeed(irp);
+        }
+        // What another thread of the requestor's process may do while
+        // its request is served.
+        user::unmap_pages(USER_OUTPUT, 1);
+        let wanted = (*location).Parameters[0] as usize;
+        (*irp).SystemBuffer.cast::<u8>().write_bytes(0x5A, wanted);
+        (*irp).IoStatus.Status = STATUS_SUCCESS;
+        (*irp).IoStatus.Information = wanted;
+        if code == GONE_PENDED {
+            // `IoMarkIrpPending`.
+            (*location).Control |= SL_PENDING_RETURNED;
+            irp::IofCompleteRequest(irp, 0);
+            return STATUS_PENDING;
+        }
+        irp::IofCompleteRequest(irp, 0);
+        STATUS_SUCCESS
+    }
 }
 
 /// Make the driver and its device, run `test`, and take both down.
@@ -258,6 +295,59 @@ fn firmware_buffer() -> Result<u32, &'static str> {
     Ok(requests.len() as u32)
 }
 
+/// A user-mode requestor's buffer is probed when the request is made
+/// and may be gone when the results are copied to it. The fault is the
+/// request's final status, as on Windows, where the exception of the
+/// copy becomes `IoStatus.Status`: what the system service returns for
+/// a request the driver pended. For one the driver completed before
+/// its dispatch routine returned, the service returns the routine's
+/// own status. Either way the driver kept its contract. Returns the
+/// requests made.
+fn copy_out_fault() -> Result<u32, &'static str> {
+    let handle = open_for(0x1F_01FF, false)?;
+    let output = file::Buffer {
+        address: USER_OUTPUT as usize,
+        len: 8,
+    };
+    let mut results = [Err(IoError::NoMemory); 2];
+    for (result, code) in results.iter_mut().zip([GONE, GONE_PENDED]) {
+        if user::map_pages(USER_OUTPUT, 1).is_err() {
+            file::close(handle);
+            return Err("cannot map a user page");
+        }
+        *result = file::user_control(
+            handle,
+            IRP_MJ_DEVICE_CONTROL,
+            code,
+            file::Buffer::NONE,
+            output,
+        );
+        if user::frame_of(USER_OUTPUT).is_some() {
+            user::unmap_pages(USER_OUTPUT, 1);
+            file::close(handle);
+            return Err("the driver was not sent the request, or left the buffer mapped");
+        }
+    }
+    file::close(handle);
+    SERVED.store(0, Ordering::Release);
+    if matches!(results[0], Err(IoError::StatusMismatch { .. })) {
+        return Err("results that could not be copied out were blamed on the driver's statuses");
+    }
+    let came_back = |status| {
+        Ok(IoResult {
+            status,
+            information: 8,
+        })
+    };
+    if results[0] != came_back(STATUS_SUCCESS) {
+        return Err("a request completed at once did not return its dispatch routine's status");
+    }
+    if results[1] != came_back(STATUS_ACCESS_VIOLATION) {
+        return Err("a pended request whose results could not be copied did not end as the fault");
+    }
+    Ok(2)
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     let mut counted = |name, result: Result<u32, &'static str>| match result {
         Ok(n) => r.ok_with(name, format_args!("requests: {n}")),
@@ -265,4 +355,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     };
     counted("io.user.access", with_driver(access));
     counted("io.user.firmware-buffer", with_driver(firmware_buffer));
+    counted("io.user.copy-out-fault", with_driver(copy_out_fault));
 }

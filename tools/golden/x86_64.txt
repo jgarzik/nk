@@ -185,6 +185,7 @@ io.close.cleanup-then-close ok
 io.close.deferred ok
 io.user.access ok
 io.user.firmware-buffer ok
+io.user.copy-out-fault ok
 io.service.default-image ok
 io.service.boot-start ok
 io.remove-lock ok

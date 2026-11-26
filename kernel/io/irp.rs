@@ -184,12 +184,18 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
 /// does it wherever the request was completed, which is at
 /// `DISPATCH_LEVEL` or below.
 ///
+/// The requestor's status block gets the request's final status, which
+/// is the fault if the results could not be copied to a user-mode
+/// requestor. The IRP keeps the status its driver completed it with:
+/// the requestor holds the driver to that one.
+///
 /// # Safety
 /// `irp` must be a live IRP whose stack has fully unwound.
 unsafe fn finish(irp: *mut IRP) {
     // SAFETY: per the contract.
     unsafe {
-        let status = (*irp).IoStatus.Status;
+        let mut result = (*irp).IoStatus;
+        let status = result.Status;
         let flags = (*irp).Flags;
         if flags & IRP_BUFFERED_IO != 0 {
             let buffer = (*irp).SystemBuffer.cast::<u8>();
@@ -220,10 +226,10 @@ unsafe fn finish(irp: *mut IRP) {
                     core::ptr::copy_nonoverlapping(buffer, requestor, count);
                 } else if crate::mm::user::copy(requestor, buffer, count).is_err() {
                     // User mode's buffer was probed when the request was
-                    // made and may be gone by now: the request fails
+                    // made and may be gone by now: the request ends
                     // with the fault, as the exception Windows catches
-                    // here becomes its status.
-                    (*irp).IoStatus.Status = STATUS_ACCESS_VIOLATION;
+                    // here becomes its final status.
+                    result.Status = STATUS_ACCESS_VIOLATION;
                 }
             }
             if flags & IRP_DEALLOCATE_BUFFER != 0
@@ -235,7 +241,7 @@ unsafe fn finish(irp: *mut IRP) {
         }
         super::mdl::release_chain(irp);
         if !(*irp).UserIosb.is_null() {
-            (*irp).UserIosb.write((*irp).IoStatus);
+            (*irp).UserIosb.write(result);
         }
         if (*irp).UserEvent.is_null() {
             free(irp);

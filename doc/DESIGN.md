@@ -1081,8 +1081,12 @@ cancelling is safe until then. Windows finishes a request in the
 requesting thread by APC; NK finishes it wherever it was completed, at
 `DISPATCH_LEVEL` or below. There is one address space, so a user-mode
 requestor's buffer is there to copy to from any thread; the copy is the
-one that may fail, and a buffer gone by then fails the request with the
-access violation.
+one that may fail, and a buffer gone by then makes the access violation
+the request's final status, in its status block. That is what the
+request returns if the driver pended it; one completed before the
+dispatch routine returned returns the routine's status, as Windows'
+system services do. The driver is held to the status it completed the
+request with, which the fault does not change.
 
 **Cancel.** `IoCancelIrp` marks the IRP, takes its cancel routine in one
 atomic step, and calls it holding the cancel spin lock, which the routine

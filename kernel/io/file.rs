@@ -146,9 +146,15 @@ impl Pending {
     }
 
     /// Wait for the request to complete, and return what it came back
-    /// with.
+    /// with: the status its system service returns on Windows, and the
+    /// status block's count. The status is the dispatch routine's for
+    /// a request completed before the routine returned, and the final
+    /// status of one the driver pended. They differ when the results
+    /// could not be copied to a user-mode requestor: the fault is the
+    /// final status, and no fault of the driver's.
     pub fn wait(mut self) -> Result<IoResult, IoError> {
         let done = &raw mut self.waiting.done;
+        let completed;
         // SAFETY: the event lives in `self.waiting` until this returns;
         // the IRP is the requestor's to free once it has completed, and
         // the file object's reference the request's to give up then.
@@ -162,20 +168,28 @@ impl Pending {
                 return Err(IoError::NotCompleted { dispatch_status });
             }
             ke::wait::wait(Some(done.cast()), None);
+            // What the driver completed the request with, which final
+            // completion leaves in the IRP.
+            completed = (*self.irp).IoStatus.Status;
             irp::free(self.irp);
             if !self.held.is_null() {
                 object::dereference(self.held.cast());
             }
         }
-        let completed = self.waiting.iosb.Status;
-        if self.dispatch_status != STATUS_PENDING && self.dispatch_status != completed {
+        if self.dispatch_status == STATUS_PENDING {
+            return Ok(IoResult {
+                status: self.waiting.iosb.Status,
+                information: self.waiting.iosb.Information,
+            });
+        }
+        if self.dispatch_status != completed {
             return Err(IoError::StatusMismatch {
                 dispatch_status: self.dispatch_status,
                 completed,
             });
         }
         Ok(IoResult {
-            status: completed,
+            status: self.dispatch_status,
             information: self.waiting.iosb.Information,
         })
     }
