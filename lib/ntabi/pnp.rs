@@ -244,6 +244,18 @@ pub union POWER_STATE {
     pub DeviceState: u32,
 }
 
+/// [`REQUEST_POWER_COMPLETE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nc-wdm-request_power_complete):
+/// the completion function a driver gives `PoRequestPowerIrp`: the
+/// device it named, the minor function, the `POWER_STATE` (one 32-bit
+/// value), its context, the request's status block.
+pub type REQUEST_POWER_COMPLETE = unsafe extern "C" fn(
+    *mut DEVICE_OBJECT,
+    u8,
+    u32,
+    *mut core::ffi::c_void,
+    *mut crate::io::IO_STATUS_BLOCK,
+);
+
 /// `POWER_SEQUENCE`: how often the device has left each low-power
 /// state.
 #[repr(C)]

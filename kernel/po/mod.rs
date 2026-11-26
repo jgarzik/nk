@@ -1,13 +1,130 @@
 //! Power: what Microsoft's drivers ask of the power manager on a
 //! machine that is on and stays on.
+//!
+//! The system is in S0 and every device in D0, always (`doc/DESIGN.md`,
+//! "Power"). [`request`] makes the power requests a driver asks for,
+//! [`setting`] keeps the registrations for power settings and for
+//! coalescing, [`absent`] answers for what a machine that never
+//! sleeps, hibernates or overheats does not have. The rules are
+//! `nk_po`'s.
 
 #![allow(non_snake_case)]
 
+pub mod absent;
+pub mod request;
+pub mod setting;
+
+use crate::ke::spinlock::{Rank, SpinLock};
+use crate::mm::pool;
+use alloc::vec::Vec;
 use core::ffi::c_void;
+use nk_ntabi::io::DEVICE_OBJECT;
 use nk_ntabi::status::{
     NTSTATUS, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED,
     STATUS_SUCCESS,
 };
+use nk_po::request::Turns;
+use nk_po::setting::Registrations;
+
+/// Pool tag of a device's power block.
+const TAG_DOPE: u32 = u32::from_le_bytes(*b"Dope");
+
+/// What the power manager keeps about a device, in the block
+/// `DEVOBJ_EXTENSION.Dope` points to, which is where Windows keeps its
+/// own (a `DEVICE_OBJECT_POWER_EXTENSION`, private to the kernel: no
+/// driver reads it). Made when first needed, freed with the device
+/// object. Read and written under [`POWER`].
+struct Dope {
+    /// The queries and sets of the device's power state asked for:
+    /// the address of the request sent, and of those that wait. Kept
+    /// in the block of the device at the bottom of the stack.
+    turns: Turns<usize>,
+    /// The flags `PoDirectedDripsSetDeviceFlags` has been given.
+    drips_flags: u32,
+}
+
+/// The power manager's records.
+struct Power {
+    /// The address of every request made for a driver that has not
+    /// completed (`request::Request`).
+    requests: Vec<usize>,
+    /// Who is registered for which power setting.
+    settings: Registrations,
+    /// Whether a worker is making, or is queued to make, the calls
+    /// owed to those registered.
+    telling: bool,
+    /// The coalescing callbacks registered.
+    coalescing: Vec<setting::Coalescing>,
+    /// How many coalescing registrations have been made.
+    coalescing_made: usize,
+}
+
+static POWER: SpinLock<Power> = SpinLock::new(
+    Rank::Power,
+    Power {
+        requests: Vec::new(),
+        settings: Registrations::new(),
+        telling: false,
+        coalescing: Vec::new(),
+        coalescing_made: 0,
+    },
+);
+
+/// The power block of `device`, made if it has none; null if there is
+/// no memory for one.
+///
+/// # Safety
+/// `device` is a live device object. The caller holds [`POWER`], which
+/// `_power` witnesses.
+unsafe fn dope(_power: &mut Power, device: *mut DEVICE_OBJECT) -> *mut Dope {
+    // SAFETY: per the contract; the extension is the device's own, and
+    // its `Dope` word is the power manager's, under the lock held.
+    unsafe {
+        let slot = &raw mut (*(*device).DeviceObjectExtension).Dope;
+        let mut block = slot.read().cast::<Dope>();
+        if block.is_null() {
+            block = pool::alloc(size_of::<Dope>(), TAG_DOPE).cast::<Dope>();
+            if !block.is_null() {
+                block.write(Dope {
+                    turns: Turns::new(),
+                    drips_flags: 0,
+                });
+                slot.write(block.cast());
+            }
+        }
+        block
+    }
+}
+
+/// A device object's memory is going: free its power block. Windows
+/// frees its own as the device is deleted (`PoRunDownDeviceObject`).
+///
+/// # Safety
+/// `device` is a device object nothing refers to any more.
+pub unsafe fn run_down(device: *mut DEVICE_OBJECT) {
+    let block = {
+        let _power = POWER.lock();
+        // SAFETY: per the contract; the word is read and cleared under
+        // the lock that owns it.
+        unsafe {
+            let extension = (*device).DeviceObjectExtension;
+            if extension.is_null() {
+                return;
+            }
+            (&raw mut (*extension).Dope)
+                .replace(core::ptr::null_mut())
+                .cast::<Dope>()
+        }
+    };
+    if !block.is_null() {
+        // SAFETY: the block `dope` made, which nothing else points to
+        // now.
+        unsafe {
+            block.drop_in_place();
+            let _ = pool::free(block.cast());
+        }
+    }
+}
 
 /// `POWER_INFORMATION_LEVEL` `PlatformInformation`: a
 /// `POWER_PLATFORM_INFORMATION`, one `BOOLEAN`, whether the platform
