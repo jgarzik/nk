@@ -47,6 +47,13 @@ pub struct Counts {
     pub writes: u32,
     /// Bytes transferred, both ways, and checked.
     pub bytes: u64,
+    /// What the disk answered of itself: the bus its device names,
+    /// and its adapter's limits and bus.
+    pub bus_type: u32,
+    pub adapter: Option<answer::Adapter>,
+    /// The statuses of the transfers beyond the disk's end: a read at
+    /// the end, a read across it, a write at it.
+    pub beyond: [NTSTATUS; 3],
 }
 
 impl core::fmt::Display for Counts {
@@ -276,6 +283,8 @@ struct Facts {
     in_page: usize,
     /// The most sectors of one transfer from such a buffer.
     largest: u64,
+    bus_type: u32,
+    adapter: answer::Adapter,
 }
 
 /// Ask the disk for its geometry, length, device number and properties
@@ -330,6 +339,8 @@ fn properties(name: &str, disk: &Disk) -> Result<Facts, &'static str> {
         sectors,
         in_page,
         largest: ((largest / SECTOR) as u64).min(sectors - WRITE_END),
+        bus_type: device.bus_type,
+        adapter,
     })
 }
 
@@ -425,7 +436,7 @@ fn written(disk: &mut Disk, facts: &Facts) -> Result<(), &'static str> {
 /// is `STATUS_INVALID_PARAMETER`. A transfer of whole sectors at or
 /// across the disk's end is the drive's to refuse: it fails, with the
 /// status the drive's refusal comes to, and moves nothing.
-fn limits(disk: &Disk, facts: &Facts) -> Result<(), &'static str> {
+fn limits(disk: &Disk, facts: &Facts) -> Result<[NTSTATUS; 3], &'static str> {
     let nothing = IoResult {
         status: STATUS_SUCCESS,
         information: 0,
@@ -464,7 +475,8 @@ fn limits(disk: &Disk, facts: &Facts) -> Result<(), &'static str> {
     {
         return Err("a transfer beyond the disk's end did not fail with no bytes");
     }
-    buffer.intact("a refused transfer wrote outside the requestor's buffer")
+    buffer.intact("a refused transfer wrote outside the requestor's buffer")?;
+    Ok(beyond.map(|result| result.status))
 }
 
 /// How the threads of the concurrent phase tell what came of them: the
@@ -666,7 +678,7 @@ pub fn disk_io(name: &str) -> Result<Counts, &'static str> {
     unaligned(&mut disk, &facts)?;
     write_range(&mut disk, &facts, 0)?;
     written(&mut disk, &facts)?;
-    limits(&disk, &facts)?;
+    let beyond = limits(&disk, &facts)?;
     concurrent(name, &mut disk, &facts)?;
     let flushed = file::flush(disk.handle).map_err(why)?;
     if flushed.status != STATUS_SUCCESS {
@@ -677,6 +689,9 @@ pub fn disk_io(name: &str) -> Result<Counts, &'static str> {
     originals(&mut disk, &facts)?;
     Ok(Counts {
         sectors: facts.sectors,
+        bus_type: facts.bus_type,
+        adapter: Some(facts.adapter),
+        beyond,
         ..disk.counts
     })
 }

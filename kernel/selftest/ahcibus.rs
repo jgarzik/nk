@@ -23,7 +23,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use nk_ntabi::dma::{DEVICE_DESCRIPTION, DMA_ADAPTER};
 use nk_ntabi::io::*;
 use nk_ntabi::pnp::*;
@@ -78,6 +78,11 @@ static REPORTED: AtomicPtr<DEVICE_OBJECT> = AtomicPtr::new(core::ptr::null_mut()
 static FUNCTION_DEVICE: AtomicPtr<DEVICE_OBJECT> = AtomicPtr::new(core::ptr::null_mut());
 static CHILD: AtomicPtr<DEVICE_OBJECT> = AtomicPtr::new(core::ptr::null_mut());
 static DRIVER: AtomicPtr<DRIVER_OBJECT> = AtomicPtr::new(core::ptr::null_mut());
+/// Whether the controller is on the bus, whether its device refuses a
+/// start, and the number the next device made for it is named by.
+static PRESENT: AtomicBool = AtomicBool::new(false);
+static REFUSE_START: AtomicBool = AtomicBool::new(false);
+static SEQUENCE: AtomicU32 = AtomicU32::new(0);
 /// The child's place on the bus: device and function number, packed as
 /// [`pack`] packs them.
 static PLACE: AtomicU32 = AtomicU32::new(0);
@@ -813,12 +818,27 @@ unsafe fn child_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
                 complete(request, STATUS_SUCCESS, moved as usize)
             }
             IRP_MN_START_DEVICE => {
-                let status = start(parameters);
+                let status = if REFUSE_START.load(Ordering::Acquire) {
+                    STATUS_DEVICE_NOT_READY
+                } else {
+                    start(parameters)
+                };
                 complete(request, status, 0)
             }
-            IRP_MN_REMOVE_DEVICE | IRP_MN_STOP_DEVICE | IRP_MN_SURPRISE_REMOVAL => {
+            IRP_MN_STOP_DEVICE | IRP_MN_SURPRISE_REMOVAL => {
                 stop();
                 complete(request, STATUS_SUCCESS, 0)
+            }
+            IRP_MN_REMOVE_DEVICE => {
+                stop();
+                // A device whose function left the bus goes for good.
+                let gone = !PRESENT.load(Ordering::Acquire);
+                let status = complete(request, STATUS_SUCCESS, 0);
+                if gone {
+                    CHILD.store(core::ptr::null_mut(), Ordering::Release);
+                    device::IoDeleteDevice(device);
+                }
+                status
             }
             // Nothing of a device's requirements is the bus's to
             // change once they are stated.
@@ -862,7 +882,13 @@ unsafe extern "C" fn dispatch_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP)
         if (*location).MinorFunction == IRP_MN_QUERY_DEVICE_RELATIONS
             && (*location).Parameters[0] as u32 == BUS_RELATIONS
         {
-            match relations_of(&[CHILD.load(Ordering::Acquire) as usize]) {
+            let child = CHILD.load(Ordering::Acquire) as usize;
+            let children = if PRESENT.load(Ordering::Acquire) {
+                &[child][..]
+            } else {
+                &[]
+            };
+            match relations_of(children) {
                 0 => return complete(request, STATUS_INSUFFICIENT_RESOURCES, 0),
                 list => {
                     (*request).IoStatus.Status = STATUS_SUCCESS;
@@ -956,12 +982,6 @@ impl Bus {
         .map_err(|_| "the bus's driver object could not be made")?;
         DRIVER.store(made, Ordering::Release);
         let bus = Bus { function };
-        // The child's name is the kind `pci.sys` gives its devices.
-        let child =
-            make(made, Some("\\Device\\NTPNP_PCI0000")).ok_or("the child could not be made")?;
-        // SAFETY: the device just made.
-        unsafe { (*child).Flags &= !DO_DEVICE_INITIALIZING };
-        CHILD.store(child, Ordering::Release);
         let reported = pnp::report_detected_device(BUS, "Internal")
             .map_err(|_| "the bus's device could not be reported")?;
         REPORTED.store(reported, Ordering::Release);
@@ -978,7 +998,51 @@ impl Bus {
         Ok(bus)
     }
 
-    /// The child's physical device object.
+    /// The controller appears on the bus: a new device is made for it,
+    /// and the manager is told the bus's children changed. With
+    /// `refuse_start` the device refuses to be started: the test's
+    /// way of failing a start below Storport.
+    pub fn plug(&self, refuse_start: bool) -> Result<(), &'static str> {
+        if !CHILD.load(Ordering::Acquire).is_null() {
+            return Err("the controller's device is there already");
+        }
+        // The name is the kind `pci.sys` gives its devices: a number
+        // no other of its devices had.
+        let number = SEQUENCE.fetch_add(1, Ordering::AcqRel);
+        let child = make(
+            DRIVER.load(Ordering::Acquire),
+            Some(&format!("\\Device\\NTPNP_PCI{number:04}")),
+        )
+        .ok_or("the child could not be made")?;
+        // SAFETY: the device just made.
+        unsafe { (*child).Flags &= !DO_DEVICE_INITIALIZING };
+        REFUSE_START.store(refuse_start, Ordering::Release);
+        CHILD.store(child, Ordering::Release);
+        PRESENT.store(true, Ordering::Release);
+        self.changed();
+        Ok(())
+    }
+
+    /// The controller goes from the bus: the manager is told, and the
+    /// device is deleted when the manager removes it.
+    pub fn unplug(&self) {
+        PRESENT.store(false, Ordering::Release);
+        self.changed();
+    }
+
+    /// Tell the manager the bus's children changed.
+    fn changed(&self) {
+        // SAFETY: the device the bus reported.
+        unsafe {
+            pnp::export::IoInvalidateDeviceRelations(
+                REPORTED.load(Ordering::Acquire),
+                BUS_RELATIONS,
+            );
+        }
+    }
+
+    /// The child's physical device object; null while the controller
+    /// is off the bus.
     pub fn child(&self) -> *mut DEVICE_OBJECT {
         CHILD.load(Ordering::Acquire)
     }
@@ -991,6 +1055,10 @@ impl Bus {
 
 impl Drop for Bus {
     fn drop(&mut self) {
+        if !REPORTED.load(Ordering::Acquire).is_null() {
+            self.unplug();
+            pnp::settle();
+        }
         // SAFETY: devices of the bus's: its own is detached and deleted
         // before the device it reported is taken back, which takes the
         // child out of the tree; the child is then the bus's to delete.

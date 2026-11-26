@@ -175,13 +175,39 @@ gate tier has, for each architecture:
   `storahci`'s `AddDevice`, assigns and translates its resources and
   starts it; Storport enumerates the disk; `disk.sys` is installed and
   started on it. `stor.direct` requires the bus and the controller's
-  identifiers; `stor.direct.controller` the controller started by
+  identifiers; `stor.direct.failed-start` a start that fails to be
+  undone: the bus's device refuses the start request Storport passes
+  down, and the manager must leave the controller failed with
+  `storahci`'s device gone from it and no resources or interrupt
+  vector held, and take its device away when the controller leaves the
+  bus; done twice, the second round must leave the kernel holding
+  exactly what the first left (`selftest::resources`), after which the
+  controller comes back for the tests that follow;
+  `stor.direct.controller` the controller started by
   `storahci` with its ports, the memory its sixth address register
-  names and one interrupt; `stor.direct.disk` the disk with the
+  names and one interrupt, with `storahci`'s the one service routine
+  on its vector and called at least once (the count is in the
+  verdict; Storport's DPCs are not counted anywhere, and are proved by
+  the disk having been found, since every command's completion goes
+  through one); `stor.direct.disk` the disk with the
   reference Windows' instance path, identifiers, service and class,
-  started, and `\Device\Harddisk0\DR0`; `stor.direct.io` the proof of
-  disk I/O (below) on that device, and the scenario holds the image to
-  `disk_expect = "written"`.
+  started, `\Device\Harddisk0\DR0`, the link `PhysicalDrive0`, and
+  the port and the unit in `HARDWARE\DEVICEMAP\Scsi` as the reference
+  machine has them (driver, 64-bit DMA, initiator, identifier, device
+  type and INQUIRY data); `stor.direct.io` the proof of
+  disk I/O (below) on that device, with the disk's adapter answering
+  as the reference machine's (SATA, 128 KiB and 33 pages a transfer,
+  alignment mask 1), and the scenario holds the image to
+  `disk_expect = "written"`. `x86_64-storage-direct-smp1` is the same
+  on one processor.
+
+  Most of the boot's time is three requests of the proof: the
+  transfers at and across the disk's end. With no partition manager
+  on the stack they reach the controller, which fails them, and
+  `classpnp.sys` retries each for some four seconds, logs Windows'
+  event 153 (an `NK-ERRORLOG` line each) and fails it with
+  `STATUS_IO_DEVICE_ERROR`; the verdict states the three statuses and
+  the proof's time.
 
   What it does not prove is the path below the controller:
   `acpi.sys` and `pci.sys` enumerating it, `acpi.sys`'s filter on its

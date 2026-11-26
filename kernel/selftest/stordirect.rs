@@ -19,12 +19,14 @@ use crate::test::{Group, Report};
 use alloc::format;
 use alloc::string::String;
 use nk_bootinfo::BootInfo;
+use nk_disk::answer::Adapter;
 use nk_ntabi::io::DEVICE_OBJECT;
 use nk_pnp::resources::{ResourceList, TYPE_INTERRUPT, TYPE_MEMORY, TYPE_PORT};
 
 pub static GROUP: Group = Group {
     names: &[
         "stor.direct",
+        "stor.direct.failed-start",
         "stor.direct.controller",
         "stor.direct.disk",
         "stor.direct.io",
@@ -55,6 +57,78 @@ const DISK_HARDWARE_IDS: [&str; 6] = [
 ];
 const DISK_COMPATIBLE_IDS: [&str; 2] = ["SCSI\\Disk", "SCSI\\RAW"];
 
+/// The disk's INQUIRY data as Storport records it in the device map on
+/// the reference machine (`DISK-ORACLE.md` of the recorded trace).
+const INQUIRY: [u8; 36] = [
+    0x00, 0x00, 0x00, 0x02, 0x37, 0x00, 0x00, 0x02, 0x51, 0x45, 0x4D, 0x55, 0x20, 0x20, 0x20, 0x20,
+    0x48, 0x41, 0x52, 0x44, 0x44, 0x49, 0x53, 0x4B, 0x00, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x32, 0x2E, 0x35, 0x2B,
+];
+
+/// What the reference machine's disk answers for its adapter
+/// (`DISK-ORACLE.md`): 128 KiB a transfer over at most 33 pages,
+/// buffers at even addresses, on a SATA bus.
+const ADAPTER: Adapter = Adapter {
+    maximum_transfer_length: 0x20000,
+    maximum_physical_pages: 33,
+    alignment_mask: 1,
+    bus_type: BUS_TYPE_SATA,
+};
+const BUS_TYPE_SATA: u32 = 11;
+
+/// How many interrupt vectors the hardware layer has given out.
+fn vectors_given() -> usize {
+    (0..1024)
+        .filter(|vector| crate::hal::interrupt::info(*vector).is_some())
+        .count()
+}
+
+/// A start of the controller that fails is undone: the bus's device
+/// refuses the start request Storport passes down first, so
+/// `storahci`'s start fails with the device's stack built and its
+/// resources assigned. The manager then has the stack taken down and
+/// takes back what it gave: the device is left failed with nothing on
+/// it but the bus's device, no resources and no interrupt vector; and
+/// when the controller leaves the bus the device goes. Done twice,
+/// the second round leaves the kernel holding exactly what the first
+/// left it holding. Returns the device's instance path.
+fn failed_start(bus: &Bus) -> Result<String, &'static str> {
+    let vectors = vectors_given();
+    let mut held = [None; 2];
+    let mut instance = String::new();
+    for round in &mut held {
+        bus.plug(true)?;
+        pnp::settle();
+        let pdo = bus.child() as usize;
+        let found = node::get(pdo).ok_or("the controller has no device node")?;
+        if found.state != State::Failed || found.problem != node::CM_PROB_FAILED_START {
+            return Err("a controller that refuses its start is not left failed to start");
+        }
+        if !found.raw.is_empty() || !found.translated.is_empty() || !found.vectors.is_empty() {
+            return Err("a controller that failed to start still holds resources");
+        }
+        if vectors_given() != vectors {
+            return Err("a controller that failed to start still holds an interrupt vector");
+        }
+        if stack(pdo) != [format!("\\Driver\\{}", ahcibus::BUS)] {
+            return Err("storahci's device is still on a controller that failed to start");
+        }
+        bus.unplug();
+        pnp::settle();
+        if !bus.child().is_null() || node::by_instance(&found.instance).is_some() {
+            return Err("a controller that left the bus still has a device");
+        }
+        instance = found.instance;
+        *round = Some(super::resources());
+    }
+    if held[0] != held[1] {
+        kprintln!("stor.direct: after one failed start {:?}", held[0]);
+        kprintln!("stor.direct: after another     {:?}", held[1]);
+        return Err("a failed start leaves something behind each time");
+    }
+    Ok(instance)
+}
+
 /// The names of the drivers on the stack of `pdo`, top first.
 fn stack(pdo: usize) -> alloc::vec::Vec<String> {
     // SAFETY: a device the tree holds.
@@ -65,7 +139,7 @@ fn stack(pdo: usize) -> alloc::vec::Vec<String> {
 /// `storahci` as its driver, installed as Windows installs it, and was
 /// given what the reference machine's controller has: its I/O ports,
 /// the page of memory its sixth address register names, and one
-/// interrupt.
+/// interrupt, which is connected and has been served.
 fn controller(bus: &Bus) -> Result<String, &'static str> {
     let found = node::get(bus.child() as usize).ok_or("the controller has no device node")?;
     if found.state != State::Started {
@@ -108,8 +182,30 @@ fn controller(bus: &Bus) -> Result<String, &'static str> {
     if interrupts != 1 {
         return Err("the controller was not given one interrupt");
     }
+    let kind = if raw.partials().any(|partial| partial.is_message()) {
+        "message"
+    } else {
+        "line"
+    };
+    // Storport connected the interrupt, and the controller has
+    // interrupted: the disk was found by commands whose completion
+    // the service routine saw and a DPC of Storport's reported.
+    let (translated, _) = ResourceList::parse(&found.translated)
+        .ok_or("the controller's resources are untranslated")?;
+    let (_, _, vector, _) = translated
+        .partials()
+        .find(|partial| partial.kind == TYPE_INTERRUPT)
+        .and_then(|partial| partial.as_interrupt())
+        .ok_or("the controller's interrupt is untranslated")?;
+    let (connected, calls) = crate::ke::kinterrupt::served(vector);
+    if connected != 1 {
+        return Err("storahci's is not the one service routine connected to the vector");
+    }
+    if calls == 0 {
+        return Err("the controller's service routine was never called");
+    }
     Ok(format!(
-        "{}: ports {ports:#x}, memory {memory:#x}",
+        "{}: ports {ports:#x}, memory {memory:#x}, {kind} interrupt on vector {vector:#x} served {calls} times",
         found.instance
     ))
 }
@@ -160,6 +256,24 @@ fn disk(bus: &Bus) -> Result<String, &'static str> {
     if !storage::exists(storage::DISK) {
         return Err("disk.sys did not make \\Device\\Harddisk0\\DR0");
     }
+    // What Storport and the class driver record of the port and the
+    // unit, as the reference machine's registry has it.
+    let port = "Machine\\Hardware\\DeviceMap\\Scsi\\Scsi Port 0";
+    let unit = format!("{port}\\Scsi Bus 0\\Target Id 0\\Logical Unit Id 0");
+    let inquiry = crate::cm::read(&unit, "InquiryData").map(|(_, data)| data);
+    if registry::string(port, "Driver").as_deref() != Some("storahci")
+        || registry::dword(port, "Dma64BitAddresses") != Some(1)
+        || !crate::cm::exists(&format!("{port}\\Scsi Bus 0\\Initiator Id 255"))
+        || registry::string(&unit, "Identifier").as_deref() != Some("QEMU    HARDDISK")
+        || registry::string(&unit, "DeviceType").as_deref() != Some("DiskPeripheral")
+        || inquiry.as_deref() != Ok(&INQUIRY[..])
+    {
+        return Err("the device map does not describe the port and the disk as Windows' does");
+    }
+    // The link user mode opens the disk by.
+    if !storage::exists("\\GLOBAL??\\PhysicalDrive0") {
+        return Err("disk.sys did not make the link PhysicalDrive0");
+    }
     Ok(found.instance.clone())
 }
 
@@ -197,6 +311,24 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
     };
     pnp::settle();
+    match failed_start(&bus) {
+        Ok(what) => r.ok_with(
+            "stor.direct.failed-start",
+            format_args!("{what}: twice refused, taken down and gone"),
+        ),
+        Err(why) => r.fail("stor.direct.failed-start", format_args!("{why}")),
+    }
+    // The controller comes back, and this time starts.
+    if !bus.child().is_null() {
+        bus.unplug();
+        pnp::settle();
+    }
+    if let Err(why) = bus.plug(false) {
+        r.fail("stor.direct", format_args!("{why}"));
+        r.skip_rest(format_args!("the controller could not be put on the bus"));
+        return;
+    }
+    pnp::settle();
     r.ok_with(
         "stor.direct",
         format_args!(
@@ -215,8 +347,29 @@ fn run(r: &mut Report, _: &BootInfo) {
         Err(why) => r.fail("stor.direct.disk", format_args!("{why}")),
     }
     if storage::exists(storage::DISK) {
-        match diskio::disk_io(storage::DISK) {
-            Ok(counts) => r.ok_with("stor.direct.io", format_args!("{counts}")),
+        let began = crate::ke::time::interrupt_time();
+        let proof = diskio::disk_io(storage::DISK);
+        let took = (crate::ke::time::interrupt_time() - began) / 10_000;
+        match proof {
+            // The disk's own answers are the reference machine's.
+            Ok(counts) if counts.bus_type != BUS_TYPE_SATA || counts.adapter != Some(ADAPTER) => {
+                kprintln!(
+                    "stor.direct: bus type {}, adapter {:?}",
+                    counts.bus_type,
+                    counts.adapter
+                );
+                r.fail(
+                    "stor.direct.io",
+                    format_args!("the disk's adapter is not as the reference machine's"),
+                );
+            }
+            Ok(counts) => r.ok_with(
+                "stor.direct.io",
+                format_args!(
+                    "{counts}; flushed; beyond the end {:#x} {:#x} {:#x}; {took} ms",
+                    counts.beyond[0], counts.beyond[1], counts.beyond[2]
+                ),
+            ),
             Err(why) => r.fail("stor.direct.io", format_args!("{why}")),
         }
     } else {
