@@ -1563,7 +1563,9 @@ asks it the same questions into a buffer of its own
 (`ZwQueryInformationToken`) and copies it (`ZwDuplicateToken`). A copy
 is a new token object: the same user, groups, privileges and defaults,
 of the type asked, at the impersonation level its quality of service
-names or else the source's own, with ids of its own. An effective-only
+names or else the source's own, with ids of its own. Every token's
+statistics report Windows' least charge for its dynamic part, 0x1000
+bytes, and none of it available, as Windows' do. An effective-only
 copy leaves out the privileges and groups not in effect
 (`Token::duplicate`).
 
