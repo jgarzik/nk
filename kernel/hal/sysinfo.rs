@@ -22,6 +22,21 @@ const DEBUGGER_INFORMATION: u32 = 33;
 /// driver's interpreter must keep firmware's AML code away from.
 const AML_ILLEGAL_PORTS: u32 = 16;
 
+/// The class `acpi.sys` asks for the HAL's secondary interrupt
+/// services, those of interrupt controllers behind another interrupt
+/// (GPIO controllers): a range of interrupt numbers and five routines,
+/// 0x38 bytes.
+const SECONDARY_INTERRUPT_INFORMATION: u32 = 28;
+const SECONDARY_INTERRUPT_SIZE: u32 = 0x38;
+
+/// The class `acpi.sys` asks for how many message-signalled interrupts
+/// one device may have: a `USHORT`.
+const PER_DEVICE_MESSAGE_LIMIT: u32 = 50;
+
+/// The pinned kernel's limit, which NK keeps: 2048, the most MSI-X
+/// gives a device, so no limit of the HAL's own.
+const MESSAGE_LIMIT: u16 = 0x800;
+
 /// `HAL_AMLI_BAD_IO_ADDRESS_LIST`: one run of ports. The list ends with
 /// an entry of zeros.
 #[repr(C)]
@@ -150,6 +165,27 @@ pub unsafe extern "C" fn HalQuerySystemInformation(
             give(needed);
             STATUS_SUCCESS
         }
+        // NK has no secondary interrupt services, and answers as
+        // Windows' HAL does while it has none: a failure, after the
+        // buffer is cleared and its length told.
+        SECONDARY_INTERRUPT_INFORMATION => {
+            if size < SECONDARY_INTERRUPT_SIZE {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            // SAFETY: the caller's buffer, of at least that size.
+            unsafe { buffer.write_bytes(0, SECONDARY_INTERRUPT_SIZE as usize) };
+            give(SECONDARY_INTERRUPT_SIZE);
+            STATUS_UNSUCCESSFUL
+        }
+        PER_DEVICE_MESSAGE_LIMIT => {
+            if size < 2 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            // SAFETY: the caller's buffer, of at least two bytes.
+            unsafe { buffer.cast::<u16>().write_unaligned(MESSAGE_LIMIT) };
+            give(2);
+            STATUS_SUCCESS
+        }
         _ => crate::kd::bugcheck(format_args!(
             "HalQuerySystemInformation: NK does not implement information class {class} \
              (buffer of {size:#x} bytes)"
@@ -234,6 +270,29 @@ pub fn test() -> Result<(), &'static str> {
         if unsafe { aml_pci_ports(1, 0xCF9, 1, &raw mut word) } != STATUS_UNSUCCESSFUL {
             return Err("an access to a port between the two was not refused");
         }
+    }
+    // The two classes of the ACPI driver's interrupt arbiter.
+    let mut services = [0xFFu8; 0x38];
+    let mut ask = |class: u32, size: u32, returned: &mut u32| {
+        // SAFETY: a local of at least `size` bytes.
+        unsafe { HalQuerySystemInformation(class, size, services.as_mut_ptr().cast(), returned) }
+    };
+    if ask(SECONDARY_INTERRUPT_INFORMATION, 0x30, &mut returned) != STATUS_INFO_LENGTH_MISMATCH
+        || returned != 0
+        || ask(SECONDARY_INTERRUPT_INFORMATION, 0x38, &mut returned) != STATUS_UNSUCCESSFUL
+        || returned != 0x38
+    {
+        return Err("secondary interrupt services were not reported as absent");
+    }
+    if ask(PER_DEVICE_MESSAGE_LIMIT, 1, &mut returned) != STATUS_INFO_LENGTH_MISMATCH
+        || returned != 0
+        || ask(PER_DEVICE_MESSAGE_LIMIT, 2, &mut returned) != STATUS_SUCCESS
+        || returned != 2
+    {
+        return Err("the limit of messages for a device was not given");
+    }
+    if services[..2] != MESSAGE_LIMIT.to_le_bytes() || services[2..].iter().any(|&b| b != 0) {
+        return Err("the answers were not written as Windows writes them");
     }
     if HalDispatchTable.routine(public_slot("HalQuerySystemInformation"))
         != HalQuerySystemInformation as *mut ()
