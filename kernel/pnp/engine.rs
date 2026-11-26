@@ -284,13 +284,19 @@ fn identify(pdo: usize) {
     // mutex is held, at `PASSIVE_LEVEL`.
     unsafe {
         if !found.reported {
-            match query::id(device, BUS_QUERY_DEVICE_ID).as_deref() {
-                Ok([id]) if !id.is_empty() => found.device_id = id.clone(),
-                _ => {
+            // An enumerator and a device, one backslash between.
+            let id = query::id(device, BUS_QUERY_DEVICE_ID)
+                .ok()
+                .and_then(|mut ids| ids.pop())
+                .and_then(|id| ids::fixed_up(&id, ids::MAX_ID, ids::Separators::Exactly(1)))
+                .filter(|id| id.split('\\').all(|part| !part.is_empty()));
+            match id {
+                Some(id) => found.device_id = id,
+                None => {
                     return fail(
                         pdo,
                         node::CM_PROB_INVALID_DATA,
-                        format_args!("its bus driver gave no device identifier"),
+                        format_args!("its bus driver gave no valid device identifier"),
                     );
                 }
             }
@@ -315,9 +321,31 @@ fn identify(pdo: usize) {
         found.description = query::text(device, DEVICE_TEXT_DESCRIPTION);
         found.location = query::text(device, DEVICE_TEXT_LOCATION_INFORMATION);
         if !found.reported {
-            let instance = query::id(device, BUS_QUERY_INSTANCE_ID)
-                .ok()
-                .and_then(|mut ids| ids.pop());
+            // No backslash: the identifier is one key's name.
+            let instance = match query::id(device, BUS_QUERY_INSTANCE_ID).as_deref() {
+                Ok([]) => None,
+                Ok([id]) => {
+                    let fixed = ids::fixed_up(id, ids::MAX_ID, ids::Separators::Exactly(0))
+                        .filter(|id| !id.is_empty());
+                    let Some(fixed) = fixed else {
+                        node::with(pdo, |node| node.instance = found.device_id.clone());
+                        return fail(
+                            pdo,
+                            node::CM_PROB_INVALID_DATA,
+                            format_args!("its bus driver gave an invalid instance identifier"),
+                        );
+                    };
+                    Some(fixed)
+                }
+                _ => {
+                    node::with(pdo, |node| node.instance = found.device_id.clone());
+                    return fail(
+                        pdo,
+                        node::CM_PROB_INVALID_DATA,
+                        format_args!("the query for its instance identifier failed"),
+                    );
+                }
+            };
             let unique = found.capabilities & DEVICE_CAPABILITY_UNIQUE_ID != 0;
             let prefix = if unique && instance.is_some() {
                 String::new()
@@ -356,8 +384,15 @@ fn identify(pdo: usize) {
                 );
             }
         }
-        found.hardware_ids = query::id(device, BUS_QUERY_HARDWARE_IDS).unwrap_or_default();
-        found.compatible_ids = query::id(device, BUS_QUERY_COMPATIBLE_IDS).unwrap_or_default();
+        // A list with an invalid identifier in it is no list.
+        let list = |kind| {
+            query::id(device, kind)
+                .ok()
+                .and_then(|list| ids::fixed_up_list(&list))
+                .unwrap_or_default()
+        };
+        found.hardware_ids = list(BUS_QUERY_HARDWARE_IDS);
+        found.compatible_ids = list(BUS_QUERY_COMPATIBLE_IDS);
         if found.reported {
             // What the report itself stated comes behind what the
             // device's driver answers.
@@ -383,7 +418,17 @@ fn identify(pdo: usize) {
     // What firmware configured is kept for the device until it is
     // given its resources: nobody else is put there meanwhile.
     if let Some((list, _)) = ResourceList::parse(&found.boot) {
-        let ranges: Vec<assign::Range> = list.partials().filter_map(boot_range).collect();
+        let ranges: Option<Vec<Option<assign::Range>>> =
+            list.partials().map(assign::held_by).collect();
+        let Some(ranges) = ranges else {
+            node::with(pdo, |node| node.instance = found.instance.clone());
+            return fail(
+                pdo,
+                node::CM_PROB_INVALID_DATA,
+                format_args!("its boot configuration names a range that does not exist"),
+            );
+        };
+        let ranges: Vec<assign::Range> = ranges.into_iter().flatten().collect();
         with_claims(|claims| claims.claim(pdo, &ranges));
     }
     // SAFETY: as above.
@@ -391,22 +436,6 @@ fn identify(pdo: usize) {
     kprintln!("pnp: {}: found", found.instance);
     found.state = State::Identified;
     node::with(pdo, |node| *node = found);
-}
-
-/// What a descriptor of a boot configuration holds, as a claim.
-fn boot_range(partial: &Partial) -> Option<assign::Range> {
-    let space = assign::space_of(partial.kind)?;
-    let (start, length) = match partial.as_interrupt() {
-        Some(_) if partial.is_message() => return None,
-        Some((_, _, vector, _)) => (u64::from(vector), 1),
-        None => partial.as_range()?,
-    };
-    (length != 0).then(|| assign::Range {
-        space,
-        start,
-        end: start + (length - 1),
-        shared: partial.share == nk_pnp::resources::SHARE_SHARED,
-    })
 }
 
 /// A driver named for a device's stack, and whether it is a filter.

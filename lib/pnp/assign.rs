@@ -64,6 +64,31 @@ impl Range {
     }
 }
 
+/// What a descriptor of a resource list holds, as a claim: nothing
+/// (`Some(None)`) for a kind that is not numbers devices compete for,
+/// for a message-signalled interrupt and for an empty range. `None`
+/// if the descriptor names a range that runs past the end of its
+/// space: a driver's error.
+pub fn held_by(partial: &Partial) -> Option<Option<Range>> {
+    let Some(space) = space_of(partial.kind) else {
+        return Some(None);
+    };
+    let (start, length) = match partial.as_interrupt() {
+        Some(_) if partial.is_message() => return Some(None),
+        Some((_, _, vector, _)) => (u64::from(vector), 1),
+        None => partial.as_range()?,
+    };
+    if length == 0 {
+        return Some(None);
+    }
+    Some(Some(Range {
+        space,
+        start,
+        end: start.checked_add(length - 1)?,
+        shared: partial.share == SHARE_SHARED,
+    }))
+}
+
 /// What every device of the machine holds. A holder is known by a
 /// number of the caller's choosing.
 #[derive(Debug, Default)]
@@ -706,6 +731,46 @@ mod tests {
             assignment.partials[0].as_interrupt(),
             Some((0, 4, MESSAGE_TOKEN, 0))
         );
+    }
+
+    #[test]
+    fn what_a_descriptor_holds() {
+        let port = Partial::range(TYPE_PORT, 1, 1, 0x6040, 0x20);
+        assert_eq!(
+            held_by(&port),
+            Some(Some(Range {
+                space: Space::Port,
+                start: 0x6040,
+                end: 0x605F,
+                shared: false
+            }))
+        );
+        let line = Partial::interrupt(SHARE_SHARED, 0, 10, 0, 10, u64::MAX);
+        assert_eq!(
+            held_by(&line),
+            Some(Some(Range {
+                space: Space::Interrupt,
+                start: 10,
+                end: 10,
+                shared: true
+            }))
+        );
+        assert_eq!(held_by(&Partial::raw_messages(1, 3, 1, 0)), Some(None));
+        assert_eq!(
+            held_by(&Partial::new(TYPE_DEVICE_PRIVATE, 0, 0)),
+            Some(None)
+        );
+        assert_eq!(
+            held_by(&Partial::range(TYPE_MEMORY, 1, 0, 0x1000, 0)),
+            Some(None)
+        );
+        // To the last byte of the space, and one past it.
+        let last = Partial::range(TYPE_MEMORY, 1, 0, u64::MAX - 0xFFF, 0x1000);
+        assert_eq!(held_by(&last).unwrap().unwrap().end, u64::MAX);
+        let beyond = Partial::range(TYPE_MEMORY, 1, 0, u64::MAX - 0xFFF, 0x1001);
+        assert_eq!(held_by(&beyond), None);
+        let large = Partial::range(TYPE_MEMORY_LARGE, 1, MEMORY_LARGE_64, u64::MAX, 1 << 40);
+        assert_eq!(held_by(&large), None);
     }
 
     #[test]
