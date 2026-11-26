@@ -304,6 +304,14 @@ limit is one more object, and the first signalled ends the wait. A wait
 may name up to 64 objects (the caller's wait blocks beyond three), for
 any one (it reports which) or for all (it takes all or none).
 
+A wait by handle (`ZwWaitForSingleObject`) is a wait on the object the
+handle names, referenced for as long: an event, a thread, or the
+process, which never ends. Windows waits on an object of any other
+type through that type's default object; NK does not, and stops by
+name. `ZwCreateEvent` makes an event object without a name and hands
+back a handle; a name, or the attributes that go with one, is refused
+(`STATUS_NOT_IMPLEMENTED`). Both are `Partial` in the ledger for that.
+
 A wait that would block at `DISPATCH_LEVEL` stops the system
 (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
 its limit, an exception on Windows, stops the system.

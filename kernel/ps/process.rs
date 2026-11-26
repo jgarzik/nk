@@ -52,6 +52,9 @@ pub fn init(time: u64) -> Result<(), &'static str> {
         // references in advance, every one is taken from the object.
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
         process.write(layout::PROCESS_OBJECT);
+        // A process is something a thread can wait on: for its end,
+        // which never comes.
+        crate::ke::object::init_wait_list(process.cast());
         process
             .add(layout::UNIQUE_PROCESS_ID)
             .cast::<u64>()

@@ -213,6 +213,7 @@ static EXPORTS: &[Export] = &[
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Implemented, ps::ZwAlertThread),
     export!(Implemented, ps::ZwClose),
+    export!(Partial, ob::event::ZwCreateEvent),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export!(Implemented, rtl::print::RtlFreeUnicodeString),
     export_entry!(
@@ -241,6 +242,7 @@ static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
     export!(Implemented, se::ZwSetSecurityObject),
+    export!(Partial, ob::event::ZwWaitForSingleObject),
     export!(Implemented, cm::ZwCreateKey),
     export!(Implemented, cm::ZwDeleteKey),
     export!(Implemented, cm::ZwOpenKey),

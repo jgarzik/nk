@@ -12,6 +12,7 @@
 //! object with, so under the namespace's lock a name leads to a live
 //! object. Directories are made at boot and never removed.
 
+pub mod event;
 pub mod handle;
 pub mod object;
 pub mod security;
