@@ -21,7 +21,7 @@ use nk_ntabi::status::{
 };
 
 pub static GROUP: Group = Group {
-    names: &["cm.notify", "cm.rtl-keys"],
+    names: &["cm.notify", "cm.rtl-keys", "cm.volatile-keys"],
     run,
     manual: false,
 };
@@ -402,7 +402,84 @@ fn rtl_keys() -> Result<(), &'static str> {
     verdict
 }
 
+/// The volatile keys a storage port driver makes for its adapter, as
+/// storport makes them: `Hardware\DeviceMap\Scsi\Scsi Port 0` and
+/// below, one level at a time with `REG_OPTION_VOLATILE`, each made
+/// once and then opened, with values of several types.
+fn volatile_keys() -> Result<(), &'static str> {
+    const REG_OPTION_VOLATILE: u32 = 1;
+    let make = |path: &str, root: *mut c_void| -> Result<(*mut c_void, u32), &'static str> {
+        let text: Vec<u16> = path.encode_utf16().collect();
+        let name = UNICODE_STRING {
+            Length: (text.len() * 2) as u16,
+            MaximumLength: (text.len() * 2) as u16,
+            Buffer: text.as_ptr().cast_mut(),
+        };
+        let attributes = OBJECT_ATTRIBUTES {
+            Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+            RootDirectory: root,
+            ObjectName: &raw const name,
+            Attributes: 0x240,
+            SecurityDescriptor: core::ptr::null_mut(),
+            SecurityQualityOfService: core::ptr::null_mut(),
+        };
+        let (mut made, mut disposition) = (core::ptr::null_mut(), 0u32);
+        // SAFETY: locals that outlive the call.
+        let status = unsafe {
+            cm::ZwCreateKey(
+                &raw mut made,
+                0xF003F,
+                &raw const attributes,
+                0,
+                core::ptr::null(),
+                REG_OPTION_VOLATILE,
+                &raw mut disposition,
+            )
+        };
+        if status == STATUS_SUCCESS {
+            Ok((made, disposition))
+        } else {
+            Err("a volatile key could not be made")
+        }
+    };
+    let none = core::ptr::null_mut();
+    let (scsi, _) = make("\\Registry\\Machine\\Hardware\\DeviceMap\\Scsi", none)?;
+    let verdict = (|| {
+        let (port, first) = make("Scsi Port 0", scsi)?;
+        let (again, second) = make("Scsi Port 0", scsi)?;
+        handle::close(again as u64);
+        let bus = make("Scsi Bus 0", port);
+        let initiator = bus.and_then(|(bus, _)| {
+            let made = make("Initiator Id 7", bus);
+            handle::close(bus as u64);
+            made
+        });
+        let stored = set(port, 11);
+        handle::close(port as u64);
+        let (initiator, _) = initiator?;
+        handle::close(initiator as u64);
+        // REG_CREATED_NEW_KEY, then REG_OPENED_EXISTING_KEY.
+        if (first, second) != (1, 2) {
+            return Err("a volatile key was not made once and opened after");
+        }
+        const PORT: &str = "Machine\\Hardware\\DeviceMap\\Scsi\\Scsi Port 0";
+        if !stored
+            || cm::read(PORT, "Watched").ok() != Some((4, 11u32.to_le_bytes().to_vec()))
+            || !cm::exists(
+                "Machine\\Hardware\\DeviceMap\\Scsi\\Scsi Port 0\\Scsi Bus 0\\Initiator Id 7",
+            )
+        {
+            return Err("a volatile key does not hold its values and subkeys");
+        }
+        Ok(())
+    })();
+    handle::close(scsi as u64);
+    let _ = cm::delete_tree("Machine\\Hardware\\DeviceMap\\Scsi");
+    verdict
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
+    r.check("cm.volatile-keys", volatile_keys);
     r.check("cm.notify", notify_test);
     r.check("cm.rtl-keys", rtl_keys);
 }

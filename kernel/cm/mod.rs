@@ -81,6 +81,8 @@ const REG_DWORD: u32 = 4;
 const SKELETON: &[&str] = &[
     "MACHINE",
     "MACHINE\\HARDWARE",
+    "MACHINE\\HARDWARE\\DEVICEMAP",
+    "MACHINE\\HARDWARE\\RESOURCEMAP",
     "MACHINE\\SYSTEM",
     "MACHINE\\SYSTEM\\Select",
     "USER",

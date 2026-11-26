@@ -2261,7 +2261,11 @@ One tree of keys and values in memory (`lib/cm`; exports in `kernel/cm`).
 It is built at boot:
 
 1. the keys every system has: `\Registry\Machine\System` with
-   `Select`, `\Registry\Machine\Hardware`, `\Registry\User`;
+   `Select`, `\Registry\Machine\Hardware` with `DeviceMap` and
+   `ResourceMap` (which Windows makes at every boot, and under which
+   drivers make volatile keys of their own: storport its
+   `DeviceMap\Scsi\Scsi Port N`; every key of NK's lives in memory, so
+   `REG_OPTION_VOLATILE` changes nothing), `\Registry\User`;
 2. the SYSTEM hive the loader read (`doc/BOOT.md`), if it read one,
    copied over `\Registry\Machine\System`: keys, values, classes,
    security descriptors, times. A hive that is damaged, or that needs
