@@ -53,6 +53,7 @@ mod stack;
 mod storage;
 mod thread;
 mod timer;
+mod timer2;
 mod wait;
 mod whea;
 mod work;
@@ -152,6 +153,7 @@ pub static GROUPS: &[&[&Group]] = &[
     smp::GROUPS,
     dpc::GROUPS,
     timer::GROUPS,
+    timer2::GROUPS,
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,

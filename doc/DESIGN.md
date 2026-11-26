@@ -603,6 +603,15 @@ time; one already past fires inside `KeSetTimer`. The driver owns the
 `KTIMER`; its layout and the header bits NK uses (`Inserted`, the lock
 bit, `Expired`) are Windows'.
 
+A `KTIMER2` (`KeInitializeTimer2`, `KeSetTimer2`, `KeCancelTimer2`) is
+storage of the driver's whose fields no driver reads, so NK uses its
+136 bytes its own way (`ke::timer2`): a kernel timer where Windows has
+the dispatcher header, the DPC each expiry queues, and the callback's
+context. It behaves as an executive timer does, with the same
+departures: periods in whole milliseconds, no high resolution, never
+late on purpose. The header's type byte is a kernel timer's, not
+Windows' value for a `KTIMER2`.
+
 ## Work items
 
 Three queues (critical, delayed, hypercritical), each with worker threads
@@ -1138,7 +1147,7 @@ make that safe.
 | DPC routine, a timer's included | base: kernel mode |
 | interrupt service routine, a message's included | base: kernel mode |
 | the routine of `KeSynchronizeExecution` | undo: release the interrupt's lock and restore the IRQL |
-| an executive timer's callback (from the timer's DPC) | base: kernel mode |
+| an executive timer's callback, and a `KTIMER2`'s (from the timer's DPC) | base: kernel mode |
 | an executive timer's delete callback | nothing: the timer is freed before it is called |
 | a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
 | a stream context's `FreeCallback` (`FsRtlTeardownPerStreamContexts`) | nothing: the context is off the header's list, and the header's lock and the critical region are given up before the call |
