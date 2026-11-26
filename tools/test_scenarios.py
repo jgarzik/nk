@@ -5,6 +5,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
+import boot_test
 import datadisk
 import mkesp
 
@@ -12,7 +13,7 @@ TOOLS = Path(__file__).resolve().parent
 SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
     "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
-    "golden", "canonical", "disk", "disk_size", "disk_expect", "registry",
+    "golden", "canonical", "disk", "disk_size", "disk_expect", "registry", "paths",
 }
 
 
@@ -51,6 +52,16 @@ class Scenarios(unittest.TestCase):
                 if "golden" in sc:
                     self.assertTrue((TOOLS / "golden" / sc["golden"]).is_dir())
                 self.assertLess(len(sc.get("cmdline", "")), 256)
+                if "paths" in sc:
+                    # Only the fast and batch gates select by path, and
+                    # they boot x86-64 scenarios of the gate tier.
+                    self.assertEqual((sc["arch"], sc["tier"]), ("x86_64", "gate"))
+                    self.assertTrue(sc["paths"])
+                    for path in sc["paths"]:
+                        # A path that names nothing selects nothing.
+                        there = TOOLS.parent / path
+                        self.assertTrue(there.is_dir() if path.endswith("/") else there.is_file(),
+                                        f"{path} is not in the tree")
                 # A disk is always checked after the boot, and only a
                 # scenario with a disk says anything about one.
                 self.assertEqual("disk_expect" in sc, "disk" in sc)
@@ -78,6 +89,23 @@ class Scenarios(unittest.TestCase):
         sc = SCENARIOS["x86_64-disk-present"]
         self.assertEqual((sc["tier"], sc["disk"], sc["disk_expect"], sc.get("expect", "ok")),
                          ("gate", "ahci", "unchanged", "ok"))
+
+    def test_the_fast_gate_runs_microsoft_s_stack_for_a_kernel_change(self):
+        for changed in ("kernel/io/irp.rs", "kernel/pnp/mod.rs", "lib/ntabi/lib.rs"):
+            names = boot_test.select(SCENARIOS, "fast", [changed])
+            self.assertLessEqual({"x86_64", "x86_64-storage", "x86_64-storage-direct"},
+                                 set(names), changed)
+        self.assertEqual(boot_test.select(SCENARIOS, "fast", ["doc/TESTING.md"]), ["x86_64"])
+
+    def test_the_batch_gate_with_no_base_and_the_full_gate_run_what_they_say(self):
+        gate = [n for n, sc in SCENARIOS.items() if sc["tier"] == "gate"]
+        self.assertEqual(boot_test.select(SCENARIOS, "full", []), gate)
+        self.assertEqual(boot_test.select(SCENARIOS, "batch", None),
+                         [n for n in gate if SCENARIOS[n]["arch"] == "x86_64"])
+        # With nothing changed, the batch gate still boots all that must pass.
+        self.assertEqual(boot_test.select(SCENARIOS, "batch", []),
+                         [n for n in gate if SCENARIOS[n]["arch"] == "x86_64"
+                          and SCENARIOS[n].get("expect", "ok") == "ok"])
 
     def test_the_gate_proves_failures_are_seen(self):
         for arch in ("x86_64", "aarch64"):
