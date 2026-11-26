@@ -1704,5 +1704,19 @@ Windows machine gets a real debugger, played by `tools/kd.py`.
 ## What is absent
 
 No APCs, device interrupts, PnP, power management, user processes or
-user mode. Where a fixture imports something in that territory but never
-reaches it on the tested path, the export is `Traps`.
+user mode.
+
+**Traps.** Where a binary imports a routine in territory NK lacks and
+does not reach it on the paths NK runs, the export is `Traps`
+(`kernel/export/trap.rs`): the import binds, so the binary loads, and a
+call stops the system with `BUGCHECK: <name>: NK does not implement
+this routine`. One macro makes every such routine, so none can return.
+The ledger counts them apart from `implemented`. These trap:
+
+| Names | Imported by | Why |
+| --- | --- | --- |
+| `ZwAlpcCancelMessage`, `ZwAlpcConnectPort`, `ZwAlpcConnectPortEx`, `ZwAlpcCreatePortSection`, `ZwAlpcCreateResourceReserve`, `ZwAlpcCreateSectionView`, `ZwAlpcCreateSecurityContext`, `ZwAlpcDeletePortSection`, `ZwAlpcDeleteSectionView`, `ZwAlpcDeleteSecurityContext`, `ZwAlpcDisconnectPort`, `ZwAlpcQueryInformation`, `ZwAlpcQueryInformationMessage`, `ZwAlpcSendWaitReceivePort`, `ZwAlpcSetInformation` | `msrpc.sys` | NK has no ALPC ports. `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
+| `IoSetIoCompletionEx`, `ZwCreateIoCompletion`, `ZwRemoveIoCompletionEx` | `msrpc.sys` | NK has no I/O completion ports, on which `msrpc.sys` waits for its ALPC messages |
+
+The `*-neg-trap` scenarios call one through the address its name
+resolves to and require the stop that names it.

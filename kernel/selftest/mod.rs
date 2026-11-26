@@ -197,6 +197,7 @@ pub static GROUPS: &[&Group] = &[
     &pend::OVERSTATED,
     &requestor::CREATE_NOT_COMPLETED,
     &neg::PROTECTED_CLOSE,
+    &neg::TRAP,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

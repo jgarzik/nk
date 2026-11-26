@@ -8,6 +8,8 @@
 //! `ledger/README.md`. Exports exist because a real driver in the fixture
 //! corpus imports them, not to fill out the Windows export list.
 
+mod trap;
+
 use crate::{arch, cm, etw, ex, io, ke, ldr, mm, ob, ps, rtl, se};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -17,11 +19,8 @@ pub enum State {
     /// Works for the subset the proof drivers use; gaps are documented at
     /// the function.
     Partial,
-    /// Present so the driver loads; bugchecks by name if ever called.
-    #[allow(
-        dead_code,
-        reason = "the ledger's vocabulary; nothing is bound this way at present"
-    )]
+    /// Present so the driver loads; bugchecks by name if ever called
+    /// (`trap`).
     Traps,
 }
 
@@ -409,6 +408,24 @@ static EXPORTS: &[Export] = &[
         "MmUserProbeAddress",
         mm::user::MmUserProbeAddress
     ),
+    export!(Traps, trap::ZwAlpcCancelMessage),
+    export!(Traps, trap::ZwAlpcConnectPort),
+    export!(Traps, trap::ZwAlpcConnectPortEx),
+    export!(Traps, trap::ZwAlpcCreatePortSection),
+    export!(Traps, trap::ZwAlpcCreateResourceReserve),
+    export!(Traps, trap::ZwAlpcCreateSectionView),
+    export!(Traps, trap::ZwAlpcCreateSecurityContext),
+    export!(Traps, trap::ZwAlpcDeletePortSection),
+    export!(Traps, trap::ZwAlpcDeleteSectionView),
+    export!(Traps, trap::ZwAlpcDeleteSecurityContext),
+    export!(Traps, trap::ZwAlpcDisconnectPort),
+    export!(Traps, trap::ZwAlpcQueryInformation),
+    export!(Traps, trap::ZwAlpcQueryInformationMessage),
+    export!(Traps, trap::ZwAlpcSendWaitReceivePort),
+    export!(Traps, trap::ZwAlpcSetInformation),
+    export!(Traps, trap::IoSetIoCompletionEx),
+    export!(Traps, trap::ZwCreateIoCompletion),
+    export!(Traps, trap::ZwRemoveIoCompletionEx),
 ];
 
 /// The address a driver's import of `module!name` binds to.
