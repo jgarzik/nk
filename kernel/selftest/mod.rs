@@ -250,9 +250,11 @@ pub fn resources() -> Resources {
     let (registry_blocks, registry_bytes) = crate::cm::storage();
     // Hardware error sources keep their table and what they removed.
     let (whea_blocks, whea_bytes) = crate::whea::storage();
+    // The HAL keeps the list of firmware tables it once made.
+    let (hal_blocks, hal_bytes) = crate::hal::acpi::storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes,
+        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks - hal_blocks,
+        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes - hal_bytes,
         irql: crate::ke::irql::current(),
         spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
         names: crate::ob::count(),

@@ -9,11 +9,8 @@ use super::super::{Export, NT, State};
 trap_list!(
     IoAssignResources,
     IoDuplicateDependency,
-    IoGetConfigurationInformation,
     IoQueryFullDriverPath,
     IoReadPartitionTableEx,
-    IoRegisterDeviceInterface,
-    IoRegisterPlugPlayNotification,
     IoReportTargetDeviceChangeAsynchronous,
     IoRequestDeviceEject,
     IoRequestDeviceEjectEx,
@@ -22,10 +19,7 @@ trap_list!(
     IoResolveDependency,
     IoSetDependency,
     IoSetDeviceInterfacePropertyData,
-    IoSetDeviceInterfaceState,
     IoTestDependency,
-    IoUnregisterPlugPlayNotification,
-    IoUnregisterPlugPlayNotificationEx,
     IoWMIExecuteMethod,
     IoWMIQueryAllData,
 );

@@ -1288,6 +1288,7 @@ make that safe.
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | a driver's `AddDevice` (the Plug and Play manager) | base: a system thread |
+| a Plug and Play notification callback | nothing: the registration's count of calls in progress stays raised, so it can no longer be taken back |
 | boot driver's reinitialisation routine | base of the system thread: the queue's reference to the driver object is not given back |
 | a driver's `StartIo`, and its cancel routine for a request already cancelled, from `IoStartPacket` | undo: the IRQL `IoStartPacket` raised |
 | a driver's `StartIo`, from `IoStartNextPacket` | nothing: the caller's IRQL is its own; with deferred start the count of calls at work is left raised, and the device's queue stays where it is, as on Windows |
@@ -1394,8 +1395,10 @@ table of routines and gives it the HAL's ACPI table, a third table of
 the same kind with Windows' signature, version and slot order, whose
 `HalAcpiGetTable` finds a firmware table by signature (`RSDT` and
 `XSDT` both name the root table there is; `DSDT` is found through the
-FADT; `nk_acpi::lookup`). It returns the firmware's own table where
-Windows returns a copy. `HalQuerySystemInformation`
+FADT; `nk_acpi::lookup`), and whose `HalAcpiGetAllTables` lists every
+table the root table lists but the root tables, the DSDT and the FACS,
+as a count and pointers, made once. Both give the firmware's own
+tables where Windows gives copies. `HalQuerySystemInformation`
 (`kernel/hal/sysinfo.rs`) answers the information classes drivers
 reach and stops the system naming any other. One is the list of I/O
 ports the ACPI driver must keep firmware's AML code away from: on
@@ -2026,6 +2029,14 @@ away a registration its drivers left behind).
 platform's low-power idle state) and a device's flags for that state
 (`PoDirectedDripsSetDeviceFlags`).
 
+**Shutting down.** A driver's request for a shutdown that ends with
+the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button
+and for a critical temperature) powers the machine off at once, by the
+path the kernel ends a run by: there is no user mode to ask and nothing
+to flush. What the pinned kernel refuses outright is refused; every
+other action is its policy manager's, which NK lacks, and stops the
+system naming the action.
+
 **Absent.** Hibernation: `PoSetHiberRange` stops the system with the
 bugcheck the pinned kernel raises when it is called and no hibernation
 is in progress. An ordered shutdown before a bugcheck:
@@ -2166,6 +2177,24 @@ those no longer reported are told they are gone (surprise removal, then
 removal) with everything below them. That, the removal after a failed
 start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
+
+**What drivers call** (`pnp/export.rs`, `pnp/interface.rs`,
+`pnp/notify.rs`). A device's properties (`IoGetDeviceProperty`) come
+from its node and its key; `IoOpenDeviceRegistryKey` opens its
+`Device Parameters` key or its driver key. A property set with
+`IoSetDevicePropertyData` is kept in the key where Windows keeps it and
+read back by `IoGetDevicePropertyData`; the properties Windows computes
+(`DEVPKEY_Device_*`) are not answered unless a driver set them. A
+device interface is registered under Windows' link name and
+`DeviceClasses` record; enabling it makes the symbolic link to the
+physical device object (which therefore needs a name) and calls the
+callbacks registered for the class's arrivals, on the caller's thread
+where Windows queues them for a worker; enabled before its device has
+started, an interface waits for the start. Notification registrations
+for hardware profile changes and for a target device's removal are
+kept and never called: NK produces neither event.
+`IoInvalidateDeviceState` has a started device asked for its state
+again by the worker.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
 not bring up yet because their `AddDevice` or start stops the system
@@ -2784,6 +2813,13 @@ binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
 Lengths, and what is reported as the length needed, are the pinned
 kernel's, class by class.
 
+`ZwSetSystemInformation` takes one class, the one `acpi.sys` sets:
+the registration of a firmware table provider (75), kept by the pinned
+kernel's rules with a reference to the provider's driver object
+(`kernel/ex/firmware.rs`, `nk_ex::firmware`). Nothing asks a provider
+for a table: the class that would is not among those answered. Any
+other class set stops the system naming it.
+
 | Class | Answer |
 | --- | --- |
 | 0, basic | page size, 64 KiB granularity, Windows' user range, the processors running, the memory NK uses as RAM |
@@ -2995,8 +3031,8 @@ not made.
 **Plug and Play** (the section of that name says what NK does). No
 device installation: a driver-database record is applied when a device
 is first seen. No arbiters or translators of bus drivers are asked: NK
-assigns resources itself. No removal on request, eject, stop,
-rebalance, hot-plug notification or device interface. A filter driver
+assigns resources itself. No removal on request, eject, stop or
+rebalance, and so none of the notifications that go with them. A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver

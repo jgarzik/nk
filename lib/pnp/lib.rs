@@ -17,5 +17,6 @@ extern crate alloc;
 pub mod assign;
 pub mod database;
 pub mod ids;
+pub mod interface;
 pub mod relations;
 pub mod resources;

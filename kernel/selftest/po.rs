@@ -30,6 +30,7 @@ pub static GROUP: Group = Group {
         "po.setting-callback",
         "po.setting-unregister",
         "po.coalescing",
+        "po.power-action",
     ],
     run,
     manual: false,
@@ -46,6 +47,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     numbered("po.setting-callback", setting_callback());
     numbered("po.setting-unregister", setting_unregister());
     numbered("po.coalescing", coalescing());
+    r.check("po.power-action", crate::po::action::test);
 }
 
 /// This file's test groups, in the order they run.

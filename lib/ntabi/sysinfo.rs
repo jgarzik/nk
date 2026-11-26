@@ -12,6 +12,32 @@ pub const SYSTEM_MODULE_INFORMATION_CLASS: u32 = 11;
 pub const SYSTEM_KERNEL_DEBUGGER_INFORMATION_CLASS: u32 = 35;
 pub const SYSTEM_ISOLATED_USER_MODE_INFORMATION_CLASS: u32 = 165;
 
+/// `SystemRegisterFirmwareTableInformationHandler`, which
+/// `ZwSetSystemInformation` takes.
+pub const SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS: u32 = 75;
+
+/// `SYSTEM_FIRMWARE_TABLE_HANDLER`: a driver registers (`Register`
+/// non-zero) or takes back the routine that serves the firmware tables
+/// of one provider, named by a four-character signature. The layout is
+/// the one `acpi.sys` builds and the pinned kernel's
+/// `ExpRegisterFirmwareTableInformationHandler` reads.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SYSTEM_FIRMWARE_TABLE_HANDLER {
+    pub ProviderSignature: u32,
+    pub Register: u8,
+    pub FirmwareTableHandler: *mut c_void,
+    pub DriverObject: *mut c_void,
+}
+
+const _: () = {
+    use core::mem::offset_of;
+    assert!(size_of::<SYSTEM_FIRMWARE_TABLE_HANDLER>() == 0x18);
+    assert!(offset_of!(SYSTEM_FIRMWARE_TABLE_HANDLER, Register) == 0x04);
+    assert!(offset_of!(SYSTEM_FIRMWARE_TABLE_HANDLER, FirmwareTableHandler) == 0x08);
+    assert!(offset_of!(SYSTEM_FIRMWARE_TABLE_HANDLER, DriverObject) == 0x10);
+};
+
 /// `SYSTEM_BASIC_INFORMATION`.
 #[repr(C)]
 pub struct SYSTEM_BASIC_INFORMATION {

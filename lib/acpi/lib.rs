@@ -85,6 +85,14 @@ pub fn find_table<'a>(mem: &'a impl PhysMem, rsdp: u64, sig: &[u8; 4]) -> Option
     listed(mem, rsdp).find(|t| &t[..4] == sig)
 }
 
+/// The tables a HAL hands an ACPI driver that asks for all of them:
+/// those the root table lists, in its order, but for the ones the
+/// driver gets by other means, which Windows' HAL leaves out: the root
+/// tables themselves, the DSDT and the FACS.
+pub fn all_tables(mem: &impl PhysMem, rsdp: u64) -> impl Iterator<Item = &[u8]> {
+    listed(mem, rsdp).filter(|table| !matches!(&table[..4], b"DSDT" | b"RSDT" | b"XSDT" | b"FACS"))
+}
+
 /// Offsets in the FADT: the DSDT's 32-bit address, the table's
 /// revision, and the DSDT's 64-bit address, which revision 3 added.
 const FADT_DSDT: usize = 40;
@@ -656,6 +664,8 @@ mod tests {
             fw.0[0x800..][..dsdt.len()].copy_from_slice(&dsdt);
 
             assert_eq!(root_address(&fw, 0x1000), Some(0x1100));
+            let all: Vec<&[u8]> = all_tables(&fw, 0x1000).map(|t| &t[..4]).collect();
+            assert_eq!(all, [&b"FACP"[..], b"SSDT", b"SSDT"]);
             let find = |sig, id, table| lookup(&fw, 0x1000, sig, id, table);
             let name: &[u8] = if xsdt { b"XSDT" } else { b"RSDT" };
             assert_eq!(&find(b"RSDT", None, None).unwrap()[..4], name);
