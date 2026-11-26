@@ -50,3 +50,4 @@ io.interrupt.synchronize ok
 io.interrupt.shared ok
 io.interrupt.message ok
 io.interrupt.refused ok
+io.error-log ok

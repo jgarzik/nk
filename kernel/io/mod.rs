@@ -9,6 +9,7 @@ pub mod build;
 pub mod csq;
 pub mod device;
 pub mod driver;
+pub mod errlog;
 pub mod file;
 pub mod fsrtl;
 pub mod interrupt;

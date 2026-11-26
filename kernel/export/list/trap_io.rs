@@ -7,7 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    IoAllocateErrorLogEntry,
     IoAssignResources,
     IoClearActivityIdThread,
     IoConnectInterruptEx,
@@ -28,7 +27,6 @@ trap_list!(
     IoGetPagingIoPriority,
     IoGetRequestorProcessId,
     IoGetStackLimits,
-    IoInitializeWorkItem,
     IoInvalidateDeviceRelations,
     IoInvalidateDeviceState,
     IoIs32bitProcess,
@@ -38,7 +36,6 @@ trap_list!(
     IoPropagateIrpExtension,
     IoPropagateIrpExtensionEx,
     IoQueryFullDriverPath,
-    IoQueueWorkItemEx,
     IoReadPartitionTableEx,
     IoRecordIoAttribution,
     IoRegisterBootDriverReinitialization,
@@ -61,16 +58,13 @@ trap_list!(
     IoSetGenericIrpExtension,
     IoSetHardErrorOrVerifyDevice,
     IoSetStartIoAttributes,
-    IoSizeofWorkItem,
     IoStartNextPacket,
     IoStartPacket,
     IoTestDependency,
-    IoUninitializeWorkItem,
     IoUnregisterPlugPlayNotification,
     IoUnregisterPlugPlayNotificationEx,
     IoUnregisterPriorityCallback,
     IoWMIExecuteMethod,
     IoWMIOpenBlock,
     IoWMIQueryAllData,
-    IoWriteErrorLogEntry,
 );
