@@ -1,5 +1,6 @@
 //! Hardware error sources, through the routines drivers import.
 
+use crate::mm::pool;
 use crate::test::{Group, Report};
 use crate::whea;
 use core::ffi::c_void;
@@ -23,6 +24,7 @@ pub static GROUP: Group = Group {
         "whea.device-driver-source",
         "whea.report",
         "whea.configured-source",
+        "whea.callers-packets",
     ],
     run,
     manual: false,
@@ -377,10 +379,60 @@ fn configured_source() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A device driver's source added through `WheaAddErrorSource` brings
+/// its own descriptor, packet pointers included: they are the caller's
+/// memory, and removing the source leaves them alone.
+fn callers_packets() -> Result<(), &'static str> {
+    const TAG: u32 = u32::from_le_bytes(*b"NkWt");
+    let v2 = nk_whea::v2_of_v1(&config(), 0x464).map_err(|_| "no configuration")?;
+    let (mut descriptor, _) = nk_whea::device_driver_descriptor(&v2, 1, core::ptr::null_mut())
+        .map_err(|_| "no descriptor")?;
+    let buffer = pool::alloc(0x40, TAG);
+    let states = pool::alloc(0x40, TAG);
+    if buffer.is_null() || states.is_null() {
+        return Err("no memory for the caller's packets");
+    }
+    descriptor.Info.DeviceDriverDescriptor.PacketBuffer = buffer;
+    descriptor.Info.DeviceDriverDescriptor.PacketStateBuffer = states;
+    ANSWER.store(STATUS_SUCCESS, Ordering::Relaxed);
+    INITIALIZED_ID.store(NO_ID, Ordering::Relaxed);
+    let context = core::ptr::without_provenance_mut(CONTEXT);
+    // SAFETY: a descriptor in a local.
+    if unsafe { whea::WheaAddErrorSource(&raw const descriptor, context) } != STATUS_SUCCESS {
+        return Err("a device driver's source was not added by its descriptor");
+    }
+    let id = INITIALIZED_ID.load(Ordering::Relaxed);
+    let found = whea::WheaGetErrorSource(id);
+    if found.is_null() {
+        return Err("the source was not found by the id its Initialize was given");
+    }
+    whea::WheaRemoveErrorSource(id);
+    if UNINITIALIZED_WITH.swap(0, Ordering::Relaxed) != CONTEXT {
+        return Err("Uninitialize was not called with the context");
+    }
+    // The caller's blocks are still the caller's, and still named by
+    // the descriptor.
+    let kept = pool::info(buffer).is_some() && pool::info(states).is_some();
+    // SAFETY: a removed source's descriptor stays.
+    let named = unsafe {
+        let driver = (&raw const (*found).Info.DeviceDriverDescriptor).read_unaligned();
+        driver.PacketBuffer == buffer && driver.PacketStateBuffer == states
+    };
+    if kept {
+        let _ = pool::free(buffer);
+        let _ = pool::free(states);
+    }
+    if !kept || !named {
+        return Err("removing a source freed or forgot packets the kernel did not allocate");
+    }
+    Ok(())
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("whea.device-driver-source", device_driver_source);
     r.check("whea.report", report);
     r.check("whea.configured-source", configured_source);
+    r.check("whea.callers-packets", callers_packets);
 }
 
 /// This file's test groups, in the order they run.
