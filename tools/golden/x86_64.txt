@@ -96,6 +96,8 @@ se.subject-context ok
 se.access-state ok
 se.access-check ok
 se.access-check.privileges ok
+se.privileges ok
+se.privileges.append ok
 cm.keys ok
 cm.values ok
 cm.delete ok

@@ -1,0 +1,7 @@
+# A privilege a token holds counts whether or not it is enabled: every
+# privilege check of a held privilege says yes.
+scenario: x86_64
+fails: se.privileges
+file: lib/se/token.rs
+replace:             .any(|held| held.luid == number && held.attributes & SE_PRIVILEGE_ENABLED != 0)
+with:             .any(|held| held.luid == number && held.attributes & SE_PRIVILEGE_ENABLED != 9)

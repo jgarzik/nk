@@ -24,6 +24,8 @@ pub static GROUP: Group = Group {
         "se.access-state",
         "se.access-check",
         "se.access-check.privileges",
+        "se.privileges",
+        "se.privileges.append",
     ],
     run,
     manual: false,
@@ -796,9 +798,182 @@ fn access_check_privileges() -> Result<(), &'static str> {
     verdict
 }
 
+// ---- privileges -----------------------------------------------------------
+
+/// A set of up to four privileges, as a driver declares one: the set,
+/// then the entries after its first.
+#[repr(C)]
+struct Set {
+    set: PRIVILEGE_SET,
+    more: [LUID_AND_ATTRIBUTES; 3],
+}
+
+impl Set {
+    fn of(control: u32, privileges: &[(u32, u32)]) -> Self {
+        // SAFETY: integers, for which all-zero is a value.
+        let mut set: Self = unsafe { core::mem::zeroed() };
+        set.set.PrivilegeCount = privileges.len() as u32;
+        set.set.Control = control;
+        let first = (&raw mut set.set.Privilege).cast::<LUID_AND_ATTRIBUTES>();
+        for (i, &(number, attributes)) in privileges.iter().enumerate() {
+            // SAFETY: at most four entries, which the structure has.
+            unsafe {
+                (*first.add(i)).Luid.LowPart = number;
+                (*first.add(i)).Attributes = attributes;
+            }
+        }
+        set
+    }
+
+    fn pointer(&mut self) -> *mut PRIVILEGE_SET {
+        &raw mut self.set
+    }
+}
+
+const fn luid(number: u32) -> nk_ntabi::se::LUID {
+    nk_ntabi::se::LUID {
+        LowPart: number,
+        HighPart: 0,
+    }
+}
+
+/// The privilege checks, with the sets and the answers of `nkc-se`.
+fn privileges() -> Result<(), &'static str> {
+    const ALL: u32 = 1;
+    const USED: u32 = 0x8000_0000;
+    // Which privileges, by number, the System token holds enabled.
+    let held = (0..64).fold(0u64, |held, number| {
+        held | u64::from(SeSinglePrivilegeCheck(luid(number), 1)) << number
+    });
+    if held != 0x1E_60B1_E890 {
+        return Err("the privileges the System token holds enabled are not Windows'");
+    }
+    if SeSinglePrivilegeCheck(luid(8), 0) != 1 || SeSinglePrivilegeCheck(luid(63), 0) != 1 {
+        return Err("kernel mode does not hold every privilege");
+    }
+    let (token, before) = primary();
+    let mut subject: SECURITY_SUBJECT_CONTEXT = dirty();
+    let subject = &raw mut subject;
+    // (control, the set, for kernel mode) and (answer, the set after).
+    type Case = (u32, &'static [(u32, u32)], bool, u8, &'static [(u32, u32)]);
+    let cases: [Case; 8] = [
+        (ALL, &[(7, 0)], false, 1, &[(7, USED)]),
+        (ALL, &[(7, 0), (2, 0)], false, 0, &[(7, USED), (2, 0)]),
+        (0, &[(7, 0), (2, 0)], false, 1, &[(7, USED), (2, 0)]),
+        (ALL, &[(63, 0)], false, 0, &[(63, 0)]),
+        (ALL, &[(63, 0)], true, 1, &[(63, 0)]),
+        (ALL, &[], false, 1, &[]),
+        (0, &[], false, 0, &[]),
+        (
+            0,
+            &[(2, USED | 1), (20, 1)],
+            false,
+            1,
+            &[(2, 1), (20, USED | 1)],
+        ),
+    ];
+    let mut wrong = 0;
+    // SAFETY: the subject is captured for as long as it is used.
+    unsafe {
+        SeCaptureSubjectContext(subject);
+        for (i, &(control, set, kernel, answer, after)) in cases.iter().enumerate() {
+            let mut set = Set::of(control, set);
+            let got = SePrivilegeCheck(set.pointer(), subject, i8::from(!kernel));
+            if got != answer || privileges_of(set.pointer()) != after {
+                crate::kd::print(format_args!("se.privileges: set {i}: {got}\n"));
+                wrong += 1;
+            }
+        }
+        SeReleaseSubjectContext(subject);
+        // A client that only identifies holds nothing.
+        let mut identifying = Subject::acting_as(token, 1);
+        let mut set = Set::of(ALL, &[(7, 0)]);
+        if SePrivilegeCheck(set.pointer(), identifying.pointer(), 1) != 0
+            || privileges_of(set.pointer()) != [(7, 0)]
+        {
+            wrong += 1;
+        }
+    }
+    // SAFETY: the reference `primary` took.
+    let left = unsafe {
+        let left = references(token);
+        object::dereference(token);
+        left
+    };
+    if wrong != 0 {
+        return Err("a privilege check gave another answer than Windows");
+    }
+    if left != before {
+        return Err("a privilege check kept a reference to the token");
+    }
+    Ok(())
+}
+
+/// Privileges an open has used stay in the access state while three
+/// are enough, then move to the pool, which the state's end frees.
+fn append_privileges() -> Result<(), &'static str> {
+    let (mut state, mut aux): (ACCESS_STATE, AUX_ACCESS_DATA) = (dirty(), dirty());
+    let (state, aux) = (&raw mut state, &raw mut aux);
+    let numbers = |set: *const PRIVILEGE_SET| -> Vec<u32> {
+        // SAFETY: a privilege set of the state.
+        unsafe { privileges_of(set) }
+            .iter()
+            .map(|&(number, _)| number)
+            .collect()
+    };
+    // SAFETY: locals that outlive the calls.
+    unsafe {
+        if SeCreateAccessState(state, aux, 1, &FILE_GENERIC_MAPPING) != 0 {
+            return Err("no access state");
+        }
+        let own = (&raw mut (*state).Privileges).cast::<PRIVILEGE_SET>();
+        let verdict = (|| {
+            let mut one = Set::of(1, &[(7, 0)]);
+            let mut two = Set::of(1, &[(23, 0), (20, 0)]);
+            if SeAppendPrivileges(state, one.pointer()) != 0
+                || numbers(own) != [7]
+                || (*state).PrivilegesAllocated != 0
+            {
+                return Err("the first privilege is not in the state's own set");
+            }
+            if SeAppendPrivileges(state, two.pointer()) != 0
+                || numbers(own) != [7, 23, 20]
+                || (*state).PrivilegesAllocated != 0
+                || (*aux).PrivilegesUsed != own
+                || (*own).Control != 0
+            {
+                return Err("three privileges do not fit the state's own set");
+            }
+            let mut fourth = Set::of(1, &[(21, 0)]);
+            if SeAppendPrivileges(state, fourth.pointer()) != 0 {
+                return Err("a fourth privilege was refused");
+            }
+            let moved = (*aux).PrivilegesUsed;
+            if moved == own || (*state).PrivilegesAllocated != 1 {
+                return Err("a fourth privilege did not move the set to the pool");
+            }
+            if numbers(moved) != [7, 23, 20, 21] || numbers(own) != [7, 23, 20] {
+                return Err("the moved set is not the old one and the new privilege");
+            }
+            // Once more: from the pool to the pool, the old block freed.
+            if SeAppendPrivileges(state, two.pointer()) != 0
+                || numbers((*aux).PrivilegesUsed) != [7, 23, 20, 21, 23, 20]
+            {
+                return Err("privileges were not added to a set in the pool");
+            }
+            Ok(())
+        })();
+        // Frees the set in the pool: the group's leak check says so.
+        SeDeleteAccessState(state);
+        verdict
+    }
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
     r.check("se.access-check", access_check);
     r.check("se.access-check.privileges", access_check_privileges);
+    r.check("se.privileges", privileges);
+    r.check("se.privileges.append", append_privileges);
 }

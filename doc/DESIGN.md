@@ -1032,6 +1032,13 @@ done. Generic rights are the caller's to map, as on Windows. A right
 that a privilege granted comes back in a privilege set from the pool,
 which `SeFreePrivileges` frees. Nothing audits.
 
+The privilege checks (`SePrivilegeCheck`, `SeSinglePrivilegeCheck`)
+answer for the same subject, and mark in the caller's set the
+privileges found enabled (`lib/se/privilege.rs`). A kernel-mode caller
+holds every privilege, unmarked. `SeAppendPrivileges` records the
+privileges an open used in its access state: in the state's own set
+while three are enough, in a pool block after.
+
 ## Breakpoints and the debugger
 
 A driver's breakpoint (`DbgBreakPoint`, in-line code) gets one of

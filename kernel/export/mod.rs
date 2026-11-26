@@ -222,6 +222,7 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, se::RtlLengthSid),
     export!(Implemented, se::RtlSetDaclSecurityDescriptor),
     export!(Implemented, se::access::SeAccessCheck),
+    export!(Implemented, se::access::SeAppendPrivileges),
     export!(Implemented, se::SeCaptureSecurityDescriptor),
     export!(Implemented, se::token::SeCaptureSubjectContext),
     export!(Implemented, se::token::SeCreateAccessState),
@@ -229,7 +230,9 @@ static EXPORTS: &[Export] = &[
     export_variable!(Implemented, "SeExports", se::SeExports),
     export!(Implemented, se::access::SeFreePrivileges),
     export!(Implemented, se::token::SeLockSubjectContext),
+    export!(Implemented, se::access::SePrivilegeCheck),
     export!(Implemented, se::token::SeReleaseSubjectContext),
+    export!(Implemented, se::access::SeSinglePrivilegeCheck),
     export!(Implemented, se::token::SeUnlockSubjectContext),
     export_variable!(
         Implemented,

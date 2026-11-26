@@ -270,11 +270,15 @@ impl Token {
         }
     }
 
-    /// Whether the token holds `privilege` and it is enabled.
+    /// Whether the token holds `privilege` and it is enabled. A
+    /// privilege is known by the low six bits of its number, as on
+    /// Windows, which keeps a token's privileges as the bits of a
+    /// 64-bit word and never looks at the rest of the LUID.
     pub fn privilege_enabled(&self, privilege: Luid) -> bool {
+        let number = privilege & 63;
         self.privileges
             .iter()
-            .any(|held| held.luid == privilege && held.attributes & SE_PRIVILEGE_ENABLED != 0)
+            .any(|held| held.luid == number && held.attributes & SE_PRIVILEGE_ENABLED != 0)
     }
 
     /// Whether an access-list entry naming `sid` applies to this token.

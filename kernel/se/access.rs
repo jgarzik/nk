@@ -6,13 +6,18 @@
 
 use super::{Copies, token};
 use crate::mm::pool;
+use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_ntabi::io::KERNEL_MODE;
 use nk_ntabi::ob::GENERIC_MAPPING;
-use nk_ntabi::se::{LUID, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_SUBJECT_CONTEXT};
+use nk_ntabi::se::{
+    ACCESS_STATE, AUX_ACCESS_DATA, INITIAL_PRIVILEGE_COUNT, LUID, LUID_AND_ATTRIBUTES,
+    PRIVILEGE_SET, SECURITY_SUBJECT_CONTEXT,
+};
 use nk_ntabi::status::*;
 use nk_se::access::{GenericMapping, Outcome, Request, Status, access_check};
-use nk_se::token::{Luid, SE_PRIVILEGE_USED_FOR_ACCESS};
+use nk_se::privilege::{privilege_check, single_privilege_check};
+use nk_se::token::{Luid, Privilege, SE_PRIVILEGE_USED_FOR_ACCESS};
 
 /// Pool tag of privilege sets, Windows' own (`SePr`).
 const TAG_PRIVILEGES: u32 = u32::from_le_bytes(*b"SePr");
@@ -167,6 +172,152 @@ pub unsafe extern "C" fn SeAccessCheck(
         }
         1
     }
+}
+
+/// A driver's `LUID` as one number.
+fn luid_of(luid: LUID) -> Luid {
+    u64::from(luid.LowPart) | u64::from(luid.HighPart as u32) << 32
+}
+
+/// The privileges of a driver's set, copied: the count, the control
+/// word and each privilege. `None` without memory for the copy.
+///
+/// # Safety
+/// `set` points to a privilege set with the entries its count says.
+unsafe fn copied_set(set: *const PRIVILEGE_SET) -> Option<(u32, Vec<Privilege>)> {
+    // SAFETY: per the contract.
+    unsafe {
+        let count = (&raw const (*set).PrivilegeCount).read_unaligned() as usize;
+        let control = (&raw const (*set).Control).read_unaligned();
+        let first = (&raw const (*set).Privilege).cast::<LUID_AND_ATTRIBUTES>();
+        let mut privileges = Vec::new();
+        privileges.try_reserve_exact(count).ok()?;
+        for i in 0..count {
+            let entry = first.add(i).read_unaligned();
+            privileges.push(Privilege {
+                luid: luid_of(entry.Luid),
+                attributes: entry.Attributes,
+            });
+        }
+        Some((control, privileges))
+    }
+}
+
+/// [`SePrivilegeCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-seprivilegecheck):
+/// whether the captured subject holds the privileges of the set,
+/// enabled, by the rules of `nk_se::privilege`. Each privilege's
+/// attributes are written back with what the check found.
+///
+/// # Safety
+/// `required` points to a privilege set the caller may write;
+/// `subject` is a captured subject context.
+pub unsafe extern "C" fn SePrivilegeCheck(
+    required: *mut PRIVILEGE_SET,
+    subject: *mut SECURITY_SUBJECT_CONTEXT,
+    access_mode: i8,
+) -> u8 {
+    if access_mode == KERNEL_MODE {
+        return 1;
+    }
+    // SAFETY: per the contract. The set is the driver's memory: the
+    // rules run on a copy and the attributes are written back.
+    unsafe {
+        let Some((control, mut privileges)) = copied_set(required) else {
+            return 0;
+        };
+        let held = privilege_check(
+            token::effective(subject),
+            impersonation_level(subject),
+            control,
+            &mut privileges,
+            false,
+        );
+        let first = (&raw mut (*required).Privilege).cast::<LUID_AND_ATTRIBUTES>();
+        for (i, privilege) in privileges.iter().enumerate() {
+            (&raw mut (*first.add(i)).Attributes).write_unaligned(privilege.attributes);
+        }
+        u8::from(held)
+    }
+}
+
+/// [`SeSinglePrivilegeCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-sesingleprivilegecheck):
+/// whether the calling thread's subject holds one privilege, enabled.
+pub extern "C" fn SeSinglePrivilegeCheck(privilege: LUID, access_mode: i8) -> u8 {
+    // SAFETY: an all-zero subject context is a valid value.
+    let mut subject: SECURITY_SUBJECT_CONTEXT = unsafe { core::mem::zeroed() };
+    let subject = &raw mut subject;
+    // SAFETY: a local, captured for as long as it is used.
+    unsafe {
+        token::SeCaptureSubjectContext(subject);
+        let held = single_privilege_check(
+            token::effective(subject),
+            impersonation_level(subject),
+            luid_of(privilege),
+            access_mode == KERNEL_MODE,
+        );
+        token::SeReleaseSubjectContext(subject);
+        u8::from(held)
+    }
+}
+
+/// The bytes a privilege set of `count` privileges takes.
+const fn set_size(count: u32) -> usize {
+    core::mem::offset_of!(PRIVILEGE_SET, Privilege)
+        + size_of::<LUID_AND_ATTRIBUTES>() * count as usize
+}
+
+/// [`SeAppendPrivileges`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-seappendprivileges):
+/// add the privileges of `set` to those an open has used
+/// (`AUX_ACCESS_DATA.PrivilegesUsed`). While they number three at most
+/// they stay in the access state's own set; beyond that they move to a
+/// pool block, which `SeDeleteAccessState` frees, and the state says so
+/// (`PrivilegesAllocated`). The set's control word is not carried over.
+///
+/// # Safety
+/// `state` is an access state from `SeCreateAccessState`; `set` points
+/// to a privilege set with the entries its count says.
+pub unsafe extern "C" fn SeAppendPrivileges(
+    state: *mut ACCESS_STATE,
+    set: *const PRIVILEGE_SET,
+) -> NTSTATUS {
+    // SAFETY: per the contract. Both structures are the driver's
+    // memory: fields are read and written one at a time.
+    unsafe {
+        let aux = (&raw const (*state).AuxData)
+            .read()
+            .cast::<AUX_ACCESS_DATA>();
+        let used = (&raw const (*aux).PrivilegesUsed).read();
+        let (had, more) = (
+            (&raw const (*used).PrivilegeCount).read_unaligned(),
+            (&raw const (*set).PrivilegeCount).read_unaligned(),
+        );
+        let target = if had.saturating_add(more) > INITIAL_PRIVILEGE_COUNT {
+            let Some(size) = set_size(had).checked_add(set_size(more)) else {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            };
+            let moved = pool::alloc(size, TAG_PRIVILEGES).cast::<PRIVILEGE_SET>();
+            if moved.is_null() {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            moved
+                .cast::<u8>()
+                .copy_from_nonoverlapping(used.cast(), set_size(had));
+            if (&raw const (*state).PrivilegesAllocated).read() != 0 {
+                pool::ExFreePoolWithTag(used.cast(), 0);
+            }
+            (&raw mut (*aux).PrivilegesUsed).write(moved);
+            (&raw mut (*state).PrivilegesAllocated).write(1);
+            moved
+        } else {
+            used
+        };
+        target.cast::<u8>().add(set_size(had)).copy_from(
+            (&raw const (*set).Privilege).cast(),
+            size_of::<LUID_AND_ATTRIBUTES>() * more as usize,
+        );
+        (&raw mut (*target).PrivilegeCount).write_unaligned(had + more);
+    }
+    STATUS_SUCCESS
 }
 
 /// [`SeFreePrivileges`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sefreeprivileges):
