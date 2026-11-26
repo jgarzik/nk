@@ -59,7 +59,7 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
-| 25 | `io::device::DATABASE` | every device's reference count, delete-pending mark and security descriptor pointer; each driver's list of devices | DISPATCH |
+| 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them) and security descriptor pointer; each driver's list of devices | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |

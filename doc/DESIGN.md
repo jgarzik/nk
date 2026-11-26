@@ -1147,7 +1147,11 @@ Driver, device and file objects are object-manager objects of exactly
 their Windows size, and IRPs pool allocations of theirs; all are reached
 by raw pointer. An IRP's allocation ends, past its stack locations, with
 one word of NK's: the room in the requestor's buffer. A device object is
-followed by the driver's extension, then a private NK block. A device's
+followed by the driver's extension, then the I/O manager's own
+(`DEVOBJ_EXTENSION`, which `DeviceObjectExtension` points to), laid out
+as the pinned kernel's and with nothing of NK's after it: what NK keeps
+about a device it keeps in the fields Windows keeps it in (deletion
+pending is `DOE_DELETE_PENDING` in `ExtensionFlags`). A device's
 own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes.
 

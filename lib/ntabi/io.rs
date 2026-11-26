@@ -233,8 +233,45 @@ pub struct DEVICE_OBJECT {
     pub DeviceLock: KEVENT,
     pub SectorSize: u16,
     pub Spare1: u16,
-    pub DeviceObjectExtension: PVOID,
+    pub DeviceObjectExtension: *mut DEVOBJ_EXTENSION,
     pub Reserved: PVOID,
+}
+
+/// `DEVOBJ_EXTENSION.Type` (`IO_TYPE_DEVICE_OBJECT_EXTENSION`).
+pub const IO_TYPE_DEVICE_OBJECT_EXTENSION: i16 = 0x0D;
+
+/// `DEVOBJ_EXTENSION.ExtensionFlags`: what is pending for the device.
+/// The names are those of the WDK's debugger extensions; the values are
+/// the ones the pinned kernel tests.
+pub const DOE_UNLOAD_PENDING: u32 = 0x01;
+pub const DOE_DELETE_PENDING: u32 = 0x02;
+pub const DOE_REMOVE_PENDING: u32 = 0x04;
+pub const DOE_REMOVE_PROCESSED: u32 = 0x08;
+pub const DOE_START_PENDING: u32 = 0x10;
+
+/// What `DEVICE_OBJECT.DeviceObjectExtension` points to: the I/O
+/// manager's own record of a device, which the WDK declares only the
+/// head of. Microsoft's drivers read it in line (the device node, the
+/// device attached to), so it is laid out as the pinned kernel's.
+#[repr(C)]
+pub struct DEVOBJ_EXTENSION {
+    pub Type: i16,
+    pub Size: u16,
+    pub DeviceObject: *mut DEVICE_OBJECT,
+    pub PowerFlags: u32,
+    pub Dope: PVOID,
+    pub ExtensionFlags: u32,
+    pub DeviceNode: PVOID,
+    /// The device this one is attached to, the next lower of its stack.
+    pub AttachedTo: *mut DEVICE_OBJECT,
+    pub StartIoCount: i32,
+    pub StartIoKey: i32,
+    pub StartIoFlags: u32,
+    pub Vpb: PVOID,
+    pub DependencyNode: PVOID,
+    pub InterruptContext: PVOID,
+    pub InterruptCount: i32,
+    pub VerifierContext: PVOID,
 }
 
 /// `FILE_OBJECT.Flags`
@@ -627,6 +664,22 @@ const _: () = {
     assert!(offset_of!(DEVICE_OBJECT, SectorSize) == 0x130);
     assert!(offset_of!(DEVICE_OBJECT, DeviceObjectExtension) == 0x138);
     assert!(offset_of!(DEVICE_OBJECT, Reserved) == 0x140);
+    assert!(size_of::<DEVOBJ_EXTENSION>() == 0x70);
+    assert!(offset_of!(DEVOBJ_EXTENSION, Size) == 0x02);
+    assert!(offset_of!(DEVOBJ_EXTENSION, DeviceObject) == 0x08);
+    assert!(offset_of!(DEVOBJ_EXTENSION, PowerFlags) == 0x10);
+    assert!(offset_of!(DEVOBJ_EXTENSION, Dope) == 0x18);
+    assert!(offset_of!(DEVOBJ_EXTENSION, ExtensionFlags) == 0x20);
+    assert!(offset_of!(DEVOBJ_EXTENSION, DeviceNode) == 0x28);
+    assert!(offset_of!(DEVOBJ_EXTENSION, AttachedTo) == 0x30);
+    assert!(offset_of!(DEVOBJ_EXTENSION, StartIoCount) == 0x38);
+    assert!(offset_of!(DEVOBJ_EXTENSION, StartIoKey) == 0x3C);
+    assert!(offset_of!(DEVOBJ_EXTENSION, StartIoFlags) == 0x40);
+    assert!(offset_of!(DEVOBJ_EXTENSION, Vpb) == 0x48);
+    assert!(offset_of!(DEVOBJ_EXTENSION, DependencyNode) == 0x50);
+    assert!(offset_of!(DEVOBJ_EXTENSION, InterruptContext) == 0x58);
+    assert!(offset_of!(DEVOBJ_EXTENSION, InterruptCount) == 0x60);
+    assert!(offset_of!(DEVOBJ_EXTENSION, VerifierContext) == 0x68);
     assert!(offset_of!(FILE_OBJECT, DeviceObject) == 0x08);
     assert!(offset_of!(FILE_OBJECT, FsContext) == 0x18);
     assert!(offset_of!(FILE_OBJECT, PrivateCacheMap) == 0x30);

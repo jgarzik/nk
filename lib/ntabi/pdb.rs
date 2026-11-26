@@ -1119,6 +1119,35 @@ fn create_requests_match_the_kernel() {
 }
 
 #[test]
+fn device_object_extension_matches_the_kernel() {
+    use crate::io::DEVOBJ_EXTENSION;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        DEVOBJ_EXTENSION,
+        "_DEVOBJ_EXTENSION",
+        [
+            Type,
+            Size,
+            DeviceObject,
+            PowerFlags,
+            Dope,
+            ExtensionFlags,
+            DeviceNode,
+            AttachedTo,
+            StartIoCount,
+            StartIoKey,
+            StartIoFlags,
+            Vpb,
+            DependencyNode,
+            InterruptContext,
+            InterruptCount,
+            VerifierContext,
+        ]
+    );
+}
+
+#[test]
 fn object_attributes_match_the_kernel() {
     use crate::ob::OBJECT_ATTRIBUTES;
     use core::mem::{offset_of, size_of};

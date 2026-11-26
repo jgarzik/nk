@@ -7,6 +7,11 @@
 //! which decides when its memory goes. `IoCreateDevice` holds one
 //! pointer reference; the device gives it up when it is deleted and
 //! unreferenced.
+//!
+//! `DeviceObjectExtension` points to a `DEVOBJ_EXTENSION` laid out as
+//! Windows', behind the driver's own extension in the device's block.
+//! What the I/O manager keeps about a device is kept there, in the
+//! fields Windows keeps it in.
 
 #![allow(non_snake_case)]
 
@@ -16,19 +21,6 @@ use crate::{kd, ke, ob, rtl};
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
-/// NK's private per-device block, where Windows keeps its `DEVOBJ_EXTENSION`.
-/// The first fields mirror the public head of that structure.
-#[repr(C)]
-struct DeviceExtra {
-    kind: i16,
-    size: u16,
-    device: *mut DEVICE_OBJECT,
-    /// `IoDeleteDevice` was called while the device was still open.
-    delete_pending: bool,
-}
-
-/// `IO_TYPE_DEVICE_OBJECT_EXTENSION`
-const EXTRA_TYPE: i16 = 0x0D;
 /// `KDEVICE_QUEUE.Type` (`DeviceQueueObject`).
 const DEVICE_QUEUE_OBJECT: i16 = 0x14;
 /// The object's `Size` field is 16 bits.
@@ -62,9 +54,10 @@ pub unsafe extern "C" fn IoCreateDevice(
     if extension_size > MAX_EXTENSION {
         return STATUS_INVALID_PARAMETER;
     }
-    // Device object, then the driver's extension, then NK's private block.
+    // Device object, then the driver's extension, then the I/O manager's
+    // (`DEVOBJ_EXTENSION`), in one block and nothing after, as on Windows.
     let ext = (extension_size as usize).next_multiple_of(16);
-    let total = size_of::<DEVICE_OBJECT>() + ext + size_of::<DeviceExtra>();
+    let total = size_of::<DEVICE_OBJECT>() + ext + size_of::<DEVOBJ_EXTENSION>();
     // SAFETY: `name` is valid per the contract.
     let name = unsafe { rtl::copy_unicode(name) };
     // A device with a name is an object with a name: `\Device\Null` is
@@ -85,10 +78,10 @@ pub unsafe extern "C" fn IoCreateDevice(
         let extra = device
             .cast::<u8>()
             .add(size_of::<DEVICE_OBJECT>() + ext)
-            .cast::<DeviceExtra>();
-        (*extra).kind = EXTRA_TYPE;
-        (*extra).size = size_of::<DeviceExtra>() as u16;
-        (*extra).device = device;
+            .cast::<DEVOBJ_EXTENSION>();
+        // Windows leaves `Size` zero.
+        (*extra).Type = IO_TYPE_DEVICE_OBJECT_EXTENSION;
+        (*extra).DeviceObject = device;
 
         (*device).Type = IO_TYPE_DEVICE;
         (*device).Size = (size_of::<DEVICE_OBJECT>() as u32 + extension_size) as u16;
@@ -96,7 +89,7 @@ pub unsafe extern "C" fn IoCreateDevice(
         (*device).DeviceType = device_type;
         (*device).Characteristics = characteristics;
         (*device).StackSize = 1;
-        (*device).DeviceObjectExtension = extra.cast();
+        (*device).DeviceObjectExtension = extra;
         if extension_size != 0 {
             (*device).DeviceExtension = device.add(1).cast();
         }
@@ -133,12 +126,19 @@ pub unsafe extern "C" fn IoCreateDevice(
     STATUS_SUCCESS
 }
 
+/// The I/O manager's extension of `device`.
+///
 /// # Safety
 /// `device` must be a live device object.
-unsafe fn extra(device: *mut DEVICE_OBJECT) -> *mut DeviceExtra {
+pub(super) unsafe fn extra(device: *mut DEVICE_OBJECT) -> *mut DEVOBJ_EXTENSION {
     // SAFETY: `IoCreateDevice` stored this pointer.
-    unsafe { (*device).DeviceObjectExtension.cast() }
+    unsafe { (*device).DeviceObjectExtension }
 }
+
+/// What `ExtensionFlags` says that keeps a device from being opened or
+/// attached to: it is going away.
+const DOE_GOING: u32 =
+    DOE_UNLOAD_PENDING | DOE_DELETE_PENDING | DOE_REMOVE_PENDING | DOE_REMOVE_PROCESSED;
 
 /// # Safety
 /// `device` must be a live device object with no remaining users.
@@ -195,8 +195,8 @@ pub unsafe fn replace_security(
     Some(())
 }
 
-/// One lock over every device's reference count, its delete-pending
-/// mark and its security descriptor pointer, as on Windows (the I/O database lock). "The count has reached
+/// One lock over every device's reference count, its `ExtensionFlags`
+/// (delete pending among them) and its security descriptor pointer, as on Windows (the I/O database lock). "The count has reached
 /// zero" and "deletion is pending" are decided together or not at all:
 /// whichever of `IoDeleteDevice` and the last dereference comes second
 /// sees both, under the lock, and it alone frees the device, after
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
         ob::remove(device.cast());
         let unreferenced = {
             let _database = DATABASE.lock();
-            if (*extra(device)).delete_pending {
+            if (*extra(device)).ExtensionFlags & DOE_DELETE_PENDING != 0 {
                 kd::bugcheck(format_args!("IoDeleteDevice: {device:p} deleted twice"));
             }
             // Unlink from the driver's singly linked device list.
@@ -229,7 +229,7 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
                 *link = (*device).NextDevice;
             }
             (*device).NextDevice = core::ptr::null_mut();
-            (*extra(device)).delete_pending = true;
+            (*extra(device)).ExtensionFlags |= DOE_DELETE_PENDING;
             (*device).ReferenceCount == 0
         };
         if unreferenced {
@@ -239,7 +239,9 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
 }
 
 /// Take a reference on a device found by name, for a file about to be
-/// opened on it, unless it has been deleted since it was found.
+/// opened on it, unless it has been deleted since it was found, or is
+/// otherwise going away or not yet started (`ExtensionFlags`), as
+/// Windows refuses the open.
 ///
 /// # Safety
 /// `device` is a device object whose memory the caller keeps alive (a
@@ -249,7 +251,7 @@ pub unsafe fn reference_unless_deleted(device: *mut DEVICE_OBJECT) -> bool {
     // SAFETY: per the contract; the mark and the count belong to the
     // lock. The private block is part of the device's own allocation.
     unsafe {
-        if (*extra(device)).delete_pending {
+        if (*extra(device)).ExtensionFlags & (DOE_GOING | DOE_START_PENDING) != 0 {
             return false;
         }
         (*device).ReferenceCount += 1;
@@ -280,7 +282,8 @@ pub unsafe fn dereference(device: *mut DEVICE_OBJECT) {
         let last = {
             let _database = DATABASE.lock();
             (*device).ReferenceCount -= 1;
-            (*device).ReferenceCount == 0 && (*extra(device)).delete_pending
+            (*device).ReferenceCount == 0
+                && (*extra(device)).ExtensionFlags & DOE_DELETE_PENDING != 0
         };
         if last {
             destroy(device);
