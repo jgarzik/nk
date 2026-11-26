@@ -75,6 +75,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
 | 233 | `ps::silo::HOST` | which silo context slots are allocated, and the context the host silo holds in each | DISPATCH |
+| 234 | `se::impersonate::IMPERSONATION` | what every thread impersonates: `ETHREAD.ClientSecurity` and the two flags that go with it | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
 | 240 | a processor's DPC queue (`ke::dpc`) | the DPCs waiting to run there | HIGH |
 | 242 | `ke::bugcheck::RECORDS` | the list of bugcheck callback records drivers registered, and each record's links and state | HIGH |
@@ -335,6 +336,25 @@ of mutexes held. A thread being let in to a mutex while it sleeps has
 its list and its APC-disable count changed on its behalf by the
 releasing thread, under that mutex's lock; otherwise only a thread
 itself changes them.
+
+### Impersonation
+
+One lock covers what every thread impersonates, where Windows has a
+lock per thread: a thread asks about another's token, or changes it,
+rarely and briefly. Under it a token is read out of a thread and
+referenced, so the thread cannot let go of it in between; a token
+replaced or put off is dereferenced after the lock is dropped, since
+its last reference frees pool memory. Nothing else is taken inside it.
+A thread being freed reads its own fields without the lock: nothing
+else can reach it any more.
+
+### Tokens
+
+A token is written once, before anything else can reach it, and never
+again, so it has no lock: whoever holds a reference reads it freely.
+What Windows guards with the token's lock (`SeLockSubjectContext`,
+`SeQueryInformationToken`) NK reads without one. `SeLockSubjectContext`
+still enters the critical regions a driver can observe.
 
 ### Waiting and waking
 

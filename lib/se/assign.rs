@@ -22,6 +22,11 @@
 //!   is effective and inheritable and would change that way becomes two:
 //!   the effective one, changed, then an inherit-only one, unchanged.
 //!
+//! - A supplied owner the token may not own with is refused
+//!   (`STATUS_INVALID_OWNER`, [SeAssignSecurity]) unless
+//!   `SeRestorePrivilege` is enabled, and only for a creator whose
+//!   previous mode is user mode: so the pinned kernel's code.
+//!
 //! INFERRED, for the conformance drivers:
 //! - "Inherited from the parent" means at least one entry reaches this
 //!   kind of child; [MS-DTYP] asks only whether the parent has an
@@ -37,13 +42,13 @@
 //! - Of the two entries a directory may get for one, the effective one
 //!   comes first.
 //! - An assigned ACL is exactly as long as its entries.
-//! - A supplied owner the token may not own with is refused
-//!   (`STATUS_INVALID_OWNER`, [SeAssignSecurity]) for a user-mode
-//!   creator only, and not when `SeRestorePrivilege` is enabled.
 //! - Entries that are not allow, deny, audit or alarm are inherited by
 //!   their flags and never changed.
 //!
-//! Not done: object-specific entries are not inherited (their
+//! Not done: when the parent's DACL (or SACL) is marked auto-inherited
+//! and the creator supplies none, Windows' `SeAssignSecurity` inherits
+//! with the auto-inherit rules of `SeAssignSecurityEx`; here the rules
+//! above apply all the same. Object-specific entries are not inherited (their
 //! inheritance depends on object-type GUIDs); a supplied SACL is copied
 //! and a parent's inherited like a DACL, with no mandatory-label rules.
 //!
@@ -56,7 +61,7 @@ use crate::acl::{
     Ace, CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, INHERITED_ACE, NO_PROPAGATE_INHERIT_ACE,
     OBJECT_INHERIT_ACE, aces, applied, build, object_specific, resolved, with_flags,
 };
-use crate::token::{SE_RESTORE_PRIVILEGE, SE_SECURITY_PRIVILEGE, Token};
+use crate::token::{SE_SECURITY_PRIVILEGE, Token};
 use crate::{
     Parts, SE_DACL_DEFAULTED, SE_DACL_PRESENT, SE_SACL_DEFAULTED, SE_SACL_PRESENT, acl_used,
 };
@@ -109,8 +114,7 @@ pub fn assign_security(creation: &Creation<'_>) -> Result<Vec<u8>, AssignError> 
     let explicit = creation.explicit.map(Parts::present).unwrap_or_default();
     let owner = match explicit.owner {
         Some(owner) => {
-            if user_mode && !token.may_own(owner) && !token.privilege_enabled(SE_RESTORE_PRIVILEGE)
-            {
+            if user_mode && !token.valid_owner(owner) {
                 return Err(AssignError::InvalidOwner);
             }
             owner
@@ -716,7 +720,7 @@ mod tests {
         }
         // The restore privilege, enabled, allows any owner.
         for held in &mut token.privileges {
-            if held.luid == SE_RESTORE_PRIVILEGE {
+            if held.luid == crate::token::SE_RESTORE_PRIVILEGE {
                 held.attributes = SE_PRIVILEGE_ENABLED;
             }
         }

@@ -32,7 +32,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_ntabi::io::*;
-use nk_ntabi::se::ACCESS_STATE;
+use nk_ntabi::se::{ACCESS_STATE, AUX_ACCESS_DATA};
 use nk_ntabi::status::*;
 use nk_ob::handles::Mode;
 
@@ -463,10 +463,10 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
     // read and write meanwhile, so they are reached through raw
     // pointers only.
     let desired = object::FILE_TYPE.map_generic(request.desired_access);
-    // SAFETY: an all-zero access state is a valid value (integers and
-    // null pointers).
-    let mut state: ACCESS_STATE = unsafe { core::mem::zeroed() };
-    let state = &raw mut state;
+    // SAFETY: an all-zero access state, and its auxiliary data, are
+    // valid values (integers and null pointers).
+    let (mut state, mut aux): (ACCESS_STATE, AUX_ACCESS_DATA) = unsafe { core::mem::zeroed() };
+    let (state, aux) = (&raw mut state, &raw mut aux);
     let mut context = IO_SECURITY_CONTEXT {
         SecurityQos: core::ptr::null_mut(),
         AccessState: state,
@@ -508,7 +508,7 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         (*file).IrpList.Blink = &raw mut (*file).IrpList;
         // The access state as Windows hands it to a file system: the
         // generic rights mapped to the file rights they stand for.
-        se::token::create_access_state(state, desired);
+        se::token::SeCreateAccessState(state, aux, desired, &FILE_GENERIC_MAPPING);
         let named = set_name(file, &target.remainder);
         let result = if named {
             self::request(file, major, parameters).and_then(|irp| {
@@ -528,7 +528,7 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         // granted on its own.
         let granted = (&raw const (*state).PreviouslyGrantedAccess).read()
             | (&raw const (*state).RemainingDesiredAccess).read();
-        se::token::delete_access_state(state);
+        se::token::SeDeleteAccessState(state);
         // The related file object is the driver's to read only while
         // the create is processed. `target` holds it until this
         // function returns, which is after the request has completed,

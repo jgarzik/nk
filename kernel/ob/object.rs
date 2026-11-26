@@ -193,7 +193,11 @@ static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 /// Events (`KEVENT`).
 pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
 /// Threads (`ETHREAD`).
-pub static THREAD_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 1, &THREAD_NAME, None);
+pub static THREAD_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 1,
+    &THREAD_NAME,
+    Some(crate::se::impersonate::thread_deleted),
+);
 /// Devices (`DEVICE_OBJECT`).
 pub static DEVICE_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 2,

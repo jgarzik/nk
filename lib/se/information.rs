@@ -15,13 +15,16 @@
 //! ([TOKEN_INFORMATION_CLASS] links each one): a count or pointers
 //! first, the SIDs or the ACL packed after them in order.
 //!
+//! Which classes are values, that `TokenIsAppContainer` is one of them,
+//! that a block is exactly as long as its parts, and that
+//! `TokenImpersonationLevel` of a primary token fails with
+//! `STATUS_INVALID_INFO_CLASS` are the pinned kernel's, read from its
+//! code.
+//!
 //! INFERRED, for the conformance drivers: the variable parts follow the
-//! fixed part with no gap and in the order of the array;
-//! `TokenIsAppContainer` is a value like the session id;
-//! `TokenImpersonationLevel` of a primary token and every class not
-//! listed here fail with `STATUS_INVALID_INFO_CLASS`; a token without a
-//! default DACL answers a null pointer; `TokenGroups` includes the
-//! integrity label.
+//! fixed part in the order of the array; a token without a default
+//! DACL answers a null pointer; `TokenGroups` includes the integrity
+//! label.
 //!
 //! Not done: every other class (`TokenSource`, restricted SIDs, linked
 //! tokens, claims, capabilities, ...).
@@ -29,7 +32,7 @@
 //! [SeQueryInformationToken]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryinformationtoken
 //! [TOKEN_INFORMATION_CLASS]: https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ne-ntifs-_token_information_class
 
-use crate::token::{Token, TokenType};
+use crate::token::{SE_GROUP_INTEGRITY, Token, TokenType};
 use alloc::vec::Vec;
 
 /// `TOKEN_INFORMATION_CLASS` values answered here.
@@ -118,6 +121,45 @@ pub fn token_information(token: &Token, class: u32, base: u64) -> Result<Informa
         _ => return Err(QueryError::InvalidInfoClass),
     };
     Ok(Information::Block(block))
+}
+
+/// Whether `class` is one answered here at all, for some token.
+pub fn class_known(class: u32) -> bool {
+    matches!(
+        class,
+        TOKEN_USER..=TOKEN_DEFAULT_DACL
+            | TOKEN_TYPE..=TOKEN_STATISTICS
+            | TOKEN_SESSION_ID
+            | TOKEN_INTEGRITY_LEVEL
+            | TOKEN_IS_APP_CONTAINER
+    )
+}
+
+/// `NtQueryInformationToken`: what `token` answers for `class`, as the
+/// bytes of the caller's buffer, which is at `base`. The classes that
+/// [`token_information`] hands out in a block are the same bytes here.
+/// Those it answers with a number are four bytes, but for the
+/// integrity level, which here is a `TOKEN_MANDATORY_LABEL`: the
+/// label's SID and attributes (a null SID for a token without one).
+pub fn token_information_buffer(
+    token: &Token,
+    class: u32,
+    base: u64,
+) -> Result<Vec<u8>, QueryError> {
+    if class == TOKEN_INTEGRITY_LEVEL {
+        let label = token
+            .groups
+            .iter()
+            .find(|group| group.attributes & SE_GROUP_INTEGRITY != 0);
+        return Ok(match label {
+            Some(label) => sids(base, &[], &[(&label.sid, label.attributes)]),
+            None => alloc::vec![0; 16],
+        });
+    }
+    Ok(match token_information(token, class, base)? {
+        Information::Value(value) => value.to_le_bytes().to_vec(),
+        Information::Block(block) => block,
+    })
 }
 
 /// `header`, an array of `SID_AND_ATTRIBUTES` (a pointer, the
@@ -267,7 +309,11 @@ mod tests {
         assert_eq!(u32_at(&statistics, 0), 0x3EA, "TokenId.LowPart");
         assert_eq!(u32_at(&statistics, 4), 1, "TokenId.HighPart");
         assert_eq!(u64_at(&statistics, 8), 0x3E7, "AuthenticationId");
-        assert_eq!(u64_at(&statistics, 16), i64::MAX as u64, "ExpirationTime");
+        assert_eq!(
+            u64_at(&statistics, 16),
+            crate::token::SYSTEM_TOKEN_EXPIRATION as u64,
+            "ExpirationTime"
+        );
         assert_eq!(u32_at(&statistics, 24), 1, "TokenType");
         assert_eq!(u32_at(&statistics, 28), 0, "ImpersonationLevel");
         assert_eq!(u32_at(&statistics, 32), 0x1000, "DynamicCharged");
@@ -298,6 +344,59 @@ mod tests {
                 Err(QueryError::InvalidInfoClass),
                 "class {class}"
             );
+        }
+    }
+
+    #[test]
+    fn the_buffer_form_of_an_answer() {
+        let token = Token::system();
+        // A block class: the same bytes.
+        assert_eq!(
+            token_information_buffer(&token, TOKEN_USER, 0x1000),
+            Ok(match token_information(&token, TOKEN_USER, 0x1000) {
+                Ok(Information::Block(block)) => block,
+                other => panic!("{other:?}"),
+            })
+        );
+        // A number: four bytes.
+        assert_eq!(
+            token_information_buffer(&token, TOKEN_SESSION_ID, 0),
+            Ok(alloc::vec![0; 4])
+        );
+        assert_eq!(
+            token_information_buffer(&token, TOKEN_IS_APP_CONTAINER, 0).map(|b| b.len()),
+            Ok(4)
+        );
+        // The integrity level: a label of 28 bytes, its SID after it.
+        let label = token_information_buffer(&token, TOKEN_INTEGRITY_LEVEL, 0x2000).unwrap();
+        assert_eq!(label.len(), 28);
+        assert_eq!(u64_at(&label, 0), 0x2010);
+        assert_eq!(u64_at(&label, 8), 0x60);
+        assert_eq!(label[16..], crate::token::SYSTEM_LABEL);
+        let mut bare = token.clone();
+        bare.groups.pop();
+        assert_eq!(
+            token_information_buffer(&bare, TOKEN_INTEGRITY_LEVEL, 0x2000),
+            Ok(alloc::vec![0; 16])
+        );
+        // What has no answer has none here either.
+        assert_eq!(
+            token_information_buffer(&token, TOKEN_IMPERSONATION_LEVEL, 0),
+            Err(QueryError::InvalidInfoClass)
+        );
+        assert_eq!(
+            token_information_buffer(&token, 0x7F, 0),
+            Err(QueryError::InvalidInfoClass)
+        );
+    }
+
+    #[test]
+    fn the_classes_there_are() {
+        for class in [1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 25, 29] {
+            assert!(class_known(class), "{class}");
+        }
+        for class in [0, 7, 11, 13, 24, 26, 30, 0x7F] {
+            assert!(!class_known(class), "{class}");
         }
     }
 

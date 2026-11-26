@@ -968,6 +968,86 @@ fn access_state_matches_the_kernel() {
     );
 }
 
+/// Hold a structure of this crate to the pinned kernel's layout of the
+/// same name: its size and the offset of each field named.
+macro_rules! same_layout {
+    ($types:expr, $ty:path, $name:literal, [$($field:ident),* $(,)?]) => {{
+        let layout = $types.layout($name).expect($name);
+        assert_eq!(core::mem::size_of::<$ty>(), layout.size as usize, $name);
+        $(
+            assert_eq!(
+                core::mem::offset_of!($ty, $field),
+                offset(&layout, $name, stringify!($field)),
+                concat!($name, ".", stringify!($field))
+            );
+        )*
+    }};
+}
+
+#[test]
+fn privilege_sets_match_the_kernel() {
+    use crate::se::{
+        AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_CLIENT_CONTEXT,
+        SECURITY_QUALITY_OF_SERVICE,
+    };
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        SECURITY_CLIENT_CONTEXT,
+        "_SECURITY_CLIENT_CONTEXT",
+        [
+            SecurityQos,
+            ClientToken,
+            DirectlyAccessClientToken,
+            DirectAccessEffectiveOnly,
+            ServerIsRemote,
+            ClientTokenControl,
+        ]
+    );
+    same_layout!(
+        types,
+        SECURITY_QUALITY_OF_SERVICE,
+        "_SECURITY_QUALITY_OF_SERVICE",
+        [
+            Length,
+            ImpersonationLevel,
+            ContextTrackingMode,
+            EffectiveOnly
+        ]
+    );
+    same_layout!(
+        types,
+        LUID_AND_ATTRIBUTES,
+        "_LUID_AND_ATTRIBUTES",
+        [Luid, Attributes]
+    );
+    same_layout!(
+        types,
+        PRIVILEGE_SET,
+        "_PRIVILEGE_SET",
+        [PrivilegeCount, Control, Privilege]
+    );
+    same_layout!(
+        types,
+        AUX_ACCESS_DATA,
+        "_AUX_ACCESS_DATA",
+        [
+            PrivilegesUsed,
+            GenericMapping,
+            AccessesToAudit,
+            MaximumAuditMask,
+            TransactionId,
+            NewSecurityDescriptor,
+            ExistingSecurityDescriptor,
+            ParentSecurityDescriptor,
+            DeRefSecurityDescriptor,
+            SDLock,
+            AccessReasons,
+            GenerateStagingEvents,
+        ]
+    );
+}
+
 #[test]
 fn create_requests_match_the_kernel() {
     use crate::io::{IO_SECURITY_CONTEXT, NAMED_PIPE_CREATE_PARAMETERS};

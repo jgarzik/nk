@@ -1462,12 +1462,28 @@ with eight or twelve sub-authorities, and refused with Windows'
 statuses (`nk_se::sid`); a parent's SID is a pool block the caller
 frees.
 
-Nothing is enforced: there is no user mode to check. Descriptors are
+NK itself enforces none: every open it makes is a kernel-mode open,
+which Windows does not check either, and there is no user mode. A
+driver that guards its own objects asks
+[`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck)
+and gets Windows' answer (below). Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
 replaces the named parts of a device's descriptor; for other objects it
 answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
 is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
 forced, returns a self-relative pool copy, the caller's to free.
+
+A driver that keeps descriptors for its own objects (a file system)
+gets them from
+[`SeAssignSecurity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seassignsecurity)
+(the rules: `lib/se/assign.rs`), reads parts of one with
+`SeQuerySecurityDescriptorInfo` and changes one with
+`SeSetSecurityDescriptorInfo` (`lib/se/descriptor.rs`). Each descriptor
+handed out is one self-relative pool block, the driver's to keep and
+free; a changed descriptor is a new block and the old one is the
+driver's to free. Every creator is a kernel-mode creator, which may
+name any owner for a new object; changing an owner asks the caller's
+token, as on Windows.
 
 Where a descriptor lives:
 
@@ -1494,21 +1510,101 @@ Where a descriptor lives:
 ## Tokens and access state
 
 A token is an object whose body is NK's own (`nk_se::token::Token`):
-drivers treat `TOKEN` as opaque and ask through routines. There is one,
-the System process's, with the user, groups and privileges of Windows'
-SYSTEM token (the table at `Token::system` says which of those facts
-Microsoft documents). No thread impersonates.
+drivers treat `TOKEN` as opaque and ask through routines. There is one
+logon, the system's: the System process's token has the user, groups
+and privileges of Windows' SYSTEM token (the table at `Token::system`
+says which of those facts Microsoft documents), and every other token
+is a copy of it, but one. That one is the anonymous logon's
+(`Token::anonymous`, S-1-5-7), made at boot as Windows makes it, which
+a thread takes on to act as nobody (`ZwImpersonateAnonymousToken`):
+it is in no group, not even everyone, and holds no privilege. Its
+integrity level is "untrusted", by which Windows would also deny it
+write access to objects that carry no label; NK applies no mandatory
+policy.
+
+A thread may impersonate: act with another token than its process's.
+It keeps that token where Windows does, since Microsoft's drivers are
+built against the thread's layout: `ETHREAD.ClientSecurity` holds the
+token's address, the impersonation level and "effective only", and two
+bits of `CrossThreadFlags` say that it impersonates and that opening
+its token copies it (`kernel/se/impersonate.rs`). The thread holds a
+reference to the token until it puts it off or is freed. A thread
+takes a token on through `ZwSetInformationThread`
+(`ThreadImpersonationToken`: an impersonation token by handle, or
+none), and anyone may ask what a thread wears
+(`PsReferenceImpersonationToken`, `ZwOpenThreadTokenEx`). A server
+records its client in a `SECURITY_CLIENT_CONTEXT` of its own
+([`SeCreateClientSecurity`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-secreateclientsecurity):
+the client's token itself when tracked dynamically, a copy at the
+level asked when tracked statically) and later takes it on
+(`SeImpersonateClientEx`). Windows
+lowers the level of an impersonation its process is not entitled to;
+the System process, the only one, is entitled to all.
+
+A driver asks a token about itself with
+[`SeQueryInformationToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequeryinformationtoken)
+(`lib/se/information.rs` lists the classes answered; the others fail
+with `STATUS_INVALID_INFO_CLASS`) and `SeTokenType`. An answer with
+parts of variable length is a pool block the driver frees; the session
+id, the integrity level and "is an app container" are numbers written
+in place of the block's address, as on Windows.
+
+By handle a driver opens the process's token (`ZwOpenProcessTokenEx`),
+asks it the same questions into a buffer of its own
+(`ZwQueryInformationToken`) and copies it (`ZwDuplicateToken`). A copy
+is a new token object: the same user, groups, privileges and defaults,
+of the type asked, at the impersonation level its quality of service
+names or else the source's own, with ids of its own. An effective-only
+copy leaves out the privileges and groups not in effect
+(`Token::duplicate`).
+
+A token never changes once it is made: NK exports nothing that adjusts
+one. So a token has no lock, and
+[`SeLockSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-selocksubjectcontext)
+is what is left of Windows' routine when the token lock cannot be
+contended: a critical region for each token of the subject.
 
 What an open carries about its requestor has Windows' layout, because a
 file system reads it in line (`kernel/se/token.rs`):
 
-- the subject context: no client token, the primary token (referenced
-  until the context is released), the process id for auditing;
-- the access state: the subject, an operation id of its own, the access
-  asked for as both original and remaining, generic rights as given (the
-  type being opened maps them), nothing granted yet, and the traverse
-  flag when the token holds `SeChangeNotifyPrivilege` enabled. Its
-  security descriptor, auxiliary data, privileges and names are empty.
+- the subject context
+  ([`SeCaptureSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-secapturesubjectcontext)):
+  the token the thread impersonates and at which level, the primary
+  token (both referenced until the context is released), the process
+  id for auditing. With no client token the impersonation level is not
+  written, as on Windows;
+- the access state (`SeCreateAccessState`), in the two structures its
+  maker supplies, `ACCESS_STATE` and `AUX_ACCESS_DATA`: the subject, an
+  operation id of its own, the access asked for as both original and
+  remaining (generic rights mapped when a mapping is given), nothing
+  granted yet, the traverse flag when the token holds
+  `SeChangeNotifyPrivilege` enabled, and the privileges used, which
+  start in the state's own set. An open NK makes itself gets both
+  structures, with the file type's mapping. `SeDeleteAccessState` frees
+  what the state came to own in the pool and releases the subject.
+
+`SeAccessCheck` decides by the descriptor's DACL and owner and by the
+subject's token: the client token of the captured subject if it has
+one, else the primary token. The rules, their order and their statuses
+are those of the pinned kernel's code (`lib/se/access.rs` lists them);
+what that code does beyond them (mandatory integrity labels, restricted
+tokens, object-specific and conditional entries, AppContainers) is not
+done. Generic rights are the caller's to map, as on Windows. A right
+that a privilege granted comes back in a privilege set from the pool,
+which `SeFreePrivileges` frees.
+
+Nothing audits: NK has no audit policy and nobody to report to, which
+is Windows with every audit category off. `SeOpenObjectAuditAlarm`
+does what Windows' does then (`kernel/se/audit.rs`): it clears the
+access state's "generate audit" mark and leaves the caller's
+"generate on close" as it was.
+
+The privilege checks (`SePrivilegeCheck`, `SeSinglePrivilegeCheck`)
+answer for the same subject, and mark in the caller's set the
+privileges found enabled (`lib/se/privilege.rs`). A kernel-mode caller
+holds every privilege, unmarked. `SeAppendPrivileges` records the
+privileges an open used in its access state: in the state's own set
+while three are enough, in a pool block after.
 
 ## Tracing
 

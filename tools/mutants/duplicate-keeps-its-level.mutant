@@ -1,0 +1,7 @@
+# A copy of a token is made at the source's impersonation level, not
+# the one asked for: a copy meant only to identify can do all the
+# source can.
+scenario: x86_64
+fails: se.token-handles
+file: lib/se/token.rs
+remove:         copy.impersonation_level = level;

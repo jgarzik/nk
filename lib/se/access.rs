@@ -1,49 +1,56 @@
-//! The access check: may this token have this access to an object with
-//! this security descriptor (`SeAccessCheck`).
+//! The access check: may this subject have this access to an object
+//! with this security descriptor (`SeAccessCheck`).
 //!
-//! The algorithm is the one of [MS-DTYP] 2.5.3.2 and of ["How DACLs
-//! control access to an object"], with what [SeAccessCheck] documents
-//! for kernel callers. Where those pages are silent NK follows what
-//! Windows is seen to do; each such choice is marked INFERRED and is
-//! held to Windows by the conformance drivers.
+//! The rules are those of [MS-DTYP] 2.5.3.2 and of ["How DACLs control
+//! access to an object"], in the order and with the particulars of the
+//! pinned Windows kernel's `SeAccessCheck`, read from its code. Where
+//! this differs from [MS-DTYP] the kernel decides: it is what a driver
+//! gets.
 //!
 //! In order:
 //!
-//! 1. Generic rights in the request are mapped to the object type's own.
-//! 2. A kernel-mode caller is granted what it asked, `MAXIMUM_ALLOWED`
-//!    becoming the mapping's "generic all", and nothing is looked at.
-//!    INFERRED: [SeAccessCheck] takes the mode and does not say what it
-//!    does with it.
-//! 3. An impersonation token below `SecurityImpersonation` is refused
-//!    with `STATUS_BAD_IMPERSONATION_LEVEL`. INFERRED.
-//! 4. A request for nothing succeeds with what was granted before, and
-//!    fails if that is nothing too. INFERRED.
+//! 1. A kernel-mode caller is granted what it asked and what it had,
+//!    `MAXIMUM_ALLOWED` becoming the mapping's "generic all", and
+//!    nothing is looked at.
+//! 2. A subject that impersonates below `SecurityImpersonation` is
+//!    refused with `STATUS_BAD_IMPERSONATION_LEVEL`. The level is the
+//!    subject context's, not the token's.
+//! 3. A request for nothing succeeds with what was granted before, and
+//!    is denied if that is nothing too.
+//! 4. The object's owner is granted `READ_CONTROL` and `WRITE_DAC` if
+//!    it asks for them (or for `MAXIMUM_ALLOWED`), unless the DACL has
+//!    an effective entry for OWNER RIGHTS (S-1-3-4), which then stands
+//!    for the owner in the walk ([MS-DTYP]).
 //! 5. `ACCESS_SYSTEM_SECURITY` is granted by `SeSecurityPrivilege` and
-//!    by nothing else; without it the check fails at once ([MS-DTYP];
-//!    INFERRED: with `STATUS_PRIVILEGE_NOT_HELD`). `WRITE_OWNER` is
-//!    granted by `SeTakeOwnershipPrivilege` before the DACL is read
-//!    ([MS-DTYP]). Neither privilege is consulted unless its right is
-//!    asked for by name ([SeAccessCheck]: "does not do any privilege
-//!    checks unless the caller specifically requests them").
+//!    by nothing else; without it the check fails at once with
+//!    `STATUS_PRIVILEGE_NOT_HELD`.
 //! 6. No DACL: everything asked is granted; `MAXIMUM_ALLOWED` gives
 //!    "generic all plus any additional access the caller explicitly
 //!    requests" ([SeAccessCheck]).
-//! 7. The owner is granted `READ_CONTROL` and `WRITE_DAC`, unless the
-//!    DACL has an effective entry for OWNER RIGHTS (S-1-3-4), which then
-//!    stands for the owner in the walk ([MS-DTYP]).
+//! 7. `WRITE_OWNER` is granted by `SeTakeOwnershipPrivilege`, when the
+//!    object has a DACL. Neither privilege is consulted unless its
+//!    right is asked for by name.
 //! 8. The DACL is walked in the order stored. An entry counts when it
-//!    is not inherit-only and its SID is in the token (`Token::has_sid`):
-//!    the first entry that counts decides each right, allow or deny.
-//!    For a request by name that is [MS-DTYP]'s walk. For
-//!    `MAXIMUM_ALLOWED`, [MS-DTYP] subtracts every denied right whatever
-//!    the order; NK lets the order decide there too. INFERRED.
-//! 9. A request by name succeeds when every right is granted; one with
-//!    `MAXIMUM_ALLOWED` when also something at all is granted, now or
-//!    before (INFERRED for "or before"). A refusal grants nothing.
+//!    is not inherit-only and its SID is in the token
+//!    (`Token::has_sid`). A request by name ends in refusal at the
+//!    first counting denial of a right still wanted, and succeeds when
+//!    allowances have covered every right. `MAXIMUM_ALLOWED` collects:
+//!    each right goes to whichever counting entry names it first, allow
+//!    or deny.
+//! 9. A success grants what was asked (or collected) and what was
+//!    granted before; a success that would grant nothing at all is a
+//!    denial. A refusal grants nothing.
+//!
+//! Generic rights are not mapped, neither those asked for nor those in
+//! an entry: [SeAccessCheck] wants the caller to have mapped the
+//! request, and an object's stored descriptor holds mapped entries
+//! (`assign`, `descriptor`). An unmapped generic bit is one more right
+//! nobody grants.
 //!
 //! Not done: object-specific and conditional entries (skipped, as are
 //! all types but allow and deny), restricted tokens, mandatory integrity
-//! policy, AppContainer and central access policy checks, auditing.
+//! policy and process trust labels, AppContainer and central access
+//! policy checks, auditing.
 //!
 //! [MS-DTYP]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/4f1bbcbb-814a-4c70-a11e-2a5b8779a6f9
 //! ["How DACLs control access to an object"]: https://learn.microsoft.com/en-us/windows/win32/secauthz/how-dacls-control-access-to-an-object
@@ -52,7 +59,7 @@
 use crate::acl::{ACCESS_DENIED_ACE, INHERIT_ONLY_ACE, aces};
 use crate::token::{
     Luid, OWNER_RIGHTS, SE_SECURITY_PRIVILEGE, SE_TAKE_OWNERSHIP_PRIVILEGE, SECURITY_IMPERSONATION,
-    Token, TokenType,
+    Token,
 };
 use crate::{ACCESS_ALLOWED_ACE, Parts, acl_used};
 use alloc::vec::Vec;
@@ -117,9 +124,13 @@ pub enum Status {
 pub struct Request<'a> {
     /// The token that asks: see `subject_token`.
     pub token: &'a Token,
+    /// The level at which the subject impersonates
+    /// (`SECURITY_SUBJECT_CONTEXT.ImpersonationLevel`), when `token` is
+    /// a client's; `None` when the subject acts as itself.
+    pub impersonation_level: Option<u32>,
     /// The object's descriptor.
     pub descriptor: &'a Parts<'a>,
-    /// The rights wanted, generic ones and `MAXIMUM_ALLOWED` included.
+    /// The rights wanted, `MAXIMUM_ALLOWED` included.
     pub desired: u32,
     /// Rights the caller already has; a success grants them as well.
     pub previously_granted: u32,
@@ -152,78 +163,106 @@ pub fn access_check(request: &Request<'_>) -> Outcome {
         status,
         privileges: Vec::new(),
     };
-    let granted = |rights: u32, privileges| Outcome {
-        granted: rights | request.previously_granted,
-        status: Status::Success,
-        privileges,
+    // A success that grants nothing is a denial.
+    let granted = |rights: u32, privileges| match rights | request.previously_granted {
+        0 => refused(Status::AccessDenied),
+        granted => Outcome {
+            granted,
+            status: Status::Success,
+            privileges,
+        },
     };
     let (token, mapping) = (request.token, &request.mapping);
-    let desired = map_generic(request.desired, mapping);
-    let maximum = desired & MAXIMUM_ALLOWED != 0;
-    let wanted = desired & !MAXIMUM_ALLOWED;
+    let maximum = request.desired & MAXIMUM_ALLOWED != 0;
+    let mut wanted = request.desired & !MAXIMUM_ALLOWED;
     // "Everything": what a kernel caller or an unprotected object gets.
-    let everything = if maximum {
-        wanted | mapping.all
-    } else {
-        wanted
+    let everything = |wanted: u32| {
+        if maximum {
+            wanted | mapping.all
+        } else {
+            wanted
+        }
     };
     if request.kernel_mode {
-        return granted(everything, Vec::new());
+        return Outcome {
+            granted: everything(wanted) | request.previously_granted,
+            status: Status::Success,
+            privileges: Vec::new(),
+        };
     }
-    if token.token_type == TokenType::Impersonation
-        && token.impersonation_level < SECURITY_IMPERSONATION
+    if request
+        .impersonation_level
+        .is_some_and(|level| level < SECURITY_IMPERSONATION)
     {
         return refused(Status::BadImpersonationLevel);
     }
-    if desired == 0 {
-        return if request.previously_granted == 0 {
-            refused(Status::AccessDenied)
-        } else {
-            granted(0, Vec::new())
-        };
+    if request.desired == 0 {
+        return granted(0, Vec::new());
     }
 
-    // What privileges and ownership give, before any entry is read.
+    let descriptor = request.descriptor.present();
+    // NK's decision: a DACL that cannot be read protects the object.
+    if descriptor.dacl.is_some_and(|dacl| acl_used(dacl).is_none()) {
+        return refused(Status::AccessDenied);
+    }
+    // An entry of the DACL that takes part: (denies, mask, SID).
+    let effective =
+        || {
+            descriptor
+                .dacl
+                .into_iter()
+                .flat_map(aces)
+                .filter_map(|ace| {
+                    let (mask, sid) = ace.basic()?;
+                    (ace.flags & INHERIT_ONLY_ACE == 0 && ace.kind <= ACCESS_DENIED_ACE)
+                        .then_some((ace.kind != ACCESS_ALLOWED_ACE, mask, sid))
+                })
+        };
+
+    // What ownership and privileges give, before any entry is read.
+    // Each right given is no longer wanted of the DACL.
     let mut allowed = 0;
     let mut privileges = Vec::new();
+    let owner = descriptor
+        .owner
+        .is_some_and(|owner| token.has_sid(owner, false));
+    let implicit = READ_CONTROL | WRITE_DAC;
+    if owner
+        && (maximum || wanted & implicit != 0)
+        && !effective().any(|(_, _, sid)| sid == OWNER_RIGHTS)
+    {
+        allowed |= if maximum { implicit } else { wanted & implicit };
+        wanted &= !implicit;
+        if !maximum && wanted == 0 {
+            return granted(allowed, privileges);
+        }
+    }
     if wanted & ACCESS_SYSTEM_SECURITY != 0 {
         if !token.privilege_enabled(SE_SECURITY_PRIVILEGE) {
             return refused(Status::PrivilegeNotHeld);
         }
         allowed |= ACCESS_SYSTEM_SECURITY;
+        wanted &= !ACCESS_SYSTEM_SECURITY;
         privileges.push(SE_SECURITY_PRIVILEGE);
+        if !maximum && wanted == 0 {
+            return granted(allowed, privileges);
+        }
+    }
+    if descriptor.dacl.is_none() {
+        return granted(allowed | everything(wanted), privileges);
     }
     if wanted & WRITE_OWNER != 0 && token.privilege_enabled(SE_TAKE_OWNERSHIP_PRIVILEGE) {
         allowed |= WRITE_OWNER;
+        wanted &= !WRITE_OWNER;
         privileges.push(SE_TAKE_OWNERSHIP_PRIVILEGE);
-    }
-    let Some(dacl) = request.descriptor.present().dacl else {
-        return granted(everything, privileges);
-    };
-    if acl_used(dacl).is_none() {
-        // NK's decision: a DACL that cannot be read protects the object.
-        return refused(Status::AccessDenied);
-    }
-    // An entry of the DACL that takes part: (denies, mask, SID).
-    let effective = || {
-        aces(dacl).filter_map(|ace| {
-            let (mask, sid) = ace.basic()?;
-            (ace.flags & INHERIT_ONLY_ACE == 0 && ace.kind <= ACCESS_DENIED_ACE).then_some((
-                ace.kind != ACCESS_ALLOWED_ACE,
-                mask,
-                sid,
-            ))
-        })
-    };
-    let owner = request
-        .descriptor
-        .owner
-        .is_some_and(|owner| token.has_sid(owner, false));
-    if owner && !effective().any(|(_, _, sid)| sid == OWNER_RIGHTS) {
-        allowed |= READ_CONTROL | WRITE_DAC;
+        if !maximum && wanted == 0 {
+            return granted(allowed, privileges);
+        }
     }
 
-    let mut denied = 0;
+    // The walk. `collected` and `denied` are what `MAXIMUM_ALLOWED`
+    // gathers; `remaining` is what a request by name still lacks.
+    let (mut collected, mut denied, mut remaining) = (0, 0, wanted);
     for (denies, mask, sid) in effective() {
         let applies = if sid == OWNER_RIGHTS {
             owner
@@ -233,27 +272,31 @@ pub fn access_check(request: &Request<'_>) -> Outcome {
         if !applies {
             continue;
         }
-        // A DACL grants neither of these two.
-        let mask = map_generic(mask, mapping) & !(ACCESS_SYSTEM_SECURITY | MAXIMUM_ALLOWED);
-        // A right already allowed stays allowed; one denied first is
-        // never allowed after.
+        // A DACL grants neither of these two ([MS-DTYP]: only the
+        // privilege grants the first; the second is not a right).
+        let mask = mask & !(ACCESS_SYSTEM_SECURITY | MAXIMUM_ALLOWED);
         if denies {
-            denied |= mask;
+            if !maximum && remaining & mask != 0 {
+                return refused(Status::AccessDenied);
+            }
+            denied |= mask & !collected;
         } else {
-            allowed |= mask & !denied;
+            remaining &= !mask;
+            collected |= mask & !denied;
         }
     }
-
-    if wanted & !allowed != 0 {
+    if maximum {
+        // A right asked for by name beside the most there is must be
+        // among what was collected.
+        if wanted & !collected != 0 {
+            return refused(Status::AccessDenied);
+        }
+        return granted(allowed | collected, privileges);
+    }
+    if remaining != 0 {
         return refused(Status::AccessDenied);
     }
-    if !maximum {
-        return granted(wanted, privileges);
-    }
-    if allowed | request.previously_granted == 0 {
-        return refused(Status::AccessDenied);
-    }
-    granted(allowed, privileges)
+    granted(allowed | wanted, privileges)
 }
 
 #[cfg(test)]
@@ -421,18 +464,18 @@ mod tests {
         vec![
             // Generic rights.
             case(
-                "a generic right asked for is mapped",
+                "a generic right asked for is not mapped",
                 Some(&[(ALLOW, 0, 0x0012_0089, ALICE)]),
                 GENERIC_READ,
-                0x0012_0089,
-                OK,
+                0,
+                NO,
             ),
             case(
-                "a generic right in an entry is mapped",
+                "a generic right in an entry is not mapped",
                 Some(&[(ALLOW, 0, GENERIC_READ, ALICE)]),
                 0x0012_0089,
-                0x0012_0089,
-                OK,
+                0,
+                NO,
             ),
             case(
                 "generic all needs every right",
@@ -771,10 +814,10 @@ mod tests {
                 OK,
             )),
             kernel(case(
-                "kernel mode: generic rights are mapped",
+                "kernel mode: generic rights stay as asked",
                 Some(&[]),
                 GENERIC_WRITE,
-                0x0012_0116,
+                GENERIC_WRITE,
                 OK,
             )),
             kernel(case(
@@ -930,9 +973,9 @@ mod tests {
             ),
             by(
                 PRIVILEGED,
-                &[SE_TAKE_OWNERSHIP_PRIVILEGE],
+                &[],
                 case(
-                    "the privilege is used even with no DACL",
+                    "with no DACL the right to take ownership needs no privilege",
                     None,
                     WRITE_OWNER,
                     WRITE_OWNER,
@@ -1028,7 +1071,7 @@ mod tests {
             .map(|&(luid, attributes)| Privilege { luid, attributes })
             .collect();
         if let Some(level) = who.impersonation {
-            token.token_type = TokenType::Impersonation;
+            token.token_type = crate::token::TokenType::Impersonation;
             token.impersonation_level = level;
         }
         token
@@ -1059,6 +1102,7 @@ mod tests {
                 descriptor: &descriptor,
                 desired: case.desired,
                 previously_granted: case.previously,
+                impersonation_level: case.who.impersonation,
                 mapping: MAPPING,
                 kernel_mode: case.kernel,
             });
@@ -1086,6 +1130,7 @@ mod tests {
             token: &token,
             descriptor,
             desired,
+            impersonation_level: None,
             previously_granted: 0,
             mapping: MAPPING,
             kernel_mode: false,

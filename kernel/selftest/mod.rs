@@ -31,6 +31,7 @@ mod rtl;
 mod se;
 mod seh;
 mod service;
+mod setoken;
 mod sioctl;
 mod smp;
 mod thread;
@@ -136,6 +137,7 @@ pub static GROUPS: &[&Group] = &[
     &ob::GROUP,
     &rtl::GROUP,
     &se::GROUP,
+    &setoken::GROUP,
     &cm::GROUP,
     &csq::GROUP,
     &review::GROUP,

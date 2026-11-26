@@ -60,6 +60,8 @@ pub enum Rank {
     Descriptors = 232,
     /// Silo context slots and the host silo's storage (`ps::silo`).
     Silo = 233,
+    /// What every thread impersonates (`se::impersonate`).
+    Impersonation = 234,
     /// An object's own lock, a word of its header (`ob::security`):
     /// innermost of the locks held at `DISPATCH_LEVEL`.
     ObjectHeader = 235,

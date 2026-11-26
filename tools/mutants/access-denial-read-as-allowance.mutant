@@ -1,0 +1,7 @@
+# The access check takes an entry that denies for one that allows: a
+# right denied to the subject is granted, and every call still returns.
+scenario: x86_64
+fails: se.access-check
+file: lib/se/access.rs
+replace:         if denies {
+with:         if denies && false {

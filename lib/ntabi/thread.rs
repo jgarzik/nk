@@ -64,6 +64,9 @@ pub const CLIENT_SECURITY: usize = 0x4A8;
 pub const CROSS_THREAD_FLAGS: usize = 0x510;
 /// `CrossThreadFlags.ActiveImpersonationInfo`.
 pub const ACTIVE_IMPERSONATION_INFO: u32 = 1 << 3;
+/// `CrossThreadFlags.CopyTokenOnOpen`: opening the token the thread
+/// impersonates hands out a copy of it.
+pub const COPY_TOKEN_ON_OPEN: u32 = 1 << 8;
 /// `Timer`: the thread's own `KTIMER`, for waits with a time limit.
 pub const TIMER: usize = 0x100;
 /// `WaitBlock`: four `KWAIT_BLOCK`s.

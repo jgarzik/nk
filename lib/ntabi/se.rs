@@ -105,6 +105,117 @@ const _: () = {
     assert!(offset_of!(ACCESS_STATE, ObjectTypeName) == 0x90);
 };
 
+/// [`SECURITY_QUALITY_OF_SERVICE`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-security_quality_of_service):
+/// how far a client lets a server act for it. Object attributes point
+/// to one.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SECURITY_QUALITY_OF_SERVICE {
+    pub Length: u32,
+    /// A `SECURITY_IMPERSONATION_LEVEL`.
+    pub ImpersonationLevel: u32,
+    /// `SECURITY_STATIC_TRACKING` (0) or `SECURITY_DYNAMIC_TRACKING`.
+    pub ContextTrackingMode: u8,
+    pub EffectiveOnly: u8,
+}
+
+const _: () = {
+    assert!(size_of::<SECURITY_QUALITY_OF_SERVICE>() == 12);
+    assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, ImpersonationLevel) == 4);
+    assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, ContextTrackingMode) == 8);
+    assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, EffectiveOnly) == 9);
+};
+
+/// [`SECURITY_CLIENT_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-secreateclientsecurity):
+/// who a client is, as a server keeps it to act for the client later.
+/// The server allocates it and reads it in line.
+#[repr(C)]
+pub struct SECURITY_CLIENT_CONTEXT {
+    pub SecurityQos: SECURITY_QUALITY_OF_SERVICE,
+    pub ClientToken: *mut c_void,
+    /// The context names the client's own token, not a copy.
+    pub DirectlyAccessClientToken: u8,
+    pub DirectAccessEffectiveOnly: u8,
+    pub ServerIsRemote: u8,
+    /// A `TOKEN_CONTROL`: three LUIDs and a token source.
+    pub ClientTokenControl: [u32; 10],
+}
+
+const _: () = {
+    assert!(size_of::<SECURITY_CLIENT_CONTEXT>() == 0x48);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, ClientToken) == 0x10);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, DirectlyAccessClientToken) == 0x18);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, DirectAccessEffectiveOnly) == 0x19);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, ServerIsRemote) == 0x1A);
+    assert!(offset_of!(SECURITY_CLIENT_CONTEXT, ClientTokenControl) == 0x1C);
+};
+
+/// [`LUID_AND_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_luid_and_attributes):
+/// a privilege and its `SE_PRIVILEGE_*` bits. Twelve bytes: the header
+/// packs it to four.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LUID_AND_ATTRIBUTES {
+    pub Luid: LUID,
+    pub Attributes: u32,
+}
+
+/// [`PRIVILEGE_SET`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_privilege_set):
+/// a count, a control word and that many privileges; one is declared.
+#[repr(C)]
+pub struct PRIVILEGE_SET {
+    pub PrivilegeCount: u32,
+    pub Control: u32,
+    pub Privilege: [LUID_AND_ATTRIBUTES; 1],
+}
+
+/// How many privileges an access state holds in line
+/// (`INITIAL_PRIVILEGE_COUNT`); more are kept in the pool.
+pub const INITIAL_PRIVILEGE_COUNT: u32 = 3;
+
+/// `AUX_ACCESS_DATA`: the part of an access state the documented
+/// structure only points to (`ACCESS_STATE.AuxData`). Whoever makes an
+/// access state supplies the room for it (`SeCreateAccessState`), so
+/// its size is part of the driver ABI; the layout is the pinned
+/// build's.
+#[repr(C)]
+pub struct AUX_ACCESS_DATA {
+    /// The privileges used so far: the state's own set, or a pool block
+    /// when `ACCESS_STATE.PrivilegesAllocated` says so.
+    pub PrivilegesUsed: *mut PRIVILEGE_SET,
+    pub GenericMapping: crate::ob::GENERIC_MAPPING,
+    pub AccessesToAudit: u32,
+    pub MaximumAuditMask: u32,
+    pub TransactionId: [u8; 16],
+    pub NewSecurityDescriptor: *mut c_void,
+    pub ExistingSecurityDescriptor: *mut c_void,
+    pub ParentSecurityDescriptor: *mut c_void,
+    pub DeRefSecurityDescriptor: *mut c_void,
+    pub SDLock: *mut c_void,
+    pub AccessReasons: [u32; 32],
+    pub GenerateStagingEvents: u8,
+}
+
+const _: () = {
+    assert!(size_of::<LUID_AND_ATTRIBUTES>() == 12);
+    assert!(offset_of!(LUID_AND_ATTRIBUTES, Attributes) == 8);
+    assert!(size_of::<PRIVILEGE_SET>() == 20);
+    assert!(offset_of!(PRIVILEGE_SET, Control) == 4);
+    assert!(offset_of!(PRIVILEGE_SET, Privilege) == 8);
+    assert!(size_of::<AUX_ACCESS_DATA>() == 0xE0);
+    assert!(offset_of!(AUX_ACCESS_DATA, GenericMapping) == 0x08);
+    assert!(offset_of!(AUX_ACCESS_DATA, AccessesToAudit) == 0x18);
+    assert!(offset_of!(AUX_ACCESS_DATA, MaximumAuditMask) == 0x1C);
+    assert!(offset_of!(AUX_ACCESS_DATA, TransactionId) == 0x20);
+    assert!(offset_of!(AUX_ACCESS_DATA, NewSecurityDescriptor) == 0x30);
+    assert!(offset_of!(AUX_ACCESS_DATA, ExistingSecurityDescriptor) == 0x38);
+    assert!(offset_of!(AUX_ACCESS_DATA, ParentSecurityDescriptor) == 0x40);
+    assert!(offset_of!(AUX_ACCESS_DATA, DeRefSecurityDescriptor) == 0x48);
+    assert!(offset_of!(AUX_ACCESS_DATA, SDLock) == 0x50);
+    assert!(offset_of!(AUX_ACCESS_DATA, AccessReasons) == 0x58);
+    assert!(offset_of!(AUX_ACCESS_DATA, GenerateStagingEvents) == 0xD8);
+};
+
 /// `SE_EXPORTS` (`ntifs.h`): the privileges and well-known SIDs the
 /// kernel publishes through `SeExports`.
 #[repr(C)]

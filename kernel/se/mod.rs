@@ -12,8 +12,13 @@
 
 #![allow(non_snake_case, non_upper_case_globals)]
 
+pub mod access;
+pub mod audit;
+pub mod descriptor;
+pub mod impersonate;
 pub mod sid;
 pub mod token;
+pub mod zwtoken;
 
 use crate::mm::pool;
 use alloc::vec::Vec;
@@ -262,6 +267,14 @@ struct Copies {
 }
 
 impl Copies {
+    /// A descriptor with no parts.
+    const fn empty() -> Self {
+        Self {
+            control: 0,
+            parts: [const { None }; 4],
+        }
+    }
+
     /// # Safety
     /// `sd` points to a security descriptor whose parts are where it
     /// says.
@@ -769,10 +782,7 @@ pub unsafe extern "C" fn ZwSetSecurityObject(
         let status = if core::ptr::eq(object::type_of(body), &raw const object::DEVICE_TYPE) {
             let replaced = crate::io::device::replace_security(body.cast(), |old| {
                 let old = if old.is_null() {
-                    Copies {
-                        control: 0,
-                        parts: [const { None }; 4],
-                    }
+                    Copies::empty()
                 } else {
                     Copies::of(old)?
                 };

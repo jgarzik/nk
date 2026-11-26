@@ -1,0 +1,7 @@
+# SeSetSecurityDescriptorInfo does not ask the caller's token whether
+# a new owner is valid: any owner at all is set, and the call succeeds.
+scenario: x86_64
+fails: se.descriptor-info
+file: kernel/se/descriptor.rs
+replace:             if !valid {
+with:             if !valid && false {
