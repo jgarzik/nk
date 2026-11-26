@@ -68,6 +68,8 @@ already held has a lower rank; two locks of one rank never nest.
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
+| 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
+| 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links, state and priority while queued | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 235 | an object's header lock (`ob::security`) | the security descriptor pointer in that object's header | DISPATCH |
@@ -114,6 +116,13 @@ Why this order:
 - A work queue's lock covers only linking and unlinking items. The
   semaphore that wakes a worker is released after the lock is dropped,
   and no work routine runs with it held.
+- A queue of push-lock waiters is locked only to link a waiter, or to
+  take waiters off and store the lock's word. Nothing is taken inside
+  it: the waiters' events are set, and so the ready queues locked,
+  after it is dropped. The queues share a rank and no two are held
+  together.
+- The UUID lock is held while one UUID's time is chosen, reading the
+  clock and nothing else; nothing is taken inside it.
 - A timer table's lock owns a pending timer's links, due time,
   processor and `Inserted` bit. Expiry holds it while it takes a due
   timer out and puts a periodic one back, then drops it before queueing
@@ -317,6 +326,28 @@ none of its ranked locks while holding it, except through what the
 driver's routine calls; the cancel routine of a cancel-safe queue
 releases it before it takes the queue's lock.
 
+### Locks a driver's thread sleeps on
+
+A push lock (`kernel/ex/pushlock.rs`) is one word the driver owns, with
+Windows' bits; NK changes it only by compare-and-swap through the
+driver's pointer. A thread that cannot have it sleeps: the routines
+are for `PASSIVE_LEVEL` and `APC_LEVEL`, and a wait at `DISPATCH_LEVEL`
+stops the system like any other. They leave the IRQL and the thread's
+APC state alone. As on Windows it is the caller that enters a critical
+region first, so that the holder cannot be suspended; NK queues no
+APCs and does not check that it did. The waiters are in NK's own
+queues (rank 215), not chained through the word as Windows chains
+them.
+
+A resource (`ERESOURCE`, `kernel/ex/resource.rs`) keeps its state in
+the driver's structure under the structure's own `SpinLock`, a
+`KSPIN_LOCK` like any the driver has: held at `DISPATCH_LEVEL`, not
+ranked or recorded. NK takes none of its ranked locks inside it: the
+owner table is allocated and freed with it dropped, and waiters are
+woken after it. An acquire that may wait is for below `DISPATCH_LEVEL`;
+the queries and an acquire that does not wait work at `DISPATCH_LEVEL`
+too. The critical region is the caller's to enter, as for a push lock.
+
 NK's own rules above are not applied to drivers. A driver that moves the
 IRQL the wrong way gets what a normal Windows build gives it: the move.
 NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
@@ -340,3 +371,15 @@ so does NK, with the same bugcheck code.
 - Mutants (`tools/mutants/`): a lock that does not raise the IRQL, a
   rank check that accepts any order, no end-of-interrupt, an IRQL that
   does not move the GIC's mask, a driver lock that does not raise.
+- `lib/ex`: the push lock's transitions, every interleaving of three
+  threads; `ex.pushlock.*`: on the booted kernel a waiter is woken for
+  each pairing of shared and exclusive, readers that waited get in
+  together, and threads taking the lock every way at once keep a
+  writer alone. Mutants: a releaser that wakes nobody, one that wakes
+  a single reader.
+- `lib/ex`: the resource's rules, and every interleaving of its
+  hand-over; `ex.resource.*`: recursion both ways, a waiter of each
+  kind let in as owner, the starving and yielding acquisitions, an
+  owner table that grows, and contention. Mutants: a waiter let in
+  but not woken, one woken but not recorded, a table grown without
+  its owners.

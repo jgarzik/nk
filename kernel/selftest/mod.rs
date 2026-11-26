@@ -12,6 +12,7 @@ mod cm;
 mod csq;
 mod dpc;
 mod driver_api;
+mod ex;
 pub mod except;
 mod library;
 mod loader;
@@ -127,6 +128,7 @@ pub static GROUPS: &[&Group] = &[
     &review::GROUP,
     &mutex::GROUP,
     &work::GROUP,
+    &ex::GROUP,
     &pend::GROUP,
     &open::GROUP,
     &service::GROUP,

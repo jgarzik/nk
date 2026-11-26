@@ -1,0 +1,8 @@
+# The 16-byte compare-and-swap compares only the first quadword: a list
+# header whose first entry changed, with depth and sequence number as
+# they were read, would be swapped all the same.
+scenario: aarch64
+fails: ex.slist.swap
+file: kernel/arch/aarch64/atomic.rs
+replace:             "ccmp {high}, {old_high}, #0, eq",
+with:             "ccmp {high}, {high}, #0, eq /* {old_high} */",

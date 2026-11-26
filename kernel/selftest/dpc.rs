@@ -11,6 +11,7 @@ pub static GROUP: Group = Group {
         "dpc.remove",
         "dpc.other-cpu",
         "dpc.stack",
+        "dpc.flush",
     ],
     run,
     manual: false,
@@ -29,6 +30,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "dpc.remove", "positions removed:", dpc::remove_test());
     counted(r, "dpc.other-cpu", "on processor", dpc::other_cpu_test());
     counted(r, "dpc.stack", "also on processor", dpc::stack_test());
+    counted(r, "dpc.flush", "DPCs waited for:", dpc::flush_test());
 }
 
 /// A DPC that runs for ever must stop the system.

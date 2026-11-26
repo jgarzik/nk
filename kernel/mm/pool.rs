@@ -228,26 +228,45 @@ pub fn self_test() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// `POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`, or'ed into the pool type.
+const QUOTA_FAIL_INSTEAD_OF_RAISE: u32 = 8;
+/// `POOL_RAISE_IF_ALLOCATION_FAILURE`, or'ed into the pool type.
+const RAISE_IF_ALLOCATION_FAILURE: u32 = 16;
+
+/// Raise `STATUS_INSUFFICIENT_RESOURCES` in the routine that calls
+/// this, as `ExRaiseStatus` would there. The caller holds nothing an
+/// unwind would have to give back.
+fn raise_no_memory() -> ! {
+    // SAFETY: raising is what the entry is for; it does not return.
+    unsafe {
+        crate::arch::seh::nk_entry_ExRaiseStatus(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES);
+    }
+    crate::kd::bugcheck(format_args!("ExRaiseStatus returned"))
+}
+
 /// [`ExAllocatePoolWithTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithtag).
 /// Every pool type gets non-paged memory, which is always a legal answer.
-/// Null if memory is exhausted; the contents are unspecified.
+/// When memory is exhausted: null, or with
+/// `POOL_RAISE_IF_ALLOCATION_FAILURE` in the pool type the exception
+/// `STATUS_INSUFFICIENT_RESOURCES`. The contents are unspecified.
 #[allow(non_snake_case)]
 pub extern "C" fn ExAllocatePoolWithTag(
-    _pool_type: u32,
+    pool_type: u32,
     number_of_bytes: usize,
     tag: u32,
 ) -> *mut core::ffi::c_void {
     // Windows gives a zero-byte request a minimal block, not null.
-    alloc(number_of_bytes.max(1), tag).cast()
+    let block = alloc(number_of_bytes.max(1), tag);
+    if block.is_null() && pool_type & RAISE_IF_ALLOCATION_FAILURE != 0 {
+        raise_no_memory();
+    }
+    block.cast()
 }
 
-/// `POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`, or'ed into the pool type.
-const QUOTA_FAIL_INSTEAD_OF_RAISE: u32 = 8;
-
 /// [`ExAllocatePoolWithQuotaTag`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithquotatag).
-/// NK charges no quotas: there is one process. On failure Windows raises
-/// an exception unless the caller asked for null instead; NK has no
-/// exceptions to raise yet, and an unhandled one stops Windows too.
+/// NK charges no quotas: there is one process. When memory is exhausted
+/// it raises `STATUS_INSUFFICIENT_RESOURCES`, unless the caller asked
+/// for null instead (`POOL_QUOTA_FAIL_INSTEAD_OF_RAISE`).
 #[allow(non_snake_case)]
 pub extern "C" fn ExAllocatePoolWithQuotaTag(
     pool_type: u32,
@@ -256,10 +275,7 @@ pub extern "C" fn ExAllocatePoolWithQuotaTag(
 ) -> *mut core::ffi::c_void {
     let block = alloc(number_of_bytes.max(1), tag);
     if block.is_null() && pool_type & QUOTA_FAIL_INSTEAD_OF_RAISE == 0 {
-        crate::kd::bugcheck(format_args!(
-            "0x0000001E KMODE_EXCEPTION_NOT_HANDLED: STATUS_INSUFFICIENT_RESOURCES \
-             (a pool allocation with quota of {number_of_bytes} bytes failed)"
-        ));
+        raise_no_memory();
     }
     block.cast()
 }
@@ -281,4 +297,64 @@ pub unsafe extern "C" fn ExFreePoolWithTag(p: *mut core::ffi::c_void, _tag: u32)
             "0x00000019 BAD_POOL_HEADER: block {p:p} (tag {tag:#x}, {size} bytes) was overrun"
         )),
     }
+}
+
+/// [`ExFreePool`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exfreepool):
+/// `ExFreePoolWithTag` for a caller that names no tag.
+///
+/// # Safety
+/// As `ExFreePoolWithTag`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ExFreePool(p: *mut core::ffi::c_void) {
+    // SAFETY: per the contract.
+    unsafe { ExFreePoolWithTag(p, 0) }
+}
+
+/// [`ExAllocatePoolWithTagPriority`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithtagpriority).
+/// The priority says how readily Windows may refuse when memory runs
+/// low. NK refuses only when it has none, which every priority allows.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePoolWithTagPriority(
+    pool_type: u32,
+    number_of_bytes: usize,
+    tag: u32,
+    _priority: u32,
+) -> *mut core::ffi::c_void {
+    ExAllocatePoolWithTag(pool_type, number_of_bytes, tag)
+}
+
+/// The variants give what the plain routines give: blocks aligned by
+/// size, a block for no bytes, null (and nothing worse) for more than
+/// there is; and the free that names no tag gives it all back. Returns
+/// the blocks allocated and freed.
+pub fn variants_test() -> Result<u32, &'static str> {
+    const TAG: u32 = u32::from_le_bytes(*b"NkPv");
+    /// `HighPoolPriority`, `LowPoolPriority`, `NormalPoolPriority`.
+    const PRIORITIES: [u32; 3] = [32, 0, 16];
+    let before = usage();
+    let mut blocks = 0;
+    for (size, align) in [(64, 16), (PAGE_SIZE + 64, PAGE_SIZE), (0, 16)] {
+        for priority in PRIORITIES {
+            let block = ExAllocatePoolWithTagPriority(1, size, TAG, priority);
+            if block.is_null() {
+                return Err("an allocation with a priority failed");
+            }
+            if block as usize % align != 0 {
+                return Err("a block is not aligned as its size requires");
+            }
+            // SAFETY: a fresh block of `size` bytes, freed once.
+            unsafe {
+                block.cast::<u8>().write_bytes(0x5A, size);
+                ExFreePool(block);
+            }
+            blocks += 1;
+        }
+    }
+    if !ExAllocatePoolWithTagPriority(0, 1 << 46, TAG, 16).is_null() {
+        return Err("more memory than there is was allocated");
+    }
+    if usage() != before {
+        return Err("ExFreePool did not give the blocks back");
+    }
+    Ok(blocks)
 }

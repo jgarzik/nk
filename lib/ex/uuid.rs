@@ -7,14 +7,15 @@
 //! the three out as a `GUID` in memory.
 //!
 //! The node is a network card's address when the kernel has one. With
-//! none it is 47 random bits under the multicast bit ([`local_node`]),
-//! which no card's address has set, and `ExUuidCreate` then returns
-//! [`RPC_NT_UUID_LOCAL_ONLY`] ([`is_universal`] decides).
+//! none it is random bits under two marks ([`local_node`]) and
+//! `ExUuidCreate` then returns [`RPC_NT_UUID_LOCAL_ONLY`]
+//! ([`is_universal`] decides).
 //!
-//! [`Sequencer`] picks the time and clock sequence of each UUID so that
-//! no pair is used twice, whatever the clock does. Windows instead
-//! returns `STATUS_RETRY` when asked faster than its clock moves; NK
-//! never does.
+//! [`Sequencer`] picks the time of each UUID so that none is used twice,
+//! whatever the clock does: each is later than the one before. Windows
+//! too gives successive UUIDs successive times, from a range it reserves
+//! ahead, and returns `STATUS_RETRY` when asked faster than its clock
+//! moves; NK never does.
 
 /// From the UUID epoch (15 October 1582) to the system time epoch
 /// (1 January 1601), in 100 ns units: 6653 days.
@@ -31,11 +32,40 @@ pub const fn timestamp(system_time: u64) -> u64 {
     (system_time + SYSTEM_TIME_EPOCH) & TIMESTAMP_MASK
 }
 
-/// A node made of random bytes: the multicast bit marks it as no
-/// network card's address.
+/// A node made of random bytes, marked as no network card's address
+/// twice over: by the multicast bit of an IEEE 802 address, the lowest
+/// of the first byte, as RFC 4122 asks; and by that byte's highest bit,
+/// where the conformance driver expects Windows' mark.
 pub const fn local_node(mut random: [u8; 6]) -> [u8; 6] {
-    random[0] |= 1;
+    random[0] |= 0x81;
     random
+}
+
+/// One round of mixing: every bit of the input moves every bit of the
+/// output (the finishing step of SplitMix64).
+const fn mix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// What one boot's UUIDs share, made from whatever the kernel can offer
+/// that differs from boot to boot and machine to machine: a clock
+/// sequence and a [`local_node`]. Every input counts toward both.
+pub const fn identity(entropy: [u64; 3]) -> (u16, [u8; 6]) {
+    let mut state = 0;
+    let mut i = 0;
+    while i < entropy.len() {
+        state = mix(state ^ entropy[i]);
+        i += 1;
+    }
+    let sequence = (mix(state) as u16) & SEQUENCE_MASK;
+    let node = mix(state ^ 1).to_le_bytes();
+    (
+        sequence,
+        local_node([node[0], node[1], node[2], node[3], node[4], node[5]]),
+    )
 }
 
 /// Whether a node is a universally administered card address, and so a
@@ -74,25 +104,23 @@ pub const fn version1(timestamp: u64, clock_sequence: u16, node: [u8; 6]) -> [u8
     ]
 }
 
-/// Chooses the (timestamp, clock sequence) of each UUID. Not one pair is
-/// given out twice by one sequencer.
+/// Chooses the timestamp of each UUID, and keeps the clock sequence
+/// they all carry. No timestamp is given out twice by one sequencer.
 ///
 /// While the clock moves forward a UUID carries the clock's time. When
 /// the clock has not moved since the last one, or has gone back, the
-/// time stays and the clock sequence goes up; when the sequence wraps
-/// to zero, where it might meet values already used at that time, the
-/// time is moved one unit ahead of the clock.
+/// UUID's time is one unit after the last: ahead of the clock, which
+/// catches up. The clock sequence never changes: it is what keeps one
+/// boot's UUIDs apart from another's, should their times meet.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Sequencer {
     /// The time of the last UUID.
     time: u64,
-    /// The clock sequence of the last UUID.
     sequence: u16,
 }
 
 impl Sequencer {
-    /// Start from a clock sequence, which should be random: it is what
-    /// keeps this boot's UUIDs apart from the last boot's.
+    /// Start from a clock sequence, which should be random.
     pub const fn new(clock_sequence: u16) -> Self {
         Self {
             time: 0,
@@ -103,14 +131,7 @@ impl Sequencer {
     /// The timestamp and clock sequence for the next UUID, given the
     /// clock's timestamp now.
     pub const fn next(&mut self, now: u64) -> (u64, u16) {
-        if now > self.time {
-            self.time = now;
-        } else {
-            self.sequence = (self.sequence + 1) & SEQUENCE_MASK;
-            if self.sequence == 0 {
-                self.time += 1;
-            }
-        }
+        self.time = if now > self.time { now } else { self.time + 1 };
         (self.time, self.sequence)
     }
 }
@@ -170,9 +191,9 @@ mod tests {
     }
 
     #[test]
-    fn a_random_node_is_marked_multicast() {
-        assert_eq!(local_node([0; 6]), [1, 0, 0, 0, 0, 0]);
-        assert_eq!(local_node([0xFE, 1, 2, 3, 4, 5]), [0xFF, 1, 2, 3, 4, 5]);
+    fn a_random_node_is_marked_as_no_cards_address() {
+        assert_eq!(local_node([0; 6]), [0x81, 0, 0, 0, 0, 0]);
+        assert_eq!(local_node([0x7E, 1, 2, 3, 4, 5]), [0xFF, 1, 2, 3, 4, 5]);
         assert!(!is_universal(local_node([
             0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC
         ])));
@@ -184,7 +205,30 @@ mod tests {
     }
 
     #[test]
-    fn a_moving_clock_is_followed_and_keeps_its_sequence() {
+    fn an_identity_depends_on_every_input_and_is_local() {
+        let base = [0x1234_5678, 0x9ABC_DEF0, 0x0FED_CBA9];
+        let mut seen = HashSet::new();
+        assert!(seen.insert(identity(base)));
+        for input in 0..3 {
+            for bit in 0..64 {
+                let mut changed = base;
+                changed[input] ^= 1 << bit;
+                let (sequence, node) = identity(changed);
+                assert!(sequence <= SEQUENCE_MASK);
+                assert_eq!(node[0] & 0x81, 0x81);
+                assert!(!is_universal(node));
+                // A node is 46 free bits: no two of these collide.
+                assert!(seen.insert((sequence, node)), "input {input} bit {bit}");
+            }
+        }
+        let nodes: HashSet<_> = seen.iter().map(|&(_, node)| node).collect();
+        assert_eq!(nodes.len(), seen.len());
+        // The same inputs, the same identity.
+        assert_eq!(identity(base), identity(base));
+    }
+
+    #[test]
+    fn a_moving_clock_is_followed() {
         let mut s = Sequencer::new(0xFFFF);
         // Only 14 bits of the seed are a clock sequence.
         assert_eq!(s.next(100), (100, 0x3FFF));
@@ -193,37 +237,22 @@ mod tests {
     }
 
     #[test]
-    fn a_stalled_or_reversed_clock_moves_the_sequence() {
+    fn a_stalled_or_reversed_clock_is_run_ahead_of() {
         let mut s = Sequencer::new(7);
         assert_eq!(s.next(100), (100, 7));
-        assert_eq!(s.next(100), (100, 8));
-        assert_eq!(s.next(40), (100, 9));
-        assert_eq!(s.next(101), (101, 9));
+        assert_eq!(s.next(100), (101, 7));
+        assert_eq!(s.next(40), (102, 7));
+        // The clock catching up to the borrowed time is still a stall.
+        assert_eq!(s.next(102), (103, 7));
+        assert_eq!(s.next(104), (104, 7));
         // A clock at zero from the start is a stalled clock.
         let mut s = Sequencer::new(7);
-        assert_eq!(s.next(0), (0, 8));
+        assert_eq!(s.next(0), (1, 7));
     }
 
     #[test]
-    fn a_wrapped_sequence_moves_the_time_ahead() {
-        let mut s = Sequencer::new(0x3FFE);
-        assert_eq!(s.next(100), (100, 0x3FFE));
-        assert_eq!(s.next(100), (100, 0x3FFF));
-        assert_eq!(s.next(100), (101, 0));
-        // A whole turn of the sequence fits in the borrowed time.
-        for sequence in 1..=0x3FFF {
-            assert_eq!(s.next(100), (101, sequence));
-        }
-        assert_eq!(s.next(100), (102, 0));
-        // The clock catching up to the borrowed time is still a stall.
-        assert_eq!(s.next(102), (102, 1));
-        assert_eq!(s.next(103), (103, 1));
-    }
-
-    #[test]
-    fn no_pair_repeats_whatever_the_clock_does() {
-        // Stalled long enough to wrap the sequence three times, then
-        // creeping, jumping back, and stalled again.
+    fn no_time_repeats_whatever_the_clock_does() {
+        // Stalled, then creeping, jumping back, and stalled again.
         let stalled = core::iter::repeat_n(1000u64, 50_000);
         let creeping = (0..20_000u64).map(|i| 1000 + i / 3);
         let reversed = (0..20_000u64).map(|i| 900 + i % 7);
@@ -233,23 +262,16 @@ mod tests {
             .chain(reversed)
             .chain(stalled);
         let mut s = Sequencer::new(0x1234);
-        let mut seen = HashSet::new();
+        let mut uuids = HashSet::new();
         let mut last = 0;
         for now in clock {
             let (time, sequence) = s.next(now);
-            assert!(seen.insert((time, sequence)), "{time} {sequence} twice");
-            assert!(sequence <= SEQUENCE_MASK);
-            // Time never runs back, and is never behind the clock.
-            assert!(time >= last && time >= now);
+            assert_eq!(sequence, 0x1234);
+            // Each later than the last, and never behind the clock.
+            assert!(time > last && time >= now, "{time} after {last} at {now}");
             last = time;
-            // So the UUIDs differ too.
-            assert_eq!(version1(time, sequence, [1; 6])[7] >> 4, 1);
+            assert!(uuids.insert(version1(time, sequence, [1; 6])));
         }
-        assert_eq!(seen.len(), 140_000);
-        let uuids: HashSet<_> = seen
-            .iter()
-            .map(|&(time, sequence)| version1(time, sequence, [1; 6]))
-            .collect();
-        assert_eq!(uuids.len(), seen.len());
+        assert_eq!(uuids.len(), 140_000);
     }
 }

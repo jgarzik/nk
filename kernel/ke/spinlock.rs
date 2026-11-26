@@ -45,6 +45,10 @@ pub enum Rank {
     Ipi = 200,
     /// A queue of work items (`ex::work`).
     WorkQueue = 210,
+    /// A queue of threads waiting for push locks (`ex::pushlock`).
+    PushLock = 215,
+    /// What a boot's UUIDs share (`ex::uuid`).
+    Uuid = 217,
     /// A processor's ready queues (`ke::thread`).
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).

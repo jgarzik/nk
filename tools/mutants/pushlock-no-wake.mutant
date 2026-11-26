@@ -1,0 +1,7 @@
+# The releaser of a push lock that threads wait for takes the duty to
+# wake them and then wakes nobody: the waiters sleep for ever.
+scenario: x86_64
+fails: ex.pushlock.hand-over
+file: kernel/ex/pushlock.rs
+replace:     if then == Release::Wake {
+with:     if then == Release::Wake && lock.is_null() {

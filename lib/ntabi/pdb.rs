@@ -608,6 +608,177 @@ fn work_items_match_the_kernel() {
 }
 
 #[test]
+fn push_lock_matches_the_kernel() {
+    use nk_ex::pushlock::{LOCKED, MULTIPLE_SHARED, SHARE_SHIFT, WAITING, WAKING};
+    let Some(types) = kernel_types() else { return };
+    let lock = types.layout("_EX_PUSH_LOCK").expect("_EX_PUSH_LOCK");
+    assert_eq!(size_of::<crate::ex::EX_PUSH_LOCK>(), lock.size as usize);
+    let bits = |name: &str| {
+        let member = lock.member(name).expect(name);
+        assert_eq!(member.offset, 0, "{name}");
+        member.bits.expect(name)
+    };
+    for (name, mask) in [
+        ("Locked", LOCKED),
+        ("Waiting", WAITING),
+        ("Waking", WAKING),
+        ("MultipleShared", MULTIPLE_SHARED),
+    ] {
+        assert_eq!(bits(name), (mask.trailing_zeros() as u8, 1), "{name}");
+    }
+    assert_eq!(bits("Shared"), (SHARE_SHIFT as u8, 60));
+}
+
+#[test]
+fn guid_matches_the_kernel() {
+    use crate::ex::GUID;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let guid = types.layout("_GUID").expect("_GUID");
+    let field = |name| offset(&guid, "_GUID", name);
+    assert_eq!(size_of::<GUID>(), guid.size as usize);
+    assert_eq!(offset_of!(GUID, Data1), field("Data1"));
+    assert_eq!(offset_of!(GUID, Data2), field("Data2"));
+    assert_eq!(offset_of!(GUID, Data3), field("Data3"));
+    assert_eq!(offset_of!(GUID, Data4), field("Data4"));
+}
+
+#[test]
+fn timer_delete_parameters_match_the_kernel() {
+    use crate::ex::EXT_DELETE_PARAMETERS;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let parameters = types
+        .layout("_EXT_DELETE_PARAMETERS")
+        .expect("_EXT_DELETE_PARAMETERS");
+    let field = |name| offset(&parameters, "_EXT_DELETE_PARAMETERS", name);
+    assert_eq!(size_of::<EXT_DELETE_PARAMETERS>(), parameters.size as usize);
+    assert_eq!(offset_of!(EXT_DELETE_PARAMETERS, Version), field("Version"));
+    assert_eq!(
+        offset_of!(EXT_DELETE_PARAMETERS, DeleteCallback),
+        field("DeleteCallback")
+    );
+    assert_eq!(
+        offset_of!(EXT_DELETE_PARAMETERS, DeleteContext),
+        field("DeleteContext")
+    );
+}
+
+#[test]
+fn lists_match_the_kernel() {
+    use crate::ex::{GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST, PAGED_LOOKASIDE_LIST, SLIST_HEADER};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let header = types.layout("_SLIST_HEADER").expect("_SLIST_HEADER");
+    let field = |name| offset(&header, "_SLIST_HEADER", name);
+    assert_eq!(size_of::<SLIST_HEADER>(), header.size as usize);
+    assert_eq!(offset_of!(SLIST_HEADER, Alignment), field("Alignment"));
+    assert_eq!(offset_of!(SLIST_HEADER, Region), field("Region"));
+
+    let list = types
+        .layout("_GENERAL_LOOKASIDE")
+        .expect("_GENERAL_LOOKASIDE");
+    let field = |name| offset(&list, "_GENERAL_LOOKASIDE", name);
+    assert_eq!(size_of::<GENERAL_LOOKASIDE>(), list.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(GENERAL_LOOKASIDE, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        ListHead,
+        Depth,
+        MaximumDepth,
+        TotalAllocates,
+        AllocateMisses,
+        TotalFrees,
+        FreeMisses,
+        Type,
+        Tag,
+        Size,
+        Allocate,
+        Free,
+        ListEntry,
+        LastTotalAllocates,
+        LastAllocateMisses,
+        Future
+    );
+    for (name, size, l) in [
+        (
+            "_PAGED_LOOKASIDE_LIST",
+            size_of::<PAGED_LOOKASIDE_LIST>(),
+            offset_of!(PAGED_LOOKASIDE_LIST, L),
+        ),
+        (
+            "_NPAGED_LOOKASIDE_LIST",
+            size_of::<NPAGED_LOOKASIDE_LIST>(),
+            offset_of!(NPAGED_LOOKASIDE_LIST, L),
+        ),
+    ] {
+        let layout = types.layout(name).expect(name);
+        assert_eq!(size, layout.size as usize, "{name}");
+        assert_eq!(l, offset(&layout, name, "L"));
+    }
+}
+
+#[test]
+fn resource_matches_the_kernel() {
+    use crate::ex::{ERESOURCE, OWNER_ENTRY};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let entry = types.layout("_OWNER_ENTRY").expect("_OWNER_ENTRY");
+    assert_eq!(size_of::<OWNER_ENTRY>(), entry.size as usize);
+    assert_eq!(
+        offset_of!(OWNER_ENTRY, OwnerThread),
+        offset(&entry, "_OWNER_ENTRY", "OwnerThread")
+    );
+    assert_eq!(
+        offset_of!(OWNER_ENTRY, Bits),
+        offset(&entry, "_OWNER_ENTRY", "TableSize")
+    );
+    let count = entry.member("OwnerCount").expect("OwnerCount");
+    assert_eq!(count.offset as usize, offset_of!(OWNER_ENTRY, Bits));
+    assert_eq!(
+        count.bits,
+        Some((nk_ex::resource::OWNER_COUNT_SHIFT as u8, 29))
+    );
+    // The logic's entry is this one, field for field.
+    assert_eq!(
+        size_of::<nk_ex::resource::OwnerEntry>(),
+        size_of::<OWNER_ENTRY>()
+    );
+    assert_eq!(
+        offset_of!(nk_ex::resource::OwnerEntry, thread),
+        offset_of!(OWNER_ENTRY, OwnerThread)
+    );
+
+    let resource = types.layout("_ERESOURCE").expect("_ERESOURCE");
+    let field = |name| offset(&resource, "_ERESOURCE", name);
+    assert_eq!(size_of::<ERESOURCE>(), resource.size as usize);
+    macro_rules! same {
+        ($($f:ident),*) => {
+            $(assert_eq!(offset_of!(ERESOURCE, $f), field(stringify!($f)));)*
+        };
+    }
+    same!(
+        SystemResourcesList,
+        OwnerTable,
+        ActiveCount,
+        Flag,
+        SharedWaiters,
+        ExclusiveWaiters,
+        OwnerEntry,
+        ActiveEntries,
+        ContentionCount,
+        NumberOfSharedWaiters,
+        NumberOfExclusiveWaiters,
+        Reserved2,
+        Address,
+        SpinLock
+    );
+}
+
+#[test]
 fn remove_lock_matches_the_kernel() {
     use crate::io::IO_REMOVE_LOCK;
     use core::mem::{offset_of, size_of};

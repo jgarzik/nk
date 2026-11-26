@@ -1,0 +1,8 @@
+# A flush of the DPC queues plants its barrier on every processor and
+# returns without waiting for it: whoever relied on the queued DPCs
+# having run (a timer being freed) goes on while they still run.
+scenario: x86_64
+fails: dpc.flush
+file: kernel/ke/dpc.rs
+replace:     while barrier.left.load(Ordering::Acquire) != 0 {
+with:     while barrier.left.load(Ordering::Acquire) == u32::MAX {

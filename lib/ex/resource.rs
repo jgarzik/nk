@@ -16,7 +16,7 @@
 //! | `ExInitializeResourceLite` | [`Resource::new`] |
 //! | `ExReinitializeResourceLite` | [`Resource::reinitialize`] |
 //! | `ExDeleteResourceLite` | nothing to decide: the kernel frees the table |
-//! | `ExAcquireResourceExclusiveLite`, `ExTryToAcquireResourceExclusiveLite` (no wait) | [`Resource::acquire_exclusive`] |
+//! | `ExAcquireResourceExclusiveLite` | [`Resource::acquire_exclusive`] |
 //! | `ExAcquireResourceSharedLite`, `ExAcquireSharedStarveExclusive`, `ExAcquireSharedWaitForExclusive` | [`Resource::acquire_shared`] |
 //! | `ExReleaseResourceLite`, `ExReleaseResourceForThreadLite` | [`Resource::release`] |
 //! | `ExConvertExclusiveToSharedLite` | [`Resource::convert_exclusive_to_shared`] |
@@ -73,8 +73,12 @@ pub struct OwnerEntry {
 
 const _: () = assert!(size_of::<OwnerEntry>() == 2 * size_of::<usize>());
 
+/// `OwnerCount` starts at this bit of an entry's second word, above
+/// three flag bits.
+pub const OWNER_COUNT_SHIFT: u32 = 3;
+
 impl OwnerEntry {
-    const ONE: u32 = 1 << 3;
+    const ONE: u32 = 1 << OWNER_COUNT_SHIFT;
 
     pub const FREE: Self = Self { thread: 0, bits: 0 };
 
@@ -87,7 +91,7 @@ impl OwnerEntry {
 
     /// `OwnerCount`: how many releases this owner owes.
     pub const fn count(&self) -> u32 {
-        self.bits >> 3
+        self.bits >> OWNER_COUNT_SHIFT
     }
 }
 
