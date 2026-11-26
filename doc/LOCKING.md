@@ -61,6 +61,7 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
+| 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
@@ -128,6 +129,10 @@ Why this order:
   the driver's and are called with the lock dropped: the entry counts
   the calls in progress instead, and a removal waits for the count to
   reach zero.
+- The errata database is locked around one registration or its
+  withdrawal, which allocate from the pool under it. What a provider
+  registers is copied out of its memory before the lock is taken, and
+  its driver object is referenced and released outside it.
 - The registry's lock is held only around a look-up or a change of the
   tree; a key handle is resolved before it is taken and the driver's
   memory is read and written outside it. The key object the handle

@@ -2306,11 +2306,14 @@ notifications registered and never made), no product policy
 (`kernel/ex/license.rs`: every licence value unknown, each name asked
 for logged), no shim engine (`kernel/ex/shim.rs`: registration fails as
 when Windows' engine is not running), no errata rules
-(`kernel/ex/em.rs`: the errata manager's database is empty, so a
-provider that names an entry type or callback and a client that asks
-about a rule are both told `STATUS_NOT_FOUND`, the rule's state
-unknown; `acpi.sys` and `pci.sys` go on as on a machine no erratum
-matches). A routine with many sub-functions
+(`kernel/ex/em.rs`: Windows reads the errata manager's database from
+an errata file at boot; NK reads none. `pci.sys` does not load unless
+it registers as a provider, so NK's database takes its entry types and
+callbacks from the providers that register them, checked as Windows
+checks a registration whose GUIDs it knows; it has no rule, so a client
+that asks about one is told `STATUS_NOT_FOUND`, the rule's state
+unknown, and `acpi.sys` and `pci.sys` go on as on a machine no erratum
+matches. With no rule nothing calls a provider's callbacks). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
 (`kernel/po/mod.rs`, `ZwPowerInformation`).
 
