@@ -465,6 +465,36 @@ unsafe fn create_not_completed(device: *mut DEVICE_OBJECT, major: u8, status: NT
 /// (`IoStatus.Information`: `FILE_OPENED`, `FILE_CREATED`, ...), or the
 /// status the open failed with.
 pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
+    let name: Vec<u16> = request.name.encode_utf16().collect();
+    open_as(request, &name, &Extra::default()).map(|(handle, result)| (handle, result.information))
+}
+
+/// What `ZwCreateFile` takes beyond an [`OpenRequest`].
+#[derive(Default)]
+pub struct Extra {
+    /// `Parameters.Create.FileAttributes`.
+    pub file_attributes: u16,
+    /// `Irp->Overlay.AllocationSize`.
+    pub allocation_size: i64,
+    /// The create's stack location flags (`SL_CASE_SENSITIVE`,
+    /// `SL_FORCE_ACCESS_CHECK`).
+    pub location_flags: u8,
+    /// The handle is inherited by child processes (`OBJ_INHERIT`).
+    pub inherit: bool,
+    /// An open for kernel mode gives the System process's own name for
+    /// the handle, not the kernel handle (no `OBJ_KERNEL_HANDLE`).
+    pub process_handle: bool,
+}
+
+/// As [`open`], with the name as the counted string it was given in
+/// (`request.name` is not looked at) and with `extra`. Returns the
+/// handle and what the create completed with: a success status and
+/// the driver's `IoStatus.Information`.
+pub fn open_as(
+    request: &OpenRequest<'_>,
+    name: &[u16],
+    extra: &Extra,
+) -> Result<(u64, IoResult), NTSTATUS> {
     // A pipe or a mailslot is created with few options
     // (`FILE_VALID_PIPE_OPTION_FLAGS`, `FILE_VALID_MAILSLOT_OPTION_FLAGS`
     // in `ntifs.h`): any other is refused before the name is looked at.
@@ -473,12 +503,11 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
     {
         return Err(STATUS_INVALID_PARAMETER);
     }
-    let name: Vec<u16> = request.name.encode_utf16().collect();
     let mode = match request.requestor_mode {
         KERNEL_MODE => Mode::Kernel,
         _ => Mode::User,
     };
-    let target = resolve(request.root, &name, mode)?;
+    let target = resolve(request.root, name, mode)?;
     let device = target.device;
     // Finding the device and counting the open are two steps, and the
     // device may be deleted between them: its memory is held (by the
@@ -539,7 +568,7 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         ),
         Kind::File => (
             IRP_MJ_CREATE,
-            create_parameters(context, options, 0, share, 0),
+            create_parameters(context, options, extra.file_attributes, share, 0),
         ),
     };
     // SAFETY: `device` is counted, so it is live; `file` is a fresh
@@ -565,6 +594,8 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
         let result = if named {
             self::request(file, major, parameters).and_then(|irp| {
                 (*irp).Flags = IRP_CREATE_OPERATION | IRP_SYNCHRONOUS_API | IRP_DEFER_IO_COMPLETION;
+                (*irp).Overlay[0] = extra.allocation_size as u64;
+                (*irp::next_location(irp)).Flags = extra.location_flags;
                 match start(file, irp, request.requestor_mode).wait() {
                     Err(IoError::NotCompleted { dispatch_status }) => {
                         create_not_completed(related_device(file), major, dispatch_status)
@@ -599,20 +630,23 @@ pub fn open(request: &OpenRequest<'_>) -> Result<(u64, usize), NTSTATUS> {
             // entry, by which that requestor's later requests are held
             // to what the handle was granted.
             unsafe {
-                let kernel = request.requestor_mode == KERNEL_MODE;
+                let kernel = request.requestor_mode == KERNEL_MODE && !extra.process_handle;
                 // Marked as having had a handle before it has one: the
                 // handle's number can be guessed, and from the moment
                 // it is in the table another thread may close it and
                 // write the flags (`cleanup`). Nothing else can reach
                 // the file yet, nor if no handle is made.
                 (*file).Flags |= FO_HANDLE_CREATED;
-                let handle =
-                    handle::open_with(body, granted, nk_ob::handles::Attributes::default(), kernel);
+                let attributes = nk_ob::handles::Attributes {
+                    inherit: extra.inherit,
+                    protect_from_close: false,
+                };
+                let handle = handle::open_with(body, granted, attributes, kernel);
                 if handle.is_err() {
                     (*file).Flags &= !FO_HANDLE_CREATED;
                 }
                 object::dereference(body);
-                return handle.map(|handle| (handle, r.information));
+                return handle.map(|handle| (handle, r));
             }
         }
         Ok((r, _)) => r.status,

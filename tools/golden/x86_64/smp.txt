@@ -1,6 +1,7 @@
 smp.running ok
 smp.each ok
 smp.calls ok
+smp.generic-call ok
 smp.counter ok
 smp.tlb ok
 smp.lock-interrupted ok

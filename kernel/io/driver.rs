@@ -123,9 +123,11 @@ pub(super) fn load(
         (*object).DriverInit = Some(entry);
         // Every request type starts out rejected, as on Windows.
         (*object).MajorFunction = [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
-        // Reached only from starting a service, which no driver does:
-        // an exception the entry point lets out is unhandled in a
-        // system thread, as on Windows, where one runs it.
+        // An exception the entry point lets out is unhandled in a
+        // system thread, as on Windows, where one runs it. That holds
+        // too when a driver started the service (`ZwLoadDriver`):
+        // Windows would search that driver's frames for a handler, NK
+        // stops the system.
         seh::call(
             entry as usize,
             [object.addr(), (&raw mut registry).addr(), 0, 0],
