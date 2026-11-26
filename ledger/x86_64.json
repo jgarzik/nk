@@ -4,8 +4,8 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 284,
-  "implemented": 251,
+  "total": 287,
+  "implemented": 254,
   "partial": 10,
   "traps": 18,
   "missing": 0,
@@ -2728,7 +2728,7 @@
   {
    "name": "nkc-se",
    "file": "nkc-se.x64.sys",
-   "sha256": "611de4cc0c244700999ff7ee3b893dc5628d7d7ab73ed6800cb14ca6115305e2",
+   "sha256": "a2b8d536f63dfd98fee2386898ba9b0fc1b9f548763afffcba99181f0f8a2cf6",
    "status": "nk-authored",
    "loaded_at_boot": true,
    "imports": [
@@ -2759,6 +2759,71 @@
     },
     {
      "module": "ntoskrnl.exe",
+     "name": "KeAreApcsDisabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCaptureSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeLockSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeUnlockSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeReleaseSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAssignSecurity",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeDeassignSecurity",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAccessCheck",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsTerminateSystemThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
      "name": "IofCompleteRequest",
      "state": "implemented"
     },
@@ -2771,6 +2836,36 @@
      "module": "ntoskrnl.exe",
      "name": "IoDeleteDevice",
      "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeSinglePrivilegeCheck",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetCurrentProcessId",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetInformationThread",
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -2799,7 +2894,122 @@
     },
     {
      "module": "ntoskrnl.exe",
+     "name": "SePrivilegeCheck",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeFreePrivileges",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeOpenObjectAuditAlarm",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeTokenType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCreateClientSecurity",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeImpersonateClientEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeQuerySecurityDescriptorInfo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeSetSecurityDescriptorInfo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAppendPrivileges",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeQueryInformationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsReferencePrimaryToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferencePrimaryToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferenceImpersonationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsReferenceImpersonationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenProcessTokenEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenThreadTokenEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryInformationToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwDuplicateToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCreateAccessState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeDeleteAccessState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwImpersonateAnonymousToken",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
      "name": "SeCaptureSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsThreadType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsInitialSystemProcess",
      "state": "implemented"
     },
     {
