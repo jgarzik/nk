@@ -642,9 +642,9 @@ impl Buffer {
         core::ptr::with_exposed_provenance_mut(self.address)
     }
 
-    /// What Windows makes of a user-mode requestor's buffer for the
-    /// methods where the I/O manager reads or writes it: a null pointer
-    /// is no buffer, whatever length came with it.
+    /// What Windows makes of a user-mode requestor's buffer that the
+    /// I/O manager copies: a null pointer is no buffer, whatever length
+    /// came with it.
     fn if_present(self) -> Self {
         if self.address == 0 { Self::NONE } else { self }
     }
@@ -936,12 +936,14 @@ unsafe fn control(
 ) -> Result<Pending, IoError> {
     let method = code & 3;
     let user = mode != KERNEL_MODE;
-    // Where the I/O manager itself reads and writes user mode's
-    // buffers, one that is not there has no length either.
-    let (input, output) = if user && method != METHOD_NEITHER {
-        (input.if_present(), output.if_present())
-    } else {
-        (input, output)
+    // A user-mode buffer the I/O manager itself copies, in or out, has
+    // no length if it is null: the input of the buffered and direct
+    // methods, the output of the buffered one. A direct method's second
+    // buffer keeps its length, and a null one fails its probe.
+    let (input, output) = match method {
+        METHOD_BUFFERED if user => (input.if_present(), output.if_present()),
+        METHOD_IN_DIRECT | METHOD_OUT_DIRECT if user => (input.if_present(), output),
+        _ => (input, output),
     };
     let parameters = |_| {
         let type3 = if method == METHOD_NEITHER {

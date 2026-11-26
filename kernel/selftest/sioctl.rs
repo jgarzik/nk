@@ -239,9 +239,9 @@ fn neither(file: u64) -> Check {
 /// manager itself reads and writes the requestor's buffers, and the
 /// driver never sees one that is not there. A buffer at an unmapped
 /// address or in the kernel's half fails the request with the access
-/// violation of the I/O manager's own probe; a null one is no buffer,
-/// which this driver refuses as an invalid parameter. These are what
-/// Windows answers.
+/// violation of the I/O manager's own probe; a null one that it would
+/// copy is no buffer, which this driver refuses as an invalid
+/// parameter. These are what Windows answers (`oracle/sioctl.txt`).
 fn user_buffers(file: u64) -> Check {
     use super::{USER_INPUT, USER_OUTPUT, UserMemory};
     use crate::io::file::Buffer;
@@ -277,10 +277,17 @@ fn user_buffers(file: u64) -> Check {
             address: 0,
             len: 14,
         };
+        // A null buffer the I/O manager would copy is no buffer; a
+        // direct method's second buffer is locked, and null cannot be.
+        let null_output = if code == BUFFERED {
+            STATUS_INVALID_PARAMETER
+        } else {
+            STATUS_ACCESS_VIOLATION
+        };
         if ask(code, null, output.buffer())? != STATUS_INVALID_PARAMETER
-            || ask(code, input.buffer(), null)? != STATUS_INVALID_PARAMETER
+            || ask(code, input.buffer(), null)? != null_output
         {
-            return Err("a null buffer was not passed on as no buffer");
+            return Err("a null buffer was not treated as Windows treats it");
         }
     }
     if output.contents() != before {
