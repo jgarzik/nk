@@ -2216,7 +2216,10 @@ are not in the database; the configuration's `Services` subtree is not
 merged into the service key; ranking is by position only (Windows also
 weighs signature and date). A device with a key already (a `ClassGUID`,
 a `Driver`, or for an enumerated device a `Service`) is not installed
-again.
+again. A device just installed is asked for its resource requirements
+again: a bus driver may build them from the settings installation put
+in the device's key, as `pci.sys` does for message-signalled
+interrupts, and on Windows those were there when it was first asked.
 
 **The stack.** Lower filters of the device, then of its class; the
 service; upper filters of the device, then of its class. Each driver's
@@ -2290,10 +2293,13 @@ drivers are not added while a device it depends on is unbound or not
 started (problem 51); NK treats the two kinds of dependency alike and
 derives no power relations from them.
 
-**Held back.** `engine::HELD_BACK` names services whose devices NK does
-not bring up yet because their `AddDevice` or start stops the system
-over something NK lacks, with the reason beside each name: at present
-`ACPI`, so nothing below the HAL's ACPI device is enumerated.
+**Held back.** `engine::HELD_BACK` names what NK does not bring up
+yet, with the reason beside each name: a service whose `AddDevice` or
+start stops the system over something NK lacks, or a device whose
+start without a driver does not complete. At present `pci`, so the PCI
+root is found and nothing below it is enumerated, and the processor
+container `ACPI\ACPI0010`, whose start `acpi.sys` never completes on
+NK.
 
 ## The registry
 
