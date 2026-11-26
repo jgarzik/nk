@@ -12,7 +12,8 @@
 //! [`RUNS`] is Windows' own table: what `RtlUpcaseUnicodeChar` answers
 //! for each of the 65536 units on Windows 10 (10.0.19045), recorded
 //! there by the conformance driver `nkc-rtl`, which returns the table
-//! whole. 973 units have an upper case other than themselves. The runs
+//! whole (`oracle/nkc-rtl-tables.txt`; a test here compares every
+//! unit). 973 units have an upper case other than themselves. The runs
 //! were generated from the recording by sorting the mapped units and
 //! merging neighbours that share a distance to their upper case and
 //! lie 1 or 2 apart. A unit with no entry, a surrogate among them, is
@@ -292,6 +293,15 @@ mod tests {
         }
         // A newer standard library may map more, never fewer.
         assert!(left_alone >= 217, "{left_alone}");
+    }
+
+    #[test]
+    fn every_unit_has_the_upper_case_windows_gave_it() {
+        let recorded = crate::recorded::upcase();
+        assert_eq!(recorded.len(), 0x1_0000);
+        for (c, &upper) in (0..=u16::MAX).zip(&recorded) {
+            assert_eq!(upcase_char(c), upper, "{c:04X}");
+        }
     }
 
     /// The table in two numbers, as the conformance driver `nkc-rtl`

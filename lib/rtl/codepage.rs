@@ -24,9 +24,10 @@
 //! the byte `RtlUnicodeToMultiByteN` gives on Windows 10 (10.0.19045)
 //! where that is not `?`: an accented or fullwidth letter becomes its
 //! plain form, a dash a hyphen. 452 units, recorded there by the
-//! conformance driver `nkc-rtl`, which returns the byte of every unit.
-//! The same recording has Windows' unit for each of the 256 bytes,
-//! which are those of [`ANSI_1252`].
+//! conformance driver `nkc-rtl`, which returns the byte of every unit
+//! (`oracle/nkc-rtl-tables.txt`). The same recording has Windows' unit
+//! for each of the 256 bytes, which are those of [`ANSI_1252`]. Tests
+//! here compare both directions, every byte and every unit.
 //!
 //! # INFERRED
 //!
@@ -374,6 +375,20 @@ mod tests {
         }
         for unit in [0xFF21, 0x0100, 0xD800, 0xFFFF] {
             assert_eq!(OEM_437.from_unicode(unit), b'?', "{unit:04X}");
+        }
+    }
+
+    #[test]
+    fn the_ansi_page_is_the_one_recorded_on_windows() {
+        let to_unicode = crate::recorded::to_unicode();
+        assert_eq!(to_unicode.len(), 256);
+        for (byte, &unit) in (0..=u8::MAX).zip(&to_unicode) {
+            assert_eq!(ANSI_1252.to_unicode(byte), unit, "{byte:02X}");
+        }
+        let to_ansi = crate::recorded::to_ansi();
+        assert_eq!(to_ansi.len(), 0x1_0000);
+        for (unit, &byte) in (0..=u16::MAX).zip(&to_ansi) {
+            assert_eq!(ANSI_1252.from_unicode(unit), byte, "{unit:04X}");
         }
     }
 

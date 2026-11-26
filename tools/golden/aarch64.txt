@@ -266,6 +266,7 @@ oracle.nkc-work ok
 oracle.nkc-se ok
 oracle.nkc-reg ok
 oracle.nkc-rtl ok
+oracle.nkc-rtl-tables ok
 oracle.cancel ok
 oracle.nkc-lib ok
 oracle.nkc-lib-twice ok
