@@ -1268,6 +1268,16 @@ allocates and finds again by an address of its choosing
 `IO_CLIENT_EXTENSION`, and are freed by the driver type's delete
 procedure when the driver object goes.
 
+A driver reports an error with a device through the error log
+([`IoAllocateErrorLogEntry`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocateerrorlogentry),
+`IoWriteErrorLogEntry`, `kernel/io/errlog.rs`). A packet is allocated
+as the pinned kernel allocates it: within Windows' sizes, behind the
+I/O manager's header, counted against the limit on outstanding
+packets, holding its device and driver object. NK has no event log
+service to queue it to: writing a packet prints one `NK-ERRORLOG` line
+to the boot log, naming the driver, the device, the error code and the
+final status, and frees the packet.
+
 A driver counts the requests in progress on a device with a
 [remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
 (`kernel/io/remlock.rs`): the lock is the driver's memory in the

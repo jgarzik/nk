@@ -7,7 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    IoAllocateErrorLogEntry,
     IoAssignResources,
     IoClearActivityIdThread,
     IoConnectInterruptEx,
@@ -68,5 +67,4 @@ trap_list!(
     IoWMIExecuteMethod,
     IoWMIOpenBlock,
     IoWMIQueryAllData,
-    IoWriteErrorLogEntry,
 );

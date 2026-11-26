@@ -1,6 +1,6 @@
 //! Tests of what the I/O manager keeps for a driver beside its requests:
-//! the extensions of its driver object, and work items in memory of the
-//! driver's own.
+//! the extensions of its driver object, work items in memory of the
+//! driver's own, and the error log.
 //!
 //! The drivers are the test's own, made as `stack` makes them.
 
@@ -18,7 +18,7 @@ use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["io.driver-extension", "work.caller-memory"],
+    names: &["io.driver-extension", "work.caller-memory", "io.error-log"],
     run,
     manual: false,
 };
@@ -266,6 +266,98 @@ fn caller_memory_work_item() -> Result<u32, &'static str> {
     result
 }
 
+/// An error-log packet is allocated within Windows' sizes, zeroed, for
+/// a device or a driver object, which it holds until it is written;
+/// writing it frees it. Returns the facts checked.
+fn error_log() -> Result<u32, &'static str> {
+    use crate::io::errlog;
+    use crate::ob::object;
+    let driver_object = stack::make_driver(refuse)?;
+    let result = (|| {
+        let device = stack::make_device(driver_object, stack::PDO, Some("\\Device\\NkErrorLog"))?;
+        let blocks = pool::usage().blocks;
+        // SAFETY: a device and a driver object of the test's; packets
+        // are written, which frees them, before either goes.
+        let result = unsafe {
+            (|| {
+                // The pointer counts the two objects have now.
+                let counts = || {
+                    let device_count = object::reference(device.cast());
+                    object::dereference(device.cast());
+                    let driver_count = object::reference(driver_object.cast());
+                    object::dereference(driver_object.cast());
+                    (device_count, driver_count)
+                };
+                let before = counts();
+                let not_an_object = 0u64;
+                for (object, size) in [
+                    (device.cast::<c_void>(), 0x2F),
+                    (device.cast(), ERROR_LOG_MAXIMUM_SIZE + 1),
+                    (core::ptr::null_mut(), 0x40),
+                    ((&raw const not_an_object).cast_mut().cast(), 0x40),
+                ] {
+                    if !errlog::IoAllocateErrorLogEntry(object, size).is_null() {
+                        return Err("an error-log packet Windows refuses was allocated");
+                    }
+                }
+                for size in [0x30, 0x41, ERROR_LOG_MAXIMUM_SIZE] {
+                    let packet = errlog::IoAllocateErrorLogEntry(device.cast(), size)
+                        .cast::<IO_ERROR_LOG_PACKET>();
+                    if packet.is_null() {
+                        return Err("an error-log packet could not be allocated");
+                    }
+                    let zeroed =
+                        core::slice::from_raw_parts(packet.cast::<u8>(), usize::from(size))
+                            .iter()
+                            .all(|byte| *byte == 0);
+                    let header = packet.cast::<ERROR_LOG_ENTRY>().sub(1);
+                    let held = counts() == (before.0 + 1, before.1 + 1);
+                    let described = (*header).Type == IO_TYPE_ERROR_LOG
+                        && (*header).Size as usize == error_log_allocation(size).unwrap_or(0)
+                        && (*header).DeviceObject == device
+                        && (*header).DriverObject == driver_object;
+                    // As a driver fills one in: the last byte it asked
+                    // for is its own.
+                    (*packet).ErrorCode = 0xC004_000Bu32 as NTSTATUS;
+                    (*packet).FinalStatus = STATUS_DEVICE_NOT_READY;
+                    (*packet).UniqueErrorValue = u32::from(size);
+                    (*packet).MajorFunctionCode = IRP_MJ_READ;
+                    packet.cast::<u8>().add(usize::from(size) - 1).write(0xEE);
+                    errlog::IoWriteErrorLogEntry(packet.cast());
+                    if !zeroed || !held || !described {
+                        return Err(
+                            "an error-log packet is not zeroed, or does not hold its device",
+                        );
+                    }
+                    if counts() != before || pool::usage().blocks != blocks {
+                        return Err("writing an error-log packet did not free it");
+                    }
+                }
+                // For a driver object: no device is named.
+                let packet = errlog::IoAllocateErrorLogEntry(driver_object.cast(), 0x30);
+                if packet.is_null() {
+                    return Err("an error-log packet could not be allocated for a driver object");
+                }
+                let header = packet.cast::<ERROR_LOG_ENTRY>().sub(1);
+                let named = (*header).DeviceObject.is_null()
+                    && (*header).DriverObject == driver_object
+                    && counts() == (before.0, before.1 + 1);
+                errlog::IoWriteErrorLogEntry(packet);
+                if !named || counts() != before || pool::usage().blocks != blocks {
+                    return Err("a driver object's error-log packet does not hold it alone");
+                }
+                Ok(12)
+            })()
+        };
+        // SAFETY: nothing holds the device any more.
+        unsafe { crate::io::device::IoDeleteDevice(device) };
+        result
+    })();
+    // SAFETY: its device is gone.
+    unsafe { stack::free_driver(driver_object) };
+    result
+}
+
 fn run(report: &mut Report, _: &BootInfo) {
     let mut numbered = |name: &str, result: Result<u32, &'static str>| match result {
         Ok(n) => report.ok_with(name, format_args!("{n} checked")),
@@ -273,4 +365,5 @@ fn run(report: &mut Report, _: &BootInfo) {
     };
     numbered("io.driver-extension", driver_extension());
     numbered("work.caller-memory", caller_memory_work_item());
+    numbered("io.error-log", error_log());
 }
