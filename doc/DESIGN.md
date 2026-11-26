@@ -1403,8 +1403,11 @@ the sleep states the firmware has and answers with the interrupt model
 for the firmware's `_PIC` method (the APIC's on x86-64, a version 3
 GIC's on arm64); Windows' HAL registers its sleep routine with the
 power manager for each state, NK registers nothing, since it never
-sleeps and powers off through the firmware's runtime services. The
-table's remaining routines that
+sleeps and powers off through the firmware's runtime services.
+`HalInterruptGetApicVersion` (`kernel/hal/interrupt.rs`) tells it how
+many lines an interrupt controller has, in the shape of an I/O APIC's
+version register, which Windows' HAL makes up from its own count
+rather than read. The table's remaining routines that
 `acpi.sys` uses at start (`kernel/hal/pm.rs`) give it the FACS and
 ACPI's fixed hardware: whether a register block exists, and one access
 of it read or written. The blocks are set up once from the FADT by
@@ -1426,7 +1429,9 @@ configuration access. arm64 has no I/O ports and an empty list.
 rather than a slot, tells `pci.sys` how interrupts name their
 destination: by a processor's own identifier (physical mode) on both
 architectures, with messages deliverable where the architecture's
-controller takes them.
+controller takes them. `acpi.sys` asks it for each processor the
+firmware lists, by its controller's identifier, and gets the
+processor's number, or `STATUS_NOT_FOUND` for one that is not running.
 
 Four more undocumented exports answer from the same facts
 (`kernel/hal/query.rs`). `HalGetProcessorIdByNtNumber` gives a

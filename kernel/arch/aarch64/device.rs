@@ -31,6 +31,13 @@ fn is_line(intid: u32) -> bool {
     (SPI_BASE..gic::lines()).contains(&intid)
 }
 
+/// The global system interrupts of the controller `gsi` is a line of:
+/// the first, and how many. The distributor's shared peripheral
+/// interrupts.
+pub fn line_set(gsi: u32) -> Option<(u32, u32)> {
+    is_line(gsi).then(|| (SPI_BASE, gic::lines() - SPI_BASE))
+}
+
 /// Have `line` interrupt processor `processor` at IRQL `level`,
 /// disabled for now. `false` if the distributor has no such interrupt,
 /// or the line is active low, which the GIC cannot be told: a board

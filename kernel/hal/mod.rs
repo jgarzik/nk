@@ -34,6 +34,7 @@ type ResetSystem = unsafe extern "efiapi" fn(u32, usize, usize, *const c_void) -
 pub fn init(info: &BootInfo) {
     EFI_RUNTIME.store(info.efi_runtime, Ordering::Relaxed);
     acpi::init();
+    interrupt::init();
     sysinfo::init();
 }
 

@@ -261,6 +261,65 @@ pub fn enable(vector: u32, on: bool) {
     }
 }
 
+/// The HAL's ACPI table, `HalInterruptGetApicVersion`: what `acpi.sys`
+/// takes for the version register of the interrupt controller whose
+/// lines start at the global system interrupt `gsi_base`, from which it
+/// learns how many lines the controller has
+/// (`nk_hal::interrupt::apic_version`).
+#[allow(non_snake_case)]
+pub extern "C" fn HalInterruptGetApicVersion(gsi_base: u32) -> u32 {
+    let lines = {
+        // The controllers' registers are read under the lock.
+        let _state = STATE.lock();
+        arch::line_set(gsi_base)
+    };
+    nk_hal::interrupt::apic_version(lines.map(|(_, count)| count))
+}
+
+/// Put the routines of this file in their slots.
+pub fn init() {
+    use super::dispatch::{HalAcpiDispatchTable, acpi_slot};
+    HalAcpiDispatchTable.provide(
+        acpi_slot("HalInterruptGetApicVersion"),
+        HalInterruptGetApicVersion as *const (),
+    );
+}
+
+/// For the self-tests: the controller's version asked as `acpi.sys`
+/// asks it, through the slot at Windows' offset, for the first line a
+/// controller has and for one no controller has.
+pub fn version_test() -> Result<(), &'static str> {
+    // SAFETY: the slot holds `HalInterruptGetApicVersion`, of this type.
+    let version: extern "C" fn(u32) -> u32 = unsafe {
+        core::mem::transmute(
+            super::dispatch::HalAcpiDispatchTable
+                .address()
+                .cast::<u8>()
+                .add(0x40)
+                .cast::<*const ()>()
+                .read(),
+        )
+    };
+    let Some((base, count)) = ({
+        let _state = STATE.lock();
+        (0..64).find_map(arch::line_set)
+    }) else {
+        return Err("no controller has a line among the first 64");
+    };
+    let answer = version(base);
+    if answer & 0xFF != 0x11
+        || answer >> 24 != count & 0xFF
+        || answer >> 16 & 0xFF != (count - 1) & 0xFF
+        || version(base + count - 1) != answer
+    {
+        return Err("the version does not tell the controller's line count");
+    }
+    if version(0xFFFF_0000) != 0xF000_0000 {
+        return Err("a version was made up for lines no controller has");
+    }
+    Ok(())
+}
+
 /// Whether `vector` is in the range device interrupts have.
 pub fn is_device_vector(vector: u32) -> bool {
     InterruptVectors::is_device(vector) && (vector as usize) < VECTORS
