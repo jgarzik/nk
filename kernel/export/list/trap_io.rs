@@ -13,7 +13,6 @@ trap_list!(
     IoGetActivityIdIrp,
     IoGetActivityIdThread,
     IoGetAdapterCryptoEngineExtension,
-    IoGetConfigurationInformation,
     IoGetGenericIrpExtension,
     IoGetIoAttributionHandle,
     IoGetIoPriorityHint,

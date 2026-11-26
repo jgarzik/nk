@@ -560,6 +560,33 @@ const _: () = {
     assert!(core::mem::offset_of!(DEVICE_INTERFACE_CHANGE_NOTIFICATION, SymbolicLinkName) == 40);
 };
 
+/// [`CONFIGURATION_INFORMATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_configuration_information):
+/// the system's counts of devices of the old kinds, which the drivers
+/// of such devices read and write in place
+/// (`IoGetConfigurationInformation`). `Version` is the structure's
+/// size, as the pinned kernel's own copy starts out.
+#[repr(C)]
+pub struct CONFIGURATION_INFORMATION {
+    pub DiskCount: u32,
+    pub FloppyCount: u32,
+    pub CdRomCount: u32,
+    pub TapeCount: u32,
+    pub ScsiPortCount: u32,
+    pub SerialCount: u32,
+    pub ParallelCount: u32,
+    pub AtDiskPrimaryAddressClaimed: u8,
+    pub AtDiskSecondaryAddressClaimed: u8,
+    pub Version: u32,
+    pub MediumChangerCount: u32,
+}
+
+const _: () = {
+    assert!(size_of::<CONFIGURATION_INFORMATION>() == 0x28);
+    assert!(core::mem::offset_of!(CONFIGURATION_INFORMATION, AtDiskPrimaryAddressClaimed) == 0x1C);
+    assert!(core::mem::offset_of!(CONFIGURATION_INFORMATION, Version) == 0x20);
+    assert!(core::mem::offset_of!(CONFIGURATION_INFORMATION, MediumChangerCount) == 0x24);
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

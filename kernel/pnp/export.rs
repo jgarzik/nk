@@ -9,7 +9,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use nk_ntabi::io::{DEVICE_OBJECT, UNICODE_STRING};
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
-use nk_ntabi::pnp::{BUS_RELATIONS, DEVICE_CAPABILITY_REMOVABLE, DEVPROPKEY};
+use nk_ntabi::pnp::{
+    BUS_RELATIONS, CONFIGURATION_INFORMATION, DEVICE_CAPABILITY_REMOVABLE, DEVPROPKEY,
+};
 use nk_ntabi::status::*;
 use nk_pnp::ids;
 
@@ -490,4 +492,35 @@ pub unsafe fn device_name(device: *mut DEVICE_OBJECT) -> Option<String> {
         crate::rtl::copy_unicode(&raw const (*info).Name)
     };
     (!name.is_empty()).then(|| format!("\\Device\\{}", String::from_utf16_lossy(&name)))
+}
+
+/// The system's `CONFIGURATION_INFORMATION`: drivers' to read and
+/// write through the pointer `IoGetConfigurationInformation` hands
+/// out, so NK reaches it by pointer only.
+struct Configuration(core::cell::UnsafeCell<CONFIGURATION_INFORMATION>);
+
+// SAFETY: the structure is the drivers' memory; NK neither reads nor
+// writes it after handing its address out.
+unsafe impl Sync for Configuration {}
+
+static CONFIGURATION: Configuration =
+    Configuration(core::cell::UnsafeCell::new(CONFIGURATION_INFORMATION {
+        DiskCount: 0,
+        FloppyCount: 0,
+        CdRomCount: 0,
+        TapeCount: 0,
+        ScsiPortCount: 0,
+        SerialCount: 0,
+        ParallelCount: 0,
+        AtDiskPrimaryAddressClaimed: 0,
+        AtDiskSecondaryAddressClaimed: 0,
+        Version: size_of::<CONFIGURATION_INFORMATION>() as u32,
+        MediumChangerCount: 0,
+    }));
+
+/// [`IoGetConfigurationInformation`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetconfigurationinformation):
+/// the one `CONFIGURATION_INFORMATION` of the system, which class and
+/// port drivers count their devices in. All counts start at zero.
+pub extern "C" fn IoGetConfigurationInformation() -> *mut CONFIGURATION_INFORMATION {
+    CONFIGURATION.0.get()
 }

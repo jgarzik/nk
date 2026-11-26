@@ -4,6 +4,7 @@ use super::super::{Export, NT, State};
 use crate::pnp;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, pnp::export::IoGetConfigurationInformation),
     export!(Implemented, pnp::export::IoGetDeviceNumaNode),
     export!(Implemented, pnp::export::IoGetDeviceProperty),
     export!(Partial, pnp::export::IoGetDevicePropertyData),

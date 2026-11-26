@@ -899,6 +899,24 @@ fn properties(bench: &Bench) -> Result<(), &'static str> {
     if set(0, &[]) != STATUS_SUCCESS || get(8).0 != STATUS_OBJECT_NAME_NOT_FOUND {
         return Err("a property taken away is still found");
     }
+    // The system's configuration information is one structure, of the
+    // version Windows' has, for drivers to count in.
+    let configuration = pnp::export::IoGetConfigurationInformation();
+    // SAFETY: the structure the routine hands out, the test's to read
+    // and write as a driver's is.
+    unsafe {
+        if configuration != pnp::export::IoGetConfigurationInformation()
+            || (*configuration).Version != 0x28
+        {
+            return Err("the configuration information is not one structure of version 0x28");
+        }
+        let disks = (*configuration).DiskCount;
+        (*configuration).DiskCount = disks + 1;
+        if (*pnp::export::IoGetConfigurationInformation()).DiskCount != disks + 1 {
+            return Err("a count written through the pointer did not stay");
+        }
+        (*configuration).DiskCount = disks;
+    }
     // The device key and the driver key open; the device key is the one
     // the settings were copied into.
     let key = registry::enum_key(&found.instance);
