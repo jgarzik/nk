@@ -368,6 +368,7 @@ pub static GROUP: Group = Group {
         "oracle.nkc-lib",
         "oracle.nkc-lib-twice",
         "oracle.nkc-libbad",
+        "oracle.nkc-seh",
     ],
     run,
     manual: false,
@@ -492,6 +493,13 @@ fn run(r: &mut Report, _: &BootInfo) {
         "nkc-libbad.sys",
         include_str!("../../oracle/nkc-libbad.script"),
         include_str!("../../oracle/nkc-libbad.txt"),
+    );
+    check(
+        r,
+        "oracle.nkc-seh",
+        "nkc-seh.sys",
+        include_str!("../../oracle/nkc-seh.script"),
+        include_str!("../../oracle/nkc-seh.txt"),
     );
 }
 

@@ -551,6 +551,18 @@ pub unsafe fn unwind(
     unsafe { cpu::restore_context(&current) }
 }
 
+/// `_local_unwind`: what compiled code calls to leave a `__try` early,
+/// by `goto` or `return`. Unwinds to `target` in the frame `frame`,
+/// the caller's own, which runs the `__finally` blocks of the scopes
+/// being left.
+///
+/// # Safety
+/// As [`unwind`], with no exception.
+pub unsafe extern "C" fn _local_unwind(frame: u64, target: u64) -> ! {
+    // SAFETY: per the contract.
+    unsafe { unwind(frame, target, core::ptr::null_mut(), 0) }
+}
+
 /// The bytes of an image from `address` to the image's end, through the
 /// image's view: what a handler's data is read from.
 fn image_from(address: u64) -> &'static [u8] {

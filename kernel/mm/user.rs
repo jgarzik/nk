@@ -22,6 +22,23 @@ pub const USER_PROBE_ADDRESS: u64 = 0x7FFF_FFFF_0000;
 /// The lowest address of the user range.
 pub const LOWEST_USER_ADDRESS: u64 = 0x1_0000;
 
+/// A variable drivers import: one word, which they read through the
+/// address their import is bound to and cannot write.
+#[repr(transparent)]
+pub struct Variable(u64);
+
+impl Variable {
+    /// The address drivers import.
+    pub const fn address(&'static self) -> *const () {
+        (&raw const self.0).cast()
+    }
+}
+
+/// `MmUserProbeAddress`: the first address beyond the user range, which
+/// a driver's in-line probes compare with.
+#[allow(non_upper_case_globals)]
+pub static MmUserProbeAddress: Variable = Variable(USER_PROBE_ADDRESS);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserError {
     /// Not whole pages inside the user range.

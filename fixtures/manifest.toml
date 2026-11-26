@@ -339,6 +339,24 @@ status = "nk-authored"
 note = "nk-fixtures v5 nkc/nkc-reg.c: the registry"
 
 [[fixture]]
+name = "nkc-seh"
+arch = "x86_64"
+file = "nkc-seh.x64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh.x64.nkc-seh.sys"
+sha256 = "c1c8471189e5b53fe38a894a7ad5ac5767a559da3e85344b72d58a9f20ec588c"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh.c: structured exception handling"
+
+[[fixture]]
+name = "nkc-seh"
+arch = "aarch64"
+file = "nkc-seh.arm64.sys"
+url = "https://github.com/jgarzik/nk-fixtures/releases/download/v6/nkc-seh.arm64.nkc-seh.sys"
+sha256 = "cd7d3e7d3291f31003acca9caaf4c7ee1f4b37ae572d9cd4591528c627470ad3"
+status = "nk-authored"
+note = "nk-fixtures v6 nkc/nkc-seh.c: structured exception handling"
+
+[[fixture]]
 name = "cancel"
 arch = "x86_64"
 file = "cancel.x64.sys"

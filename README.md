@@ -14,10 +14,12 @@ DPCs and work items, and loads real driver binaries: Microsoft's
 `null.sys` and Microsoft's WDM samples `sioctl`, `event` and `cancel`.
 It sends them real IRPs, which they may pend, complete later or have
 cancelled, and what they answer matches a recording made on real
-Windows 10, request by request.
+Windows 10, request by request. Their `__try` blocks work: exceptions,
+kernel-raised or from a processor fault, are dispatched and unwound as
+on Windows.
 
-Not yet: APCs, device interrupts, Plug
-and Play, user mode, physical hardware.
+Not yet: APCs, device interrupts, Plug and Play, user mode, physical
+hardware.
 
 ## What it intends to do
 

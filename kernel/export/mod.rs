@@ -223,6 +223,32 @@ static EXPORTS: &[Export] = &[
     export!(Implemented, io::csq::IoCsqRemoveNextIrp),
     export!(Implemented, io::csq::IoIsWdmVersionAvailable),
     export!(Implemented, ke::thread::KeSetPriorityThread),
+    export_entry!(
+        Implemented,
+        "ExRaiseStatus",
+        arch::seh::nk_entry_ExRaiseStatus
+    ),
+    export_entry!(
+        Implemented,
+        "ExRaiseAccessViolation",
+        arch::seh::nk_entry_ExRaiseAccessViolation
+    ),
+    export_entry!(
+        Implemented,
+        "ExRaiseDatatypeMisalignment",
+        arch::seh::nk_entry_ExRaiseDatatypeMisalignment
+    ),
+    export_entry!(
+        Implemented,
+        "ProbeForWrite",
+        arch::seh::nk_entry_ProbeForWrite
+    ),
+    export!(Implemented, ke::seh::_local_unwind),
+    export_variable!(
+        Implemented,
+        "MmUserProbeAddress",
+        mm::user::MmUserProbeAddress
+    ),
 ];
 
 /// The address a driver's import of `module!name` binds to.

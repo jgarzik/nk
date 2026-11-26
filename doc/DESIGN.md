@@ -652,7 +652,10 @@ not on the stack: never a guess.
 The tests `seh.*` stack assembly routines shaped like a driver's
 compiled C (`kernel/arch/*/seh_test.rs`) around NK frames of each kind
 and around instructions that fault, and check what ran, in which order,
-with what record, and what state came back.
+with what record, and what state came back. `oracle.nkc-seh` holds NK
+to what a conformance driver's own `__try` blocks saw on Windows
+(nested and collided unwinds, `__leave`, `goto` and `return` out of a
+`__try`, the raising routines, the probes, faults).
 
 ## Exports
 
@@ -813,8 +816,9 @@ their word no further than Windows takes them. For the buffered and
 direct methods the I/O manager probes them, copies the input through
 `mm::user::copy` and locks a direct buffer's pages; a buffer it cannot
 use fails the request with `STATUS_ACCESS_VIOLATION` before any driver
-sees it, and a null one is no buffer: its length goes to the driver as
-zero. For `METHOD_NEITHER` the driver is handed both addresses as they
+sees it. A null buffer that it would copy is no buffer, and its length
+goes to the driver as zero; a direct method's second buffer keeps its
+length, and null fails the probe. For `METHOD_NEITHER` the driver is handed both addresses as they
 are, and what is there is the driver's to find out. The oracle's
 requests are user mode's, their buffers pages of the user range. Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then

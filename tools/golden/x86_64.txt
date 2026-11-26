@@ -190,3 +190,4 @@ oracle.cancel ok
 oracle.nkc-lib ok
 oracle.nkc-lib-twice ok
 oracle.nkc-libbad ok
+oracle.nkc-seh ok
