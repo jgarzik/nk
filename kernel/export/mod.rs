@@ -91,6 +91,34 @@ macro_rules! export_entry {
     };
 }
 
+/// A list of routines NK exports and does not implement: defines each
+/// (see `trap`: it takes whatever the driver passed, looks at none of
+/// it, and stops the system naming itself) and the list's `EXPORTS`.
+macro_rules! trap_list {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("`", stringify!($name), "`: not implemented; stops the system.")]
+            pub extern "C" fn $name() -> ! {
+                crate::kd::bugcheck(format_args!(concat!(
+                    stringify!($name),
+                    ": NK does not implement this routine"
+                )))
+            }
+        )*
+
+        pub(in crate::export) static EXPORTS: &[Export] = &[
+            $(
+                Export {
+                    module: NT,
+                    name: stringify!($name),
+                    addr: $name as *const (),
+                    state: State::Traps,
+                },
+            )*
+        ];
+    };
+}
+
 mod list;
 
 /// Every export, list after list.
@@ -104,15 +132,31 @@ fn all() -> impl Iterator<Item = &'static Export> {
 /// follows, every export of `hal.dll` forwards to `ntoskrnl.exe`, and
 /// which of the two a driver names for a routine differs by architecture.
 pub fn resolve(module: &[u8], name: &[u8]) -> Option<u64> {
-    let module: &[u8] = if module.eq_ignore_ascii_case(b"hal.dll") {
-        NT.as_bytes()
-    } else {
-        module
-    };
+    if !is_kernel(module) {
+        return None;
+    }
     all()
-        .find(|e| e.module.as_bytes().eq_ignore_ascii_case(module) && e.name.as_bytes() == name)
+        .find(|e| e.name.as_bytes() == name)
         .map(|e| e.addr as u64)
 }
+
+/// The routines Microsoft's kernel exports by number alone that a
+/// binary NK loads imports, with the names its public symbols give
+/// them. `acpi.sys` imports number 4.
+const BY_ORDINAL: &[(u16, &str)] = &[(4, "ExAllocateTimerInternal2")];
+
+/// The address a driver's import of `module!#ordinal` binds to: that
+/// of the export NK has under the routine's name.
+pub fn resolve_ordinal(module: &[u8], ordinal: u16) -> Option<u64> {
+    let (_, name) = BY_ORDINAL.iter().find(|(number, _)| *number == ordinal)?;
+    resolve(module, name.as_bytes())
+}
+
+/// The API sets whose routines are the kernel's own: an import from
+/// any version of one (`ext-ms-win-ntos-ksr-l1-1-3.dll`) is an import
+/// from the kernel. Windows resolves an API-set name through a schema
+/// to the module that hosts the set; NK hosts these itself.
+const API_SETS: &[&str] = &["ext-ms-win-ntos-ksr-"];
 
 /// Whether `module` is a name the kernel's own exports go by: an
 /// import from any other module is from a driver that exports.
@@ -120,6 +164,11 @@ pub fn is_kernel(module: &[u8]) -> bool {
     [NT, "hal.dll"]
         .iter()
         .any(|name| name.as_bytes().eq_ignore_ascii_case(module))
+        || API_SETS.iter().any(|set| {
+            module
+                .get(..set.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(set.as_bytes()))
+        })
 }
 
 /// [`MmGetSystemRoutineAddress`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmgetsystemroutineaddress):

@@ -1,0 +1,55 @@
+//! Routines Microsoft's storage stack imports that NK does not
+//! implement: each stops the system, naming itself, if called. A name
+//! leaves this list in the commit that implements the routine.
+
+#![allow(non_snake_case, non_upper_case_globals)]
+
+use super::super::{Export, NT, State};
+
+trap_list!(
+    RtlAddRange,
+    RtlAnsiCharToUnicodeChar,
+    RtlAnsiStringToUnicodeString,
+    RtlAppendUnicodeStringToString,
+    RtlCheckRegistryKey,
+    RtlCmDecodeMemIoResource,
+    RtlCmEncodeMemIoResource,
+    RtlCompareString,
+    RtlCompareUnicodeString,
+    RtlComputeCrc32,
+    RtlCopyRangeList,
+    RtlCopyUnicodeString,
+    RtlCreateRegistryKey,
+    RtlDeleteOwnersRanges,
+    RtlDeleteRange,
+    RtlDeleteRegistryValue,
+    RtlDuplicateUnicodeString,
+    RtlEqualUnicodeString,
+    RtlFindClosestEncodableLength,
+    RtlFindMessage,
+    RtlFindRange,
+    RtlFreeRangeList,
+    RtlGUIDFromString,
+    RtlGetFirstRange,
+    RtlGetNextRange,
+    RtlInitAnsiString,
+    RtlInitString,
+    RtlInitializeRangeList,
+    RtlIntegerToUnicodeString,
+    RtlInvertRangeList,
+    RtlInvertRangeListEx,
+    RtlIoDecodeMemIoResource,
+    RtlIoEncodeMemIoResource,
+    RtlIsRangeAvailable,
+    RtlNotifyFeatureUsage,
+    RtlPcToFileName,
+    RtlQueryFeatureConfiguration,
+    RtlQueryFeatureConfigurationChangeStamp,
+    RtlRegisterFeatureConfigurationChangeNotification,
+    RtlRunOnceExecuteOnce,
+    RtlTimeToTimeFields,
+    RtlUnicodeStringToInteger,
+    RtlUnregisterFeatureConfigurationChangeNotification,
+    RtlWriteRegistryValue,
+    RtlxAnsiStringToUnicodeSize,
+);

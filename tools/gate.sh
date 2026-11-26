@@ -15,7 +15,12 @@ for step in fmt-check clippy clippy-arm test boot-gate unwind-check; do
         echo ok
     else
         echo FAILED
-        tail -n 40 "$out/$step.out"
+        # The boots are printed in the order they are listed, so the end
+        # of the output need not be about the one that failed: show the
+        # failed boots. Anything else shows its last lines.
+        if [ "$step" != boot-gate ] || ! tools/boot_test.py --failures "$out/$step.out"; then
+            tail -n 40 "$out/$step.out"
+        fi
         echo "GATE-FAILED ($step; full log: $out/$step.out)"
         exit 1
     fi
