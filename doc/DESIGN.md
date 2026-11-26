@@ -1283,6 +1283,8 @@ make that safe.
 | dispatch routine, for a power request the power manager makes for a driver (`PoRequestPowerIrp`) | nothing: the request, and the power manager's record of it, are left to the driver that raised |
 | a driver's power completion function (`PoRequestPowerIrp`) | nothing: the request stays as it is, and the device's later queries and sets wait behind it |
 | a power setting callback | nothing: it is called from a worker, whose base stops the system |
+| a component's active-condition callback (PoFx) | nothing: the component stays in its transition, which never finishes |
+| a component's idle-condition callback (PoFx) | undo: the IRQL NK raised to `DISPATCH_LEVEL` for the call; the component stays in its transition |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
 | a driver's `AddDevice` (the Plug and Play manager) | base: a system thread |
@@ -1931,6 +1933,44 @@ not been given a value. No setting changes, so no callback is called
 twice. Taking a registration back waits for its callback if another
 thread is in it.
 
+**The runtime power framework (PoFx).** A driver registers a device
+as a set of components
+([`PoFxRegisterDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pofxregisterdevice),
+all three versions of the description), and says when it uses each and
+when it has stopped. NK counts as Windows does and tells the driver in
+the same order (`lib/po/fx.rs`): a component is registered active with
+one activation, which `PoFxStartDevicePowerManagement` gives up; when
+the last activation goes the idle-condition callback is made, at
+`DISPATCH_LEVEL` as the pinned kernel makes it, and the component is
+idle once the driver has called `PoFxCompleteIdleCondition`; the first
+activation of an idle component makes the active-condition callback, in
+the caller's thread before the call returns, or from a worker thread
+when the caller asks (`PO_FX_FLAG_ASYNC_ONLY`) or when the activation
+had to wait for an idle transition to finish. One transition of a
+component is under way at a time. A blocking call waits for the
+component to be at rest.
+
+That is where NK stops. A component stays in F0 and a device in D0:
+`ComponentIdleStateCallback`, `DevicePowerNotRequiredCallback`,
+`DevicePowerRequiredCallback` and the directed power callbacks are
+recorded and never called, and the idle timeout, latency, residency and
+watchdog callback a driver sets are recorded and never acted on.
+Completing what NK never asked for stops the system with the bugcheck
+the pinned kernel raises for it. There is no platform extension (PEP),
+and what a driver asks of one gets the pinned kernel's answer with
+none: a power control request is not supported, no crash dump device
+can be registered, performance states the extension must supply or
+handle are not implemented. Performance states a driver manages itself
+and dependencies between components (providers) stop the system,
+naming themselves. The Plug and Play manager's own activations of a
+device around enumeration, which on Windows keep it in D0, are not
+made.
+
+The framework accepts a device only once the Plug and Play manager has
+begun to start it, as on Windows (`po::fx::prepare_device`, called
+before the start request; `po::fx::abandon_device` on removal takes
+away a registration its drivers left behind).
+
 **Registered and never acted on.** Coalescing callbacks
 (`PoRegisterCoalescingCallback`: Windows coalesces I/O only in the
 platform's low-power idle state) and a device's flags for that state
@@ -1946,7 +1986,10 @@ The tests `po.*` run a bus driver and a function driver of their own:
 requests of each kind go down their stack and come back to the
 completion function, a held set keeps the next query waiting, a
 wait-wake is marked and cancelled; settings callbacks are registered,
-called and taken back, from another thread and from inside.
+called and taken back, from another thread and from inside; a
+device is registered with the framework in each version, and its
+components activated and idled with the callbacks, their order, thread
+and IRQL checked.
 
 ## Plug and Play
 
