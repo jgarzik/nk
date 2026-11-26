@@ -1429,7 +1429,15 @@ sleeps and powers off through the firmware's runtime services.
 `HalInterruptGetApicVersion` (`kernel/hal/interrupt.rs`) tells it how
 many lines an interrupt controller has, in the shape of an I/O APIC's
 version register, which Windows' HAL makes up from its own count
-rather than read. The table's remaining routines that
+rather than read. `HalPciInterfaceReadConfig` and
+`HalPciInterfaceWriteConfig` (`kernel/hal/pci.rs`) are the
+configuration access `acpi.sys` uses for firmware's AML and hands
+`pci.sys` as a root bus's interface: the HAL's own access, by bus and
+slot number, always reporting the whole length done as Windows' do.
+`HalSetMaxLegacyPciBusNumber` has nothing to do: Windows' HAL answers
+its bus-data exports only up to the highest bus `acpi.sys` reports,
+NK's for every bus a configuration mechanism reaches. The table's
+remaining routines that
 `acpi.sys` uses at start (`kernel/hal/pm.rs`) give it the FACS and
 ACPI's fixed hardware: whether a register block exists, and one access
 of it read or written. The blocks are set up once from the FADT by
