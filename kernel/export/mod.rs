@@ -379,6 +379,9 @@ static EXPORTS: &[Export] = &[
         ob::object::IoDeviceObjectType
     ),
     export!(Implemented, ob::handle::ObOpenObjectByPointer),
+    export!(Implemented, se::zwtoken::ZwDuplicateToken),
+    export!(Implemented, se::zwtoken::ZwOpenProcessTokenEx),
+    export!(Implemented, se::zwtoken::ZwQueryInformationToken),
     export!(Partial, ps::ZwSetInformationThread),
     export!(Implemented, se::ZwSetSecurityObject),
     export!(Implemented, cm::RtlQueryRegistryValues),

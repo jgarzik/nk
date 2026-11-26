@@ -25,7 +25,7 @@ use nk_ntabi::se::{
 };
 use nk_ntabi::status::*;
 use nk_se::information::{Information, QueryError, token_information};
-use nk_se::token::{SE_CHANGE_NOTIFY_PRIVILEGE, Token};
+use nk_se::token::{SE_CHANGE_NOTIFY_PRIVILEGE, Token, TokenType};
 
 /// The next locally unique identifier. Windows keeps the values below
 /// 1000 for well-known ones (`SYSTEM_LUID` is 999).
@@ -268,6 +268,22 @@ pub unsafe extern "C" fn SeDeleteAccessState(state: *mut ACCESS_STATE) {
         }
         SeReleaseSubjectContext(&raw mut (*state).SubjectSecurityContext);
     }
+}
+
+/// A new token object that is a copy of `source`, of type `new_type`
+/// at `level` (`Token::duplicate`), with one reference: the caller's.
+/// `None` without memory.
+///
+/// # Safety
+/// `source` is a token object the caller holds a reference to.
+pub unsafe fn duplicate(
+    source: *mut u8,
+    new_type: TokenType,
+    level: u32,
+    effective_only: bool,
+) -> Option<*mut u8> {
+    // SAFETY: per the contract.
+    create(unsafe { of(source) }.duplicate(new_type, level, effective_only))
 }
 
 /// Pool tag of what a token query hands out, Windows' own (`Se  `).

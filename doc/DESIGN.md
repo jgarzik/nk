@@ -1464,6 +1464,15 @@ parts of variable length is a pool block the driver frees; the session
 id, the integrity level and "is an app container" are numbers written
 in place of the block's address, as on Windows.
 
+By handle a driver opens the process's token (`ZwOpenProcessTokenEx`),
+asks it the same questions into a buffer of its own
+(`ZwQueryInformationToken`) and copies it (`ZwDuplicateToken`). A copy
+is a new token object: the same user, groups, privileges and defaults,
+of the type asked, at the impersonation level its quality of service
+names or else the source's own, with ids of its own. An effective-only
+copy leaves out the privileges and groups not in effect
+(`Token::duplicate`).
+
 A token never changes once it is made: NK exports nothing that adjusts
 one. So a token has no lock, and
 [`SeLockSubjectContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-selocksubjectcontext)

@@ -129,6 +129,11 @@ pub enum TokenType {
     Impersonation = 2,
 }
 
+/// `STATUS_BAD_IMPERSONATION_LEVEL`: a token cannot be copied to the
+/// type and level asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BadImpersonationLevel;
+
 /// An access token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
@@ -324,6 +329,60 @@ impl Token {
         self.may_own(sid) || self.privilege_enabled(SE_RESTORE_PRIVILEGE)
     }
 
+    /// The impersonation level a duplicate of this token gets
+    /// (`NtDuplicateToken`): the one asked for, or this token's own
+    /// when none is. A duplicate of an impersonation token cannot
+    /// impersonate at a higher level than it, and cannot be a primary
+    /// token unless it impersonates at `SecurityImpersonation` or
+    /// above.
+    pub fn duplicate_level(
+        &self,
+        new_type: TokenType,
+        requested: Option<u32>,
+    ) -> Result<u32, BadImpersonationLevel> {
+        let level = requested.unwrap_or(self.impersonation_level);
+        if self.token_type == TokenType::Impersonation {
+            let refused = match new_type {
+                TokenType::Impersonation => level > self.impersonation_level,
+                TokenType::Primary => self.impersonation_level < SECURITY_IMPERSONATION,
+            };
+            if refused {
+                return Err(BadImpersonationLevel);
+            }
+        }
+        Ok(level)
+    }
+
+    /// A copy of this token of another type and level. The kernel
+    /// gives it ids of its own.
+    ///
+    /// `effective_only` leaves out what is not in effect, as the pinned
+    /// kernel does: privileges that are not enabled, and groups that
+    /// are neither enabled, nor deny-only, nor the integrity label. A
+    /// group that goes has its place taken by the last one. NK's
+    /// decision: the default owner stays even when it is a group not
+    /// enabled.
+    pub fn duplicate(&self, new_type: TokenType, level: u32, effective_only: bool) -> Token {
+        let mut copy = self.clone();
+        copy.token_type = new_type;
+        copy.impersonation_level = level;
+        if effective_only {
+            copy.privileges
+                .retain(|held| held.attributes & SE_PRIVILEGE_ENABLED != 0);
+            const KEPT: u32 = SE_GROUP_ENABLED | SE_GROUP_USE_FOR_DENY_ONLY | SE_GROUP_INTEGRITY;
+            let mut at = 0;
+            while at < copy.groups.len() {
+                let group = &copy.groups[at];
+                if group.attributes & KEPT != 0 || group.sid == copy.owner {
+                    at += 1;
+                } else {
+                    copy.groups.swap_remove(at);
+                }
+            }
+        }
+        copy
+    }
+
     /// The integrity level: the last number of the label's SID
     /// (0x4000 for system). Zero, "untrusted", for a token with no label.
     pub fn integrity_level(&self) -> u32 {
@@ -421,6 +480,74 @@ mod tests {
         assert!(token.privilege_enabled(SE_TCB_PRIVILEGE));
         assert!(!token.privilege_enabled(SE_SECURITY_PRIVILEGE), "held, off");
         assert!(!token.privilege_enabled(6), "not held");
+    }
+
+    #[test]
+    fn a_duplicate_is_the_same_subject_of_another_type() {
+        let system = Token::system();
+        let copy = system.duplicate(TokenType::Impersonation, SECURITY_IDENTIFICATION, false);
+        assert_eq!(copy.token_type, TokenType::Impersonation);
+        assert_eq!(copy.impersonation_level, SECURITY_IDENTIFICATION);
+        let mut back = copy.clone();
+        back.token_type = TokenType::Primary;
+        back.impersonation_level = SECURITY_ANONYMOUS;
+        assert_eq!(back, system, "nothing else changed");
+    }
+
+    #[test]
+    fn an_effective_only_duplicate_holds_what_is_in_effect() {
+        let mut token = Token::system();
+        // A disabled group in the middle, and one that only denies.
+        token.groups[1].attributes = SE_GROUP_MANDATORY;
+        token.groups[2].attributes = SE_GROUP_USE_FOR_DENY_ONLY;
+        let copy = token.duplicate(TokenType::Primary, 0, true);
+        assert!(
+            copy.privileges
+                .iter()
+                .all(|p| p.attributes & SE_PRIVILEGE_ENABLED != 0)
+        );
+        assert_eq!(copy.privileges.len(), 16);
+        // Everyone went; the label, last, took its place.
+        let sids: Vec<&[u8]> = copy.groups.iter().map(|g| &g.sid[..]).collect();
+        assert_eq!(
+            sids,
+            [&ADMINISTRATORS[..], &SYSTEM_LABEL, &AUTHENTICATED_USERS]
+        );
+        assert_eq!(copy.integrity_level(), 0x4000);
+        // The default owner stays though not enabled.
+        token.groups[0].attributes = SE_GROUP_OWNER;
+        let copy = token.duplicate(TokenType::Primary, 0, true);
+        assert_eq!(copy.groups[0].sid, ADMINISTRATORS);
+    }
+
+    #[test]
+    fn the_level_of_a_duplicate() {
+        let system = Token::system();
+        let (primary, impersonation) = (TokenType::Primary, TokenType::Impersonation);
+        // Of a primary token: whatever is asked; its own level if none.
+        assert_eq!(system.duplicate_level(impersonation, Some(3)), Ok(3));
+        assert_eq!(system.duplicate_level(impersonation, None), Ok(0));
+        assert_eq!(system.duplicate_level(primary, None), Ok(0));
+        // Of an impersonation token: no higher, and primary only from
+        // the impersonation level up.
+        let identifying = system.duplicate(impersonation, SECURITY_IDENTIFICATION, false);
+        assert_eq!(identifying.duplicate_level(impersonation, Some(1)), Ok(1));
+        assert_eq!(identifying.duplicate_level(impersonation, Some(0)), Ok(0));
+        assert_eq!(identifying.duplicate_level(impersonation, None), Ok(1));
+        assert_eq!(
+            identifying.duplicate_level(impersonation, Some(2)),
+            Err(BadImpersonationLevel)
+        );
+        assert_eq!(
+            identifying.duplicate_level(primary, None),
+            Err(BadImpersonationLevel)
+        );
+        let impersonating = system.duplicate(impersonation, SECURITY_IMPERSONATION, false);
+        assert_eq!(impersonating.duplicate_level(primary, Some(0)), Ok(0));
+        assert_eq!(
+            impersonating.duplicate_level(impersonation, Some(3)),
+            Err(BadImpersonationLevel)
+        );
     }
 
     #[test]

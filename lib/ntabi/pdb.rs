@@ -986,8 +986,21 @@ macro_rules! same_layout {
 
 #[test]
 fn privilege_sets_match_the_kernel() {
-    use crate::se::{AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET};
+    use crate::se::{
+        AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_QUALITY_OF_SERVICE,
+    };
     let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        SECURITY_QUALITY_OF_SERVICE,
+        "_SECURITY_QUALITY_OF_SERVICE",
+        [
+            Length,
+            ImpersonationLevel,
+            ContextTrackingMode,
+            EffectiveOnly
+        ]
+    );
     same_layout!(
         types,
         LUID_AND_ATTRIBUTES,

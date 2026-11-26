@@ -105,6 +105,27 @@ const _: () = {
     assert!(offset_of!(ACCESS_STATE, ObjectTypeName) == 0x90);
 };
 
+/// [`SECURITY_QUALITY_OF_SERVICE`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-security_quality_of_service):
+/// how far a client lets a server act for it. Object attributes point
+/// to one.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SECURITY_QUALITY_OF_SERVICE {
+    pub Length: u32,
+    /// A `SECURITY_IMPERSONATION_LEVEL`.
+    pub ImpersonationLevel: u32,
+    /// `SECURITY_STATIC_TRACKING` (0) or `SECURITY_DYNAMIC_TRACKING`.
+    pub ContextTrackingMode: u8,
+    pub EffectiveOnly: u8,
+}
+
+const _: () = {
+    assert!(size_of::<SECURITY_QUALITY_OF_SERVICE>() == 12);
+    assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, ImpersonationLevel) == 4);
+    assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, ContextTrackingMode) == 8);
+    assert!(offset_of!(SECURITY_QUALITY_OF_SERVICE, EffectiveOnly) == 9);
+};
+
 /// [`LUID_AND_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_luid_and_attributes):
 /// a privilege and its `SE_PRIVILEGE_*` bits. Twelve bytes: the header
 /// packs it to four.

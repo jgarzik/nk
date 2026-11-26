@@ -9,14 +9,16 @@ use crate::ps::process;
 use crate::se::access::*;
 use crate::se::descriptor::*;
 use crate::se::token::*;
+use crate::se::zwtoken::*;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
 use core::ffi::c_void;
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::FILE_GENERIC_MAPPING;
+use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::se::{
     ACCESS_STATE, AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_DESCRIPTOR,
-    SECURITY_SUBJECT_CONTEXT, TOKEN_HAS_TRAVERSE_PRIVILEGE,
+    SECURITY_QUALITY_OF_SERVICE, SECURITY_SUBJECT_CONTEXT, TOKEN_HAS_TRAVERSE_PRIVILEGE,
 };
 
 pub static GROUP: Group = Group {
@@ -30,6 +32,7 @@ pub static GROUP: Group = Group {
         "se.assign",
         "se.descriptor-info",
         "se.token-query",
+        "se.token-handles",
     ],
     run,
     manual: false,
@@ -1425,6 +1428,195 @@ fn token_query() -> Result<(), &'static str> {
     Ok(())
 }
 
+// ---- tokens by handle -----------------------------------------------------
+
+const TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+const BAD_LEVEL_STATUS: i32 = BAD_LEVEL as i32;
+const OBJ_KERNEL_HANDLE: u32 = 0x200;
+const TOKEN_QUERY: u32 = 0x8;
+const TOKEN_DUPLICATE: u32 = 0x2;
+
+/// `ZwQueryInformationToken` with `room` bytes of a buffer: the status,
+/// the length returned (rubbish before the call), the buffer, and
+/// where the buffer was.
+fn ask(handle: *mut c_void, class: u32, room: u32) -> (i32, u32, [u64; 8], u64) {
+    let mut buffer = [0u64; 8];
+    let mut length = 0xAAAA_AAAAu32;
+    // SAFETY: the buffer is 64 bytes, and no `room` is more.
+    let status = unsafe {
+        ZwQueryInformationToken(
+            handle,
+            class,
+            buffer.as_mut_ptr().cast(),
+            room,
+            &raw mut length,
+        )
+    };
+    (status, length, buffer, buffer.as_ptr() as u64)
+}
+
+/// A token handle's type and impersonation level (or the status that
+/// refuses to tell it).
+fn brief(handle: *mut c_void) -> (u32, i32) {
+    let (kind, level) = (ask(handle, 8, 4), ask(handle, 9, 4));
+    (
+        kind.2[0] as u32,
+        if level.0 == 0 {
+            level.2[0] as i32
+        } else {
+            level.0
+        },
+    )
+}
+
+/// `ZwDuplicateToken` of `source` as `kind` at `level` (`None`: no
+/// quality of service): the status and the new handle.
+fn duplicate(source: *mut c_void, kind: u32, level: Option<u32>) -> (i32, *mut c_void) {
+    let mut qos = SECURITY_QUALITY_OF_SERVICE {
+        Length: 12,
+        ImpersonationLevel: level.unwrap_or(0),
+        ContextTrackingMode: 0,
+        EffectiveOnly: 0,
+    };
+    let attributes = OBJECT_ATTRIBUTES {
+        Length: 48,
+        RootDirectory: core::ptr::null_mut(),
+        ObjectName: core::ptr::null(),
+        Attributes: OBJ_KERNEL_HANDLE,
+        SecurityDescriptor: core::ptr::null_mut(),
+        SecurityQualityOfService: match level {
+            Some(_) => (&raw mut qos).cast(),
+            None => core::ptr::null_mut(),
+        },
+    };
+    let mut copy = core::ptr::null_mut();
+    // SAFETY: locals that outlive the call.
+    let status = unsafe {
+        ZwDuplicateToken(
+            source,
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            &raw const attributes,
+            0,
+            kind,
+            &raw mut copy,
+        )
+    };
+    (status, copy)
+}
+
+/// The System process's token opened, asked and copied by handle, as
+/// `nkc-se` does.
+fn token_handles() -> Result<(), &'static str> {
+    let current_process = usize::MAX as *mut c_void;
+    let mut primary = core::ptr::null_mut();
+    // SAFETY: the result is a local.
+    let opened = unsafe {
+        ZwOpenProcessTokenEx(
+            current_process,
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            OBJ_KERNEL_HANDLE,
+            &raw mut primary,
+        )
+    };
+    if opened != 0 {
+        return Err("the process's token was not opened");
+    }
+    let verdict = (|| {
+        // The user: no room, then room.
+        if ask(primary, 1, 0).0 != TOO_SMALL || ask(primary, 1, 0).1 != 28 {
+            return Err("a buffer too short was not told the length needed");
+        }
+        let (status, length, user, _) = ask(primary, 1, 64);
+        if status != 0 || length != 28 || user[1] != 0 {
+            return Err("the user was not told");
+        }
+        // The SID S-1-5-18 follows the pointer to it. The pointer is
+        // into the buffer `ask` had; `ask` moves the buffer when it
+        // returns it, so the label below is where the pointer is held
+        // to the buffer's address.
+        if user[0] == 0 || user[2] != 0x0500_0000_0000_0101 {
+            return Err("the user's SID is not in the buffer, after the pointer to it");
+        }
+        if ask(primary, 8, 2).0 != TOO_SMALL || ask(primary, 8, 2).1 != 4 {
+            return Err("two bytes were enough for a token's type");
+        }
+        if brief(primary) != (1, INVALID_INFO_CLASS) || ask(primary, 9, 4).1 != 0xAAAA_AAAA {
+            return Err("the primary token is not one, or told a level, or a length for it");
+        }
+        let (session, container) = (ask(primary, 12, 4), ask(primary, 29, 4));
+        if (session.0, session.1, session.2[0]) != (0, 4, 0)
+            || (container.0, container.1, container.2[0]) != (0, 4, 0)
+        {
+            return Err("the session or the container answer is not four bytes of zero");
+        }
+        let label = ask(primary, 25, 64);
+        if (label.0, label.1, label.2[1]) != (0, 28, 0x60)
+            || label.2[2] != 0x1000_0000_0000_0101
+            || label.2[0] != label.3 + 16
+        {
+            return Err("the integrity level is not a label of the system level");
+        }
+        let statistics = ask(primary, 10, 64);
+        if (statistics.0, statistics.1, statistics.2[1], statistics.2[3]) != (0, 56, 0x3E7, 1) {
+            return Err("the statistics are not the system logon's");
+        }
+        // A class there is not: refused before the handle is looked at.
+        if ask(primary, 0x7F, 64).0 != INVALID_INFO_CLASS
+            || ask(core::ptr::null_mut(), 0x7F, 64).0 != INVALID_INFO_CLASS
+            || ask(core::ptr::null_mut(), 1, 64).0 == 0
+        {
+            return Err("a class there is not, or a handle there is not, was answered");
+        }
+        // Copies: an impersonation token at each level; at the source's
+        // own level when none is said; a primary token again.
+        let mut identifying = core::ptr::null_mut();
+        for level in 0..4 {
+            let (status, copy) = duplicate(primary, 2, Some(level));
+            if status != 0 || brief(copy) != (2, level as i32) {
+                return Err("a copy is not an impersonation token of the level asked");
+            }
+            if level == 1 {
+                identifying = copy;
+            } else {
+                crate::ps::ZwClose(copy);
+            }
+        }
+        let (unsaid, again, neither) = (
+            duplicate(primary, 2, None),
+            duplicate(primary, 1, None),
+            duplicate(primary, 3, Some(2)),
+        );
+        let briefs = (brief(unsaid.1), brief(again.1));
+        // What a copy that only identifies may be copied to.
+        let (higher, as_primary, lower) = (
+            duplicate(identifying, 2, Some(2)),
+            duplicate(identifying, 1, None),
+            duplicate(identifying, 2, Some(0)),
+        );
+        let lower_brief = brief(lower.1);
+        for handle in [unsaid.1, again.1, lower.1, identifying] {
+            crate::ps::ZwClose(handle);
+        }
+        if (unsaid.0, again.0) != (0, 0) || briefs != ((2, 0), (1, INVALID_INFO_CLASS)) {
+            return Err("a copy with no level said, or a primary copy, is not as on Windows");
+        }
+        if neither.0 != 0xC000_000Du32 as i32 {
+            return Err("a copy of a type there is not was made");
+        }
+        if higher.0 != BAD_LEVEL_STATUS || as_primary.0 != BAD_LEVEL_STATUS {
+            return Err("a token that only identifies was copied to more than it is");
+        }
+        if lower.0 != 0 || lower_brief != (2, 0) {
+            return Err("a token that only identifies was not copied to a lower level");
+        }
+        Ok(())
+    })();
+    if crate::ps::ZwClose(primary) != 0 {
+        return Err("the token's handle was not closed");
+    }
+    verdict
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.subject-context", subject_context);
     r.check("se.access-state", access_state);
@@ -1435,4 +1627,5 @@ fn run(r: &mut Report, _: &BootInfo) {
     r.check("se.assign", assign_security);
     r.check("se.descriptor-info", descriptor_info);
     r.check("se.token-query", token_query);
+    r.check("se.token-handles", token_handles);
 }
