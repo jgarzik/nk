@@ -783,6 +783,9 @@ make that safe.
 | I/O work item's routine | undo: the device's reference |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
 | DPC routine, a timer's included | base: kernel mode |
+| an executive timer's callback (from the timer's DPC) | base: kernel mode |
+| an executive timer's delete callback | nothing: the timer is freed before it is called |
+| a lookaside list's `Free` routine, for each block kept when the list is deleted | nothing: the blocks not yet handed over are left |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 
 **Nothing handles it.** The system stops with Windows' bugcheck for

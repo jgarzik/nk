@@ -38,6 +38,7 @@
 #![allow(non_snake_case)]
 
 use super::work;
+use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{dpc, irql, timer};
 use crate::mm::pool;
 use core::ffi::c_void;
@@ -109,9 +110,20 @@ unsafe extern "C" fn expired(_: *mut KDPC, timer: *mut c_void, _: *mut c_void, _
     // SAFETY: per the contract; a timer is not freed while its DPC can
     // run (`retire`). The callback is the driver's, called as Windows
     // calls it: at DISPATCH_LEVEL, with the timer and its context.
+    // Nothing of a driver's lies beneath a DPC: an exception the
+    // callback lets out is unhandled in kernel mode.
     unsafe {
         if let Some(callback) = (&raw const (*timer).callback).read() {
-            callback(timer, (&raw const (*timer).context).read());
+            seh::call(
+                callback as usize,
+                [
+                    timer.addr(),
+                    (&raw const (*timer).context).read().addr(),
+                    0,
+                    0,
+                ],
+                &Guard::Base(Unhandled::KernelMode),
+            );
         }
         if state(timer).load(Ordering::Acquire) == LAST_EXPIRY {
             retire_later(timer);
@@ -144,8 +156,14 @@ unsafe fn retire(timer: *mut ExTimer) {
         let context = (&raw const (*timer).delete_context).read();
         let freed = pool::free(timer.cast());
         debug_assert!(freed.is_ok());
+        // The timer is gone already: if the callback does not return,
+        // nothing is owed.
         if let Some(callback) = callback {
-            callback(context);
+            seh::call(
+                callback as usize,
+                [context.addr(), 0, 0, 0],
+                &Guard::Nothing,
+            );
         }
     }
 }

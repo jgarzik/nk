@@ -19,6 +19,7 @@
 #![allow(non_snake_case)]
 
 use super::slist;
+use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
 use nk_ex::lookaside::{self, Fields};
 use nk_ntabi::ex::{
@@ -76,9 +77,12 @@ unsafe fn delete(list: *mut GENERAL_LOOKASIDE) {
             ));
         };
         let mut entry = slist::ExpInterlockedFlushSList(&raw mut (*list).ListHead);
+        // A routine of the driver's that raises is unwound through this
+        // frame, which then owes nothing: the blocks not yet handed
+        // over stay with nobody, as the driver chose.
         while !entry.is_null() {
             let next = (&raw const (*entry).Next).read();
-            free(entry.cast());
+            seh::call(free as usize, [entry.addr(), 0, 0, 0], &Guard::Nothing);
             entry = next;
         }
     }

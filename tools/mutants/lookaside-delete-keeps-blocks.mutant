@@ -3,4 +3,4 @@
 scenario: aarch64
 fails: ex.lookaside.routines
 file: kernel/ex/lookaside.rs
-remove:             free(entry.cast());
+remove:             seh::call(free as usize, [entry.addr(), 0, 0, 0], &Guard::Nothing);
