@@ -20,7 +20,7 @@ pub use atomic::swap_pair;
 pub use chkstk::{chkstk_test, nk_chkstk};
 pub use device::{
     InterruptVectors, TestSource as InterruptTestSource, acpi_device_interrupts, hal_hardware_id,
-    interrupt_message, isa_line, level_line_polarity, line_enable, line_route,
+    interrupt_message, isa_line, level_line_polarity, line_enable, line_route, line_set,
 };
 pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 

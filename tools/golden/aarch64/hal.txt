@@ -19,3 +19,4 @@ hal.dma.bounce skip
 hal.dma.map-registers ok
 hal.firmware-variables ok
 hal.acpi-machine-states ok
+hal.interrupt-controller-lines ok
