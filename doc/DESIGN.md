@@ -86,7 +86,7 @@ into memory a driver can write.
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
-| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`, `po`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
+| `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
 
@@ -2119,10 +2119,8 @@ is no query-remove, no eject, no stop and no rebalance.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
 not bring up yet because their `AddDevice` or start stops the system
-over something NK lacks: at present `ACPI`, whose start reads the
-firmware description Windows keeps under `HARDWARE\Description`
-(the "ACPI BIOS" record) and stops without it, so nothing below the
-HAL's ACPI device is enumerated.
+over something NK lacks, with the reason beside each name: at present
+`ACPI`, so nothing below the HAL's ACPI device is enumerated.
 
 ## The registry
 
@@ -2309,6 +2307,16 @@ does what the query says. NK's decisions:
 - **A routine that raises** an exception is unwound through the query
   like any call into a driver (Exceptions). All the query holds is one
   pool block, which the guard of that call gives back.
+
+`RtlCheckRegistryKey`, `RtlCreateRegistryKey`, `RtlWriteRegistryValue`
+and `RtlDeleteRegistryValue` (`kernel/cm/helper.rs`) name their key the
+same way and find it by the same code. Each is what the pinned kernel
+makes of it: the key opened, or for all but the check made if it is
+not there (under a key that is), then the one system service; so a
+value written or deleted stamps the key and tells its watchers as
+`ZwSetValueKey` and `ZwDeleteValueKey` do, and deleting a value of a
+key that is not there makes the key. A key given by handle is not
+looked at by the check or the create, which succeed.
 
 ### The machine's description
 
@@ -2815,6 +2823,13 @@ code).
   library for what `pci.sys` imports from it. NK does not call its
   `PshedInitialize`, which takes Windows' loader block, nor any other
   of its routines.
+- `HalBugCheckSystem` (`kernel/hal/fatal.rs`), which `pshed.dll` calls
+  for a fatal error, stops the system as Windows does: by the record's
+  first section that is an NMI not the hypervisor's
+  (`0x80 NMI_HARDWARE_FAILURE`) or a machine check
+  (`0x124 WHEA_UNCORRECTABLE_ERROR`: the source's type, the record, the
+  two halves of the bank's status), and with `0x124` and no status for
+  a record with neither.
 
 ## Stopping the system
 

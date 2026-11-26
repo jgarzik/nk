@@ -40,6 +40,7 @@ pub static GROUP: Group = Group {
         "pnp.invalidate-relations",
         "pnp.failed-start",
         "pnp.invalid-instance-id",
+        "pnp.invalidate-state",
         "pnp.removed",
     ],
     run,
@@ -111,6 +112,9 @@ static RAW_LINE: AtomicU32 = AtomicU32::new(0);
 static VECTOR: AtomicU32 = AtomicU32::new(0);
 static LEVEL: AtomicU32 = AtomicU32::new(0);
 static COUNTS: AtomicU32 = AtomicU32::new(0);
+/// What the function driver answers a query for the device's state
+/// with: `PNP_DEVICE_STATE` bits.
+static DEVICE_STATE: AtomicU32 = AtomicU32::new(0);
 /// How many removal requests reached a layer.
 static REMOVED: AtomicUsize = AtomicUsize::new(0);
 
@@ -360,6 +364,10 @@ unsafe extern "C" fn dispatch(device: *mut DEVICE_OBJECT, request: *mut IRP) -> 
                     record_start(parameters);
                     (*request).IoStatus.Status = STATUS_SUCCESS;
                 }
+                if minor == IRP_MN_QUERY_PNP_DEVICE_STATE && (*own).number == 2 {
+                    (*request).IoStatus.Status = STATUS_SUCCESS;
+                    (*request).IoStatus.Information = DEVICE_STATE.load(Ordering::Acquire) as usize;
+                }
                 if minor == IRP_MN_REMOVE_DEVICE {
                     REMOVED.fetch_add(1, Ordering::AcqRel);
                     (*request).IoStatus.Status = STATUS_SUCCESS;
@@ -510,6 +518,7 @@ impl Bench {
         ADDED.store(0, Ordering::Release);
         REMOVED.store(0, Ordering::Release);
         FAILING.store(0, Ordering::Release);
+        DEVICE_STATE.store(0, Ordering::Release);
         PRESENT.store(0, Ordering::Release);
         let line = InterruptTestSource::find().map_or(u32::MAX, |source| source.line().gsi);
         LINE.store(line, Ordering::Release);
@@ -1028,18 +1037,55 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
         Ok(())
     });
-    // The bus loses its children: each is removed, and what it held is
-    // free again.
+    // The first child's driver says the device's state changed, and
+    // then that it failed (`PNP_DEVICE_FAILED`): the manager asks, and
+    // takes the device down. Its node tells of the NUMA node first.
     let vector = started.ok().map(|(_, vector)| vector);
     let before = REMOVED.load(Ordering::Acquire);
+    r.check("pnp.invalidate-state", || {
+        let first = CHILDREN[0].load(Ordering::Acquire);
+        let mut numa = 0xEEEE;
+        // SAFETY: live device objects of the test's, and a number to
+        // write.
+        unsafe {
+            if pnp::export::IoGetDeviceNumaNode(first, &raw mut numa) != STATUS_SUCCESS || numa != 0
+            {
+                return Err("the device is not on node 0");
+            }
+            if pnp::export::IoGetDeviceNumaNode(bench.function, &raw mut numa)
+                != STATUS_INVALID_PARAMETER
+            {
+                return Err("a function device object was given a node");
+            }
+            // Nothing changed: the device stays.
+            pnp::export::IoInvalidateDeviceState(first);
+            pnp::settle();
+            if child(1).is_none_or(|node| node.state != State::Started) {
+                return Err("a device whose state is unchanged did not stay started");
+            }
+            DEVICE_STATE.store(query::PNP_DEVICE_FAILED, Ordering::Release);
+            pnp::export::IoInvalidateDeviceState(first);
+        }
+        pnp::settle();
+        let found = child(1).ok_or("the first child has no node")?;
+        if found.state != State::Failed || found.problem != node::CM_PROB_FAILED_POST_START {
+            return Err("the device its driver calls failed is not failed with problem 43");
+        }
+        if REMOVED.load(Ordering::Acquire) != before + 3 {
+            return Err("the failed device's three devices were not told it is removed");
+        }
+        if !found.raw.is_empty() || !found.vectors.is_empty() {
+            return Err("the failed device still holds resources");
+        }
+        Ok(())
+    });
+    // The bus loses its children: each is removed, and what it held is
+    // free again.
     bench.report(0);
     pnp::settle();
     r.check("pnp.removed", || {
         if child(1).is_some() || child(2).is_some() {
             return Err("the children the bus no longer reports still have nodes");
-        }
-        if REMOVED.load(Ordering::Acquire) != before + 3 {
-            return Err("the started child's three devices were not told it is removed");
         }
         if CHILDREN
             .iter()

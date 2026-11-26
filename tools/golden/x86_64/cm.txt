@@ -19,3 +19,4 @@ cm.hive.names ok
 cm.hive.refused ok
 cm.overlay ok
 cm.notify ok
+cm.rtl-keys ok

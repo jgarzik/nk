@@ -1,4 +1,6 @@
-//! Watching a registry key for changes, through `ZwNotifyChangeKey`.
+//! Watching a registry key for changes, through `ZwNotifyChangeKey`,
+//! and the routines that reach a key by `RelativeTo` and path, whose
+//! writes a watcher is told of.
 
 use crate::cm::{self, notify};
 use crate::ke::wait;
@@ -14,12 +16,12 @@ use nk_ntabi::io::{IO_STATUS_BLOCK, UNICODE_STRING};
 use nk_ntabi::ke::KEVENT;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::{
-    NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_NOTIFY_CLEANUP, STATUS_NOTIFY_ENUM_DIR,
-    STATUS_PENDING, STATUS_SUCCESS,
+    NTSTATUS, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER, STATUS_NOTIFY_CLEANUP,
+    STATUS_NOTIFY_ENUM_DIR, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_PENDING, STATUS_SUCCESS,
 };
 
 pub static GROUP: Group = Group {
-    names: &["cm.notify"],
+    names: &["cm.notify", "cm.rtl-keys"],
     run,
     manual: false,
 };
@@ -266,8 +268,143 @@ fn notify_test() -> Result<(), &'static str> {
     result
 }
 
+/// `RtlCheckRegistryKey`, `RtlCreateRegistryKey`,
+/// `RtlWriteRegistryValue` and `RtlDeleteRegistryValue`: the key by
+/// each kind of `RelativeTo`, made when it is to be, and a watcher
+/// told of what is written.
+fn rtl_keys() -> Result<(), &'static str> {
+    use nk_ntabi::cm::{
+        RTL_REGISTRY_ABSOLUTE, RTL_REGISTRY_HANDLE, RTL_REGISTRY_OPTIONAL, RTL_REGISTRY_SERVICES,
+    };
+    const HELPER: &str = "Machine\\System\\CurrentControlSet\\Services\\NkRtlKeys";
+    let z = |text: &str| -> Vec<u16> { text.encode_utf16().chain([0]).collect() };
+    let (path, full) = (
+        z("NkRtlKeys"),
+        z("\\Registry\\Machine\\System\\CurrentControlSet\\Services\\NkRtlKeys"),
+    );
+    // The callers below pass terminated strings in locals that outlive
+    // the call, or a handle where `relative_to` says so.
+    let check = |relative_to: u32, path: *const u16| {
+        // SAFETY: as said above.
+        unsafe { cm::RtlCheckRegistryKey(relative_to, path) }
+    };
+    let create = |relative_to: u32, path: &[u16]| {
+        // SAFETY: as said above.
+        unsafe { cm::RtlCreateRegistryKey(relative_to, path.as_ptr()) }
+    };
+    let write = |relative_to: u32, path: *const u16, name: &str, kind: u32, data: u32| {
+        let name = z(name);
+        // SAFETY: as said above; the name and the value are locals.
+        unsafe {
+            cm::RtlWriteRegistryValue(
+                relative_to,
+                path,
+                name.as_ptr(),
+                kind,
+                (&raw const data).cast(),
+                4,
+            )
+        }
+    };
+    let delete = |relative_to: u32, path: *const u16, name: &str| {
+        let name = z(name);
+        // SAFETY: as said above; the name is a local.
+        unsafe { cm::RtlDeleteRegistryValue(relative_to, path, name.as_ptr()) }
+    };
+    let value = |key: &str, name: &str| cm::read(key, name).ok();
+    let dword = |data: u32| Some((4, data.to_le_bytes().to_vec()));
+    let no_handle = core::ptr::without_provenance::<u16>(0x7FFC);
+
+    if check(RTL_REGISTRY_SERVICES, path.as_ptr()) != STATUS_OBJECT_NAME_NOT_FOUND
+        || check(RTL_REGISTRY_ABSOLUTE, full.as_ptr()) != STATUS_OBJECT_NAME_NOT_FOUND
+        || check(7, path.as_ptr()) != STATUS_INVALID_PARAMETER
+        || create(7, &path) != STATUS_INVALID_PARAMETER
+    {
+        return Err("a key that is not there, or a key of no known kind, was found");
+    }
+    let verdict = (|| {
+        // Made under a key that exists, and not under one that does not.
+        if create(RTL_REGISTRY_SERVICES, &z("NkRtlKeys\\Sub\\Deeper"))
+            != STATUS_OBJECT_NAME_NOT_FOUND
+            || create(RTL_REGISTRY_SERVICES | RTL_REGISTRY_OPTIONAL, &path) != STATUS_SUCCESS
+            || create(RTL_REGISTRY_ABSOLUTE, &full) != STATUS_SUCCESS
+            || check(RTL_REGISTRY_SERVICES, path.as_ptr()) != STATUS_SUCCESS
+            || check(
+                RTL_REGISTRY_ABSOLUTE,
+                z("\\REGISTRY\\machine\\system\\currentcontrolset\\services\\nkrtlkeys").as_ptr(),
+            ) != STATUS_SUCCESS
+            || cm::exists("Machine\\System\\CurrentControlSet\\Services\\NkRtlKeys\\Sub")
+        {
+            return Err("a key was not made where its parent is, and only there");
+        }
+        // A value written is a value set: stored, without the type's
+        // high byte, and whoever watches the key is told.
+        let watched = key(
+            &alloc::string::String::from_utf16_lossy(&full[..full.len() - 1]),
+            core::ptr::null_mut(),
+        )?;
+        let watcher = Watcher::new().ok_or("no memory for a watcher")?;
+        let told = (|| {
+            if watcher.watch(watched, LAST_SET, false) != STATUS_PENDING {
+                return Err("a watch was not made");
+            }
+            if write(
+                RTL_REGISTRY_SERVICES,
+                path.as_ptr(),
+                "Count",
+                0x0100_0004,
+                7,
+            ) != STATUS_SUCCESS
+                || watcher.told() != Some(STATUS_NOTIFY_ENUM_DIR)
+                || value(HELPER, "Count") != dword(7)
+            {
+                return Err("a value written was not stored, or the key's watcher not told");
+            }
+            // By handle: the caller's key, used as it is.
+            if write(RTL_REGISTRY_HANDLE, watched.cast(), "ByHandle", 4, 8) != STATUS_SUCCESS
+                || value(HELPER, "ByHandle") != dword(8)
+                || write(RTL_REGISTRY_HANDLE, no_handle, "ByHandle", 4, 9) != STATUS_INVALID_HANDLE
+                || delete(RTL_REGISTRY_HANDLE, no_handle, "ByHandle") != STATUS_INVALID_HANDLE
+                || check(RTL_REGISTRY_HANDLE, no_handle) != STATUS_SUCCESS
+                || create(RTL_REGISTRY_HANDLE, &[0x7FFC]) != STATUS_SUCCESS
+            {
+                return Err("a key given by handle was not written through it, or was looked at");
+            }
+            if watcher.watch(watched, LAST_SET, false) != STATUS_PENDING
+                || delete(RTL_REGISTRY_SERVICES, path.as_ptr(), "Count") != STATUS_SUCCESS
+                || watcher.told() != Some(STATUS_NOTIFY_ENUM_DIR)
+                || value(HELPER, "Count").is_some()
+                || delete(RTL_REGISTRY_SERVICES, path.as_ptr(), "Count")
+                    != STATUS_OBJECT_NAME_NOT_FOUND
+                || delete(RTL_REGISTRY_HANDLE, watched.cast(), "ByHandle") != STATUS_SUCCESS
+            {
+                return Err("a value was not deleted, or the key's watcher not told");
+            }
+            // Writing and deleting make the key, as Windows' do.
+            let (made, emptied) = (z("NkRtlKeys\\Made"), z("NkRtlKeys\\Emptied"));
+            if write(RTL_REGISTRY_SERVICES, made.as_ptr(), "", 4, 1) != STATUS_SUCCESS
+                || value(
+                    "Machine\\System\\CurrentControlSet\\Services\\NkRtlKeys\\Made",
+                    "",
+                ) != dword(1)
+                || delete(RTL_REGISTRY_SERVICES, emptied.as_ptr(), "None")
+                    != STATUS_OBJECT_NAME_NOT_FOUND
+                || !cm::exists("Machine\\System\\CurrentControlSet\\Services\\NkRtlKeys\\Emptied")
+            {
+                return Err("writing or deleting a value did not make its key");
+            }
+            Ok(())
+        })();
+        handle::close(watched as u64);
+        told
+    })();
+    let _ = cm::delete_tree(HELPER);
+    verdict
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("cm.notify", notify_test);
+    r.check("cm.rtl-keys", rtl_keys);
 }
 
 /// This file's test groups, in the order they run.

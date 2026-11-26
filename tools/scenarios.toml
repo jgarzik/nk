@@ -178,6 +178,24 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
+# A fatal hardware error handed to the HAL (`HalBugCheckSystem`) stops
+# the system with Windows' code for it, the error's source, its record
+# and the machine check's status.
+
+[x86_64-neg-hardware-error]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=neg.hardware-error"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000124 WHEA_UNCORRECTABLE_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004, parameter 2 0x[0-9a-f]{16}, parameter 3 0x00000000deadbeef, parameter 4 0x0000000012345678\\)"
+
+[aarch64-neg-hardware-error]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=neg.hardware-error"
+expect = "bugcheck"
+match = "BUGCHECK: 0x00000124 WHEA_UNCORRECTABLE_ERROR: KeBugCheckEx \\(parameter 1 0x0000000000000004, parameter 2 0x[0-9a-f]{16}, parameter 3 0x00000000deadbeef, parameter 4 0x0000000012345678\\)"
+
 # The low half of the address space is NK's own on both architectures:
 # a null pointer faults, and so does ordinary memory at its physical
 # address, which firmware's map of the low half made readable. One

@@ -6,11 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    RtlCheckRegistryKey,
-    RtlCreateRegistryKey,
-    RtlDeleteRegistryValue,
-    RtlFindMessage,
-    RtlPcToFileName,
-    RtlWriteRegistryValue,
-);
+trap_list!(RtlFindMessage, RtlPcToFileName,);

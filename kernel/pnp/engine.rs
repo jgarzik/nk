@@ -48,7 +48,7 @@ const DELAYED_WORK_QUEUE: u32 = 1;
 /// run (`doc/DESIGN.md`, What is absent).
 const HELD_BACK: &[(&str, &str)] = &[(
     "ACPI",
-    "its start needs the firmware description under HARDWARE\\Description, which NK does not write",
+    "its start calls ExAllocateTimerInternal2, which NK lacks",
 )];
 
 /// The engine's mutex, and what only its holder touches: which
@@ -77,6 +77,9 @@ enum Action {
     /// Ask this device, which the entry holds a reference to, for its
     /// children again.
     Enumerate(usize),
+    /// Ask this device, which the entry holds a reference to, for its
+    /// state again.
+    Requery(usize),
 }
 
 struct Requests {
@@ -173,13 +176,54 @@ fn request(action: Action) -> bool {
 /// # Safety
 /// `pdo` is a live device object.
 pub unsafe fn enumerate_later(pdo: *mut DEVICE_OBJECT) {
+    // SAFETY: per the contract.
+    unsafe { later(pdo, Action::Enumerate(pdo as usize)) }
+}
+
+/// Have the device `pdo` asked for its state again, by a worker
+/// thread: what `IoInvalidateDeviceState` asks for.
+///
+/// # Safety
+/// `pdo` is a live device object.
+pub unsafe fn requery_later(pdo: *mut DEVICE_OBJECT) {
+    // SAFETY: per the contract.
+    unsafe { later(pdo, Action::Requery(pdo as usize)) }
+}
+
+/// Queue `action`, which names `pdo`.
+///
+/// # Safety
+/// `pdo` is a live device object.
+unsafe fn later(pdo: *mut DEVICE_OBJECT, action: Action) {
     // SAFETY: per the contract; the reference is the queued action's,
     // given back when it has been carried out or could not be queued.
     unsafe {
         object::reference(pdo.cast());
-        if !request(Action::Enumerate(pdo as usize)) {
+        if !request(action) {
             object::dereference(pdo.cast());
         }
+    }
+}
+
+/// Ask the started device `pdo` for its state: one its drivers now
+/// call failed, disabled or removed is taken down as after a start.
+fn requery(pdo: usize) {
+    // SAFETY: the tree's device; the engine's mutex is held, at
+    // `PASSIVE_LEVEL`.
+    let state = unsafe { query::device_state(pdo as *mut DEVICE_OBJECT) };
+    if state & (query::PNP_DEVICE_FAILED | query::PNP_DEVICE_DISABLED | query::PNP_DEVICE_REMOVED)
+        != 0
+    {
+        if let Some(found) = node::get(pdo) {
+            for child in found.children {
+                remove(child, false);
+            }
+        }
+        give_up(
+            pdo,
+            node::CM_PROB_FAILED_POST_START,
+            format_args!("its drivers report it unusable (device state {state:#x})"),
+        );
     }
 }
 
@@ -225,6 +269,13 @@ pub fn settle() {
                 Some(Action::Enumerate(pdo)) => {
                     if node::with(pdo, |node| node.state == State::Started) == Some(true) {
                         enumerate(pdo);
+                    }
+                    // SAFETY: the action's reference.
+                    unsafe { object::dereference(pdo as *mut u8) };
+                }
+                Some(Action::Requery(pdo)) => {
+                    if node::with(pdo, |node| node.state == State::Started) == Some(true) {
+                        requery(pdo);
                     }
                     // SAFETY: the action's reference.
                     unsafe { object::dereference(pdo as *mut u8) };
