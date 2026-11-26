@@ -51,6 +51,7 @@ thread.quantum ok
 thread.preempt-registers ok
 thread.migrate ok
 thread.affinity ok
+thread.steal-behind ok
 thread.identity ok
 seh.walk.thread ok
 seh.walk.dpc ok

@@ -300,8 +300,9 @@ do:
   has.
 - **Whoever queues, answers for the queue.** A changer that finds the
   thread on no queue does nothing more about a raise. So a processor
-  looking for work reads another's best thread where it is, under that
-  queue's lock, and takes it off only to run it. And a processor that
+  looking for work reads another's threads where they are, under that
+  queue's lock, from the best down to the first it is allowed to run,
+  and takes that one off only to run it. And a processor that
   queues a thread has the queue's processor look again: always, for a
   thread made ready; for the thread it is itself leaving, when the
   priority it queued the thread at is above the one it chose the next

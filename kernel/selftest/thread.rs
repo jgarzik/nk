@@ -21,6 +21,7 @@ pub static GROUP: Group = Group {
         "thread.preempt-registers",
         "thread.migrate",
         "thread.affinity",
+        "thread.steal-behind",
         "thread.identity",
     ],
     run,
@@ -105,5 +106,11 @@ fn run(r: &mut Report, _: &BootInfo) {
         thread::migrate_test(),
     );
     counted(r, "thread.affinity", "checks:", thread::affinity_test());
+    counted(
+        r,
+        "thread.steal-behind",
+        "taken by processor",
+        thread::steal_behind_test(),
+    );
     counted(r, "thread.identity", "checks:", thread::identity_test());
 }
