@@ -497,6 +497,15 @@ NK also prints an `NK-VERIFY` line, which fails a test run. Where Windows
 itself stops the system (freeing memory that is not a pool block, say),
 so does NK, with the same bugcheck code.
 
+### A device's queue
+
+A device queue's lock (`KDEVICE_QUEUE.Lock`, `io::startio`) is a
+driver's kind of spin lock, in the driver's device object: a driver's
+cancel routine takes a waiting request out under it. NK takes it only
+around linking and unlinking an entry, inside the cancel spin lock when
+the driver's requests are cancellable and never the other way round,
+and calls nothing while it is held.
+
 ## How it is tested
 
 - `lib/ke`: the rules as pure functions (`Held`, `check_raise`,

@@ -16,6 +16,7 @@ pub mod irp;
 pub mod mdl;
 pub mod remlock;
 pub mod service;
+pub mod startio;
 pub mod symlink;
 pub mod wmi;
 

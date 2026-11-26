@@ -116,6 +116,16 @@ pub struct KDEVICE_QUEUE {
     pub Busy: u64,
 }
 
+/// `KDEVICE_QUEUE_ENTRY`: how a request waits in a device queue. In an
+/// IRP it is `Tail.Overlay.DeviceQueueEntry`, which shares its place
+/// with the driver context ([`IRP_DEVICE_QUEUE_ENTRY`]).
+#[repr(C)]
+pub struct KDEVICE_QUEUE_ENTRY {
+    pub DeviceListEntry: LIST_ENTRY,
+    pub SortKey: u32,
+    pub Inserted: u8,
+}
+
 #[repr(C)]
 pub struct KDPC {
     pub TargetInfoAsUlong: u32,
@@ -372,6 +382,17 @@ pub const DOE_REMOVE_PENDING: u32 = 0x04;
 pub const DOE_REMOVE_PROCESSED: u32 = 0x08;
 pub const DOE_START_PENDING: u32 = 0x10;
 
+/// `DEVOBJ_EXTENSION.StartIoFlags`, as the pinned kernel uses them: a
+/// call of `IoStartNextPacket` that found another at work left word
+/// that the next request is to be started, and that the driver's
+/// requests are cancellable; the driver chose deferred start, and
+/// requests that are not cancellable once started
+/// (`IoSetStartIoAttributes`).
+pub const DOE_SIO_NO_KEY: u32 = 0x20;
+pub const DOE_SIO_CANCELABLE: u32 = 0x80;
+pub const DOE_SIO_DEFERRED: u32 = 0x100;
+pub const DOE_SIO_NO_CANCEL: u32 = 0x200;
+
 /// What `DEVICE_OBJECT.DeviceObjectExtension` points to: the I/O
 /// manager's own record of a device, which the WDK declares only the
 /// head of. Microsoft's drivers read it in line (the device node, the
@@ -604,6 +625,10 @@ pub struct IRP {
     pub OriginalFileObject: *mut FILE_OBJECT,
     pub IrpExtension: PVOID,
 }
+
+/// Where in an IRP its device queue entry is
+/// (`Tail.Overlay.DeviceQueueEntry`): it overlays the driver context.
+pub const IRP_DEVICE_QUEUE_ENTRY: usize = core::mem::offset_of!(IRP, DriverContext);
 
 /// `IO_STACK_LOCATION.Control`
 pub const SL_PENDING_RETURNED: u8 = 0x01;
@@ -852,6 +877,16 @@ const _: () = {
     assert!(size_of::<DISPATCHER_HEADER>() == 0x18);
     assert!(size_of::<KEVENT>() == 0x18);
     assert!(size_of::<KDEVICE_QUEUE>() == 0x28);
+    assert!(offset_of!(KDEVICE_QUEUE, DeviceListHead) == 0x08);
+    assert!(offset_of!(KDEVICE_QUEUE, Lock) == 0x18);
+    assert!(offset_of!(KDEVICE_QUEUE, Busy) == 0x20);
+    assert!(size_of::<KDEVICE_QUEUE_ENTRY>() == 0x18);
+    assert!(offset_of!(KDEVICE_QUEUE_ENTRY, SortKey) == 0x10);
+    assert!(offset_of!(KDEVICE_QUEUE_ENTRY, Inserted) == 0x14);
+    assert!(IRP_DEVICE_QUEUE_ENTRY == 0x78);
+    assert!(size_of::<KDEVICE_QUEUE_ENTRY>() <= 4 * size_of::<PVOID>());
+    assert!(offset_of!(DRIVER_OBJECT, DriverStartIo) == 0x60);
+    assert!(offset_of!(DEVICE_OBJECT, CurrentIrp) == 0x20);
     assert!(size_of::<KDPC>() == 0x40);
     assert!(size_of::<WAIT_CONTEXT_BLOCK>() == 0x48);
     assert!(size_of::<DRIVER_EXTENSION>() == 0x50);
