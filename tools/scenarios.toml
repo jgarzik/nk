@@ -831,3 +831,14 @@ cmdline = "test=stor.load"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "unchanged"
+
+# The same stack above a bus driver of the test's own, which enumerates
+# the controller in place of pci.sys (doc/TESTING.md).
+
+[x86_64-storage-direct]
+arch = "x86_64"
+tier = "gate"
+cmdline = "test=stor.direct"
+registry = ["storage"]
+disk = "ahci"
+disk_expect = "written"

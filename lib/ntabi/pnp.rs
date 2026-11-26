@@ -319,6 +319,28 @@ pub struct INTERFACE {
     pub InterfaceDereference: Option<unsafe extern "C" fn(*mut c_void)>,
 }
 
+/// [`BUS_INTERFACE_STANDARD`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_bus_interface_standard):
+/// what a bus driver hands out for `GUID_BUS_INTERFACE_STANDARD`: the
+/// routines through which a device's drivers reach its bus. The
+/// routines' types are the header's (`TRANSLATE_BUS_ADDRESS`,
+/// `GET_DMA_ADAPTER`, `GET_SET_DEVICE_DATA`).
+#[repr(C)]
+pub struct BUS_INTERFACE_STANDARD {
+    pub Header: INTERFACE,
+    pub TranslateBusAddress: PVOID,
+    pub GetDmaAdapter: PVOID,
+    pub SetBusData: PVOID,
+    pub GetBusData: PVOID,
+}
+
+const _: () = {
+    assert!(size_of::<BUS_INTERFACE_STANDARD>() == 0x40);
+    assert!(core::mem::offset_of!(BUS_INTERFACE_STANDARD, TranslateBusAddress) == 0x20);
+    assert!(core::mem::offset_of!(BUS_INTERFACE_STANDARD, GetDmaAdapter) == 0x28);
+    assert!(core::mem::offset_of!(BUS_INTERFACE_STANDARD, SetBusData) == 0x30);
+    assert!(core::mem::offset_of!(BUS_INTERFACE_STANDARD, GetBusData) == 0x38);
+};
+
 /// `CM_PARTIAL_RESOURCE_DESCRIPTOR.Type` and
 /// `IO_RESOURCE_DESCRIPTOR.Type` (`CmResourceType*`).
 pub const CM_RESOURCE_TYPE_NULL: u8 = 0;
