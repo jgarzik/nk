@@ -132,7 +132,8 @@ unsafe extern "C" fn expired(_: *mut KDPC, timer: *mut c_void, _: *mut c_void, _
 }
 
 /// Cancel the timer, wait until nothing can still be on its way to it,
-/// tell the driver if it asked, and free it.
+/// free it, and then tell the driver if it asked: its delete callback
+/// is called for a timer that is gone.
 ///
 /// Three rounds. The first flush waits out a callback that began before
 /// the timer was marked deleted, and so may have set it again; the
@@ -355,6 +356,8 @@ static CALLS: AtomicU32 = AtomicU32::new(0);
 static BAD_CALLS: AtomicU32 = AtomicU32::new(0);
 static EXPECTED: AtomicPtr<ExTimer> = AtomicPtr::new(core::ptr::null_mut());
 static DELETIONS: AtomicU32 = AtomicU32::new(0);
+/// Delete callbacks that found the timer they were for still allocated.
+static TOLD_EARLY: AtomicU32 = AtomicU32::new(0);
 
 /// The context the test timers are allocated with.
 const CONTEXT: usize = 0x7E57_C0DE;
@@ -374,6 +377,12 @@ unsafe extern "C" fn tick(timer: *mut ExTimer, context: *mut c_void) {
 /// # Safety
 /// Called as a timer's delete callback.
 unsafe extern "C" fn gone(context: *mut c_void) {
+    // The owner is told once the timer is gone: its block is no longer
+    // a timer's.
+    let timer = EXPECTED.load(Ordering::Acquire);
+    if pool::info(timer.cast()).is_some_and(|(_, tag)| tag == TAG) {
+        TOLD_EARLY.fetch_add(1, Ordering::AcqRel);
+    }
     if context.addr() == CONTEXT {
         DELETIONS.fetch_add(1, Ordering::AcqRel);
     }
@@ -502,6 +511,7 @@ pub fn delete_test() -> Result<u32, &'static str> {
     let before = pool::usage();
     CALLS.store(0, Ordering::Release);
     DELETIONS.store(0, Ordering::Release);
+    TOLD_EARLY.store(0, Ordering::Release);
     let freed = || stress::until(stress::PROMPT_MS, || pool::usage() == before);
 
     // Set far ahead, deleted with cancel and wait: gone on return.
@@ -527,8 +537,18 @@ pub fn delete_test() -> Result<u32, &'static str> {
     if unsafe { ExDeleteTimer(timer, 1, 0, &raw mut parameters) } == 0 {
         return Err("deleting a set timer without waiting did not say it was cancelled");
     }
-    if !freed() || DELETIONS.load(Ordering::Acquire) != 1 {
-        return Err("a timer deleted without waiting was not freed, or its owner not told");
+    // The worker frees the timer and then tells its owner: the memory
+    // is seen free before the owner has been told, so the telling is
+    // what is waited for, and the callback itself says whether the
+    // timer was gone by then.
+    if !stress::until(stress::PROMPT_MS, || DELETIONS.load(Ordering::Acquire) == 1) {
+        return Err("the owner of a timer deleted without waiting was not told");
+    }
+    if TOLD_EARLY.load(Ordering::Acquire) != 0 {
+        return Err("a timer's owner was told it was deleted while the timer was still there");
+    }
+    if !freed() {
+        return Err("a timer deleted without waiting was not freed");
     }
 
     // Deleted without cancelling: it expires, calls back, and goes.
