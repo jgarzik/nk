@@ -9,8 +9,6 @@ use super::super::{Export, NT, State};
 trap_list!(
     NtGetEnvironmentVariableEx,
     NtQueryEnvironmentVariableInfoEx,
-    ZwCreateDirectoryObject,
     ZwInitiatePowerAction,
-    ZwMakeTemporaryObject,
     ZwSetSystemInformation,
 );

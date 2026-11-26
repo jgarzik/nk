@@ -42,11 +42,14 @@ const DO_BUS_ENUMERATED_DEVICE: u32 = 0x1000;
 const DELAYED_WORK_QUEUE: u32 = 1;
 
 /// Services whose devices NK does not bring up yet, and why: the
-/// driver's `AddDevice` or start reaches a routine NK lacks, which
-/// would stop the system. A device served by one stays as it was
+/// driver's `AddDevice` or start reaches a routine NK lacks or looks
+/// for something NK does not provide, and stops the system. A device served by one stays as it was
 /// found. A name leaves this list in the commit that makes its driver
 /// run (`doc/DESIGN.md`, What is absent).
-const HELD_BACK: &[(&str, &str)] = &[("ACPI", "its AddDevice calls ZwOpenFile, which NK lacks")];
+const HELD_BACK: &[(&str, &str)] = &[(
+    "ACPI",
+    "its start needs the firmware description under HARDWARE\\Description, which NK does not write",
+)];
 
 /// The engine's mutex, and what only its holder touches: which
 /// resources every device holds.
@@ -587,6 +590,7 @@ fn add_drivers(pdo: usize) -> bool {
         }
     }
     for (at, (name, driver)) in drivers.iter().enumerate() {
+        kprintln!("pnp: {}: AddDevice of {name}", found.instance);
         // SAFETY: a running driver's object and its extension; the
         // routine is the driver's `AddDevice`, called at
         // `PASSIVE_LEVEL` from a system thread with the driver object
@@ -887,6 +891,7 @@ fn start(pdo: usize) {
         );
     };
     let _ = registry::write_allocation(&found.instance, &filtered, &given.raw);
+    kprintln!("pnp: {}: starting", found.instance);
     let parameters = start_device_parameters(raw.0 as u64, translated.0 as u64);
     // SAFETY: as above; the lists stay until the request has completed.
     let (status, _) = unsafe { query::pnp(device, IRP_MN_START_DEVICE, parameters) };

@@ -233,9 +233,22 @@ pub static TOKEN_TYPE: ObjectType = ObjectType::new(
 );
 
 /// Directories of the namespace (`OBJECT_DIRECTORY`): what is in one
-/// is the namespace's to know (`ob`).
-pub static DIRECTORY_TYPE: ObjectType =
-    ObjectType::new(FIRST_TYPE_INDEX + 6, &DIRECTORY_NAME, None);
+/// is the namespace's to know (`ob`), which hears of a handle closing
+/// (a temporary directory then loses its name) and of the last
+/// reference going. The generic rights are the pinned kernel's
+/// `ObpDirectoryMapping`.
+pub static DIRECTORY_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 6,
+    &DIRECTORY_NAME,
+    Some(super::directory_deleted),
+)
+.closing(super::directory_handle_closed)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0003,
+    GenericWrite: 0x0002_000C,
+    GenericExecute: 0x0002_0003,
+    GenericAll: 0x000F_000F,
+});
 /// Symbolic links (`OBJECT_SYMBOLIC_LINK`).
 pub static SYMBOLIC_LINK_TYPE: ObjectType =
     ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None);
@@ -394,6 +407,18 @@ pub unsafe fn name_info(body: *mut u8) -> *mut OBJECT_HEADER_NAME_INFO {
     header.cast::<OBJECT_HEADER_NAME_INFO>().wrapping_sub(1)
 }
 
+/// Whether an object has a name in the namespace now.
+///
+/// # Safety
+/// `body` is a live object from [`create`] or [`create_named`].
+pub unsafe fn has_name(body: *mut u8) -> bool {
+    // SAFETY: per the contract.
+    unsafe {
+        let info = name_info(body);
+        !info.is_null() && !(&raw const (*info).Directory).read().is_null()
+    }
+}
+
 /// Where the pool block of an object begins: at what its type keeps in
 /// front (`ObjectType::own_front`), then its name information if it
 /// has any, then its header.
@@ -484,30 +509,72 @@ fn allocate(ty: &'static ObjectType, size: usize, name: Option<&[u16]>) -> Optio
 }
 
 /// Record that a named object is now in `directory` (a directory
-/// object). The namespace calls this under its lock.
+/// object), which it holds a reference to for as long as it is there,
+/// as on Windows: a directory outlives its name while it has entries.
+/// The namespace calls this under its lock.
 ///
 /// # Safety
-/// `body` is a live object from [`create_named`].
+/// `body` is a live object from [`create_named`]; `directory` is a
+/// live directory object.
 pub unsafe fn entered(body: *mut u8, directory: *mut u8) {
     // SAFETY: per the contract: the object has name information.
-    unsafe { (&raw mut (*name_info(body)).Directory).write(directory.cast()) };
+    unsafe {
+        reference(directory);
+        (&raw mut (*name_info(body)).Directory).write(directory.cast());
+    }
 }
 
 /// Record that a named object has lost its name: it is in no
 /// directory and its name is empty, as Windows leaves it. The
-/// namespace calls this under its lock.
+/// namespace calls this under its lock. Returns the directory the
+/// object was in, whose reference the caller gives up once that lock
+/// is released.
 ///
 /// # Safety
-/// `body` is a live object from [`create_named`].
-pub unsafe fn left(body: *mut u8) {
+/// `body` is a live object from [`create_named`] that is in a
+/// directory.
+#[must_use]
+pub unsafe fn left(body: *mut u8) -> *mut u8 {
     // SAFETY: per the contract: the object has name information.
     unsafe {
         let info = name_info(body);
+        let directory = (&raw const (*info).Directory).read().cast::<u8>();
         (&raw mut (*info).Directory).write(core::ptr::null_mut());
         (&raw mut (*info).Name).write(UNICODE_STRING {
             Length: 0,
             MaximumLength: 0,
             Buffer: core::ptr::null_mut(),
+        });
+        directory
+    }
+}
+
+/// Whether an object is permanent (`OBJ_PERMANENT`): whether its name
+/// stays when its last handle closes. Read and written under the
+/// namespace's lock.
+///
+/// # Safety
+/// `body` is a live object from [`create`].
+pub unsafe fn permanent(body: *mut u8) -> bool {
+    // SAFETY: per the contract.
+    unsafe {
+        (&raw const (*header(body)).Flags).read() & nk_ntabi::ob::OB_FLAG_PERMANENT_OBJECT != 0
+    }
+}
+
+/// Make an object permanent, or temporary.
+///
+/// # Safety
+/// As [`permanent`].
+pub unsafe fn set_permanent(body: *mut u8, permanent: bool) {
+    // SAFETY: per the contract.
+    unsafe {
+        let flags = &raw mut (*header(body)).Flags;
+        let old = flags.read();
+        flags.write(if permanent {
+            old | nk_ntabi::ob::OB_FLAG_PERMANENT_OBJECT
+        } else {
+            old & !nk_ntabi::ob::OB_FLAG_PERMANENT_OBJECT
         });
     }
 }

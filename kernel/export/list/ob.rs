@@ -35,4 +35,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ob::object::ObReferenceObjectByPointer),
     export!(Partial, ob::event::ZwWaitForSingleObject),
+    export!(Partial, ob::directory::ZwCreateDirectoryObject),
+    export!(Partial, ob::directory::ZwMakeTemporaryObject),
 ];

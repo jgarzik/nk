@@ -50,6 +50,19 @@ static PLATFORM: AtomicPtr<Platform> = AtomicPtr::new(core::ptr::null_mut());
 /// are and which memory is firmware's.
 static BOOT: AtomicPtr<BootInfo> = AtomicPtr::new(core::ptr::null_mut());
 
+/// The loader's hand-off block, once [`init`] has it.
+pub fn boot_info() -> Option<&'static BootInfo> {
+    // SAFETY: null, or the hand-off block `init` was given, which lives
+    // for ever and is never written.
+    unsafe { BOOT.load(Ordering::Acquire).as_ref() }
+}
+
+/// The physical address of the firmware's root ACPI table.
+pub fn acpi_root() -> Option<u64> {
+    let info = boot_info()?;
+    nk_acpi::root_address(&DirectMap(info), info.rsdp)
+}
+
 /// The firmware's ACPI table of the signature `signature`, as a HAL
 /// answers an ACPI driver's request for it (`nk_acpi::lookup`). The
 /// table is the firmware's own memory, which nothing reuses.

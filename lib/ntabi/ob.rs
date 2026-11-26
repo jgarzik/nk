@@ -21,6 +21,11 @@ pub struct OBJECT_HEADER {
     pub SecurityDescriptor: *mut c_void,
 }
 
+/// `OBJECT_HEADER.Flags`: the object is permanent (`OBJ_PERMANENT`): it
+/// keeps its name when its last handle closes. `ObMakeTemporaryObject`
+/// clears the bit.
+pub const OB_FLAG_PERMANENT_OBJECT: u8 = 0x10;
+
 /// `OBJECT_HEADER.InfoMask`: an `OBJECT_HEADER_NAME_INFO` precedes the
 /// header. Each bit of the mask stands for one optional header in front
 /// of the fixed one; NK makes only this one, which then sits directly

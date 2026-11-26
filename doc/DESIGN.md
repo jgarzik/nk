@@ -1018,7 +1018,7 @@ A tree of directories holding named objects and symbolic links
 (`nk_ob::tree`, under one lock; `kernel/ob/mod.rs`). The root and the
 directories every Windows system has (`\Device`, `\Driver`,
 `\FileSystem`, `\GLOBAL??`, `\BaseNamedObjects`, `\KernelObjects`) are
-directory objects made at boot; nothing else makes or removes one. `\??`
+directory objects made at boot. `\??`
 is `\GLOBAL??`, there being one session, and `\DosDevices` is a symbolic
 link to `\??`. A named device is an entry in the directory its name puts
 it in, a symbolic link is a symbolic-link object there, a loaded
@@ -1033,9 +1033,30 @@ object, referenced, and the rest of the path. A directory missing on the
 way is `STATUS_OBJECT_PATH_NOT_FOUND`; a missing last name is
 `STATUS_OBJECT_NAME_NOT_FOUND`.
 
-An entry does not keep its object alive (a symbolic link's excepted,
-which nothing else holds): whoever names an object takes the name away
-before giving up the reference the object was made with.
+An entry does not keep its object alive (a symbolic link's and a
+directory's excepted, which nothing else holds): whoever names an
+object takes the name away before giving up the reference the object
+was made with.
+
+A driver makes a directory with
+[`ZwCreateDirectoryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatedirectoryobject)
+(`kernel/ob/directory.rs`), as `disk.sys` makes `\Device\HarddiskN`
+for each disk. A directory is temporary or permanent, with Windows'
+meaning: a temporary directory's name is taken away when the last
+handle to it closes; a permanent one (`OBJ_PERMANENT`, the header's
+permanent flag, which the boot directories have too) keeps its name
+until
+[`ZwMakeTemporaryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwmaketemporaryobject)
+clears the flag, and then loses it at once if no handle is open, or
+with the last handle. The name holds a reference to the directory, and
+whatever is in a directory holds one too (its name information points
+there), so a directory that has lost its name stays, reachable by
+handle and by what is in it but by no path, until it is empty; its
+old name is free at once. A directory made without a name is reached
+by handle alone. NK makes only directories permanent by handle: a
+device's or a link's name is its maker's to take away, and
+`ZwMakeTemporaryObject` on a handle to such a named object stops the
+system by name.
 
 A named object carries Windows' `OBJECT_HEADER_NAME_INFO` in front of
 its header, as the header's `InfoMask` says: its directory and its name
@@ -1986,9 +2007,11 @@ start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
 
 **Held back.** `engine::HELD_BACK` names services whose devices NK does
-not bring up yet because their `AddDevice` or start reaches a routine
-NK lacks: at present `ACPI`, so nothing below the HAL's ACPI device is
-enumerated.
+not bring up yet because their `AddDevice` or start stops the system
+over something NK lacks: at present `ACPI`, whose start reads the
+firmware description Windows keeps under `HARDWARE\Description`
+(the "ACPI BIOS" record) and stops without it, so nothing below the
+HAL's ACPI device is enumerated.
 
 ## The registry
 
@@ -2175,6 +2198,22 @@ does what the query says. NK's decisions:
 - **A routine that raises** an exception is unwound through the query
   like any call into a driver (Exceptions). All the query holds is one
   pool block, which the guard of that call gives back.
+
+### The machine's description
+
+`\Registry\Machine\Hardware\Description\System` is not in any hive
+file: Windows' loader and kernel write it at every boot from what
+firmware says. NK writes, after the registry is built and before any
+driver starts (`kernel/hal/description.rs`, formats in
+`nk_hal::description`), the keys Microsoft's drivers read: the
+`MultifunctionAdapter` key whose `Identifier` is "ACPI BIOS", with the
+root ACPI table's address and the firmware's memory map as an E820 map
+(one range per region of the UEFI map, by kind), without which
+`acpi.sys` stops the system when its device starts; and the one whose
+`Identifier` is "PCI", a bus with nothing more said, as on the
+reference Windows. Drivers find these by `Identifier`. Windows has an
+"ISA" key before them and processor, BIOS and video keys beside them;
+NK writes none of those.
 
 ## Strings
 
