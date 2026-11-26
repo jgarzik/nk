@@ -5,6 +5,10 @@ use crate::io;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, io::mdl::IoAllocateMdl),
+    export!(Implemented, io::interrupt::IoConnectInterruptEx),
+    export!(Implemented, io::interrupt::IoDisconnectInterruptEx),
+    export!(Implemented, io::interrupt::IoReportInterruptActive),
+    export!(Implemented, io::interrupt::IoReportInterruptInactive),
     export!(Implemented, io::device::IoCreateDevice),
     export!(Implemented, io::symlink::IoCreateSymbolicLink),
     export!(Implemented, io::device::IoDeleteDevice),

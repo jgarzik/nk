@@ -30,6 +30,8 @@ pub enum Rank {
     /// Devices' reference counts, delete-pending marks and attachment
     /// chains (`io::device`).
     IoDatabase = 25,
+    /// Which interrupts each device has been given (`io::interrupt`).
+    DeviceInterrupts = 29,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).
     IoWmi = 27,
@@ -51,10 +53,15 @@ pub enum Rank {
     Ipi = 200,
     /// A queue of work items (`ex::work`).
     WorkQueue = 210,
+    /// Connecting and disconnecting interrupt objects (`ke::kinterrupt`).
+    InterruptConnect = 212,
     /// A queue of threads waiting for push locks (`ex::pushlock`).
     PushLock = 215,
     /// What a boot's UUIDs share (`ex::uuid`).
     Uuid = 217,
+    /// Which vector each device interrupt has, and the interrupt
+    /// controllers' routing registers (`hal::interrupt`).
+    InterruptRouting = 218,
     /// A processor's ready queues (`ke::thread`).
     Ready = 220,
     /// A processor's table of pending timers (`ke::timer`).

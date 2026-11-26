@@ -5,6 +5,7 @@ pub mod dpc;
 pub mod interrupt;
 pub mod ipi;
 pub mod irql;
+pub mod kinterrupt;
 pub mod kspin;
 pub mod mutex;
 pub mod object;

@@ -17,7 +17,9 @@ use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
 pub type Handler = fn(vector: u32);
 
-const VECTORS: usize = 256;
+/// More than either architecture has: x86-64 has 256 vectors, a GIC
+/// 1020 interrupt ids.
+const VECTORS: usize = 1024;
 
 static HANDLERS: [AtomicPtr<()>; VECTORS] =
     [const { AtomicPtr::new(core::ptr::null_mut()) }; VECTORS];

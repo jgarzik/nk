@@ -10,6 +10,7 @@ lock changes this file in the same commit.
 | `PASSIVE_LEVEL` | 0 | | | threads: driver entry, dispatch routines, work items, the tests |
 | `APC_LEVEL` | 1 | | | a thread holding a fast mutex |
 | `DISPATCH_LEVEL` | 2 | `0x2F` | SGI 3 | DPCs, the dispatcher, code holding a spin lock |
+| device levels | 3 to 11 | `0x30` to `0xBF` | shared peripheral interrupts | interrupt service routines, at their object's `SynchronizeIrql`; code holding an interrupt's spin lock |
 | clock | 13 | `0xD1` | virtual timer PPI | the clock tick |
 | interprocessor | 14 | `0xE1` | SGI 1 | `ke::ipi` routines |
 | `HIGH_LEVEL` | 15 | | | the locks of the highest ranks (the DPC queues, the console and those beside them in the table below); the bugcheck path |
@@ -62,6 +63,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
+| 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
@@ -70,8 +72,10 @@ already held has a lower rank; two locks of one rank never nest.
 | 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
+| 212 | `ke::kinterrupt::CONNECT` | which interrupt objects are connected: each object's `Connected` mark, and each vector's chain together with whether its line is unmasked | DISPATCH |
 | 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
 | 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
+| 218 | `hal::interrupt::STATE` | which vector each device interrupt has, and the routing registers of the I/O APICs and the GIC distributor | DISPATCH |
 | 220 | a processor's ready queues (`ke::thread`) | which threads are ready there, their links and state, and the priority each is queued at | DISPATCH |
 | 230 | a processor's timer table (`ke::timer`) | which timers are pending there, and when | DISPATCH |
 | 232 | `ob::security::STORE` | which security descriptors are stored, and each bucket's chain | DISPATCH |
@@ -154,6 +158,16 @@ Why this order:
   the interprocessor interrupt, so a processor waiting for it still
   answers the call in progress. A routine run by a call takes no lock
   below rank 200: its caller may hold any of them.
+- The list of devices' interrupts is read into a copy under its lock
+  and used outside it; like the tables above the pool it allocates
+  under the lock.
+- Connecting and disconnecting interrupt objects is serialised by one
+  lock, so that a vector's first connection and last disconnection
+  turn its line on and off in order. Inside it are the routing lock
+  and, at `HIGH_LEVEL`, the chain's gate (below); the object is
+  allocated before and freed after. No service routine runs under it.
+- The routing lock is held around a search of the vector table and a
+  few register writes; nothing is taken inside it.
 - A work queue's lock covers only linking and unlinking items. The
   semaphore that wakes a worker is released after the lock is dropped,
   and no work routine runs with it held.
@@ -453,6 +467,19 @@ IRQL or because Windows defines it as one word changed atomically:
   queues of threads behind them are under ranked locks (the table
   above).
 
+- A vector's chain of interrupt objects (`kernel/ke/kinterrupt.rs`).
+  A service routine cannot run under a ranked lock, and the chain it
+  is found through must not change under it. Each chain has a gate
+  word: a count of the processors walking the chain, and a bit set by
+  a processor changing it. A walker waits while the bit is set, then
+  counts itself in. A changer raises to `HIGH_LEVEL`, so the vector's
+  own interrupt cannot arrive on its processor and wait for it, sets
+  the bit, waits for the count to reach zero, edits, and clears the
+  word. Changers are serialised by the connect lock (rank 212). A
+  routine that disconnects its own interrupt object would wait for
+  itself; Windows forbids that too (`IoDisconnectInterruptEx` is for
+  `PASSIVE_LEVEL`).
+
 ## What drivers get
 
 Drivers use Windows' routines, not `ke::SpinLock`
@@ -464,6 +491,13 @@ routines raise the IRQL to `DISPATCH_LEVEL` and return the old level; the
 driver's handle as Windows does but does not queue its waiters, so the
 arrival order Windows guarantees is absent; the ledger marks that export
 partial.
+
+An interrupt object's spin lock (`KINTERRUPT.ActualLock`: the object's
+own word or the driver's) is a `KSPIN_LOCK` held at the object's
+`SynchronizeIrql`: by the kernel around the service routine, and by
+`KeSynchronizeExecution` and `KeAcquireInterruptSpinLock` for the
+driver. It has no rank; NK holds none of its ranked locks when it takes
+it.
 
 The cancel spin lock (`IoAcquireCancelSpinLock`, `io::irp::CANCEL_LOCK`)
 is a driver's kind of lock too: one for the whole system, taken by

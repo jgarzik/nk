@@ -45,3 +45,8 @@ io.request.cancel-built ok
 io.request.master-status ok
 io.mdl.partial ok
 io.driver-extension ok
+io.interrupt.line ok
+io.interrupt.synchronize ok
+io.interrupt.shared ok
+io.interrupt.message ok
+io.interrupt.refused ok
