@@ -890,10 +890,12 @@ unsafe fn send(
 }
 
 /// What a request the I/O manager refused before any driver saw it
-/// comes back as: its status, as a system service returns it.
+/// comes back as: its status, as a system service returns it. So does
+/// one made through a handle that names no file or was not granted the
+/// access the request needs.
 fn refused(result: Result<IoResult, IoError>) -> Result<IoResult, IoError> {
     match result {
-        Err(IoError::Refused(status)) => Ok(IoResult {
+        Err(IoError::Refused(status) | IoError::Handle(status)) => Ok(IoResult {
             status,
             information: 0,
         }),

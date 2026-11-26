@@ -296,7 +296,7 @@ fn access() -> Result<u32, &'static str> {
             made += 1;
             match (got, allowed) {
                 (Ok(r), true) if r.status == STATUS_SUCCESS => {}
-                (Err(IoError::Handle(STATUS_ACCESS_DENIED)), false) => {}
+                (Ok(r), false) if r.status == STATUS_ACCESS_DENIED => {}
                 (Ok(_), false) => {
                     return Err(
                         "a user-mode request went through a handle not granted the access it needs",
