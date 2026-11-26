@@ -735,7 +735,8 @@ pub unsafe extern "C" fn ZwEnumerateKey(
 /// in the letter case it was created in and with any symbolic link
 /// followed: the key the handle is open to, not the path it was opened
 /// by. The cached form is the counts of the full form and the length
-/// of the key's name, without the name.
+/// of the key's name, without the name: 40 bytes are wanted, the size
+/// of the structure, and 36 written.
 ///
 /// The forms that describe what NK has none of answer as Windows does
 /// for a key without it: no flags (there are no 32-bit programs to

@@ -361,8 +361,9 @@ fn delete_value(key: *mut c_void) -> Result<(), &'static str> {
     };
     // Values, the longest name, the longest data, the key's own name.
     let counts = |values, name, data| {
-        let whole = joined(&[&TIME, &fields(&[0, 3, 12, values, name, data, 14])]);
-        query_key_info(key, 4, ROOM).is(ROOM, &whole, 36, 8)
+        let counted = fields(&[0, 3, 12, values, name, data, 14]);
+        let whole = joined(&[&TIME, &counted, &[UNTOUCHED; 4]]);
+        query_key_info(key, 4, ROOM).is(ROOM, &whole, 40, 8)
     };
     let deleted = [
         delete_named(key, "NUMBER"),
@@ -855,12 +856,14 @@ fn query_key(key: *mut c_void) -> Result<(), &'static str> {
             0,
             name_form("\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Services\\NkcTest"),
         ),
-        // The counts again, and the length of the name without the name.
+        // The counts again, and the length of the name without the
+        // name: all 40 bytes of the structure or nothing, of which the
+        // last four are left alone.
         (
             4,
-            36,
+            40,
             8,
-            joined(&[&TIME, &fields(&[0, 3, 12, 5, 12, 12, 14])]),
+            joined(&[&TIME, &fields(&[0, 3, 12, 5, 12, 12, 14]), &[UNTOUCHED; 4]]),
         ),
         // Flags, virtualization, handle tags: none. Trusted. No layer.
         (5, 12, 0, fields(&[0, 0, 0])),

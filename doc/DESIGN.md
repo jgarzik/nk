@@ -1147,7 +1147,10 @@ An open key describes itself
 in every form. Its full name starts at `\REGISTRY`, each part in the
 letter case it was created in (`MACHINE`, `SYSTEM`, `HARDWARE` and
 `USER` are Windows' spellings), with symbolic links followed: a key
-opened through `CurrentControlSet` names its control set. What NK has
+opened through `CurrentControlSet` names its control set. The cached
+form (`KEY_CACHED_INFORMATION`) is all there or not at all: it wants
+room for the structure as C sizes it, 40 bytes, and writes the 36 of
+its fields. What NK has
 none of is reported as Windows reports a key without it: no flags, no
 virtualization, no handle tags, no layer. Every key is trusted
 (`KeyTrustInformation`), because the registry holds only the system's
