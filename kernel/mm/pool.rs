@@ -282,3 +282,63 @@ pub unsafe extern "C" fn ExFreePoolWithTag(p: *mut core::ffi::c_void, _tag: u32)
         )),
     }
 }
+
+/// [`ExFreePool`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-exfreepool):
+/// `ExFreePoolWithTag` for a caller that names no tag.
+///
+/// # Safety
+/// As `ExFreePoolWithTag`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ExFreePool(p: *mut core::ffi::c_void) {
+    // SAFETY: per the contract.
+    unsafe { ExFreePoolWithTag(p, 0) }
+}
+
+/// [`ExAllocatePoolWithTagPriority`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepoolwithtagpriority).
+/// The priority says how readily Windows may refuse when memory runs
+/// low. NK refuses only when it has none, which every priority allows.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePoolWithTagPriority(
+    pool_type: u32,
+    number_of_bytes: usize,
+    tag: u32,
+    _priority: u32,
+) -> *mut core::ffi::c_void {
+    ExAllocatePoolWithTag(pool_type, number_of_bytes, tag)
+}
+
+/// The variants give what the plain routines give: blocks aligned by
+/// size, a block for no bytes, null (and nothing worse) for more than
+/// there is; and the free that names no tag gives it all back. Returns
+/// the blocks allocated and freed.
+pub fn variants_test() -> Result<u32, &'static str> {
+    const TAG: u32 = u32::from_le_bytes(*b"NkPv");
+    /// `HighPoolPriority`, `LowPoolPriority`, `NormalPoolPriority`.
+    const PRIORITIES: [u32; 3] = [32, 0, 16];
+    let before = usage();
+    let mut blocks = 0;
+    for (size, align) in [(64, 16), (PAGE_SIZE + 64, PAGE_SIZE), (0, 16)] {
+        for priority in PRIORITIES {
+            let block = ExAllocatePoolWithTagPriority(1, size, TAG, priority);
+            if block.is_null() {
+                return Err("an allocation with a priority failed");
+            }
+            if block as usize % align != 0 {
+                return Err("a block is not aligned as its size requires");
+            }
+            // SAFETY: a fresh block of `size` bytes, freed once.
+            unsafe {
+                block.cast::<u8>().write_bytes(0x5A, size);
+                ExFreePool(block);
+            }
+            blocks += 1;
+        }
+    }
+    if !ExAllocatePoolWithTagPriority(0, 1 << 46, TAG, 16).is_null() {
+        return Err("more memory than there is was allocated");
+    }
+    if usage() != before {
+        return Err("ExFreePool did not give the blocks back");
+    }
+    Ok(blocks)
+}

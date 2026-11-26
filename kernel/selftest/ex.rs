@@ -15,6 +15,7 @@ pub static GROUP: Group = Group {
         "ex.slist.swap",
         "ex.slist.order",
         "ex.slist.contention",
+        "ex.pool.variants",
     ],
     run,
     manual: false,
@@ -57,5 +58,11 @@ fn run(r: &mut Report, _: &BootInfo) {
         "ex.slist.contention",
         "entries taken:",
         slist::contention_test(),
+    );
+    counted(
+        r,
+        "ex.pool.variants",
+        "blocks:",
+        crate::mm::pool::variants_test(),
     );
 }

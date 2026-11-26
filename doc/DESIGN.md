@@ -148,7 +148,9 @@ which NK enables, restrict only pages marked for user mode.
   requests of about a page or more get their own page-aligned frames, as
   on Windows. All pool is in the direct map: non-paged and physically
   contiguous. A paged-pool request gets non-paged memory, always a legal
-  answer.
+  answer. A request's priority (`ExAllocatePoolWithTagPriority`) is not
+  used: NK refuses only when it has no memory, which every priority
+  allows.
 - **Pool checking.** Each block ends in guard bytes checked on free, a
   free of anything but a live block is refused, and live counts are kept;
   leak tests compare them. These are bug detectors, not mitigations.

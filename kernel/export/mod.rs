@@ -91,11 +91,13 @@ macro_rules! export_entry {
 static EXPORTS: &[Export] = &[
     export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
+    export!(Implemented, mm::pool::ExAllocatePoolWithTagPriority),
     export_variable!(
         Implemented,
         "ExEventObjectType",
         ob::object::ExEventObjectType
     ),
+    export!(Implemented, mm::pool::ExFreePool),
     export!(Implemented, mm::pool::ExFreePoolWithTag),
     export!(Partial, io::mdl::IoAllocateMdl),
     export!(Implemented, io::device::IoCreateDevice),

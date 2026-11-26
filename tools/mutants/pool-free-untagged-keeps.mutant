@@ -1,0 +1,6 @@
+# ExFreePool returns without freeing: every block a driver frees that
+# way is lost, and nothing says so.
+scenario: x86_64
+fails: ex.pool.variants
+file: kernel/mm/pool.rs
+remove:     unsafe { ExFreePoolWithTag(p, 0) }
