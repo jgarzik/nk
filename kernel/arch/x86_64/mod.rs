@@ -19,8 +19,8 @@ mod variadic;
 pub use atomic::swap_pair;
 pub use chkstk::{chkstk_test, nk_chkstk};
 pub use ioapic::{
-    InterruptVectors, TestSource as InterruptTestSource, interrupt_message, isa_line, line_enable,
-    line_route,
+    InterruptVectors, TestSource as InterruptTestSource, acpi_device_interrupts, hal_hardware_id,
+    interrupt_message, isa_line, level_line_polarity, line_enable, line_route,
 };
 pub use pci::{PCI_PORTS, PciPorts};
 

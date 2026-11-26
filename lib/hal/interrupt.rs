@@ -79,9 +79,55 @@ pub const fn target(allowed: u64, seed: u32) -> Option<u8> {
     }
 }
 
+/// `HalGetMessageRoutingInfo`'s destination mode in which a message
+/// names its target by the processor's own identifier. The others are
+/// the local APIC's logical modes, which NK does not use.
+pub const DESTINATION_PHYSICAL: u32 = 1;
+
+/// Whether `HalGetMessageRoutingInfo` can route a message of `kind` to
+/// the processors `mask` of `group` in destination mode `mode`, where
+/// the processors `online` run. As the pinned kernel decides it for a
+/// machine whose processors are addressed physically: the kind is one
+/// it knows (0 or 1), the mode is physical, and the target is one
+/// running processor or all of them.
+pub const fn message_routable(kind: u32, mask: u64, group: u16, mode: u32, online: u64) -> bool {
+    kind <= 1
+        && mode == DESTINATION_PHYSICAL
+        && group == 0
+        && mask & online != 0
+        && (mask.is_power_of_two() || mask == online)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_message_goes_to_one_running_processor_or_to_all() {
+        let online = 0b1111;
+        for kind in [0, 1] {
+            assert!(message_routable(kind, 0b0100, 0, 1, online));
+            assert!(message_routable(kind, online, 0, 1, online));
+            assert!(message_routable(kind, 1, 0, 1, 1));
+            // Several, but not all.
+            assert!(!message_routable(kind, 0b0110, 0, 1, online));
+            assert!(!message_routable(kind, 0b1_1111, 0, 1, online));
+            // None, or one that does not run.
+            assert!(!message_routable(kind, 0, 0, 1, online));
+            assert!(!message_routable(kind, 0b1_0000, 0, 1, online));
+            // Another group.
+            assert!(!message_routable(kind, 0b0100, 1, 1, online));
+            assert!(!message_routable(kind, online, 1, 1, online));
+            // The logical modes, and no mode at all.
+            for mode in [0, 2, 3, 4, u32::MAX] {
+                assert!(!message_routable(kind, 0b0100, 0, mode, online));
+                assert!(!message_routable(kind, online, 0, mode, online));
+            }
+        }
+        for kind in [2, 3, u32::MAX] {
+            assert!(!message_routable(kind, 0b0100, 0, 1, online));
+        }
+    }
 
     #[test]
     fn the_values_are_windows_own() {

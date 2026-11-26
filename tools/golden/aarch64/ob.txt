@@ -14,3 +14,4 @@ ob.security-store-smp ok
 ob.current-thread ok
 ob.handle.open-close-race ok
 ob.reference-by-pointer ok
+ob.directory-handle ok

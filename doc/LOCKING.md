@@ -61,6 +61,8 @@ already held has a lower rank; two locks of one rank never nest.
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 10 | `io::driver::BOOT_REINITIALIZE` | the routines boot drivers registered for reinitialisation, and whether they have been run; never held with `DRIVERS` | DISPATCH |
+| 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
+| 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and a worker has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
@@ -118,7 +120,14 @@ Why this order:
   the database lock, sending a driver the create request) happens
   outside it.
 - No object's last reference is dropped under the namespace lock: a
-  removed symbolic link's object is released after it.
+  removed symbolic link's object is released after it, and so is the
+  reference a named object holds on its directory, and a directory's
+  name on the directory. A directory's delete procedure takes the lock
+  itself, to have the tree forget it.
+- Whether a directory is permanent (its header's flag) is read and
+  written under the namespace lock, with its handle count read there
+  too: a temporary directory's name goes under the lock when the count
+  is seen to be zero.
 - A device's security descriptor is replaced under the same lock, new
   block built from old while it is held (the pool ranks above it), so
   two changes at once cannot both start from the same descriptor. The
@@ -274,6 +283,25 @@ owner).
 - A library's `DllInitialize` and `DllUnload` run with it held, as on
   Windows, where the system's load lock is held around them. A driver's
   entry point and unload routine run without it.
+
+### The Plug and Play engine's mutex
+
+Everything the Plug and Play manager does to a device (asking it who
+it is, calling `AddDevice`, assigning resources, starting, enumerating,
+removing) is serialised by a kernel mutex, `pnp::engine::ENGINE`, as
+Windows serialises device actions on one worker: requests are sent to
+device stacks and waited for with it held.
+
+- It is taken at `PASSIVE_LEVEL` with no spin lock held; whoever holds
+  it may take any ranked lock, and holds none across a request or a
+  call into a driver.
+- It covers the order of events on the tree and the table of resource
+  claims, which only its holder touches. Nodes are written only by its
+  holder, under the tree's spin lock, which is what other threads read
+  them under.
+- A driver called with it held must not wait for Plug and Play work:
+  `IoInvalidateDeviceRelations` only queues. Loading a driver for a
+  device takes the loader's mutex inside it, never the other way round.
 
 ### The silo monitors' mutex
 

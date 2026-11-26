@@ -67,6 +67,24 @@ pub fn node_affinity(node: u16, online: u64) -> (u64, u16) {
     }
 }
 
+/// What a `KDPC`'s `Number` is from when the DPC has a target
+/// processor: the target's index is added to this. Below it, the field
+/// is the processor that last queued the DPC.
+const DPC_TARGETED: u16 = 0x500;
+
+/// `KeSetTargetProcessorDpcEx`: the `Number` of a DPC whose target is
+/// the processor at `index`; `None`, `STATUS_INVALID_PARAMETER`, for
+/// [`INVALID_INDEX`].
+pub fn dpc_number(index: u32) -> Option<u16> {
+    (index != INVALID_INDEX).then(|| DPC_TARGETED + index as u16)
+}
+
+/// The index of the processor a DPC with `number` in its `Number` is
+/// to run on, or `None` if it runs wherever it is queued.
+pub fn dpc_target(number: u16) -> Option<u32> {
+    number.checked_sub(DPC_TARGETED).map(u32::from)
+}
+
 /// One record of `SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX`, whole.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Record {
@@ -192,6 +210,22 @@ pub fn relationships(
 mod tests {
     use super::*;
     use nk_ntabi::sysinfo::RELATION_CACHE;
+
+    #[test]
+    fn a_dpcs_number_is_its_target_or_where_it_was_queued() {
+        assert_eq!(dpc_number(0), Some(0x500));
+        assert_eq!(dpc_number(63), Some(0x53F));
+        assert_eq!(dpc_number(INVALID_INDEX), None);
+        assert_eq!(dpc_target(0x500), Some(0));
+        assert_eq!(dpc_target(0x53F), Some(63));
+        // As initialised, or as left by the processor that queued it.
+        assert_eq!(dpc_target(0), None);
+        assert_eq!(dpc_target(63), None);
+        assert_eq!(dpc_target(0x4FF), None);
+        for index in 0..64 {
+            assert_eq!(dpc_target(dpc_number(index).unwrap()), Some(index));
+        }
+    }
 
     type Written = Vec<(u32, u32, u64)>;
 

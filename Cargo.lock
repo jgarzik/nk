@@ -78,6 +78,10 @@ name = "nk-pe"
 version = "0.2.0"
 
 [[package]]
+name = "nk-pnp"
+version = "0.2.0"
+
+[[package]]
 name = "nk-po"
 version = "0.2.0"
 dependencies = [
@@ -133,6 +137,7 @@ dependencies = [
  "nk-ob",
  "nk-oracle",
  "nk-pe",
+ "nk-pnp",
  "nk-po",
  "nk-ps",
  "nk-rtl",

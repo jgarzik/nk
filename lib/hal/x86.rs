@@ -10,6 +10,24 @@ pub const fn irql_of_vector(vector: u32) -> u8 {
     (vector >> 4) as u8
 }
 
+/// `HalConvertDeviceIdtToIrql`: the IRQL of a device's interrupt on
+/// `vector`, as the pinned kernel works it out: the vector's upper four
+/// bits, kept within the device levels 3 to 12; 3 for a number that is
+/// no vector.
+pub const fn device_irql_of_vector(vector: u32) -> u8 {
+    if vector >= 0x100 {
+        return 3;
+    }
+    let level = irql_of_vector(vector);
+    if level < 3 {
+        3
+    } else if level > 12 {
+        12
+    } else {
+        level
+    }
+}
+
 /// First of the MSRs an APIC in x2APIC mode is reached through.
 const MSR_X2APIC: u32 = 0x800;
 
@@ -289,6 +307,22 @@ pub fn hypervisor_is_microsoft(interface: u32) -> bool {
     interface == u32::from_le_bytes(*b"Hv#1")
 }
 
+/// The interrupts Windows' HAL offers the ACPI driver's device
+/// (`ACPI_HAL\PNP0C08\0`), as `(first, count)` runs of numbers, one
+/// exclusive interrupt requirement per number.
+///
+/// The rule is the pinned kernel's (`HalpQueryAcpiResourceRequirements`):
+/// the numbers below `0xCD` that the interrupt remapping budget covers
+/// (`HalpInterruptGetIrtInfo`: 150 per processor without a Microsoft
+/// hypervisor, so from `0xCD - 150`), and then the 256 from `0x100`,
+/// the secondary interrupt range.
+pub const fn acpi_device_interrupts() -> [(u32, u32); 2] {
+    const LIMIT: u32 = 0xCD;
+    const PER_PROCESSOR: u32 = 150;
+    const SECONDARY: (u32, u32) = (0x100, 0x100);
+    [(LIMIT - PER_PROCESSOR, PER_PROCESSOR), SECONDARY]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,6 +482,27 @@ mod tests {
         assert_eq!(irql_of_vector(0x20), 2);
         assert_eq!(irql_of_vector(0xFF), 15);
         assert_eq!(irql_of_vector(0x0F), 0);
+    }
+
+    #[test]
+    fn a_device_vector_runs_at_a_device_irql() {
+        assert_eq!(device_irql_of_vector(0x30), 3);
+        assert_eq!(device_irql_of_vector(0x51), 5);
+        assert_eq!(device_irql_of_vector(0xB7), 11);
+        assert_eq!(device_irql_of_vector(0xCF), 12);
+        // Below and above the device levels.
+        assert_eq!(device_irql_of_vector(0x00), 3);
+        assert_eq!(device_irql_of_vector(0x2F), 3);
+        assert_eq!(device_irql_of_vector(0xD0), 12);
+        assert_eq!(device_irql_of_vector(0xFF), 12);
+        // Not a vector.
+        assert_eq!(device_irql_of_vector(0x100), 3);
+        assert_eq!(device_irql_of_vector(0x1C0), 3);
+        assert_eq!(device_irql_of_vector(u32::MAX), 3);
+        // Within the device levels it is the vector's own IRQL.
+        for vector in 0x30..0xD0 {
+            assert_eq!(device_irql_of_vector(vector), irql_of_vector(vector));
+        }
     }
 
     #[test]
@@ -631,5 +686,15 @@ mod tests {
         map.give_back(0xFE, 8);
         assert_eq!(map.take(2), Some(0x30));
         assert_eq!(VectorMap::default(), VectorMap::new());
+    }
+
+    /// What the reference Windows recorded for the device: 406
+    /// interrupts, 0x37 to 0xCC and 0x100 to 0x1FF.
+    #[test]
+    fn the_acpi_device_is_offered_what_windows_offers_it() {
+        let runs = acpi_device_interrupts();
+        assert_eq!(runs, [(0x37, 150), (0x100, 256)]);
+        assert_eq!(runs.iter().map(|(_, count)| count).sum::<u32>(), 406);
+        assert_eq!(runs[0].0 + runs[0].1 - 1, 0xCC);
     }
 }

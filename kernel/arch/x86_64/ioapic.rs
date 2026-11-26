@@ -16,8 +16,8 @@ use crate::hal::platform;
 use crate::mm;
 use nk_hal::interrupt::{Line, Polarity, Trigger};
 use nk_hal::x86::{
-    DEVICE_VECTORS, IoApic, REDIRECTION_MASKED, VectorMap, io_apic_inputs, irql_of_vector, message,
-    redirection, redirection_target,
+    DEVICE_VECTORS, IoApic, REDIRECTION_MASKED, VectorMap, device_irql_of_vector, io_apic_inputs,
+    irql_of_vector, message, redirection, redirection_target,
 };
 
 const INDEX: usize = 0x00;
@@ -111,6 +111,26 @@ pub fn isa_line(irq: u8) -> Option<Line> {
     platform::get().controllers.isa_line(irq)
 }
 
+/// How a level-triggered line that is not an ISA interrupt signals,
+/// when all that is known of it is a resource descriptor, which does
+/// not say: active low, as PCI's interrupt lines are.
+pub fn level_line_polarity() -> nk_hal::interrupt::Polarity {
+    nk_hal::interrupt::Polarity::Low
+}
+
+/// The hardware identifier of the HAL's own device, as Windows' HAL
+/// for this architecture answers it.
+pub fn hal_hardware_id() -> Option<&'static str> {
+    Some("acpiapic")
+}
+
+/// The interrupts the HAL offers the ACPI driver's device, as runs of
+/// numbers.
+pub fn acpi_device_interrupts() -> &'static [(u32, u32)] {
+    const RUNS: [(u32, u32); 2] = nk_hal::x86::acpi_device_interrupts();
+    &RUNS
+}
+
 /// The address and data a device writes to interrupt `processor` on
 /// `vector`.
 pub fn interrupt_message(vector: u32, processor: usize) -> Option<(u64, u32)> {
@@ -157,6 +177,12 @@ impl InterruptVectors {
     /// Whether `vector` is one a device interrupt can have.
     pub fn is_device(vector: u32) -> bool {
         DEVICE_VECTORS.contains(&vector)
+    }
+
+    /// The IRQL of a device's interrupt on `vector`, as Windows' HAL
+    /// tells drivers.
+    pub fn device_irql(vector: u32) -> u8 {
+        device_irql_of_vector(vector)
     }
 }
 

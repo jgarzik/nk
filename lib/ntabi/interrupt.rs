@@ -183,8 +183,68 @@ pub struct GROUP_AFFINITY {
     pub Reserved: [u16; 3],
 }
 
+/// What `HalGetMessageRoutingInfo` is asked. In no header: the layout
+/// is what the pinned kernel reads and `pci.sys` fills in, and the
+/// names are NK's.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HAL_MESSAGE_ROUTING_REQUEST {
+    /// [`HAL_MESSAGE_KIND_MESSAGE`] or [`HAL_MESSAGE_KIND_REQUEST`].
+    pub Kind: u32,
+    pub Unread: [u32; 3],
+    /// The processors the message is for.
+    pub Target: GROUP_AFFINITY,
+    /// How the message names them: 1 physically, 2 and 3 in the local
+    /// APIC's logical modes.
+    pub DestinationMode: u32,
+    pub Unread2: u32,
+    /// The message's address and data, for a message.
+    pub AddressHigh: u32,
+    pub AddressLow: u32,
+    pub Data: u16,
+}
+
+/// A message whose address and data are given.
+pub const HAL_MESSAGE_KIND_MESSAGE: u32 = 0;
+/// A message still to be composed.
+pub const HAL_MESSAGE_KIND_REQUEST: u32 = 1;
+
+/// What `HalGetMessageRoutingInfo` answers: a count and one 0x58-byte
+/// entry, of which these are the fields the pinned kernel writes. The
+/// rest is left as the caller had it.
+#[repr(C)]
+pub struct HAL_MESSAGE_ROUTING {
+    /// Entries: one.
+    pub Count: u32,
+    pub Unwritten: u32,
+    /// [`HAL_ROUTING_MESSAGE`] or [`HAL_ROUTING_REQUEST`].
+    pub Type: u32,
+    pub Unwritten2: [u32; 17],
+    /// A message's address, low half; a request's destination mode.
+    pub AddressLow: u32,
+    pub AddressHigh: u32,
+    pub Data: u32,
+    pub Unwritten3: u32,
+}
+
+/// The entry is a message: its address and data.
+pub const HAL_ROUTING_MESSAGE: u32 = 1;
+/// The entry is a request, to be asked about again.
+pub const HAL_ROUTING_REQUEST: u32 = 3;
+
 const _: () = {
     use core::mem::{offset_of, size_of};
+    assert!(size_of::<HAL_MESSAGE_ROUTING_REQUEST>() == 0x38);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING_REQUEST, Target) == 0x10);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING_REQUEST, DestinationMode) == 0x20);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING_REQUEST, AddressHigh) == 0x28);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING_REQUEST, AddressLow) == 0x2C);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING_REQUEST, Data) == 0x30);
+    assert!(size_of::<HAL_MESSAGE_ROUTING>() == 0x60);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING, Type) == 0x08);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING, AddressLow) == 0x50);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING, AddressHigh) == 0x54);
+    assert!(offset_of!(HAL_MESSAGE_ROUTING, Data) == 0x58);
     assert!(size_of::<KINTERRUPT>() == 0x120);
     assert!(offset_of!(KINTERRUPT, InterruptListEntry) == 0x08);
     assert!(offset_of!(KINTERRUPT, ServiceRoutine) == 0x18);

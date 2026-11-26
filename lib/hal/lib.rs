@@ -11,6 +11,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod arm;
+pub mod description;
 pub mod dma;
 pub mod interrupt;
 pub mod pci;

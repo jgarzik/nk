@@ -92,9 +92,10 @@ pub enum Error {
     /// More than [`MAX_LINK_DEPTH`] symbolic links: a ring, or a chain
     /// too long (`STATUS_OBJECT_NAME_NOT_FOUND`).
     TooManyLinks,
-    /// The directory still has entries (`STATUS_DIRECTORY_NOT_EMPTY`).
-    /// No driver sees this: a Windows directory lives as long as its
-    /// entries do.
+    /// The directory still has entries, or is still an entry itself
+    /// (`STATUS_DIRECTORY_NOT_EMPTY`). No driver sees this: a Windows
+    /// directory lives as long as its entries do, and so does the
+    /// kernel's ([`Tree::detach`], [`Tree::release`]).
     NotEmpty,
     /// No memory; nothing was changed (`STATUS_INSUFFICIENT_RESOURCES`).
     NoMemory,
@@ -486,6 +487,15 @@ impl<T> Tree<T> {
         options: Options,
     ) -> Result<DirId, Error> {
         let (parent, name) = self.place(start, path, options)?;
+        let dir = self.new_directory()?;
+        self.add(parent, name, Node::Directory(dir));
+        Ok(dir)
+    }
+
+    /// A new, empty directory that is an entry of no directory: one
+    /// made without a name. No path leads to it; a look-up may start
+    /// at it, and entries be added to it, by its [`DirId`].
+    pub fn new_directory(&mut self) -> Result<DirId, Error> {
         let index = match self.directories.iter().position(Option::is_none) {
             Some(free) => free,
             None => {
@@ -502,9 +512,66 @@ impl<T> Tree<T> {
             serial,
             entries: Vec::new(),
         });
-        let dir = DirId { index, serial };
-        self.add(parent, name, Node::Directory(dir));
-        Ok(dir)
+        Ok(DirId { index, serial })
+    }
+
+    /// Where the entry that is directory `dir` is: its directory and
+    /// its place there.
+    fn entry_of(&self, dir: DirId) -> Option<(DirId, usize)> {
+        let is_it = |e: &Entry<T>| matches!(e.node, Node::Directory(d) if d == dir);
+        if let Some(index) = self.root.iter().position(is_it) {
+            return Some((DirId::ROOT, index));
+        }
+        self.directories.iter().enumerate().find_map(|(i, d)| {
+            let d = d.as_ref()?;
+            let index = d.entries.iter().position(is_it)?;
+            Some((
+                DirId {
+                    index: i,
+                    serial: d.serial,
+                },
+                index,
+            ))
+        })
+    }
+
+    /// The directory that directory `dir` is an entry of; `None` for
+    /// one that is no entry.
+    pub fn parent(&self, dir: DirId) -> Option<DirId> {
+        self.entry_of(dir).map(|(parent, _)| parent)
+    }
+
+    /// Take the name of directory `dir` away: it stops being an entry
+    /// of its parent, and no path leads to it or below it any more.
+    /// The directory itself stays, with what is in it, as a Windows
+    /// directory that lost its name does while its entries or a handle
+    /// hold it. `false` if it was no entry (the root, a directory
+    /// without a name, one not in the tree).
+    pub fn detach(&mut self, dir: DirId) -> bool {
+        let Some((parent, index)) = self.entry_of(dir) else {
+            return false;
+        };
+        if let Some(entries) = self.entries_of_mut(parent) {
+            entries.remove(index);
+            entries.shrink_to_fit();
+        }
+        true
+    }
+
+    /// Forget directory `dir`, which has no name ([`Tree::detach`], or
+    /// it never had one) and no entries. `NotEmpty` if it has either,
+    /// `PathNotFound` if it is not in the tree; the root is never
+    /// forgotten (`NameInvalid`).
+    pub fn release(&mut self, dir: DirId) -> Result<(), Error> {
+        if dir == DirId::ROOT {
+            return Err(Error::NameInvalid);
+        }
+        let entries = self.entries_of(dir).ok_or(Error::PathNotFound)?;
+        if !entries.is_empty() || self.entry_of(dir).is_some() {
+            return Err(Error::NotEmpty);
+        }
+        self.free_directory(dir);
+        Ok(())
     }
 
     /// Add a symbolic link called `path` that leads to `target`, and
@@ -1235,6 +1302,101 @@ mod tests {
         check(&tree, ANY_CASE, &[("\\Device\\Null", ok("obj:30", ""))]);
         check(&tree, ANY_CASE, &[("\\??\\PIPE", ok("obj:2", ""))]);
         assert_eq!(tree.counts().total(), 12);
+    }
+
+    #[test]
+    fn a_directory_without_a_name_is_reached_by_its_id_alone() {
+        let mut tree = booted();
+        let before = tree.counts();
+        let dir = tree.new_directory().unwrap();
+        assert_eq!(tree.counts(), before);
+        assert!(!tree.detach(dir));
+        assert_eq!(
+            tree.insert_object(Some(dir), &w("Inside"), ANY_CASE, 77),
+            Ok(dir)
+        );
+        assert_eq!(
+            tree.lookup(Some(dir), &w("inside\\rest"), ANY_CASE)
+                .map(|o| (o.found, s(&o.remainder))),
+            Ok((Found::Object(&77), "\\rest".into()))
+        );
+        assert_eq!(tree.release(dir), Err(Error::NotEmpty));
+        assert_eq!(tree.remove_object(&77), 1);
+        assert_eq!(tree.release(dir), Ok(()));
+        assert_eq!(tree.release(dir), Err(Error::PathNotFound));
+        assert_eq!(
+            tree.lookup(Some(dir), &w(""), ANY_CASE).err(),
+            Some(Error::PathNotFound)
+        );
+        assert_eq!(tree.counts(), before);
+    }
+
+    #[test]
+    fn a_directory_that_loses_its_name_keeps_what_is_in_it() {
+        let mut tree = booted();
+        let before = tree.counts();
+        let disk = tree
+            .create_directory(None, &w("\\Device\\Harddisk0"), ANY_CASE)
+            .unwrap();
+        let below = tree
+            .create_directory(None, &w("\\Device\\Harddisk0\\Sub"), ANY_CASE)
+            .unwrap();
+        tree.insert_object(None, &w("\\Device\\Harddisk0\\DR0"), ANY_CASE, 50)
+            .unwrap();
+        tree.insert_object(None, &w("\\Device\\Harddisk0\\Sub\\X"), ANY_CASE, 51)
+            .unwrap();
+        // Still an entry, and not empty.
+        assert_eq!(tree.release(disk), Err(Error::NotEmpty));
+        assert_eq!(tree.release(DirId::ROOT), Err(Error::NameInvalid));
+
+        assert_eq!(tree.parent(below), Some(disk));
+        assert_eq!(
+            tree.parent(disk).map(|d| dir_name(&tree, d)),
+            Some("\\Device".into())
+        );
+        assert!(tree.detach(disk));
+        assert_eq!(tree.parent(disk), None);
+        assert!(!tree.detach(disk));
+        assert!(!tree.detach(DirId::ROOT));
+        // No path leads there any more, and the name is free.
+        assert_eq!(
+            look(&tree, "\\Device\\Harddisk0", ANY_CASE),
+            Err(Error::NameNotFound)
+        );
+        assert_eq!(
+            look(&tree, "\\Device\\Harddisk0\\DR0", ANY_CASE),
+            Err(Error::PathNotFound)
+        );
+        // By its id, what is in it is as it was.
+        assert_eq!(
+            tree.lookup(Some(disk), &w("dr0"), ANY_CASE)
+                .map(|o| o.found),
+            Ok(Found::Object(&50))
+        );
+        assert_eq!(
+            tree.lookup(Some(disk), &w("Sub\\X"), ANY_CASE)
+                .map(|o| o.found),
+            Ok(Found::Object(&51))
+        );
+        let again = tree
+            .create_directory(None, &w("\\Device\\Harddisk0"), ANY_CASE)
+            .unwrap();
+        assert_ne!(again, disk);
+        assert_eq!(
+            tree.remove(None, &w("\\Device\\Harddisk0"), ANY_CASE),
+            Ok(Removed::Directory)
+        );
+
+        // It goes when it is empty: its objects, then the directory in
+        // it, which is an entry until it is detached.
+        assert_eq!(tree.release(disk), Err(Error::NotEmpty));
+        assert_eq!(tree.remove_object(&50), 1);
+        assert_eq!(tree.remove_object(&51), 1);
+        assert_eq!(tree.release(below), Err(Error::NotEmpty));
+        assert!(tree.detach(below));
+        assert_eq!(tree.release(below), Ok(()));
+        assert_eq!(tree.release(disk), Ok(()));
+        assert_eq!(tree.counts(), before);
     }
 
     #[test]

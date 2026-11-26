@@ -84,6 +84,25 @@ pub fn isa_line(_irq: u8) -> Option<Line> {
     None
 }
 
+/// How a level-triggered line signals when all that is known of it is
+/// a resource descriptor: active high, the only kind the GIC takes.
+pub fn level_line_polarity() -> nk_hal::interrupt::Polarity {
+    nk_hal::interrupt::Polarity::High
+}
+
+/// The hardware identifier of the HAL's own device: what Windows' arm64
+/// HAL answers is not known to NK (no arm64 kernel is pinned), so the
+/// device has none.
+pub fn hal_hardware_id() -> Option<&'static str> {
+    None
+}
+
+/// The interrupts the HAL offers the ACPI driver's device: none, until
+/// the rule of Windows' arm64 HAL is known.
+pub fn acpi_device_interrupts() -> &'static [(u32, u32)] {
+    &[]
+}
+
 /// The message a device writes to interrupt a processor: there is none
 /// to give without an interrupt translation service.
 pub fn interrupt_message(_vector: u32, _processor: usize) -> Option<(u64, u32)> {
@@ -118,6 +137,12 @@ impl InterruptVectors {
     /// Whether `vector` is one a device interrupt can have.
     pub fn is_device(vector: u32) -> bool {
         is_line(vector)
+    }
+
+    /// The IRQL of a device's interrupt on `vector`: the level its
+    /// interrupt id has.
+    pub fn device_irql(vector: u32) -> u8 {
+        spi_level(vector)
     }
 }
 

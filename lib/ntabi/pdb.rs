@@ -383,6 +383,16 @@ fn thread_matches_the_kernel() {
         );
     }
     assert_eq!(IDEAL_PROCESSOR, field("IdealProcessor"));
+    assert_eq!(USER_AFFINITY, field("UserAffinity"));
+    assert_eq!(USER_IDEAL_PROCESSOR, field("UserIdealProcessor"));
+    let system_affinity = kthread
+        .member("SystemAffinityActive")
+        .expect("_KTHREAD.SystemAffinityActive");
+    assert_eq!(system_affinity.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        system_affinity.bits,
+        Some((MISC_FLAG_SYSTEM_AFFINITY_ACTIVE.trailing_zeros() as u8, 1))
+    );
     let affinity = types.layout("_GROUP_AFFINITY").expect("_GROUP_AFFINITY");
     assert_eq!(offset(&affinity, "_GROUP_AFFINITY", "Mask"), 0);
     assert_eq!(START_ADDRESS, offset(&ethread, "_ETHREAD", "StartAddress"));

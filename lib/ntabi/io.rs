@@ -432,6 +432,9 @@ pub const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
 pub const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
 /// Create disposition: open what exists, fail otherwise.
 pub const FILE_OPEN: u32 = 1;
+/// What a create reports in `IoStatus.Information`: the file existed
+/// and was opened.
+pub const FILE_OPENED: usize = 1;
 
 /// What the generic rights mean for a file
 /// ([`IoGetFileObjectGenericMapping`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetfileobjectgenericmapping)):
@@ -630,6 +633,11 @@ pub struct IRP {
 /// (`Tail.Overlay.DeviceQueueEntry`): it overlays the driver context.
 pub const IRP_DEVICE_QUEUE_ENTRY: usize = core::mem::offset_of!(IRP, DriverContext);
 
+/// `IO_STACK_LOCATION.Flags` of a create request: the opener's access
+/// is to be checked though the request is kernel mode's, and the name
+/// is to be compared case-sensitively.
+pub const SL_FORCE_ACCESS_CHECK: u8 = 0x01;
+pub const SL_CASE_SENSITIVE: u8 = 0x80;
 /// `IO_STACK_LOCATION.Control`
 pub const SL_PENDING_RETURNED: u8 = 0x01;
 pub const SL_INVOKE_ON_CANCEL: u8 = 0x20;

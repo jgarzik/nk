@@ -58,3 +58,6 @@ io.start-io.deferred ok
 io.request.power ok
 io.stack.send-synchronous ok
 io.no-paging-file ok
+io.open.zw-file ok
+io.service.zw-load-missing ok
+io.service.zw-load ok

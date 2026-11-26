@@ -11,9 +11,10 @@
 //! answer within the timeout is stuck with interrupts off, and the
 //! system stops.
 
-use super::{Rank, SpinLock, irql, pcr, smp, time};
+use super::{Rank, SpinLock, irql, pcr, seh, smp, time};
 use crate::arch;
-use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use nk_ntabi::ke::KIPI_BROADCAST_WORKER;
 
 /// What a call runs on each processor.
 pub type Routine = fn(argument: usize);
@@ -92,6 +93,86 @@ pub fn call_all(routine: Routine, argument: usize) {
 /// Run `routine(argument)` on processor `number`.
 pub fn call_on(number: usize, routine: Routine, argument: usize) {
     call(1 << number, routine, argument);
+}
+
+/// One `KeIpiGenericCall`: the driver's function and where the
+/// processors stand.
+struct Broadcast {
+    function: KIPI_BROADCAST_WORKER,
+    context: usize,
+    /// The processor that made the call.
+    caller: u32,
+    /// The processors that have yet to arrive, the caller among them;
+    /// the caller, the last one left, sets it to zero, which lets all
+    /// of them go.
+    waiting: AtomicU32,
+    /// What the function returned on the caller's processor.
+    result: AtomicUsize,
+}
+
+/// A processor's part in a `KeIpiGenericCall`: wait until every
+/// processor is here, then run the driver's function.
+fn broadcast(packet: usize) {
+    // SAFETY: the address of the `Broadcast` of a `KeIpiGenericCall`
+    // that does not return before every processor has run this.
+    let packet = unsafe { &*(packet as *const Broadcast) };
+    let caller = pcr::current_processor() == packet.caller;
+    if caller {
+        while packet.waiting.load(Ordering::Acquire) != 1 {
+            core::hint::spin_loop();
+        }
+        packet.waiting.store(0, Ordering::Release);
+    } else {
+        packet.waiting.fetch_sub(1, Ordering::AcqRel);
+        while packet.waiting.load(Ordering::Acquire) != 0 {
+            core::hint::spin_loop();
+        }
+    }
+    // An exception the function lets out cannot be survived, here as
+    // on Windows, which would be left holding its interprocessor lock.
+    let guard = seh::Guard::Base(seh::Unhandled::KernelMode);
+    // SAFETY: the driver's function, called as `KeIpiGenericCall`
+    // promises: at the interprocessor IRQL, with its context.
+    let result = unsafe { seh::call(packet.function as usize, [packet.context, 0, 0, 0], &guard) };
+    if caller {
+        packet.result.store(result, Ordering::Release);
+    }
+}
+
+/// [`KeIpiGenericCall`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keipigenericcall):
+/// run `function(context)` on every processor at once, at the
+/// interprocessor IRQL, and return what it returned on this one. As on
+/// Windows no processor begins the function before every processor has
+/// been interrupted and waits to begin it: while the function runs
+/// anywhere, nothing else runs anywhere.
+///
+/// For callers at or below `DISPATCH_LEVEL`.
+///
+/// # Safety
+/// `function` may be called with `context` on every processor.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeIpiGenericCall(
+    function: KIPI_BROADCAST_WORKER,
+    context: usize,
+) -> usize {
+    let old = irql::current();
+    if old > irql::DISPATCH_LEVEL {
+        crate::kd::bugcheck(format_args!(
+            "0x0000000A IRQL_NOT_LESS_OR_EQUAL: KeIpiGenericCall at IRQL {old}"
+        ));
+    }
+    // On one processor from here to the end of the call.
+    arch::set_irql(irql::DISPATCH_LEVEL);
+    let packet = Broadcast {
+        function,
+        context,
+        caller: pcr::current_processor(),
+        waiting: AtomicU32::new(smp::online_count() as u32),
+        result: AtomicUsize::new(0),
+    };
+    call_all(broadcast, core::ptr::from_ref(&packet) as usize);
+    arch::set_irql(old);
+    packet.result.load(Ordering::Acquire)
 }
 
 // ---- tests --------------------------------------------------------------
@@ -246,6 +327,86 @@ pub fn tlb_test() -> Result<usize, &'static str> {
     map::free_va(va, 1);
     mm::free_frames(frames, 2);
     verdict.map(|()| cpus)
+}
+
+/// Set by the thread that keeps a processor from answering: it is at
+/// the interprocessor IRQL; then, it has come down again.
+static HOLDING: AtomicU32 = AtomicU32::new(0);
+static HELD_LONG_ENOUGH: AtomicU32 = AtomicU32::new(0);
+/// Processors that began the broadcast function while the held
+/// processor had not been interrupted.
+static EARLY: AtomicU32 = AtomicU32::new(0);
+
+/// The function `generic_call_test` broadcasts.
+///
+/// # Safety
+/// Called by `KeIpiGenericCall`; the context is a number.
+unsafe extern "C" fn together(context: usize) -> usize {
+    if HOLDING.load(Ordering::Acquire) != 0 && HELD_LONG_ENOUGH.load(Ordering::Acquire) == 0 {
+        EARLY.fetch_add(1, Ordering::Relaxed);
+    }
+    count(0);
+    SLOT[me()].store(context as u64, Ordering::Relaxed);
+    me() + 100
+}
+
+/// `KeIpiGenericCall` runs the function once on every processor, at
+/// the interprocessor IRQL, with its context; returns what it returned
+/// on the caller's; and begins it nowhere before every processor has
+/// been interrupted: one that holds the interrupt off holds all of
+/// them. Returns the processors.
+pub fn generic_call_test() -> Result<usize, &'static str> {
+    use super::thread;
+    fn hold(_: usize) {
+        let old = irql::raise(arch::IPI.1);
+        HOLDING.store(1, Ordering::Release);
+        // Long after a call that did not wait for this processor would
+        // have begun on the others.
+        for _ in 0..2_000_000 {
+            core::hint::spin_loop();
+        }
+        HELD_LONG_ENOUGH.store(1, Ordering::Release);
+        irql::lower(old);
+    }
+    let cpus = smp::online_count();
+    reset();
+    EARLY.store(0, Ordering::Relaxed);
+    HOLDING.store(0, Ordering::Relaxed);
+    HELD_LONG_ENOUGH.store(0, Ordering::Relaxed);
+    let old = irql::raise(irql::DISPATCH_LEVEL);
+    let here = me();
+    // SAFETY: the function takes any context.
+    let returned = unsafe { KeIpiGenericCall(together, 0x5151) };
+    irql::lower(old);
+    if returned != here + 100 {
+        return Err("KeIpiGenericCall did not return what the function returned here");
+    }
+    for n in 0..cpus {
+        if RUNS[n].load(Ordering::Relaxed) != 1 || SLOT[n].load(Ordering::Relaxed) != 0x5151 {
+            return Err("the function did not run once on each processor with its context");
+        }
+    }
+    if WRONG_IRQL.load(Ordering::Relaxed) != 0 {
+        return Err("the function did not run at the interprocessor IRQL");
+    }
+    if cpus > 1 {
+        let threads = thread::count();
+        let other = (0..cpus).find(|&n| n != here).unwrap_or(0);
+        thread::create(hold, 0, thread::NORMAL_PRIORITY, 1 << other)?;
+        while HOLDING.load(Ordering::Acquire) == 0 {
+            thread::yield_now();
+        }
+        // SAFETY: as above.
+        unsafe { KeIpiGenericCall(together, 0) };
+        thread::settle(threads);
+        if EARLY.load(Ordering::Relaxed) != 0 {
+            return Err("the function began before every processor had been interrupted");
+        }
+    }
+    if irql::current() != irql::PASSIVE_LEVEL {
+        return Err("the IRQL did not come back down");
+    }
+    Ok(cpus)
 }
 
 /// Processor 1 takes an interprocessor call and never returns from it,

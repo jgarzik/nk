@@ -513,6 +513,106 @@ pub fn exists(path: &str) -> bool {
     hive.root().is_ok_and(|root| hive.open(root, &path).is_ok())
 }
 
+/// As [`write`], making every key of `path` that is not there, not
+/// only the last: an instance path is several keys deep, and the first
+/// device of a kind brings all of them. For the kernel's own use.
+pub fn write_path(path: &str, values: &[(&str, u32, &[u8])]) -> Result<(), NTSTATUS> {
+    for (at, _) in path.match_indices('\\') {
+        write(&path[..at], &[])?;
+    }
+    write(path, values)
+}
+
+/// The names of the subkeys of the key at `path` (from the registry's
+/// root), in the order Windows enumerates them; none if there is no
+/// such key. For the kernel's own use.
+pub fn subkeys(path: &str) -> Vec<String> {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    while let Ok(Some(child)) = hive.subkey(key, names.len()) {
+        let name = hive.info(child).map_or(&[][..], |info| info.name);
+        names.push(String::from_utf16_lossy(name));
+    }
+    names
+}
+
+/// A value: its name, type and data.
+pub type Value = (String, u32, Vec<u8>);
+
+/// The values of the key at `path` (from the registry's root), in the
+/// order they were first set; none if there is no such key. For the
+/// kernel's own use.
+pub fn values(path: &str) -> Vec<Value> {
+    let path = wide(path);
+    let mut hive = HIVE.lock();
+    let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    while let Ok(Some((name, kind, data))) = hive.value_at(key, values.len()) {
+        values.push((String::from_utf16_lossy(name), kind, data.to_vec()));
+    }
+    values
+}
+
+/// Copy the key at `from`, with its values and everything below it,
+/// over the key at `to` (both from the registry's root), making what
+/// is not there: values of the same name are replaced, others stay.
+/// For the kernel's own use: what installing a device copies from the
+/// driver database into the device's key.
+pub fn copy_tree(from: &str, to: &str) -> Result<(), NTSTATUS> {
+    let found = values(from);
+    let list: Vec<(&str, u32, &[u8])> = found
+        .iter()
+        .map(|(name, kind, data)| (name.as_str(), *kind, &data[..]))
+        .collect();
+    write_path(to, &list)?;
+    for child in subkeys(from) {
+        copy_tree(
+            &alloc::format!("{from}\\{child}"),
+            &alloc::format!("{to}\\{child}"),
+        )?;
+    }
+    Ok(())
+}
+
+/// Delete the key at `path` (from the registry's root) and everything
+/// below it. A key that is not there is not an error. For the kernel's
+/// own use.
+pub fn delete_tree(path: &str) -> Result<(), NTSTATUS> {
+    for child in subkeys(path) {
+        delete_tree(&alloc::format!("{path}\\{child}"))?;
+    }
+    let wide = wide(path);
+    let now = now();
+    let mut hive = HIVE.lock();
+    let Ok(key) = hive.root().and_then(|root| hive.open(root, &wide)) else {
+        return Ok(());
+    };
+    hive.parent(key)
+        .and_then(|parent| {
+            hive.delete(key)?;
+            hive.set_last_write(parent, now)
+        })
+        .map_err(status)
+}
+
+/// Delete the value `name` of the key at `path` (from the registry's
+/// root). Neither a missing key nor a missing value is an error. For
+/// the kernel's own use.
+pub fn delete_value(path: &str, name: &str) {
+    let path = wide(path);
+    let name = wide(name);
+    let mut hive = HIVE.lock();
+    if let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) {
+        let _ = hive.delete_value(key, &name);
+    }
+}
+
 /// [`ZwDeleteKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwdeletekey):
 /// delete an open key that has no subkeys. It is gone by name at once;
 /// handles still open to it, this one included, are good only for

@@ -22,6 +22,7 @@ mod ke;
 mod ldr;
 mod mm;
 mod ob;
+mod pnp;
 mod po;
 mod ps;
 mod rt;
@@ -120,6 +121,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = cm::init() {
         test::abort("cm", format_args!("{why}"));
     }
+    if let Err(why) = hal::description::publish() {
+        test::abort("hal.description", format_args!("{why}"));
+    }
 
     // The rest runs in a thread, at PASSIVE_LEVEL, as drivers expect of
     // whatever calls them; this context idles.
@@ -137,6 +141,11 @@ fn system_thread(info: usize) {
     // for ever and is never written.
     let info = unsafe { &*(info as *const BootInfo) };
     export::print_all();
+    if let Err(why) = pnp::init().and_then(|()| hal::bus::init()) {
+        test::abort("pnp.init", format_args!("{why}"));
+    }
+    // The HAL's device and its child are known before any driver starts.
+    pnp::settle();
     if let Err(why) = io::service::start_boot_services() {
         test::abort("io.boot-start", format_args!("{why}"));
     }
