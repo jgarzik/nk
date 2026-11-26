@@ -483,7 +483,7 @@ fn identify(pdo: usize) {
             );
         };
         let ranges: Vec<assign::Range> = ranges.into_iter().flatten().collect();
-        with_claims(|claims| claims.claim(pdo, &ranges));
+        with_claims(|claims| claims.keep(pdo, &ranges));
     }
     // SAFETY: as above.
     unsafe { query::pnp(device, IRP_MN_DEVICE_ENUMERATED, [0; 4]) };

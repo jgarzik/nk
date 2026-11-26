@@ -4,6 +4,7 @@ hal.acpi-tables ok
 hal.system-information ok
 hal.interrupt-targets ok
 hal.description ok
+hal.pm-registers ok
 hal.queries ok
 hal.pci.bridge ok
 hal.pci.ahci skip
@@ -16,3 +17,4 @@ hal.dma.common-buffer ok
 hal.dma.scatter-gather ok
 hal.dma.bounce skip
 hal.dma.map-registers ok
+hal.firmware-variables ok

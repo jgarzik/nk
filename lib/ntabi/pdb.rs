@@ -424,6 +424,12 @@ fn thread_matches_the_kernel() {
     );
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
     assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
+    assert_eq!(
+        DEVICE_TO_VERIFY,
+        offset(&ethread, "_ETHREAD", "DeviceToVerify")
+    );
+    assert_eq!(IO_BOOST_COUNT, offset(&ethread, "_ETHREAD", "IoBoostCount"));
+    assert_eq!(ACTIVITY_ID, offset(&ethread, "_ETHREAD", "ActivityId"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueThread"), 8);
@@ -808,6 +814,41 @@ fn work_items_match_the_kernel() {
     assert_eq!(offset_of!(IO_WORKITEM, Context), field("Context"));
     assert_eq!(offset_of!(IO_WORKITEM, Type), field("Type"));
     assert_eq!(offset_of!(IO_WORKITEM, ActivityId), field("ActivityId"));
+}
+
+#[test]
+fn irp_extension_matches_the_kernel() {
+    use crate::io::IOP_IRP_EXTENSION;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let extension = types
+        .layout("_IOP_IRP_EXTENSION")
+        .expect("_IOP_IRP_EXTENSION");
+    let field = |name| offset(&extension, "_IOP_IRP_EXTENSION", name);
+    assert_eq!(size_of::<IOP_IRP_EXTENSION>(), extension.size as usize);
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, TypesAllocated),
+        field("TypesAllocated")
+    );
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, GenericExtension),
+        field("GenericExtension")
+    );
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, DiskIoAttributionHandle),
+        field("DiskIoAttributionHandle")
+    );
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, ActivityId),
+        field("ActivityId")
+    );
+    for name in ["Timestamp", "FsTrackOffsetBlob", "AdapterCryptoParameters"] {
+        assert_eq!(offset_of!(IOP_IRP_EXTENSION, Parameters), field(name));
+    }
+    assert_eq!(
+        offset_of!(IOP_IRP_EXTENSION, DriverFlags),
+        field("DriverFlags")
+    );
 }
 
 #[test]

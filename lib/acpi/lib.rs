@@ -93,6 +93,112 @@ pub fn all_tables(mem: &impl PhysMem, rsdp: u64) -> impl Iterator<Item = &[u8]> 
     listed(mem, rsdp).filter(|table| !matches!(&table[..4], b"DSDT" | b"RSDT" | b"XSDT" | b"FACS"))
 }
 
+/// Where a register of ACPI's fixed hardware is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterSpace {
+    /// System memory, at this physical address.
+    Memory(u64),
+    /// System I/O, at this port.
+    Port(u16),
+}
+
+/// One register block of ACPI's fixed hardware, as an operating
+/// system's HAL sets it up for its ACPI driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PmRegister {
+    pub space: RegisterSpace,
+    /// The size of one access, in bytes: 1, 2 or 4.
+    pub access: u32,
+}
+
+/// The register blocks, in the order Windows' HAL numbers them for
+/// `acpi.sys`: PM1a event, PM1b event, PM timer, PM1a control, PM1b
+/// control, PM2 control, GPE0, GPE1, and the reset register.
+pub const PM_REGISTERS: usize = 9;
+
+/// (32-bit address, length byte, extended address, access size) of
+/// the first eight blocks in the FADT.
+const PM_BLOCKS: [(usize, usize, usize, u32); 8] = [
+    (0x38, 0x58, 0x94, 2),
+    (0x40, 0x59, 0xAC, 2),
+    (0x4C, 0x5B, 0xD0, 4),
+    (0x3C, 0x58, 0xA0, 2),
+    (0x44, 0x59, 0xB8, 2),
+    (0x48, 0x5A, 0xC4, 1),
+    (0x50, 0x5C, 0xDC, 1),
+    (0x54, 0x5D, 0xE8, 1),
+];
+const FADT_FLAGS: usize = 0x70;
+const FADT_RESET_REG: usize = 0x74;
+/// `RESET_REG_SUP` and `HW_REDUCED_ACPI` in the FADT's flags.
+const RESET_REG_SUP: u32 = 1 << 10;
+const HW_REDUCED_ACPI: u32 = 1 << 20;
+
+/// A register from a generic address structure (space, bit width, bit
+/// offset, access size, address), accessed `access` bytes at a time:
+/// the structure's own access size, where it states one, must be at
+/// least that, the address not zero, and the space memory or I/O.
+fn from_generic(gas: &[u8], access: u32) -> Option<PmRegister> {
+    let stated = match gas[3] {
+        0 | 1 => 1,
+        2 => 2,
+        3 => 4,
+        4 => 8,
+        _ => return None,
+    };
+    let address = u64_at(gas, 4)?;
+    if stated < access || address == 0 {
+        return None;
+    }
+    let space = match gas[0] {
+        0 => RegisterSpace::Memory(address),
+        1 => RegisterSpace::Port(u16::try_from(address).ok()?),
+        _ => return None,
+    };
+    Some(PmRegister { space, access })
+}
+
+/// The fixed-hardware register blocks the FADT describes, as Windows'
+/// HAL sets them up: before revision 5 of the table from the 32-bit
+/// port addresses, a zero address meaning the block is not there; from
+/// revision 5 from the extended addresses alone. The reset register is
+/// there when the table says so (`RESET_REG_SUP`, from revision 2). A
+/// hardware-reduced platform has none of the blocks.
+pub fn pm_registers(fadt: &[u8]) -> [Option<PmRegister>; PM_REGISTERS] {
+    let mut registers = [None; PM_REGISTERS];
+    let revision = fadt.get(SDT_REVISION).copied().unwrap_or(0);
+    let flags = u32_at(fadt, FADT_FLAGS).unwrap_or(0);
+    if revision >= 5 && flags & HW_REDUCED_ACPI != 0 {
+        return registers;
+    }
+    for (register, &(narrow, _, wide, access)) in registers.iter_mut().zip(&PM_BLOCKS) {
+        *register = if revision >= 5 {
+            fadt.get(wide..wide + 12)
+                .and_then(|gas| from_generic(gas, access))
+        } else {
+            u32_at(fadt, narrow)
+                .filter(|&port| port != 0)
+                .and_then(|port| u16::try_from(port).ok())
+                .map(|port| PmRegister {
+                    space: RegisterSpace::Port(port),
+                    access,
+                })
+        };
+    }
+    if revision > 1 && flags & RESET_REG_SUP != 0 {
+        registers[8] = fadt
+            .get(FADT_RESET_REG..FADT_RESET_REG + 12)
+            .and_then(|gas| from_generic(gas, 1));
+    }
+    registers
+}
+
+/// The physical address of the FACS, from the FADT's 32-bit field,
+/// which is the one Windows' HAL reads.
+pub fn facs_address(fadt: &[u8]) -> Option<u64> {
+    u32_at(fadt, 0x24).filter(|&at| at != 0).map(u64::from)
+}
+
 /// Offsets in the FADT: the DSDT's 32-bit address, the table's
 /// revision, and the DSDT's 64-bit address, which revision 3 added.
 const FADT_DSDT: usize = 40;
@@ -680,6 +786,81 @@ mod tests {
             assert!(find(b"SSDT", None, Some(b"THIRD   ")).is_none());
             assert!(find(b"MCFG", None, None).is_none());
         }
+    }
+
+    #[test]
+    fn the_fixed_hardware_registers_are_set_up_as_windows_hal_does() {
+        let fadt = |revision: u8, edit: &dyn Fn(&mut [u8])| {
+            let mut t = sdt(b"FACP", &[0; 240]);
+            t[SDT_REVISION] = revision;
+            edit(&mut t);
+            t
+        };
+        // Revision 3: the 32-bit ports; a zero address is no block.
+        let old = fadt(3, &|t| {
+            t[0x38..0x3C].copy_from_slice(&0x600u32.to_le_bytes());
+            t[0x3C..0x40].copy_from_slice(&0x604u32.to_le_bytes());
+            t[0x4C..0x50].copy_from_slice(&0x608u32.to_le_bytes());
+            t[0x50..0x54].copy_from_slice(&0x620u32.to_le_bytes());
+            t[0x24..0x28].copy_from_slice(&0x7FF0_0000u32.to_le_bytes());
+        });
+        let r = pm_registers(&old);
+        let port = |port, access| {
+            Some(PmRegister {
+                space: RegisterSpace::Port(port),
+                access,
+            })
+        };
+        assert_eq!(r[0], port(0x600, 2));
+        assert_eq!(r[1], None);
+        assert_eq!(r[2], port(0x608, 4));
+        assert_eq!(r[3], port(0x604, 2));
+        assert_eq!(r[6], port(0x620, 1));
+        assert_eq!((r[4], r[5], r[7], r[8]), (None, None, None, None));
+        assert_eq!(facs_address(&old), Some(0x7FF0_0000));
+        assert_eq!(facs_address(&fadt(3, &|_| ())), None);
+
+        // Revision 5: the extended addresses alone; the reset register
+        // when the flags say so; memory as well as ports.
+        let gas = |space: u8, size: u8, address: u64| {
+            let mut g = [0u8; 12];
+            g[0] = space;
+            g[1] = 32;
+            g[3] = size;
+            g[4..12].copy_from_slice(&address.to_le_bytes());
+            g
+        };
+        let new = fadt(5, &|t| {
+            t[0x38..0x3C].copy_from_slice(&0x600u32.to_le_bytes());
+            t[0xD0..0xDC].copy_from_slice(&gas(0, 3, 0xFED0_0000));
+            t[0xA0..0xAC].copy_from_slice(&gas(1, 2, 0x604));
+            t[0xDC..0xE8].copy_from_slice(&gas(1, 5, 0x620));
+            t[0xC4..0xD0].copy_from_slice(&gas(2, 1, 0x40));
+            t[0x70..0x74].copy_from_slice(&RESET_REG_SUP.to_le_bytes());
+            t[0x74..0x80].copy_from_slice(&gas(1, 1, 0xCF9));
+        });
+        let r = pm_registers(&new);
+        assert_eq!(r[0], None, "the 32-bit port is not used from revision 5");
+        assert_eq!(
+            r[2],
+            Some(PmRegister {
+                space: RegisterSpace::Memory(0xFED0_0000),
+                access: 4
+            })
+        );
+        assert_eq!(r[3], port(0x604, 2));
+        assert_eq!(r[6], None, "an access size the structure cannot have");
+        assert_eq!(r[5], None, "configuration space is not memory or I/O");
+        assert_eq!(r[8], port(0xCF9, 1));
+        // An access size smaller than the block needs is refused.
+        let narrow = fadt(5, &|t| t[0xD0..0xDC].copy_from_slice(&gas(1, 2, 0x608)));
+        assert_eq!(pm_registers(&narrow)[2], None);
+        // Hardware-reduced: none.
+        let reduced = fadt(5, &|t| {
+            t[0xA0..0xAC].copy_from_slice(&gas(1, 2, 0x604));
+            t[0x70..0x74].copy_from_slice(&HW_REDUCED_ACPI.to_le_bytes());
+        });
+        assert!(pm_registers(&reduced).iter().all(Option::is_none));
     }
 
     /// From revision 3 the FADT's 64-bit address of the DSDT is used,

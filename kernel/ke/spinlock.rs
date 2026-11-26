@@ -57,6 +57,9 @@ pub enum Rank {
     Power = 37,
     /// The firmware table providers drivers registered (`ex::firmware`).
     FirmwareTables = 38,
+    /// The firmware's variable services, entered one call at a time
+    /// (`hal::variables`).
+    FirmwareVariables = 39,
     /// The executive pool (`mm::pool`).
     Pool = 40,
     /// Kernel address space and page tables (`mm::map`).

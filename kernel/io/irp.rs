@@ -343,8 +343,12 @@ unsafe fn finish(irp: *mut IRP) {
 /// `irp` must be a live IRP that no driver still holds.
 pub unsafe fn free(irp: *mut IRP) {
     // SAFETY: per the contract; clearing Type makes a stale pointer fail
-    // the check in `IofCompleteRequest`.
-    unsafe { (*irp).Type = 0 };
+    // the check in `IofCompleteRequest`. The IRP's extension block, if
+    // it has one, goes with it.
+    unsafe {
+        super::irpext::freed(irp);
+        (*irp).Type = 0;
+    }
     if let Err(e) = pool::free(irp.cast()) {
         kd::bugcheck(format_args!("freeing IRP {irp:p}: {e:?}"));
     }
@@ -408,8 +412,9 @@ pub unsafe extern "C" fn IoInitializeIrp(irp: *mut IRP, packet_size: u16, stack_
 
 /// [`IoReuseIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreuseirp):
 /// make an IRP of the caller's ready to be sent again, with `status` as
-/// its status. It keeps its size, its stack locations and the
-/// allocation flags the pinned kernel keeps ([`REUSE_KEEPS`]).
+/// its status. It keeps its size, its stack locations, the
+/// allocation flags the pinned kernel keeps ([`REUSE_KEEPS`]), and of
+/// its extensions the block and the activity id (`irpext`).
 ///
 /// # Safety
 /// `irp` is an IRP of the caller's that no driver holds.
@@ -425,14 +430,17 @@ pub unsafe extern "C" fn IoReuseIrp(irp: *mut IRP, status: NTSTATUS) {
             ));
         }
         let kept = (*irp).AllocationFlags & REUSE_KEEPS;
+        let extension = super::irpext::before_reuse(irp);
         IoInitializeIrp(irp, (*irp).Size, (*irp).StackCount);
         (*irp).AllocationFlags = kept;
+        super::irpext::after_reuse(irp, extension);
         (*irp).IoStatus.Status = status;
     }
 }
 
 /// The bits of `IRP.AllocationFlags` that `IoReuseIrp` of the pinned
-/// kernel carries over. NK sets none of them.
+/// kernel carries over. NK sets one of them: that the IRP has an
+/// extension block.
 const REUSE_KEEPS: u8 = 0x6D;
 
 /// [`IoGetRequestorProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetrequestorprocess):
