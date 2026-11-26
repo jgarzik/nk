@@ -11,6 +11,11 @@ const fn err(v: u32) -> NTSTATUS {
 pub const STATUS_SUCCESS: NTSTATUS = 0;
 pub const STATUS_ALERTED: NTSTATUS = 0x101;
 pub const STATUS_TIMEOUT: NTSTATUS = 0x102;
+/// A mirrored volume served the read from its other copy.
+pub const STATUS_FT_READ_FROM_COPY: NTSTATUS = 0x4000_0035;
+/// The medium may have been changed: the volume must be verified.
+pub const STATUS_VERIFY_REQUIRED: NTSTATUS = 0x8000_0016u32 as NTSTATUS;
+pub const STATUS_CANCELLED: NTSTATUS = 0xC000_0120u32 as NTSTATUS;
 pub const STATUS_PENDING: NTSTATUS = 0x103;
 pub const STATUS_OBJECT_NAME_EXISTS: NTSTATUS = 0x4000_0000;
 pub const STATUS_BUFFER_OVERFLOW: NTSTATUS = err(0x8000_0005);

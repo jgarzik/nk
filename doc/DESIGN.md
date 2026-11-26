@@ -695,6 +695,10 @@ documents. A type's generic rights are Windows' for files and registry
 keys; the other types have none recorded, and a generic right asked of
 them grants nothing. `NtCurrentThread()` (-2) names the caller and
 `NtCurrentProcess()` (-1) its process, with every access.
+`ObReferenceObjectByPointer` takes a reference to an object the caller
+already has, if it is of the type named (`STATUS_OBJECT_TYPE_MISMATCH`
+otherwise, for either mode); with no type named it does so for kernel
+mode only, as the pinned kernel decides it.
 
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index
@@ -947,10 +951,11 @@ make that safe.
 | Call into a driver | Guard |
 | --- | --- |
 | dispatch routine, for a request NK sends | undo: leave the critical region the request is sent in |
-| dispatch routine, for a request a driver sends (`IoCallDriver`) | nothing |
+| dispatch routine, for a request a driver sends (`IoCallDriver`, `IoSynchronousCallDriver`) | nothing: the request, and for `IoSynchronousCallDriver` the event in the sender's frame that its completion routine sets, are left to the driver that raised |
 | dispatch routine, for WMI's registration request | nothing: it is sent from a worker, whose base stops the system |
 | completion routine, cancel routine, a cancel-safe queue's callbacks | nothing: the cancel lock and its IRQL are the routine's to release, the queue's lock the driver's own |
 | I/O work item's routine | undo: the device's reference |
+| a driver's `FastIoDetachDevice` (the device its own is attached to is being deleted) | nothing: the deleted device keeps the count taken for the call, and stays |
 | silo monitor's create and terminate callbacks | undo: release the mutex that serialises monitors |
 | silo context's cleanup routine | nothing: the context is left allocated, as Windows leaves it |
 | work item's routine (from the worker), a system thread's start routine, `DriverEntry`, the unload routine, a library's `DllInitialize` and `DllUnload` | base: a system thread |
@@ -1175,11 +1180,44 @@ Other services start when something asks: the tests make a key the way
 
 Driver, device and file objects are object-manager objects of exactly
 their Windows size, and IRPs pool allocations of theirs; all are reached
-by raw pointer. An IRP's allocation ends, past its stack locations, with
-one word of NK's: the room in the requestor's buffer. A device object is
-followed by the driver's extension, then a private NK block. A device's
+by raw pointer. An IRP that NK allocates ends, past its stack locations, with
+a block of NK's: the room in the requestor's buffer, and whether NK's
+own requestor keeps the IRP when it completes. The pool tells such an
+IRP from one a driver laid out in its own memory, which has no such
+block. A device object is
+followed by the driver's extension, then the I/O manager's own
+(`DEVOBJ_EXTENSION`, which `DeviceObjectExtension` points to), laid out
+as the pinned kernel's and with nothing of NK's after it: what NK keeps
+about a device it keeps in the fields Windows keeps it in (deletion
+pending is `DOE_DELETE_PENDING` in `ExtensionFlags`). A device's
 own `ReferenceCount` decides when a deleted device stops being one, the
 object's pointer count when its memory goes.
+
+**Stacks.** Devices are stacked as on Windows
+([`IoAttachDeviceToDeviceStack`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioattachdevicetodevicestack),
+`IoDetachDevice`): the chain up is `AttachedDevice`, the chain down the
+extension's `AttachedTo`, and a device's `StackSize` is one more than
+that of the device it was attached to. Attaching goes to the top of the
+stack the target is in and looks at that device only: it is refused
+while the top is still initialising, is going away, or has a stack as
+deep as the pinned kernel allows (`MAXIMUM_ATTACH_STACK_SIZE`).
+`IoGetAttachedDeviceReference` and `IoGetDeviceAttachmentBaseRef` hand
+out the top and the bottom with a pointer reference.
+
+A request for a device is a request for its stack: an open sends the
+create to the top of the stack the named device is in, in an IRP with a
+location for every device of it, and so does every later request on the
+file (`file::related_device`, Windows' `IoGetRelatedDeviceObject`). The
+file stays counted on the device that was named, and
+`IoGetDeviceObjectPointer` hands out the top. How a read's or a write's
+buffer travels is the top device's choice (`DO_BUFFERED_IO`).
+
+A deleted device with another still attached to it stays, deletion
+pending, until that one detaches. The driver of the attached device is
+told at once if it has a `FastIoDetachDevice` routine, as the pinned
+kernel tells it. A device deleted while it is itself still attached to
+the one below would leave that one pointing at freed memory, as it does
+on Windows: NK stops, naming both.
 
 `kernel/io/file.rs` plays the I/O system services, by handle: `open`
 (`NtCreateFile`, `NtCreateNamedPipeFile`, `NtCreateMailslotFile`),
@@ -1212,6 +1250,36 @@ NK opens the device for kernel mode and closes the handle again, so the
 device's driver is sent a create and a cleanup at once and a close when
 the caller gives up the file object's reference it is handed.
 
+A driver also has the I/O manager build a request for it
+([`IoBuildSynchronousFsdRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildsynchronousfsdrequest),
+[`IoBuildDeviceIoControlRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuilddeviceiocontrolrequest),
+`kernel/io/build.rs`): the request names the calling thread, carries
+the I/O priority hint of a normal thread in its flags as the pinned
+kernel's does, and has its buffers set up the way the device or the
+control code asks for. Such a request is the I/O manager's. When it has
+completed all the way up, final completion copies the results out,
+writes the caller's status block, frees the IRP with its system buffer
+and MDL, and sets the caller's event; the caller never frees it. A
+flush, a shutdown, a power and a Plug and Play request are built with
+no buffer, as the pinned kernel builds them.
+
+[`IoSynchronousCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosynchronouscalldriver)
+sends a driver's own IRP with a completion routine of the I/O manager's
+that keeps it, and waits if the request was pended: the IRP comes back
+uncompleted. `IoReuseIrp` and `IoInitializeIrp` clear an IRP for
+another use, in the pool or in the driver's own memory. A driver that
+splits a request folds the parts' statuses into the master's with
+`IoSetMasterIrpStatus`, by the pinned kernel's rule
+(`nk_ntabi::io::master_irp_status`).
+
+A driver keeps what it needs per driver object in extensions it
+allocates and finds again by an address of its choosing
+([`IoAllocateDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatedriverobjectextension),
+`IoGetDriverObjectExtension`). They hang off the driver extension's
+`ClientDriverExtension`, as on Windows, each behind an
+`IO_CLIENT_EXTENSION`, and are freed by the driver type's delete
+procedure when the driver object goes.
+
 A driver counts the requests in progress on a device with a
 [remove lock](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-remove-locks)
 (`kernel/io/remlock.rs`): the lock is the driver's memory in the
@@ -1233,7 +1301,9 @@ is a named pipe; for a control request the access its code names (bits
 
 Completion follows the Windows
 sequence: unwind the stack locations running completion routines, then
-copy results to the requestor and signal its event. A buffered request's
+copy results to the requestor, free the IRP and signal the requestor's
+event. NK's own requestor keeps its IRP instead, and frees it once it
+has seen the completion. A buffered request's
 results are copied only as far as the requestor asked; a driver that
 reports more stops the system. A driver that returns other than
 `STATUS_PENDING` without completing, or a status different from the one
@@ -1344,7 +1414,12 @@ up as the two drivers' code sets them up; the
 **Direct I/O** uses real MDLs: the buffer, the kernel's or one in the
 user range, is described by its physical pages, and a system address is
 a fresh mapping of them, so the driver works through its own view.
-Limits are at the top of `kernel/io/mdl.rs`.
+Limits are at the top of `kernel/io/mdl.rs`. A partial MDL
+([`IoBuildPartialMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildpartialmdl))
+shares the pages of the part of the source's buffer it names, and the
+source's system mapping if there is one; mapped on its own, it keeps
+that mapping until it is freed. A part outside the source's buffer
+stops the system.
 
 ## The registry
 

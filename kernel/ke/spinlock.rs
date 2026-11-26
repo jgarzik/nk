@@ -27,7 +27,8 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
-    /// Devices' reference counts and delete-pending marks (`io::device`).
+    /// Devices' reference counts, delete-pending marks and attachment
+    /// chains (`io::device`).
     IoDatabase = 25,
     /// Devices registered with WMI and the requests owed them
     /// (`io::wmi`).

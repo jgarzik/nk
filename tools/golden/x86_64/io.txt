@@ -32,3 +32,16 @@ io.driver.unload-reentered ok
 io.requestor-process ok
 io.file-generic-mapping ok
 io.open.missing-name ok
+io.stack.attach ok
+io.stack.open-goes-to-the-top ok
+io.stack.pended-below ok
+io.stack.detach-then-delete ok
+io.stack.delete-then-detach ok
+io.stack.fast-io-detach ok
+io.request.synchronous-fsd ok
+io.request.device-control ok
+io.request.synchronous-call ok
+io.request.cancel-built ok
+io.request.master-status ok
+io.mdl.partial ok
+io.driver-extension ok

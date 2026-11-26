@@ -20,6 +20,7 @@ mod ex;
 pub mod except;
 mod fsd;
 mod hal;
+mod iosupport;
 mod library;
 mod loader;
 mod mslib;
@@ -31,6 +32,7 @@ mod open;
 mod oracle;
 mod pend;
 mod po;
+mod request;
 mod requestor;
 mod resource;
 mod review;
@@ -42,6 +44,7 @@ mod setoken;
 mod sioctl;
 mod smp;
 mod storage;
+mod stack;
 mod thread;
 mod timer;
 mod wait;
@@ -162,6 +165,9 @@ pub static GROUPS: &[&[&Group]] = &[
     pend::GROUPS,
     open::GROUPS,
     requestor::GROUPS,
+    stack::GROUPS,
+    request::GROUPS,
+    iosupport::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,
