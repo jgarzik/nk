@@ -2857,6 +2857,25 @@ stated), and whether interrupts are steered between processors, which
 they are not. Any other class, and any other part of these two, stops
 the system naming it.
 
+## Firmware variables
+
+`pshed.dll` keeps hardware error records in firmware variables.
+`NtGetEnvironmentVariableEx`, `NtQueryEnvironmentVariableInfoEx`,
+`HalEnumerateEnvironmentVariablesEx` and `HalSetEnvironmentVariableEx`
+(`kernel/hal/variables.rs`) are UEFI's variable services
+(`GetVariable`, `QueryVariableInfo`, `GetNextVariableName`,
+`SetVariable`), called like the shutdown: in the kernel's address
+space, with the caller's buffers. What Windows adds is kept
+(`nk_hal::variables`): the firmware's status becomes the status of the
+pinned kernel's table; a variable must be non-volatile and is given
+both access bits; a write deletes the variable first; the name is
+copied to a buffer of 256 characters; an enumeration is laid out as
+`VARIABLE_NAME` or `VARIABLE_NAME_AND_VALUE` entries, and says the
+size it needs. UEFI forbids entering the services twice at once: one
+lock is held across each call, where Windows keeps such calls on the
+boot processor. The `Nt` routines are for kernel mode alone on
+Windows; NK's have no other caller.
+
 ## Hardware errors
 
 WHEA is Windows' path for hardware errors: a *source* reports them, the

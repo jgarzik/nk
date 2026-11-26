@@ -14,6 +14,7 @@ pub static GROUP: Group = Group {
         "hal.interrupt-targets",
         "hal.description",
         "hal.queries",
+        "hal.firmware-variables",
         "kd.variables",
     ],
     run,
@@ -27,6 +28,10 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("hal.interrupt-targets", crate::hal::target::test);
     r.check("hal.description", crate::hal::description::test);
     r.check("hal.queries", crate::hal::query::test);
+    match crate::hal::variables::test() {
+        Ok(n) => r.ok_with("hal.firmware-variables", format_args!("calls: {n}")),
+        Err(why) => r.fail("hal.firmware-variables", format_args!("{why}")),
+    }
     r.check("kd.variables", || variables::variables_test(info));
 }
 
