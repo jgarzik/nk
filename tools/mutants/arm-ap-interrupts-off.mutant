@@ -1,7 +1,7 @@
 # A started arm64 processor does not enable, in its own redistributor,
 # the interrupts NK enabled before it ran: its clock never fires.
 scenario: aarch64
-fails: smp.running
+fails: scenario
 file: kernel/arch/aarch64/gic.rs
 occurrence: 1
 replace:         enable_on(redistributor, vector);
