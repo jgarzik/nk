@@ -125,6 +125,7 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = cm::init() {
         test::abort("cm", format_args!("{why}"));
     }
+    fsrtl::init();
     if let Err(why) = hal::description::publish() {
         test::abort("hal.description", format_args!("{why}"));
     }

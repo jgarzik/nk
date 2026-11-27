@@ -7,6 +7,7 @@ pub mod bitmap;
 pub mod counted;
 pub mod crt;
 pub mod feature;
+pub mod gen83;
 pub mod image;
 pub mod name;
 pub mod nls;

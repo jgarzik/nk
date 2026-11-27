@@ -159,4 +159,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         rtl::oem::RtlUpcaseUnicodeStringToCountedOemString
     ),
     export!(Implemented, rtl::oem::RtlFreeOemString),
+    export!(Implemented, rtl::gen83::RtlGenerate8dot3Name),
 ];

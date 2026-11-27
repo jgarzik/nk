@@ -19,6 +19,7 @@ pub mod counted;
 pub mod crt;
 pub mod dbgfilter;
 pub mod format;
+pub mod gen83;
 pub mod legal;
 pub mod once;
 pub mod prefix;

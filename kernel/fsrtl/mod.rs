@@ -11,6 +11,34 @@
 pub mod filter;
 pub mod mcb;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Whether a short name's extension of more than three characters ends
+/// in `~` (`RtlGenerate8dot3Name`): Windows' `FsRtlSafeExtensions`, true
+/// unless the registry's `Win95TruncatedExtensions` says otherwise.
+static SAFE_EXTENSIONS: AtomicBool = AtomicBool::new(true);
+
+/// The key Windows reads the file systems' compatibility values from.
+const FILE_SYSTEM: &str = "Machine\\System\\CurrentControlSet\\Control\\FileSystem";
+
+/// Read what the runtime library's behaviour depends on from the
+/// registry, as `FsRtlInitSystem` does: `Win95TruncatedExtensions`,
+/// whose first four bytes, whatever the value's type, turn safe
+/// extensions off when they are not zero.
+pub fn init() {
+    if let Ok((_, data)) = crate::cm::read(FILE_SYSTEM, "Win95TruncatedExtensions")
+        && let Some(first) = data.first_chunk::<4>()
+        && u32::from_le_bytes(*first) != 0
+    {
+        SAFE_EXTENSIONS.store(false, Ordering::Relaxed);
+    }
+}
+
+/// [`SAFE_EXTENSIONS`].
+pub fn safe_extensions() -> bool {
+    SAFE_EXTENSIONS.load(Ordering::Relaxed)
+}
+
 use crate::ex::pushlock;
 use crate::kd;
 use crate::ke::mutex;

@@ -107,6 +107,9 @@ version = "0.2.0"
 [[package]]
 name = "nk-rtl"
 version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
 
 [[package]]
 name = "nk-se"

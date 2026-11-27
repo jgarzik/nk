@@ -26,6 +26,13 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   `STATUS_UNMAPPABLE_CHARACTER` for it, as Windows does for a character
   with no best fit. The variables file systems read say 437 has no
   double-byte characters (`kernel/rtl/nls.rs`).
+- **Short names** (`RtlGenerate8dot3Name`, `nk_rtl::gen83`) are
+  Windows' to the character, read from the pinned kernel: the base,
+  the numbering, the checksum (`RtlComputeLfnChecksum`) and when it is
+  used, and the end of the numbers. Whether an extension of more than
+  three characters ends in `~` comes from the registry's
+  `Control\FileSystem\Win95TruncatedExtensions`, read at boot as
+  Windows reads it (`fsrtl::init`).
 - **Upper case** is one table, `nk_rtl::upcase`: Windows' own, every
   unit as `RtlUpcaseUnicodeChar` answers on Windows 10, recorded there
   by the conformance driver `nkc-rtl`. It is older than the Unicode
