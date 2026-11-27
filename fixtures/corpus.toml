@@ -307,6 +307,12 @@ url = "https://msdl.microsoft.com/download/symbols/volmgr.sys/1177989B19000/volm
 sha256 = "e8e08c6a8682920e7e62def3c5681e0d30688106976e1baee71dab70fdc0e66c"
 
 [[binary]]
+file = "volume.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/volume.sys/83CF10C9b000/volume.sys"
+sha256 = "ba775f373bc80ca77e42578f689d87c961b6548777e10724fea192443f0c9839"
+
+[[binary]]
 file = "watchdog.sys"
 version = "10.0.19041.868"
 url = "https://msdl.microsoft.com/download/symbols/watchdog.sys/F13839AB18000/watchdog.sys"
