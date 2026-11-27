@@ -41,6 +41,10 @@ pub fn charge(scm: &Scm, pages: i64) {
     scm.dirty_pages
         .set(scm.dirty_pages.get().wrapping_add_signed(pages));
     d.pages = d.pages.wrapping_add_signed(pages);
+    drop(d);
+    if pages > 0 {
+        super::lazy::schedule_scan();
+    }
 }
 
 /// Note a write's result in `result`: the first failure is kept, the

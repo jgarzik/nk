@@ -25,10 +25,12 @@
 
 pub mod copy;
 pub mod flush;
+pub mod lazy;
 pub mod map;
 pub mod mdl;
 pub mod pin;
 pub mod size;
+pub mod throttle;
 pub mod vacb;
 
 use crate::arch::seh::Context;
@@ -103,6 +105,10 @@ pub struct Scm {
     /// The file object the cache manager holds a reference on: the
     /// first that cached the file.
     pub file_object: Cell<*mut FILE_OBJECT>,
+    pub callbacks: *const nk_ntabi::cc::CACHE_MANAGER_CALLBACKS,
+    pub lazy_write_context: *mut core::ffi::c_void,
+    /// The pages a queued write-behind writes, under [`MASTER`].
+    pub pages_to_write: Cell<u64>,
     section: UnsafeCell<Option<SectionRef>>,
     /// Under `vacb::VACBS`.
     index: UnsafeCell<Option<VacbIndex>>,
@@ -134,13 +140,24 @@ pub static MASTER: SpinLock<Master> = SpinLock::new(
     },
 );
 
-/// What [`DIRTY`] guards: the dirty pages in the cache.
+/// What [`DIRTY`] guards: the dirty pages in the cache, the workers'
+/// queue and the lazy writer's state, and the deferred writes.
 pub struct Dirty {
     pub pages: u64,
+    pub queue: lazy::Queue,
+    pub deferred: throttle::Queue,
 }
 
-/// Dirty-page counts and the BCBs' dirty marks.
-pub static DIRTY: SpinLock<Dirty> = SpinLock::new(Rank::CcDirty, Dirty { pages: 0 });
+/// Dirty-page counts, the BCBs' dirty marks, the work queue and the
+/// deferred writes.
+pub static DIRTY: SpinLock<Dirty> = SpinLock::new(
+    Rank::CcDirty,
+    Dirty {
+        pages: 0,
+        queue: lazy::Queue::new(),
+        deferred: throttle::Queue::new(),
+    },
+);
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -152,6 +169,7 @@ const VIEWS: usize = 256;
 /// views. Once, before any file system starts.
 pub fn init() -> Result<(), &'static str> {
     vacb::init(VIEWS)?;
+    lazy::init()?;
     STARTED.store(true, Ordering::Release);
     Ok(())
 }

@@ -120,6 +120,9 @@ fn shutdown_file_systems() {
         // SAFETY: as above.
         unsafe { super::device::dereference(device) };
     }
+    // What the file systems left dirty is written now, as Windows waits
+    // for the lazy writer here.
+    crate::cc::lazy::shutdown_flush();
 }
 
 /// Send every registered device its shutdown request: the first queue,

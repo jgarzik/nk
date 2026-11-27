@@ -134,8 +134,8 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   and copied; a fault on the buffer raises
   `STATUS_INVALID_USER_BUFFER`, a failed read its status (or
   `STATUS_UNEXPECTED_IO_ERROR` when a file system would not expect it).
-  The file object's read history is rotated. Read-ahead is not
-  scheduled yet.
+  The file object's read history is rotated and a read-ahead queued as
+  its pattern calls for (`CcMdlRead` too).
 - **Copy writes.** `CcCopyWrite` and `CcCopyWriteEx` make no read of a
   page they overwrite whole or of one wholly at or beyond the valid
   data length in the FCB header (`MmCopyToCachedPage`: the rest of such
@@ -192,3 +192,42 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   also turns modified writing off, which turning it on does not undo.
   The `Ex` form takes those from bits 1 and 2 and records its other bits
   as the pinned kernel records them.
+
+## The lazy writer
+
+- **Scans** (`kernel/cc/lazy.rs`). The first dirt arms the scan timer
+  for 3 s (`CcFirstDelay`); while dirt remains, or a map waits to be
+  closed, it is armed again every second (`CcIdleDelay`). Its DPC has a
+  worker scan: the pages to write (`lib/cc`, from the cache's dirty
+  pages, the pages throttled writers wait for, the threshold and target,
+  and the available pages), then a write-behind queued for each map with
+  dirty data (unless write-behind is off and the map is still open) or
+  open by nobody, at most 64 a scan, each with its share of the pages.
+- **Write-behind.** On a worker, the file is taken through the file
+  system's `AcquireForLazyWrite` (FALSE: the next scan tries again), the
+  share flushed, the file given back with `ReleaseFromLazyWrite`; the
+  cache manager sets no top-level IRP, the file system's callbacks do.
+  Deferred writes are posted after it.
+- **Lazy close.** A map nobody has open, nothing dirties and no work
+  holds is deleted after its write-behind, with its file taken through
+  `FsRtlAcquireFileExclusive` and given back with `FsRtlReleaseFile`
+  ([FsRtl](fsrtl.md)); dropping the map's file object then may send a
+  stream file object's close from the worker.
+- **Workers.** Two, and one more per 4 processors (NK's number; Windows
+  runs the cache manager's work on its critical worker threads), share
+  one queue. Read-ahead runs on them between the file system's
+  `AcquireForReadAhead` and `ReleaseFromReadAhead` (FALSE skips it) with
+  the memory manager's prefetch, and never raises.
+- **Throttling** (`kernel/cc/throttle.rs`). `CcCanIWrite` lets a write go
+  while the cache's dirty pages and its own stay within the threshold
+  and no writer is queued before it; otherwise FALSE, or with `Wait` a
+  wait on an entry of the deferred-write queue (first when retrying).
+  `CcDeferWrite` queues the file system's post routine, or calls it at
+  once when its entry cannot be had. The queue is served in order as
+  dirty pages are written. Windows' soft throttle and the memory check
+  for the write are not built.
+- **Waiting for it.** `CcWaitForCurrentLazyWriterActivity` runs a scan at
+  once, which writes every dirty page (NK's choice for a scan asked
+  for), queues itself behind the scan's work and waits until every item
+  before it has ended. The I/O manager's shutdown calls it after every
+  file system has had its shutdown request, where Windows calls it.

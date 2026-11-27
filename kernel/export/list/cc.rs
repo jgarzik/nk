@@ -10,7 +10,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         "CcInitializeCacheMap",
         arch::seh::nk_entry_CcInitializeCacheMap
     ),
-    export!(Partial, cc::map::CcUninitializeCacheMap),
+    export!(Implemented, cc::map::CcUninitializeCacheMap),
     export_entry!(Partial, "CcMapData", arch::seh::nk_entry_CcMapData),
     export_entry!(Partial, "CcPinRead", arch::seh::nk_entry_CcPinRead),
     export_entry!(
@@ -23,7 +23,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         "CcPreparePinWrite",
         arch::seh::nk_entry_CcPreparePinWrite
     ),
-    export!(Partial, cc::pin::CcSetDirtyPinnedData),
+    export!(Implemented, cc::pin::CcSetDirtyPinnedData),
     export!(Implemented, cc::pin::CcUnpinData),
     export!(Implemented, cc::pin::CcRepinBcb),
     export!(Implemented, cc::pin::CcUnpinRepinnedBcb),
@@ -66,4 +66,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, cc::size::CcSetReadAheadGranularity),
     export!(Implemented, cc::size::CcSetAdditionalCacheAttributes),
     export!(Implemented, cc::size::CcSetAdditionalCacheAttributesEx),
+    export!(Partial, cc::throttle::CcCanIWrite),
+    export!(Implemented, cc::throttle::CcDeferWrite),
+    export!(Implemented, cc::lazy::CcWaitForCurrentLazyWriterActivity),
 ];

@@ -15,3 +15,6 @@ cc.zero ok
 cc.purge ok
 cc.sizes ok
 cc.attributes ok
+cc.lazy-write ok
+cc.defer-write ok
+cc.lazy-close ok

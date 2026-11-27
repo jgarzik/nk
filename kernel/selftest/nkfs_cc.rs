@@ -39,6 +39,9 @@ static CC: Group = Group {
         "cc.purge",
         "cc.sizes",
         "cc.attributes",
+        "cc.lazy-write",
+        "cc.defer-write",
+        "cc.lazy-close",
     ],
     run: cc_tests,
     manual: false,
@@ -85,8 +88,31 @@ unsafe extern "C" fn acquire(_: *mut c_void, _: u8) -> u8 {
 /// Takes any context.
 unsafe extern "C" fn release(_: *mut c_void) {}
 
+/// Calls of `AcquireForLazyWrite`.
+static LAZY_ACQUIRED: AtomicUsize = AtomicUsize::new(0);
+
+/// `AcquireForLazyWrite`: nothing to take; counted.
+///
+/// # Safety
+/// Takes any context.
+unsafe extern "C" fn acquire_lazy(_: *mut c_void, _: u8) -> u8 {
+    LAZY_ACQUIRED.fetch_add(1, Ordering::Relaxed);
+    1
+}
+
+/// Calls of the deferred write's post routine.
+static POSTED: AtomicUsize = AtomicUsize::new(0);
+
+/// A deferred write's post routine.
+///
+/// # Safety
+/// Takes any contexts.
+unsafe extern "C" fn posted(context: *mut c_void, _: *mut c_void) {
+    POSTED.fetch_add(context.addr(), Ordering::Relaxed);
+}
+
 static CALLBACKS: CACHE_MANAGER_CALLBACKS = CACHE_MANAGER_CALLBACKS {
-    AcquireForLazyWrite: Some(acquire),
+    AcquireForLazyWrite: Some(acquire_lazy),
     ReleaseFromLazyWrite: Some(release),
     AcquireForReadAhead: Some(acquire),
     ReleaseFromReadAhead: Some(release),
@@ -834,13 +860,90 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
     };
     verdicts.push(("cc.attributes", attributes));
 
-    // A file cached for copying closes at once when truncated.
-    let size = 0i64;
-    // SAFETY: a cached nkfs file; the size on this stack.
-    let deleted =
-        unsafe { cc::map::CcUninitializeCacheMap(file, &raw const size, core::ptr::null_mut()) };
-    if deleted != 1 {
-        return Err("a truncating uninitialize did not delete the map");
-    }
+    // Dirty data is written by the lazy writer within the first delay
+    // and a second, through the file system's callbacks.
+    let lazy = {
+        LAZY_ACQUIRED.store(0, Ordering::Relaxed);
+        let ok = copy_write(file, 0xB0010, &[0x99; 0x20]);
+        let interval: i64 = -45_000_000;
+        // SAFETY: a due time on this stack.
+        unsafe { crate::ke::wait::KeDelayExecutionThread(0, 0, &raw const interval) };
+        let log = nkfs::take_log();
+        let written = log
+            .iter()
+            .any(|r| r.major == IRP_MJ_WRITE && r.offset == 0xB0000 && r.cache_manager_active);
+        if ok != 1 {
+            Err("CcCopyWrite failed")
+        } else if !written || nkfs::data()[0xB0010..0xB0030] != [0x99; 0x20] {
+            Err("the lazy writer did not write the dirty page within 4.5 s")
+        } else if LAZY_ACQUIRED.load(Ordering::Relaxed) == 0 {
+            Err("the lazy writer did not take the file through AcquireForLazyWrite")
+        } else if dirty_pages(file) != 0 {
+            Err("the file is dirty after the lazy writer wrote it")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.lazy-write", lazy));
+
+    let deferred = {
+        POSTED.store(0, Ordering::Relaxed);
+        // SAFETY: a cached file; the post routine takes any contexts.
+        let can = unsafe { cc::throttle::CcCanIWrite(file, 0x1000, 0, 0) };
+        // SAFETY: as above.
+        unsafe {
+            cc::throttle::CcDeferWrite(
+                file,
+                posted as *const () as usize,
+                7 as *mut c_void,
+                core::ptr::null_mut(),
+                0x1000,
+                0,
+            )
+        };
+        if can != 1 {
+            Err("CcCanIWrite refused a small write with the cache clean")
+        } else if POSTED.load(Ordering::Relaxed) != 7 {
+            Err("CcDeferWrite did not call the post routine at once with the cache clean")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.defer-write", deferred));
+
+    // A file cached for copying and closed without a truncate size is
+    // left to the lazy writer, which deletes its map and signals the
+    // event.
+    let close = {
+        // SAFETY: a zeroed event, initialised before use.
+        let mut event: CACHE_UNINITIALIZE_EVENT = unsafe { core::mem::zeroed() };
+        // SAFETY: the event on this stack.
+        unsafe { crate::ke::wait::KeInitializeEvent(&raw mut event.Event, 0, 0) };
+        // SAFETY: a cached nkfs file; the event lives until signalled
+        // (waited for below).
+        let kept =
+            unsafe { cc::map::CcUninitializeCacheMap(file, core::ptr::null(), &raw mut event) };
+        // SAFETY: as above.
+        let early = unsafe { crate::ke::wait::KeReadStateEvent(&raw mut event.Event) };
+        let waited = cc::lazy::CcWaitForCurrentLazyWriterActivity();
+        // SAFETY: as above.
+        let late = unsafe { crate::ke::wait::KeReadStateEvent(&raw mut event.Event) };
+        // SAFETY: nkfs's pointers.
+        let scm = unsafe { (*sop).SharedCacheMap };
+        if late == 0 {
+            // The map holds the event: wait for it rather than leave it
+            // on this stack.
+            // SAFETY: as above.
+            unsafe { crate::ke::wait::wait(Some((&raw mut event.Event).cast()), None) };
+        }
+        if kept != 0 || early != 0 {
+            Err("closing a file cached for copying deleted its map at once")
+        } else if waited != STATUS_SUCCESS || late == 0 || !scm.is_null() {
+            Err("the lazy writer did not delete the closed map and signal its event")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.lazy-close", close));
     Ok(())
 }

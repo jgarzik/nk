@@ -581,6 +581,8 @@ fn set_dirty(b: &Bcb, lsn: *const i64) {
         let pages = b.pages();
         scm.dirty_pages.set(scm.dirty_pages.get() + pages);
         d.pages += pages;
+        drop(d);
+        super::lazy::schedule_scan();
     }
 }
 
@@ -599,8 +601,6 @@ pub fn set_clean(b: &Bcb) {
 /// [`CcSetDirtyPinnedData`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccsetdirtypinneddata):
 /// the pinned range is dirty. Nothing reaches the memory manager until
 /// the range is written.
-///
-/// Partial: the lazy writer, which writes dirty BCBs, is not built yet.
 ///
 /// # Safety
 /// `bcb` is a handle from a pin; `lsn` null or readable.
@@ -689,6 +689,7 @@ pub unsafe extern "C" fn CcUnpinRepinnedBcb(
         }
     }
     unpin(b, resource);
+    super::throttle::post_deferred();
 }
 
 /// [`CcGetFileObjectFromBcb`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccgetfileobjectfrombcb):

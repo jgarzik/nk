@@ -277,6 +277,7 @@ paths = [
     "kernel/cc/",
     "lib/cc/",
     "kernel/fsrtl/acquire.rs",
+    "kernel/io/shutdown.rs",
     "kernel/selftest/nkfs.rs",
     "kernel/selftest/nkfs_cc.rs",
 ]

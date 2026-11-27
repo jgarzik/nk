@@ -126,9 +126,13 @@ pub unsafe fn copy_read(
     if done {
         // SAFETY: per the contract.
         if let Some(pcm) = unsafe { pcm_of(file) } {
-            let _m = MASTER.lock();
-            pcm.history
-                .set(pcm.history.get().after(offset, u64::from(length)));
+            let (before, mask) = {
+                let _m = MASTER.lock();
+                let before = pcm.history.get();
+                pcm.history.set(before.after(offset, u64::from(length)));
+                (before, pcm.read_ahead_mask.get())
+            };
+            super::lazy::schedule_read_ahead(file, scm, before, offset, length, mask);
         }
     }
     Ok(done)

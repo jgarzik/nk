@@ -42,8 +42,8 @@ fn new_pcm(file: *mut FILE_OBJECT, scm: *mut Scm) -> Pcm {
 /// A fresh shared cache map for `sop`, being created, or null.
 fn new_scm(
     sop: *mut SECTION_OBJECT_POINTERS,
-    _callbacks: *const CACHE_MANAGER_CALLBACKS,
-    _context: *mut c_void,
+    callbacks: *const CACHE_MANAGER_CALLBACKS,
+    context: *mut c_void,
 ) -> *mut Scm {
     let scm = alloc_in_pool(
         Scm {
@@ -60,6 +60,9 @@ fn new_scm(
             uninit_events: Cell::new(core::ptr::null_mut()),
             sop,
             file_object: Cell::new(core::ptr::null_mut()),
+            callbacks,
+            lazy_write_context: context,
+            pages_to_write: Cell::new(0),
             section: UnsafeCell::new(None),
             index: UnsafeCell::new(None),
             dirty_pages: Cell::new(0),
@@ -361,9 +364,6 @@ pub fn extend_for(scm: &Scm, allocation: u64) -> Result<(), NTSTATUS> {
 /// once, when the shared cache map is deleted (at once if the file was
 /// not cached).
 ///
-/// Partial: a map left to the lazy writer (lazy close) stays until the
-/// lazy writer is built.
-///
 /// # Safety
 /// `file` is a live file object; `truncate` null or readable; `event`
 /// null or an initialised `CACHE_UNINITIALIZE_EVENT` that stays valid
@@ -464,6 +464,10 @@ pub unsafe extern "C" fn CcUninitializeCacheMap(
                 unsafe { signal(event) };
             }
             true
+        }
+        Some((_, Outcome::Lazy)) => {
+            super::lazy::schedule_scan();
+            false
         }
         Some(_) => false,
     };

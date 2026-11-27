@@ -88,7 +88,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 41 | `cc::MASTER` | the cache manager's shared cache maps: `SectionObjectPointer->SharedCacheMap`, each map's open count, references, flags and sizes, the list of maps, each map's private cache maps and `FileObject->PrivateCacheMap`, and its chain of uninitialize events | DISPATCH |
 | 42 | `cc::vacb::VACBS` | the cache manager's views: each VACB's map, view, users and state, and every map's index of its views; never held across a call to the memory manager | DISPATCH |
-| 43 | `cc::DIRTY` | the dirty pages of the cache and of each map, and each BCB's dirty mark | DISPATCH |
+| 43 | `cc::DIRTY` | the dirty pages of the cache and of each map, each BCB's dirty mark, the cache manager's work queue and the lazy writer's scan state, and the deferred writes; never held across a file system's routine | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::pfn::PFN` | the frame bitmap; every entry of the page-frame-number database and its page lists; every control area's counts and flags and subsection directory, every subsection's counts and prototype PTEs, the entries of the system-cache views, and each file's `SectionObjectPointer->DataSectionObject`; never held across I/O, a wait or a pool allocation | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |

@@ -229,7 +229,11 @@ tier has, for each architecture:
   On a file cached for copying: copy reads, writes that read only the
   pages they cover in part and below the valid data length, flushes,
   MDL reads and writes, zeroing, purges refused while a view is in use,
-  shrinking and growing, and the attributes.
+  shrinking and growing, and the attributes; the lazy writer writing a
+  dirty page within 4.5 s through the file system's callbacks,
+  `CcDeferWrite` posting at once on a clean cache, and a map closed
+  without a truncate size deleted by the lazy writer, its event
+  signalled, once `CcWaitForCurrentLazyWriterActivity` returns.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

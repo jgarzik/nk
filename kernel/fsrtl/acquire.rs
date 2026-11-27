@@ -1,6 +1,7 @@
 //! Taking a file system's file for what the kernel does on its behalf:
 //! a flush of the cache manager's (`FsRtlAcquireFileForCcFlushEx`,
-//! `FsRtlReleaseFileForCcFlush`).
+//! `FsRtlReleaseFileForCcFlush`) and the lazy writer's deletion of a
+//! cache map (`FsRtlAcquireFileExclusive`, `FsRtlReleaseFile`).
 //!
 //! As the pinned kernel does it: inside a critical region kept until
 //! the release, first the file system's own filter callback for the
@@ -28,6 +29,8 @@ use nk_ntabi::status::*;
 /// Offsets in `FAST_IO_DISPATCH`.
 const FAST_IO_ACQUIRE_FOR_CC_FLUSH: usize = 0xD0;
 const FAST_IO_RELEASE_FOR_CC_FLUSH: usize = 0xD8;
+const FAST_IO_ACQUIRE_FILE_FOR_NT_CREATE_SECTION: usize = 0x58;
+const FAST_IO_RELEASE_FILE_FOR_NT_CREATE_SECTION: usize = 0x60;
 
 /// The file system's own device for `file` (`IoGetBaseFileSystemDeviceObject`).
 ///
@@ -203,6 +206,36 @@ unsafe fn give_for_flush(header: *mut FSRTL_COMMON_FCB_HEADER) {
     }
 }
 
+/// The default exclusive acquisition: the main resource.
+///
+/// # Safety
+/// As [`take_for_flush`].
+unsafe fn take_exclusive(header: *mut FSRTL_COMMON_FCB_HEADER) {
+    // SAFETY: per the contract.
+    unsafe {
+        if let Some(h) = header.as_ref()
+            && !h.Resource.is_null()
+        {
+            crate::ex::resource::ExAcquireResourceExclusiveLite(h.Resource, 1);
+        }
+    }
+}
+
+/// The default release of [`take_exclusive`].
+///
+/// # Safety
+/// The thread holds the main resource.
+unsafe fn give_exclusive(header: *mut FSRTL_COMMON_FCB_HEADER) {
+    // SAFETY: per the contract.
+    unsafe {
+        if let Some(h) = header.as_ref()
+            && !h.Resource.is_null()
+        {
+            crate::ex::resource::ExReleaseResourceLite(h.Resource);
+        }
+    }
+}
+
 /// `FsRtlAcquireFileForCcFlushEx`: take `file` for a flush of the cache
 /// manager's. Success leaves the thread in a critical region until
 /// [`release_for_cc_flush`].
@@ -239,3 +272,33 @@ pub const CC_FLUSH: FlushAcquire = FlushAcquire {
     acquire: acquire_for_cc_flush,
     release: release_for_cc_flush,
 };
+
+/// `FsRtlAcquireFileExclusive`: take `file` exclusive, as for a section
+/// of no particular kind (`SyncTypeOther`); the thread stays in a
+/// critical region until [`release_file`].
+pub fn acquire_file_exclusive(file: *mut FILE_OBJECT) {
+    const OP: Operation = Operation {
+        code: FS_FILTER_ACQUIRE_FOR_SECTION_SYNCHRONIZATION,
+        pre: PRE_ACQUIRE_FOR_SECTION_SYNCHRONIZATION,
+        fast_io: FAST_IO_ACQUIRE_FILE_FOR_NT_CREATE_SECTION,
+        fast_io_status: false,
+        default: take_exclusive,
+        acquire: true,
+    };
+    // SAFETY: the lazy writer's file, which a cache map holds open.
+    unsafe { run(file, &OP, [u64::from(SYNC_TYPE_OTHER), 0, 0, 0, 0]) };
+}
+
+/// `FsRtlReleaseFile`.
+pub fn release_file(file: *mut FILE_OBJECT) {
+    const OP: Operation = Operation {
+        code: FS_FILTER_RELEASE_FOR_SECTION_SYNCHRONIZATION,
+        pre: PRE_RELEASE_FOR_SECTION_SYNCHRONIZATION,
+        fast_io: FAST_IO_RELEASE_FILE_FOR_NT_CREATE_SECTION,
+        fast_io_status: false,
+        default: give_exclusive,
+        acquire: false,
+    };
+    // SAFETY: as above, after the acquisition.
+    unsafe { run(file, &OP, [0; 5]) };
+}

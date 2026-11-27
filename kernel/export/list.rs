@@ -24,7 +24,6 @@ mod ps;
 mod rtl;
 mod se;
 mod trap;
-mod trap_cc;
 mod trap_crt;
 mod trap_ex;
 mod trap_fsrtl;
@@ -61,7 +60,6 @@ pub(super) static ALL: &[&[Export]] = &[
     rtl::EXPORTS,
     se::EXPORTS,
     trap::EXPORTS,
-    trap_cc::EXPORTS,
     trap_crt::EXPORTS,
     trap_ex::EXPORTS,
     trap_fsrtl::EXPORTS,
