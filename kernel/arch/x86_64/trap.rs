@@ -345,6 +345,8 @@ const FLAG_IF: u64 = 0x200;
 /// Page-fault error code: the access was a write; an instruction fetch.
 const PF_WRITE: u64 = 2;
 const PF_FETCH: u64 = 0x10;
+/// The faulting access was made in user mode.
+const PF_USER: u64 = 4;
 
 /// The interrupted code as a `CONTEXT`. XMM6-XMM15 are read from the
 /// processor: nothing between the interrupted code and here has touched
@@ -482,7 +484,12 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     // A page of a file the memory manager can bring in.
     let mut in_page = None;
     if vector == PAGE_FAULT && !overflow {
-        match crate::mm::fault::page_fault(cr2, frame.rflags & FLAG_IF != 0) {
+        match crate::mm::fault::page_fault(
+            cr2,
+            access,
+            frame.error & PF_USER != 0,
+            frame.rflags & FLAG_IF != 0,
+        ) {
             Some(Ok(())) => return,
             Some(Err(status)) => in_page = Some(status),
             None => {}

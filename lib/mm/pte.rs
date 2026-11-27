@@ -82,8 +82,73 @@ impl Proto {
     }
 }
 
+/// How a memory access is made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    Read,
+    Write,
+    Execute,
+}
+
+/// What a page-table entry of a system-cache view holds, as a fault
+/// sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewEntry {
+    /// Nothing is mapped.
+    Empty,
+    /// A prototype pointer: the page is to be resolved.
+    Prototype,
+    /// A valid entry, which allows writes or not.
+    Valid { writable: bool },
+}
+
+/// What becomes of a fault on a system-cache view's page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewFault {
+    /// Resolve the page from its prototype PTE.
+    Resolve,
+    /// The entry already allows the access (another processor made it
+    /// valid meanwhile): run the access again.
+    Again,
+    /// Not the memory manager's to resolve: an access violation, or the
+    /// kernel's rule for a fault on a kernel address.
+    Refuse,
+}
+
+/// `MmAccessFault`'s first questions for a system-cache view: user mode
+/// may not touch system addresses at all; view pages hold data, never
+/// code; a valid entry is resolved again only for an access it allows,
+/// so a protection fault is never taken for a page to bring in.
+pub fn view_fault(entry: ViewEntry, access: Access, user_mode: bool) -> ViewFault {
+    if user_mode || access == Access::Execute {
+        return ViewFault::Refuse;
+    }
+    match entry {
+        ViewEntry::Empty => ViewFault::Refuse,
+        ViewEntry::Prototype => ViewFault::Resolve,
+        ViewEntry::Valid { writable } if writable || access == Access::Read => ViewFault::Again,
+        ViewEntry::Valid { .. } => ViewFault::Refuse,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_view_fault_resolves_only_what_it_may() {
+        use super::{Access::*, ViewEntry::*, ViewFault::*, view_fault};
+        assert_eq!(view_fault(Prototype, Read, false), Resolve);
+        assert_eq!(view_fault(Prototype, Write, false), Resolve);
+        assert_eq!(view_fault(Prototype, Execute, false), Refuse);
+        assert_eq!(view_fault(Prototype, Read, true), Refuse);
+        assert_eq!(view_fault(Empty, Read, false), Refuse);
+        assert_eq!(view_fault(Valid { writable: true }, Write, false), Again);
+        assert_eq!(view_fault(Valid { writable: false }, Read, false), Again);
+        // A protection fault is no page to bring in, again and again.
+        assert_eq!(view_fault(Valid { writable: false }, Write, false), Refuse);
+        assert_eq!(view_fault(Valid { writable: true }, Execute, false), Refuse);
+        assert_eq!(view_fault(Valid { writable: true }, Read, true), Refuse);
+    }
+
     use super::*;
 
     #[test]

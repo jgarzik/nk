@@ -63,22 +63,34 @@ pub enum Got {
     NeedsIo,
 }
 
-/// What the trap handler asks of a page fault on kernel address `va`,
-/// taken by code that ran with interrupts on (`interrupts`): `None` if
-/// the memory manager has nothing there to resolve, or the fault may not
-/// wait (interrupts off, or `DISPATCH_LEVEL` and above: the caller's
-/// rules then stop the system); else the page made valid, or the status
-/// of the read that failed, which the faulting code gets as
+/// What the trap handler asks of a page fault on `va` by an `access`
+/// (`seh::ACCESS_*`) made in user mode or not, by code that ran with
+/// interrupts on (`interrupts`): `None` if the memory manager has
+/// nothing there to resolve (`cache::fault`), or the fault may not wait
+/// (interrupts off, or `DISPATCH_LEVEL` and above: the caller's rules
+/// then stop the system); else the page made valid, or the status of the
+/// read that failed, which the faulting code gets as
 /// `STATUS_IN_PAGE_ERROR`.
-pub fn page_fault(va: u64, interrupts: bool) -> Option<Result<(), NTSTATUS>> {
+pub fn page_fault(
+    va: u64,
+    access: u64,
+    user_mode: bool,
+    interrupts: bool,
+) -> Option<Result<(), NTSTATUS>> {
+    use crate::ke::seh::{ACCESS_EXECUTE, ACCESS_WRITE};
     if !interrupts
         || !super::cache::is_cache_va(va)
         || crate::ke::irql::current() >= crate::ke::irql::DISPATCH_LEVEL
     {
         return None;
     }
+    let access = match access {
+        ACCESS_WRITE => nk_mm::pte::Access::Write,
+        ACCESS_EXECUTE => nk_mm::pte::Access::Execute,
+        _ => nk_mm::pte::Access::Read,
+    };
     crate::arch::enable_interrupts();
-    let outcome = super::cache::fault(va);
+    let outcome = super::cache::fault(va, access, user_mode);
     crate::arch::disable_interrupts();
     outcome
 }

@@ -55,6 +55,9 @@ const ABORT_WRITE: u64 = 1 << 6;
 /// SPSR_EL1: interrupts were masked; the condition flags, which are all
 /// of it a handler's context may change.
 const SPSR_I: u64 = 1 << 7;
+/// SPSR_EL1: the exception level and stack the interrupted code ran at;
+/// 0 is EL0, user mode.
+const SPSR_M: u64 = 0xF;
 const SPSR_NZCV: u64 = 0xF000_0000;
 /// `brk` immediates, as Windows on arm64 assigns them.
 const BRK_BREAKPOINT: u64 = 0xF000;
@@ -756,7 +759,12 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
                 _ => ACCESS_READ,
             };
             // A page of a file the memory manager can bring in.
-            let in_page = match crate::mm::fault::page_fault(frame.far, frame.spsr & SPSR_I == 0) {
+            let in_page = match crate::mm::fault::page_fault(
+                frame.far,
+                access,
+                frame.spsr & SPSR_M == 0,
+                frame.spsr & SPSR_I == 0,
+            ) {
                 Some(Ok(())) => return,
                 Some(Err(status)) => Some(status),
                 None => None,

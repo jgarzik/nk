@@ -290,20 +290,32 @@ fn resolve(va: u64, mode: Mode) -> Result<Got, NTSTATUS> {
     fault::resolve(ss, index, Some(entry(va)), mode)
 }
 
-/// What the trap handler asks of a fault on `va`: `None` if `va` is not
-/// in a mapped page of a view; else the page made valid, or the status
-/// of the read that failed.
-pub fn fault(va: u64) -> Option<Result<(), NTSTATUS>> {
+/// What the trap handler asks of a fault on `va` by an `access` made
+/// in user mode or not: `None` if the memory manager has nothing to
+/// resolve there (not a view's page, a user-mode access, an execution,
+/// a protection fault on a valid entry: `pte::view_fault`); else the
+/// page made valid, or the status of the read that failed.
+pub fn fault(va: u64, access: pte::Access, user_mode: bool) -> Option<Result<(), NTSTATUS>> {
     if !is_cache_va(va) {
         return None;
     }
     let va = va & !(PAGE_SIZE as u64 - 1);
-    if pte::prototype_target(entry(va).load(Ordering::Acquire)).is_none()
-        && !arch::pt_arch().present(entry(va).load(Ordering::Acquire))
-    {
-        return None;
+    let e = entry(va).load(Ordering::Acquire);
+    let a = arch::pt_arch();
+    let seen = if a.present(e) {
+        pte::ViewEntry::Valid {
+            writable: a.writable(e),
+        }
+    } else if pte::prototype_target(e).is_some() && !owner(va).0.is_null() {
+        pte::ViewEntry::Prototype
+    } else {
+        pte::ViewEntry::Empty
+    };
+    match pte::view_fault(seen, access, user_mode) {
+        pte::ViewFault::Refuse => None,
+        pte::ViewFault::Again => Some(Ok(())),
+        pte::ViewFault::Resolve => Some(resolve(va, Mode::FaultIn).map(|_| ())),
     }
-    Some(resolve(va, Mode::FaultIn).map(|_| ()))
 }
 
 /// The frame behind `va`, a page of a mapped view, made valid and
