@@ -119,7 +119,8 @@ fn release(va: u64, pages: usize) {
     for page in 0..pages {
         let at = va + (page * PAGE_SIZE) as u64;
         if let Some(frame) = frame_of(at) {
-            map::unmap(at, 1);
+            // SAFETY: the region is being given up; nothing uses it.
+            unsafe { map::unmap(at, 1) };
             free_frames(frame, 1);
         }
     }

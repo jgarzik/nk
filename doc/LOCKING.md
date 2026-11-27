@@ -78,6 +78,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
+| 36 | `mm::map::LIVE` | which ranges of the dynamic kernel region are handed out; taken with no lock of the address space held | DISPATCH |
 | 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing; the devices registered with the runtime power framework, their components' counts and conditions, and which are owed callbacks from a worker | DISPATCH |
 | 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |
 | 39 | `hal::variables::FIRMWARE` | the firmware's variable services: one call into them at a time, held across the call and nothing else | DISPATCH |

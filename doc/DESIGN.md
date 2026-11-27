@@ -278,6 +278,16 @@ written at any IRQL, as Windows allows.
   mapped cached unless the protection says otherwise. Write combining
   is mapped as uncached: it makes a run of writes cheaper and changes
   nothing a driver reads.
+- **Giving the dynamic region back** (`kernel/mm/map.rs`). The ranges
+  handed out are recorded (room for 512 is taken at the first, so the
+  record does not grow under drivers and tests). A release must lie
+  wholly in one recorded range, else the system stops as Windows'
+  `MiReleasePtes` stops for system PTEs that were not allocated:
+  `SYSTEM_PTE_MISUSE` (0xDA) with 0x302, the address and the count
+  (`MmUnmapIoSpace` checks before it unmaps anything). Part of a range
+  may be given back, as on Windows; only a whole range is handed out
+  again. Mappings kept for good (device registers the HAL maps) are not
+  recorded, so unmapping one stops too.
 - **Physical addresses.** `MmGetPhysicalAddress` takes no lock, so it
   is callable at any IRQL: arithmetic for the map of all RAM, else a
   walk of the page tables, which are never freed and whose entries are

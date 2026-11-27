@@ -32,6 +32,7 @@ pub fn name(code: u32) -> Option<&'static str> {
         0xC2 => "BAD_POOL_CALLER",
         0xC4 => "DRIVER_VERIFIER_DETECTED_VIOLATION",
         0xD1 => "DRIVER_IRQL_NOT_LESS_OR_EQUAL",
+        0xDA => "SYSTEM_PTE_MISUSE",
         0xE1 => "WORKER_THREAD_RETURNED_AT_BAD_IRQL",
         0xE2 => "MANUALLY_INITIATED_CRASH",
         0xE4 => "WORKER_INVALID",
@@ -160,7 +161,7 @@ mod tests {
 
     /// Every code that has a name, with Microsoft's name for it (the
     /// bug check code reference).
-    const NAMED: [(u32, &str); 30] = [
+    const NAMED: [(u32, &str); 31] = [
         (0x09, "IRQL_NOT_GREATER_OR_EQUAL"),
         (0x0A, "IRQL_NOT_LESS_OR_EQUAL"),
         (0x0C, "MAXIMUM_WAIT_OBJECTS_EXCEEDED"),
@@ -182,6 +183,7 @@ mod tests {
         (0xC2, "BAD_POOL_CALLER"),
         (0xC4, "DRIVER_VERIFIER_DETECTED_VIOLATION"),
         (0xD1, "DRIVER_IRQL_NOT_LESS_OR_EQUAL"),
+        (0xDA, "SYSTEM_PTE_MISUSE"),
         (0xE1, "WORKER_THREAD_RETURNED_AT_BAD_IRQL"),
         (0xE2, "MANUALLY_INITIATED_CRASH"),
         (0xE4, "WORKER_INVALID"),

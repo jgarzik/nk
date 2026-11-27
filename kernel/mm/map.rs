@@ -10,9 +10,10 @@
 use super::{PAGE_SIZE, alloc_frames, phys_to_virt};
 use crate::arch;
 use crate::ke::{Rank, SpinLock};
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_mm::pt::{self, MapError, Prot, TableMem};
-use nk_mm::space::Space;
+use nk_mm::space::{self, Space};
 
 /// Frames taken for page tables. They are kept for good, so a leak check
 /// must not count them as lost.
@@ -56,22 +57,88 @@ impl TableMem for Tables {
     }
 }
 
+/// The ranges `alloc_va` handed out and that are not given back yet,
+/// sorted by address: what may be unmapped and given back. A mapping
+/// made for good (`map_device_for_good`) is not among them. Room for
+/// [`ROOM`] ranges is taken once, at the first reservation, so that the
+/// record does not grow while drivers and tests come and go.
+static LIVE: SpinLock<Vec<(u64, usize)>> = SpinLock::new(Rank::Mappings, Vec::new());
+
+/// The ranges [`LIVE`] has room for from the start.
+const ROOM: usize = 512;
+
 /// Reserve `pages` pages of kernel address space. A gap page follows each
 /// reservation, so running off the end of one mapping faults.
 pub fn alloc_va(pages: usize) -> Option<u64> {
-    NEXT_VA.lock().take(pages, PAGE_SIZE as u64)
+    alloc_va_aligned(pages, PAGE_SIZE as u64)
 }
 
 /// As `alloc_va`, at an address that is a multiple of `align` bytes (a
 /// power of two, at least a page).
 pub fn alloc_va_aligned(pages: usize, align: u64) -> Option<u64> {
-    NEXT_VA.lock().take(pages, align)
+    let va = NEXT_VA.lock().take(pages, align)?;
+    let recorded = {
+        let mut live = LIVE.lock();
+        if live.capacity() == 0 {
+            let _ = live.try_reserve_exact(ROOM);
+        }
+        let room = live.try_reserve(1).is_ok();
+        if room {
+            let at = live.partition_point(|&(start, _)| start < va);
+            live.insert(at, (va, pages));
+        }
+        room
+    };
+    if !recorded {
+        NEXT_VA.lock().give_back(va, pages);
+        return None;
+    }
+    Some(va)
 }
 
-/// Give back address space from `alloc_va`, once nothing is mapped there.
-/// If the reuse cache is full the range is simply not reused.
-pub fn free_va(va: u64, pages: usize) {
-    NEXT_VA.lock().give_back(va, pages);
+/// Stop the system if the `pages` pages at `va` are not all held by one
+/// range `alloc_va` handed out, as Windows' `MiReleasePtes` stops when
+/// system PTEs it is given back were not allocated: `SYSTEM_PTE_MISUSE`
+/// with 0x302, the address and the count. (Windows' fourth parameter
+/// is a position in its allocation bitmap, which NK does not have.)
+pub fn check_held(va: u64, pages: usize) {
+    if space::holder(&LIVE.lock(), va, pages).is_none() {
+        crate::ke::bugcheck::KeBugCheckEx(0xDA, 0x302, va as usize, pages, 0);
+    }
+}
+
+/// Give back the `pages` pages at `va`, all of them held by one range
+/// `alloc_va` handed out ([`check_held`] stops the system otherwise).
+/// A whole range goes back for reuse; part of one is given up but not
+/// reused, as the rest stays mapped beside it without a gap page.
+///
+/// # Safety
+/// Nothing is mapped in the pages any more, and nothing refers to them.
+pub unsafe fn free_va(va: u64, pages: usize) {
+    check_held(va, pages);
+    let whole = {
+        let mut live = LIVE.lock();
+        match space::holder(&live, va, pages) {
+            Some(at) => {
+                let range = live[at];
+                let (before, after) = space::remainder(range, va, pages);
+                // Splitting a range needs one more entry; without the
+                // room the range stays recorded whole, and what was
+                // given back is simply not handed out again.
+                if before.is_none() || after.is_none() || live.try_reserve(1).is_ok() {
+                    live.remove(at);
+                    for piece in [after, before].into_iter().flatten() {
+                        live.insert(at, piece);
+                    }
+                }
+                range == (va, pages)
+            }
+            None => false,
+        }
+    };
+    if whole {
+        NEXT_VA.lock().give_back(va, pages);
+    }
 }
 
 /// Map `pages` pages at `va` to the physical range starting at `pa`.
@@ -120,7 +187,11 @@ pub fn map_device_for_good(pa: u64, bytes: u64) -> Option<u64> {
 }
 
 /// Remove `pages` mappings starting at `va`. Unmapped pages are skipped.
-pub fn unmap(va: u64, pages: usize) {
+///
+/// # Safety
+/// Nothing still uses the pages: no reference into them, and no driver
+/// that holds them.
+pub unsafe fn unmap(va: u64, pages: usize) {
     let _guard = NEXT_VA.lock();
     let (root, arch_pt) = (arch::pt_root_of(va), arch::pt_arch());
     for i in 0..pages {
@@ -233,7 +304,8 @@ pub fn self_test() -> Result<(), &'static str> {
             return Err("mapped view and direct map differ");
         }
     }
-    unmap(va, 2);
+    // SAFETY: the test's own two pages.
+    unsafe { unmap(va, 2) };
     if translate(va).is_some() || translate(va + PAGE_SIZE as u64).is_some() {
         return Err("still mapped after unmap");
     }
@@ -246,10 +318,12 @@ pub fn self_test() -> Result<(), &'static str> {
         return Err("direct map translation is wrong");
     }
     super::free_frames(pa, 2);
-    free_va(va, 2);
+    // SAFETY: unmapped above; the test's own range.
+    unsafe { free_va(va, 2) };
     if alloc_va(2) != Some(va) {
         return Err("freed address space was not reused");
     }
-    free_va(va, 2);
+    // SAFETY: just reserved, never mapped.
+    unsafe { free_va(va, 2) };
     Ok(())
 }

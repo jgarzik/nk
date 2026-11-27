@@ -747,11 +747,13 @@ fn read_only_probe() -> Result<u32, &'static str> {
                 verdict
             }
         };
-        map::unmap(va, 1);
+        // SAFETY: the test's own page, which its MDLs no longer map.
+        unsafe { map::unmap(va, 1) };
         verdict
     };
     let verdict = check(Prot::RO, false).and_then(|()| check(Prot::RW, true));
-    map::free_va(va, 1);
+    // SAFETY: unmapped above; the test's own range.
+    unsafe { map::free_va(va, 1) };
     mm::free_frames(frame, 1);
     verdict.map(|()| probes)
 }

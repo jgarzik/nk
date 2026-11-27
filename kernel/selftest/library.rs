@@ -371,7 +371,8 @@ fn forwarder() -> Result<(), &'static str> {
     ];
     // SAFETY: address space reserved above for nothing else.
     let bound = unsafe { ldr::bind_for_test("nkt-forward.sys", base, &image, exports, &symbols) };
-    map::free_va(base, pages);
+    // SAFETY: as above; never mapped.
+    unsafe { map::free_va(base, pages) };
     let bound = bound.ok_or("the test's image could not be entered")?;
     let kernel = crate::export::resolve(b"ntoskrnl.exe", b"KeSetEvent");
     let expected = [

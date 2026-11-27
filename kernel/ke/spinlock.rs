@@ -58,6 +58,9 @@ pub enum Rank {
     RegistryWatches = 34,
     /// The kernel handle table (`ob::handle`).
     Handles = 35,
+    /// The ranges of the dynamic kernel region that are handed out
+    /// (`mm::map`).
+    Mappings = 36,
     /// The power manager's records (`po`).
     Power = 37,
     /// The firmware table providers drivers registered (`ex::firmware`).

@@ -214,6 +214,17 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
+# Unmapping system address space a mapping does not hold stops the
+# system as Windows does.
+
+[x86_64-neg-unmap-io-space]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/mm/", "lib/mm/", "kernel/selftest/neg.rs"]
+cmdline = "test=neg.unmap-io-space"
+expect = "bugcheck"
+match = "BUGCHECK: 0x000000DA SYSTEM_PTE_MISUSE"
+
 # A fatal hardware error handed to the HAL (`HalBugCheckSystem`) stops
 # the system with Windows' code for it, the error's source, its record
 # and the machine check's status.

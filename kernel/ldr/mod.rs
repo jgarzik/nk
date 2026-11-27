@@ -74,8 +74,11 @@ fn map_view(phys: u64, pages: usize, flags: impl Fn(u32) -> Option<u32>) -> Opti
 }
 
 fn unmap_view(view: u64, pages: usize) {
-    map::unmap(view, pages);
-    map::free_va(view, pages);
+    // SAFETY: the loader's own temporary view, which it is done with.
+    unsafe {
+        map::unmap(view, pages);
+        map::free_va(view, pages);
+    }
 }
 
 /// The bytes of a loaded image, through its view.
@@ -623,8 +626,12 @@ fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Im
 /// Give back an image's memory and addresses, and its place among the
 /// importers of the libraries it had bound to.
 fn release(image: &Image) {
-    map::unmap(image.base, image.pages);
-    map::free_va(image.base, image.pages);
+    // SAFETY: the image is unloaded or never ran: nothing runs in it or
+    // refers to it any more.
+    unsafe {
+        map::unmap(image.base, image.pages);
+        map::free_va(image.base, image.pages);
+    }
     mm::free_frames(image.phys, image.pages);
     for &library in &image.libraries {
         drop_importer(library);

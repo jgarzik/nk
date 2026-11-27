@@ -54,11 +54,13 @@ fn release(stack: Stack, pages: usize) {
     for page in 0..pages {
         let va = stack.base + (page * PAGE_SIZE) as u64;
         if let Some(frame) = map::translate(va) {
-            map::unmap(va, 1);
+            // SAFETY: the stack's thread is gone, or never ran on it.
+            unsafe { map::unmap(va, 1) };
             free_frames(frame, 1);
         }
     }
-    map::free_va(stack.base - KERNEL_STACK_SIZE, 2 * STACK_PAGES);
+    // SAFETY: as above; the whole range the stack was given.
+    unsafe { map::free_va(stack.base - KERNEL_STACK_SIZE, 2 * STACK_PAGES) };
 }
 
 /// Free a stack from `alloc`. Nothing may be running on it.

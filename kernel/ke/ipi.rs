@@ -311,7 +311,9 @@ pub fn tlb_test() -> Result<usize, &'static str> {
         {
             return Err("a processor did not read the page first mapped");
         }
-        map::unmap(va, 1);
+        // SAFETY: the test's own page; the other processors only read it
+        // when asked, and are not asked meanwhile.
+        unsafe { map::unmap(va, 1) };
         map::map(va, frames + 4096, 1, Prot::RO).map_err(|_| "remap failed")?;
         call_all(read_page, va as usize);
         if SLOT[..cpus]
@@ -323,8 +325,11 @@ pub fn tlb_test() -> Result<usize, &'static str> {
         Ok(())
     };
     let verdict = check();
-    map::unmap(va, 1);
-    map::free_va(va, 1);
+    // SAFETY: as above; the test is done with the page.
+    unsafe {
+        map::unmap(va, 1);
+        map::free_va(va, 1);
+    }
     mm::free_frames(frames, 2);
     verdict.map(|()| cpus)
 }
