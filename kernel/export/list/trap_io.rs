@@ -7,15 +7,20 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
+    IoAcquireVpbSpinLock,
+    IoAdjustStackSizeForRedirection,
     IoAssignResources,
+    IoCreateFile,
     IoDuplicateDependency,
+    IoMakeAssociatedIrp,
     IoQueryFullDriverPath,
     IoReadPartitionTableEx,
-    IoReportTargetDeviceChangeAsynchronous,
+    IoReleaseVpbSpinLock,
     IoRequestDeviceEject,
     IoRequestDeviceEjectEx,
     IoRequestDeviceRemovalForReset,
     IoTestDependency,
+    IoVolumeDeviceToDosName,
     IoWMIExecuteMethod,
     IoWMIQueryAllData,
 );

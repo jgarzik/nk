@@ -77,6 +77,9 @@ pub const CLIENT_SECURITY: usize = 0x4A8;
 pub const CROSS_THREAD_FLAGS: usize = 0x510;
 /// `CrossThreadFlags.ActiveImpersonationInfo`.
 pub const ACTIVE_IMPERSONATION_INFO: u32 = 1 << 3;
+/// `CrossThreadFlags.HardErrorsAreDisabled`: the thread asked for no
+/// hard-error message (`IoSetThreadHardErrorMode`).
+pub const HARD_ERRORS_ARE_DISABLED: u32 = 1 << 4;
 /// `CrossThreadFlags.CopyTokenOnOpen`: opening the token the thread
 /// impersonates hands out a copy of it.
 pub const COPY_TOKEN_ON_OPEN: u32 = 1 << 8;

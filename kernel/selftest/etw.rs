@@ -1845,11 +1845,17 @@ fn wmi_register(device: *mut DEVICE_OBJECT) -> Result<(), &'static str> {
     {
         return Err("an action there is not was taken");
     }
-    // By callback, and as a trace provider: the way of before
-    // EtwRegisterClassicProvider, which NK does not take.
+    // As a trace provider, with the notify bits partmgr and volmgr
+    // pass: Windows takes off those bits and registers the device.
+    if wmi_control(device, 0x0011_0001) != STATUS_OBJECT_NAME_EXISTS
+        || wmi_control(device, 0x0081_0001) != STATUS_OBJECT_NAME_EXISTS
+    {
+        return Err("a registration as a trace provider was not taken as a registration");
+    }
+    // By callback: the way of before EtwRegisterClassicProvider, which
+    // NK does not take.
     if wmi_control(device, 0x8001_0001) != STATUS_UNSUCCESSFUL
         || wmi_control(device, 0x8000_0002) != STATUS_UNSUCCESSFUL
-        || wmi_control(device, 0x0001_0001) != STATUS_UNSUCCESSFUL
     {
         return Err("a registration by callback was not refused");
     }

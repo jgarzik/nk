@@ -4,6 +4,26 @@ Windows defines the expected behaviour. Oracle tests hold NK to a
 transcript recorded on real Windows; other expectations come from
 Microsoft's documentation, sample source and the fixture binaries.
 
+## What gets a test
+
+Microsoft's binaries running in boot scenarios are the proof of the
+driver ABI: a routine one of them calls on its way to a passing verdict
+is tested by that boot. During a phase:
+
+- a structure a binary can see is checked against Microsoft's layout
+  tables (`lib/ntabi`, below);
+- algorithmic code in `lib/` gets host unit tests;
+- a bug gets a test that fails before the fix;
+- the golden lists stay: a verdict that disappears or turns into a SKIP
+  fails the boot;
+- a routine a Microsoft binary already executes in a scenario gets no
+  boot self-test of NK's own.
+
+Hardening is the failure paths, cleanup after a failure, `make soak`,
+`make mutants` and the arm64 mirror of the x86-64 work. It runs on a
+tagged snapshot once a phase's proof boots, beside the next phase, and
+is never a condition of a commit.
+
 ## The gates
 
 | Gate | Passes | Prints | Runs |
@@ -42,8 +62,7 @@ by name (`tools/boot_test.py aarch64-smp1`, `make check-arm`).
 | `make oracle` | re-record the transcripts on Windows | no: needs KVM and the VM |
 
 `make help` lists the targets that test nothing themselves (`fixtures`,
-`ledger`, `corpus`). The ungated targets run when the code they cover
-changes and at the end of a phase.
+`ledger`, `corpus`). The ungated targets belong to hardening.
 
 ## Host unit tests
 
@@ -98,7 +117,7 @@ The kernel command line is `\NK\cmdline.txt` on the boot volume:
 | `cpus=<n>` | `hal.cpus` fails unless the kernel finds `n` processors; the harness sets it to what it asked QEMU for |
 | `dpc-limit=<ticks>` | how long one DPC may run, instead of Windows' 20 seconds |
 | `debug=on` | behave as with a debugger attached that continues at every breakpoint |
-| `without=<file>` | boot as if the driver file `<file>` had not been provided: its service is passed over and a device that needs it is left without its driver |
+| `without=<file>[,<file>...]` | boot as if the driver files named had not been provided: their services are passed over, and a device that needs one is left without its driver (a filter is left out of the stack) |
 | `trace=registry` | log every key a driver opens and every value it reads, with the status: what a driver looks for in the registry, for bringing one up |
 
 ### What passing means
@@ -255,9 +274,11 @@ tier has, for each architecture:
   and the device reset interface; the test's bus completes the
   request unchanged, as `pci.sys` completes a request for an
   interface it has no entry for, and Storport goes on without them.
-  The class filters the reference machine registers for disks
-  (`partmgr`, `EhStorClass`) have no image among the boot files and
-  are left out (`doc/DESIGN.md`, What is absent).
+  The class filters the reference machine registers for disks are
+  left out: `EhStorClass` has no image among the boot files
+  (`doc/DESIGN.md`, What is absent), and the storage scenarios boot
+  `without=partmgr.sys`, since the pattern disk has no partition table
+  for it to read. The volume scenarios have it.
 
   The two paths never both have the controller. The direct path
   exists only in this group, which runs only when named
@@ -348,6 +369,18 @@ a test disk that loses a write, writes a sector it was not asked to,
 reads a sector from the wrong place, or reports fewer bytes than it
 moved.
 
+The test disk is a disk device, so it has a volume parameter block,
+and the proof reads it through RAW, as every open of a disk for data
+goes (`doc/DESIGN.md`, Mounting). `disk.raw.*` hold the mount to that:
+an open of the disk for its attributes alone mounts nothing
+(`disk.raw.direct`); an open of a name on the unmounted disk, whose
+block does not allow a raw mount, is `STATUS_UNRECOGNIZED_VOLUME`
+(`disk.raw.unrecognized`); an open of the disk for data mounts RAW,
+whose device then serves the disk's first sector, and a name on the
+mounted disk is RAW's `STATUS_INVALID_PARAMETER` (`disk.raw.mount`).
+The group deletes its disk at the end, which dismounts it; its count
+of what it leaves behind would show a volume left mounted.
+
 Against Microsoft's disk the proof is `stor.direct.io` of the
 `x86_64-storage-direct` scenario, whose image is held to
 `disk_expect = "written"`, and `stor.io` of the `x86_64-storage`
@@ -355,14 +388,59 @@ scenario. That scenario says `disk_expect = "unchanged"` for as long as
 `stor.io` is skipped; the boot in which the disk device first exists
 writes the write range, and its scenario says `disk_expect = "written"`.
 
+### The FAT disk
+
+A scenario with `disk_image` as well as `disk` gets, in place of the
+pattern disk, a 64 MiB disk holding one FAT32 volume
+(`tools/fatdisk.py`): one partition at sector 2048, 126976 sectors long,
+in an MBR (`fat32-mbr`, disk signature `0x4E4B0001`, type `0x0C`) or a
+GPT (`fat32-gpt`, a Basic Data partition, fixed disk and partition
+GUIDs). The volume has one sector a cluster, the serial `4e4b0002`,
+the label `NKVOL`, and three files: `HELLO.TXT`, `PATTERN.BIN` (three
+sectors and 100 bytes of the data disk's original pattern) and
+`DIR1\NESTED.TXT`. After the boot, `disk_expect = "fat-unchanged"`
+requires `fsck.fat -n` to find the volume clean, every file to hold
+what it was given, and no other file. `tools/test_fatdisk.py` holds the
+check to that without booting.
+
+- `x86_64-volumes-partmgr` (`test=vol.partmgr`,
+  `kernel/selftest/volumes.rs`): the storage stack with `partmgr.sys`
+  as the disk class's upper filter, on the MBR disk. `vol.partmgr`
+  asks the disk for its layout (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`),
+  which `partmgr.sys` answers from the partition table it read: an
+  MBR disk with the disk's signature, the FAT32 partition first, the
+  other entries empty.
+- `x86_64-volumes-volmgr` (`registry = ["storage", "volumes"]`): and
+  `volmgr.sys`, which reports its own root device, takes the partition
+  from `partmgr.sys` and makes `\Device\HarddiskVolume1`, a
+  `STORAGE\Volume` device that `volume.sys` is installed on and serves.
+  `vol.volume` waits for the volume (the drivers hand partitions and
+  volumes on in work items of their own) and asks which partition it is
+  (`IOCTL_DISK_GET_PARTITION_INFO_EX`, with the verify override, since
+  no file system has mounted it). The volume is offline until
+  `mountmgr.sys` brings it online, so it is not read here.
+- `x86_64-volumes-mountmgr` (`registry = ["storage", "volumes",
+  "mount"]`): and `mountmgr.sys`, which brings the volume online, names
+  it by `volmgr.sys`'s stable GUID (`Volume{4e4b0001-...}`, the disk's
+  signature and the partition's offset) and, from its reinitialisation
+  routine at the end of start, gives it `C:`. `vol.mount` waits for
+  `\GLOBAL??\C:`, requires both names to lead to the volume and the
+  mounted-devices key to hold `\DosDevices\C:`, and reads the volume
+  through `\??\C:`, by way of RAW: the FAT32 boot sector first, and a
+  read past the end refused.
+- `x86_64-volumes-gpt`: the same on the GPT disk (`disk_image =
+  "fat32-gpt"`). `vol.partmgr` requires a GPT layout with the disk's
+  GUID and one Basic Data partition with its GUID; the volume's name is
+  the partition's GUID (`Volume{4e4b0000-...-000000000002}`).
+
 ### Soak
 
 `make soak` runs the soak tier `SOAK_REPEAT` times each: the whole list
 with one to eight processors on both architectures,
 x86-64 both virtualised and emulated. It starts twice as many guest
 processors as the host has, on purpose: an overloaded host stalls guest
-processors at arbitrary instants, which is what shakes out races. Run it
-whenever scheduling, locking or interrupt entry changes.
+processors at arbitrary instants, which is what shakes out races. It
+is part of hardening.
 
 ### Firmware hangs
 
@@ -466,9 +544,9 @@ with the test that must catch it. `make mutants` applies each, rebuilds,
 boots, requires that test to fail, and restores the source. `make test`
 checks every mutant still applies.
 
-A change that adds a mechanism whose failure would be silent (state
-saved and restored, an interrupt acknowledged, a wake-up delivered) adds
-the mutant that removes it.
+A mechanism whose failure would be silent (state saved and restored, an
+interrupt acknowledged, a wake-up delivered) gets the mutant that
+removes it, in hardening.
 
 ## Unwind coverage
 

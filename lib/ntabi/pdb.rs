@@ -364,6 +364,14 @@ fn thread_matches_the_kernel() {
         impersonating.bits,
         Some((ACTIVE_IMPERSONATION_INFO.trailing_zeros() as u8, 1))
     );
+    let hard_errors = ethread
+        .member("HardErrorsAreDisabled")
+        .expect("_ETHREAD.HardErrorsAreDisabled");
+    assert_eq!(hard_errors.offset as usize, CROSS_THREAD_FLAGS);
+    assert_eq!(
+        hard_errors.bits,
+        Some((HARD_ERRORS_ARE_DISABLED.trailing_zeros() as u8, 1))
+    );
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
@@ -1397,6 +1405,12 @@ fn plug_and_play_structures_match_the_kernel() {
     );
     same_layout!(
         types,
+        DEVICE_NODE,
+        "_DEVICE_NODE",
+        [Sibling, Child, Parent, LastChild, PhysicalDeviceObject]
+    );
+    same_layout!(
+        types,
         DEVICE_CAPABILITIES,
         "_DEVICE_CAPABILITIES",
         [
@@ -1579,6 +1593,52 @@ fn runtime_library_structures_match_the_kernel() {
     assert_eq!(offset_of!(RTL_SPLAY_LINKS, Parent), field("Parent"));
     assert_eq!(offset_of!(RTL_SPLAY_LINKS, LeftChild), field("LeftChild"));
     assert_eq!(offset_of!(RTL_SPLAY_LINKS, RightChild), field("RightChild"));
+    let links = types
+        .layout("_RTL_BALANCED_LINKS")
+        .expect("_RTL_BALANCED_LINKS");
+    let field = |name| offset(&links, "_RTL_BALANCED_LINKS", name);
+    assert_eq!(size_of::<RTL_BALANCED_LINKS>(), links.size as usize);
+    assert_eq!(offset_of!(RTL_BALANCED_LINKS, Parent), field("Parent"));
+    assert_eq!(
+        offset_of!(RTL_BALANCED_LINKS, LeftChild),
+        field("LeftChild")
+    );
+    assert_eq!(
+        offset_of!(RTL_BALANCED_LINKS, RightChild),
+        field("RightChild")
+    );
+    assert_eq!(offset_of!(RTL_BALANCED_LINKS, Balance), field("Balance"));
+    let table = types.layout("_RTL_AVL_TABLE").expect("_RTL_AVL_TABLE");
+    let field = |name| offset(&table, "_RTL_AVL_TABLE", name);
+    assert_eq!(size_of::<RTL_AVL_TABLE>(), table.size as usize);
+    assert_eq!(
+        offset_of!(RTL_AVL_TABLE, OrderedPointer),
+        field("OrderedPointer")
+    );
+    assert_eq!(
+        offset_of!(RTL_AVL_TABLE, WhichOrderedElement),
+        field("WhichOrderedElement")
+    );
+    assert_eq!(
+        offset_of!(RTL_AVL_TABLE, NumberGenericTableElements),
+        field("NumberGenericTableElements")
+    );
+    assert_eq!(offset_of!(RTL_AVL_TABLE, DepthOfTree), field("DepthOfTree"));
+    assert_eq!(offset_of!(RTL_AVL_TABLE, RestartKey), field("RestartKey"));
+    assert_eq!(offset_of!(RTL_AVL_TABLE, DeleteCount), field("DeleteCount"));
+    assert_eq!(
+        offset_of!(RTL_AVL_TABLE, CompareRoutine),
+        field("CompareRoutine")
+    );
+    assert_eq!(
+        offset_of!(RTL_AVL_TABLE, AllocateRoutine),
+        field("AllocateRoutine")
+    );
+    assert_eq!(offset_of!(RTL_AVL_TABLE, FreeRoutine), field("FreeRoutine"));
+    assert_eq!(
+        offset_of!(RTL_AVL_TABLE, TableContext),
+        field("TableContext")
+    );
     let guid = types.layout("_GUID").expect("_GUID");
     let field = |name| offset(&guid, "_GUID", name);
     assert_eq!(size_of::<GUID>(), guid.size as usize);

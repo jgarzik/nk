@@ -7,13 +7,15 @@ from pathlib import Path
 
 import boot_test
 import datadisk
+import fatdisk
 import mkesp
 
 TOOLS = Path(__file__).resolve().parent
 SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
     "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
-    "golden", "canonical", "disk", "disk_size", "disk_expect", "registry", "paths",
+    "golden", "canonical", "disk", "disk_size", "disk_image", "disk_expect", "registry",
+    "paths",
 }
 
 
@@ -69,7 +71,12 @@ class Scenarios(unittest.TestCase):
                     self.assertIn("disk", sc)
                 for name in sc.get("registry", ()):
                     self.assertTrue(mkesp.registry_file(name).exists(), name)
-                if "disk" in sc:
+                if "disk_image" in sc:
+                    self.assertEqual(sc.get("disk"), "ahci")
+                    self.assertNotIn("disk_size", sc, "a FAT disk has its own size")
+                    self.assertIn(sc["disk_image"], fatdisk.LAYOUTS)
+                    self.assertIn(sc["disk_expect"], fatdisk.CHECKS)
+                elif "disk" in sc:
                     self.assertEqual(sc["disk"], "ahci")
                     self.assertIn(sc["disk_expect"], datadisk.CHECKS)
                     size = sc.get("disk_size", datadisk.DEFAULT_MIB)

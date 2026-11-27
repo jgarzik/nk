@@ -20,6 +20,52 @@ use nk_ntabi::status::*;
 /// Where service keys live, from the registry's root.
 const SERVICES: &str = "Machine\\System\\CurrentControlSet\\Services";
 
+/// `IoCreateArcName` (undocumented; `ntddk.h` declares it): give the
+/// disk `device` its ARC names (`\ArcName\multi(0)disk(0)rdisk(N)`),
+/// as links to its partitions, if the loader named it among the disks
+/// it saw. Windows matches the disk against the loader's table of ARC
+/// disks and answers `STATUS_NOT_SUPPORTED` when the table holds none
+/// that matches; `partmgr.sys` notes a success. NK's loader is UEFI's
+/// and its table is empty, so that is the answer for every disk, as on
+/// Windows with such a loader, and no name is made.
+#[allow(non_snake_case)]
+pub extern "C" fn IoCreateArcName(_device: *mut nk_ntabi::io::DEVICE_OBJECT) -> NTSTATUS {
+    STATUS_NOT_SUPPORTED
+}
+
+/// Whether the boot-start and system-start drivers have all been
+/// started: Windows' second phase of initialisation has begun.
+static STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Bytes of `BOOTDISK_INFORMATION_LITE` before its entries: the number
+/// of entries.
+const BOOT_DISK_HEADER: usize = 4;
+
+/// `IoGetBootDiskInformationLite` (undocumented; `ntddk.h` declares it):
+/// a pool block the caller frees, listing the disks the loader booted
+/// from and found the system on. NK's loader is UEFI's: it names no ARC
+/// disk, so the list is empty, as Windows' is for a loader that names
+/// none. Once the system has started, `STATUS_TOO_LATE`, as on Windows.
+///
+/// # Safety
+/// `information` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoGetBootDiskInformationLite(information: *mut *mut u8) -> NTSTATUS {
+    if STARTED.load(core::sync::atomic::Ordering::Acquire) {
+        return STATUS_TOO_LATE;
+    }
+    let block = crate::mm::pool::alloc(BOOT_DISK_HEADER, u32::from_le_bytes(*b"IoBd"));
+    if block.is_null() {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // SAFETY: a fresh block of the header's size; per the contract.
+    unsafe {
+        block.cast::<u32>().write_unaligned(0);
+        information.write(block);
+    }
+    STATUS_SUCCESS
+}
+
 /// Registry value types.
 const REG_EXPAND_SZ: u32 = 2;
 const REG_DWORD: u32 = 4;
@@ -164,6 +210,10 @@ pub fn start_boot_services() -> Result<(), &'static str> {
     // devices they serve have been started.
     crate::pnp::boot_drivers_loaded();
     driver::reinitialize_boot_drivers();
+    // NK has started: the third of the points where Windows calls the
+    // other reinitialisation routines.
+    STARTED.store(true, core::sync::atomic::Ordering::Release);
+    driver::reinitialize_drivers();
     Ok(())
 }
 
@@ -233,7 +283,10 @@ pub unsafe extern "C" fn ZwLoadDriver(
         ));
     };
     match start(&name) {
-        Ok(_) => STATUS_SUCCESS,
+        Ok(_) => {
+            driver::reinitialize_drivers();
+            STATUS_SUCCESS
+        }
         Err(error) => error.status(),
     }
 }

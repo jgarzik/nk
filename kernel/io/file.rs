@@ -270,16 +270,24 @@ unsafe fn submit(file: *mut FILE_OBJECT, irp: *mut IRP) -> Result<IoResult, IoEr
     unsafe { start(file, irp, KERNEL_MODE) }.wait()
 }
 
-/// The device a request on `file` is sent to: the top of the stack the
-/// file's device is in
+/// The device a request on `file` is sent to: the top of the stack of
+/// the file system's volume device, for a file opened on a mounted
+/// volume, else of the stack the file's device is in
 /// ([`IoGetRelatedDeviceObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetrelateddeviceobject)).
 /// The file stays counted on the device that was named.
 ///
 /// # Safety
 /// `file` must be an open file object.
 pub unsafe fn related_device(file: *mut FILE_OBJECT) -> *mut DEVICE_OBJECT {
-    // SAFETY: per the contract: an open file holds its device.
-    unsafe { device::top((*file).DeviceObject) }
+    // SAFETY: per the contract: an open file holds its device, and the
+    // block of a mounted volume it holds a reference to.
+    unsafe {
+        let vpb = (*file).Vpb.cast::<VPB>();
+        if !vpb.is_null() && !(*vpb).DeviceObject.is_null() {
+            return device::top((*vpb).DeviceObject);
+        }
+        device::top((*file).DeviceObject)
+    }
 }
 
 /// A new IRP for a request on `file`, with its next location's function
@@ -525,9 +533,34 @@ pub fn open_as(
     if !live {
         return Err(STATUS_NO_SUCH_DEVICE);
     }
+    let desired = object::FILE_TYPE.map_generic(request.desired_access);
+    // A device a file system can be mounted on is opened through the
+    // one mounted on it, unless the open is a direct device open
+    // (`io::mount`).
+    let itself = target.remainder.is_empty() && target.related.is_null();
+    // SAFETY: the device is counted.
+    let has_vpb = unsafe { !(*device).Vpb.is_null() };
+    let vpb = if has_vpb && !super::mount::direct_open(itself, desired) {
+        // SAFETY: as above; at `PASSIVE_LEVEL`, as an open is.
+        match unsafe { super::mount::mounted(device, itself) } {
+            Ok(vpb) => vpb,
+            Err(status) => {
+                // SAFETY: the count taken above.
+                unsafe { device::dereference(device) };
+                return Err(status);
+            }
+        }
+    } else {
+        core::ptr::null_mut()
+    };
     let Some(body) = object::create(&object::FILE_TYPE, size_of::<FILE_OBJECT>()) else {
-        // SAFETY: the count taken above.
-        unsafe { device::dereference(device) };
+        // SAFETY: the count and the block's reference taken above.
+        unsafe {
+            if !vpb.is_null() {
+                super::mount::release(vpb);
+            }
+            device::dereference(device);
+        }
         return Err(STATUS_INSUFFICIENT_RESOURCES);
     };
     let file = body.cast::<FILE_OBJECT>();
@@ -536,7 +569,6 @@ pub fn open_as(
     // to it, and a named pipe's or a mailslot's parameters. They are the
     // driver's to read and write meanwhile, so they are reached through
     // raw pointers only.
-    let desired = object::FILE_TYPE.map_generic(request.desired_access);
     // SAFETY: an all-zero access state, and its auxiliary data, are
     // valid values (integers and null pointers).
     let (mut state, mut aux): (ACCESS_STATE, AUX_ACCESS_DATA) = unsafe { core::mem::zeroed() };
@@ -577,6 +609,7 @@ pub fn open_as(
         (*file).Type = IO_TYPE_FILE;
         (*file).Size = size_of::<FILE_OBJECT>() as i16;
         (*file).DeviceObject = device;
+        (*file).Vpb = vpb.cast();
         (*file).RelatedFileObject = target.related;
         if request.create_options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT) != 0
         {
@@ -657,6 +690,10 @@ pub fn open_as(
     // what a file object with no device means.
     unsafe {
         (*file).DeviceObject = core::ptr::null_mut();
+        (*file).Vpb = core::ptr::null_mut();
+        if !vpb.is_null() {
+            super::mount::release(vpb);
+        }
         device::dereference(device);
         object::dereference(body);
     }
@@ -712,7 +749,8 @@ pub unsafe extern "C" fn handle_closed(
 /// The file type's delete procedure: the last reference to a file
 /// object has gone. The driver is sent `IRP_MJ_CLOSE` (after a cleanup
 /// request, if the file never had a handle to be closed), the device
-/// loses the file's reference and the name its block. A file object
+/// loses the file's reference, a mounted volume's block the open's, and
+/// the name its block. A file object
 /// whose create failed has no device, and the driver hears nothing.
 ///
 /// A driver is called at `PASSIVE_LEVEL`: when the last reference to
@@ -736,6 +774,10 @@ pub unsafe extern "C" fn deleted(object: *mut c_void) {
                 (*irp).Flags = IRP_CLOSE_OPERATION | IRP_SYNCHRONOUS_API;
                 submit(file, irp)
             });
+            let vpb = (*file).Vpb.cast::<VPB>();
+            if !vpb.is_null() {
+                super::mount::release(vpb);
+            }
             device::dereference(device);
         }
         let name = (*file).FileName.Buffer;

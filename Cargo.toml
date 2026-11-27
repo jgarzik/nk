@@ -49,6 +49,10 @@ panic = "abort"
 overflow-checks = true
 debug-assertions = true
 opt-level = 2
+# The kernel is one image: whole-program optimisation lets the small
+# functions of `lib/` crates inline into their kernel callers.
+lto = "fat"
+codegen-units = 1
 
 [profile.dev]
 panic = "abort"

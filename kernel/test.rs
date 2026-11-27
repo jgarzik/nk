@@ -189,6 +189,7 @@ fn complete() -> ! {
         FAIL.load(Ordering::Relaxed),
         SKIP.load(Ordering::Relaxed)
     );
+    crate::io::shutdown::shutdown_system();
     crate::hal::power_off_or_halt()
 }
 

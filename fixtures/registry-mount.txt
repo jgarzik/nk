@@ -1,0 +1,16 @@
+# Registry content for Microsoft's mount manager over the volume
+# drivers, laid over the SYSTEM hive with registry-overlay.txt,
+# registry-storage.txt and registry-volumes.txt in the boots that ask
+# for it (a scenario's `registry = [..., "mount"]`; tools/mkesp.py).
+#
+# NK's own, as registry-volumes.txt is: the least mountmgr.sys needs to
+# be started. It makes its MountedDevices key itself.
+
+# mountmgr.sys: a boot-start driver that names volumes and gives them
+# drive letters.
+key ControlSet001\Services\mountmgr
+value ImagePath expand_sz System32\drivers\mountmgr.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 1
+value Group sz "System Bus Extender"

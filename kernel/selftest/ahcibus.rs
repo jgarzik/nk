@@ -1005,7 +1005,7 @@ impl Bus {
         .map_err(|_| "the bus's driver object could not be made")?;
         DRIVER.store(made, Ordering::Release);
         let bus = Bus { function };
-        let reported = pnp::report_detected_device(BUS, "Internal")
+        let reported = pnp::report_detected_device(BUS, Some("Internal"))
             .map_err(|_| "the bus's device could not be reported")?;
         REPORTED.store(reported, Ordering::Release);
         let own = make(made, None).ok_or("the bus's own device could not be made")?;

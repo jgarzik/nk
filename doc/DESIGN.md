@@ -621,7 +621,12 @@ process, which never ends. Windows waits on an object of any other
 type through that type's default object; NK does not, and stops by
 name. `ZwCreateEvent` makes an event object without a name and hands
 back a handle; a name, or the attributes that go with one, is refused
-(`STATUS_NOT_IMPLEMENTED`). Both are `Partial` in the ledger for that.
+(`STATUS_NOT_IMPLEMENTED`). `ZwOpenEvent` looks the name up and hands
+back a handle to an event found there; what it finds otherwise is
+answered as the namespace answers it (`mountmgr.sys` asks for an event
+that only the session manager makes, and it is not found), and a name
+relative to a directory handle stops by name. All three are `Partial`
+in the ledger for that.
 
 A wait that would block at `DISPATCH_LEVEL` stops the system
 (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
@@ -1138,10 +1143,11 @@ Not covered:
   overflow stub have no entries.
 - Code that starts a processor before it is on the kernel's page tables
   (the x86-64 trampoline, arm64's `nk_ap_stub`).
-- The prebuilt `core`, `alloc` and `compiler_builtins`: Rust ships them
-  without tables. What NK instantiates from them (generic code) is
-  compiled with NK and has entries; their own non-generic functions
-  (formatting, `memcpy`, 128-bit division) do not.
+- The prebuilt `compiler_builtins` (`memcpy`, 128-bit division): Rust
+  ships it without tables, and the link-time optimisation leaves it
+  apart. `core` and `alloc` are optimised with the kernel as one
+  program (`lto = "fat"` in the workspace's release profile), so their
+  code is compiled with NK and has entries.
 - x86-64 MXCSR and arm64 FPCR of interrupted code: they are in the trap
   frame, but unwind codes have no way to name them.
 
@@ -1331,6 +1337,7 @@ make that safe.
 | a callback object's registered routine (`ExNotifyCallback`) | undo: the registration is no longer in use, so unregistering it does not wait for ever |
 | a one-time initialisation routine (`RtlRunOnceExecuteOnce`) | undo: the `RTL_RUN_ONCE` is new again, so the threads waiting for it try in their turn |
 | a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
+| an AVL table's compare, allocate and free routines | nothing: the table is the caller's, a new node is linked only after its routines have returned, and a deleted one is freed after it is unlinked |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 | a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`, `WheaAddErrorSource`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
@@ -1645,6 +1652,17 @@ reinitialised; one may register again from within itself. Afterwards
 the queue is closed, and a routine registered later is never called, as
 on Windows.
 
+The routines drivers registered with `IoRegisterDriverReinitialization`
+are called at the three points the pinned kernel calls them: after a
+driver is loaded for a device, after one is loaded by `ZwLoadDriver`,
+and when the system has finished starting (after the boot queue). Each
+point calls the routines registered before it, in order; a routine
+registered meanwhile, or by itself again, waits for the next point.
+`mountmgr.sys` names drive letters only from its reinitialisation
+routine. `IoGetBootDiskInformationLite` lists the disks the loader
+names, which for NK's UEFI loader are none, and answers
+`STATUS_TOO_LATE` once the system has started, as Windows does.
+
 - A service whose image is not among the boot files is passed over,
   with a line in the log: a test image holds only the drivers it was
   given.
@@ -1702,6 +1720,27 @@ file (`file::related_device`, Windows' `IoGetRelatedDeviceObject`). The
 file stays counted on the device that was named, and
 `IoGetDeviceObjectPointer` hands out the top. How a read's or a write's
 buffer travels is the top device's choice (`DO_BUFFERED_IO`).
+
+**Mounting** (`io/mount.rs`, `io/raw.rs`). A device a file system can be
+mounted on has a volume parameter block (`VPB`), and an open of it that
+is not a direct device open (the device itself, for its attributes,
+synchronisation or security alone) mounts the block first, as Windows'
+`IopCheckVpbMounted` does: the file object gets the block, with a
+reference, and its requests go to the top of the mounted volume
+device's stack. NK has one file system, RAW, the kernel's own as on
+Windows (`\FileSystem\RAW`): it mounts when the device itself is
+opened, or when the block allows a raw mount (`VPB_RAW_MOUNT`), and
+otherwise the open fails with `STATUS_UNRECOGNIZED_VOLUME`. RAW's
+volume device takes the buffering of the device beneath, lets the
+volume itself be opened and nothing in it (a name, a related file, a
+disposition other than "open", or a directory is
+`STATUS_INVALID_PARAMETER`, as Windows' RAW answers), and passes
+reads, writes, control requests and flushes down unchanged; NK's own
+disk tests read `\Device\Harddisk0\DR0` through it. Mounting clears
+the device's `DO_VERIFY_VOLUME`. Two opens mounting at once make two
+volume devices; the first published wins and the other is deleted. A
+volume stays mounted until its device is deleted (`VPB_REMOVE_PENDING`)
+and nothing is open on it; then RAW's device goes.
 
 A deleted device with another still attached to it stays, deletion
 pending, until that one detaches. The driver of the attached device is
@@ -2137,7 +2176,12 @@ itself.
 the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button
 and for a critical temperature) powers the machine off at once, by the
 path the kernel ends a run by: there is no user mode to ask and nothing
-to flush. What the pinned kernel refuses outright is refused; every
+to flush. That path first sends `IRP_MJ_SHUTDOWN` to the devices
+registered for it (`io::shutdown`), to the top of each one's stack, one
+at a time and waited for, newest first: the
+`IoRegisterShutdownNotification` queue, then the last-chance one, which
+on Windows comes after the file systems are flushed. A device deleted
+while registered leaves its queue. What the pinned kernel refuses outright is refused; every
 other action is its policy manager's, which NK lacks, and stops the
 system naming the action.
 
@@ -2165,21 +2209,27 @@ resource lists a start carries, the keys under `Enum`. The rest is NK's.
 
 **The tree.** One node per device (`pnp/node.rs`), NK's own structure,
 found by the address of the device's physical device object. Windows'
-`DEVICE_NODE` is private to its kernel; the device extension's
-`DeviceNode` field holds the address of NK's node, so that it is
-non-null for an enumerated device as on Windows, and NK never reads it
-back. The disassembly of `acpi.sys`, `pci.sys`, `storport.sys`,
-`classpnp.sys` and `disk.sys` was searched for reads through that field
-and none was found; that is a search, not a proof. The root is
-`HTREE\ROOT\0`, a device of `\Driver\PnpManager` (`pnp/root.rs`).
+`DEVICE_NODE` is private to its kernel, yet its drivers read its front:
+`partmgr.sys` follows a disk's `DeviceNode` to its `Parent` and that
+node's `PhysicalDeviceObject`. So each node has a `DEVICE_NODE` of
+Windows' size (`nk_ntabi::pnp`, checked against the kernel's symbols),
+a pool block the device extension's `DeviceNode` field points to, whose
+tree links (`Sibling`, `Child`, `Parent`, `LastChild`) and device NK
+keeps as nodes come and go, under the tree's lock; the rest of it is
+zero, and NK never reads it back. The field is cleared before the block
+is freed. The root is `HTREE\ROOT\0`, a device of
+`\Driver\PnpManager` (`pnp/root.rs`).
 
 **Reported devices.** A driver that detects its own device reports it
-(`pnp::report_detected_device`, Windows' `IoReportDetectedDevice` for a
-report without resources; kernel-internal, no driver NK runs imports
-the export): the device becomes `ROOT\<service>\0000`, a child of the
-root, with a physical device object of the manager's. The reporting
-driver attaches its own device and serves it; the manager adds no
-driver and sends no start. The HAL does this at boot, as on Windows
+(`pnp::report_detected_device`; the export `IoReportDetectedDevice`,
+which `volmgr.sys` calls, for a report without resources): the device
+becomes `ROOT\<service>\0000`, a child of the root, with a physical
+device object of the manager's. The reporting driver attaches its own
+device and serves it; the manager adds no driver and sends no start,
+and the interfaces the driver enabled meanwhile arrive when the device
+counts as started (`volmgr.sys` enables its manager's interface in its
+own `AddDevice`). A report that names resources, or hands back a device
+of an earlier boot, stops the system by name. The HAL does this at boot, as on Windows
 (`hal/bus.rs`): `ROOT\ACPI_HAL\0000`, on whose bus the HAL's driver
 `\Driver\ACPI_HAL` enumerates `ACPI_HAL\PNP0C08\0`, the device the ACPI
 driver serves. What those two devices answer is read from the pinned
@@ -2194,7 +2244,9 @@ cache coherency); NK's hands out none.
 device is done by the thread that holds the engine's mutex
 (`pnp/engine.rs`): the boot thread as it starts drivers, the engine's
 own thread for what drivers ask for (`IoInvalidateDeviceRelations`
-queues, wakes it and returns), a test. `pnp::settle` does all there is
+queues, wakes it and returns; `SingleBusRelations` is taken as
+`BusRelations`, since NK asks only the device itself in either case),
+a test. `pnp::settle` does all there is
 to do and returns when nothing moves. Windows queues device actions for
 one worker of its own in the same way. The engine's thread is not a
 thread of the system's work queues: the engine waits for drivers with
@@ -2299,16 +2351,31 @@ is no query-remove, no eject, no stop and no rebalance.
 from its node and its key; `IoOpenDeviceRegistryKey` opens its
 `Device Parameters` key or its driver key. A property set with
 `IoSetDevicePropertyData` is kept in the key where Windows keeps it and
-read back by `IoGetDevicePropertyData`; the properties Windows computes
-(`DEVPKEY_Device_*`) are not answered unless a driver set them. A
+read back by `IoGetDevicePropertyData`. Of the properties Windows
+computes, NK answers those Microsoft's binaries ask of a disk:
+`DEVPKEY_Device_ClassGuid`, `_BusNumber` and `_Address` (from what
+`IoGetDeviceProperty` answers) and `DEVPKEY_Device_Parent` (the
+parent's instance path); any other is not found unless a driver set
+it. A
 device interface is registered under Windows' link name and
 `DeviceClasses` record; enabling it makes the symbolic link to the
 physical device object (which therefore needs a name) and calls the
 callbacks registered for the class's arrivals, on the caller's thread
 where Windows queues them for a worker; enabled before its device has
-started, an interface waits for the start. Notification registrations
-for hardware profile changes and for a target device's removal are
-kept and never called: NK produces neither event.
+started, an interface waits for the start. Disabling one answers
+success whatever came of it, as Windows' routine does: `partmgr.sys`
+disables an interface it never enabled on each disk it starts. A
+registration for a device's changes names a file; the device is what
+the file's stack answers `TargetDeviceRelation` with, as on Windows,
+held by the registration. A custom event a driver reports for a device
+(`IoReportTargetDeviceChangeAsynchronous`; `mountmgr.sys` reports a
+volume's new names) is copied and told, from a worker, to every
+registration for that device, each with its own file in the
+structure, and then the reporter's routine is called; the call answers
+`STATUS_PENDING`. One of the predefined removal events is refused as
+Windows refuses it. Notification registrations for hardware profile
+changes, and the removal events of a device, are never called: NK
+produces neither.
 `IoInvalidateDeviceState` has a started device asked for its state
 again by the worker. Dependencies between devices
 (`IoReserveDependency`, `IoResolveDependency`, `IoSetDependency`;
@@ -2602,6 +2669,22 @@ a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
 
+### The AVL table
+
+An [AVL generic table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlinitializegenerictableavl)
+is the driver's: its header (`RTL_AVL_TABLE`, `nk_ntabi::rtl`, checked
+against the kernel's symbols), its order (the compare routine) and its
+nodes, each an `RTL_BALANCED_LINKS` with the element copied after it in
+a block from the allocate routine. The header's `BalancedRoot` is the
+tree's sentinel, its own parent, with the root as its right child. The
+balancing is `nk_rtl::avl`, written against a store of nodes as the
+prefix table's is and checked on the host against a set over random
+sequences. Insertion and deletion keep the element count, the delete
+count and the depth the header declares, and forget its place of an
+ordered walk. The caller serialises the calls on one table. The walks
+(`RtlEnumerateGenericTableAvl` and its kin) are not exported: no binary
+NK runs imports them.
+
 ### Bitmaps
 
 An [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap)
@@ -2670,8 +2753,9 @@ driver that guards its own objects asks
 [`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck)
 and gets Windows' answer (below). Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
-replaces the named parts of a device's descriptor; for other objects it
-answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
+and `ObSetSecurityObjectByPointer` (by handle and by pointer) replace
+the named parts of a device's descriptor; for other objects they answer
+`STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
 is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
 forced, returns a self-relative pool copy, the caller's to free.
 
@@ -2901,9 +2985,12 @@ anything: its registration, and the request that follows it.
   update; `WMIREG_ACTION_BLOCK_IRPS` ends the sending. Deregistering
   drops what waits for the device, waits for a request that is with the
   driver, and gives the device back.
-- A registration by callback or as a trace provider
-  (`WMIREG_FLAG_CALLBACK`, `WMIREG_FLAG_TRACE_PROVIDER`) is how WPP
-  registered before `EtwRegisterClassicProvider`. NK does not take it:
+- An action with `WMIREG_FLAG_TRACE_PROVIDER` and the trace-notification
+  bits (`partmgr.sys`, `volmgr.sys`) is taken without them, as the
+  pinned kernel takes it: the device registers as any other, and no
+  session ever enables it. A registration by callback
+  (`WMIREG_FLAG_CALLBACK`) is how WPP registered before
+  `EtwRegisterClassicProvider`. NK does not take it:
   `STATUS_UNSUCCESSFUL`, Windows' answer while WMI is not running. The
   export is `Partial` for that.
 - `IoWMIWriteEvent` takes an event and frees its block, the event
@@ -3168,6 +3255,11 @@ transition calls them.
 
 ## What is absent
 
+**File systems.** None registers (`IoRegisterFileSystem` is absent):
+RAW is all there is to mount. RAW enforces no share access between
+opens of a volume, and its answers to information queries and
+file-system control requests stop the system by name.
+
 No APCs, sleep states, device power-down ("Power"), processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
@@ -3188,7 +3280,12 @@ rebalance, and so none of the notifications that go with them. A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver
-outside the corpus) and `partmgr` for disks.
+outside the corpus) for disks, and `volsnap` for volumes, which NK's
+volume overlay leaves out of the class. `IoCreateArcName` names no disk: the
+loader's table of ARC disks is empty (UEFI names none), and the answer
+is Windows' for a disk not in it, `STATUS_NOT_SUPPORTED`.
+`FsRtlGetVirtualDiskNestingLevel` asks the disk as Windows does; a
+disk that answers as a virtual disk stops the system by name.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`
@@ -3237,7 +3334,7 @@ always has the helper, and `pci.sys` then reports nothing to it.
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
 | I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
-| What the storage stack imports and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
+| What the storage stack and the volume drivers import and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys`, `partmgr.sys`, `volmgr.sys`, `volume.sys`, `mountmgr.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
 
 The `*-neg-trap` scenarios call one through the address its name
 resolves to and require the stop that names it.

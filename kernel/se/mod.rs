@@ -746,8 +746,8 @@ impl Copies {
 
 /// `ZwSetSecurityObject` (`ntifs.h`): replace the parts of an object's
 /// security descriptor that `information` names with those of
-/// `descriptor`. Devices have a descriptor (`DEVICE_OBJECT.
-/// SecurityDescriptor`); for other objects NK keeps none and says so.
+/// `descriptor` ([`ObSetSecurityObjectByPointer`] on the object the
+/// handle names).
 ///
 /// # Safety
 /// `descriptor` points to a security descriptor whose parts are where
@@ -758,45 +758,85 @@ pub unsafe extern "C" fn ZwSetSecurityObject(
     descriptor: *const c_void,
 ) -> NTSTATUS {
     use crate::ob::{handle, object};
-    if descriptor.is_null() {
-        return STATUS_INVALID_PARAMETER;
-    }
     // SAFETY: per the contract; the object is referenced from the look-up
     // to the last line.
     unsafe {
-        if !known_revision(descriptor.cast()) {
-            return STATUS_UNKNOWN_REVISION;
-        }
-        let Some(new) = Copies::of(descriptor.cast()) else {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        };
-        match new.parts().validate() {
-            Ok(()) => {}
-            Err(nk_se::Invalid::Sid) => return STATUS_INVALID_SID,
-            Err(nk_se::Invalid::Acl) => return STATUS_INVALID_ACL,
+        if let Some(status) = refused(descriptor) {
+            return status;
         }
         let body = match handle::reference(handle as u64, None) {
             Ok(body) => body,
             Err(status) => return status,
         };
-        let status = if core::ptr::eq(object::type_of(body), &raw const object::DEVICE_TYPE) {
-            let replaced = crate::io::device::replace_security(body.cast(), |old| {
-                let old = if old.is_null() {
-                    Copies::empty()
-                } else {
-                    Copies::of(old)?
-                };
-                Copies::block(&old.parts().replaced(&new.parts(), information))
-            });
-            match replaced {
-                Some(()) => STATUS_SUCCESS,
-                None => STATUS_INSUFFICIENT_RESOURCES,
-            }
-        } else {
-            STATUS_NOT_SUPPORTED
-        };
+        let status = ObSetSecurityObjectByPointer(body.cast(), information, descriptor);
         object::dereference(body);
         status
+    }
+}
+
+/// Why `descriptor` cannot be set on anything, if it cannot.
+///
+/// # Safety
+/// As [`ZwSetSecurityObject`].
+unsafe fn refused(descriptor: *const c_void) -> Option<NTSTATUS> {
+    if descriptor.is_null() {
+        return Some(STATUS_INVALID_PARAMETER);
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        if !known_revision(descriptor.cast()) {
+            return Some(STATUS_UNKNOWN_REVISION);
+        }
+        let Some(new) = Copies::of(descriptor.cast()) else {
+            return Some(STATUS_INSUFFICIENT_RESOURCES);
+        };
+        match new.parts().validate() {
+            Ok(()) => None,
+            Err(nk_se::Invalid::Sid) => Some(STATUS_INVALID_SID),
+            Err(nk_se::Invalid::Acl) => Some(STATUS_INVALID_ACL),
+        }
+    }
+}
+
+/// `ObSetSecurityObjectByPointer` (`ntifs.h`): replace the parts of
+/// `object`'s security descriptor that `information` names with those
+/// of `descriptor`. Devices have a descriptor (`DEVICE_OBJECT.
+/// SecurityDescriptor`); for other objects NK keeps none and says so
+/// (`STATUS_NOT_SUPPORTED`).
+///
+/// # Safety
+/// `object` is a referenced object; `descriptor` points to a security
+/// descriptor whose parts are where it says.
+pub unsafe extern "C" fn ObSetSecurityObjectByPointer(
+    object: *mut c_void,
+    information: u32,
+    descriptor: *const c_void,
+) -> NTSTATUS {
+    use crate::ob::object as ob_object;
+    // SAFETY: per the contract.
+    unsafe {
+        if let Some(status) = refused(descriptor) {
+            return status;
+        }
+        let Some(new) = Copies::of(descriptor.cast()) else {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        };
+        let body = object.cast::<u8>();
+        if !core::ptr::eq(ob_object::type_of(body), &raw const ob_object::DEVICE_TYPE) {
+            return STATUS_NOT_SUPPORTED;
+        }
+        let replaced = crate::io::device::replace_security(body.cast(), |old| {
+            let old = if old.is_null() {
+                Copies::empty()
+            } else {
+                Copies::of(old)?
+            };
+            Copies::block(&old.parts().replaced(&new.parts(), information))
+        });
+        match replaced {
+            Some(()) => STATUS_SUCCESS,
+            None => STATUS_INSUFFICIENT_RESOURCES,
+        }
     }
 }
 

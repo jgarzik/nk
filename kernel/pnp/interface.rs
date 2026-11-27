@@ -197,9 +197,14 @@ fn switch(link: &str, class: &[u8; 16], pdo: usize, on: bool) -> NTSTATUS {
 /// class's arrivals; if the device is not started yet, that happens
 /// when it starts, and the call succeeds now, as on Windows.
 ///
-/// - `STATUS_OBJECT_NAME_NOT_FOUND`: no such interface is registered,
-///   or one is disabled that is not enabled.
+/// Enabling answers:
+/// - `STATUS_OBJECT_NAME_NOT_FOUND`: no such interface is registered.
 /// - `STATUS_OBJECT_NAME_EXISTS`: enabled already.
+///
+/// Disabling answers `STATUS_SUCCESS` whatever came of it, as the
+/// pinned kernel's routine turns any failure of a disable into success:
+/// `partmgr.sys` disables an interface it never enabled on each disk it
+/// starts, and fails the start on an error.
 ///
 /// # Safety
 /// `link_name` points to a counted string.
@@ -207,10 +212,19 @@ pub unsafe extern "C" fn IoSetDeviceInterfaceState(
     link_name: *const UNICODE_STRING,
     enable: u8,
 ) -> NTSTATUS {
+    // SAFETY: per the contract.
+    let status = unsafe { set_state(link_name, enable != 0) };
+    if enable == 0 { STATUS_SUCCESS } else { status }
+}
+
+/// What [`IoSetDeviceInterfaceState`] does, with the status of it.
+///
+/// # Safety
+/// `link_name` points to a counted string.
+unsafe fn set_state(link_name: *const UNICODE_STRING, on: bool) -> NTSTATUS {
     crate::ke::irql::expect_passive("IoSetDeviceInterfaceState");
     // SAFETY: per the contract.
     let link = String::from_utf16_lossy(&unsafe { crate::rtl::copy_unicode(link_name) });
-    let on = enable != 0;
     // Whether the interface's device is started is the tree's to say,
     // under its own lock: asked before this list's lock is taken.
     let device = INTERFACES

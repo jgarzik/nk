@@ -4,10 +4,10 @@
  "export_states_from_boot_log": true,
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
-  "total": 758,
-  "implemented": 588,
-  "partial": 56,
-  "traps": 39,
+  "total": 809,
+  "implemented": 610,
+  "partial": 60,
+  "traps": 64,
   "missing": 10,
   "library": 65
  },
@@ -1751,7 +1751,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExAllocatePool2",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6580,7 +6580,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoReportTargetDeviceChangeAsynchronous",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7689,7 +7689,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoReportTargetDeviceChangeAsynchronous",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -7895,6 +7895,1782 @@
      "module": "CLASSPNP.SYS",
      "name": "ClassScanForSpecial",
      "state": "library"
+    }
+   ]
+  },
+  {
+   "name": "partmgr",
+   "file": "partmgr.x64.sys",
+   "sha256": "34f5e9db0cd91ed74b54f39fc4745ba165cb0af24c3ff28bef027a2f1ee5938f",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildSynchronousFsdRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmUnlockPages",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSynchronousCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDeviceAttachmentBaseRef",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildAsynchronousFsdRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeMdl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExUuidCreate",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValuesEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlWriteRegistryValue",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReportTargetDeviceChangeAsynchronous",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoForwardIrpSynchronously",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfReferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoIs32bitProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseCancelSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetSaclSecurityDescriptor",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAcquireRemoveLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterDeviceInterface",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseRemoveLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseInStackQueuedSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildPartialMdl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddProcessTrustLabelAce",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAnsiStringToUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_vsnwprintf",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExWaitForRundownProtectionReleaseCacheAware",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseRemoveLockAndWaitEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlRegisterFeatureConfigurationChangeNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGUIDFromString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryFeatureConfiguration",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterDriverReinitialization",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoPropagateIrpExtensionEx",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitializeGenericTableAvl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoInvalidateDeviceState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDetachDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwSetInformation",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetMasterIrpStatus",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoUnregisterPlugPlayNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExIsSoftBoot",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetDaclSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCheckRegistryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PoCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetBootDiskInformationLite",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateMdl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlxAnsiStringToUnicodeSize",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwCreateKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetActivityIdIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoOpenDeviceRegistryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObSetSecurityObjectByPointer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoInitializeRemoveLockEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetIoPriorityHint",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildDeviceIoControlRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PoSetPowerState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDevicePropertyData",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "FsRtlGetVirtualDiskNestingLevel",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryFeatureConfigurationChangeStamp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAttachDeviceToDeviceStack",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwWriteTransfer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddAccessAllowedAce",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAcquireRundownProtectionCacheAware",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitAnsiString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlUnregisterFeatureConfigurationChangeNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwUnregister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeClearEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlStringFromGUID",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoIsActivityTracingEnabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterPlugPlayNotification",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItemEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwRegister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateAcl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIRegistrationControl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "isspace",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PoEnergyEstimationEnabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlDuplicateUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReleaseRundownProtectionCacheAware",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PoStartNextPowerIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExReInitializeRundownProtectionCacheAware",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeExports",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAcquireInStackQueuedSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateArcName",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwUpdateWnfStateData",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExSizeOfRundownProtectionCacheAware",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetAttachedDeviceReference",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExInitializeRundownProtectionCacheAware",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "wcsncmp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCompareMemory",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "sprintf_s",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeQueryUnbiasedInterruptTimePrecise",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeQueryMaximumProcessorCountEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeQueryActiveProcessorCountEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObDereferenceObjectDeferDelete",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsUpdateComponentPower",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectSafe",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetRequestorProcess",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlIntegerToUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlDeleteElementGenericTableAvl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWriteErrorLogEntry",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLookupElementGenericTableAvl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInsertElementGenericTableAvl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateErrorLogEntry",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlComputeCrc32",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlEqualUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCopyUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDeviceObjectPointer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoMakeAssociatedIrp",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReuseIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetDeviceInterfaceState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetActivityIdIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAcquireSpinLockRaiseToDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_purecall",
+     "state": "traps"
+    },
+    {
+     "module": "HAL.dll",
+     "name": "KeQueryPerformanceCounter",
+     "state": "implemented"
+    },
+    {
+     "module": "WMILIB.SYS",
+     "name": "WmiCompleteRequest",
+     "state": "library"
+    },
+    {
+     "module": "WMILIB.SYS",
+     "name": "WmiSystemControl",
+     "state": "library"
+    }
+   ]
+  },
+  {
+   "name": "volmgr",
+   "file": "volmgr.x64.sys",
+   "sha256": "e8e08c6a8682920e7e62def3c5681e0d30688106976e1baee71dab70fdc0e66c",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "__C_specific_handler",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetSaclSecurityDescriptor",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterDeviceInterface",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmResetDriverPaging",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildPartialMdl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddProcessTrustLabelAce",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValuesEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlWriteRegistryValue",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "_vsnwprintf",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAcquireSpinLockRaiseToDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitializeSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlDeleteRegistryValue",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterDriverReinitialization",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoPropagateIrpExtensionEx",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoInvalidateDeviceState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetDeviceInterfaceState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDetachDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwSetInformation",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWriteErrorLogEntry",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoUnregisterPlugPlayNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSubAuthoritySid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeAccessCheck",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlSetDaclSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCheckRegistryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAcquireVpbSpinLock",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReportTargetDeviceChangeAsynchronous",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeEnterCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetBootDiskInformationLite",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetFileObjectGenericMapping",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateMdl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoVolumeDeviceToDosName",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoOpenDeviceRegistryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObSetSecurityObjectByPointer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoForwardIrpSynchronously",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetDevicePropertyData",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterLastChanceShutdownNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDeviceAttachmentBaseRef",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildDeviceIoControlRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PoSetPowerState",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReportDetectedDevice",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDevicePropertyData",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetActivityIdIrp",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAttachDeviceToDeviceStack",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlLengthSid",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAddAccessAllowedAce",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFileObjectType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwFlushKey",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoMakeAssociatedIrp",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePool2",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlValidSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlGetVersion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwUnregister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeClearEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlStringFromGUID",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterPlugPlayNotification",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItemEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeMdl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeReleaseSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfReferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseVpbSpinLock",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeUnlockSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoUnregisterShutdownNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwRegister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateAcl",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenFile",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetDeviceInterfacePropertyData",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetHardErrorOrVerifyDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmPageEntireDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAdjustStackSizeForRedirection",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeLockSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateSecurityDescriptor",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateErrorLogEntry",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterBootDriverReinitialization",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlDuplicateUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCheckPortableOperatingSystem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeExports",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetAttachedDeviceReference",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoInvalidateDeviceRelations",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCompareMemory",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeLeaveCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "SeCaptureSubjectContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryValueKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIRegistrationControl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwWriteTransfer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "WMILIB.SYS",
+     "name": "WmiSystemControl",
+     "state": "library"
+    },
+    {
+     "module": "WMILIB.SYS",
+     "name": "WmiCompleteRequest",
+     "state": "library"
+    }
+   ]
+  },
+  {
+   "name": "volume",
+   "file": "volume.x64.sys",
+   "sha256": "ba775f373bc80ca77e42578f689d87c961b6548777e10724fea192443f0c9839",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoForwardIrpSynchronously",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAttachDeviceToDeviceStack",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDetachDevice",
+     "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "mountmgr",
+   "file": "mountmgr.x64.sys",
+   "sha256": "1e1259530988e7c6147527b70bc9f641e7231a709cdc46d4eb26a27fd6640423",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwFsControlFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCompareUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenEvent",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAllocateWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlQueryRegistryValuesEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlWriteRegistryValue",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeAcquireSpinLockRaiseToDpc",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwWaitForSingleObject",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQuerySymbolicLinkObject",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlDeleteRegistryValue",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlAppendUnicodeStringToString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterDriverReinitialization",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetJobSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwReadFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObQueryNameString",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetThreadHardErrorsAreDisabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsIsHostSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlEqualUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoUnregisterPlugPlayNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryVolumeInformationFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObIsDosDeviceLocallyMapped",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReportTargetDeviceChangeAsynchronous",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateRegistryKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlUpcaseUnicodeChar",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsJobType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObfDereferenceObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFreeUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenSymbolicLinkObject",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCreateSystemVolumeInformationFolder",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsGetHostSilo",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAttachSiloToCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCopyUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDeviceAttachmentBaseRef",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoBuildDeviceIoControlRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwWriteFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetDeviceObjectPointer",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseMutex",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoDeleteSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlPrefixUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "FsRtlGetVirtualDiskNestingLevel",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryDirectoryFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFileObjectType",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ObReferenceObjectByHandle",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoSetThreadHardErrorMode",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeReleaseSemaphore",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwUnregister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterShutdownNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwSetInformationFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlStringFromGUID",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoRegisterPlugPlayNotification",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsCreateSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "MmGetSystemRoutineAddress",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoFreeWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsInsertPermanentSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwWrite",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoUnregisterShutdownNotification",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "EtwRegister",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateDevice",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCallDriver",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoAcquireCancelSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExFreePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoWMIRegistrationControl",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenFile",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDetachSiloFromCurrentThread",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExUuidCreate",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoQueueWorkItem",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsSetThreadHardErrorsAreDisabled",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsFreeSiloContextSlot",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwQueryInformationFile",
+     "state": "traps"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoCreateSymbolicLink",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoReleaseCancelSpinLock",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlDuplicateUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwClose",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IoGetAttachedDeviceReference",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsDereferenceSiloContext",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ZwOpenKey",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCompareMemory",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "PsAllocSiloContextSlot",
+     "state": "implemented"
     }
    ]
   },
@@ -10635,13 +12411,13 @@
  ],
  "corpus": {
   "note": "Microsoft's kernel-mode binaries of the pinned build (fixtures/corpus.toml): distinct names they import from ntoskrnl.exe and hal.dll, by what NK does about each. Those that are fixtures too are loaded; the rest are not.",
-  "binaries": 58,
+  "binaries": 59,
   "kernel_names": {
    "total": 1740,
-   "implemented": 586,
-   "partial": 56,
-   "traps": 39,
-   "missing": 1059
+   "implemented": 608,
+   "partial": 60,
+   "traps": 64,
+   "missing": 1008
   },
   "by_binary": [
    {
@@ -10668,8 +12444,8 @@
      "total": 251,
      "implemented": 171,
      "partial": 9,
-     "traps": 3,
-     "missing": 68
+     "traps": 5,
+     "missing": 66
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -10712,10 +12488,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 240,
-     "implemented": 133,
+     "implemented": 134,
      "partial": 10,
-     "traps": 1,
-     "missing": 96
+     "traps": 10,
+     "missing": 86
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -10728,9 +12504,9 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 171,
-     "implemented": 158,
+     "implemented": 159,
      "partial": 11,
-     "traps": 2,
+     "traps": 1,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -10741,10 +12517,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 186,
-     "implemented": 119,
+     "implemented": 124,
      "partial": 7,
-     "traps": 0,
-     "missing": 60
+     "traps": 2,
+     "missing": 53
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -10754,10 +12530,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 121,
-     "implemented": 80,
+     "implemented": 82,
      "partial": 9,
      "traps": 0,
-     "missing": 32
+     "missing": 30
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -10780,9 +12556,9 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 68,
-     "implemented": 61,
+     "implemented": 62,
      "partial": 5,
-     "traps": 2,
+     "traps": 1,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -10795,10 +12571,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 486,
-     "implemented": 286,
-     "partial": 23,
-     "traps": 5,
-     "missing": 172
+     "implemented": 292,
+     "partial": 24,
+     "traps": 14,
+     "missing": 156
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -10812,10 +12588,10 @@
     "version": "10.0.19041.1826",
     "kernel": {
      "total": 326,
-     "implemented": 142,
-     "partial": 8,
-     "traps": 1,
-     "missing": 175
+     "implemented": 144,
+     "partial": 9,
+     "traps": 5,
+     "missing": 168
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -10830,10 +12606,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 158,
+     "implemented": 160,
      "partial": 10,
-     "traps": 3,
-     "missing": 154
+     "traps": 9,
+     "missing": 146
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -10845,8 +12621,8 @@
      "total": 78,
      "implemented": 62,
      "partial": 4,
-     "traps": 1,
-     "missing": 11
+     "traps": 2,
+     "missing": 10
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -10860,10 +12636,10 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 107,
-     "implemented": 84,
+     "implemented": 85,
      "partial": 11,
      "traps": 0,
-     "missing": 12
+     "missing": 11
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -10939,10 +12715,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 58,
+     "implemented": 59,
      "partial": 4,
      "traps": 0,
-     "missing": 4
+     "missing": 3
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -10985,10 +12761,10 @@
     "version": "10.0.19041.1586",
     "kernel": {
      "total": 120,
-     "implemented": 81,
-     "partial": 2,
+     "implemented": 84,
+     "partial": 3,
      "traps": 2,
-     "missing": 35
+     "missing": 31
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11000,10 +12776,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 64,
-     "partial": 4,
-     "traps": 1,
-     "missing": 22
+     "implemented": 72,
+     "partial": 6,
+     "traps": 13,
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -11056,8 +12832,8 @@
      "total": 147,
      "implemented": 100,
      "partial": 5,
-     "traps": 0,
-     "missing": 42
+     "traps": 2,
+     "missing": 40
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -11067,10 +12843,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 248,
-     "partial": 20,
-     "traps": 3,
-     "missing": 88
+     "implemented": 250,
+     "partial": 21,
+     "traps": 6,
+     "missing": 82
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11083,10 +12859,10 @@
     "version": "10.0.19041.1682",
     "kernel": {
      "total": 235,
-     "implemented": 168,
+     "implemented": 169,
      "partial": 11,
-     "traps": 1,
-     "missing": 55
+     "traps": 2,
+     "missing": 53
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11113,10 +12889,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 229,
-     "partial": 16,
-     "traps": 2,
-     "missing": 378
+     "implemented": 236,
+     "partial": 18,
+     "traps": 10,
+     "missing": 361
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11146,10 +12922,10 @@
     "version": "10.0.19041.1889",
     "kernel": {
      "total": 137,
-     "implemented": 109,
-     "partial": 5,
-     "traps": 1,
-     "missing": 22
+     "implemented": 123,
+     "partial": 6,
+     "traps": 8,
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11192,9 +12968,9 @@
     "kernel": {
      "total": 71,
      "implemented": 58,
-     "partial": 2,
-     "traps": 0,
-     "missing": 11
+     "partial": 3,
+     "traps": 2,
+     "missing": 8
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -11277,10 +13053,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 216,
-     "partial": 15,
+     "implemented": 219,
+     "partial": 16,
      "traps": 3,
-     "missing": 95
+     "missing": 91
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11343,10 +13119,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 81,
-     "partial": 9,
-     "traps": 4,
-     "missing": 21
+     "implemented": 82,
+     "partial": 10,
+     "traps": 8,
+     "missing": 15
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11363,9 +13139,9 @@
     "kernel": {
      "total": 121,
      "implemented": 84,
-     "partial": 11,
-     "traps": 4,
-     "missing": 22
+     "partial": 12,
+     "traps": 8,
+     "missing": 17
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11379,15 +13155,28 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 109,
-     "implemented": 85,
-     "partial": 6,
-     "traps": 1,
-     "missing": 17
+     "implemented": 93,
+     "partial": 8,
+     "traps": 8,
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
      "wmilib.sys": 2
     }
+   },
+   {
+    "file": "volume.sys",
+    "version": "10.0.19041.1",
+    "kernel": {
+     "total": 7,
+     "implemented": 7,
+     "partial": 0,
+     "traps": 0,
+     "missing": 0
+    },
+    "by_ordinal": 0,
+    "other_modules": {}
    },
    {
     "file": "watchdog.sys",
@@ -11396,8 +13185,8 @@
      "total": 89,
      "implemented": 71,
      "partial": 1,
-     "traps": 1,
-     "missing": 16
+     "traps": 4,
+     "missing": 13
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11409,10 +13198,10 @@
     "version": "1.31.19041.1566",
     "kernel": {
      "total": 217,
-     "implemented": 174,
+     "implemented": 177,
      "partial": 18,
-     "traps": 3,
-     "missing": 22
+     "traps": 4,
+     "missing": 18
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11425,10 +13214,10 @@
     "version": "1.31.19041.1151",
     "kernel": {
      "total": 38,
-     "implemented": 34,
+     "implemented": 35,
      "partial": 2,
      "traps": 0,
-     "missing": 2
+     "missing": 1
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -11453,10 +13242,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 37,
-     "implemented": 14,
+     "implemented": 15,
      "partial": 1,
      "traps": 0,
-     "missing": 22
+     "missing": 21
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11472,10 +13261,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 451,
-     "implemented": 193,
+     "implemented": 198,
      "partial": 18,
-     "traps": 6,
-     "missing": 234
+     "traps": 16,
+     "missing": 219
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11492,10 +13281,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 439,
-     "implemented": 188,
-     "partial": 15,
-     "traps": 5,
-     "missing": 231
+     "implemented": 196,
+     "partial": 16,
+     "traps": 16,
+     "missing": 211
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -11540,7 +13329,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 687,
+   "exported_by_nk": 738,
    "nk_names_it_lacks": [
     "ExAllocateTimerInternal2",
     "KfLowerIrql"

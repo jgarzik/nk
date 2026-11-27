@@ -264,10 +264,11 @@ fn adopt(device: *mut DEVICE_OBJECT, node: Node) -> Option<()> {
 ///
 /// Its key gets what Windows' report writes: `DeviceReported`,
 /// `Service` naming the driver object, and the compatible identifiers
-/// `DETECTED<interface>\<service>` and `DETECTED\<service>`.
+/// `DETECTED<interface>\<service>` (for a bus type given) and
+/// `DETECTED\<service>`.
 pub fn report_detected_device(
     service: &str,
-    interface: &str,
+    interface: Option<&str>,
 ) -> Result<*mut DEVICE_OBJECT, NTSTATUS> {
     let instance = format!("ROOT\\{service}\\0000");
     if node::by_instance(&instance).is_some() {
@@ -278,10 +279,11 @@ pub fn report_detected_device(
     found.instance = instance;
     found.reported = true;
     found.device_id = format!("ROOT\\{service}");
-    found.compatible_ids = alloc::vec![
-        format!("DETECTED{interface}\\{service}"),
-        format!("DETECTED\\{service}"),
-    ];
+    found.compatible_ids = interface
+        .map(|interface| format!("DETECTED{interface}\\{service}"))
+        .into_iter()
+        .chain([format!("DETECTED\\{service}")])
+        .collect();
     let key = registry::enum_key(&found.instance);
     let compatible: Vec<u8> = ids::to_multi_sz(&found.compatible_ids)
         .into_iter()
@@ -318,4 +320,80 @@ pub fn remove_reported_device(pdo: *mut DEVICE_OBJECT) {
     // SAFETY: a device `report_detected_device` made, out of the tree
     // now and with nothing attached.
     unsafe { device::IoDeleteDevice(pdo) };
+}
+
+/// The names Windows gives the bus types (`INTERFACE_TYPE`) in a
+/// reported device's compatible identifier, by number.
+const BUS_TYPES: [&str; 18] = [
+    "Internal",
+    "Isa",
+    "Eisa",
+    "MicroChannel",
+    "TurboChannel",
+    "PCIBus",
+    "VMEBus",
+    "NuBus",
+    "PCMCIABus",
+    "CBus",
+    "MPIBus",
+    "MPSABus",
+    "ProcessorInternal",
+    "InternalPowerBus",
+    "PNPISABus",
+    "PNPBus",
+    "Vmcs",
+    "ACPIBus",
+];
+
+/// [`IoReportDetectedDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-ioreportdetecteddevice):
+/// report a device `driver` detected itself: [`report_detected_device`]
+/// under the driver's service name, the bus type naming the first
+/// compatible identifier (none for `InterfaceTypeUndefined`, -1, as
+/// `volmgr.sys` passes). The physical device object is returned in
+/// `device`.
+///
+/// Partial: a report that names resources, or hands back a device the
+/// driver reported at an earlier boot, stops the system by name: NK
+/// keeps no reported devices from boot to boot, and no binary NK runs
+/// reports resources.
+///
+/// # Safety
+/// `driver` is a live driver object; `device` is readable and writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoReportDetectedDevice(
+    driver: *mut nk_ntabi::io::DRIVER_OBJECT,
+    bus_type: i32,
+    _bus_number: u32,
+    _slot_number: u32,
+    resources: *mut core::ffi::c_void,
+    requirements: *mut core::ffi::c_void,
+    _resources_assigned: u8,
+    device: *mut *mut DEVICE_OBJECT,
+) -> NTSTATUS {
+    // SAFETY: per the contract; the driver's name is a counted string
+    // that stays while the driver object does.
+    let (service, given) = unsafe {
+        let name = crate::rtl::copy_unicode(&raw const (*driver).DriverName);
+        let name = alloc::string::String::from_utf16_lossy(&name);
+        let service = name.rsplit('\\').next().unwrap_or("").into();
+        (service, device.read())
+    };
+    let service: alloc::string::String = service;
+    if !given.is_null() || !resources.is_null() || !requirements.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "IoReportDetectedDevice: {service} reported a device with resources or one of an \
+             earlier boot, which NK does not implement"
+        ));
+    }
+    let interface = usize::try_from(bus_type)
+        .ok()
+        .and_then(|number| BUS_TYPES.get(number).copied());
+    match report_detected_device(&service, interface) {
+        Ok(pdo) => {
+            // SAFETY: per the contract.
+            unsafe { device.write(pdo) };
+            STATUS_SUCCESS
+        }
+        Err(status) => status,
+    }
 }

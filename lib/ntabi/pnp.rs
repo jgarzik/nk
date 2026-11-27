@@ -534,6 +534,27 @@ const _: () = {
     assert!(offset_of!(IO_RESOURCE_REQUIREMENTS_LIST, List) == 32);
 };
 
+/// `DEVICE_NODE` (private): what Windows keeps of a device, which a
+/// physical device object's `DeviceObjectExtension->DeviceNode` points
+/// to. Microsoft's drivers read the front of it: `partmgr.sys` follows
+/// `Parent` to the parent's `PhysicalDeviceObject`. NK keeps the tree's
+/// links and the device in it; the rest is zero.
+#[repr(C)]
+pub struct DEVICE_NODE {
+    pub Sibling: *mut DEVICE_NODE,
+    pub Child: *mut DEVICE_NODE,
+    pub Parent: *mut DEVICE_NODE,
+    pub LastChild: *mut DEVICE_NODE,
+    pub PhysicalDeviceObject: *mut DEVICE_OBJECT,
+    pub Rest: [u8; 0x310 - 0x28],
+}
+
+const _: () = {
+    assert!(size_of::<DEVICE_NODE>() == 0x310);
+    assert!(core::mem::offset_of!(DEVICE_NODE, Parent) == 0x10);
+    assert!(core::mem::offset_of!(DEVICE_NODE, PhysicalDeviceObject) == 0x20);
+};
+
 /// [`DEVPROPKEY`](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/devpropkey):
 /// the name of a device property: its category, a GUID, and its number
 /// in the category.
@@ -552,6 +573,48 @@ const _: () = {
 pub const EVENT_CATEGORY_HARDWARE_PROFILE_CHANGE: u32 = 0;
 pub const EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE: u32 = 2;
 pub const EVENT_CATEGORY_TARGET_DEVICE_CHANGE: u32 = 3;
+
+/// [`TARGET_DEVICE_CUSTOM_NOTIFICATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_target_device_custom_notification):
+/// a custom event a driver reports for a device. `Size` covers the
+/// header and the data after it; the kernel fills `FileObject` in for
+/// each registration it tells.
+#[repr(C)]
+pub struct TARGET_DEVICE_CUSTOM_NOTIFICATION {
+    pub Version: u16,
+    pub Size: u16,
+    pub Event: [u8; 16],
+    pub FileObject: *mut crate::io::FILE_OBJECT,
+    /// Where in `CustomDataBuffer` a name starts, or -1 for none.
+    pub NameBufferOffset: i32,
+    pub CustomDataBuffer: [u8; 1],
+}
+
+/// The bytes of a [`TARGET_DEVICE_CUSTOM_NOTIFICATION`] before its data.
+pub const TARGET_DEVICE_CUSTOM_HEADER: usize = 0x24;
+
+/// The predefined target-device events, which a driver may not report:
+/// `GUID_TARGET_DEVICE_QUERY_REMOVE` (`{cb3a4009-46f0-11d0-b08f-00609713053f}`),
+/// `..._REMOVE_CANCELLED` (`...400a...`) and `..._REMOVE_COMPLETE`
+/// (`...400b...`).
+pub const GUID_TARGET_DEVICE_QUERY_REMOVE: [u8; 16] = [
+    0x09, 0x40, 0x3A, 0xCB, 0xF0, 0x46, 0xD0, 0x11, 0xB0, 0x8F, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3F,
+];
+pub const GUID_TARGET_DEVICE_REMOVE_CANCELLED: [u8; 16] = [
+    0x0A, 0x40, 0x3A, 0xCB, 0xF0, 0x46, 0xD0, 0x11, 0xB0, 0x8F, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3F,
+];
+pub const GUID_TARGET_DEVICE_REMOVE_COMPLETE: [u8; 16] = [
+    0x0B, 0x40, 0x3A, 0xCB, 0xF0, 0x46, 0xD0, 0x11, 0xB0, 0x8F, 0x00, 0x60, 0x97, 0x13, 0x05, 0x3F,
+];
+
+const _: () = {
+    assert!(core::mem::offset_of!(TARGET_DEVICE_CUSTOM_NOTIFICATION, Event) == 4);
+    assert!(core::mem::offset_of!(TARGET_DEVICE_CUSTOM_NOTIFICATION, FileObject) == 0x18);
+    assert!(core::mem::offset_of!(TARGET_DEVICE_CUSTOM_NOTIFICATION, NameBufferOffset) == 0x20);
+    assert!(
+        core::mem::offset_of!(TARGET_DEVICE_CUSTOM_NOTIFICATION, CustomDataBuffer)
+            == TARGET_DEVICE_CUSTOM_HEADER
+    );
+};
 
 /// `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES`.
 pub const PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES: u32 = 1;

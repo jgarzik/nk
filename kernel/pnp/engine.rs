@@ -583,6 +583,10 @@ fn add_drivers(pdo: usize) -> bool {
         // The driver that reported the device serves it: its device is
         // on the stack, and the device counts as started.
         node::with(pdo, |node| node.state = State::Started);
+        // What its driver enabled while it set the device up exists now
+        // (`volmgr.sys` enables its manager's interface in its own
+        // `AddDevice`, before the device counts as started).
+        super::interface::device_started(pdo);
         kprintln!("pnp: {}: started (reported by its driver)", found.instance);
         return true;
     }
@@ -728,6 +732,7 @@ fn start_service(name: &str) -> Result<*mut DRIVER_OBJECT, u32> {
     match service::start(name) {
         Ok(driver) => {
             kprintln!("pnp: service {name} started for a device");
+            io::driver::reinitialize_drivers();
             Ok(driver)
         }
         Err(service::ServiceError::Driver(io::driver::DriverError::EntryFailed(status))) => {
@@ -1204,8 +1209,8 @@ pub fn remove(pdo: usize, surprise: bool) {
             registry::service_stopped_serving(service, &found.instance);
         }
         registry::clear_allocation(&found.instance);
-        node::remove(pdo);
         (&raw mut (*(*device).DeviceObjectExtension).DeviceNode).write(core::ptr::null_mut());
+        node::remove(pdo);
         kprintln!("pnp: {}: removed", found.instance);
         object::dereference(device.cast());
     }

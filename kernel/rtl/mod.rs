@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod avl;
 pub mod bitmap;
 pub mod counted;
 pub mod crt;
@@ -37,6 +38,26 @@ pub unsafe fn copy_unicode(us: *const UNICODE_STRING) -> alloc::vec::Vec<u16> {
         }
     }
     out
+}
+
+/// [`RtlCheckPortableOperatingSystem`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlcheckportableoperatingsystem):
+/// whether the system started as a portable (Windows To Go) workspace,
+/// which the control set's `PortableOperatingSystem` value says. Without
+/// it, not.
+///
+/// # Safety
+/// `portable` is writable.
+pub unsafe extern "system" fn RtlCheckPortableOperatingSystem(portable: *mut u8) -> NTSTATUS {
+    let set = matches!(
+        crate::cm::read(
+            "Machine\\System\\CurrentControlSet\\Control",
+            "PortableOperatingSystem"
+        ),
+        Ok((_, data)) if data.iter().any(|&b| b != 0)
+    );
+    // SAFETY: per the contract.
+    unsafe { portable.write(u8::from(set)) };
+    STATUS_SUCCESS
 }
 
 /// `RtlInitUnicodeString`: point `destination` at the NUL-terminated

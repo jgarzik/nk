@@ -14,10 +14,10 @@ Usage: unwind_coverage.py [arch...]   (default: both; `make unwind-check`,
 
 An uncovered symbol passes if it is
 
-- in a listed library: the prebuilt `core`, `alloc` and
-  `compiler_builtins`, which Rust ships without tables. They are allowed
-  whole, because which of their functions a build links in changes with
-  unrelated code and with the compiler's version;
+- in a listed library: the prebuilt `compiler_builtins`, which Rust
+  ships without tables and the link-time optimisation leaves apart. It
+  is allowed whole, because which of its functions a build links in
+  changes with unrelated code and with the compiler's version;
 - a Rust function compiled with NK (a mangled name in an object that is
   not a listed library): the compiler gives every function that uses the
   stack an entry, so one without is a leaf;

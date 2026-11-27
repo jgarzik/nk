@@ -61,4 +61,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, se::impersonate::ZwOpenThreadTokenEx),
     export!(Implemented, se::zwtoken::ZwQueryInformationToken),
     export!(Implemented, se::ZwSetSecurityObject),
+    export!(Implemented, se::ObSetSecurityObjectByPointer),
 ];

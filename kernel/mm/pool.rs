@@ -275,6 +275,50 @@ pub extern "C" fn ExAllocatePoolWithTag(
     block.cast()
 }
 
+/// [`ExAllocatePool2`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool2):
+/// a block of `number_of_bytes`, zeroed unless `POOL_FLAG_UNINITIALIZED`
+/// is given. Each of the three pool types is given non-paged memory, as
+/// `ExAllocatePoolWithTag` gives it. When memory is exhausted: null, or
+/// with `POOL_FLAG_RAISE_ON_FAILURE` the exception
+/// `STATUS_INSUFFICIENT_RESOURCES`.
+///
+/// Partial: quota charging, session pool and cache alignment, which no
+/// binary NK runs asks for, stop the system by name.
+#[allow(non_snake_case)]
+pub extern "C" fn ExAllocatePool2(
+    flags: u64,
+    number_of_bytes: usize,
+    tag: u32,
+) -> *mut core::ffi::c_void {
+    const USE_QUOTA: u64 = 0x1;
+    const UNINITIALIZED: u64 = 0x2;
+    const SESSION: u64 = 0x4;
+    const CACHE_ALIGNED: u64 = 0x8;
+    const RAISE_ON_FAILURE: u64 = 0x20;
+    const NON_PAGED: u64 = 0x40;
+    const NON_PAGED_EXECUTE: u64 = 0x80;
+    const PAGED: u64 = 0x100;
+    let unsupported = flags & (USE_QUOTA | SESSION | CACHE_ALIGNED);
+    let types = flags & (NON_PAGED | NON_PAGED_EXECUTE | PAGED);
+    if unsupported != 0 || types.count_ones() != 1 {
+        crate::kd::bugcheck(format_args!(
+            "ExAllocatePool2: NK does not implement the pool flags {flags:#x}"
+        ));
+    }
+    let block = alloc(number_of_bytes.max(1), tag);
+    if block.is_null() {
+        if flags & RAISE_ON_FAILURE != 0 {
+            raise_no_memory();
+        }
+        return core::ptr::null_mut();
+    }
+    if flags & UNINITIALIZED == 0 {
+        // SAFETY: a fresh block of at least that many bytes.
+        unsafe { block.write_bytes(0, number_of_bytes) };
+    }
+    block.cast()
+}
+
 /// [`ExAllocatePool`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exallocatepool):
 /// `ExAllocatePoolWithTag` under the tag Windows gives a caller that
 /// names none, `None`.

@@ -22,19 +22,24 @@ If unsure whether something qualifies, ask before writing it.
 
 ## What a change must do
 
-- **Pass the gate.** `make gate` prints `GATE-OK`, for every commit on
-  its own.
-- **Come with tests.** A pure function gets a host unit test in its
-  `lib/` crate; a kernel behaviour gets a boot test (`NK-TEST` line); a
-  silent mechanism gets a mutant (`doc/TESTING.md`). A bug fix starts
-  with a test that reproduces the bug.
+- **Pass the gates.** `make gate-fast` prints `GATE-FAST-OK` for every
+  commit on its own; `make gate` prints `GATE-OK` for the merged result
+  (`doc/TESTING.md`).
+- **Come with proof.** A Microsoft binary doing its work in a boot
+  scenario is the proof of a routine it calls. Algorithmic code gets a
+  host unit test in its `lib/` crate; a structure a binary sees gets a
+  layout check; a kernel behaviour no Microsoft binary reaches gets a
+  boot test (`NK-TEST` line). A bug fix starts with a test that
+  reproduces the bug (`doc/TESTING.md`, What gets a test).
 - **Stay honest at the driver boundary.** No export reports success for
   work it did not do. An incomplete routine is `Partial` or `Traps` in
   its list under `kernel/export/list/`, with the gap in its doc comment.
 - **Be driven by a real driver.** An export is added because a binary in
   the pinned corpus or a pinned fixture imports it.
-- **Build for both architectures.** CPU-specific code lives in
-  `kernel/arch/`; pure logic in `lib/`.
+- **Stay portable.** CPU-specific code lives in `kernel/arch/`; pure
+  logic in `lib/`. arm64 is paused until x86-64 reaches `cmd.exe`: it
+  must compile (`make clippy-arm`, part of `make gate`), and is booted
+  only by `make gate-full`.
 - **Document as it goes,** in the same commit. Record NK's decisions;
   link to Microsoft's documentation rather than restating it. Docs state
   the present, not the history.

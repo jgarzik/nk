@@ -120,3 +120,82 @@ pub unsafe extern "C" fn FsRtlTeardownPerStreamContexts(header: *mut FSRTL_ADVAN
 pub extern "C" fn FsRtlIsSystemPagingFile(_file: *const core::ffi::c_void) -> u32 {
     0
 }
+
+/// The control code `FsRtlGetVirtualDiskNestingLevel` asks a disk with
+/// (storage family, function 0x464). A virtual disk answers how deep it
+/// is nested; any other disk refuses it.
+const IOCTL_STORAGE_GET_NESTING: u32 = 0x002D_1190;
+
+/// [`FsRtlGetVirtualDiskNestingLevel`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlgetvirtualdisknestinglevel):
+/// how many virtual disks `device`'s disk is nested in. The disk is
+/// asked, with hard errors off, as Windows asks it; a disk that refuses
+/// is no virtual disk, and the refusal is the answer, the level zero.
+/// Only a disk or CD-ROM device, or a file system on one, or a virtual
+/// disk, is asked: anything else is `STATUS_INVALID_PARAMETER`.
+///
+/// Partial: a disk that answers is a virtual disk, which NK has none of;
+/// its answer stops the system by name.
+///
+/// # Safety
+/// `device` is a live device object; `level` is writable and `flags`
+/// writable or null. Called at `PASSIVE_LEVEL`.
+pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
+    device: *mut nk_ntabi::io::DEVICE_OBJECT,
+    level: *mut u32,
+    flags: *mut u32,
+) -> nk_ntabi::status::NTSTATUS {
+    use nk_ntabi::io::{IO_STATUS_BLOCK, KEVENT};
+    use nk_ntabi::status::*;
+    /// `FILE_DEVICE_CD_ROM`, `_CD_ROM_FILE_SYSTEM`, `_DISK`,
+    /// `_DISK_FILE_SYSTEM` and `_VIRTUAL_DISK`.
+    const ASKED: [u32; 5] = [0x02, 0x03, 0x07, 0x08, 0x24];
+    crate::ke::irql::expect_passive("FsRtlGetVirtualDiskNestingLevel");
+    // SAFETY: per the contract. The event, status block and answer stay
+    // on this stack until the request has been seen to complete.
+    unsafe {
+        level.write(0);
+        if !flags.is_null() {
+            flags.write(0);
+        }
+        if !ASKED.contains(&(*device).DeviceType) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let top = super::device::IoGetAttachedDeviceReference(device);
+        let mut answer = [0u8; 0x14];
+        let mut done: KEVENT = core::mem::zeroed();
+        crate::ke::wait::KeInitializeEvent(&raw mut done, 0, 0);
+        let mut status_block = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: 0,
+        };
+        let request = super::build::IoBuildDeviceIoControlRequest(
+            IOCTL_STORAGE_GET_NESTING,
+            top,
+            core::ptr::null_mut(),
+            0,
+            answer.as_mut_ptr().cast(),
+            answer.len() as u32,
+            0,
+            &raw mut done,
+            &raw mut status_block,
+        );
+        if request.is_null() {
+            crate::ob::object::dereference(top.cast());
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        let was_enabled = crate::ps::IoSetThreadHardErrorMode(0);
+        if super::irp::IofCallDriver(top, request) == STATUS_PENDING {
+            crate::ke::wait::wait(Some((&raw mut done).cast()), None);
+        }
+        crate::ps::IoSetThreadHardErrorMode(was_enabled);
+        crate::ob::object::dereference(top.cast());
+        let status = status_block.Status;
+        if !nt_success(status) {
+            return status;
+        }
+        crate::kd::bugcheck(format_args!(
+            "FsRtlGetVirtualDiskNestingLevel: the disk answered as a virtual disk, which NK does \
+             not implement"
+        ))
+    }
+}

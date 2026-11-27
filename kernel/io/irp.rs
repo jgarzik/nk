@@ -495,6 +495,43 @@ pub unsafe extern "C" fn IofCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP
     unsafe { call_driver(device, irp, &Guard::Nothing) }
 }
 
+/// [`IoForwardIrpSynchronously`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioforwardirpsynchronously):
+/// pass `irp` down to `device` with the caller's stack location copied
+/// to the next, and wait for the drivers below to complete it. The
+/// request comes back to the caller, its status in `IoStatus`, for the
+/// caller to complete. FALSE, and nothing sent, if the request has no
+/// location left below the current one.
+///
+/// # Safety
+/// `device` is a live device object and `irp` a live IRP its caller
+/// owns. Called at `PASSIVE_LEVEL`.
+pub unsafe extern "C" fn IoForwardIrpSynchronously(
+    device: *mut DEVICE_OBJECT,
+    irp: *mut IRP,
+) -> u8 {
+    crate::ke::irql::expect_passive("IoForwardIrpSynchronously");
+    // SAFETY: per the contract.
+    unsafe {
+        if (*irp).CurrentLocation <= 1 {
+            return 0;
+        }
+        let current = (*irp).CurrentStackLocation;
+        let next = next_location(irp);
+        // `IoCopyCurrentIrpStackLocationToNext`: all but the completion
+        // routine and its context; the control bits cleared, as the
+        // pinned kernel clears them before it sends.
+        (*next).MajorFunction = (*current).MajorFunction;
+        (*next).MinorFunction = (*current).MinorFunction;
+        (*next).Flags = (*current).Flags;
+        (*next).Control = 0;
+        (*next).Parameters = (*current).Parameters;
+        (*next).DeviceObject = (*current).DeviceObject;
+        (*next).FileObject = (*current).FileObject;
+        super::build::IoSynchronousCallDriver(device, irp);
+    }
+    1
+}
+
 /// [`PoCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pocalldriver):
 /// send a power request to the next driver. Since Windows Vista a power
 /// request is sent as any other; the pinned kernel's `PoCallDriver` is

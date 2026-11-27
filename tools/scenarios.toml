@@ -23,10 +23,15 @@
 #             file made for each boot, every sector holding a pattern the
 #             kernel can compute (tools/datadisk.py, doc/TESTING.md)
 #   disk_size the disk's size in MiB (default 64)
+#   disk_image  with `disk`, a FAT32 volume in place of the pattern:
+#             "fat32-mbr" or "fat32-gpt", one partition at 1 MiB holding
+#             known files (tools/fatdisk.py)
 #   disk_expect  with `disk`, what the disk must hold after the boot:
 #             "unchanged": every sector its original pattern;
 #             "written": the sectors of the write range the written
-#             pattern, every other sector its original one
+#             pattern, every other sector its original one;
+#             with `disk_image`, "fat-unchanged": fsck.fat finds the
+#             volume clean and its files as they were made
 #   registry  list of names: fixtures/registry-<name>.txt is laid over the
 #             hive too, after registry-overlay.txt
 #   golden    directory in tools/golden/ listing every test and its verdict
@@ -1059,7 +1064,7 @@ match = "BUGCHECK: 0x0000001E KMODE_EXCEPTION_NOT_HANDLED: 0xE04E4B41 \\(paramet
 arch = "x86_64"
 tier = "gate"
 paths = ["kernel/", "lib/", "boot/", "fixtures/"]
-cmdline = "test=stor.load"
+cmdline = "test=stor.load without=partmgr.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
@@ -1071,7 +1076,7 @@ disk_expect = "written"
 arch = "x86_64"
 tier = "gate"
 paths = ["kernel/", "lib/", "boot/", "fixtures/"]
-cmdline = "test=stor.direct without=pci.sys"
+cmdline = "test=stor.direct without=pci.sys,partmgr.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
@@ -1083,7 +1088,58 @@ disk_expect = "written"
 arch = "x86_64"
 tier = "gate"
 smp = 1
-cmdline = "test=stor.direct without=pci.sys"
+cmdline = "test=stor.direct without=pci.sys,partmgr.sys"
 registry = ["storage"]
 disk = "ahci"
 disk_expect = "written"
+
+# Microsoft's partition manager over the same stack, on a disk holding a
+# FAT32 volume: partmgr.sys reads the MBR and answers for the disk.
+
+[x86_64-volumes-partmgr]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=vol.partmgr"
+registry = ["storage"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
+
+# And the volume manager: volmgr.sys makes a volume of the partition,
+# volume.sys serves it.
+
+[x86_64-volumes-volmgr]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=vol.partmgr"
+registry = ["storage", "volumes"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
+
+# And the mount manager: mountmgr.sys names the volume and, from its
+# reinitialisation routine, gives it C:.
+
+[x86_64-volumes-mountmgr]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=vol.mount"
+registry = ["storage", "volumes", "mount"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
+
+# The same on a disk with a GUID partition table.
+
+[x86_64-volumes-gpt]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=vol.mount"
+registry = ["storage", "volumes", "mount"]
+disk = "ahci"
+disk_image = "fat32-gpt"
+disk_expect = "fat-unchanged"

@@ -130,17 +130,18 @@ pub fn init(info: &'static BootInfo) -> Result<(), &'static str> {
 /// loader read one of that name from `\NK\drivers`. This is NK's
 /// `System32\drivers` until there is a file system to read.
 ///
-/// The command-line word `without=<file>` takes one file out of that
-/// directory for the boot: a scenario that shares its image with
-/// others boots as if the file had not been provided.
+/// The command-line word `without=<file>[,<file>...]` takes files out
+/// of that directory for the boot: a scenario that shares its image
+/// with others boots as if they had not been provided.
 pub fn boot_file(name: &str) -> Option<&'static [u8]> {
     // SAFETY: null, or the hand-off block `init` was given, which lives
     // for ever and is never written.
     let info = unsafe { BOOT.load(Ordering::Acquire).as_ref() }?;
-    if info
-        .option("without")
-        .is_some_and(|without| without.eq_ignore_ascii_case(name))
-    {
+    if info.option("without").is_some_and(|without| {
+        without
+            .split(',')
+            .any(|file| file.eq_ignore_ascii_case(name))
+    }) {
         return None;
     }
     let m = info

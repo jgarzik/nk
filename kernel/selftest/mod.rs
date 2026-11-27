@@ -46,6 +46,7 @@ mod pnp;
 mod po;
 mod pofx;
 mod range;
+mod rawfs;
 mod request;
 mod requestor;
 mod resource;
@@ -65,6 +66,7 @@ mod testdisk;
 mod thread;
 mod timer;
 mod timer2;
+mod volumes;
 mod wait;
 mod whea;
 mod without;
@@ -205,6 +207,7 @@ pub static GROUPS: &[&[&Group]] = &[
     iosupport::GROUPS,
     startio::GROUPS,
     diskio::GROUPS,
+    rawfs::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,
@@ -218,6 +221,7 @@ pub static GROUPS: &[&[&Group]] = &[
     oracle::GROUPS,
     neg::GROUPS,
     storage::GROUPS,
+    volumes::GROUPS,
     stordirect::GROUPS,
 ];
 

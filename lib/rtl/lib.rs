@@ -1,7 +1,7 @@
 //! Runtime-library logic with no hardware behind it: UTF-16
 //! counted-string arithmetic and object-name handling here; in the
 //! modules, formatted output, upper-casing and comparison, the prefix
-//! table, wildcard matching, text forms and length rules, code pages,
+//! table, the AVL table's balancing, wildcard matching, text forms and length rules, code pages,
 //! the characters legal in file names, bitmaps, the C string
 //! functions, and the filter of debug messages.
 //! Nothing here allocates: what a routine works on is the caller's.
@@ -11,6 +11,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod avl;
 pub mod bitmap;
 pub mod codepage;
 pub mod convert;

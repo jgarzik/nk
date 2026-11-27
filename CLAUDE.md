@@ -12,18 +12,30 @@ where the host can unit-test it.
   storage, file-system, framework and window-system drivers are
   Microsoft's binaries; so is all of user mode. Destination: Microsoft's
   WinPE at a `cmd.exe` prompt (`doc/ROADMAP.md`).
-- Both arches are first class: every commit builds both.
+- x86-64 first: arm64 is paused until x86-64 reaches `cmd.exe`. The code
+  stays portable and every merged batch compiles for arm64; arm64 boots
+  return when x86-64 is there.
 - Scope follows the import tables of real binaries (`ledger/`), not the
   size of the Windows export list.
 - NK code is written fresh: read hk, ReactOS and Wine; copy none of them.
 
 ## Build / verify
-- Makefile targets only. Done = `make gate` prints GATE-OK.
-- Bisectable: every commit passes the gate alone. `main` is protected:
-  commit on a branch (`updates`); the maintainer pushes and merges. Never
-  amend. Never commit after a gate whose exit status was hidden by a pipe.
-- Tests grow with the kernel: a pure function gets a host unit test, a
-  kernel behaviour gets a boot test line (`NK-TEST name:OK`).
+- Makefile targets only. Three gates: every commit passes `make gate-fast`
+  (GATE-FAST-OK); every merged tip of `updates` passes `make gate`
+  (GATE-OK); `make gate-full` (GATE-FULL-OK, both arches) runs nightly
+  and at milestones.
+- Bisectable: every commit passes the fast gate alone, every merged tip
+  the batch gate. `main` is protected: commit on a branch (`updates`);
+  the maintainer pushes and merges. Never amend. Never commit after a
+  gate whose exit status was hidden by a pipe.
+- Microsoft's binaries running in boot scenarios are the proof of the
+  driver ABI. During a phase, keep: layout checks against Microsoft's
+  PDB/WDK tables, host unit tests for algorithmic `lib/` code, golden
+  lists, and a failing test first for every bug. Write no NK boot
+  self-test for a routine a Microsoft binary already runs in a scenario.
+- Hardening (failure paths, cleanup, soak, mutants, the arm64 mirror)
+  runs on a tagged snapshot after a phase's proof, never in front of a
+  commit.
 - Tests clean up after themselves; all output lives under `target/`.
 
 ## Rules

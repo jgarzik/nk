@@ -38,9 +38,11 @@ this directory.
 ```sh
 make test       # host unit tests
 make check      # boot x86-64 under QEMU and run the kernel self-tests
-make check-arm  # the same for arm64 (emulated, a little slower)
+make check-arm  # the same for arm64 (emulated, slower)
 make run        # boot with the serial console attached (Ctrl-A X quits)
-make gate       # everything a commit must pass; prints GATE-OK
+make gate-fast  # what every commit must pass; prints GATE-FAST-OK
+make gate       # what the merged tip must pass; prints GATE-OK
+make gate-full  # both architectures, every scenario; prints GATE-FULL-OK
 make help       # the other targets
 make dist       # release boot images in target/dist/
 make clean      # remove target/

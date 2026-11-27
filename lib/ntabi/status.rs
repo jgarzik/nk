@@ -103,6 +103,8 @@ pub const STATUS_PROCEDURE_NOT_FOUND: NTSTATUS = err(0xC000_007A);
 pub const STATUS_IMAGE_MACHINE_TYPE_MISMATCH: NTSTATUS = err(0x4000_000E);
 pub const STATUS_HANDLE_NOT_CLOSABLE: NTSTATUS = err(0xC000_0235);
 pub const STATUS_DRIVER_UNABLE_TO_LOAD: NTSTATUS = err(0xC000_026C);
+pub const STATUS_TOO_LATE: NTSTATUS = err(0xC000_0189);
+pub const STATUS_UNRECOGNIZED_VOLUME: NTSTATUS = err(0xC000_014F);
 
 /// `NT_SUCCESS`: success and informational codes are non-negative.
 pub const fn nt_success(status: NTSTATUS) -> bool {
