@@ -225,11 +225,16 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
         if !descriptor.is_null() {
             let _ = pool::free(descriptor.cast());
         }
-        // The block `IoCreateDevice` gave it. No file system mounts on
-        // NK yet, so the block is still the device's own.
-        let vpb = (*body.cast::<DEVICE_OBJECT>()).Vpb;
-        if !vpb.is_null() {
-            let _ = pool::free(vpb.cast());
+        // The block `IoCreateDevice` gave it, and only that: a block is
+        // freed with the device it belongs to (`RealDevice`). A volume
+        // mounted on it was dismounted before the device could go
+        // (`io::mount`).
+        let device = body.cast::<DEVICE_OBJECT>();
+        let vpb = (*device).Vpb.cast::<VPB>();
+        if !vpb.is_null() && (*vpb).RealDevice == device && pool::free(vpb.cast()).is_err() {
+            kd::bugcheck(format_args!(
+                "a device's volume parameter block {vpb:p} was freed before the device"
+            ));
         }
         crate::po::run_down(body.cast());
     }
@@ -298,7 +303,8 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
         if (*device).Flags & super::shutdown::DO_SHUTDOWN_REGISTERED != 0 {
             super::shutdown::IoUnregisterShutdownNotification(device);
         }
-        if !(*device).Vpb.is_null() {
+        let vpb = (*device).Vpb.cast::<VPB>();
+        if !vpb.is_null() && (*vpb).RealDevice == device {
             super::mount::device_deleted(device);
         }
         ob::remove(device.cast());

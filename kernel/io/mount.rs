@@ -67,7 +67,6 @@ pub unsafe fn mounted(device: *mut DEVICE_OBJECT, itself: bool) -> Result<*mut V
             if !lost {
                 (*vpb).DeviceObject = volume;
                 (*vpb).Flags |= VPB_MOUNTED;
-                (*volume).Vpb = vpb.cast();
                 (*device).Flags &= !DO_VERIFY_VOLUME;
             }
             (*vpb).ReferenceCount += 1;
