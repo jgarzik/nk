@@ -28,10 +28,13 @@ use nk_ntabi::thread::{KERNEL_APC_DISABLE, MUTANT_LIST_HEAD};
 
 /// A thread's count of reasons kernel APCs are off: negative while there
 /// are any.
-fn apc_disable<'a>(thread: *mut thread::Thread) -> &'a AtomicI16 {
-    // SAFETY: an aligned 16-bit field of a live thread's block. The
-    // thread itself changes it, and so does whoever hands it a mutex
-    // while it sleeps.
+///
+/// # Safety
+/// `thread` is a live thread, and stays live for `'a`.
+unsafe fn apc_disable<'a>(thread: *mut thread::Thread) -> &'a AtomicI16 {
+    // SAFETY: per the contract; an aligned 16-bit field of the thread's
+    // block. The thread itself changes it, and so does whoever hands it
+    // a mutex while it sleeps.
     unsafe { AtomicI16::from_ptr(thread::object_field(thread, KERNEL_APC_DISABLE)) }
 }
 
@@ -179,12 +182,14 @@ pub unsafe extern "C" fn KeReadStateMutex(mutex: *mut KMUTANT) -> i32 {
 
 /// [`KeEnterCriticalRegion`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keentercriticalregion).
 pub extern "C" fn KeEnterCriticalRegion() {
-    apc_disable(thread::current()).fetch_sub(1, Ordering::Relaxed);
+    // SAFETY: the running thread, live while it runs this.
+    unsafe { apc_disable(thread::current()) }.fetch_sub(1, Ordering::Relaxed);
 }
 
 /// [`KeLeaveCriticalRegion`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keleavecriticalregion).
 pub extern "C" fn KeLeaveCriticalRegion() {
-    apc_disable(thread::current()).fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the running thread, live while it runs this.
+    unsafe { apc_disable(thread::current()) }.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Run `f` inside a critical region.

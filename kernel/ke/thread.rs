@@ -485,10 +485,13 @@ fn steal() -> Option<*mut Thread> {
 }
 
 /// The thread's wait register.
-pub fn wait_register<'a>(thread: *mut Thread) -> &'a WaitRegister {
-    // SAFETY: a thread's register lives as long as the thread, and
-    // callers hold a thread they found through a linked wait block or
-    // the current-thread slot.
+///
+/// # Safety
+/// `thread` is a live thread, and stays live for `'a`: one found
+/// through a linked wait block or the current-thread slot.
+pub unsafe fn wait_register<'a>(thread: *mut Thread) -> &'a WaitRegister {
+    // SAFETY: per the contract; a thread's register lives as long as
+    // the thread.
     unsafe { &(*thread).wait }
 }
 
@@ -686,7 +689,8 @@ fn dispatch(leaving: Leaving) {
                             (*me).swap_busy.store(true, Ordering::Release);
                             set_state(me, layout::state::READY);
                         }
-                        return switch_to(me, thread);
+                        // SAFETY: `me` runs here and the other thread is ready to run here.
+                        return unsafe { switch_to(me, thread) };
                     }
                     None => return,
                 }
@@ -730,12 +734,17 @@ fn dispatch(leaving: Leaving) {
         // affinity.
         wake_an_idle(unsafe { field::<u64>(me, layout::AFFINITY).read() });
     }
-    switch_to(me, next);
+    // SAFETY: `me` runs here and the other thread is ready to run here.
+    unsafe { switch_to(me, next) };
 }
 
 /// Leave `me`, already marked and queued as its leaving requires, for
 /// `next`, which this processor took off a queue or is its idle thread.
-fn switch_to(me: *mut Thread, next: *mut Thread) {
+///
+/// # Safety
+/// `me` is the running thread and `next` a live thread ready to run
+/// here.
+unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
     // A DPC routine runs on the processor's DPC stack, which the next DPC
     // will use: no thread can be left there. Only a routine that lowered
     // the IRQL gets this far.
@@ -857,8 +866,12 @@ pub fn yield_now() {
 
 /// The calling thread's `MiscFlags`, which another thread may change
 /// (an alert), so only ever as a whole.
-fn misc_flags<'a>(me: *mut Thread) -> &'a AtomicU32 {
-    // SAFETY: an aligned field of the running thread's block.
+///
+/// # Safety
+/// `me` is the running thread (live for `'a`, which ends before it
+/// does).
+unsafe fn misc_flags<'a>(me: *mut Thread) -> &'a AtomicU32 {
+    // SAFETY: per the contract; an aligned field of the thread's block.
     unsafe { AtomicU32::from_ptr(field(me, layout::MISC_FLAGS)) }
 }
 
@@ -946,7 +959,8 @@ pub unsafe extern "C" fn KeSetSystemGroupAffinityThread(
     }
     let old = hold_processor("KeSetSystemGroupAffinityThread");
     let me = current();
-    let was_active = misc_flags(me)
+    // SAFETY: the running thread.
+    let was_active = unsafe { misc_flags(me) }
         .fetch_or(layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE, Ordering::AcqRel)
         & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE
         != 0;
@@ -981,7 +995,8 @@ pub unsafe extern "C" fn KeSetSystemGroupAffinityThread(
 pub unsafe extern "C" fn KeRevertToUserGroupAffinityThread(previous: *mut GROUP_AFFINITY) {
     let me = current();
     let active =
-        misc_flags(me).load(Ordering::Acquire) & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE != 0;
+        // SAFETY: the running thread.
+        unsafe { misc_flags(me) }.load(Ordering::Acquire) & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE != 0;
     // SAFETY: per the contract.
     let given = unsafe { previous.read_unaligned() };
     let revert = sched::revert_affinity(
@@ -995,7 +1010,9 @@ pub unsafe extern "C" fn KeRevertToUserGroupAffinityThread(previous: *mut GROUP_
         sched::Revert::Nothing => {}
         sched::Revert::ToUser => {
             let old = hold_processor("KeRevertToUserGroupAffinityThread");
-            misc_flags(me).fetch_and(!layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE, Ordering::AcqRel);
+            // SAFETY: the running thread.
+            unsafe { misc_flags(me) }
+                .fetch_and(!layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE, Ordering::AcqRel);
             // SAFETY: the running thread's own fields, written at its
             // creation.
             let (own, ideal) = unsafe {
@@ -2072,7 +2089,8 @@ pub fn system_affinity_test() -> Result<u32, &'static str> {
     // SAFETY: the running thread's own fields.
     let affinity = || unsafe { field::<u64>(me, layout::AFFINITY).read() };
     let active =
-        || misc_flags(me).load(Ordering::Acquire) & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE != 0;
+        // SAFETY: the running thread.
+        || unsafe { misc_flags(me) }.load(Ordering::Acquire) & layout::MISC_FLAG_SYSTEM_AFFINITY_ACTIVE != 0;
     let processors = super::smp::online_count() as u32;
     let online = super::smp::online();
     let own = affinity();

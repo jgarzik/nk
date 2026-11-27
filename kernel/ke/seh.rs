@@ -139,7 +139,8 @@ pub unsafe extern "C" fn guard_handler(
             unsafe { undo(*context) }
         }
         Some(Guard::Base(how)) if !unwinding => {
-            unhandled(*how, record, context, format_args!("no handler"))
+            // SAFETY: the exception being dispatched.
+            unsafe { unhandled(*how, record, context, format_args!("no handler")) }
         }
         _ => {}
     }
@@ -364,12 +365,15 @@ pub unsafe fn dispatch(record: *mut EXCEPTION_RECORD, context: *mut Context, int
             // to address zero. Every thread is a system thread. Code
             // stopped at address zero is something else: a call through
             // a null pointer, whose caller is searched.
-            unhandled(
-                Unhandled::SystemThread,
-                record,
-                context,
-                format_args!("no handler"),
-            );
+            // SAFETY: the exception being dispatched.
+            unsafe {
+                unhandled(
+                    Unhandled::SystemThread,
+                    record,
+                    context,
+                    format_args!("no handler"),
+                )
+            };
         }
         let mut frame = match frame_of(&current, interrupted) {
             Ok(frame) => frame,
@@ -380,12 +384,15 @@ pub unsafe fn dispatch(record: *mut EXCEPTION_RECORD, context: *mut Context, int
         // search ran into.
         loop {
             if !on_stack(frame.establisher) {
-                unhandled(
-                    Unhandled::KernelMode,
-                    record,
-                    context,
-                    format_args!("the frame at {:#x} is off the stack", frame.establisher),
-                );
+                // SAFETY: the exception being dispatched.
+                unsafe {
+                    unhandled(
+                        Unhandled::KernelMode,
+                        record,
+                        context,
+                        format_args!("the frame at {:#x} is off the stack", frame.establisher),
+                    )
+                };
             }
             let Some(handler) = frame.handler.filter(|h| h.search) else {
                 break;
@@ -828,19 +835,25 @@ unsafe fn raise_here(code: u32, chained: *mut EXCEPTION_RECORD) -> ! {
 /// searched for a handler. Never a guess: a frame that cannot be undone
 /// is named.
 fn unsearchable(record: *mut EXCEPTION_RECORD, context: *mut Context, error: WalkError) -> ! {
-    unhandled(
-        Unhandled::KernelMode,
-        record,
-        context,
-        format_args!("the stack cannot be searched: {error}"),
-    )
+    // SAFETY: the exception being dispatched.
+    unsafe {
+        unhandled(
+            Unhandled::KernelMode,
+            record,
+            context,
+            format_args!("the stack cannot be searched: {error}"),
+        )
+    }
 }
 
 /// Stop the system for an exception nothing handled, with Windows'
 /// bugcheck for where it was raised. The line begins with the bugcheck's
 /// code and the exception's code, which is the low half of the
 /// bugcheck's first parameter; the parameter itself follows.
-fn unhandled(
+///
+/// # Safety
+/// `record` and `context` describe the exception being dispatched.
+unsafe fn unhandled(
     how: Unhandled,
     record: *mut EXCEPTION_RECORD,
     context: *mut Context,

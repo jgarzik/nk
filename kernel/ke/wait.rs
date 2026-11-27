@@ -272,7 +272,8 @@ pub unsafe fn wait_objects(
     }
     arch::set_irql(irql::DISPATCH_LEVEL);
     let me = thread::current();
-    let register = thread::wait_register(me);
+    // SAFETY: the running thread.
+    let register = unsafe { thread::wait_register(me) };
     let timer_block = thread::wait_block(me, TIMER_WAIT_BLOCK);
     let my_timer = thread::timer(me);
     // A time limit is fixed once, as a system time, however often a

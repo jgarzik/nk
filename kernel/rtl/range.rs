@@ -38,6 +38,11 @@ const TAG: u32 = u32::from_le_bytes(*b"RRle");
 /// A driver's list.
 struct Driver(*mut RTL_RANGE_LIST);
 
+// `Driver`'s methods, and the `Ranges` methods below, take raw entry
+// pointers and are safe: a `Driver` is made only by the unsafe `of`,
+// whose contract covers the list and every entry chained from it, and
+// the entry pointers they are handed are ones the same list gave
+// (doc/UNSAFE.md, rule 1).
 impl Driver {
     /// # Safety
     /// `list` is an initialised range list, and stays valid, with every

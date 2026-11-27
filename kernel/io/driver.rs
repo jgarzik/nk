@@ -137,7 +137,8 @@ pub(super) fn load(
     if !nt_success(status) {
         // Windows does not call the unload routine of a driver whose entry
         // failed; the driver must have cleaned up after itself.
-        free(object, Some(&image));
+        // SAFETY: the object is this module's, out of the records, and has no device.
+        unsafe { free(object, Some(&image)) };
         return Err(DriverError::EntryFailed(status));
     }
     // SAFETY: the driver object and its device list are live; devices made
@@ -234,10 +235,16 @@ pub fn remove_builtin(object: *mut DRIVER_OBJECT) {
         drivers.shrink_to_fit();
         record
     };
-    free(record.object, None);
+    // SAFETY: the object is this module's, out of the records, and has no device.
+    unsafe { free(record.object, None) };
 }
 
-fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
+/// Free a driver object this module made, and its image.
+///
+/// # Safety
+/// `object` is a driver object this module made, out of the records,
+/// with no device left.
+unsafe fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
     // SAFETY: `object` is a driver object this module made and named;
     // clearing Type makes a stale pointer recognisable. The name goes
     // before the reference the object was made with.
@@ -257,6 +264,9 @@ fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
 /// The routine runs with no lock held, and other drivers are loaded and
 /// unloaded meanwhile: where the driver's record is in the table is
 /// looked up afterwards, under the lock hold that removes it.
+///
+/// Safe although `object` is a raw pointer: it is found among this
+/// module's records before it is used (doc/UNSAFE.md, rule 1).
 pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
     // A driver that is part of the kernel is not unloaded.
@@ -294,7 +304,8 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         core::mem::forget(record);
         return Err("unload routine left device objects behind");
     }
-    free(record.object, record.image.as_ref());
+    // SAFETY: the object is this module's, out of the records, and has no device.
+    unsafe { free(record.object, record.image.as_ref()) };
     Ok(())
 }
 

@@ -292,7 +292,11 @@ struct RoutineCall {
 /// passes four, so this is the function the guarded call calls: one
 /// frame of NK's own between the guard and the routine, which holds
 /// nothing and has an unwind entry like any other.
-extern "C" fn pass_on(call: *const RoutineCall) -> NTSTATUS {
+///
+/// # Safety
+/// `call` is a `RoutineCall` of `work`'s, naming a table entry's
+/// routine and what it takes.
+unsafe extern "C" fn pass_on(call: *const RoutineCall) -> NTSTATUS {
     // SAFETY: `work` passes a `RoutineCall` of its own, which names a
     // table entry's routine and what such a routine takes.
     unsafe {

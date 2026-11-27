@@ -206,7 +206,8 @@ pub fn init() -> Result<(), &'static str> {
             )
         })
         .map_err(|_| "the root device's key could not be written")?;
-    adopt(root, top).ok_or("no memory for the root device's node")
+    // SAFETY: a device of the manager's, just made.
+    unsafe { adopt(root, top) }.ok_or("no memory for the root device's node")
 }
 
 /// A device of the manager's: unnamed for the root, else named by the
@@ -243,7 +244,10 @@ fn new_device() -> Option<*mut DEVICE_OBJECT> {
 
 /// Enter `node` in the tree for `device`, which the tree then holds a
 /// reference to, and point the device at it.
-fn adopt(device: *mut DEVICE_OBJECT, node: Node) -> Option<()> {
+///
+/// # Safety
+/// `device` is a live device of the manager's.
+unsafe fn adopt(device: *mut DEVICE_OBJECT, node: Node) -> Option<()> {
     let address = node::insert(node)?;
     // SAFETY: a live device of the manager's.
     unsafe {
@@ -303,7 +307,8 @@ pub fn report_detected_device(
             &[("DeviceReported", REG_DWORD, &1u32.to_le_bytes())],
         )
     });
-    if written.is_err() || adopt(pdo, found).is_none() {
+    // SAFETY: a device of the manager's, just made.
+    if written.is_err() || unsafe { adopt(pdo, found) }.is_none() {
         // SAFETY: the device just made, which nothing else knows.
         unsafe { device::IoDeleteDevice(pdo) };
         return Err(STATUS_INSUFFICIENT_RESOURCES);
