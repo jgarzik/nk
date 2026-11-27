@@ -274,9 +274,12 @@ pub fn irql() -> u8 {
     level as u8
 }
 
-/// Set the IRQL. The caller has checked the change is legal.
+/// Set the IRQL. The caller has checked the change is legal. Not
+/// `nomem`: what is done at a raised IRQL (a lock's record, a
+/// processor's own state) must not be moved across the change by the
+/// compiler.
 pub fn set_irql(level: u8) {
     // SAFETY: CR8 only holds the task priority; any value up to 15 is
     // valid.
-    unsafe { core::arch::asm!("mov cr8, {}", in(reg) u64::from(level), options(nomem, nostack)) };
+    unsafe { core::arch::asm!("mov cr8, {}", in(reg) u64::from(level), options(nostack)) };
 }

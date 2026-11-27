@@ -108,12 +108,13 @@ fn find_redistributor() -> Option<u64> {
     None
 }
 
-/// Set the priority mask for IRQL `level`.
+/// Set the priority mask for IRQL `level`. Not `nomem`, as x86-64's
+/// IRQL write is not: memory accesses stay on their side of the change.
 pub fn set_mask(level: u8) {
     // SAFETY: writing the priority mask only changes which interrupts
     // this processor accepts.
     unsafe {
-        asm!("msr icc_pmr_el1, {}", "isb", in(reg) u64::from(priority(level)), options(nomem, nostack));
+        asm!("msr icc_pmr_el1, {}", "isb", in(reg) u64::from(priority(level)), options(nostack));
     }
 }
 
