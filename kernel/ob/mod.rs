@@ -31,6 +31,7 @@ use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::{OBJECT_DIRECTORY_SIZE, OBJECT_SYMBOLIC_LINK};
 use nk_ntabi::status::*;
 use nk_ob::tree::{DirId, Error, Found, Options, Removed, Tree};
+use object::ObRef;
 
 /// An object as the namespace holds it.
 #[derive(Clone, Copy, PartialEq)]
@@ -289,14 +290,14 @@ pub fn remove_link(path: &[u16]) -> NTSTATUS {
 }
 
 /// What `path` leads to, following symbolic links: the object, with a
-/// reference for the caller to drop (`object::dereference`), and what
+/// reference for the caller, and what
 /// is left of the path if it goes on below the object, starting with
 /// its backslash. The rest is the business of the object's type: the
 /// lock is dropped before anything is done with it.
 ///
 /// The path is absolute, or relative to the directory object `start`
 /// (the `RootDirectory` of `OBJECT_ATTRIBUTES`).
-pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(*mut u8, Vec<u16>), NTSTATUS> {
+pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(ObRef, Vec<u16>), NTSTATUS> {
     let ns = NAMESPACE.lock();
     let start = match start {
         None => None,
@@ -311,8 +312,7 @@ pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(*mut u8, Vec<u16>
     // gives up the reference it was made with; so one that still has a
     // name is alive. A directory's name holds a reference to it, and
     // the directory a look-up starts at is the caller's to hold.
-    unsafe { object::reference(body) };
-    Ok((body, outcome.remainder))
+    Ok((unsafe { ObRef::new(body) }, outcome.remainder))
 }
 
 /// Make a directory object: called `path` (absolute, or relative to
@@ -515,9 +515,7 @@ fn named_event(path: &str) -> Result<*mut u8, &'static str> {
 /// identity.
 fn find(path: &str) -> Result<(*mut u8, alloc::string::String), NTSTATUS> {
     let (body, rest) = lookup(None, &wide(path))?;
-    // SAFETY: the reference the look-up took.
-    unsafe { object::dereference(body) };
-    Ok((body, alloc::string::String::from_utf16_lossy(&rest)))
+    Ok((body.body(), alloc::string::String::from_utf16_lossy(&rest)))
 }
 
 fn found(body: *mut u8, rest: &str) -> Result<(*mut u8, alloc::string::String), NTSTATUS> {

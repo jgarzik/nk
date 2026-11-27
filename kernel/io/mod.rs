@@ -3,7 +3,7 @@
 //!
 //! Objects handed to drivers are allocated from the pool at exactly their
 //! Windows size and reached through raw pointers only. A request may be
-//! pended and completed later, and cancelled; `doc/DESIGN.md` says how.
+//! pended and completed later, and cancelled; `doc/design/io.md` says how.
 
 pub mod build;
 pub mod csq;

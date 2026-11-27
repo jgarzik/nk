@@ -27,7 +27,7 @@ fn device_checks() -> Result<(), &'static str> {
     let (kind, characteristics, flags) = unsafe {
         let device = body.cast::<nk_ntabi::io::DEVICE_OBJECT>();
         let fields = core::ptr::eq(
-            ob::object::type_of(body),
+            ob::object::type_of(body.body()),
             &raw const ob::object::DEVICE_TYPE,
         )
         .then(|| {
@@ -37,7 +37,7 @@ fn device_checks() -> Result<(), &'static str> {
                 (*device).Flags,
             )
         });
-        ob::object::dereference(body);
+        drop(body);
         fields.ok_or("\\Device\\Null is not a device")?
     };
     if kind != FILE_DEVICE_NULL {

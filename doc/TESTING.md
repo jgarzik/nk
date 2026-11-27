@@ -102,7 +102,10 @@ NK-TEST-COMPLETE pass=<n> fail=<n> skip=<n>
 
 A declared verdict never reported is a FAIL, as is one reported twice,
 one not declared, and a group that does not give back what it took
-(`NK-TEST leak:FAIL`).
+(`NK-TEST leak:FAIL`). Kernel tables that keep their room are given it
+at boot, before any group runs (the record of mapped kernel address
+space has room for 512 live ranges); a test that holds more at once
+grows it, and the comparison sees that as a leak.
 
 A test reaches what the kernel does without memory by watching its own
 thread's allocations from the kernel's heap (`kernel/rt.rs`): it counts
@@ -276,7 +279,7 @@ tier has, for each architecture:
   interface it has no entry for, and Storport goes on without them.
   The class filters the reference machine registers for disks are
   left out: `EhStorClass` has no image among the boot files
-  (`doc/DESIGN.md`, What is absent), and the storage scenarios boot
+  (`doc/design/absent.md`), and the storage scenarios boot
   `without=partmgr.sys`, since the pattern disk has no partition table
   for it to read. The volume scenarios have it.
 
@@ -371,7 +374,7 @@ moved.
 
 The test disk is a disk device, so it has a volume parameter block,
 and the proof reads it through RAW, as every open of a disk for data
-goes (`doc/DESIGN.md`, Mounting). `disk.raw.*` hold the mount to that:
+goes (`doc/design/io.md`, Mounting). `disk.raw.*` hold the mount to that:
 an open of the disk for its attributes alone mounts nothing
 (`disk.raw.direct`); an open of a name on the unmounted disk, whose
 block does not allow a raw mount, is `STATUS_UNRECOGNIZED_VOLUME`
@@ -505,7 +508,7 @@ WDK's compiler recorded and the kernel's symbol file, which the host
 tests compare `lib/ntabi` with (`doc/ABI.md`).
 `fixtures/registry-overlay.txt` is a fixture kept in this repository:
 registry content, as text, that the next release of the hive takes
-over (`doc/DESIGN.md`, The registry). `fixtures/registry-<name>.txt`
+over (`doc/design/registry.md`). `fixtures/registry-<name>.txt`
 are more of the same, laid over the hive after it only in the boots
 whose scenario names them (`registry`): `registry-storage.txt` holds
 what Microsoft's storage stack and the enumeration of its devices read,

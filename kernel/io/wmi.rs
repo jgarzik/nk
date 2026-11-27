@@ -4,8 +4,8 @@
 //!
 //! The bookkeeping is `nk_etw::wmi::Registry`, under one lock. The
 //! registration request is sent from a system worker thread through the
-//! ordinary IRP path. What is and is not done is in `doc/DESIGN.md`,
-//! "Tracing".
+//! ordinary IRP path. What is and is not done is in
+//! `doc/design/tracing.md`.
 
 #![allow(non_snake_case)]
 
@@ -14,6 +14,7 @@ use crate::ex::work::ExQueueWorkItem;
 use crate::ke::seh::Guard;
 use crate::ke::{Rank, SpinLock, pcr, wait};
 use crate::mm::pool;
+use crate::ob::object::ObRef;
 use crate::{kd, ob};
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -96,15 +97,20 @@ unsafe fn ask(device: *mut DEVICE_OBJECT, update: bool) {
         if buffer.is_null() {
             return;
         }
-        // SAFETY: per the contract; the buffer is `size` bytes.
-        let (minor, status, written) = unsafe {
+        // SAFETY: per the contract; the buffer is `size` bytes. A
+        // request its driver kept keeps the buffer too: it is left to
+        // the driver, and nothing more is asked.
+        let answered = unsafe {
             match send(device, IRP_MN_REGINFO_EX, update, buffer, size) {
-                (status, _) if !nt_success(status) && status != STATUS_BUFFER_TOO_SMALL => {
-                    let (status, written) = send(device, IRP_MN_REGINFO, update, buffer, size);
-                    (IRP_MN_REGINFO, status, written)
+                Some((status, _)) if !nt_success(status) && status != STATUS_BUFFER_TOO_SMALL => {
+                    send(device, IRP_MN_REGINFO, update, buffer, size)
+                        .map(|(status, written)| (IRP_MN_REGINFO, status, written))
                 }
-                (status, written) => (IRP_MN_REGINFO_EX, status, written),
+                answer => answer.map(|(status, written)| (IRP_MN_REGINFO_EX, status, written)),
             }
+        };
+        let Some((minor, status, written)) = answered else {
+            return;
         };
         let needs_more = status == STATUS_BUFFER_TOO_SMALL || written == NEEDED_ONLY;
         // The rules run on a copy of what the driver reports written, no
@@ -166,7 +172,12 @@ unsafe extern "C" fn completed(
 
 /// Send one `IRP_MJ_SYSTEM_CONTROL` registration request to `device`
 /// and wait for it: the status it completed with and the bytes the
-/// driver says it wrote.
+/// driver says it wrote. None if the driver returned without
+/// completing the request or saying it would: it may still hold the
+/// IRP, so the IRP, the event its completion signals, the buffer and
+/// the reference to the top of the stack are left to it (as
+/// `io::stack` leaves a request), and the breach is reported
+/// (`NK-VERIFY`).
 ///
 /// The IRP is built as Windows builds it: a stack location of WMI's own
 /// above the driver's, the buffer as the system buffer, the status
@@ -183,20 +194,24 @@ unsafe fn send(
     update: bool,
     buffer: *mut u8,
     size: usize,
-) -> (NTSTATUS, usize) {
-    // SAFETY: per the contract.
+) -> Option<(NTSTATUS, usize)> {
+    // SAFETY: per the contract. The event is in pool, so that a
+    // request its driver keeps never signals a frame that is gone.
     unsafe {
         // Held while the request is with the stack.
-        let top = device::IoGetAttachedDeviceReference(device);
+        let held = ObRef::adopt(device::IoGetAttachedDeviceReference(device).cast());
+        let top = held.cast::<DEVICE_OBJECT>();
         let request = irp::alloc((*top).StackSize.saturating_add(1));
         if request.is_null() {
-            ob::object::dereference(top.cast());
-            return (STATUS_INSUFFICIENT_RESOURCES, 0);
+            return Some((STATUS_INSUFFICIENT_RESOURCES, 0));
         }
-        // An all-zero event is a valid value; it is initialised just
-        // below, and outlives the request.
-        let mut done: KEVENT = core::mem::zeroed();
-        wait::KeInitializeEvent(&raw mut done, 0, 0);
+        // Initialised just below, and outlives the request.
+        let done = pool::alloc(size_of::<KEVENT>(), TAG).cast::<KEVENT>();
+        if done.is_null() {
+            irp::free(request);
+            return Some((STATUS_INSUFFICIENT_RESOURCES, 0));
+        }
+        wait::KeInitializeEvent(done, 0, 0);
         // WMI's own location.
         (*request).CurrentLocation -= 1;
         (*request).CurrentStackLocation = (*request).CurrentStackLocation.sub(1);
@@ -214,25 +229,27 @@ unsafe fn send(
             buffer.addr() as u64,
         ];
         (*location).CompletionRoutine = Some(completed);
-        (*location).Context = (&raw mut done).cast();
+        (*location).Context = done.cast();
         (*location).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
         // Nothing is owed if the routine does not return: beneath it is
         // the worker, where an exception is unhandled.
         let returned = irp::call_driver(top, request, &Guard::Nothing);
-        if returned != STATUS_PENDING && wait::KeReadStateEvent(&raw mut done) == 0 {
-            // The driver neither completed the request nor said it
-            // would. It may still hold the IRP: leave it be.
+        if returned != STATUS_PENDING && wait::KeReadStateEvent(done) == 0 {
             kd::verify(format_args!(
                 "a driver returned {returned:#010x} from IRP_MJ_SYSTEM_CONTROL without \
                  completing the request"
             ));
-            return (returned, 0);
+            // The driver may still pass the request down or complete
+            // it: the stack it names stays referenced, the event stays
+            // where the completion routine signals it.
+            held.into_raw();
+            return None;
         }
-        wait::wait(Some((&raw mut done).cast()), None);
+        wait::wait(Some(done.cast()), None);
         let result = ((*request).IoStatus.Status, (*request).IoStatus.Information);
         irp::free(request);
-        ob::object::dereference(top.cast());
-        result
+        let _ = pool::free(done.cast());
+        Some(result)
     }
 }
 

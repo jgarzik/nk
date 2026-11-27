@@ -757,7 +757,7 @@ pub unsafe extern "C" fn ZwSetSecurityObject(
     information: u32,
     descriptor: *const c_void,
 ) -> NTSTATUS {
-    use crate::ob::{handle, object};
+    use crate::ob::handle;
     // SAFETY: per the contract; the object is referenced from the look-up
     // to the last line.
     unsafe {
@@ -768,9 +768,7 @@ pub unsafe extern "C" fn ZwSetSecurityObject(
             Ok(body) => body,
             Err(status) => return status,
         };
-        let status = ObSetSecurityObjectByPointer(body.cast(), information, descriptor);
-        object::dereference(body);
-        status
+        ObSetSecurityObjectByPointer(body.cast(), information, descriptor)
     }
 }
 

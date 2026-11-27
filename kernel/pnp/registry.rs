@@ -7,8 +7,7 @@
 //! finds what installation left in the device's key. NK's registry
 //! starts without the keys of enumerated devices, so NK applies the
 //! driver database's record when it first sees a device and writes the
-//! values installation writes (`install`). `doc/DESIGN.md`, Plug and
-//! Play.
+//! values installation writes (`install`). `doc/design/pnp.md`.
 
 use super::node::Node;
 use crate::cm;

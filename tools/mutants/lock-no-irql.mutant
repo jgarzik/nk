@@ -5,5 +5,5 @@ scenario: x86_64
 # arrives while such a lock is held and takes a lock ranked below it.
 fails: scenario
 file: kernel/ke/spinlock.rs
-replace:         let level = self.rank.level();
-with:         let level = irql::current();
+replace:     let old_irql = irql::raise(rank.level());
+with:     let old_irql = irql::current();

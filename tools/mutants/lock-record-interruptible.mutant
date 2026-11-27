@@ -1,8 +1,8 @@
-# The record of locks a processor holds is updated at the lock's own
-# level instead of HIGH_LEVEL, so an interrupt handler that takes a lock
-# can land in the middle of an update and corrupt it.
+# The record of locks a processor holds is updated with interrupts on,
+# so an interrupt handler that takes a lock can land in the middle of an
+# update and corrupt it.
 scenario: x86_64
 fails: scenario
 file: kernel/ke/spinlock.rs
-occurrence: 1
-remove:     arch::set_irql(irql::HIGH_LEVEL);
+replace:     let saved = arch::interrupts_off();
+with:     let saved = arch::interrupts_off(); arch::interrupts_restore(saved);

@@ -23,8 +23,7 @@ it is the default path for a volume with no boot entry.
 1. Reads the kernel, every file in `\NK\drivers` and the hive
    `\NK\SYSTEM` (if there is one) into memory. The hive is handed to
    the kernel as one more boot file, called `SYSTEM`, unread: the kernel
-   checks it and builds the registry from it (`doc/DESIGN.md`, The
-   registry). Without the file the registry starts from the kernel's
+   checks it and builds the registry from it (`doc/design/registry.md`). Without the file the registry starts from the kernel's
    built-in keys. The registry overlay `\NK\OVERLAY`, a text file, is
    handed over the same way, as the boot file `OVERLAY`. Also the command line if there is one: a single line of `key=value` words
    (`doc/TESTING.md` lists them), at most 255 ASCII characters.
@@ -100,7 +99,7 @@ writable, which relies on firmware having left `SCTLR_EL1.WXN` clear.
   the image's read-only mappings stop accidents, not a determined write.
 - The stack cookie the loader gives each driver image, and the node of
   the UUIDs NK makes, have no entropy but the cycle counter and the
-  clock (`doc/DESIGN.md`, "Loading a driver").
+  clock (`doc/design/drivers.md`, "Loading a driver").
 - The loader's boot stack has ordinary memory below it. The kernel
   leaves it for a guarded stack of its own as soon as it can allocate
   one; until then an overflow is caught on arm64 (by the alignment rule)

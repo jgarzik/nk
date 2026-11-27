@@ -57,12 +57,8 @@ const SHARE_READ_WRITE: u32 = 0x3;
 fn arrives(name: &str) -> Result<(), &'static str> {
     let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
     for _ in 0..100 {
-        if let Ok((body, rest)) = crate::ob::lookup(None, &wide) {
-            // SAFETY: the reference the look-up took for its caller.
-            unsafe { crate::ob::object::dereference(body) };
-            if rest.is_empty() {
-                return Ok(());
-            }
+        if crate::ob::lookup(None, &wide).is_ok_and(|(_, rest)| rest.is_empty()) {
+            return Ok(());
         }
         // SAFETY: no object is waited on; a relative tenth of a second.
         unsafe { crate::ke::wait::wait(None, Some(-1_000_000)) };
@@ -307,10 +303,8 @@ fn with_volume(
     // stack is referenced for the requests and given back after.
     unsafe {
         let top = crate::io::device::IoGetAttachedDeviceReference(body.cast());
-        let result = f(top);
-        crate::ob::object::dereference(top.cast());
-        crate::ob::object::dereference(body);
-        result
+        let top = crate::ob::object::ObRef::adopt(top.cast());
+        f(top.cast())
     }
 }
 
@@ -334,12 +328,11 @@ fn mount() -> Result<(), &'static str> {
     arrives(DRIVE)?;
     let found = |name: &str| {
         let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
-        crate::ob::lookup(None, &wide).ok().map(|(body, rest)| {
-            // SAFETY: the look-up's reference, given back at once; only
-            // the address is compared.
-            unsafe { crate::ob::object::dereference(body) };
-            (body, rest.is_empty())
-        })
+        // The look-up's reference goes at once; only the address is
+        // compared.
+        crate::ob::lookup(None, &wide)
+            .ok()
+            .map(|(body, rest)| (body.body(), rest.is_empty()))
     };
     let name = if style()? == PARTITION_STYLE_GPT {
         VOLUME_NAME_GPT

@@ -65,8 +65,90 @@ impl Space {
     }
 }
 
+/// A range of pages: its address and how many.
+pub type Range = (u64, usize);
+
+/// The index of the range of `live` (sorted by start, disjoint) that
+/// holds all of the `pages` pages at `va`; `None` if none does. No
+/// pages are held only by a range of no pages at `va`: a mapping of
+/// nothing (an empty MDL) still took an address, and gives it back.
+pub fn holder(live: &[Range], va: u64, pages: usize) -> Option<usize> {
+    let end = va.checked_add(u64::try_from(pages).ok()?.checked_mul(PAGE_SIZE)?)?;
+    let at = live
+        .partition_point(|&(start, _)| start <= va)
+        .checked_sub(1)?;
+    let (start, length) = live[at];
+    let held_end = start + length as u64 * PAGE_SIZE;
+    let held = if pages == 0 {
+        (start, length) == (va, 0)
+    } else {
+        end <= held_end
+    };
+    held.then_some(at)
+}
+
+/// What is left of the live `range` once the `pages` pages at `va`,
+/// which it holds, are given back: the part before them and the part
+/// after, each if not empty.
+pub fn remainder(range: Range, va: u64, pages: usize) -> (Option<Range>, Option<Range>) {
+    let (start, length) = range;
+    let before = ((va - start) / PAGE_SIZE) as usize;
+    let after = length - before - pages;
+    let piece = |at: u64, n: usize| (n != 0).then_some((at, n));
+    (
+        piece(start, before),
+        piece(va + pages as u64 * PAGE_SIZE, after),
+    )
+}
+
 #[cfg(test)]
 mod tests {
+
+    const P: u64 = PAGE_SIZE;
+
+    #[test]
+    fn a_release_must_lie_wholly_in_one_live_range() {
+        let live = [(0x1000 * P, 4), (0x2000 * P, 2)];
+        assert_eq!(holder(&live, 0x1000 * P, 4), Some(0));
+        assert_eq!(holder(&live, 0x1001 * P, 2), Some(0));
+        assert_eq!(holder(&live, 0x2001 * P, 1), Some(1));
+        // One page too many, before the first, between, and nothing.
+        assert_eq!(holder(&live, 0x1000 * P, 5), None);
+        assert_eq!(holder(&live, 0x0FFF * P, 1), None);
+        assert_eq!(holder(&live, 0x1800 * P, 1), None);
+        assert_eq!(holder(&live, 0x1001 * P, 0), None);
+        assert_eq!(holder(&[], 0x1000 * P, 1), None);
+        assert_eq!(holder(&live, u64::MAX - P, 4), None);
+    }
+
+    #[test]
+    fn an_empty_range_handed_out_is_given_back_as_it_was() {
+        // A mapping of no pages (an empty MDL) still takes an address.
+        let live = [(0x1000 * P, 0), (0x1002 * P, 3)];
+        assert_eq!(holder(&live, 0x1000 * P, 0), Some(0));
+        assert_eq!(remainder(live[0], 0x1000 * P, 0), (None, None));
+        // No pages anywhere else, nor a page of the empty range.
+        assert_eq!(holder(&live, 0x1003 * P, 0), None);
+        assert_eq!(holder(&live, 0x1000 * P, 1), None);
+    }
+
+    #[test]
+    fn a_partial_release_leaves_the_pieces_around_it() {
+        let range = (0x1000 * P, 6);
+        assert_eq!(remainder(range, 0x1000 * P, 6), (None, None));
+        assert_eq!(
+            remainder(range, 0x1000 * P, 2),
+            (None, Some((0x1002 * P, 4)))
+        );
+        assert_eq!(
+            remainder(range, 0x1004 * P, 2),
+            (Some((0x1000 * P, 4)), None)
+        );
+        assert_eq!(
+            remainder(range, 0x1002 * P, 1),
+            (Some((0x1000 * P, 2)), Some((0x1003 * P, 3)))
+        );
+    }
     use super::*;
 
     const BASE: u64 = 0xFFFF_F880_0000_0000;

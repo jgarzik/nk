@@ -730,6 +730,61 @@ pub unsafe fn dereference(body: *mut u8) -> i64 {
     left
 }
 
+/// One pointer reference to an object, owned: given up when this is
+/// dropped, however the holder leaves, unless [`ObRef::into_raw`] hands
+/// it on first (to a handle, a driver, a table that keeps it).
+pub struct ObRef(*mut u8);
+
+impl ObRef {
+    /// Take ownership of a reference the caller holds.
+    ///
+    /// # Safety
+    /// `body` is a live object from [`create`] and the caller owns one
+    /// of its references, which this now owns.
+    pub unsafe fn adopt(body: *mut u8) -> Self {
+        Self(body)
+    }
+
+    /// Take a new reference to `body`.
+    ///
+    /// # Safety
+    /// As [`reference`].
+    pub unsafe fn new(body: *mut u8) -> Self {
+        // SAFETY: per the contract.
+        unsafe { reference(body) };
+        Self(body)
+    }
+
+    /// The object's body.
+    pub fn body(&self) -> *mut u8 {
+        self.0
+    }
+
+    /// The object's body, as the structure it is.
+    pub fn cast<T>(&self) -> *mut T {
+        self.0.cast()
+    }
+
+    /// Whether the object is of the type `ty`.
+    pub fn is(&self, ty: &ObjectType) -> bool {
+        // SAFETY: the reference this owns keeps the object, and its
+        // header, alive.
+        core::ptr::eq(unsafe { type_of(self.0) }, ty)
+    }
+
+    /// Hand the reference on: it is the caller's to give up.
+    pub fn into_raw(self) -> *mut u8 {
+        core::mem::ManuallyDrop::new(self).0
+    }
+}
+
+impl Drop for ObRef {
+    fn drop(&mut self) {
+        // SAFETY: the reference this owns.
+        unsafe { dereference(self.0) };
+    }
+}
+
 /// Drop a reference unless it is the last one; says whether it was
 /// dropped. For an owner that must give its reference up while it
 /// still holds a lock inside the object.

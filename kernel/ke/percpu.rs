@@ -66,10 +66,10 @@ impl PerCpu {
     /// The locks this processor holds.
     ///
     /// # Safety
-    /// The caller is running on the processor this belongs to, at
-    /// HIGH_LEVEL, and drops the reference before the IRQL falls: an
-    /// interrupt handler may take a lock, and must not find the record
-    /// half updated.
+    /// The caller is running on the processor this belongs to, with
+    /// interrupts off (or at HIGH_LEVEL), and drops the reference before
+    /// they can arrive again: an interrupt handler may take a lock, and
+    /// must not find the record half updated.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn held(&self) -> &mut Held {
         // SAFETY: per the contract, this is the only live reference.

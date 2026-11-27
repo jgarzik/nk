@@ -214,7 +214,7 @@ pub extern "C" fn DbgSetDebugFilterState(component: u32, level: u32, state: u8) 
 /// breakpoint the debugger answers. With no debugger Windows' stub
 /// passes over print and command requests but not this one, which is
 /// then an exception, `0x80000003`, like any breakpoint
-/// (`doc/DESIGN.md`, "Breakpoints and the debugger"); NK's debugger
+/// (`doc/design/system.md`, "Breakpoints and the debugger"); NK's debugger
 /// that always says go has nobody to type, and the response is empty.
 pub extern "C" fn DbgPrompt(_prompt: *const u8, _response: *mut u8, _length: u32) -> u32 {
     crate::arch::driver_breakpoint();

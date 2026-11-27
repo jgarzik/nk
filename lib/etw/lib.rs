@@ -2,7 +2,7 @@
 //!
 //! NK starts no trace session and has no consumer of WMI data, so every
 //! answer here is the one Windows gives a provider nobody listens to
-//! (`doc/DESIGN.md`, "Tracing"). What is left is bookkeeping and
+//! (`doc/design/tracing.md`). What is left is bookkeeping and
 //! validation, which the host can test:
 //!
 //! [`provider`] is the table of registered providers. [`traits`] checks

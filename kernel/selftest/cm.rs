@@ -2002,22 +2002,17 @@ fn namespace() -> Result<(), &'static str> {
     let (root, rest) = ob::lookup(None, &wide("\\REGISTRY\\Machine\\System"))
         .map_err(|_| "\\Registry is not in the namespace")?;
     // SAFETY: the look-up's reference, given up after the type is read.
-    let is_key = unsafe {
-        let is_key = core::ptr::eq(object::type_of(root), &raw const object::KEY_TYPE);
-        object::dereference(root);
-        is_key
-    };
+    let is_key =
+        unsafe { core::ptr::eq(object::type_of(root.body()), &raw const object::KEY_TYPE) };
+    drop(root);
     if !is_key || rest != wide("\\Machine\\System") {
         return Err("\\Registry is not a key object that is handed the rest of the path");
     }
     // A handle to the namespace's root directory, to start from.
     let (directory, _) = ob::lookup(None, &wide("\\")).map_err(|_| "no root directory")?;
-    // SAFETY: the look-up's reference, handed to the handle.
-    let directory = unsafe {
-        let opened = handle::open(directory, 0).unwrap_or(0);
-        object::dereference(directory);
-        opened as *mut c_void
-    };
+    // SAFETY: the look-up's reference keeps the directory until the
+    // handle holds it.
+    let directory = unsafe { handle::open(directory.body(), 0) }.unwrap_or(0) as *mut c_void;
     let made = ob::insert_link(&wide("\\??\\NkRegistry"), &wide("\\Registry\\Machine"));
     let result = (|| {
         if made != 0 {

@@ -299,8 +299,36 @@ fn hardware_error(_: &mut Report, _: &BootInfo) {
     crate::hal::fatal::stop_test()
 }
 
+/// Releasing system address space a mapping does not hold
+/// (`MmUnmapIoSpace` of more pages than were mapped) must stop the
+/// system as Windows' `MiReleasePtes` does: `SYSTEM_PTE_MISUSE`, 0x302.
+pub static UNMAP_IO_SPACE: Group = Group {
+    names: &["neg.unmap-io-space"],
+    run: unmap_io_space,
+    manual: true,
+};
+
+fn unmap_io_space(r: &mut Report, _: &BootInfo) {
+    // A page of RAM, mapped for one page and unmapped for two: the
+    // second page was never the mapping's.
+    let va = crate::mm::io::MmMapIoSpaceEx(0x10_0000, 4096, 0x04);
+    if va.is_null() {
+        return r.fail(
+            "neg.unmap-io-space",
+            format_args!("the page could not be mapped"),
+        );
+    }
+    kprintln!("NK-NEG-ARMED neg.unmap-io-space");
+    crate::mm::io::MmUnmapIoSpace(va, 2 * 4096);
+    r.fail(
+        "neg.unmap-io-space",
+        format_args!("an unmapping of pages never mapped returned"),
+    );
+}
+
 pub static GROUPS: &[&Group] = &[
     &PANIC,
+    &UNMAP_IO_SPACE,
     &HARDWARE_ERROR,
     &FAULT,
     &NULL,

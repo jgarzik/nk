@@ -13,7 +13,7 @@ use super::{POWER, dope};
 use crate::io::{device, irp};
 use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
-use crate::ob::object;
+use crate::ob::object::{self, ObRef};
 use core::ffi::c_void;
 use nk_ntabi::io::*;
 use nk_ntabi::pnp::*;
@@ -80,24 +80,27 @@ pub unsafe extern "C" fn PoRequestPowerIrp(
         let Some(kind) = kind(minor) else {
             return STATUS_INVALID_PARAMETER_2;
         };
-        let top = device::IoGetAttachedDeviceReference(device);
-        let base = device::IoGetDeviceAttachmentBaseRef(device);
-        let give_up = |status| {
-            object::dereference(top.cast());
-            object::dereference(base.cast());
-            status
-        };
+        // Given up on the way out, unless the request is sent or made
+        // to wait: its record holds them then.
+        let ends = (
+            ObRef::adopt(device::IoGetAttachedDeviceReference(device).cast()),
+            ObRef::adopt(device::IoGetDeviceAttachmentBaseRef(device).cast()),
+        );
+        let (top, base) = (
+            ends.0.cast::<DEVICE_OBJECT>(),
+            ends.1.cast::<DEVICE_OBJECT>(),
+        );
         if (*(*base).DeviceObjectExtension).DeviceNode.is_null() {
-            return give_up(STATUS_INVALID_DEVICE_REQUEST);
+            return STATUS_INVALID_DEVICE_REQUEST;
         }
         let record = pool::alloc(size_of::<Request>(), TAG_REQUEST).cast::<Request>();
         if record.is_null() {
-            return give_up(STATUS_INSUFFICIENT_RESOURCES);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
         let request = irp::alloc((*top).StackSize + 1);
         if request.is_null() {
             let _ = pool::free(record.cast());
-            return give_up(STATUS_INSUFFICIENT_RESOURCES);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
         record.write(Request {
             irp: request,
@@ -157,6 +160,11 @@ pub unsafe extern "C" fn PoRequestPowerIrp(
                 send
             }
         };
+        if send.is_some() {
+            // The record's now, given up when the request completes.
+            ends.0.into_raw();
+            ends.1.into_raw();
+        }
         match send {
             Some(true) => {
                 // Nothing is owed if the dispatch routine is unwound:
@@ -170,7 +178,7 @@ pub unsafe extern "C" fn PoRequestPowerIrp(
                 }
                 irp::free(request);
                 let _ = pool::free(record.cast());
-                return give_up(STATUS_INSUFFICIENT_RESOURCES);
+                return STATUS_INSUFFICIENT_RESOURCES;
             }
         }
         STATUS_PENDING

@@ -374,9 +374,11 @@ unsafe extern "C" fn dispatch(device: *mut DEVICE_OBJECT, request: *mut IRP) -> 
             }
             Role::Layer => {
                 if minor == IRP_MN_START_DEVICE && (*own).number == 2 {
-                    let child = device::IoGetDeviceAttachmentBaseRef(device);
-                    let number = (*extension(child)).number;
-                    crate::ob::object::dereference(child.cast());
+                    let child = crate::ob::object::ObRef::adopt(
+                        device::IoGetDeviceAttachmentBaseRef(device).cast(),
+                    );
+                    let number = (*extension(child.cast())).number;
+                    drop(child);
                     if number == FAILING.load(Ordering::Acquire) {
                         return complete(request, STATUS_DEVICE_NOT_READY, 0);
                     }
@@ -1138,11 +1140,8 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             )
         };
         let linked = || {
-            crate::ob::lookup(None, &wide_link).is_ok_and(|(body, rest)| {
-                // SAFETY: the reference the lookup took for its caller.
-                unsafe { crate::ob::object::dereference(body) };
-                body == pdo.cast() && rest.is_empty()
-            })
+            crate::ob::lookup(None, &wide_link)
+                .is_ok_and(|(body, rest)| body.body() == pdo.cast() && rest.is_empty())
         };
         let checks = (|| {
             // Disabling answers success whatever came of it, as Windows'
@@ -1513,9 +1512,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         let link: Vec<u16> = format!("\\??\\{}#{CLASS}", found.instance.replace('\\', "#"))
             .encode_utf16()
             .collect();
-        if let Ok((body, _)) = crate::ob::lookup(None, &link) {
-            // SAFETY: the reference the lookup took for its caller.
-            unsafe { crate::ob::object::dereference(body) };
+        if crate::ob::lookup(None, &link).is_ok() {
             return Err("the failed device's interface is still linked");
         }
         Ok(())

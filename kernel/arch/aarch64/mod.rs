@@ -26,7 +26,8 @@ pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 
 pub use gic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
-    init as interrupts_init, interrupt_enable, self_interrupt, stop_others,
+    init as interrupts_init, interrupt_enable, interrupts_off, interrupts_restore, self_interrupt,
+    stop_others,
 };
 
 /// `(interrupt id, IRQL)` of the interrupt a processor sends itself to
@@ -248,11 +249,21 @@ pub fn pt_root() -> u64 {
 }
 
 /// Drop any cached translation for the page at `va`, on every processor:
-/// the instruction broadcasts.
+/// the instruction broadcasts. The table entry the caller just wrote is
+/// made visible to the walkers first (`dsb ishst`): a walk after the
+/// invalidation must not find the old entry and cache it again.
 pub fn flush_tlb_page(va: u64) {
-    // SAFETY: TLB invalidation only discards cached translations.
+    // SAFETY: a barrier and TLB invalidation only order memory and
+    // discard cached translations.
     unsafe {
-        core::arch::asm!("tlbi vaae1is, {}", "dsb ish", "isb", in(reg) va >> 12, options(nostack));
+        core::arch::asm!(
+            "dsb ishst",
+            "tlbi vaae1is, {}",
+            "dsb ish",
+            "isb",
+            in(reg) va >> 12,
+            options(nostack)
+        );
     }
 }
 

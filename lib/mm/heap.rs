@@ -89,30 +89,32 @@ impl<'a> Arena<'a> {
         self.usage
     }
 
-    fn word(&self, off: usize) -> u32 {
-        u32::from_le_bytes([
-            self.mem[off],
-            self.mem[off + 1],
-            self.mem[off + 2],
-            self.mem[off + 3],
-        ])
-    }
-
+    /// The header at `off`: one slice of `HEADER` bytes, bounds-checked
+    /// once, read as four little-endian words.
     fn get(&self, off: usize) -> Block {
+        let h: &[u8; HEADER] = self.mem[off..off + HEADER]
+            .try_into()
+            .expect("a header's bytes");
+        let word =
+            |i: usize| u32::from_le_bytes([h[4 * i], h[4 * i + 1], h[4 * i + 2], h[4 * i + 3]]);
         Block {
-            units: self.word(off),
-            prev_units: self.word(off + 4),
-            tag: self.word(off + 8),
-            req: self.word(off + 12),
+            units: word(0),
+            prev_units: word(1),
+            tag: word(2),
+            req: word(3),
         }
     }
 
+    /// Write `b` as the header at `off`, in one slice of `HEADER` bytes.
     fn put(&mut self, off: usize, b: &Block) {
+        let h: &mut [u8; HEADER] = (&mut self.mem[off..off + HEADER])
+            .try_into()
+            .expect("a header's bytes");
         for (i, v) in [b.units, b.prev_units, b.tag, b.req]
             .into_iter()
             .enumerate()
         {
-            self.mem[off + 4 * i..off + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+            h[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
         }
     }
 

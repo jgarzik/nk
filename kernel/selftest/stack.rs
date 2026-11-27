@@ -781,17 +781,15 @@ fn open_goes_to_the_top() -> Result<u32, &'static str> {
         }
         // SAFETY: the file is open: its object names its device.
         unsafe {
-            let file = crate::ob::handle::reference_for(
+            let (file, _) = crate::ob::handle::reference_for(
                 opened,
                 Some(&raw const object::FILE_TYPE),
                 0,
                 nk_ob::handles::Mode::Kernel,
             )
-            .map_err(|_| "the handle names no file")?
-            .0
-            .cast::<FILE_OBJECT>();
-            let named = (*file).DeviceObject;
-            object::dereference(file.cast());
+            .map_err(|_| "the handle names no file")?;
+            let named = (*file.cast::<FILE_OBJECT>()).DeviceObject;
+            drop(file);
             if named != stack.pdo() || (*stack.pdo()).ReferenceCount != 1 {
                 return Err("the file is not counted on the device that was named");
             }

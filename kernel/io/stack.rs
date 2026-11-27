@@ -7,7 +7,7 @@
 use super::{device, irp};
 use crate::ke::seh::Guard;
 use crate::ke::{self, irql};
-use crate::ob::object;
+use crate::ob::object::ObRef;
 use alloc::boxed::Box;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -36,8 +36,9 @@ struct Waiting {
 /// and referenced once: the IRP has a location for each device of the
 /// stack as it is then. A driver that returns other than
 /// `STATUS_PENDING` without completing the request may still hold it:
-/// the request is left to it, the breach is reported (`NK-VERIFY`),
-/// and the status the driver returned is the answer.
+/// the request, and the reference to the top of the stack, are left
+/// to it, the breach is reported (`NK-VERIFY`), and the status the
+/// driver returned is the answer.
 ///
 /// # Safety
 /// `device` is a live device object, and `parameters` names nothing
@@ -73,10 +74,10 @@ pub unsafe fn send_synchronous_from(
     // the boxed block stays where it is until the request has been
     // seen to complete.
     unsafe {
-        let top = device::IoGetAttachedDeviceReference(device);
+        let held = ObRef::adopt(device::IoGetAttachedDeviceReference(device).cast());
+        let top = held.cast::<DEVICE_OBJECT>();
         let request = irp::alloc((*top).StackSize);
         if request.is_null() {
-            object::dereference(top.cast());
             return (STATUS_INSUFFICIENT_RESOURCES, 0);
         }
         // An all-zero event is a valid value; it is initialised below.
@@ -113,13 +114,15 @@ pub unsafe fn send_synchronous_from(
                  it had not completed",
                 returned as u32
             ));
+            // The driver may still pass the request down or complete
+            // it: the stack it names stays referenced, and the block
+            // its completion writes stays where it is.
             Box::leak(waiting);
-            object::dereference(top.cast());
+            held.into_raw();
             return (returned, 0);
         }
         ke::wait::wait(Some((&raw mut waiting.done).cast()), None);
         irp::free(request);
-        object::dereference(top.cast());
         let result = (&raw const waiting.status_block).read();
         (result.Status, result.Information)
     }

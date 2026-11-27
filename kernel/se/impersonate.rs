@@ -357,7 +357,6 @@ pub extern "C" fn ZwImpersonateAnonymousToken(thread_handle: *mut c_void) -> NTS
                 copy_on_open: true,
             }),
         );
-        object::dereference(thread);
     }
     STATUS_SUCCESS
 }
@@ -383,12 +382,13 @@ pub unsafe fn set_thread_impersonation_token(
             return STATUS_SUCCESS;
         }
         let found = handle::reference(token_handle as u64, Some(&raw const object::TOKEN_TYPE));
-        let body = match found {
-            Ok(body) => body,
+        let held = match found {
+            Ok(held) => held,
             Err(status) => return status,
         };
+        let body = held.body();
         let its = token::of(body);
-        let status = if its.token_type == TokenType::Impersonation {
+        if its.token_type == TokenType::Impersonation {
             let new = Impersonation {
                 token: body,
                 level: its.impersonation_level,
@@ -399,9 +399,7 @@ pub unsafe fn set_thread_impersonation_token(
             STATUS_SUCCESS
         } else {
             STATUS_BAD_TOKEN_TYPE
-        };
-        object::dereference(body);
-        status
+        }
     }
 }
 
@@ -438,7 +436,7 @@ pub unsafe extern "C" fn ZwOpenThreadTokenEx(
     // SAFETY: per the contract; the thread is referenced until the
     // last line, the token by `reference` until it is given up here.
     unsafe {
-        let status = match reference(thread.cast()) {
+        match reference(thread.cast()) {
             None => STATUS_NO_TOKEN,
             Some(worn) => {
                 let status = if worn.level == SECURITY_ANONYMOUS {
@@ -469,8 +467,6 @@ pub unsafe extern "C" fn ZwOpenThreadTokenEx(
                 object::dereference(worn.token);
                 status
             }
-        };
-        object::dereference(thread);
-        status
+        }
     }
 }

@@ -151,7 +151,8 @@ pub fn prepare(info: &BootInfo) -> Result<(), &'static str> {
 
 /// Every processor is running: the trampoline's low mapping goes.
 pub fn finish() {
-    mm::map::unmap(TRAMPOLINE, 1);
+    // SAFETY: every processor has left the trampoline for good.
+    unsafe { mm::map::unmap(TRAMPOLINE, 1) };
 }
 
 /// Store `value` in the copy of the trampoline's data word `field`.

@@ -13,7 +13,7 @@ use super::stack::{self, ECHO, HOLD, PDO, PEND, PENDED_OFFSET, Stack};
 use crate::io::{build, device, irp, mdl};
 use crate::ke::{irql, wait};
 use crate::mm::pool;
-use crate::ob::object;
+use crate::ob::object::{self, ObRef};
 use crate::test::{Group, Report};
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
@@ -115,19 +115,19 @@ fn set_transfer_method(stack: &Stack, flags: u32) {
 
 /// The top of the stack, with the reference a driver holds while it
 /// sends requests there.
-struct Top(*mut DEVICE_OBJECT);
+struct Top(ObRef);
 
 impl Top {
     fn of(stack: &Stack) -> Self {
-        // SAFETY: a live device of the test's.
-        Self(unsafe { device::IoGetAttachedDeviceReference(stack.devices[PDO as usize]) })
+        // SAFETY: a live device of the test's; the reference is the
+        // caller's.
+        Self(unsafe {
+            ObRef::adopt(device::IoGetAttachedDeviceReference(stack.devices[PDO as usize]).cast())
+        })
     }
-}
 
-impl Drop for Top {
-    fn drop(&mut self) {
-        // SAFETY: the reference `of` took.
-        unsafe { object::dereference(self.0.cast()) };
+    fn device(&self) -> *mut DEVICE_OBJECT {
+        self.0.cast()
     }
 }
 
@@ -161,7 +161,7 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
             unsafe {
                 let request = build::IoBuildSynchronousFsdRequest(
                     u32::from(IRP_MJ_READ),
-                    top.0,
+                    top.device(),
                     data.as_mut_ptr().cast(),
                     LEN as u32,
                     &raw const offset,
@@ -179,7 +179,7 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
                 {
                     return Err("a built read is not set up as the device asks");
                 }
-                let (status, count, pended) = sender.send(top.0, request)?;
+                let (status, count, pended) = sender.send(top.device(), request)?;
                 if pended != (offset == PENDED_OFFSET) {
                     return Err("the bus driver did not pend the read it was to pend");
                 }
@@ -197,7 +197,7 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
                 let (event, block) = sender.arm();
                 let request = build::IoBuildSynchronousFsdRequest(
                     u32::from(IRP_MJ_WRITE),
-                    top.0,
+                    top.device(),
                     data.as_mut_ptr().cast(),
                     LEN as u32,
                     &raw const offset,
@@ -213,7 +213,7 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
                 {
                     return Err("a built buffered write is flagged as returning data");
                 }
-                let (status, count, _) = sender.send(top.0, request)?;
+                let (status, count, _) = sender.send(top.device(), request)?;
                 let sum: u32 = data.iter().map(|b| u32::from(*b)).sum();
                 if status != STATUS_SUCCESS
                     || count != LEN
@@ -233,7 +233,7 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
     unsafe {
         let request = build::IoBuildSynchronousFsdRequest(
             u32::from(IRP_MJ_PNP),
-            top.0,
+            top.device(),
             unused.as_mut_ptr().cast(),
             8,
             core::ptr::null(),
@@ -256,7 +256,7 @@ fn synchronous_fsd() -> Result<u32, &'static str> {
         // As whoever sends a Plug and Play request sets it; the bus
         // driver does not know this one and completes it as it came.
         (*request).IoStatus.Status = STATUS_NOT_SUPPORTED;
-        let (status, count, _) = sender.send(top.0, request)?;
+        let (status, count, _) = sender.send(top.device(), request)?;
         if status != STATUS_NOT_SUPPORTED || count != 0 {
             return Err("a request with no transfer did not come back");
         }
@@ -289,7 +289,7 @@ fn device_control() -> Result<u32, &'static str> {
                 unsafe {
                     let request = build::IoBuildDeviceIoControlRequest(
                         ctl_code(0x22, function, method, 0),
-                        top.0,
+                        top.device(),
                         input.as_mut_ptr().cast(),
                         8,
                         output.as_mut_ptr().cast(),
@@ -301,7 +301,7 @@ fn device_control() -> Result<u32, &'static str> {
                     if request.is_null() {
                         return Err("a control request could not be built");
                     }
-                    let (status, count, pended) = sender.send(top.0, request)?;
+                    let (status, count, pended) = sender.send(top.device(), request)?;
                     if pended != (function == PEND) {
                         return Err("the bus driver did not pend the request it was to pend");
                     }
@@ -327,7 +327,7 @@ fn device_control() -> Result<u32, &'static str> {
     unsafe {
         let request = build::IoBuildDeviceIoControlRequest(
             ctl_code(0x22, ECHO, METHOD_BUFFERED, 0),
-            top.0,
+            top.device(),
             core::ptr::null_mut(),
             0,
             core::ptr::null_mut(),
@@ -342,7 +342,7 @@ fn device_control() -> Result<u32, &'static str> {
         if !(*request).SystemBuffer.is_null() || (*request).Flags != IRP_PRIORITY_HINT_NORMAL {
             return Err("a control request with no buffers was given one");
         }
-        let (status, count, _) = sender.send(top.0, request)?;
+        let (status, count, _) = sender.send(top.device(), request)?;
         if status != STATUS_SUCCESS || count != 0 {
             return Err("a control request with no buffers did not come back");
         }
@@ -400,14 +400,14 @@ fn synchronous_call() -> Result<u32, &'static str> {
     // SAFETY: the test's own IRPs, sent to a stack of the test's and
     // freed when they have come back.
     unsafe {
-        let request = irp::IoAllocateIrp((*top.0).StackSize, 0);
+        let request = irp::IoAllocateIrp((*top.device()).StackSize, 0);
         if request.is_null() {
             return Err("no memory for an IRP");
         }
         let result = (|| {
             for function in [PEND, ECHO, PEND] {
                 own_control(request, function, &mut buffer);
-                let status = build::IoSynchronousCallDriver(top.0, request);
+                let status = build::IoSynchronousCallDriver(top.device(), request);
                 if status != STATUS_SUCCESS || !came_back(request, &buffer) {
                     return Err("an IRP sent synchronously did not come back to its sender");
                 }
@@ -454,7 +454,7 @@ fn synchronous_call() -> Result<u32, &'static str> {
                 .all(|byte| *byte == 0);
         let result = if laid_out {
             own_control(own, PEND, &mut buffer);
-            let status = build::IoSynchronousCallDriver(top.0, own);
+            let status = build::IoSynchronousCallDriver(top.device(), own);
             if status == STATUS_SUCCESS && came_back(own, &buffer) {
                 Ok(sent + 1)
             } else {
@@ -500,7 +500,7 @@ fn cancel_built() -> Result<u32, &'static str> {
     unsafe {
         let request = build::IoBuildDeviceIoControlRequest(
             ctl_code(0x22, HOLD, METHOD_BUFFERED, 0),
-            top.0,
+            top.device(),
             data.as_mut_ptr().cast(),
             4,
             data.as_mut_ptr().cast(),
@@ -512,7 +512,7 @@ fn cancel_built() -> Result<u32, &'static str> {
         if request.is_null() {
             return Err("a control request could not be built");
         }
-        if irp::IofCallDriver(top.0, request) != STATUS_PENDING {
+        if irp::IofCallDriver(top.device(), request) != STATUS_PENDING {
             return Err("the bus driver did not hold the request");
         }
         if wait::KeReadStateEvent(event) != 0 {
@@ -591,7 +591,7 @@ fn power() -> Result<u32, &'static str> {
     // SAFETY: the test's own IRP, sent to a stack of the test's and
     // kept by its completion routine.
     unsafe {
-        let request = irp::IoAllocateIrp((*top.0).StackSize, 0);
+        let request = irp::IoAllocateIrp((*top.device()).StackSize, 0);
         if request.is_null() {
             return Err("no memory for an IRP");
         }
@@ -603,7 +603,7 @@ fn power() -> Result<u32, &'static str> {
         (*location).CompletionRoutine = Some(keep);
         (*location).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
         stack::clear_log();
-        let status = irp::PoCallDriver(top.0, request);
+        let status = irp::PoCallDriver(top.device(), request);
         let before = core::slice::from_raw_parts(request.cast::<u8>(), size_of::<IRP>()).to_vec();
         irp::PoStartNextPowerIrp(request);
         let after = core::slice::from_raw_parts(request.cast::<u8>(), size_of::<IRP>());
@@ -726,7 +726,47 @@ fn partial_mdl_test() -> Result<u32, &'static str> {
             if !shares || !same {
                 return Err("a part of a mapped buffer does not share its mapping");
             }
-            Ok(9)
+            // An empty part, at the end of a buffer that ends on a page
+            // boundary: it maps no page, and taking that mapping down
+            // gives back what mapping it took.
+            let end = (va.addr() + 0x1000) & !0xFFF;
+            let short = mdl::IoAllocateMdl(
+                va.cast(),
+                (end - va.addr()) as u32,
+                0,
+                0,
+                core::ptr::null_mut(),
+            );
+            let part = mdl::IoAllocateMdl(va.cast(), LEN as u32, 0, 0, core::ptr::null_mut());
+            if short.is_null() || part.is_null() {
+                return Err("no memory for an MDL");
+            }
+            let empty = (|| {
+                mdl::probe_and_lock(short, KERNEL_MODE, IO_WRITE_ACCESS)
+                    .map_err(|_| "a pool buffer could not be locked")?;
+                mdl::IoBuildPartialMdl(
+                    short,
+                    part,
+                    core::ptr::with_exposed_provenance_mut::<c_void>(end),
+                    0,
+                );
+                if (*part).ByteCount != 0 || (*part).ByteOffset != 0 {
+                    return Err("a part at a buffer's end is not empty");
+                }
+                let view = stack::mapped(part);
+                if view.is_null() {
+                    return Err("an empty partial MDL was not mapped");
+                }
+                mdl::MmUnmapLockedPages(view.cast(), part);
+                Ok(())
+            })();
+            mdl::IoFreeMdl(part);
+            if (*short).MdlFlags & MDL_PAGES_LOCKED != 0 {
+                mdl::MmUnlockPages(short);
+            }
+            mdl::IoFreeMdl(short);
+            empty?;
+            Ok(10)
         })();
         if !source.is_null() {
             if (*source).MdlFlags & MDL_PAGES_LOCKED != 0 {

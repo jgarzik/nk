@@ -146,19 +146,18 @@ pub unsafe extern "C" fn ZwOpenEvent(
     }
     // SAFETY: per the contract.
     let wide = unsafe { crate::rtl::copy_unicode(name) };
-    let (body, rest) = match super::lookup(None, &wide) {
+    let (held, rest) = match super::lookup(None, &wide) {
         Ok(found) => found,
         Err(status) => return status,
     };
+    let body = held.body();
     // SAFETY: the look-up's reference, given up once the handle, if
     // there is one, holds the event.
     unsafe {
         if !rest.is_empty() {
-            object::dereference(body);
             return STATUS_OBJECT_NAME_NOT_FOUND;
         }
         if !core::ptr::eq(object::type_of(body), &raw const object::EVENT_TYPE) {
-            object::dereference(body);
             return STATUS_OBJECT_TYPE_MISMATCH;
         }
         let opened = handle::open_with(
@@ -170,7 +169,7 @@ pub unsafe extern "C" fn ZwOpenEvent(
             },
             true,
         );
-        object::dereference(body);
+        drop(held);
         match opened {
             Ok(opened) => {
                 event_handle.write_unaligned(opened as *mut c_void);
@@ -211,10 +210,11 @@ pub unsafe extern "C" fn ZwWaitForSingleObject(
     alertable: u8,
     timeout: *const i64,
 ) -> NTSTATUS {
-    let body = match handle::reference_for(handle as u64, None, SYNCHRONIZE, Mode::Kernel) {
-        Ok((body, _)) => body,
+    let held = match handle::reference_for(handle as u64, None, SYNCHRONIZE, Mode::Kernel) {
+        Ok((held, _)) => held,
         Err(status) => return status,
     };
+    let body = held.body();
     // SAFETY: the object is referenced until the wait is over; its
     // type says its body is a dispatcher object; per the contract for
     // the timeout.
@@ -230,9 +230,7 @@ pub unsafe extern "C" fn ZwWaitForSingleObject(
             ));
         }
         let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
-        let status = wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0);
-        object::dereference(body);
-        status as NTSTATUS
+        wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0) as NTSTATUS
     }
 }
 

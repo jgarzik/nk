@@ -7,8 +7,7 @@
 //! ask a driver for either (`ComponentIdleStateCallback`,
 //! `DevicePowerNotRequiredCallback`, `DevicePowerRequiredCallback`, the
 //! directed ones) are recorded and never called, and there is no
-//! platform extension (PEP) behind any of it (`doc/DESIGN.md`,
-//! "Power").
+//! platform extension (PEP) behind any of it (`doc/design/power.md`).
 
 use super::{POWER, Power, dope};
 use crate::ex::work::ExQueueWorkItem;
@@ -17,7 +16,7 @@ use crate::ke::bugcheck::KeBugCheckEx;
 use crate::ke::seh::{self, Guard};
 use crate::ke::{self, irql};
 use crate::mm::pool;
-use crate::ob::object;
+use crate::ob::object::{self, ObRef};
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -567,26 +566,24 @@ pub unsafe extern "C" fn PoFxRegisterDevice(
     // SAFETY: per the contract; the reference keeps the bottom of the
     // stack for as long as the registration lasts.
     unsafe {
-        let base = device::IoGetDeviceAttachmentBaseRef(pdo);
-        let refuse = |status| {
-            object::dereference(base.cast());
-            status
-        };
+        // Given up on a refusal; the registration's once it is made.
+        let held = ObRef::adopt(device::IoGetDeviceAttachmentBaseRef(pdo).cast());
+        let base = held.cast::<DEVICE_OBJECT>();
         if (*(*base).DeviceObjectExtension).DeviceNode.is_null() {
-            return refuse(STATUS_INVALID_PARAMETER);
+            return STATUS_INVALID_PARAMETER;
         }
         {
             let mut power = POWER.lock();
             let block = dope(&mut power, base);
             if block.is_null() || !(*block).fx_prepared {
                 drop(power);
-                return refuse(STATUS_DEVICE_NOT_READY);
+                return STATUS_DEVICE_NOT_READY;
             }
         }
         match accepted(&read) {
             Ok(true) => {}
-            Ok(false) => return refuse(STATUS_INVALID_PARAMETER),
-            Err(status) => return refuse(status),
+            Ok(false) => return STATUS_INVALID_PARAMETER,
+            Err(status) => return status,
         }
         if !read.providers.is_empty() {
             crate::kd::bugcheck(format_args!(
@@ -596,7 +593,7 @@ pub unsafe extern "C" fn PoFxRegisterDevice(
         }
         let mut parts = Vec::new();
         if parts.try_reserve_exact(read.components.len()).is_err() {
-            return refuse(STATUS_INSUFFICIENT_RESOURCES);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
         for _ in &read.components {
             parts.push(Part {
@@ -614,7 +611,7 @@ pub unsafe extern "C" fn PoFxRegisterDevice(
         }
         let fx = pool::alloc(size_of::<Fx>(), TAG_FX).cast::<Fx>();
         if fx.is_null() {
-            return refuse(STATUS_INSUFFICIENT_RESOURCES);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
         fx.write(Fx {
             base,
@@ -651,8 +648,9 @@ pub unsafe extern "C" fn PoFxRegisterDevice(
         if !registered {
             fx.drop_in_place();
             let _ = pool::free(fx.cast());
-            return refuse(STATUS_INSUFFICIENT_RESOURCES);
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
+        held.into_raw();
         handle.write(fx.cast());
     }
     STATUS_SUCCESS

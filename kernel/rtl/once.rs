@@ -113,7 +113,14 @@ static RUNS: AtomicUsize = AtomicUsize::new(0);
 
 /// An `RTL_RUN_ONCE_INIT_FN` for the test: fails if its parameter is
 /// zero, and otherwise leaves the parameter as the context.
-extern "C" fn initialise(_: *mut usize, parameter: *mut c_void, context: *mut *mut c_void) -> u32 {
+///
+/// # Safety
+/// `context` is writable, as `RtlRunOnceExecuteOnce` passes it.
+unsafe extern "C" fn initialise(
+    _: *mut usize,
+    parameter: *mut c_void,
+    context: *mut *mut c_void,
+) -> u32 {
     RUNS.fetch_add(1, Ordering::AcqRel);
     if parameter.is_null() {
         return 0;

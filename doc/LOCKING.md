@@ -48,9 +48,11 @@ gives access to the `T` inside until the guard is dropped, which restores
 the IRQL.
 
 Per processor, the kernel records which locks are held
-(`ke::percpu::PerCpu`). The record is updated at `HIGH_LEVEL`, whatever
-the lock's own level: an interrupt handler may take a lock too, and must
-never find the record half written.
+(`ke::percpu::PerCpu`). The record is updated with interrupts masked
+(`arch::interrupts_off`), whatever the lock's own level: an interrupt
+handler may take a lock too, and must never find the record half
+written. Masking is cheaper than raising the IRQL to `HIGH_LEVEL` and
+back, and the IRQL a driver reads never shows the update.
 
 ### Order
 
@@ -78,6 +80,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
+| 36 | `mm::map::LIVE` | which ranges of the dynamic kernel region are handed out; taken with no lock of the address space held | DISPATCH |
 | 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing; the devices registered with the runtime power framework, their components' counts and conditions, and which are owed callbacks from a worker | DISPATCH |
 | 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |
 | 39 | `hal::variables::FIRMWARE` | the firmware's variable services: one call into them at a time, held across the call and nothing else | DISPATCH |
@@ -320,7 +323,7 @@ thread can sleep on: the monitor's create and terminate callbacks run
 with it held, at `PASSIVE_LEVEL`, and may wait. It is taken with no
 spin lock held and nothing ranked is held across a callback. An
 exception that unwinds a callback releases it (the guard of that call,
-`doc/DESIGN.md`). What a monitor's slot holds is let go after the mutex
+`doc/design/exceptions.md`). What a monitor's slot holds is let go after the mutex
 is released.
 
 ### Per-processor state
@@ -530,6 +533,22 @@ IRQL or because Windows defines it as one word changed atomically:
   routine that disconnects its own interrupt object would wait for
   itself; Windows forbids that too (`IoDisconnectInterruptEx` is for
   `PASSIVE_LEVEL`).
+
+### Barriers on arm64
+
+Locks and atomics order memory between processors; these orderings
+are not memory accesses, so each has its barrier where it is made:
+
+| Before | Barrier | Store it orders | Observer |
+| --- | --- | --- | --- |
+| a broadcast TLB invalidation (`flush_tlb_page`) | `dsb ishst` | the page-table entry just written | every processor's table walker |
+| after the invalidation | `dsb ish; isb` | the invalidation itself | this processor's later accesses |
+| using a new mapping (`mapping_sync`) | `dsb ishst; isb` | the page-table entry | this processor's walker |
+| raising a software interrupt (`gic::send`) | `dsb ish` | the request the target is to act on | the target processor |
+
+On x86-64 the processor orders these itself: a page-table write is
+seen by the next walk, and an interrupt command register write is
+ordered after earlier stores.
 
 ## What drivers get
 

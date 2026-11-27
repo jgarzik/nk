@@ -3,4 +3,4 @@
 scenario: x86_64
 fails: mm.user.map
 file: kernel/mm/user.rs
-remove:             map::unmap(at, 1);
+remove:             unsafe { map::unmap(at, 1) };

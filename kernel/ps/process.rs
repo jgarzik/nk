@@ -386,10 +386,7 @@ pub fn self_test() -> Result<(), &'static str> {
     // `NtCurrentProcess()` names it, and only as a process.
     let current = -1i64 as u64;
     match handle::reference(current, Some(&raw const object::PROCESS_TYPE)) {
-        Ok(body) if body == process => {
-            // SAFETY: the reference the look-up took.
-            unsafe { object::dereference(body) };
-        }
+        Ok(body) if body.body() == process => {}
         Ok(_) => return Err("NtCurrentProcess names another object"),
         Err(_) => return Err("NtCurrentProcess names nothing"),
     }

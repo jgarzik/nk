@@ -108,12 +108,13 @@ fn find_redistributor() -> Option<u64> {
     None
 }
 
-/// Set the priority mask for IRQL `level`.
+/// Set the priority mask for IRQL `level`. Not `nomem`, as x86-64's
+/// IRQL write is not: memory accesses stay on their side of the change.
 pub fn set_mask(level: u8) {
     // SAFETY: writing the priority mask only changes which interrupts
     // this processor accepts.
     unsafe {
-        asm!("msr icc_pmr_el1, {}", "isb", in(reg) u64::from(priority(level)), options(nomem, nostack));
+        asm!("msr icc_pmr_el1, {}", "isb", in(reg) u64::from(priority(level)), options(nostack));
     }
 }
 
@@ -248,11 +249,15 @@ pub fn interrupt_enable(vector: u32, level: u8) {
 }
 
 /// Send software-generated interrupt `vector` to the processor with
-/// MPIDR affinity `id`.
+/// MPIDR affinity `id`. What this processor wrote before (the request
+/// the target is to act on) is made visible to the target first
+/// (`dsb ish`): the register write that raises the interrupt is not a
+/// memory access, and nothing else orders the two. Not `nomem`, so the
+/// compiler keeps those writes before it too.
 fn send(id: u64, vector: u32) {
     let value = sgi(id, vector).expect("affinity level 0 above 15 needs a range selector");
-    // SAFETY: generating an interrupt for a processor.
-    unsafe { asm!("msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nomem, nostack)) };
+    // SAFETY: a barrier, then generating an interrupt for a processor.
+    unsafe { asm!("dsb ish", "msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nostack)) };
 }
 
 /// Send software-generated interrupt `vector` to this processor.
@@ -305,4 +310,20 @@ pub fn enable_interrupts() {
 pub fn disable_interrupts() {
     // SAFETY: masking interrupts touches no memory.
     unsafe { asm!("msr daifset, #2", options(nomem, nostack)) };
+}
+
+/// Mask interrupts (IRQ and FIQ) on this processor and return the mask
+/// bits as they were, for [`interrupts_restore`]. Not `nomem`: what is
+/// done with them off stays between the two.
+pub fn interrupts_off() -> u64 {
+    let daif: u64;
+    // SAFETY: reads the mask bits, then masks interrupts.
+    unsafe { asm!("mrs {}, daif", "msr daifset, #3", out(reg) daif, options(nostack)) };
+    daif
+}
+
+/// Undo [`interrupts_off`]: put the mask bits back as they were.
+pub fn interrupts_restore(daif: u64) {
+    // SAFETY: the value `interrupts_off` read on this processor.
+    unsafe { asm!("msr daif, {}", in(reg) daif, options(nostack)) };
 }

@@ -58,6 +58,9 @@ pub enum Rank {
     RegistryWatches = 34,
     /// The kernel handle table (`ob::handle`).
     Handles = 35,
+    /// The ranges of the dynamic kernel region that are handed out
+    /// (`mm::map`).
+    Mappings = 36,
     /// The power manager's records (`po`).
     Power = 37,
     /// The firmware table providers drivers registered (`ex::firmware`).
@@ -129,19 +132,55 @@ impl Rank {
 }
 
 /// Update this processor's record of the locks it holds. The caller is
-/// at `level`, the level of the lock being taken or released.
+/// at `DISPATCH_LEVEL` or above, so stays on this processor.
 ///
-/// The update runs at `HIGH_LEVEL`. An interrupt handler may take a lock
-/// too (the console, a DPC queue), and one arriving half-way through an
-/// update would read, and then overwrite, a record that is not yet
-/// whole.
-fn held<R>(level: u8, update: impl FnOnce(&mut nk_ke::Held) -> R) -> R {
-    arch::set_irql(irql::HIGH_LEVEL);
-    // SAFETY: at HIGH_LEVEL nothing else runs on this processor, and the
-    // reference ends with the closure.
+/// The update runs with interrupts off. An interrupt handler may take a
+/// lock too (the console, a DPC queue), and one arriving half-way
+/// through an update would read, and then overwrite, a record that is
+/// not yet whole. Masking interrupts costs less than raising the IRQL to
+/// `HIGH_LEVEL` and back, and keeps them out as surely.
+fn held<R>(update: impl FnOnce(&mut nk_ke::Held) -> R) -> R {
+    let saved = arch::interrupts_off();
+    // SAFETY: with interrupts off nothing else runs on this processor,
+    // and the reference ends with the closure.
     let result = update(unsafe { arch::percpu().held() });
-    arch::set_irql(level);
+    arch::interrupts_restore(saved);
     result
+}
+
+/// Raise to the level of `rank` and enter the lock `id` in the record:
+/// the part of taking a lock that is the same for every kind. Returns
+/// the IRQL to go back to. Not generic, so one copy serves every
+/// `SpinLock<T>`.
+fn enter(id: usize, rank: Rank) -> u8 {
+    let old_irql = irql::raise(rank.level());
+    if let Err(v) = held(|held| held.acquire(id, rank as u8)) {
+        irql::violation(v);
+    }
+    old_irql
+}
+
+/// Strike the lock `id` from the record and go back to `old_irql`: the
+/// reverse of [`enter`], once the lock's word is free.
+fn leave(id: usize, old_irql: u8) {
+    if let Err(v) = held(|held| held.release(id)) {
+        irql::violation(v);
+    }
+    irql::lower(old_irql);
+}
+
+/// Take `lock`, known by `id`, of `rank`: what [`SpinLock::lock`] does,
+/// apart from its type.
+fn acquire(lock: &TicketLock, id: usize, rank: Rank) -> u8 {
+    let old_irql = enter(id, rank);
+    lock.lock();
+    old_irql
+}
+
+/// Free `lock` and undo [`acquire`].
+fn release(lock: &TicketLock, id: usize, old_irql: u8) {
+    lock.unlock();
+    leave(id, old_irql);
 }
 
 /// A hold on a lock whose word is not a [`SpinLock`]'s: one that lies
@@ -152,27 +191,21 @@ fn held<R>(level: u8, update: impl FnOnce(&mut nk_ke::Held) -> R) -> R {
 /// reverse; the word is to be free again by then.
 pub struct Ranked {
     id: usize,
-    rank: Rank,
     old_irql: u8,
 }
 
 impl Ranked {
     pub fn enter(id: usize, rank: Rank) -> Self {
-        let level = rank.level();
-        let old_irql = irql::raise(level);
-        if let Err(v) = held(level, |held| held.acquire(id, rank as u8)) {
-            irql::violation(v);
+        Self {
+            id,
+            old_irql: enter(id, rank),
         }
-        Self { id, rank, old_irql }
     }
 }
 
 impl Drop for Ranked {
     fn drop(&mut self) {
-        if let Err(v) = held(self.rank.level(), |held| held.release(self.id)) {
-            irql::violation(v);
-        }
-        irql::lower(self.old_irql);
+        leave(self.id, self.old_irql);
     }
 }
 
@@ -209,15 +242,9 @@ impl<T> SpinLock<T> {
     }
 
     pub fn lock(&self) -> Guard<'_, T> {
-        let level = self.rank.level();
-        let old_irql = irql::raise(level);
-        if let Err(v) = held(level, |held| held.acquire(self.id(), self.rank as u8)) {
-            irql::violation(v);
-        }
-        self.lock.lock();
         Guard {
             lock: self,
-            old_irql,
+            old_irql: acquire(&self.lock, self.id(), self.rank),
         }
     }
 
@@ -247,11 +274,7 @@ impl<T> DerefMut for Guard<'_, T> {
 
 impl<T> Drop for Guard<'_, T> {
     fn drop(&mut self) {
-        self.lock.lock.unlock();
-        if let Err(v) = held(self.lock.rank.level(), |held| held.release(self.lock.id())) {
-            irql::violation(v);
-        }
-        irql::lower(self.old_irql);
+        release(&self.lock.lock, self.lock.id(), self.old_irql);
     }
 }
 

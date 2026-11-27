@@ -7,7 +7,7 @@
 
 use super::token;
 use crate::ob::handle::{self, ObOpenObjectByPointer};
-use crate::ob::object;
+use crate::ob::object::{self, ObRef};
 use core::ffi::c_void;
 use nk_ntabi::io::KERNEL_MODE;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
@@ -18,11 +18,11 @@ use nk_se::information::{class_known, token_information_buffer};
 use nk_se::token::TokenType;
 
 /// The object a handle names, if it is of type `ty`, with what the
-/// handle was granted. The caller gives up the reference.
+/// handle was granted.
 fn referenced(
     handle: *mut c_void,
     ty: &'static object::ObjectType,
-) -> Result<(*mut u8, u32), NTSTATUS> {
+) -> Result<(ObRef, u32), NTSTATUS> {
     handle::reference_for(
         handle as u64,
         Some(core::ptr::from_ref(ty)),
@@ -76,11 +76,14 @@ pub unsafe extern "C" fn ZwOpenProcessTokenEx(
     // SAFETY: per the contract; the process and its token are
     // referenced from the look-ups to the last lines.
     unsafe {
-        let primary = crate::ps::process::PsReferencePrimaryToken(process.cast()).cast::<u8>();
-        let status = open(primary, desired_access, handle_attributes, token_handle);
-        object::dereference(primary);
-        object::dereference(process);
-        status
+        let primary =
+            ObRef::adopt(crate::ps::process::PsReferencePrimaryToken(process.cast()).cast::<u8>());
+        open(
+            primary.body(),
+            desired_access,
+            handle_attributes,
+            token_handle,
+        )
     }
 }
 
@@ -132,7 +135,8 @@ pub unsafe extern "C" fn ZwDuplicateToken(
     // SAFETY: per the contract; the source is referenced until the
     // last line, the copy until its handle holds it.
     unsafe {
-        let status = match token::of(source).duplicate_level(new_type, requested) {
+        let source = source.body();
+        match token::of(source).duplicate_level(new_type, requested) {
             Err(_) => STATUS_BAD_IMPERSONATION_LEVEL,
             Ok(level) => match token::duplicate(source, new_type, level, effective_only != 0) {
                 None => STATUS_INSUFFICIENT_RESOURCES,
@@ -142,14 +146,10 @@ pub unsafe extern "C" fn ZwDuplicateToken(
                     } else {
                         desired_access
                     };
-                    let status = open(copy, access, attributes, new_handle);
-                    object::dereference(copy);
-                    status
+                    open(ObRef::adopt(copy).body(), access, attributes, new_handle)
                 }
             },
-        };
-        object::dereference(source);
-        status
+        }
     }
 }
 
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn ZwQueryInformationToken(
     // SAFETY: per the contract; the token is referenced until the
     // last line.
     unsafe {
-        let status = match token_information_buffer(token::of(source), class, buffer as u64) {
+        match token_information_buffer(token::of(source.body()), class, buffer as u64) {
             Err(_) => STATUS_INVALID_INFO_CLASS,
             Ok(answer) => {
                 return_length.write_unaligned(answer.len() as u32);
@@ -193,8 +193,6 @@ pub unsafe extern "C" fn ZwQueryInformationToken(
                     STATUS_SUCCESS
                 }
             }
-        };
-        object::dereference(source);
-        status
+        }
     }
 }

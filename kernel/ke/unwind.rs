@@ -8,7 +8,7 @@
 //! stubs, the change of stack around DPC routines, interrupt frames.
 //!
 //! The walk ends at a frame that returns to address zero: every stack
-//! is entered as if called from address zero (`doc/DESIGN.md`, "Unwind
+//! is entered as if called from address zero (`doc/design/image.md`, "Unwind
 //! tables"). Code an interrupt stopped at address zero is not the end:
 //! it was called through a null pointer, and is in no image.
 //!

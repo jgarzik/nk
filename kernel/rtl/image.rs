@@ -243,7 +243,8 @@ pub fn find_message_test() -> Result<u32, &'static str> {
             ]
         })
     };
-    map::free_va(base, pages);
+    // SAFETY: address space the test reserved and never mapped.
+    unsafe { map::free_va(base, pages) };
     let asked = asked.ok_or("the test's image could not be entered")?;
     if before != untouched(STATUS_RESOURCE_DATA_NOT_FOUND) {
         return Err("a message was found at an address where no image is loaded");

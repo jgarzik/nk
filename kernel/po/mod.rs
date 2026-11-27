@@ -1,8 +1,7 @@
 //! Power: what Microsoft's drivers ask of the power manager on a
 //! machine that is on and stays on.
 //!
-//! The system is in S0 and every device in D0, always (`doc/DESIGN.md`,
-//! "Power"). [`request`] makes the power requests a driver asks for,
+//! The system is in S0 and every device in D0, always (`doc/design/power.md`). [`request`] makes the power requests a driver asks for,
 //! [`setting`] keeps the registrations for power settings and for
 //! coalescing, [`fx`] is the runtime power framework, [`action`] takes
 //! a request to shut the system down, [`absent`]

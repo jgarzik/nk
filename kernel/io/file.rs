@@ -29,6 +29,7 @@
 use super::{TAG_FILE_NAME, TAG_IO_BUFFER, device, irp, mdl};
 use crate::ke::seh::Guard;
 use crate::mm::{pool, user};
+use crate::ob::object::ObRef;
 use crate::ob::{handle, object};
 use crate::{ke, ob, se};
 use alloc::boxed::Box;
@@ -322,21 +323,9 @@ unsafe fn request(
 /// is to parse, and for a name relative to an open file, that file.
 /// The device and the file are referenced (pointer references).
 struct Target {
-    device: *mut DEVICE_OBJECT,
+    device: ObRef,
     remainder: Vec<u16>,
-    related: *mut FILE_OBJECT,
-}
-
-impl Drop for Target {
-    fn drop(&mut self) {
-        // SAFETY: the references `resolve` took.
-        unsafe {
-            object::dereference(self.device.cast());
-            if !self.related.is_null() {
-                object::dereference(self.related.cast());
-            }
-        }
-    }
+    related: Option<ObRef>,
 }
 
 /// Find what `name` leads to, from the namespace's root or from what
@@ -348,60 +337,45 @@ impl Drop for Target {
 /// with no access asked of it, as Windows' `ObpLookupObjectName` does:
 /// a kernel handle is no root for user mode.
 fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
-    let is = |body: *mut u8, ty: &'static object::ObjectType| {
-        // SAFETY: called with objects this function holds a reference to.
-        core::ptr::eq(unsafe { object::type_of(body) }, ty)
-    };
     let found = match root {
         None => ob::lookup(None, name),
         Some(root) => {
             let (root, _) = handle::reference_for(root, None, 0, mode)?;
-            if is(root, &object::FILE_TYPE) {
+            if root.is(&object::FILE_TYPE) {
                 // Relative to an open file: the name as given is the
                 // driver's to read, and is not absolute.
                 if name.first() == Some(&u16::from(b'\\')) {
-                    // SAFETY: the reference taken above.
-                    unsafe { object::dereference(root) };
                     return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
                 }
-                let related = root.cast::<FILE_OBJECT>();
                 // SAFETY: an open file holds a reference on its device,
                 // so the device's memory is there to be referenced.
-                let device = unsafe {
-                    let device = (*related).DeviceObject;
-                    object::reference(device.cast());
-                    device
-                };
+                let device =
+                    unsafe { ObRef::new((*root.cast::<FILE_OBJECT>()).DeviceObject.cast()) };
                 return Ok(Target {
                     device,
                     remainder: name.to_vec(),
-                    related,
+                    related: Some(root),
                 });
             }
-            let found = if is(root, &object::DIRECTORY_TYPE) {
-                ob::lookup(Some(root), name)
-            } else if is(root, &object::KEY_TYPE) {
+            if root.is(&object::DIRECTORY_TYPE) {
+                ob::lookup(Some(root.body()), name)
+            } else if root.is(&object::KEY_TYPE) {
                 // A key parses a name into a key, never a file.
                 Err(STATUS_OBJECT_TYPE_MISMATCH)
             } else {
                 // Nothing parses a name below such an object.
                 Err(STATUS_INVALID_HANDLE)
-            };
-            // SAFETY: the reference taken above.
-            unsafe { object::dereference(root) };
-            found
+            }
         }
     };
-    let (body, remainder) = found?;
-    if !is(body, &object::DEVICE_TYPE) {
-        // SAFETY: the look-up's reference.
-        unsafe { object::dereference(body) };
+    let (device, remainder) = found?;
+    if !device.is(&object::DEVICE_TYPE) {
         return Err(STATUS_OBJECT_TYPE_MISMATCH);
     }
     Ok(Target {
-        device: body.cast(),
+        device,
         remainder,
-        related: core::ptr::null_mut(),
+        related: None,
     })
 }
 
@@ -515,7 +489,7 @@ pub fn open_as(
         _ => Mode::User,
     };
     let target = resolve(request.root, name, mode)?;
-    let device = target.device;
+    let device = target.device.cast::<DEVICE_OBJECT>();
     // Finding the device and counting the open are two steps, and the
     // device may be deleted between them: its memory is held (by the
     // look-up's pointer reference) until the device's own count has
@@ -537,7 +511,7 @@ pub fn open_as(
     // A device a file system can be mounted on is opened through the
     // one mounted on it, unless the open is a direct device open
     // (`io::mount`).
-    let itself = target.remainder.is_empty() && target.related.is_null();
+    let itself = target.remainder.is_empty() && target.related.is_none();
     // SAFETY: the device is counted.
     let has_vpb = unsafe { !(*device).Vpb.is_null() };
     let vpb = if has_vpb && !super::mount::direct_open(itself, desired) {
@@ -610,7 +584,10 @@ pub fn open_as(
         (*file).Size = size_of::<FILE_OBJECT>() as i16;
         (*file).DeviceObject = device;
         (*file).Vpb = vpb.cast();
-        (*file).RelatedFileObject = target.related;
+        (*file).RelatedFileObject = target
+            .related
+            .as_ref()
+            .map_or(core::ptr::null_mut(), ObRef::cast);
         if request.create_options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT) != 0
         {
             (*file).Flags = FO_SYNCHRONOUS_IO;
@@ -866,18 +843,14 @@ fn file_for(handle: u64, mode: i8, needs: Needs) -> Result<*mut FILE_OBJECT, IoE
     let (body, information) =
         handle::reference_for(handle, Some(&raw const object::FILE_TYPE), all, mode)
             .map_err(IoError::Handle)?;
-    let file = body.cast::<FILE_OBJECT>();
     // SAFETY: an open file, referenced just above.
-    unsafe {
-        if mode == Mode::User
-            && matches!(needs, Needs::Write)
-            && !may_write(information.granted, (*file).Flags)
-        {
-            object::dereference(body);
-            return Err(IoError::Handle(STATUS_ACCESS_DENIED));
-        }
+    let flags = unsafe { (*body.cast::<FILE_OBJECT>()).Flags };
+    if mode == Mode::User && matches!(needs, Needs::Write) && !may_write(information.granted, flags)
+    {
+        return Err(IoError::Handle(STATUS_ACCESS_DENIED));
     }
-    Ok(file)
+    // The caller's reference from here.
+    Ok(body.into_raw().cast())
 }
 
 /// A requestor's buffer, as a system service is given it: an address

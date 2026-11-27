@@ -63,4 +63,4 @@ where the host can unit-test it.
 - Locks: `doc/LOCKING.md` states the ranks and rules; a new or changed
   lock updates it in the same commit.
 
-Design: `doc/DESIGN.md`. Phases: `doc/ROADMAP.md`. Tests: `doc/TESTING.md`.
+Design: `doc/DESIGN.md`, per part `doc/design/`. Phases: `doc/ROADMAP.md`. Tests: `doc/TESTING.md`.

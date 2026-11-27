@@ -124,6 +124,9 @@ unsafe fn unmap(mdl: *mut MDL) {
     // SAFETY: per the contract.
     unsafe {
         let va = (*mdl).MappedSystemVa as u64 & !(PAGE_SIZE as u64 - 1);
+        // Checked before anything is unmapped: an MDL whose length has
+        // changed must not take down a neighbour's pages.
+        map::check_held(va, pages(mdl));
         map::unmap(va, pages(mdl));
         map::free_va(va, pages(mdl));
         (*mdl).MappedSystemVa = core::ptr::null_mut();
@@ -380,6 +383,8 @@ pub unsafe extern "C" fn MmUnmapLockedPages(base_address: *mut c_void, mdl: *mut
         if flags & MDL_MAPPED_TO_SYSTEM_VA != 0 && (*mdl).MappedSystemVa == base_address && !shared
         {
             let va = base_address as u64 & !(PAGE_SIZE as u64 - 1);
+            // Checked before anything is unmapped, as `unmap` checks.
+            map::check_held(va, pages(mdl));
             map::unmap(va, pages(mdl));
             map::free_va(va, pages(mdl));
             (*mdl).MappedSystemVa = core::ptr::null_mut();

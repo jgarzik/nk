@@ -136,8 +136,31 @@ pub(super) fn load(
     };
     if !nt_success(status) {
         // Windows does not call the unload routine of a driver whose entry
-        // failed; the driver must have cleaned up after itself.
-        free(object, Some(&image));
+        // failed; the driver must have cleaned up after itself. One that
+        // left a device behind has its image and object kept, as
+        // `unload` keeps them: the device's dispatch routines and its
+        // `DriverObject` point into them. On Windows the devices keep
+        // the driver object, and so its image, alive.
+        // SAFETY: the object is this module's; its device list was
+        // written by the driver, which has returned.
+        if unsafe { !(*object).DeviceObject.is_null() } {
+            crate::kd::verify(format_args!(
+                "{name}: DriverEntry failed ({:#010x}) and left device objects behind; the \
+                 driver is kept loaded",
+                status as u32
+            ));
+            // Kept whole, as `unload` keeps a record: the object
+            // points into its name and registry path too.
+            core::mem::forget(Record {
+                object,
+                image: Some(image),
+                _driver_name: driver_name,
+                _registry_path: registry_path,
+            });
+            return Err(DriverError::EntryFailed(status));
+        }
+        // SAFETY: the object is this module's, out of the records, and has no device.
+        unsafe { free(object, Some(&image)) };
         return Err(DriverError::EntryFailed(status));
     }
     // SAFETY: the driver object and its device list are live; devices made
@@ -234,10 +257,16 @@ pub fn remove_builtin(object: *mut DRIVER_OBJECT) {
         drivers.shrink_to_fit();
         record
     };
-    free(record.object, None);
+    // SAFETY: the object is this module's, out of the records, and has no device.
+    unsafe { free(record.object, None) };
 }
 
-fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
+/// Free a driver object this module made, and its image.
+///
+/// # Safety
+/// `object` is a driver object this module made, out of the records,
+/// with no device left.
+unsafe fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
     // SAFETY: `object` is a driver object this module made and named;
     // clearing Type makes a stale pointer recognisable. The name goes
     // before the reference the object was made with.
@@ -257,6 +286,9 @@ fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
 /// The routine runs with no lock held, and other drivers are loaded and
 /// unloaded meanwhile: where the driver's record is in the table is
 /// looked up afterwards, under the lock hold that removes it.
+///
+/// Safe although `object` is a raw pointer: it is found among this
+/// module's records before it is used (doc/UNSAFE.md, rule 1).
 pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
     // A driver that is part of the kernel is not unloaded.
@@ -294,7 +326,8 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         core::mem::forget(record);
         return Err("unload routine left device objects behind");
     }
-    free(record.object, record.image.as_ref());
+    // SAFETY: the object is this module's, out of the records, and has no device.
+    unsafe { free(record.object, record.image.as_ref()) };
     Ok(())
 }
 

@@ -39,20 +39,29 @@ pub fn map_physical(pa: u64, bytes: usize, protection: Protection) -> Option<*mu
     };
     let va = map::alloc_va(pages)?;
     if map::map(va, first, pages, prot).is_err() {
-        map::unmap(va, pages);
-        map::free_va(va, pages);
+        // SAFETY: the range was just reserved and nobody has it.
+        unsafe {
+            map::unmap(va, pages);
+            map::free_va(va, pages);
+        }
         return None;
     }
     Some((va + (pa - first)) as *mut u8)
 }
 
-/// Undo [`map_physical`] for the `bytes` bytes mapped at `va`.
+/// Undo [`map_physical`] for the `bytes` bytes mapped at `va`. Pages a
+/// mapping does not hold stop the system before anything is unmapped
+/// (`map::check_held`), as Windows stops.
 pub fn unmap_physical(va: *mut u8, bytes: usize) {
     let Some((first, pages)) = span(va as u64, bytes) else {
         return;
     };
-    map::unmap(first, pages);
-    map::free_va(first, pages);
+    map::check_held(first, pages);
+    // SAFETY: the pages are a mapping's, which the caller gives up.
+    unsafe {
+        map::unmap(first, pages);
+        map::free_va(first, pages);
+    }
 }
 
 /// [`MmMapIoSpaceEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmmapiospaceex):

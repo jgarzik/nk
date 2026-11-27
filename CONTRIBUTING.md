@@ -44,7 +44,7 @@ If unsure whether something qualifies, ask before writing it.
   link to Microsoft's documentation rather than restating it. Docs state
   the present, not the history.
 
-Conventions: `doc/UNSAFE.md`, `doc/LOCKING.md`, `doc/DESIGN.md`.
+Conventions: `doc/UNSAFE.md`, `doc/LOCKING.md`, `doc/DESIGN.md` (and the part documents in `doc/design/`).
 Driver-visible structures and routines keep their Windows names.
 
 ## Commits
