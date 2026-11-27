@@ -118,6 +118,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::counted::RtlxAnsiStringToUnicodeSize),
     export!(Implemented, rtl::counted::RtlAnsiCharToUnicodeChar),
     export!(Implemented, rtl::counted::RtlAppendUnicodeStringToString),
+    export!(Implemented, rtl::counted::RtlAppendUnicodeToString),
     export!(Implemented, rtl::counted::RtlCompareString),
     export!(Implemented, rtl::counted::RtlCompareUnicodeString),
     export!(Implemented, rtl::counted::RtlEqualUnicodeString),

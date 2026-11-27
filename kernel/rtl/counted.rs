@@ -218,6 +218,53 @@ pub unsafe extern "C" fn RtlUnicodeStringToInteger(
     }
 }
 
+/// [`RtlAppendUnicodeToString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlappendunicodetostring):
+/// append the NUL-terminated `source` (nothing if it is null), with a
+/// terminator if there is room for one. A source too long for a counted
+/// string, or one the destination cannot hold, is
+/// `STATUS_BUFFER_TOO_SMALL`, as the pinned kernel answers both.
+///
+/// # Safety
+/// `destination` points to a counted string whose buffer has
+/// `MaximumLength` bytes; `source` is null or NUL-terminated.
+pub unsafe extern "C" fn RtlAppendUnicodeToString(
+    destination: *mut UNICODE_STRING,
+    source: *const u16,
+) -> NTSTATUS {
+    if source.is_null() {
+        return STATUS_SUCCESS;
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        let mut units = 0usize;
+        while source.add(units).read_unaligned() != 0 {
+            units += 1;
+        }
+        // `RtlInitUnicodeStringEx`'s limit.
+        let Ok(from) = u16::try_from(units * 2) else {
+            return STATUS_BUFFER_TOO_SMALL;
+        };
+        if from > 0xFFFC {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        let length = (&raw const (*destination).Length).read_unaligned();
+        let maximum = (&raw const (*destination).MaximumLength).read_unaligned();
+        if u32::from(length) + u32::from(from) > u32::from(maximum) {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        let to = (&raw const (*destination).Buffer)
+            .read_unaligned()
+            .add(usize::from(length) / 2);
+        core::ptr::copy(source.cast::<u8>(), to.cast::<u8>(), usize::from(from));
+        let total = length + from;
+        (&raw mut (*destination).Length).write_unaligned(total);
+        if u32::from(total) + 1 < u32::from(maximum) {
+            to.add(units).write_unaligned(0);
+        }
+    }
+    STATUS_SUCCESS
+}
+
 /// [`RtlAppendUnicodeStringToString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlappendunicodestringtostring).
 ///
 /// # Safety
