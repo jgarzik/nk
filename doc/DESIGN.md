@@ -2934,9 +2934,12 @@ anything: its registration, and the request that follows it.
   update; `WMIREG_ACTION_BLOCK_IRPS` ends the sending. Deregistering
   drops what waits for the device, waits for a request that is with the
   driver, and gives the device back.
-- A registration by callback or as a trace provider
-  (`WMIREG_FLAG_CALLBACK`, `WMIREG_FLAG_TRACE_PROVIDER`) is how WPP
-  registered before `EtwRegisterClassicProvider`. NK does not take it:
+- An action with `WMIREG_FLAG_TRACE_PROVIDER` and the trace-notification
+  bits (`partmgr.sys`, `volmgr.sys`) is taken without them, as the
+  pinned kernel takes it: the device registers as any other, and no
+  session ever enables it. A registration by callback
+  (`WMIREG_FLAG_CALLBACK`) is how WPP registered before
+  `EtwRegisterClassicProvider`. NK does not take it:
   `STATUS_UNSUCCESSFUL`, Windows' answer while WMI is not running. The
   export is `Partial` for that.
 - `IoWMIWriteEvent` takes an event and frees its block, the event

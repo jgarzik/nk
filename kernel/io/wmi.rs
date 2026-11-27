@@ -242,7 +242,9 @@ const DEREGISTER: u32 = 2;
 const REREGISTER: u32 = 3;
 const UPDATE_GUIDS: u32 = 4;
 const BLOCK_IRPS: u32 = 5;
-const FLAG_TRACE_PROVIDER: u32 = 0x0001_0000;
+/// `WMIREG_FLAG_TRACE_PROVIDER` and the trace-notification bits that go
+/// with it: the bits the pinned kernel takes off an action.
+const TRACE_BITS: u32 = 0x00F1_0000;
 const FLAG_CALLBACK: u32 = 0x8000_0000;
 
 fn register(device: *mut DEVICE_OBJECT) -> NTSTATUS {
@@ -295,20 +297,27 @@ fn deregister(device: *mut DEVICE_OBJECT) -> NTSTATUS {
 /// (`STATUS_OBJECT_NAME_EXISTS`, a success), one not registered and an
 /// unknown action (`STATUS_INVALID_PARAMETER`).
 ///
+/// An action that carries `WMIREG_FLAG_TRACE_PROVIDER`, and with it the
+/// bits that ask for trace notifications (what `partmgr.sys` and
+/// `volmgr.sys` pass), is taken without those bits, as the pinned kernel
+/// takes it while WMI runs: the device is registered as any other. No
+/// trace session exists to enable it, so the notifications are never
+/// due.
+///
 /// Partial: a registration by callback (`WMIREG_FLAG_CALLBACK`, which
-/// names a routine where the device would be) or as a trace provider
-/// (`WMIREG_FLAG_TRACE_PROVIDER`) is the way WPP registered before
-/// `EtwRegisterClassicProvider` existed. NK does not take it and
+/// names a routine where the device would be) is the way WPP registered
+/// before `EtwRegisterClassicProvider` existed. NK does not take it and
 /// answers `STATUS_UNSUCCESSFUL`, as Windows does while WMI is not
 /// running.
 ///
 /// # Safety
-/// `device` is a live device object, unless the action carries one of
-/// the two flags. Called at `PASSIVE_LEVEL`.
+/// `device` is a live device object, unless the action is by callback.
+/// Called at `PASSIVE_LEVEL`.
 pub unsafe extern "C" fn IoWMIRegistrationControl(device: *mut c_void, action: u32) -> NTSTATUS {
-    if action & (FLAG_CALLBACK | FLAG_TRACE_PROVIDER) != 0 {
+    if action & FLAG_CALLBACK != 0 {
         return STATUS_UNSUCCESSFUL;
     }
+    let action = action & !TRACE_BITS;
     let device = device.cast::<DEVICE_OBJECT>();
     // SAFETY: per the contract.
     unsafe { device::check(device, "IoWMIRegistrationControl") };
