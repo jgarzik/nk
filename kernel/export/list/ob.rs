@@ -22,6 +22,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export_variable!(Implemented, "PsJobType", ob::object::PsJobType),
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export!(Partial, ob::event::ZwCreateEvent),
+    export!(Partial, ob::event::ZwOpenEvent),
     export_variable!(
         Implemented,
         "IoDeviceObjectType",

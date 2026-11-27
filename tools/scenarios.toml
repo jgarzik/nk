@@ -1118,3 +1118,16 @@ registry = ["storage", "volumes"]
 disk = "ahci"
 disk_image = "fat32-mbr"
 disk_expect = "fat-unchanged"
+
+# And the mount manager: mountmgr.sys names the volume and, from its
+# reinitialisation routine, gives it C:.
+
+[x86_64-volumes-mountmgr]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=vol.mount"
+registry = ["storage", "volumes", "mount"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"

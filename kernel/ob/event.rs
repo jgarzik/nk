@@ -1,4 +1,5 @@
-//! Events and waits by handle: `ZwCreateEvent`, `ZwWaitForSingleObject`.
+//! Events and waits by handle: `ZwCreateEvent`, `ZwOpenEvent`,
+//! `ZwWaitForSingleObject`.
 //!
 //! An event made here is an object-manager object whose body is a
 //! `KEVENT`; the handle is the only thing that holds it. A wait by
@@ -85,6 +86,86 @@ pub unsafe extern "C" fn ZwCreateEvent(
             desired_access,
             Attributes {
                 inherit: attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            true,
+        );
+        object::dereference(body);
+        match opened {
+            Ok(opened) => {
+                event_handle.write_unaligned(opened as *mut c_void);
+                STATUS_SUCCESS
+            }
+            Err(status) => status,
+        }
+    }
+}
+
+/// [`ZwOpenEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwopenevent):
+/// a handle, granted the access asked for, to the event the attributes
+/// name. A name that leads to nothing is what the namespace says of it
+/// (`STATUS_OBJECT_NAME_NOT_FOUND`, `STATUS_OBJECT_PATH_NOT_FOUND`); to
+/// an object that is not an event, `STATUS_OBJECT_TYPE_MISMATCH`.
+/// `mountmgr.sys` asks for an event the session manager makes on
+/// Windows, which no one makes on NK: it is not found.
+///
+/// Partial: a name relative to a directory handle stops the system by
+/// name.
+///
+/// # Safety
+/// `event_handle` points to room for a handle; `object_attributes`
+/// points to an `OBJECT_ATTRIBUTES` whose name is a counted string.
+pub unsafe extern "C" fn ZwOpenEvent(
+    event_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    if object_attributes.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; the driver's memory, read field by field
+    // through its pointer.
+    let (length, root, name, given) = unsafe {
+        (
+            (&raw const (*object_attributes).Length).read_unaligned(),
+            (&raw const (*object_attributes).RootDirectory).read_unaligned(),
+            (&raw const (*object_attributes).ObjectName).read_unaligned(),
+            (&raw const (*object_attributes).Attributes).read_unaligned(),
+        )
+    };
+    if length as usize != size_of::<OBJECT_ATTRIBUTES>() || given & !OBJ_VALID_ATTRIBUTES != 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if name.is_null() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    if !root.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "ZwOpenEvent: a name relative to a directory handle is not implemented"
+        ));
+    }
+    // SAFETY: per the contract.
+    let wide = unsafe { crate::rtl::copy_unicode(name) };
+    let (body, rest) = match super::lookup(None, &wide) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    // SAFETY: the look-up's reference, given up once the handle, if
+    // there is one, holds the event.
+    unsafe {
+        if !rest.is_empty() {
+            object::dereference(body);
+            return STATUS_OBJECT_NAME_NOT_FOUND;
+        }
+        if !core::ptr::eq(object::type_of(body), &raw const object::EVENT_TYPE) {
+            object::dereference(body);
+            return STATUS_OBJECT_TYPE_MISMATCH;
+        }
+        let opened = handle::open_with(
+            body,
+            desired_access,
+            Attributes {
+                inherit: given & OBJ_INHERIT != 0,
                 protect_from_close: false,
             },
             true,

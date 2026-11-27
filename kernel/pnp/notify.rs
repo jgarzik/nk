@@ -3,14 +3,17 @@
 //! when one happens.
 //!
 //! The events NK produces are the arrival and the removal of a device
-//! interface (`super::interface`). A registration for a hardware
-//! profile change or for a target device's removal is kept and never
-//! called: NK has one hardware profile and removes no device on
-//! request.
+//! interface (`super::interface`), and the custom events drivers report
+//! for a device (`IoReportTargetDeviceChangeAsynchronous`), which go to
+//! the registrations for that device's changes. A registration for a
+//! hardware profile change is kept and never called, nor is one for a
+//! device for its removal: NK has one hardware profile and removes no
+//! device on request.
 //!
-//! A callback is called at `PASSIVE_LEVEL` with no lock held, on the
-//! thread that changed the interface's state (Windows queues the event
-//! for a worker of its own). While it runs, the registration counts as
+//! A callback is called at `PASSIVE_LEVEL` with no lock held: for an
+//! interface, on the thread that changed the interface's state
+//! (Windows queues the event for a worker of its own); for a custom
+//! event, on a worker thread. While it runs, the registration counts as
 //! in use, and taking it back waits for that to end.
 
 #![allow(non_snake_case)]
@@ -30,6 +33,11 @@ struct Registration {
     category: u32,
     /// For interface changes: the class.
     class: [u8; 16],
+    /// For a device's changes: the device (the physical device object
+    /// of the file's stack, which the registration holds a reference
+    /// to) and the file the driver named.
+    target: usize,
+    file: usize,
     driver: usize,
     callback: usize,
     context: usize,
@@ -180,9 +188,22 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
     if driver.is_null() || callback == 0 || handle.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
+    // A device's changes are those of the device the file's stack says
+    // it is (`TargetDeviceRelation`), as Windows asks.
+    let (target, file) = if category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE {
+        // SAFETY: per the contract, `data` is an open file object.
+        match unsafe { target_of(data.cast_mut().cast()) } {
+            Ok(target) => (target, data as usize),
+            Err(status) => return status,
+        }
+    } else {
+        (0, 0)
+    };
     let registration = alloc::boxed::Box::new(Registration {
         category,
         class,
+        target,
+        file,
         driver: driver as usize,
         callback,
         context,
@@ -238,6 +259,11 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void)
             found.gone = true;
             if found.calls == 0 || (found.calls == 1 && found.caller == me) {
                 let driver = found.driver;
+                if found.target != 0 {
+                    // SAFETY: the registration's reference to its device.
+                    unsafe { object::dereference(found.target as *mut u8) };
+                    found.target = 0;
+                }
                 // A callback taking itself back leaves the entry for
                 // `call` to free when the callback returns.
                 if found.calls == 0 {
@@ -263,4 +289,133 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void)
 pub unsafe extern "C" fn IoUnregisterPlugPlayNotification(handle: *mut c_void) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe { IoUnregisterPlugPlayNotificationEx(handle) }
+}
+
+/// The physical device object of `file`'s stack, with a reference: what
+/// the stack answers `TargetDeviceRelation` with.
+///
+/// # Safety
+/// `file` is an open file object. Called at `PASSIVE_LEVEL`.
+unsafe fn target_of(file: *mut nk_ntabi::io::FILE_OBJECT) -> Result<usize, NTSTATUS> {
+    // SAFETY: per the contract: an open file holds its device.
+    let reported =
+        unsafe { super::query::relations((*file).DeviceObject, TARGET_DEVICE_RELATION) }?
+            .ok_or(STATUS_NOT_SUPPORTED)?;
+    let (first, rest) = reported.split_first().ok_or(STATUS_NOT_SUPPORTED)?;
+    for extra in rest {
+        // SAFETY: each device the driver reported comes referenced.
+        unsafe { object::dereference(*extra as *mut u8) };
+    }
+    Ok(*first)
+}
+
+/// A custom event on its way to a worker: the work item, the device,
+/// the reporter's callback and its context, then the event's copy.
+#[repr(C)]
+struct Report {
+    item: nk_ntabi::ex::WORK_QUEUE_ITEM,
+    device: usize,
+    callback: usize,
+    context: usize,
+}
+
+/// [`IoReportTargetDeviceChangeAsynchronous`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreporttargetdevicechangeasynchronous):
+/// tell the registrations for `device`'s changes of the custom event
+/// `notification`, from a worker thread, each with its own file object
+/// in the structure; then call `callback` with `context`, if given. The
+/// event is copied, and `STATUS_PENDING` answered at once. One of the
+/// predefined removal events, or a structure too short for its header
+/// or its name, is `STATUS_INVALID_DEVICE_REQUEST`, as Windows answers.
+///
+/// # Safety
+/// `device` is a physical device object; `notification` is readable for
+/// its `Size`; `callback` is null or a routine of the caller's.
+pub unsafe extern "C" fn IoReportTargetDeviceChangeAsynchronous(
+    device: *mut nk_ntabi::io::DEVICE_OBJECT,
+    notification: *const TARGET_DEVICE_CUSTOM_NOTIFICATION,
+    callback: usize,
+    context: usize,
+) -> NTSTATUS {
+    // SAFETY: per the contract; the header is read field by field.
+    let (event, size, name) = unsafe {
+        (
+            (&raw const (*notification).Event).read_unaligned(),
+            usize::from((&raw const (*notification).Size).read_unaligned()),
+            (&raw const (*notification).NameBufferOffset).read_unaligned(),
+        )
+    };
+    let predefined = [
+        GUID_TARGET_DEVICE_QUERY_REMOVE,
+        GUID_TARGET_DEVICE_REMOVE_CANCELLED,
+        GUID_TARGET_DEVICE_REMOVE_COMPLETE,
+    ];
+    let data = size.wrapping_sub(TARGET_DEVICE_CUSTOM_HEADER);
+    if predefined.contains(&event)
+        || size < TARGET_DEVICE_CUSTOM_HEADER
+        || (name != -1 && name as isize > data as isize)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+    let block = pool::alloc(size_of::<Report>() + size, super::TAG);
+    if block.is_null() {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // SAFETY: a fresh block with room for the report and the copy; the
+    // device is referenced until the worker is done with it.
+    unsafe {
+        object::reference(device.cast());
+        let report = block.cast::<Report>();
+        report.write(Report {
+            item: core::mem::zeroed(),
+            device: device as usize,
+            callback,
+            context,
+        });
+        core::ptr::copy_nonoverlapping(
+            notification.cast::<u8>(),
+            block.add(size_of::<Report>()),
+            size,
+        );
+        (*report).item.WorkerRoutine = Some(deliver);
+        (*report).item.Parameter = block.cast();
+        crate::ex::work::ExQueueWorkItem(&raw mut (*report).item, nk_ntabi::ex::DELAYED_WORK_QUEUE);
+    }
+    STATUS_PENDING
+}
+
+/// The worker's part of [`IoReportTargetDeviceChangeAsynchronous`].
+///
+/// # Safety
+/// `parameter` is the report's block.
+unsafe extern "C" fn deliver(parameter: *mut c_void) {
+    let block = parameter.cast::<u8>();
+    // SAFETY: per the contract; the copy is the kernel's, handed to each
+    // callback in turn.
+    unsafe {
+        let report = block.cast::<Report>();
+        let device = (*report).device;
+        let copy = block
+            .add(size_of::<Report>())
+            .cast::<TARGET_DEVICE_CUSTOM_NOTIFICATION>();
+        let handles: Vec<(usize, usize)> = REGISTRATIONS
+            .lock()
+            .iter()
+            .filter(|r| {
+                r.category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE && r.target == device && !r.gone
+            })
+            .map(|r| (core::ptr::from_ref::<Registration>(r) as usize, r.file))
+            .collect();
+        for (handle, file) in handles {
+            (&raw mut (*copy).FileObject).write_unaligned(file as *mut _);
+            call(handle, copy.cast());
+        }
+        let (callback, context) = ((*report).callback, (*report).context);
+        if callback != 0 {
+            // SAFETY: the reporter's routine, called at `PASSIVE_LEVEL`
+            // with its context. Nothing is owed if it is unwound.
+            seh::call(callback, [context, 0, 0, 0], &Guard::Nothing);
+        }
+        object::dereference(device as *mut u8);
+        let _ = pool::free(block);
+    }
 }

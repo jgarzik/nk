@@ -621,7 +621,12 @@ process, which never ends. Windows waits on an object of any other
 type through that type's default object; NK does not, and stops by
 name. `ZwCreateEvent` makes an event object without a name and hands
 back a handle; a name, or the attributes that go with one, is refused
-(`STATUS_NOT_IMPLEMENTED`). Both are `Partial` in the ledger for that.
+(`STATUS_NOT_IMPLEMENTED`). `ZwOpenEvent` looks the name up and hands
+back a handle to an event found there; what it finds otherwise is
+answered as the namespace answers it (`mountmgr.sys` asks for an event
+that only the session manager makes, and it is not found), and a name
+relative to a directory handle stops by name. All three are `Partial`
+in the ledger for that.
 
 A wait that would block at `DISPATCH_LEVEL` stops the system
 (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
@@ -2359,9 +2364,18 @@ callbacks registered for the class's arrivals, on the caller's thread
 where Windows queues them for a worker; enabled before its device has
 started, an interface waits for the start. Disabling one answers
 success whatever came of it, as Windows' routine does: `partmgr.sys`
-disables an interface it never enabled on each disk it starts. Notification registrations
-for hardware profile changes and for a target device's removal are
-kept and never called: NK produces neither event.
+disables an interface it never enabled on each disk it starts. A
+registration for a device's changes names a file; the device is what
+the file's stack answers `TargetDeviceRelation` with, as on Windows,
+held by the registration. A custom event a driver reports for a device
+(`IoReportTargetDeviceChangeAsynchronous`; `mountmgr.sys` reports a
+volume's new names) is copied and told, from a worker, to every
+registration for that device, each with its own file in the
+structure, and then the reporter's routine is called; the call answers
+`STATUS_PENDING`. One of the predefined removal events is refused as
+Windows refuses it. Notification registrations for hardware profile
+changes, and the removal events of a device, are never called: NK
+produces neither.
 `IoInvalidateDeviceState` has a started device asked for its state
 again by the worker. Dependencies between devices
 (`IoReserveDependency`, `IoResolveDependency`, `IoSetDependency`;

@@ -13,7 +13,7 @@ use nk_ntabi::disk::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["vol.partmgr", "vol.volume"],
+    names: &["vol.partmgr", "vol.volume", "vol.mount"],
     run,
     manual: true,
 };
@@ -269,6 +269,72 @@ fn with_volume(
     }
 }
 
+/// The drive letter `mountmgr.sys` gives the volume.
+const DRIVE: &str = "\\GLOBAL??\\C:";
+
+/// The volume's name: `volmgr.sys` gives a basic MBR volume a stable
+/// GUID made of the disk's signature and the partition's offset, and
+/// `mountmgr.sys` names the volume by it.
+const VOLUME_NAME: &str = "\\GLOBAL??\\Volume{4e4b0001-0000-0000-0000-100000000000}";
+
+/// `mountmgr.sys` named the volume and, from its reinitialisation
+/// routine, gave it `C:`: both names lead to the volume, and the
+/// mounted-devices key holds the letter. Through the letter the volume,
+/// brought online, reads as the partition (its first sector the FAT32
+/// boot sector, a read past its end refused), by way of the RAW file
+/// system mounted on it.
+fn mount() -> Result<(), &'static str> {
+    arrives(DRIVE)?;
+    let found = |name: &str| {
+        let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+        crate::ob::lookup(None, &wide).ok().map(|(body, rest)| {
+            // SAFETY: the look-up's reference, given back at once; only
+            // the address is compared.
+            unsafe { crate::ob::object::dereference(body) };
+            (body, rest.is_empty())
+        })
+    };
+    let volume = found(VOLUME);
+    if volume.is_none() || found(DRIVE) != volume || found(VOLUME_NAME) != volume {
+        return Err("C: or the volume's name does not lead to the volume");
+    }
+    let names: alloc::vec::Vec<alloc::string::String> =
+        crate::cm::values("Machine\\System\\MountedDevices")
+            .iter()
+            .map(|value| value.0.clone())
+            .collect();
+    if !names.iter().any(|name| name == "\\DosDevices\\C:") {
+        kprintln!("vol: MountedDevices holds {names:?}");
+        return Err("the mounted-devices key does not hold C:");
+    }
+    let handle = open("\\??\\C:")?;
+    let result = (|| {
+        let mut sector = [0u8; 512];
+        let read =
+            file::read_at(handle, 0, &mut sector).map_err(|_| "the volume could not be read")?;
+        if read.status != STATUS_SUCCESS || read.information != sector.len() {
+            kprintln!(
+                "vol: reading C: {:#x}, {} bytes",
+                read.status,
+                read.information
+            );
+            return Err("the volume's first sector could not be read through C:");
+        }
+        let hidden = u32::from_le_bytes([sector[28], sector[29], sector[30], sector[31]]);
+        if sector[510..] != [0x55, 0xAA] || &sector[82..90] != b"FAT32   " || hidden != 2048 {
+            return Err("the volume's first sector is not the FAT32 boot sector");
+        }
+        let past = file::read_at(handle, LENGTH, &mut sector)
+            .map_err(|_| "a read past the end could not be made")?;
+        if past.status == STATUS_SUCCESS {
+            return Err("a read past the volume's end succeeded");
+        }
+        Ok(())
+    })();
+    file::close(handle);
+    result
+}
+
 fn run(r: &mut Report, _: &BootInfo) {
     crate::test::keeps_what_it_started();
     if let Some(absent) = IMAGES.iter().find(|file| ldr::boot_file(file).is_none()) {
@@ -281,4 +347,9 @@ fn run(r: &mut Report, _: &BootInfo) {
         return;
     }
     r.check("vol.volume", volume);
+    if !crate::io::service::running("mountmgr") {
+        r.skip_rest(format_args!("mountmgr.sys was not started"));
+        return;
+    }
+    r.check("vol.mount", mount);
 }

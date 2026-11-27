@@ -419,6 +419,15 @@ check to that without booting.
   (`IOCTL_DISK_GET_PARTITION_INFO_EX`, with the verify override, since
   no file system has mounted it). The volume is offline until
   `mountmgr.sys` brings it online, so it is not read here.
+- `x86_64-volumes-mountmgr` (`registry = ["storage", "volumes",
+  "mount"]`): and `mountmgr.sys`, which brings the volume online, names
+  it by `volmgr.sys`'s stable GUID (`Volume{4e4b0001-...}`, the disk's
+  signature and the partition's offset) and, from its reinitialisation
+  routine at the end of start, gives it `C:`. `vol.mount` waits for
+  `\GLOBAL??\C:`, requires both names to lead to the volume and the
+  mounted-devices key to hold `\DosDevices\C:`, and reads the volume
+  through `\??\C:`, by way of RAW: the FAT32 boot sector first, and a
+  read past the end refused.
 
 ### Soak
 
