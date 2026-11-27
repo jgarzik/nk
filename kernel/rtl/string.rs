@@ -3,7 +3,7 @@
 //! driver's strings are read and written in place, one unit at a time.
 //!
 //! The ANSI code page is Windows-1252 and the upper-case table is
-//! `nk_rtl::upcase` (`doc/DESIGN.md`, "Strings").
+//! `nk_rtl::upcase` (`doc/design/rtl.md`, "Strings").
 
 #![allow(non_snake_case)]
 

@@ -6,7 +6,7 @@
 //! kernel's through its first field. The rules of a record (its states,
 //! its checksum, which the stop looks at before it calls anything) are
 //! `nk_ke::bugcheck`. What NK calls when it stops, and what it never
-//! calls, is in `doc/DESIGN.md`, "Stopping the system".
+//! calls, is in `doc/design/system.md`, "Stopping the system".
 
 #![allow(non_snake_case, non_upper_case_globals)]
 

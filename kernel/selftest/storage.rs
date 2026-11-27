@@ -82,7 +82,7 @@ const DISK_INSTANCE: &str = "SCSI\\Disk&Ven_QEMU&Prod_HARDDISK\\4&35424867&0&000
 
 /// The path. The stacks are Windows' but for the disk's, which on
 /// Windows has `partmgr` on top: NK builds it without the class
-/// filters that have no image (`doc/DESIGN.md`, What is absent).
+/// filters that have no image (`doc/design/absent.md`).
 const PATH: [Expected; 5] = [
     Expected {
         instance: ACPI_HAL,

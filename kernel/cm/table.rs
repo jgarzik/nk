@@ -9,7 +9,7 @@
 //! A routine may raise an exception that a handler beneath the caller
 //! takes; the call into it is then unwound and never returns here. So
 //! all that a query holds is in one pool block, a [`Run`], which the
-//! guard of that call gives back (`doc/DESIGN.md`, "Exceptions"), and
+//! guard of that call gives back (`doc/design/exceptions.md`), and
 //! the frames of this file hold nothing else across it.
 
 use super::{HIVE, Held, absolute, key_of, now, status};

@@ -5,7 +5,7 @@
 //! NK's and says what state the source is really in. An error a source
 //! reports becomes an error record, whose summary goes to the boot log;
 //! a fatal one stops the system. The rules and the numbers are
-//! `nk_whea`'s; `doc/DESIGN.md` ("Hardware errors") says what NK does.
+//! `nk_whea`'s; `doc/design/system.md` ("Hardware errors") says what NK does.
 
 #![allow(non_snake_case)]
 

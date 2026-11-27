@@ -611,7 +611,7 @@ pub unsafe extern "C" fn IoCancelIrp(irp: *mut IRP) -> u8 {
         // The flag, then the routine; whoever makes a request
         // cancellable installs the routine, then reads the flag. Both
         // orders must be seen by both sides: sequentially consistent
-        // operations (`doc/DESIGN.md`).
+        // operations (`doc/design/io.md`).
         cancel_flag(irp).store(1, Ordering::SeqCst);
         // Taken out in one step: the driver takes it out the same way
         // when it means to complete the request itself.

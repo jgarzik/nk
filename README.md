@@ -25,7 +25,7 @@ by request. Their `__try` blocks work: exceptions, kernel-raised or
 from a processor fault, are dispatched and unwound as on Windows.
 
 Absent: APCs, device interrupts, Plug and Play, user mode, physical
-hardware ([doc/DESIGN.md](doc/DESIGN.md), "What is absent").
+hardware ([doc/design/absent.md](doc/design/absent.md)).
 
 ## What it intends to do
 
@@ -55,7 +55,8 @@ passing boot ends with `NK-TEST-COMPLETE pass=<n> fail=0 skip=<n>`.
 - [DEVELOPMENT.md](DEVELOPMENT.md): setup, everyday commands, debugging a failed boot, releases
 - [CONTRIBUTING.md](CONTRIBUTING.md): where code may come from, what a change must do
 - [SECURITY.md](SECURITY.md): what NK does not protect against
-- [doc/DESIGN.md](doc/DESIGN.md): scope, principles, source map, how each part works
+- [doc/DESIGN.md](doc/DESIGN.md): scope, principles, source map, and an index of
+  [doc/design/](doc/design/), how each part works
 - [doc/BOOT.md](doc/BOOT.md): from firmware to the kernel's first instruction
 - [doc/LOCKING.md](doc/LOCKING.md): IRQL, locks and their order, the SMP rules
 - [doc/ABI.md](doc/ABI.md): compiler and layout facts

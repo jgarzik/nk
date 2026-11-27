@@ -7,8 +7,7 @@
 //! ask a driver for either (`ComponentIdleStateCallback`,
 //! `DevicePowerNotRequiredCallback`, `DevicePowerRequiredCallback`, the
 //! directed ones) are recorded and never called, and there is no
-//! platform extension (PEP) behind any of it (`doc/DESIGN.md`,
-//! "Power").
+//! platform extension (PEP) behind any of it (`doc/design/power.md`).
 
 use super::{POWER, Power, dope};
 use crate::ex::work::ExQueueWorkItem;

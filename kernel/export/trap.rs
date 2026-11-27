@@ -4,8 +4,7 @@
 //! A trap exists so that a driver which imports the routine loads; it
 //! is right only for a routine the driver does not reach on the paths
 //! NK runs it down. It is never a success: nothing returns from one.
-//! Which routines trap, and why, is in `doc/DESIGN.md`, "What is
-//! absent".
+//! Which routines trap, and why, is in `doc/design/absent.md`.
 
 #![allow(non_snake_case)]
 

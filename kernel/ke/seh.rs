@@ -16,7 +16,7 @@
 //! an exception can cross, holds nothing across a call into a driver
 //! that would need one: no lock, no guard, no owned block. What such a
 //! frame does owe is stated in the [`Guard`] it calls the driver with
-//! (`doc/DESIGN.md`, "Exceptions").
+//! (`doc/design/exceptions.md`).
 
 #![allow(non_snake_case)]
 

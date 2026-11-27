@@ -90,7 +90,7 @@ pub enum ServiceError {
 
 impl ServiceError {
     /// The status Windows' `ZwLoadDriver` gives for it. Observed on the
-    /// reference Windows (`doc/DESIGN.md`, Exports): a driver that is
+    /// reference Windows (`doc/design/image.md`, Exports): a driver that is
     /// running already, and what `LoadError::status` names. A service
     /// without a key or without its file is not found.
     pub fn status(&self) -> NTSTATUS {

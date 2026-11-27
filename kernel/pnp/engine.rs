@@ -17,7 +17,7 @@
 //!
 //! The order of what a device is asked is Windows' (`PiProcessNewDeviceNode`,
 //! `PipCallDriverAddDevice`, `PnpStartDevice` and what follows it in
-//! the pinned kernel): `doc/DESIGN.md`, Plug and Play.
+//! the pinned kernel): `doc/design/pnp.md`.
 
 use super::node::{self, Node, State};
 use super::{query, registry};
@@ -656,7 +656,7 @@ fn add_drivers(pdo: usize) -> bool {
                 }
                 _ if filter => {
                     // NK's stated difference from Windows, which fails
-                    // the device: `doc/DESIGN.md`, What is absent.
+                    // the device: `doc/design/absent.md`.
                     left_out.push(name.clone());
                     None
                 }

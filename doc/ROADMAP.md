@@ -58,7 +58,7 @@ provides. What the counts say:
 ## Shape of the kernel
 
 The parts of an NT kernel still to build, and the phase that builds
-each. What NK has of each part is in `doc/DESIGN.md`.
+each. What NK has of each part is in `doc/design/`.
 
 | NT part | To build | Linux analogue | Phase |
 | --- | --- | --- | --- |
@@ -127,7 +127,7 @@ Its scope follows what its proof binaries import
 - arm64 has no Microsoft binaries: its share is the same managers,
   proven with NK's own test drivers inside the kernel.
 
-What NK lacks is listed in `doc/DESIGN.md` ("What is absent").
+What NK lacks is listed in `doc/design/absent.md`.
 
 ## Risks
 

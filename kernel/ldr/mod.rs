@@ -268,7 +268,7 @@ pub enum LoadError {
 
 impl LoadError {
     /// What Windows' `ZwLoadDriver` reports for it. Observed on the
-    /// reference Windows (`doc/DESIGN.md`, Exports): a library that
+    /// reference Windows (`doc/design/image.md`, Exports): a library that
     /// lacks a name its importer asks for, and a library that is
     /// nowhere. The rest follow the status codes' own meanings.
     pub fn status(&self) -> NTSTATUS {

@@ -4,8 +4,8 @@
 //!
 //! The bookkeeping is `nk_etw::wmi::Registry`, under one lock. The
 //! registration request is sent from a system worker thread through the
-//! ordinary IRP path. What is and is not done is in `doc/DESIGN.md`,
-//! "Tracing".
+//! ordinary IRP path. What is and is not done is in
+//! `doc/design/tracing.md`.
 
 #![allow(non_snake_case)]
 

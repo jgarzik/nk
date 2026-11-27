@@ -2,7 +2,7 @@
 """Which code of the kernel image has no unwind entry, and may it?
 
 A stack walk needs a `.pdata` entry for every function that makes a call
-(doc/DESIGN.md, "Unwind tables"). This reads the built kernel image and
+(doc/design/image.md, "Unwind tables"). This reads the built kernel image and
 its link map, finds every code symbol whose address no `.pdata` entry
 covers, and holds them to tools/unwind/<arch>.txt:
 

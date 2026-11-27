@@ -110,7 +110,7 @@ No floating point.
 ## Exception handling
 
 What a driver's compiled code and its handlers can observe of an
-exception (`doc/DESIGN.md`, "Exceptions"):
+exception (`doc/design/exceptions.md`):
 
 | | x86-64 | arm64 |
 | --- | --- | --- |
@@ -138,7 +138,7 @@ architectures and against the kernel's symbols on x86-64.
   friends are inlined, never imported.
 - A WDK-built driver's real entry point is a compiler wrapper that
   validates the stack cookie before the author's `DriverEntry` runs. See
-  "Loading a driver" in `doc/DESIGN.md`.
+  "Loading a driver" in `doc/design/drivers.md`.
 - `null.sys` writes a `FAST_IO_DISPATCH` table into its device extension.
   NK never calls fast I/O routines; every request is an IRP.
 

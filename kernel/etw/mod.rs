@@ -4,7 +4,7 @@
 //! registration is real and kept (`nk_etw::provider`), its enable
 //! callback is never called, and an event written is dropped with
 //! Windows' answer for a provider no session has enabled. The
-//! decisions are in `doc/DESIGN.md`, "Tracing".
+//! decisions are in `doc/design/tracing.md`.
 
 #![allow(non_snake_case)]
 

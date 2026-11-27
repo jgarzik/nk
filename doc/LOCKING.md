@@ -323,7 +323,7 @@ thread can sleep on: the monitor's create and terminate callbacks run
 with it held, at `PASSIVE_LEVEL`, and may wait. It is taken with no
 spin lock held and nothing ranked is held across a callback. An
 exception that unwinds a callback releases it (the guard of that call,
-`doc/DESIGN.md`). What a monitor's slot holds is let go after the mutex
+`doc/design/exceptions.md`). What a monitor's slot holds is let go after the mutex
 is released.
 
 ### Per-processor state

@@ -9,7 +9,7 @@
 //!   owns the root device and the devices drivers report.
 //! - [`export`]: what drivers call.
 //!
-//! `doc/DESIGN.md`, Plug and Play, says what is NK's own decision here.
+//! `doc/design/pnp.md` says what is NK's own decision here.
 
 pub mod depend;
 pub mod engine;
