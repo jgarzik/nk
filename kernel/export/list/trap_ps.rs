@@ -21,5 +21,4 @@ trap_list!(
     PsSetCreateProcessNotifyRoutine,
     PsSetCreateProcessNotifyRoutineEx2,
     PsUpdateComponentPower,
-    PsUpdateDiskCounters,
 );

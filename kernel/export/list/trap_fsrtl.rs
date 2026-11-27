@@ -7,12 +7,10 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    FsRtlAreVolumeStartupApplicationsComplete,
     FsRtlBalanceReads,
     FsRtlCopyRead,
     FsRtlCopyWrite,
     FsRtlDismountComplete,
-    FsRtlGetEcpListFromIrp,
     FsRtlGetSectorSizeInformation,
     FsRtlMdlReadCompleteDev,
     FsRtlMdlReadDev,
@@ -24,6 +22,4 @@ trap_list!(
     FsRtlPrepareMdlWriteDev,
     FsRtlPrivateLock,
     FsRtlProcessFileLock,
-    FsRtlUpdateDiskCounters,
-    FsRtlVolumeDeviceToCorrelationId,
 );

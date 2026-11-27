@@ -8,6 +8,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod device;
 pub mod filter;
 pub mod lock;
 pub mod mcb;

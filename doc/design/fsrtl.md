@@ -95,3 +95,17 @@ target-device relation of the top of the stack a request on the file
 goes to, the file system's own volume device on a mounted volume. Its
 status is that of finding the device, as on Windows. Other events were
 not read and stop the system by name.
+
+## Asking the volume
+
+Requests the runtime library sends a file system's devices go to the
+device named, not the top of its stack, as Windows'
+`FsRtlIssueDeviceIoControl` sends them (`kernel/fsrtl/device.rs`). A
+volume's correlation id is its answer to
+`IOCTL_MOUNTDEV_QUERY_STABLE_GUID`; for one that does not answer,
+Windows falls back to `IoVolumeDeviceToGuid`, which stops the system by
+name until it exists. A create request's extra create parameters are
+none. The volume start-up applications have not run (user mode reports
+them), as on Windows before they do. The disk counters file systems add
+to are kept, and read by nothing, as on Windows; a process's own
+counters are added to where it has them.

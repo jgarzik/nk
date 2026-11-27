@@ -518,6 +518,7 @@ fn process_matches_the_kernel() {
     assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));
     assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
+    assert_eq!(DISK_COUNTERS, field("DiskCounters"));
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.
     let fast = types.layout("_EX_FAST_REF").expect("_EX_FAST_REF");

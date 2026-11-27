@@ -25,6 +25,9 @@ pub const CREATE_TIME: usize = 0x468;
 /// to the token object whose low four bits ([`FAST_REF_COUNT_MASK`])
 /// count references handed out in advance.
 pub const TOKEN: usize = 0x4B8;
+/// `DiskCounters`: the process's `PROCESS_DISK_COUNTERS` (bytes read
+/// and written, read, write and flush operations), or null.
+pub const DISK_COUNTERS: usize = 0x8B8;
 /// The bits of an `EX_FAST_REF` that are a count, not part of the
 /// pointer. Objects are 16-byte aligned, so a pointer has them clear.
 pub const FAST_REF_COUNT_MASK: usize = 0xF;

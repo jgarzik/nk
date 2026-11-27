@@ -76,6 +76,13 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, fsrtl::tunnel::FsRtlFindInTunnelCache),
     export!(Implemented, fsrtl::tunnel::FsRtlDeleteKeyFromTunnelCache),
     export!(Partial, fsrtl::volume::FsRtlNotifyVolumeEvent),
+    export!(Partial, fsrtl::device::FsRtlVolumeDeviceToCorrelationId),
+    export!(Implemented, fsrtl::device::FsRtlGetEcpListFromIrp),
+    export!(
+        Implemented,
+        fsrtl::device::FsRtlAreVolumeStartupApplicationsComplete
+    ),
+    export!(Implemented, fsrtl::device::FsRtlUpdateDiskCounters),
     export!(Implemented, fsrtl::status::FsRtlIsNtstatusExpected),
     export!(Implemented, fsrtl::status::FsRtlNormalizeNtstatus),
     export!(Implemented, fsrtl::status::FsRtlIsTotalDeviceFailure),

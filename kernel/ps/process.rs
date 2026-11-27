@@ -604,3 +604,47 @@ pub fn token_test() -> Result<u32, &'static str> {
 pub extern "C" fn PsIsDiskCountersEnabled() -> u8 {
     1
 }
+
+/// [`PsUpdateDiskCounters`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psupdatediskcounters):
+/// add a file system's disk I/O to the process's counters, where it has
+/// them (`EPROCESS.DiskCounters`); a process without counters is left
+/// alone, as on Windows.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsUpdateDiskCounters(
+    process: *mut core::ffi::c_void,
+    bytes_read: u64,
+    bytes_written: u64,
+    reads: u32,
+    writes: u32,
+    flushes: u32,
+) {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    // SAFETY: per the contract; the counters are five 64-bit words the
+    // kernel owns, updated atomically as Windows does.
+    unsafe {
+        let counters = process
+            .cast::<u8>()
+            .add(nk_ntabi::process::DISK_COUNTERS)
+            .cast::<*mut AtomicU64>()
+            .read();
+        if counters.is_null() {
+            return;
+        }
+        for (at, value) in [
+            bytes_read,
+            bytes_written,
+            u64::from(reads),
+            u64::from(writes),
+            u64::from(flushes),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if value != 0 {
+                (*counters.add(at)).fetch_add(value, Ordering::Relaxed);
+            }
+        }
+    }
+}
