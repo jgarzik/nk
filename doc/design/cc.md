@@ -214,11 +214,13 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   `FsRtlAcquireFileExclusive` and given back with `FsRtlReleaseFile`
   ([FsRtl](fsrtl.md)); dropping the map's file object then may send a
   stream file object's close from the worker.
-- **Workers.** Two, and one more per 4 processors (NK's number; Windows
-  runs the cache manager's work on its critical worker threads), share
-  one queue. Read-ahead runs on them between the file system's
-  `AcquireForReadAhead` and `ReleaseFromReadAhead` (FALSE skips it) with
-  the memory manager's prefetch, and never raises.
+- **Workers.** Scans, write-behinds and read-aheads run on the
+  executive's critical work queue (`ex::work`), as on Windows, bounded
+  by a small pool of reusable work items (`2 + cpus / 4`, at most 8)
+  draining the cache manager's queue under `DIRTY`. Read-ahead runs
+  between the file system's `AcquireForReadAhead` and
+  `ReleaseFromReadAhead` (FALSE skips it) with the memory manager's
+  prefetch, and never raises.
 - **Throttling** (`kernel/cc/throttle.rs`). `CcCanIWrite` lets a write go
   while the cache's dirty pages and its own stay within the threshold
   and no writer is queued before it; otherwise FALSE, or with `Wait` a
@@ -229,8 +231,7 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   for the write are not built.
 - **Waiting for it.** `CcWaitForCurrentLazyWriterActivity` runs a scan at
   once, which writes every dirty page (NK's choice for a scan asked
-  for), queues itself behind the scan's work, and returns once its
-  item is reached with no other work running: an item that finds work
-  still running goes back to the end of the queue, as Windows' event
-  items do, and waiting items never count each other. The I/O manager's shutdown calls it after every
-  file system has had its shutdown request, where Windows calls it.
+  for), attaches a barrier behind that scan, and returns once no scan or
+  item remains queued or running: concurrent waiters never wait for each
+  other. The I/O manager's shutdown calls it after every file system has
+  had its shutdown request, where Windows calls it.

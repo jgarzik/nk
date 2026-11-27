@@ -1,39 +1,40 @@
-//! The lazy writer and the cache manager's worker threads.
+//! The lazy writer and the cache manager's background work.
 //!
 //! The first dirt arms the scan timer for 3 s (`CcFirstDelay`); while
 //! dirt remains it is armed again every second (`CcIdleDelay`). Its DPC
-//! has a worker run a scan (`CcLazyWriteScan`): how many pages to write
-//! (`nk_cc::pages`), and a write-behind queued for each map with dirty
-//! data that is not already queued, and for each that no file object
-//! has open any more. A write-behind (`CcWriteBehind`) takes the file
-//! through the file system's `AcquireForLazyWrite`, flushes its share
-//! of the pages, gives the file back, and then deletes a map nobody has
-//! open and nothing dirties (lazy close), with the file taken exclusive
-//! through FsRtl; dropping the map's file object may send its file
-//! system the close. Deferred writes are posted after every write-behind.
+//! wakes a worker to run a scan (`CcLazyWriteScan`): how many pages to
+//! write (`nk_cc::pages`), and a write-behind queued for each map with
+//! dirty data that is not already queued, and for each that no file
+//! object has open any more. A write-behind (`CcWriteBehind`) takes the
+//! file through the file system's `AcquireForLazyWrite`, flushes its
+//! share of the pages, gives the file back, and then deletes a map
+//! nobody has open and nothing dirties (lazy close), with the file
+//! taken exclusive through FsRtl; dropping the map's file object may
+//! send its file system the close. Deferred writes are posted after
+//! every write-behind.
 //!
-//! The workers (2, and one more per 4 processors: NK's number; Windows
-//! uses its critical worker threads) share one queue under [`DIRTY`].
-//! Read-ahead runs on them too, between the file system's
-//! `AcquireForReadAhead` and `ReleaseFromReadAhead`, and never raises.
-//! `CcWaitForCurrentLazyWriterActivity` queues an item behind the work
-//! of a scan run at once; the item is done when a worker reaches it with
-//! no other work running, and goes back to the end of the queue if some
-//! is. Such items are not counted as running, so two never wait for
+//! Scans, write-behinds and read-aheads run on the executive's
+//! `CriticalWorkQueue` (`ex::work`), as on Windows, bounded by a small
+//! pool of reusable work items (`2 + cpus / 4`, at most `MAX_WORKERS`)
+//! draining the cache manager's queue under [`DIRTY`].
+//! `CcWaitForCurrentLazyWriterActivity` attaches a barrier behind a
+//! scan run at once; every waiting barrier is signalled when no scan or
+//! item remains queued or running, so concurrent waiters never wait for
 //! each other.
 
 use super::flush::flush_scm;
-use super::{DIRTY, MASTER, Scm, flag, map, short_delay, trace};
+use super::{DIRTY, MASTER, Scm, flag, map, trace};
 use crate::ke::seh::{self, Guard, Unhandled};
-use crate::ke::{thread, wait};
+use crate::ke::wait;
 use crate::mm::pool;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_cc::pages::{self, Scan};
+use nk_ntabi::ex::{CRITICAL_WORK_QUEUE, WORK_QUEUE_ITEM};
 use nk_ntabi::io::FILE_OBJECT;
-use nk_ntabi::ke::{KDPC, KEVENT, KSEMAPHORE, KTIMER};
+use nk_ntabi::ke::{KDPC, KEVENT, KTIMER, LIST_ENTRY};
 use nk_ntabi::status::*;
 
 /// `CcFirstDelay` and `CcIdleDelay`, in 100 ns units, relative.
@@ -41,6 +42,9 @@ const FIRST_DELAY: i64 = -30_000_000;
 const IDLE_DELAY: i64 = -10_000_000;
 /// The most maps one scan queues.
 const SCAN_ROOM: usize = 64;
+/// Upper bound on concurrent executive work items draining the cache
+/// manager's queue.
+const MAX_WORKERS: usize = 8;
 const TAG_WORK: u32 = u32::from_le_bytes(*b"CcWk");
 
 /// The dirty-page threshold and target (`nk_cc::pages::thresholds`).
@@ -60,8 +64,6 @@ pub enum Work {
         offset: u64,
         length: u32,
     },
-    /// Wait for every item before it to end, then signal the event.
-    Barrier(*mut KEVENT),
 }
 
 /// An item of the queue, from the pool.
@@ -70,20 +72,35 @@ pub struct Entry {
     work: Work,
 }
 
+/// A waiter in [`CcWaitForCurrentLazyWriterActivity`], living on the
+/// caller's stack until its event is signalled.
+struct Barrier {
+    next: *mut Barrier,
+    event: *mut KEVENT,
+}
+
 /// The queue and the scan's state, under [`DIRTY`].
 pub struct Queue {
     head: *mut Entry,
     tail: *mut Entry,
-    /// Items to queue at the end of the next scan.
-    post_tick: *mut Entry,
+    /// Waiters waiting for the next scan to finish before joining
+    /// `barriers`.
+    post_tick: *mut Barrier,
+    /// Waiters waiting for all queued and running work to finish.
+    barriers: *mut Barrier,
     /// The timer is armed or a scan is under way.
     scan_active: bool,
     /// A scan is to run.
     scan_pending: bool,
     /// The next scan writes every dirty page.
     everything: bool,
-    /// Items being run.
+    /// Scans and work items currently executing.
     running: u32,
+    /// Bitmask of `STATICS.items` currently queued or running on
+    /// `ex::work`.
+    active_mask: u8,
+    /// How many `STATICS.items` slots may be active at once.
+    limit: usize,
 }
 
 impl Queue {
@@ -92,10 +109,13 @@ impl Queue {
             head: core::ptr::null_mut(),
             tail: core::ptr::null_mut(),
             post_tick: core::ptr::null_mut(),
+            barriers: core::ptr::null_mut(),
             scan_active: false,
             scan_pending: false,
             everything: false,
             running: 0,
+            active_mask: 0,
+            limit: 2,
         }
     }
 
@@ -121,36 +141,58 @@ impl Queue {
         }
         e
     }
+
+    fn claim_slot(&mut self) -> Option<usize> {
+        for slot in 0..self.limit {
+            let bit = 1u8 << slot;
+            if self.active_mask & bit == 0 {
+                self.active_mask |= bit;
+                return Some(slot);
+            }
+        }
+        None
+    }
 }
 
-// SAFETY: the entries are reached only under the lock.
+// SAFETY: the entries and barriers are reached only under the lock.
 unsafe impl Send for Queue {}
 
-/// The scan's timer, its DPC and the workers' semaphore.
+/// The scan's timer, its DPC and the reusable executive work items.
 struct Statics {
     timer: UnsafeCell<MaybeUninit<KTIMER>>,
     dpc: UnsafeCell<MaybeUninit<KDPC>>,
-    work: UnsafeCell<MaybeUninit<KSEMAPHORE>>,
+    items: [UnsafeCell<WORK_QUEUE_ITEM>; MAX_WORKERS],
 }
 
-// SAFETY: dispatcher objects, used through the kernel's routines.
+// SAFETY: the timer and DPC are dispatcher objects used through kernel
+// routines; each work item is owned exclusively by the slot bit in
+// `Queue::active_mask`.
 unsafe impl Sync for Statics {}
+
+const EMPTY_WORK_ITEM: WORK_QUEUE_ITEM = WORK_QUEUE_ITEM {
+    List: LIST_ENTRY {
+        Flink: core::ptr::null_mut(),
+        Blink: core::ptr::null_mut(),
+    },
+    WorkerRoutine: None,
+    Parameter: core::ptr::null_mut(),
+};
 
 static STATICS: Statics = Statics {
     timer: UnsafeCell::new(MaybeUninit::uninit()),
     dpc: UnsafeCell::new(MaybeUninit::uninit()),
-    work: UnsafeCell::new(MaybeUninit::uninit()),
+    items: [const { UnsafeCell::new(EMPTY_WORK_ITEM) }; MAX_WORKERS],
 };
 
-fn semaphore() -> *mut KSEMAPHORE {
-    STATICS.work.get().cast()
-}
-
-/// Start the lazy writer: thresholds, timer, workers.
+/// Start the lazy writer: thresholds, timer and executive work-item
+/// slots. Runs on `ex::work`'s critical work queue, so no threads of
+/// its own are created.
 pub fn init() -> Result<(), &'static str> {
     let (threshold, target) = pages::thresholds(crate::mm::physical_memory().0);
     THRESHOLD.store(threshold, Ordering::Relaxed);
     TARGET.store(target, Ordering::Relaxed);
+    let limit = (2 + crate::ke::smp::online_count() / 4).min(MAX_WORKERS);
+    DIRTY.lock().queue.limit = limit;
     // SAFETY: static storage nothing uses yet.
     unsafe {
         crate::ke::timer::KeInitializeTimer(STATICS.timer.get().cast());
@@ -159,19 +201,46 @@ pub fn init() -> Result<(), &'static str> {
             Some(scan_dpc),
             core::ptr::null_mut(),
         );
-        wait::KeInitializeSemaphore(semaphore(), 0, i32::MAX);
-    }
-    let workers = 2 + crate::ke::smp::online_count() / 4;
-    for _ in 0..workers {
-        thread::create(worker, 0, 13, thread::ANYWHERE)?;
+        for (slot, cell) in STATICS.items.iter().enumerate() {
+            let item = cell.get();
+            (&raw mut (*item).List.Flink).write(core::ptr::null_mut());
+            (&raw mut (*item).WorkerRoutine).write(Some(worker_item));
+            (&raw mut (*item).Parameter).write(slot as *mut c_void);
+        }
     }
     Ok(())
 }
 
-/// Wake a worker for one more item.
+/// Queue an executive critical work item if work is waiting and a slot
+/// is free.
 fn wake() {
-    // SAFETY: the workers' semaphore, initialised at start.
-    unsafe { wait::KeReleaseSemaphore(semaphore(), 0, 1, 0) };
+    let slot = {
+        let mut d = DIRTY.lock();
+        let q = &mut d.queue;
+        if !q.scan_pending && q.head.is_null() {
+            return;
+        }
+        q.claim_slot()
+    };
+    if let Some(slot) = slot {
+        // SAFETY: `slot` is exclusively owned by this claim until
+        // `worker_item` clears its bit in `active_mask`.
+        unsafe { crate::ex::work::ExQueueWorkItem(STATICS.items[slot].get(), CRITICAL_WORK_QUEUE) };
+    }
+}
+
+/// Signal every barrier on `list`.
+fn signal_barriers(mut node: *mut Barrier) {
+    while !node.is_null() {
+        // SAFETY: each node stays live on its waiter's stack until its
+        // event is signalled; read `next` before signalling.
+        unsafe {
+            let next = (*node).next;
+            let event = (*node).event;
+            wait::KeSetEvent(event, 0, 0);
+            node = next;
+        }
+    }
 }
 
 /// Arm the timer, under the lock, if no scan is active.
@@ -196,13 +265,11 @@ pub fn schedule_scan() {
 /// # Safety
 /// Called as a DPC routine.
 unsafe extern "C" fn scan_dpc(_: *mut KDPC, _: *mut c_void, _: *mut c_void, _: *mut c_void) {
-    let first = {
+    {
         let mut d = DIRTY.lock();
-        !core::mem::replace(&mut d.queue.scan_pending, true)
-    };
-    if first {
-        wake();
+        d.queue.scan_pending = true;
     }
+    wake();
 }
 
 /// Queue `work`; `Err` if the pool has no room for it.
@@ -222,45 +289,40 @@ pub fn post(work: Work) -> Result<(), ()> {
     Ok(())
 }
 
-/// A worker: scans and items, for ever.
-fn worker(_: usize) {
+/// Executive critical worker callback: drain scans and items from the
+/// cache manager's queue, then release its slot back to `ex::work`.
+///
+/// # Safety
+/// Called as a work-queue routine with the slot index as `parameter`.
+unsafe extern "C" fn worker_item(parameter: *mut c_void) {
+    let slot = parameter.addr();
     loop {
-        // SAFETY: the workers' semaphore.
-        unsafe { wait::wait(Some(semaphore().cast()), None) };
-        let (scan, entry) = {
+        let (scan, entry, done) = {
             let mut d = DIRTY.lock();
             let q = &mut d.queue;
             if core::mem::replace(&mut q.scan_pending, false) {
                 q.running += 1;
-                (true, core::ptr::null_mut())
+                (true, core::ptr::null_mut(), core::ptr::null_mut())
             } else {
                 let e = q.pop();
-                // SAFETY: an entry taken off the queue, now this worker's.
-                match unsafe { e.as_ref() } {
-                    None => continue,
-                    Some(entry) => {
-                        if let Work::Barrier(event) = entry.work {
-                            if q.running == 0 {
-                                drop(d);
-                                // SAFETY: the waiter's event, valid until
-                                // signalled; the entry is the waiter's.
-                                unsafe { wait::KeSetEvent(event, 0, 0) };
-                            } else {
-                                // Work dequeued before it still runs: to
-                                // the back of the queue again.
-                                q.push(e);
-                                drop(d);
-                                short_delay();
-                                wake();
-                            }
-                            continue;
-                        }
-                    }
+                if !e.is_null() {
+                    q.running += 1;
+                    (false, e, core::ptr::null_mut())
+                } else {
+                    let done = if q.running == 0 {
+                        core::mem::replace(&mut q.barriers, core::ptr::null_mut())
+                    } else {
+                        core::ptr::null_mut()
+                    };
+                    q.active_mask &= !(1u8 << slot);
+                    (false, core::ptr::null_mut(), done)
                 }
-                q.running += 1;
-                (false, e)
             }
         };
+        if !scan && entry.is_null() {
+            signal_barriers(done);
+            return;
+        }
         if scan {
             lazy_write_scan();
         } else {
@@ -272,7 +334,17 @@ fn worker(_: usize) {
             }
             run(work);
         }
-        DIRTY.lock().queue.running -= 1;
+        let done = {
+            let mut d = DIRTY.lock();
+            let q = &mut d.queue;
+            q.running -= 1;
+            if q.running == 0 && !q.scan_pending && q.head.is_null() {
+                core::mem::replace(&mut q.barriers, core::ptr::null_mut())
+            } else {
+                core::ptr::null_mut()
+            }
+        };
+        signal_barriers(done);
     }
 }
 
@@ -295,7 +367,6 @@ fn run(work: Work) {
             // SAFETY: the reference the queuing took.
             unsafe { crate::ob::object::dereference(file.cast()) };
         }
-        Work::Barrier(_) => unreachable!("a barrier is run by the worker loop"),
     }
 }
 
@@ -366,14 +437,15 @@ fn lazy_write_scan() {
     super::throttle::post_deferred();
     let mut d = DIRTY.lock();
     let q = &mut d.queue;
-    let mut e = core::mem::replace(&mut q.post_tick, core::ptr::null_mut());
-    let mut moved = 0;
-    while !e.is_null() {
-        // SAFETY: entries of the post-tick list are the queue's.
-        let next = unsafe { (*e).next };
-        q.push(e);
-        moved += 1;
-        e = next;
+    let mut b = core::mem::replace(&mut q.post_tick, core::ptr::null_mut());
+    while !b.is_null() {
+        // SAFETY: barriers of the post-tick list live on their waiters'
+        // stacks until signalled.
+        let next = unsafe { (*b).next };
+        // SAFETY: as above.
+        unsafe { (*b).next = q.barriers };
+        q.barriers = b;
+        b = next;
     }
     if more || !chosen.is_empty() {
         arm(q, IDLE_DELAY);
@@ -381,9 +453,6 @@ fn lazy_write_scan() {
         q.scan_active = false;
     }
     drop(d);
-    for _ in 0..moved {
-        wake();
-    }
 }
 
 /// The pages a queued write-behind may write, kept in its map until it
@@ -576,24 +645,22 @@ pub extern "C" fn CcWaitForCurrentLazyWriterActivity() -> NTSTATUS {
     let mut event = MaybeUninit::<KEVENT>::uninit();
     // SAFETY: an event on this stack, signalled before it ends.
     unsafe { wait::KeInitializeEvent(event.as_mut_ptr(), 0, 0) };
-    let mut barrier = Entry {
+    let mut barrier = Barrier {
         next: core::ptr::null_mut(),
-        work: Work::Barrier(event.as_mut_ptr()),
+        event: event.as_mut_ptr(),
     };
-    let e = &raw mut barrier;
-    let first = {
+    let b = &raw mut barrier;
+    {
         let mut d = DIRTY.lock();
         let q = &mut d.queue;
-        // SAFETY: the fresh entry, the list's from now on.
-        unsafe { (*e).next = q.post_tick };
-        q.post_tick = e;
+        // SAFETY: the fresh barrier, the list's until signalled.
+        unsafe { (*b).next = q.post_tick };
+        q.post_tick = b;
         q.everything = true;
         q.scan_active = true;
-        !core::mem::replace(&mut q.scan_pending, true)
-    };
-    if first {
-        wake();
+        q.scan_pending = true;
     }
+    wake();
     // SAFETY: as above.
     unsafe { wait::wait(Some(event.as_mut_ptr().cast()), None) };
     STATUS_SUCCESS
