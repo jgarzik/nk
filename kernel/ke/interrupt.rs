@@ -52,7 +52,9 @@ pub fn dispatch(vector: u32, level: u8, eoi: impl FnOnce()) {
     let handler = HANDLERS
         .get(vector as usize)
         .map_or(core::ptr::null_mut(), |h| h.load(Ordering::Acquire));
-    if handler.is_null() {
+    if vector == arch::APC.0 {
+        // Nothing runs before the end of interrupt: see below.
+    } else if handler.is_null() {
         // Report the first few; a storm of them must not bury the log.
         if STRAY.fetch_add(1, Ordering::Relaxed) < 4 {
             kprintln!("ke: stray interrupt on vector {vector:#x}");
@@ -64,6 +66,15 @@ pub fn dispatch(vector: u32, level: u8, eoi: impl FnOnce()) {
     }
     arch::disable_interrupts();
     eoi();
+    if vector == arch::APC.0 {
+        // The thread's kernel APCs run once the controller has been told
+        // the interrupt is over, as Windows' `KiApcInterrupt` runs them:
+        // a normal routine may wait, and this processor must not hold
+        // back the next thread's APC interrupt meanwhile.
+        arch::enable_interrupts();
+        super::apc::deliver();
+        arch::disable_interrupts();
+    }
     // Back to the thread's own level: if a switch is wanted, this is the
     // place. The controller has been told the interrupt is over, and the
     // thread resumes here, inside the interrupt's frame on its own

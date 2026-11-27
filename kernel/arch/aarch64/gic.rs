@@ -312,6 +312,14 @@ pub fn disable_interrupts() {
     unsafe { asm!("msr daifset, #2", options(nomem, nostack)) };
 }
 
+/// Whether interrupts (IRQ) are enabled on this processor.
+pub fn interrupts_enabled() -> bool {
+    let daif: u64;
+    // SAFETY: reads the mask bits.
+    unsafe { asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack)) };
+    daif & (1 << 7) == 0
+}
+
 /// Mask interrupts (IRQ and FIQ) on this processor and return the mask
 /// bits as they were, for [`interrupts_restore`]. Not `nomem`: what is
 /// done with them off stays between the two.

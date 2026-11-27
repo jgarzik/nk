@@ -88,6 +88,8 @@ pub struct Thread {
     queued_on: AtomicU32,
     /// The priority it is queued at. That queue's lock.
     queued_at: AtomicU8,
+    /// Guards the thread's APC queues (`ke::apc`).
+    apc: SpinLock<()>,
 }
 
 /// One processor's dispatcher state.
@@ -266,6 +268,8 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).wake_link).write(core::ptr::null_mut());
         (&raw mut (*thread).queued_on).write(AtomicU32::new(0));
         (&raw mut (*thread).queued_at).write(AtomicU8::new(0));
+        (&raw mut (*thread).apc).write(SpinLock::new(Rank::Apc, ()));
+        super::apc::init_thread(thread);
         super::wait::init_thread(thread);
         super::mutex::init_thread(thread);
         field::<u8>(thread, 0).write(layout::THREAD_OBJECT);
@@ -493,6 +497,24 @@ pub unsafe fn wait_register<'a>(thread: *mut Thread) -> &'a WaitRegister {
     // SAFETY: per the contract; a thread's register lives as long as
     // the thread.
     unsafe { &(*thread).wait }
+}
+
+/// The lock of the thread's APC queues.
+///
+/// # Safety
+/// As [`wait_register`].
+pub unsafe fn apc_lock<'a>(thread: *mut Thread) -> &'a SpinLock<()> {
+    // SAFETY: per the contract.
+    unsafe { &(*thread).apc }
+}
+
+/// The processor a running thread runs on, or a ready one is queued for.
+///
+/// # Safety
+/// `thread` is a live thread.
+pub unsafe fn processor(thread: *mut Thread) -> usize {
+    // SAFETY: per the contract.
+    unsafe { next_processor(thread).load(Ordering::Relaxed) as usize }
 }
 
 /// A field of the thread's Windows-shaped block, for the modules that
@@ -773,6 +795,7 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
     }
     // Running again, on whatever processor took this thread.
     after_switch();
+    super::apc::switched_in();
 }
 
 /// The first thing a thread does when it gets a processor: release, or
@@ -847,6 +870,7 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
 /// Where a new thread begins.
 extern "C" fn start() -> ! {
     after_switch();
+    super::apc::switched_in();
     arch::set_irql(irql::PASSIVE_LEVEL);
     let me = current();
     // SAFETY: `me` is the running thread; these were written at creation.
@@ -1036,6 +1060,7 @@ pub unsafe extern "C" fn KeRevertToUserGroupAffinityThread(previous: *mut GROUP_
 /// End the calling thread.
 pub fn exit() -> ! {
     irql::expect_passive("thread exit");
+    super::apc::rundown();
     arch::set_irql(irql::DISPATCH_LEVEL);
     dispatch(Leaving::Exit);
     unreachable!("a thread that exited ran again")

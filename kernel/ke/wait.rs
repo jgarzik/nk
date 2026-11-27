@@ -45,13 +45,19 @@ use nk_ntabi::ke::{
     DISPATCHER_HEADER, EVENT_NOTIFICATION_OBJECT, EVENT_SYNCHRONIZATION_OBJECT, KEVENT, KSEMAPHORE,
     KWAIT_BLOCK, SEMAPHORE_OBJECT, WAIT_BLOCK_INACTIVE,
 };
-use nk_ntabi::thread::{ALERTED, MISC_FLAG_ALERTABLE, MISC_FLAGS, TIMER_WAIT_BLOCK, WAIT_MODE};
+use nk_ntabi::thread::{
+    ALERTED, MISC_FLAG_ALERTABLE, MISC_FLAGS, TIMER_WAIT_BLOCK, WAIT_IRQL, WAIT_MODE,
+};
 
 pub const STATUS_SUCCESS: u32 = 0;
 /// The thread was alerted: an alertable wait returns this.
 pub const STATUS_ALERTED: u32 = 0x101;
 /// The wait's time limit passed first.
 pub const STATUS_TIMEOUT: u32 = 0x102;
+/// What a wait entered at `PASSIVE_LEVEL` is ended with internally when
+/// kernel APCs are queued to its thread: it delivers them and waits
+/// again (`ke::apc`). No wait returns it.
+pub const STATUS_KERNEL_APC: u32 = 0x100;
 
 /// `WAIT_TYPE`: `WaitAll` and `WaitAny`.
 const WAIT_ALL: u8 = 0;
@@ -294,7 +300,13 @@ pub unsafe fn wait_objects(
             // until a block goes on a list below. Only blocks linked
             // here are looked at again afterwards: the rest of the
             // caller's array is whatever the caller left in it.
+            set_wait_irql(me, old);
             register.begin();
+            // Kernel APCs queued before the wait began, which no waker
+            // will now interrupt it for, are delivered first.
+            if old == irql::PASSIVE_LEVEL && super::apc::interrupts_wait() {
+                let _ = register.claim(STATUS_KERNEL_APC);
+            }
             let mut linked = 0;
             // An alert left for the thread comes before everything
             // else: nothing is looked at, nothing taken.
@@ -388,6 +400,17 @@ pub unsafe fn wait_objects(
                 alertable_wait_over(me);
             }
             register.finish();
+            if status == STATUS_KERNEL_APC {
+                // Delivered, and the wait goes on, its time limit as it
+                // was. A wait entered above PASSIVE_LEVEL, ended by an
+                // APC queued as it began, just waits again.
+                if old == irql::PASSIVE_LEVEL {
+                    arch::set_irql(nk_ntabi::pcr::APC_LEVEL);
+                    super::apc::deliver();
+                    arch::set_irql(irql::DISPATCH_LEVEL);
+                }
+                continue;
+            }
             if status != WAKE_AND_LOOK {
                 break status;
             }
@@ -397,6 +420,17 @@ pub unsafe fn wait_objects(
     unsafe { thread::set_wait_status(me, status) };
     arch::set_irql(old);
     status
+}
+
+/// Record the IRQL the thread's wait was entered at (`WaitIrql`), which
+/// decides whether a kernel APC interrupts it.
+///
+/// # Safety
+/// `me` is the running thread.
+unsafe fn set_wait_irql(me: *mut thread::Thread, level: u8) {
+    // SAFETY: per the contract; a byte other processors read.
+    unsafe { AtomicU8::from_ptr(thread::object_field(me, WAIT_IRQL)) }
+        .store(level, Ordering::Relaxed);
 }
 
 /// Start the running thread's wait blocks off as unlinked. Once per
@@ -553,7 +587,8 @@ pub unsafe extern "C" fn KeReadStateSemaphore(semaphore: *mut KSEMAPHORE) -> i32
 
 /// [`KeWaitForSingleObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kewaitforsingleobject).
 /// An alertable wait returns `STATUS_ALERTED` when the thread is
-/// alerted ([`alert`]). No wait takes APCs: there are none.
+/// alerted ([`alert`]). A wait entered at `PASSIVE_LEVEL` runs the
+/// kernel APCs queued to its thread and goes on waiting.
 ///
 /// # Safety
 /// `object` is a live dispatcher object that stays valid until this

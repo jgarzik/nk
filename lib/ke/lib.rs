@@ -10,6 +10,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod apc;
 pub mod bugcheck;
 pub mod kdpower;
 pub mod sched;

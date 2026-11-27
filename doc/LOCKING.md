@@ -8,7 +8,7 @@ lock changes this file in the same commit.
 | Level | Value | x86-64 vector | arm64 interrupt | What runs there |
 | --- | --- | --- | --- | --- |
 | `PASSIVE_LEVEL` | 0 | | | threads: driver entry, dispatch routines, work items, the tests |
-| `APC_LEVEL` | 1 | | | a thread holding a fast mutex |
+| `APC_LEVEL` | 1 | `0x1F` | SGI 4 | a thread holding a fast mutex; kernel APCs (`ke::apc`) |
 | `DISPATCH_LEVEL` | 2 | `0x2F` | SGI 3 | DPCs, the dispatcher, code holding a spin lock |
 | device levels | 3 to 11 | `0x30` to `0xBF` | shared peripheral interrupts | interrupt service routines, at their object's `SynchronizeIrql`; code holding an interrupt's spin lock |
 | clock | 13 | `0xD1` | virtual timer PPI | the clock tick |
@@ -91,6 +91,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 212 | `ke::kinterrupt::CONNECT` | which interrupt objects are connected: each object's `Connected` mark, and each vector's chain together with whether its line is unmasked | DISPATCH |
 | 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
+| 216 | a thread's APC queues (`ke::apc`) | the lists of its two `KAPC_STATE`s, each queued APC's `Inserted` mark, and whether APCs may still be queued to it (`ApcQueueable`); readying the thread for an APC that ends its wait takes rank 220 after it | DISPATCH |
 | 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
 | 218 | `hal::interrupt::STATE` | which vector each device interrupt has, and the routing registers of the I/O APICs and the GIC distributor | DISPATCH |
 | 219 | `ex::callback::LOCK` | every callback object's list of registrations, and each registration's count of calls under way and its mark of being unregistered | DISPATCH |
@@ -599,8 +600,8 @@ driver's pointer. A thread that cannot have it sleeps: the routines
 are for `PASSIVE_LEVEL` and `APC_LEVEL`, and a wait at `DISPATCH_LEVEL`
 stops the system like any other. They leave the IRQL and the thread's
 APC state alone. As on Windows it is the caller that enters a critical
-region first, so that the holder cannot be suspended; NK queues no
-APCs and does not check that it did. The waiters are in NK's own
+region first, so that the holder cannot be suspended; NK does not
+check that it did. The waiters are in NK's own
 queues (rank 215), not chained through the word as Windows chains
 them.
 

@@ -187,8 +187,8 @@ alert, one at most per mode, for its next alertable wait, which
 returns at once without looking at its objects or its time limit and
 takes nothing. An alert made in kernel mode ends a wait of either
 mode; `ZwAlertThread` alerts in kernel mode. Waits that are not
-alertable never see an alert. An alert is the only thing that ends a
-wait this way: there are no APCs to deliver.
+alertable never see an alert. Kernel APCs interrupt a wait too, and
+it goes on (below).
 
 ## Mutexes and critical regions
 
@@ -205,8 +205,48 @@ free, 0 held, one lower per waiter. Taking a free one is one atomic step;
 a release that finds waiters passes it on through the event. Holding it
 raises the IRQL to `APC_LEVEL`.
 
-NK queues no APCs. The counts and the IRQL are kept as Windows keeps
-them, so code that asks whether APCs are disabled gets Windows' answer.
+Releasing the mutex or leaving the last critical region lets through
+the kernel APCs held back meanwhile.
+
+## Asynchronous procedure calls
+
+An APC runs a routine in one thread's context (`kernel/ke/apc.rs`;
+[Types of APCs](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/types-of-apcs)).
+The `KAPC` is the caller's; it is linked into the thread's `KAPC_STATE`
+at Windows' offsets, under the thread's APC lock, and `KeInitializeApc`,
+`KeInsertQueueApc` and `KeRemoveQueueApc` are exported as ntoskrnl
+exports them. The rules are those of Windows' `KiInsertQueueApc`,
+`KiSignalThreadForApc` and `KiDeliverApc`, read in the pinned kernel;
+the decisions are `lib/ke/apc.rs`, tested on the host:
+
+- A special kernel APC (no normal routine) goes after the last special
+  one, ahead of every normal one; a normal one at the tail.
+- Special APCs run at `APC_LEVEL` unless the thread is in a guarded
+  region (`SpecialApcDisable`, `KeEnterGuardedRegion`). A normal one runs
+  its kernel routine at `APC_LEVEL` and then its normal routine at
+  `PASSIVE_LEVEL`, unless the thread is also in a critical region or
+  already delivering one; then it and those behind it wait.
+- They run when the IRQL falls below `APC_LEVEL`: queueing one for a
+  thread that can run it raises the APC_LEVEL interrupt on its processor
+  (vector `0x1F` on x86-64, as on Windows; SGI 4 on arm64), which the
+  processor holds back while the IRQL is higher however it came down,
+  and runs them after its end of interrupt. Leaving the last critical or
+  guarded region runs them at once at `PASSIVE_LEVEL`, or raises the
+  interrupt above it. A thread that gets a processor with APCs pending
+  raises it for itself.
+- A wait entered at `PASSIVE_LEVEL` (`WaitIrql`), alertable or not, is
+  ended internally for them (`STATUS_KERNEL_APC`); the thread runs them
+  and waits again with the same time limit. Whether the thread waits is
+  its wait register's to say, so an APC queued as the wait begins is
+  seen by one side or the other.
+- `KeAreAllApcsDisabled` is a guarded region, interrupts off or an IRQL
+  of `APC_LEVEL` and above.
+- An ending thread takes no more APCs, runs the kernel APCs it can, and
+  runs down its user APCs; one with kernel APCs it cannot run stops the
+  system (`KERNEL_APC_PENDING_DURING_EXIT`), as Windows'
+  `KeRundownApcQueues` does.
+
+User-mode APCs are queued but never delivered; see [absent](absent.md).
 
 ## Deferred procedure calls
 

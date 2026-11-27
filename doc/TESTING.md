@@ -192,6 +192,11 @@ tier has, for each architecture:
   whose DPC routine raises over a thread inside a `__try`;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
+- `*-ke-apc` (`test=ke.apc.*`), and `x86_64-ke-apc-smp1` on one
+  processor: kernel APCs, which no Microsoft binary on a boot path
+  queues yet, by NK's own tests: special before normal, held back by
+  guarded and critical regions and a raised IRQL and run when they end,
+  a wait interrupted for them and resumed, `KeAreAllApcsDisabled`.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

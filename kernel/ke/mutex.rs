@@ -142,6 +142,7 @@ pub unsafe extern "C" fn KeReleaseMutex(mutex: *mut KMUTANT, _wait: u8) -> i32 {
     // SAFETY: per the contract.
     unsafe {
         let header = mutex.cast::<DISPATCHER_HEADER>();
+        let mut released = 0;
         let (previous, woken) = {
             let _lock = ObjectLock::take(header);
             if owner(mutex) != me {
@@ -159,14 +160,15 @@ pub unsafe extern "C" fn KeReleaseMutex(mutex: *mut KMUTANT, _wait: u8) -> i32 {
                 let LIST_ENTRY { Flink, Blink } = (&raw const (*mutex).MutantListEntry).read();
                 (&raw mut (*Blink).Flink).write(Flink);
                 (&raw mut (*Flink).Blink).write(Blink);
-                apc_disable(me).fetch_add(
-                    i16::from((&raw const (*mutex).ApcDisable).read()),
-                    Ordering::Relaxed,
-                );
+                released = i16::from((&raw const (*mutex).ApcDisable).read());
                 (previous, object::satisfy(header))
             }
         };
         woken.ready();
+        // The owner's kernel APCs, held back while it held the mutex,
+        // may run now: the counter is the thread's own, so it is given
+        // back with the mutex's lock dropped.
+        super::apc::kernel_disable_raised(released);
         previous
     }
 }
@@ -186,10 +188,10 @@ pub extern "C" fn KeEnterCriticalRegion() {
     unsafe { apc_disable(thread::current()) }.fetch_sub(1, Ordering::Relaxed);
 }
 
-/// [`KeLeaveCriticalRegion`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keleavecriticalregion).
+/// [`KeLeaveCriticalRegion`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keleavecriticalregion):
+/// leaving the last one lets the thread's queued kernel APCs run.
 pub extern "C" fn KeLeaveCriticalRegion() {
-    // SAFETY: the running thread, live while it runs this.
-    unsafe { apc_disable(thread::current()) }.fetch_add(1, Ordering::Relaxed);
+    super::apc::kernel_disable_raised(1);
 }
 
 /// Run `f` inside a critical region.

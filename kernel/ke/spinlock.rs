@@ -82,6 +82,8 @@ pub enum Rank {
     InterruptConnect = 212,
     /// A queue of threads waiting for push locks (`ex::pushlock`).
     PushLock = 215,
+    /// A thread's APC queues (`ke::apc`).
+    Apc = 216,
     /// What a boot's UUIDs share (`ex::uuid`).
     Uuid = 217,
     /// Which vector each device interrupt has, and the interrupt

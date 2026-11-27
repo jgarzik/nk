@@ -5,3 +5,10 @@ ke.bugcheck.order ok
 ke.queued-lock ok
 ke.processors ok
 ke.small-routines ok
+ke.apc.order ok
+ke.apc.critical ok
+ke.apc.irql ok
+ke.apc.wait ok
+ke.apc.thread ok
+ke.apc.remove ok
+ke.apc.disabled ok

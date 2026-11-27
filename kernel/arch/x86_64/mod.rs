@@ -26,7 +26,8 @@ pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 
 pub use apic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
-    init as interrupts_init, interrupt_enable, interrupts_off, interrupts_restore, self_interrupt,
+    init as interrupts_init, interrupt_enable, interrupts_enabled, interrupts_off,
+    interrupts_restore, self_interrupt,
 };
 
 pub use cpu::{
@@ -129,6 +130,10 @@ pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
     smp::start(number, smp::hardware_id(number), stack_top);
     Ok(())
 }
+
+/// `(vector, IRQL)` of the interrupt that runs a thread's kernel APCs:
+/// APC_LEVEL, on the vector Windows uses.
+pub const APC: (u32, u8) = (0x1F, 1);
 
 /// `(vector, IRQL)` of the interrupt a processor sends itself to run its
 /// deferred procedure calls: DISPATCH_LEVEL.

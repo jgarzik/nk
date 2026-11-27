@@ -79,6 +79,28 @@ tier = "gate"
 smp = 1
 golden = "aarch64"
 
+# Kernel APCs on their own: the order of delivery, what holds it back,
+# and a wait interrupted for them and resumed; once on one processor,
+# where the busy thread is only ever ready, not running elsewhere.
+
+[x86_64-ke-apc]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/ke/apc.rs", "kernel/ke/wait.rs", "kernel/ke/interrupt.rs", "lib/ke/apc.rs"]
+cmdline = "test=ke.apc.*"
+
+[x86_64-ke-apc-smp1]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/ke/apc.rs", "kernel/ke/wait.rs", "kernel/ke/interrupt.rs", "lib/ke/apc.rs"]
+smp = 1
+cmdline = "test=ke.apc.*"
+
+[aarch64-ke-apc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=ke.apc.*"
+
 # A data disk on the machine changes nothing for a kernel that does not
 # write it: the boot passes, and the disk is as it was made. This is the
 # harness's own proof that the disk is attached, kept and compared.

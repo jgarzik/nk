@@ -7,11 +7,8 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    KeAreAllApcsDisabled,
-    KeEnterGuardedRegion,
     KeExpandKernelStackAndCalloutEx,
     KeIsExecutingDpc,
-    KeLeaveGuardedRegion,
     KeRestoreExtendedProcessorState,
     KeSaveExtendedProcessorState,
     KeStartDynamicProcessor,

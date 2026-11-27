@@ -430,6 +430,51 @@ fn thread_matches_the_kernel() {
         APC_STATE_PROCESS,
         field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")
     );
+    assert_eq!(APC_STATE, field("ApcState"));
+    assert_eq!(SAVED_APC_STATE, field("SavedApcState"));
+    assert_eq!(APC_STATE_INDEX, field("ApcStateIndex"));
+    assert_eq!(WAIT_IRQL, field("WaitIrql"));
+    assert_eq!(SPECIAL_APC_DISABLE, field("SpecialApcDisable"));
+    let queueable = kthread
+        .member("ApcQueueable")
+        .expect("_KTHREAD.ApcQueueable");
+    assert_eq!(queueable.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        queueable.bits,
+        Some((MISC_FLAG_APC_QUEUEABLE.trailing_zeros() as u8, 1))
+    );
+    for (flag, name) in [
+        (crate::ke::KERNEL_APC_IN_PROGRESS, "KernelApcInProgress"),
+        (crate::ke::SPECIAL_APC_IN_PROGRESS, "SpecialApcInProgress"),
+    ] {
+        let member = apc_state.member(name).expect(name);
+        assert_eq!(
+            member.offset as usize,
+            core::mem::offset_of!(crate::ke::KAPC_STATE, InProgressFlags)
+        );
+        assert_eq!(member.bits, Some((flag.trailing_zeros() as u8, 1)));
+    }
+    {
+        use crate::ke::KAPC;
+        use core::mem::{offset_of, size_of};
+        let apc = types.layout("_KAPC").expect("_KAPC");
+        let field = |name| offset(&apc, "_KAPC", name);
+        assert_eq!(size_of::<KAPC>(), apc.size as usize);
+        assert_eq!(offset_of!(KAPC, Type), field("Type"));
+        assert_eq!(offset_of!(KAPC, Size), field("Size"));
+        assert_eq!(offset_of!(KAPC, Thread), field("Thread"));
+        assert_eq!(offset_of!(KAPC, ApcListEntry), field("ApcListEntry"));
+        // The public symbols name the three routines `Reserved[3]`; the
+        // order is KeInitializeApc's.
+        assert_eq!(offset_of!(KAPC, KernelRoutine), field("Reserved"));
+        assert_eq!(offset_of!(KAPC, NormalContext), field("Reserved") + 0x18);
+        assert_eq!(offset_of!(KAPC, NormalContext), field("NormalContext"));
+        assert_eq!(offset_of!(KAPC, SystemArgument1), field("SystemArgument1"));
+        assert_eq!(offset_of!(KAPC, SystemArgument2), field("SystemArgument2"));
+        assert_eq!(offset_of!(KAPC, ApcStateIndex), field("ApcStateIndex"));
+        assert_eq!(offset_of!(KAPC, ApcMode), field("ApcMode"));
+        assert_eq!(offset_of!(KAPC, Inserted), field("Inserted"));
+    }
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
     assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
     assert_eq!(

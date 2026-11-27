@@ -52,6 +52,23 @@ pub const MISC_FLAGS: usize = 0x74;
 pub const MISC_FLAG_SYSTEM_AFFINITY_ACTIVE: u32 = 1 << 3;
 /// `MiscFlags.Alertable`: the thread is in a wait an alert may end.
 pub const MISC_FLAG_ALERTABLE: u32 = 1 << 4;
+/// `MiscFlags.ApcQueueable`: APCs may be queued to the thread; cleared
+/// as it ends.
+pub const MISC_FLAG_APC_QUEUEABLE: u32 = 1 << 14;
+/// `ApcState`: the thread's `KAPC_STATE` for the process it is in.
+pub const APC_STATE: usize = 0x98;
+/// `SavedApcState`: its own process's `KAPC_STATE` while it is attached
+/// to another.
+pub const SAVED_APC_STATE: usize = 0x258;
+/// `ApcStateIndex`: one byte, 0 while the thread is in its own process
+/// (`ApcState` is that process's), 1 while attached.
+pub const APC_STATE_INDEX: usize = 0x24A;
+/// `WaitIrql`: the IRQL the thread's current or last wait was entered
+/// at. A kernel APC interrupts a wait entered at `PASSIVE_LEVEL`.
+pub const WAIT_IRQL: usize = 0x186;
+/// `SpecialApcDisable`: 16 bits, negative while the thread is in a
+/// guarded region; no kernel APC runs then.
+pub const SPECIAL_APC_DISABLE: usize = 0x1E6;
 /// `WaitMode`: the processor mode of the thread's alertable wait, one
 /// signed byte.
 pub const WAIT_MODE: usize = 0x187;

@@ -441,7 +441,10 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         // Another processor is stopping the system and said so.
         super::halt();
     }
-    if vector >= 32 && vector != FAST_FAIL {
+    // The APC interrupt's vector is below 32, in the range of the
+    // processor's own exceptions, as on Windows: its IRQL is its upper
+    // four bits, 1. No exception uses it.
+    if (vector >= 32 && vector != FAST_FAIL) || vector == u64::from(super::APC.0) {
         return super::apic::interrupt(vector as u32);
     }
     let cr2: u64;

@@ -210,8 +210,8 @@ pub fn self_interrupt(vector: u32) {
     }
 }
 
-/// An interrupt arrived on `vector` (32 or above). Called from the trap
-/// handler with interrupts disabled.
+/// An interrupt arrived on `vector` (32 or above, or the APC vector).
+/// Called from the trap handler with interrupts disabled.
 pub fn interrupt(vector: u32) {
     if vector == SPURIOUS_VECTOR {
         // The APIC withdrew the interrupt; there is nothing to finish.
@@ -238,6 +238,14 @@ pub fn enable_interrupts() {
 pub fn disable_interrupts() {
     // SAFETY: masking interrupts touches no memory.
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
+}
+
+/// Whether interrupts are enabled on this processor.
+pub fn interrupts_enabled() -> bool {
+    let flags: u64;
+    // SAFETY: reads RFLAGS through the stack.
+    unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem)) };
+    flags & (1 << 9) != 0
 }
 
 /// Mask interrupts on this processor and return whether they were on,

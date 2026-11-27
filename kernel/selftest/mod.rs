@@ -7,6 +7,7 @@
 
 mod absent;
 mod ahcibus;
+mod apc;
 mod base;
 mod bitmap;
 mod callback;
@@ -174,6 +175,7 @@ pub static GROUPS: &[&[&Group]] = &[
     seh::GROUPS,
     except::GROUPS,
     wait::GROUPS,
+    apc::GROUPS,
     ob::GROUPS,
     rtl::GROUPS,
     bitmap::GROUPS,
