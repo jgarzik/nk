@@ -319,23 +319,43 @@ struct Report {
     context: usize,
 }
 
-/// [`IoReportTargetDeviceChangeAsynchronous`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreporttargetdevicechangeasynchronous):
-/// tell the registrations for `device`'s changes of the custom event
-/// `notification`, from a worker thread, each with its own file object
-/// in the structure; then call `callback` with `context`, if given. The
-/// event is copied, and `STATUS_PENDING` answered at once. One of the
-/// predefined removal events, or a structure too short for its header
-/// or its name, is `STATUS_INVALID_DEVICE_REQUEST`, as Windows answers.
+/// The physical device object a file system's volume answers for, with
+/// a reference: the target-device relation of the top of the stack a
+/// request on `file` goes to, the file system's volume device on a
+/// mounted volume, as Windows' `IoGetRelatedTargetDevice` asks it.
+///
+/// # Safety
+/// `file` is an open file object. Called at `PASSIVE_LEVEL`.
+pub unsafe fn related_target(file: *mut nk_ntabi::io::FILE_OBJECT) -> Result<usize, NTSTATUS> {
+    // SAFETY: per the contract.
+    let reported = unsafe {
+        super::query::relations(
+            crate::io::file::related_device(file),
+            TARGET_DEVICE_RELATION,
+        )
+    }?
+    .ok_or(STATUS_NOT_SUPPORTED)?;
+    let (first, rest) = reported.split_first().ok_or(STATUS_NOT_SUPPORTED)?;
+    for extra in rest {
+        // SAFETY: each device the driver reported comes referenced.
+        unsafe { object::dereference(*extra as *mut u8) };
+    }
+    Ok(*first)
+}
+
+/// A report of `notification` for `device`, copied into a block for
+/// [`deliver`]; `Err` with Windows' status for an event a driver may not
+/// report, a structure too short, or no memory.
 ///
 /// # Safety
 /// `device` is a physical device object; `notification` is readable for
-/// its `Size`; `callback` is null or a routine of the caller's.
-pub unsafe extern "C" fn IoReportTargetDeviceChangeAsynchronous(
+/// its `Size`.
+unsafe fn report(
     device: *mut nk_ntabi::io::DEVICE_OBJECT,
     notification: *const TARGET_DEVICE_CUSTOM_NOTIFICATION,
     callback: usize,
     context: usize,
-) -> NTSTATUS {
+) -> Result<*mut u8, NTSTATUS> {
     // SAFETY: per the contract; the header is read field by field.
     let (event, size, name) = unsafe {
         (
@@ -354,18 +374,18 @@ pub unsafe extern "C" fn IoReportTargetDeviceChangeAsynchronous(
         || size < TARGET_DEVICE_CUSTOM_HEADER
         || (name != -1 && name as isize > data as isize)
     {
-        return STATUS_INVALID_DEVICE_REQUEST;
+        return Err(STATUS_INVALID_DEVICE_REQUEST);
     }
     let block = pool::alloc(size_of::<Report>() + size, super::TAG);
     if block.is_null() {
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
     }
     // SAFETY: a fresh block with room for the report and the copy; the
-    // device is referenced until the worker is done with it.
+    // device is referenced until the report is delivered.
     unsafe {
         object::reference(device.cast());
-        let report = block.cast::<Report>();
-        report.write(Report {
+        let record = block.cast::<Report>();
+        record.write(Report {
             item: core::mem::zeroed(),
             device: device as usize,
             callback,
@@ -376,11 +396,65 @@ pub unsafe extern "C" fn IoReportTargetDeviceChangeAsynchronous(
             block.add(size_of::<Report>()),
             size,
         );
-        (*report).item.WorkerRoutine = Some(deliver);
-        (*report).item.Parameter = block.cast();
-        crate::ex::work::ExQueueWorkItem(&raw mut (*report).item, nk_ntabi::ex::DELAYED_WORK_QUEUE);
+        (*record).item.WorkerRoutine = Some(deliver);
+        (*record).item.Parameter = block.cast();
     }
-    STATUS_PENDING
+    Ok(block)
+}
+
+/// [`IoReportTargetDeviceChangeAsynchronous`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreporttargetdevicechangeasynchronous):
+/// tell the registrations for `device`'s changes of the custom event
+/// `notification`, from a worker thread, each with its own file object
+/// in the structure; then call `callback` with `context`, if given. The
+/// event is copied, and `STATUS_PENDING` answered at once. One of the
+/// predefined removal events, or a structure too short for its header
+/// or its name, is `STATUS_INVALID_DEVICE_REQUEST`, as Windows answers.
+///
+/// # Safety
+/// `device` is a physical device object; `notification` is readable for
+/// its `Size`; `callback` is null or a routine of the caller's.
+pub unsafe extern "C" fn IoReportTargetDeviceChangeAsynchronous(
+    device: *mut nk_ntabi::io::DEVICE_OBJECT,
+    notification: *const TARGET_DEVICE_CUSTOM_NOTIFICATION,
+    callback: usize,
+    context: usize,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    match unsafe { report(device, notification, callback, context) } {
+        Ok(block) => {
+            // SAFETY: the block `report` made, its work item set up.
+            unsafe {
+                let record = block.cast::<Report>();
+                crate::ex::work::ExQueueWorkItem(
+                    &raw mut (*record).item,
+                    nk_ntabi::ex::DELAYED_WORK_QUEUE,
+                );
+            }
+            STATUS_PENDING
+        }
+        Err(status) => status,
+    }
+}
+
+/// What Windows' `IoReportTargetDeviceChange` does for a custom event:
+/// tell the registrations for `device` before returning, in the
+/// caller's thread.
+///
+/// # Safety
+/// As [`IoReportTargetDeviceChangeAsynchronous`], at `PASSIVE_LEVEL`.
+pub unsafe fn report_target_change(
+    device: *mut nk_ntabi::io::DEVICE_OBJECT,
+    notification: *const TARGET_DEVICE_CUSTOM_NOTIFICATION,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    match unsafe { report(device, notification, 0, 0) } {
+        Ok(block) => {
+            // SAFETY: the block `report` made; `deliver` frees it.
+            unsafe { deliver(block.cast()) };
+            STATUS_SUCCESS
+        }
+        Err(status) => status,
+    }
 }
 
 /// The worker's part of [`IoReportTargetDeviceChangeAsynchronous`].

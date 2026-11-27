@@ -16,6 +16,7 @@ pub mod notify;
 pub mod oplock;
 pub mod status;
 pub mod tunnel;
+pub mod volume;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use nk_fsrtl::tunnel::Limits;

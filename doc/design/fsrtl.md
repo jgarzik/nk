@@ -85,3 +85,13 @@ owner may take again, from the pool). A directory watch is registered
 only by `FsRtlNotifyFullChangeDirectory`, a trap, so the list is always
 empty: reporting a change or cleaning up a handle finds nothing to
 complete, and a watch on the list stops the system by name.
+
+## Volume events
+
+`FsRtlNotifyVolumeEvent` reports a mount (from a worker), a dismount, a
+lock or an unlock (before it returns) as a target-device change of the
+volume's physical device object, found as Windows finds it: the
+target-device relation of the top of the stack a request on the file
+goes to, the file system's own volume device on a mounted volume. Its
+status is that of finding the device, as on Windows. Other events were
+not read and stop the system by name.

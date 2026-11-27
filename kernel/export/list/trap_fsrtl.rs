@@ -18,7 +18,6 @@ trap_list!(
     FsRtlMdlReadDev,
     FsRtlMdlWriteCompleteDev,
     FsRtlNotifyFullChangeDirectory,
-    FsRtlNotifyVolumeEvent,
     FsRtlOplockFsctrl,
     FsRtlPostPagingFileStackOverflow,
     FsRtlPostStackOverflow,

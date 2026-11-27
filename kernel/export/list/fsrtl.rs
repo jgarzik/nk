@@ -75,6 +75,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, fsrtl::tunnel::FsRtlAddToTunnelCache),
     export!(Implemented, fsrtl::tunnel::FsRtlFindInTunnelCache),
     export!(Implemented, fsrtl::tunnel::FsRtlDeleteKeyFromTunnelCache),
+    export!(Partial, fsrtl::volume::FsRtlNotifyVolumeEvent),
     export!(Implemented, fsrtl::status::FsRtlIsNtstatusExpected),
     export!(Implemented, fsrtl::status::FsRtlNormalizeNtstatus),
     export!(Implemented, fsrtl::status::FsRtlIsTotalDeviceFailure),
