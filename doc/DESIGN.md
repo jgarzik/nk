@@ -1331,6 +1331,7 @@ make that safe.
 | a callback object's registered routine (`ExNotifyCallback`) | undo: the registration is no longer in use, so unregistering it does not wait for ever |
 | a one-time initialisation routine (`RtlRunOnceExecuteOnce`) | undo: the `RTL_RUN_ONCE` is new again, so the threads waiting for it try in their turn |
 | a range list's conflict callback (`RtlFindRange`, `RtlIsRangeAvailable`) | nothing: the search holds nothing, and the list is the caller's |
+| an AVL table's compare, allocate and free routines | nothing: the table is the caller's, a new node is linked only after its routines have returned, and a deleted one is freed after it is unlinked |
 | a query table's routine (`RtlQueryRegistryValues`) | undo: what the query holds, in one block: its copy of the table, the value lent to the routine, its count on the key |
 | a system service made for user mode (the oracle's requests) | base: a system service |
 | a hardware error source's `Initialize` (`WheaAddErrorSourceDeviceDriverV1`, `WheaAddErrorSource`) | undo: the source's count of calls in progress. The source stays started, as Windows leaves it |
@@ -2601,6 +2602,22 @@ allocates, so none can fail for want of memory. Which rotations balance
 a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
+
+### The AVL table
+
+An [AVL generic table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlinitializegenerictableavl)
+is the driver's: its header (`RTL_AVL_TABLE`, `nk_ntabi::rtl`, checked
+against the kernel's symbols), its order (the compare routine) and its
+nodes, each an `RTL_BALANCED_LINKS` with the element copied after it in
+a block from the allocate routine. The header's `BalancedRoot` is the
+tree's sentinel, its own parent, with the root as its right child. The
+balancing is `nk_rtl::avl`, written against a store of nodes as the
+prefix table's is and checked on the host against a set over random
+sequences. Insertion and deletion keep the element count, the delete
+count and the depth the header declares, and forget its place of an
+ordered walk. The caller serialises the calls on one table. The walks
+(`RtlEnumerateGenericTableAvl` and its kin) are not exported: no binary
+NK runs imports them.
 
 ### Bitmaps
 

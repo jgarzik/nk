@@ -49,6 +49,13 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::crt::strrchr),
     export!(Implemented, rtl::print::wcschr),
     export!(Implemented, rtl::crt::wcsstr),
+    export!(Implemented, rtl::crt::wcsncmp),
+    export_entry!(Implemented, "sprintf_s", rtl::print::nk_variadic_sprintf_s),
+    export!(Implemented, rtl::RtlCheckPortableOperatingSystem),
+    export!(Implemented, rtl::avl::RtlInitializeGenericTableAvl),
+    export!(Implemented, rtl::avl::RtlInsertElementGenericTableAvl),
+    export!(Implemented, rtl::avl::RtlLookupElementGenericTableAvl),
+    export!(Implemented, rtl::avl::RtlDeleteElementGenericTableAvl),
     export!(Implemented, rtl::feature::RtlNotifyFeatureUsage),
     export!(Implemented, rtl::feature::RtlQueryFeatureConfiguration),
     export!(

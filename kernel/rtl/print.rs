@@ -23,6 +23,8 @@ unsafe extern "C" {
     pub fn nk_variadic_DbgPrintEx(component: u32, level: u32, format: *const u8, ...) -> u32;
     /// [`_snwprintf`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/snprintf-snprintf-snprintf-l-snwprintf-snwprintf-l).
     pub fn nk_variadic__snwprintf(buffer: *mut u16, count: usize, format: *const u16, ...) -> i32;
+    /// [`sprintf_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/sprintf-s-sprintf-s-l-swprintf-s-swprintf-s-l).
+    pub fn nk_variadic_sprintf_s(buffer: *mut u8, size: usize, format: *const u8, ...) -> i32;
 }
 
 /// The arguments of a variadic call, as the entry stub laid them out.
@@ -240,6 +242,39 @@ unsafe extern "C" fn nk_snwprintf(args: *const u64) -> i32 {
             args.add(2).read() as *const u16,
             args.add(3),
         )
+    }
+}
+
+/// `sprintf_s`, entered from its stub: buffer, its size, format, then
+/// the format's arguments. The text and its terminator must fit: then
+/// the count of characters, the terminator not counted. Otherwise the
+/// parameter is invalid, and as the C runtime does when its handler
+/// lets it go on, the buffer is emptied (if there is one) and the answer
+/// is -1.
+///
+/// # Safety
+/// `args` is the argument array of a `sprintf_s` call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn nk_sprintf_s(args: *const u64) -> i32 {
+    // SAFETY: per the contract, as in `nk_snwprintf`.
+    unsafe {
+        let buffer = args.read() as *mut u8;
+        let size = args.add(1).read() as usize;
+        let format_string = args.add(2).read() as *const u8;
+        if buffer.is_null() || size == 0 {
+            return -1;
+        }
+        if format_string.is_null() {
+            buffer.write(0);
+            return -1;
+        }
+        match _vsnprintf(buffer, size, format_string, args.add(3)) {
+            written if written >= 0 && (written as usize) < size => written,
+            _ => {
+                buffer.write(0);
+                -1
+            }
+        }
     }
 }
 

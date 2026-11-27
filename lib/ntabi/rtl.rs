@@ -93,6 +93,54 @@ pub struct RTL_SPLAY_LINKS {
     pub RightChild: *mut RTL_SPLAY_LINKS,
 }
 
+/// `RTL_BALANCED_LINKS` (`ntddk.h`): a node's place in an
+/// [AVL table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlinitializegenerictableavl).
+/// The caller's element follows it in the same allocation.
+#[repr(C)]
+pub struct RTL_BALANCED_LINKS {
+    pub Parent: *mut RTL_BALANCED_LINKS,
+    pub LeftChild: *mut RTL_BALANCED_LINKS,
+    pub RightChild: *mut RTL_BALANCED_LINKS,
+    /// The height of the right subtree less that of the left: -1, 0, 1.
+    pub Balance: i8,
+    pub Reserved: [u8; 3],
+}
+
+/// `RTL_AVL_TABLE` (`ntddk.h`): the header of an AVL table, which the
+/// driver owns. `BalancedRoot` is the tree's sentinel: its own parent,
+/// with the root as its right child.
+#[repr(C)]
+pub struct RTL_AVL_TABLE {
+    pub BalancedRoot: RTL_BALANCED_LINKS,
+    pub OrderedPointer: *mut core::ffi::c_void,
+    pub WhichOrderedElement: u32,
+    pub NumberGenericTableElements: u32,
+    pub DepthOfTree: u32,
+    pub RestartKey: *mut RTL_BALANCED_LINKS,
+    pub DeleteCount: u32,
+    pub CompareRoutine: Option<AvlCompare>,
+    pub AllocateRoutine: Option<AvlAllocate>,
+    pub FreeRoutine: Option<AvlFree>,
+    pub TableContext: *mut core::ffi::c_void,
+}
+
+/// `RTL_AVL_COMPARE_ROUTINE`: `GenericLessThan` (0), `GenericGreaterThan`
+/// (1) or `GenericEqual` (2), of the first element against the second.
+pub type AvlCompare = unsafe extern "system" fn(
+    *mut RTL_AVL_TABLE,
+    *mut core::ffi::c_void,
+    *mut core::ffi::c_void,
+) -> u32;
+/// `RTL_AVL_ALLOCATE_ROUTINE`.
+pub type AvlAllocate = unsafe extern "system" fn(*mut RTL_AVL_TABLE, u32) -> *mut core::ffi::c_void;
+/// `RTL_AVL_FREE_ROUTINE`.
+pub type AvlFree = unsafe extern "system" fn(*mut RTL_AVL_TABLE, *mut core::ffi::c_void);
+
+/// `RTL_GENERIC_COMPARE_RESULTS`.
+pub const GENERIC_LESS_THAN: u32 = 0;
+pub const GENERIC_GREATER_THAN: u32 = 1;
+pub const GENERIC_EQUAL: u32 = 2;
+
 /// `UNICODE_PREFIX_TABLE_ENTRY` (`ntifs.h`): one name of a
 /// [prefix table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlinsertunicodeprefix).
 /// The driver allocates it; the prefix routines fill it in.
@@ -138,6 +186,19 @@ const _: () = {
     assert!(size_of::<RTL_BITMAP>() == 0x10);
     assert!(offset_of!(RTL_BITMAP, Buffer) == 8);
     assert!(size_of::<RTL_SPLAY_LINKS>() == 0x18);
+    assert!(size_of::<RTL_BALANCED_LINKS>() == 0x20);
+    assert!(offset_of!(RTL_BALANCED_LINKS, Balance) == 0x18);
+    assert!(size_of::<RTL_AVL_TABLE>() == 0x68);
+    assert!(offset_of!(RTL_AVL_TABLE, OrderedPointer) == 0x20);
+    assert!(offset_of!(RTL_AVL_TABLE, WhichOrderedElement) == 0x28);
+    assert!(offset_of!(RTL_AVL_TABLE, NumberGenericTableElements) == 0x2C);
+    assert!(offset_of!(RTL_AVL_TABLE, DepthOfTree) == 0x30);
+    assert!(offset_of!(RTL_AVL_TABLE, RestartKey) == 0x38);
+    assert!(offset_of!(RTL_AVL_TABLE, DeleteCount) == 0x40);
+    assert!(offset_of!(RTL_AVL_TABLE, CompareRoutine) == 0x48);
+    assert!(offset_of!(RTL_AVL_TABLE, AllocateRoutine) == 0x50);
+    assert!(offset_of!(RTL_AVL_TABLE, FreeRoutine) == 0x58);
+    assert!(offset_of!(RTL_AVL_TABLE, TableContext) == 0x60);
     assert!(offset_of!(RTL_SPLAY_LINKS, LeftChild) == 8);
     assert!(offset_of!(RTL_SPLAY_LINKS, RightChild) == 0x10);
     assert!(size_of::<UNICODE_PREFIX_TABLE_ENTRY>() == 0x38);

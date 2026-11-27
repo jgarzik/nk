@@ -38,6 +38,16 @@ pub unsafe extern "C" fn strncmp(a: *const u8, b: *const u8, count: usize) -> i3
     unsafe { crt::strncmp(characters(a), characters(b), count) }
 }
 
+/// [`wcsncmp`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strncmp-wcsncmp-mbsncmp-mbsncmp-l):
+/// [`strncmp`] for wide strings.
+///
+/// # Safety
+/// Each string is NUL-terminated or at least `count` characters long.
+pub unsafe extern "C" fn wcsncmp(a: *const u16, b: *const u16, count: usize) -> i32 {
+    // SAFETY: per the contract; neither string is read past `count`.
+    unsafe { crt::strncmp(characters(a), characters(b), count) }
+}
+
 /// [`strrchr`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strrchr-wcsrchr-mbsrchr-mbsrchr-l):
 /// the last `character` in `string`, or null. Only the low byte of
 /// `character` counts, and the terminator is part of the string.

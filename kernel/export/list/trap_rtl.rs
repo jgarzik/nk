@@ -9,14 +9,7 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     RtlAddProcessTrustLabelAce,
-    RtlCheckPortableOperatingSystem,
     RtlCreateSystemVolumeInformationFolder,
-    RtlDeleteElementGenericTableAvl,
-    RtlInitializeGenericTableAvl,
-    RtlInsertElementGenericTableAvl,
-    RtlLookupElementGenericTableAvl,
     RtlSetSaclSecurityDescriptor,
     _purecall,
-    sprintf_s,
-    wcsncmp,
 );
