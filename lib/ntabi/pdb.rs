@@ -2075,3 +2075,25 @@ fn boot_entropy_result_matches_the_kernel() {
         ])
     );
 }
+
+#[test]
+fn entropy_timing_state_matches_the_kernel() {
+    use crate::ke::KENTROPY_TIMING_STATE;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let layout = types
+        .layout("_KENTROPY_TIMING_STATE")
+        .expect("_KENTROPY_TIMING_STATE");
+    let field = |name| offset(&layout, "_KENTROPY_TIMING_STATE", name);
+    assert_eq!(size_of::<KENTROPY_TIMING_STATE>(), layout.size as usize);
+    assert_eq!(
+        offset_of!(KENTROPY_TIMING_STATE, EntropyCount),
+        field("EntropyCount")
+    );
+    assert_eq!(offset_of!(KENTROPY_TIMING_STATE, Buffer), field("Buffer"));
+    assert_eq!(offset_of!(KENTROPY_TIMING_STATE, Dpc), field("Dpc"));
+    assert_eq!(
+        offset_of!(KENTROPY_TIMING_STATE, LastDeliveredBuffer),
+        field("LastDeliveredBuffer")
+    );
+}

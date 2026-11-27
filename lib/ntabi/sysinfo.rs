@@ -203,6 +203,25 @@ const _: () = {
     assert!(offset_of!(AUX_MODULE_EXTENDED_INFO, FullPathName) == 0x0E);
 };
 
+/// `SystemEntropyInterruptTimingInformation`, which
+/// `ZwSetSystemInformation` takes: a driver's routine for the times of
+/// interrupts ([`SYSTEM_ENTROPY_TIMING_INFORMATION`]).
+pub const SYSTEM_ENTROPY_INTERRUPT_TIMING_INFORMATION_CLASS: u32 = 0x83;
+
+/// What class 0x83 takes, as `cng.sys` builds it and the pinned
+/// kernel's `NtSetSystemInformation` reads it: the routine given each
+/// full half of a processor's timing buffer, the routine run once for
+/// each processor's state when it registers, and their context.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SYSTEM_ENTROPY_TIMING_INFORMATION {
+    pub EntropyRoutine: *mut c_void,
+    pub InitializationRoutine: *mut c_void,
+    pub InitializationContext: *mut c_void,
+}
+
+const _: () = assert!(size_of::<SYSTEM_ENTROPY_TIMING_INFORMATION>() == 0x18);
+
 /// `SystemBootEntropyInformation`: the entropy the loader gathered, for
 /// `cng.sys`. Answered once, in kernel mode, into a buffer of exactly
 /// [`SYSTEM_BOOT_ENTROPY_INFORMATION_SIZE`] bytes.

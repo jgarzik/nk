@@ -68,6 +68,32 @@ pub struct KDPC {
     pub DpcData: *mut c_void,
 }
 
+/// `KENTROPY_TIMING_STATE`: what each processor gathers of the times
+/// its device interrupts arrive, for the entropy routine a driver
+/// registers (`SystemEntropyInterruptTimingInformation`). The driver
+/// sees it through the pointer its initialisation routine is given and
+/// the halves of `Buffer` its routine is given.
+#[repr(C)]
+pub struct KENTROPY_TIMING_STATE {
+    /// Interrupts recorded.
+    pub EntropyCount: u32,
+    /// Two halves of 32 words each that the interrupts' cycle counts are
+    /// folded into, and one spare word.
+    pub Buffer: [u32; 65],
+    /// Queued when a half is full.
+    pub Dpc: KDPC,
+    /// The half last handed to the routine.
+    pub LastDeliveredBuffer: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KENTROPY_TIMING_STATE>() == 336);
+    assert!(offset_of!(KENTROPY_TIMING_STATE, Buffer) == 4);
+    assert!(offset_of!(KENTROPY_TIMING_STATE, Dpc) == 264);
+    assert!(offset_of!(KENTROPY_TIMING_STATE, LastDeliveredBuffer) == 328);
+};
+
 const _: () = {
     use core::mem::{offset_of, size_of};
     assert!(size_of::<KDPC>() == 0x40);
