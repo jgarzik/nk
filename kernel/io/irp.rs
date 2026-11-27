@@ -267,6 +267,9 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
 unsafe fn finish(irp: *mut IRP) {
     // SAFETY: per the contract.
     unsafe {
+        if complete_paging(irp) {
+            return;
+        }
         let mut result = (*irp).IoStatus;
         let status = result.Status;
         let flags = (*irp).Flags;
@@ -335,6 +338,31 @@ unsafe fn finish(irp: *mut IRP) {
             ke::wait::KeSetEvent(event, 0, 0);
         }
     }
+}
+
+/// Final completion of a synchronous paging request, as the pinned
+/// kernel's `IopfCompleteRequest` does it: the status goes to the memory
+/// manager's status block, the IRP is freed and the memory manager's
+/// event signalled, inline and with no APC; the MDL and its pages stay
+/// the memory manager's (`io::paging`). False for any other request.
+///
+/// # Safety
+/// `irp` must be a live IRP whose stack has fully unwound.
+unsafe fn complete_paging(irp: *mut IRP) -> bool {
+    // SAFETY: per the contract; a paging request's status block and
+    // event are the memory manager's, live until the event is signalled.
+    unsafe {
+        let flags = (*irp).Flags;
+        if flags & IRP_PAGING_IO == 0 || flags & IRP_SYNCHRONOUS_PAGING_IO == 0 {
+            return false;
+        }
+        (*irp).UserIosb.write((*irp).IoStatus);
+        let event = (*irp).UserEvent;
+        (*irp).MdlAddress = core::ptr::null_mut();
+        free(irp);
+        ke::wait::KeSetEvent(event, 0, 0);
+    }
+    true
 }
 
 /// Free an IRP (`IoFreeIrp`).

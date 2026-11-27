@@ -15,6 +15,12 @@ pub const ETHREAD_SIZE: usize = 0x898;
 /// `ETHREAD.DeviceToVerify`: the device a file system asked to have
 /// verified (`IoSetHardErrorOrVerifyDevice`).
 pub const DEVICE_TO_VERIFY: usize = 0x4C8;
+/// `ETHREAD.CacheManagerActive` (a byte): 1 while the thread writes a
+/// section's pages for the cache manager (`MmFlushSection`); one half
+/// of `MmIsRecursiveIoFault`.
+pub const CACHE_MANAGER_ACTIVE: usize = 0x51C;
+/// `ETHREAD.DisablePageFaultClustering` (a byte): the other half.
+pub const DISABLE_PAGE_FAULT_CLUSTERING: usize = 0x51D;
 /// `ETHREAD.IoBoostCount`: how many times the thread's I/O priority is
 /// boosted now.
 pub const IO_BOOST_COUNT: usize = 0x550;

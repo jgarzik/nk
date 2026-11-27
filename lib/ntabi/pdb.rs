@@ -482,6 +482,14 @@ fn thread_matches_the_kernel() {
         offset(&ethread, "_ETHREAD", "DeviceToVerify")
     );
     assert_eq!(IO_BOOST_COUNT, offset(&ethread, "_ETHREAD", "IoBoostCount"));
+    assert_eq!(
+        CACHE_MANAGER_ACTIVE,
+        offset(&ethread, "_ETHREAD", "CacheManagerActive")
+    );
+    assert_eq!(
+        DISABLE_PAGE_FAULT_CLUSTERING,
+        offset(&ethread, "_ETHREAD", "DisablePageFaultClustering")
+    );
     assert_eq!(ACTIVITY_ID, offset(&ethread, "_ETHREAD", "ActivityId"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
@@ -958,6 +966,30 @@ fn timer_delete_parameters_match_the_kernel() {
     assert_eq!(
         offset_of!(EXT_DELETE_PARAMETERS, DeleteContext),
         field("DeleteContext")
+    );
+}
+
+#[test]
+fn section_object_pointers_match_the_kernel() {
+    use crate::io::SECTION_OBJECT_POINTERS;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let sop = types
+        .layout("_SECTION_OBJECT_POINTERS")
+        .expect("_SECTION_OBJECT_POINTERS");
+    let field = |name| offset(&sop, "_SECTION_OBJECT_POINTERS", name);
+    assert_eq!(size_of::<SECTION_OBJECT_POINTERS>(), sop.size as usize);
+    assert_eq!(
+        offset_of!(SECTION_OBJECT_POINTERS, DataSectionObject),
+        field("DataSectionObject")
+    );
+    assert_eq!(
+        offset_of!(SECTION_OBJECT_POINTERS, SharedCacheMap),
+        field("SharedCacheMap")
+    );
+    assert_eq!(
+        offset_of!(SECTION_OBJECT_POINTERS, ImageSectionObject),
+        field("ImageSectionObject")
     );
 }
 

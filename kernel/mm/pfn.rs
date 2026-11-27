@@ -5,7 +5,8 @@
 //! records what each frame is. A frame the kernel takes (pool, stacks,
 //! page tables, driver images) is active and owned by no section; a page
 //! of a file is owned by its prototype PTE and lives on the lists when
-//! nothing maps it.
+//! nothing maps it. When the bitmap has no frame left, the oldest
+//! standby page is taken from its file.
 //!
 //! The database is allocated once, at boot, from the bitmap: one entry
 //! per frame up to the highest usable one.
@@ -71,17 +72,47 @@ pub fn init(mut bitmap: FrameBitmap<'static>, nframes: u64) -> Result<(), &'stat
 }
 
 /// Take `count` frames where `within` allows, recording them as the
-/// kernel's. Returns the first frame number. Not zeroed.
+/// kernel's. When none are free, standby pages are taken from their
+/// files ([`super::section::reclaim`]), oldest first, until the run can
+/// be had or standby is empty. Returns the first frame number. Not
+/// zeroed.
 pub fn take(guard: &mut Guard, count: u64, within: Option<&Within>) -> Option<u64> {
-    let f = frames(guard);
-    let first = match within {
-        Some(within) => f.bitmap.alloc_within(count, within),
-        None => f.bitmap.alloc(count),
-    }?;
-    for pfn in first..first + count {
-        f.db.kernel_allocate(pfn);
+    loop {
+        let f = frames(guard);
+        let run = match within {
+            Some(within) => f.bitmap.alloc_within(count, within),
+            None => f.bitmap.alloc(count),
+        };
+        if let Some(first) = run {
+            for pfn in first..first + count {
+                f.db.kernel_allocate(pfn);
+            }
+            return Some(first);
+        }
+        if !super::section::reclaim(guard) {
+            return None;
+        }
     }
-    Some(first)
+}
+
+/// Give back to the allocator a page of a section that the database
+/// has released (`PfnDb::release`).
+pub fn give_back_released(guard: &mut Guard, pfn: u64) {
+    let freed = frames(guard).bitmap.dealloc(pfn, 1);
+    assert!(freed, "a released frame {pfn:#x} was not allocated");
+}
+
+/// How many frames are free, and on standby, modified and
+/// modified-no-write.
+pub fn counts() -> [u64; 4] {
+    let mut guard = lock();
+    let f = frames(&mut guard);
+    [
+        f.bitmap.free_frames(),
+        f.db.count(Location::Standby),
+        f.db.count(Location::Modified),
+        f.db.count(Location::ModifiedNoWrite),
+    ]
 }
 
 /// Give back frames [`take`] handed out. A double free is a kernel bug.

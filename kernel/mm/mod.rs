@@ -8,12 +8,16 @@
 //! the loader allocated and firmware's boot-services memory stay
 //! reserved.
 
+pub mod cache;
 pub mod contig;
+pub mod fault;
+pub mod flush;
 pub mod io;
 pub mod map;
 pub mod pfn;
 pub mod pool;
 pub mod query;
+pub mod section;
 pub mod stack;
 pub mod user;
 

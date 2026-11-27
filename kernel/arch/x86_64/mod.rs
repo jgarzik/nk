@@ -211,6 +211,22 @@ pub fn flush_tlb_page(va: u64) {
     crate::ke::ipi::call_all(flush_local, va as usize);
 }
 
+/// Drop any cached translation for the `pages` pages at `va`, on every
+/// processor, with one request to each.
+pub fn flush_tlb_range(va: u64, pages: usize) {
+    let range = [va, pages as u64];
+    crate::ke::ipi::call_all(flush_range_local, (&raw const range).addr());
+}
+
+fn flush_range_local(range: usize) {
+    // SAFETY: the caller's pair lives until every processor has
+    // answered (`ipi::call` waits).
+    let [va, pages] = unsafe { (range as *const [u64; 2]).read() };
+    for page in 0..pages {
+        flush_local((va + page * 4096) as usize);
+    }
+}
+
 fn flush_local(va: usize) {
     // SAFETY: invlpg only discards a TLB entry.
     unsafe { core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack)) };

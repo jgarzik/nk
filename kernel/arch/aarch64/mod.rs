@@ -271,6 +271,19 @@ pub fn flush_tlb_page(va: u64) {
     }
 }
 
+/// Drop any cached translation for the `pages` pages at `va`, on every
+/// processor: the instructions broadcast, and one barrier ends them all.
+pub fn flush_tlb_range(va: u64, pages: usize) {
+    // SAFETY: as in `flush_tlb_page`.
+    unsafe {
+        core::arch::asm!("dsb ishst", options(nostack));
+        for page in 0..pages as u64 {
+            core::arch::asm!("tlbi vaae1is, {}", in(reg) (va >> 12) + page, options(nostack));
+        }
+        core::arch::asm!("dsb ish", "isb", options(nostack));
+    }
+}
+
 /// Make new mappings visible: a table write must be synchronised before
 /// the mapping is used.
 pub fn mapping_sync() {

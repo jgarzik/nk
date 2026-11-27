@@ -544,6 +544,27 @@ pub struct MAILSLOT_CREATE_PARAMETERS {
     pub TimeoutSpecified: u8,
 }
 
+/// [`SECTION_OBJECT_POINTERS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_section_object_pointers):
+/// what a file system keeps per stream for the memory and cache
+/// managers (`FILE_OBJECT.SectionObjectPointer` points at it). The
+/// memory manager owns `DataSectionObject` and `ImageSectionObject`,
+/// the cache manager `SharedCacheMap`; file systems compare them with
+/// null.
+#[repr(C)]
+pub struct SECTION_OBJECT_POINTERS {
+    pub DataSectionObject: PVOID,
+    pub SharedCacheMap: PVOID,
+    pub ImageSectionObject: PVOID,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<SECTION_OBJECT_POINTERS>() == 0x18);
+    assert!(offset_of!(SECTION_OBJECT_POINTERS, SharedCacheMap) == 0x08);
+    assert!(offset_of!(SECTION_OBJECT_POINTERS, ImageSectionObject) == 0x10);
+    assert!(offset_of!(FILE_OBJECT, SectionObjectPointer) == 0x28);
+};
+
 #[repr(C)]
 pub struct FILE_OBJECT {
     pub Type: i16,
@@ -600,8 +621,17 @@ pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
 pub const IRP_PRIORITY_HINT_MASK: u32 = 0x000E_0000;
 pub const IRP_PRIORITY_HINT_NORMAL: u32 = 0x0006_0000;
 
+/// `IRP_NOCACHE`: the request goes past the cache, to the device.
+pub const IRP_NOCACHE: u32 = 0x0000_0001;
 /// `IRP_PAGING_IO`: the request is the memory manager's, for a page.
 pub const IRP_PAGING_IO: u32 = 0x0000_0002;
+/// `IRP_SYNCHRONOUS_PAGING_IO`: the memory manager waits for the paging
+/// request on its own event; completion signals it and frees the IRP,
+/// leaving the MDL and its pages to the memory manager.
+pub const IRP_SYNCHRONOUS_PAGING_IO: u32 = 0x0000_0040;
+/// `IRP.AllocationFlags`: a synchronous paging read into an MDL marked
+/// `MDL_IO_PAGE_READ`, as `IoPageReadEx` of the pinned kernel marks it.
+pub const IRP_ALLOCATION_PAGE_READ: u8 = 0x20;
 
 /// `IO_PRIORITY_HINT`.
 pub const IO_PRIORITY_VERY_LOW: u32 = 0;

@@ -48,3 +48,63 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
   the stack pointer before storing anything and reports from a
   per-processor overflow stack. Windows' stacks are 24 KiB on x86-64; no
   driver can depend on the size.
+
+## Files in memory
+
+Phase 4 adds pageable memory of one kind: a file's pages, mapped in the
+system cache for the cache manager. Pool stays non-paged and driver
+images stay resident. Microsoft's file systems see the memory manager
+only through `SECTION_OBJECT_POINTERS`, paging IRPs, MDLs and a few
+exports; the rest is NK's design, following Windows' semantics (and
+Windows' x64 software PTE formats, `lib/mm/pte.rs`).
+
+- **Sections** (`kernel/mm/section.rs`). One data control area per file,
+  named by `SectionObjectPointer->DataSectionObject`, which is non-null
+  exactly while the control area lives. It keeps Windows' counts
+  (sections, views, system-cache views, frames, user references,
+  locked pages starting at 1, flushes) and `_MMSECTION_FLAGS`. Its
+  subsections cover 256 KiB each, one system-cache view, and hold that
+  range's 64 prototype PTEs; one is made when a view or a read-ahead
+  first needs it and freed when nothing maps it and none of its pages
+  is in memory, as Windows makes and frees a mapped file's prototype
+  PTEs per range. A prototype PTE of a page that is only in the file
+  is in subsection format. `MmCreateCacheManagerSection` takes the size
+  it is given (the cache manager's allocation size rounded to 1 MiB)
+  and does no I/O. A section object (type `Section`) holds the control
+  area. When no section, view, frame or flush holds a control area
+  (`MiCheckControlArea`), `DataSectionObject` is cleared and the area is
+  freed with its reference to the file, which may send the file system
+  its close. Clean pages on standby keep the control area, and so the
+  file object, alive until they are reused or purged, as on Windows.
+- **System-cache views** (`kernel/mm/cache.rs`). A region of 4 GiB of
+  256 KiB slots whose page tables are made when the cache manager
+  reserves its slots and never freed; its entries are written under
+  the PFN lock, never through `mm::map`. Mapping a view writes
+  prototype pointers; unmapping moves each valid entry's dirty bit to
+  the PFN entry, drops the translations on every processor in one
+  request, and lists the pages nothing else holds. On arm64 NK does not
+  enable hardware dirty tracking, so a writable entry counts as dirty.
+- **Resolving a page** (`kernel/mm/fault.rs`), one path for every
+  caller: valid, soft (off a list), collided (wait for the read in
+  flight, then again) or hard. A hard fault reads the page and up to 15
+  after it that are in the file only, within the subsection and the
+  section, in one synchronous paging read
+  (`IRP_NOCACHE|IRP_PAGING_IO|IRP_SYNCHRONOUS_PAGING_IO`, `io::paging`,
+  completed inline with no APC as Windows completes it); no cluster
+  when `MmIsRecursiveIoFault`. The faulting page is mapped, the rest go
+  to standby, and what the file system did not return is zero. A read
+  that fails frees its frames, restores the prototype PTEs, and gives
+  its status to the faulting thread and every waiter. A driver's system
+  mapping of the paging MDL is undone when the read is over.
+  `MmCheckCachedPageStates` (`make_resident`) resolves each page of a
+  range, with no read for pages the caller overwrites whole, or stops
+  at the first that would need one; `MmCopyToCachedPage` never reads.
+  Read-ahead for the cache manager reads into standby before it
+  returns.
+- **Purge** (`kernel/mm/flush.rs`): Windows' rule
+  (`MiCanFileBeTruncatedInternal` with the purge's checks, host-tested
+  in `lib/mm/section.rs`) decides; a page a view still maps leaves the
+  view first; a page under I/O or locked refuses the purge.
+- **Memory pressure.** When the frame bitmap is empty the oldest standby
+  page is taken from its file. What that leaves unused is freed by the
+  next memory-manager call, never under the PFN lock.

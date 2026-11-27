@@ -197,6 +197,14 @@ tier has, for each architecture:
   queues yet, by NK's own tests: special before normal, held back by
   guarded and critical regions and a raised IRQL and run when they end,
   a wait interrupted for them and resumed, `KeAreAllApcsDisabled`.
+- `x86_64-mm-section` (`test=mm.section trace=mm`): the memory
+  manager's data sections, system-cache views and paging I/O, driven as
+  the cache manager drives them over nkfs, a test-only file system
+  (`kernel/selftest/nkfs.rs`) that records every paging request: views
+  map without reading, a fault reads a cluster of at most 16 pages in
+  one request flagged 0x43, overwritten pages are not read, a failed
+  read is the fault's status, a purge is refused while a view is mapped
+  and afterwards gives every page and block back.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

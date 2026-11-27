@@ -13,6 +13,8 @@ pub mod heap;
 pub mod pfn;
 pub mod protect;
 pub mod pt;
+pub mod pte;
+pub mod section;
 pub mod space;
 
 pub const PAGE_SIZE: u64 = 4096;

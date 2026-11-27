@@ -15,7 +15,12 @@ pub fn console_init(info: &BootInfo) {
     *CONSOLE.lock() = Uart::new(info);
     variables::init(info);
     DEBUGGER.store(info.option("debug") == Some("on"), Ordering::Relaxed);
-    TRACE_REGISTRY.store(info.option("trace") == Some("registry"), Ordering::Relaxed);
+    let traced = |what| {
+        info.option("trace")
+            .is_some_and(|list| list.split(',').any(|t| t == what))
+    };
+    TRACE_REGISTRY.store(traced("registry"), Ordering::Relaxed);
+    TRACE_MM.store(traced("mm"), Ordering::Relaxed);
 }
 
 /// The command line asked (`trace=registry`) for a line in the log for
@@ -27,6 +32,17 @@ static TRACE_REGISTRY: AtomicBool = AtomicBool::new(false);
 /// Whether registry lookups are logged.
 pub fn trace_registry() -> bool {
     TRACE_REGISTRY.load(Ordering::Relaxed)
+}
+
+/// The command line asked (`trace=mm`) for a line in the log for every
+/// section made and deleted, view mapped and unmapped, page read in or
+/// written out, and purge: what the memory manager does for a file.
+/// `trace=` takes a list separated by commas.
+static TRACE_MM: AtomicBool = AtomicBool::new(false);
+
+/// Whether the memory manager's work on files is logged.
+pub fn trace_mm() -> bool {
+    TRACE_MM.load(Ordering::Relaxed)
 }
 
 /// A kernel debugger is attached and tells the kernel to go on at every

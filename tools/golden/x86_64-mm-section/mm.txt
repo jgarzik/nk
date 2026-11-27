@@ -1,0 +1,6 @@
+mm.section ok
+mm.section-view ok
+mm.section-read ok
+mm.section-overwrite ok
+mm.section-inpage-error ok
+mm.section-purge ok

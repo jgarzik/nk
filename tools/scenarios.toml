@@ -236,6 +236,26 @@ cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
 
+# The memory manager's data sections, system-cache views and paging
+# I/O, driven as the cache manager drives them over nkfs, the test-only
+# file system: what each paging request looked like, and every page and
+# block given back.
+
+[x86_64-mm-section]
+arch = "x86_64"
+tier = "gate"
+paths = [
+    "kernel/mm/",
+    "lib/mm/",
+    "kernel/io/paging.rs",
+    "kernel/io/irp.rs",
+    "kernel/io/mdl.rs",
+    "kernel/selftest/nkfs.rs",
+    "kernel/selftest/nkfs_mm.rs",
+]
+cmdline = "test=mm.section trace=mm"
+golden = "x86_64-mm-section"
+
 # Unmapping system address space a mapping does not hold stops the
 # system as Windows does.
 

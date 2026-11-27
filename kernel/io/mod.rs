@@ -17,6 +17,7 @@ pub mod irpext;
 pub mod irpinfo;
 pub mod mdl;
 pub mod mount;
+pub mod paging;
 pub mod priority;
 pub mod raw;
 pub mod remlock;

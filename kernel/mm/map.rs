@@ -235,6 +235,15 @@ pub fn remap(
     Ok(())
 }
 
+/// The physical address of the table of 4 KiB entries that covers
+/// `va`, made if it is not there: for a region whose entries the memory
+/// manager then writes itself, without this lock (`mm::cache`). Tables
+/// are never freed.
+pub fn leaf_table(va: u64) -> Result<u64, MapError> {
+    let _guard = NEXT_VA.lock();
+    pt::leaf_table(&mut Tables, &arch::pt_arch(), arch::pt_root_of(va), va)
+}
+
 /// The physical address `va` maps to, found without a lock, so at any
 /// IRQL: by arithmetic for an address in the map of all RAM, else by
 /// reading the page tables as the processor reads them. Tables are
