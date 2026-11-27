@@ -1984,3 +1984,94 @@ fn timer2_matches_the_kernel() {
         CollectionIndex
     );
 }
+
+#[test]
+fn boot_entropy_result_matches_the_kernel() {
+    use crate::sysinfo::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let result = types
+        .layout("_BOOT_ENTROPY_LDR_RESULT")
+        .expect("_BOOT_ENTROPY_LDR_RESULT");
+    let field = |name| offset(&result, "_BOOT_ENTROPY_LDR_RESULT", name);
+    assert_eq!(size_of::<BOOT_ENTROPY_LDR_RESULT>(), result.size as usize);
+    macro_rules! same {
+        ($ty:ident, $field:ident, $($f:ident),*) => {
+            $(assert_eq!(offset_of!($ty, $f), $field(stringify!($f)));)*
+        };
+    }
+    same!(
+        BOOT_ENTROPY_LDR_RESULT,
+        field,
+        maxEntropySources,
+        EntropySourceResult,
+        SeedBytesForCng,
+        RngBytesForNtoskrnl,
+        KdEntropy
+    );
+    let source = types
+        .layout("_BOOT_ENTROPY_SOURCE_LDR_RESULT")
+        .expect("_BOOT_ENTROPY_SOURCE_LDR_RESULT");
+    let at = |name| offset(&source, "_BOOT_ENTROPY_SOURCE_LDR_RESULT", name);
+    assert_eq!(
+        size_of::<BOOT_ENTROPY_SOURCE_LDR_RESULT>(),
+        source.size as usize
+    );
+    same!(
+        BOOT_ENTROPY_SOURCE_LDR_RESULT,
+        at,
+        SourceId,
+        Policy,
+        ResultCode,
+        ResultStatus,
+        Time,
+        EntropyLength,
+        EntropyData
+    );
+    let values = |name: &str| -> Vec<(String, u64)> {
+        types
+            .enumerators(name)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"))
+    };
+    let named = |v: &[(&str, u32)]| -> Vec<(String, u64)> {
+        v.iter()
+            .map(|&(n, v)| (String::from(n), u64::from(v)))
+            .collect()
+    };
+    assert_eq!(
+        values("_BOOT_ENTROPY_SOURCE_ID"),
+        named(&[
+            ("BootEntropySourceNone", BOOT_ENTROPY_SOURCE_NONE),
+            ("BootEntropySourceSeedfile", BOOT_ENTROPY_SOURCE_SEEDFILE),
+            ("BootEntropySourceExternal", BOOT_ENTROPY_SOURCE_EXTERNAL),
+            ("BootEntropySourceTpm", BOOT_ENTROPY_SOURCE_TPM),
+            ("BootEntropySourceRdrand", BOOT_ENTROPY_SOURCE_RDRAND),
+            ("BootEntropySourceTime", BOOT_ENTROPY_SOURCE_TIME),
+            ("BootEntropySourceAcpiOem0", BOOT_ENTROPY_SOURCE_ACPI_OEM0),
+            ("BootEntropySourceUefi", BOOT_ENTROPY_SOURCE_UEFI),
+            ("BootEntropySourceCng", BOOT_ENTROPY_SOURCE_CNG),
+            ("BootEntropySourceTcbTpm", BOOT_ENTROPY_SOURCE_TCB_TPM),
+            ("BootEntropySourceTcbRdrand", BOOT_ENTROPY_SOURCE_TCB_RDRAND),
+            ("BootMaxEntropySources", BOOT_MAX_ENTROPY_SOURCES as u32),
+        ])
+    );
+    assert_eq!(
+        values("_BOOT_ENTROPY_SOURCE_RESULT_CODE"),
+        named(&[
+            (
+                "BootEntropySourceStructureUninitialized",
+                BOOT_ENTROPY_SOURCE_STRUCTURE_UNINITIALIZED
+            ),
+            (
+                "BootEntropySourceDisabledByPolicy",
+                BOOT_ENTROPY_SOURCE_DISABLED_BY_POLICY
+            ),
+            (
+                "BootEntropySourceNotPresent",
+                BOOT_ENTROPY_SOURCE_NOT_PRESENT
+            ),
+            ("BootEntropySourceError", BOOT_ENTROPY_SOURCE_ERROR),
+            ("BootEntropySourceSuccess", BOOT_ENTROPY_SOURCE_SUCCESS),
+        ])
+    );
+}
