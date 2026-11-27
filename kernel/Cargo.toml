@@ -20,6 +20,7 @@ nk-bootinfo = { path = "../lib/bootinfo" }
 nk-disk = { path = "../lib/disk" }
 nk-etw = { path = "../lib/etw" }
 nk-ex = { path = "../lib/ex" }
+nk-fsrtl = { path = "../lib/fsrtl" }
 nk-hal = { path = "../lib/hal" }
 nk-ke = { path = "../lib/ke" }
 nk-mm = { path = "../lib/mm" }

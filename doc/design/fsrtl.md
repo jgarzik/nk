@@ -16,3 +16,18 @@ A file system registers its own filter callbacks
 object goes, as on Windows. The kernel calls them around the operations
 it starts on the file system's behalf, before it falls back to the
 fast-I/O dispatch entries and then to its own defaults.
+
+## Mapping control blocks
+
+A file system keeps, per file, which runs of its virtual blocks lie at
+which logical blocks of the volume in a `LARGE_MCB`
+(`kernel/fsrtl/mcb.rs`, rules in `nk_fsrtl::mcb`). The array of pairs
+and its mutex are pool blocks, as on Windows; numbers are cut to 32
+bits as Windows cuts them, and the map is always in Windows' one form
+(no empty runs, no two runs that continue each other, no hole at the
+end), so look-ups and enumerations report what Windows reports. A
+range added over runs that map it differently is refused. When memory
+runs out the routine raises `STATUS_INSUFFICIENT_RESOURCES` in its
+caller, entered through `nk_with_caller_context` so the exception
+starts in the file system's own frame. The array grows by doubling and
+never shrinks.

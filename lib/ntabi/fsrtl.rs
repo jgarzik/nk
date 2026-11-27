@@ -92,6 +92,27 @@ pub const fn with_fcb_header_version(reserved_and_version: u8, version: u8) -> u
     (reserved_and_version & 0x0F) | (version << 4)
 }
 
+/// `BASE_MCB` (`ntifs.h`): the mapping a `LARGE_MCB` holds. The public
+/// symbols do not describe it; the offsets are those the pinned kernel's
+/// MCB routines use.
+#[repr(C)]
+pub struct BASE_MCB {
+    pub MaximumPairCount: u32,
+    pub PairCount: u32,
+    pub PoolType: u16,
+    pub Flags: u16,
+    /// `MaximumPairCount` pairs of `{ NextVbn, Lbn }`, 32 bits each.
+    pub Mapping: *mut c_void,
+}
+
+/// `LARGE_MCB` (`ntifs.h`): a `BASE_MCB` with the mutex that guards it,
+/// which a file system embeds in its control blocks.
+#[repr(C)]
+pub struct LARGE_MCB {
+    pub GuardedMutex: *mut FAST_MUTEX,
+    pub BaseMcb: BASE_MCB,
+}
+
 const _: () = {
     use core::mem::{offset_of, size_of};
     assert!(size_of::<FSRTL_COMMON_FCB_HEADER>() == 0x30);
@@ -114,6 +135,14 @@ const _: () = {
     assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, FileContextSupportPointer) == 0x50);
     assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, Oplock) == 0x58);
     assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, ReservedContext) == 0x60);
+
+    assert!(size_of::<BASE_MCB>() == 0x18);
+    assert!(offset_of!(BASE_MCB, PairCount) == 0x04);
+    assert!(offset_of!(BASE_MCB, PoolType) == 0x08);
+    assert!(offset_of!(BASE_MCB, Flags) == 0x0A);
+    assert!(offset_of!(BASE_MCB, Mapping) == 0x10);
+    assert!(size_of::<LARGE_MCB>() == 0x20);
+    assert!(offset_of!(LARGE_MCB, BaseMcb) == 0x08);
 
     assert!(size_of::<FSRTL_PER_STREAM_CONTEXT>() == 0x28);
     assert!(offset_of!(FSRTL_PER_STREAM_CONTEXT, OwnerId) == 0x10);

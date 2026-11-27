@@ -134,6 +134,10 @@ nk_with_caller_context:
     nk_caller_context nk_entry_ProbeForRead, nk_probe_for_read
     nk_caller_context nk_entry_ProbeForWrite, nk_probe_for_write
     nk_caller_context nk_entry_MmProbeAndLockPages, nk_probe_and_lock_pages
+    nk_caller_context nk_entry_FsRtlInitializeLargeMcb, nk_fsrtl_initialize_large_mcb
+    nk_caller_context nk_entry_FsRtlAddLargeMcbEntry, nk_fsrtl_add_large_mcb_entry
+    nk_caller_context nk_entry_FsRtlRemoveLargeMcbEntry, nk_fsrtl_remove_large_mcb_entry
+    nk_caller_context nk_entry_FsRtlTruncateLargeMcb, nk_fsrtl_truncate_large_mcb
 
     .globl nk_guarded_call
 // rcx: a routine. rdx, r8, r9 and the fifth argument: its arguments.
@@ -310,6 +314,17 @@ unsafe extern "C" {
     pub fn nk_entry_ProbeForRead(address: *const c_void, length: usize, alignment: u32);
     pub fn nk_entry_ProbeForWrite(address: *mut c_void, length: usize, alignment: u32);
     pub fn nk_entry_MmProbeAndLockPages(mdl: *mut c_void, access_mode: i8, operation: u32);
+    pub fn nk_entry_FsRtlInitializeLargeMcb(mcb: *mut c_void, pool_type: u32);
+    pub fn nk_entry_FsRtlAddLargeMcbEntry(mcb: *mut c_void, vbn: i64, lbn: i64, count: i64) -> u8;
+    pub fn nk_entry_FsRtlRemoveLargeMcbEntry(mcb: *mut c_void, vbn: i64, count: i64);
+    pub fn nk_entry_FsRtlTruncateLargeMcb(mcb: *mut c_void, vbn: i64);
+}
+
+/// The fourth argument of a routine entered through
+/// `nk_with_caller_context`, which passes only the first three: the
+/// register it arrived in, as the context records it.
+pub fn fourth_argument(context: &Context) -> u64 {
+    context.R9
 }
 
 /// Call `routine` with `args` through the guarded frame.

@@ -9,6 +9,7 @@
 #![allow(non_snake_case)]
 
 pub mod filter;
+pub mod mcb;
 
 use crate::ex::pushlock;
 use crate::kd;
