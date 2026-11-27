@@ -78,6 +78,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
+| 32 | `ps::notify::TABLE` | the process-creation notify routines drivers have registered, and their kinds | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |

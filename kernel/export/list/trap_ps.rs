@@ -17,7 +17,5 @@ trap_list!(
     PsIsProtectedProcess,
     PsLookupProcessByProcessId,
     PsRevertToSelf,
-    PsSetCreateProcessNotifyRoutine,
-    PsSetCreateProcessNotifyRoutineEx2,
     PsUpdateComponentPower,
 );

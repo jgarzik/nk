@@ -150,6 +150,16 @@ type itself is real (`PsJobType`): a driver that asks for the job
 behind a handle is told the handle names another type of object, which
 is true of every handle there is.
 
+### Process notify routines
+
+Drivers register routines for process creation in a table of 64, as on
+Windows (`kernel/ps/notify.rs`): `PsSetCreateProcessNotifyRoutine`
+takes a routine of any loaded image, the `Ex2` form one of an image
+linked with `/INTEGRITYCHECK` (`STATUS_ACCESS_DENIED` otherwise),
+removal names the routine and its kind (`STATUS_PROCEDURE_NOT_FOUND`
+otherwise), and a full table is `STATUS_INVALID_PARAMETER`. NK creates
+no process but System, so no routine is called yet.
+
 ## Waits
 
 A thread waits on an event, semaphore, timer, mutex or thread by linking

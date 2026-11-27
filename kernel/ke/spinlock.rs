@@ -54,6 +54,9 @@ pub enum Rank {
     /// The routines registered with the kernel debugger for power
     /// transitions (`kd::debugger`).
     KdPower = 31,
+    /// The process-creation notify routines drivers registered
+    /// (`ps::notify`).
+    ProcessNotify = 32,
     /// The registry (`cm`).
     Registry = 33,
     /// The watches on registry keys (`cm::notify`).

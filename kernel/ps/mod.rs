@@ -5,6 +5,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod notify;
 pub mod process;
 pub mod silo;
 

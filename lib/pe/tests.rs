@@ -104,6 +104,7 @@ impl Builder {
         f[opt + 56..][..4].copy_from_slice(&IMAGE_SIZE.to_le_bytes());
         f[opt + 60..][..4].copy_from_slice(&0x400u32.to_le_bytes());
         f[opt + 68..][..2].copy_from_slice(&1u16.to_le_bytes());
+        f[opt + 70..][..2].copy_from_slice(&0x4160u16.to_le_bytes());
         f[opt + 108..][..4].copy_from_slice(&16u32.to_le_bytes());
         let mut dir = |i: usize, rva: u32, size: u32| {
             f[opt + 112 + 8 * i..][..4].copy_from_slice(&rva.to_le_bytes());
@@ -194,6 +195,7 @@ fn headers_and_sections() {
         (h.entry_rva, h.subsystem, h.section_alignment),
         (TEXT + 0x10, 1, 0x1000)
     );
+    assert_eq!(h.dll_characteristics, 0x4160);
     let s: Vec<Section> = pe.sections().collect();
     assert_eq!(s.len(), 2);
     assert_eq!(&s[0].name[..5], b".text");

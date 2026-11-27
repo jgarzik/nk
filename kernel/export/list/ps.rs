@@ -10,6 +10,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ps::PsGetHostSilo),
     export!(Implemented, ps::PsGetThreadHardErrorsAreDisabled),
     export!(Implemented, ps::PsSetThreadHardErrorsAreDisabled),
+    export!(Implemented, ps::notify::PsSetCreateProcessNotifyRoutine),
+    export!(Implemented, ps::notify::PsSetCreateProcessNotifyRoutineEx2),
     export!(Implemented, ps::IoSetThreadHardErrorMode),
     export!(Implemented, ps::silo::PsAllocSiloContextSlot),
     export!(Implemented, ps::silo::PsAttachSiloToCurrentThread),
