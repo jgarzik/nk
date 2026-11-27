@@ -134,3 +134,43 @@ Windows' x64 software PTE formats, `lib/mm/pte.rs`).
 - **Memory pressure.** When the frame bitmap is empty the oldest standby
   page is taken from its file. What that leaves unused is freed by the
   next memory-manager call, never under the PFN lock.
+
+## Designed, not yet built
+
+- **Page writers and trimming.** The mapped-page writer is a system
+  thread woken when the modified list passes a threshold or on a timer.
+  It takes pages of control areas without `NoModifiedWriting` off the
+  modified list, clustered by file offset (at most 16 pages per
+  write), acquires the file through FsRtl's acquire-for-mod-write, and
+  writes with `IoAsynchronousPageWrite` (flags `IRP_NOCACHE |
+  IRP_PAGING_IO`, 0x3, no event). Completion is a special kernel APC to
+  the writer thread (`IopCompletePageWrite`), which settles the pages as
+  a flush does. It never writes modified-no-write pages. With no paging
+  file, the modified-page writer has nothing to write and does not
+  exist. The trimmer takes valid pages out of system-cache views the
+  cache manager holds inactive, oldest first, when available pages fall
+  below a low mark; the cache manager's own unmapping of inactive views
+  is the first relief. Both wait for kernel APCs and for the thresholds
+  and aging read from the pinned kernel (`MiMappedPageWriter`,
+  `MiGatherMappedPages`, `MiTrimWorkingSet`).
+- **Image sections.** A separate control area hangs from
+  `SectionObjectPointer->ImageSectionObject`. The PE headers are read at
+  creation through a paging read; each PE section becomes a subsection
+  with its protection; pages are shared read-only across mappings and
+  writable sections are copy-on-write; relocation happens as pages are
+  read when the image cannot load at its preferred base. Views go
+  through VADs. NK's loader keeps loading drivers itself unless a binary
+  can tell. Until then `ImageSectionObject` is always null, and the
+  routines that would delete an image section (`MmFlushImageSection`,
+  the first step of `MmCanFileBeTruncated`) find none.
+- **User address spaces (VADs).** One address space per process: the
+  page-table root (`KPROCESS.DirectoryTableBase`), an AVL tree of VADs
+  keyed by page number (private, mapped, image), a working set, and the
+  address-creation push lock taken before the PFN lock. Faults in the
+  user half go through the same resolver; one with no VAD raises
+  `STATUS_ACCESS_VIOLATION`. `Nt/ZwAllocateVirtualMemory`,
+  `MmMapViewOfSection` and their kin build on VADs. Paging-file-backed
+  sections are anonymous memory committed against RAM: with no paging
+  file, anonymous pages are never written out or trimmed, and a commit
+  beyond physical memory less a reserve fails with
+  `STATUS_COMMITMENT_LIMIT`.
