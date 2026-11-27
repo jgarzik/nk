@@ -41,7 +41,7 @@ LAYOUTS = {
 }
 
 # What a scenario's `disk_expect` may name for such a disk.
-CHECKS = {"fat-unchanged", "fat-written"}
+CHECKS = {"fat-unchanged", "fat-written", "fat-lazy"}
 
 
 def pattern(length):
@@ -68,6 +68,8 @@ FILES = {
 WRITE_FROM, WRITE_TO = 192 * 1024, 392 * 1024
 OVERWRITE_AT, OVERWRITE = 300 * 1024, 1024
 CUT_TO = 350 * 1024
+# What fat.lazy leaves: a new file of the same pattern, never flushed.
+LAZY_LENGTH = 100 * 1024
 
 
 def written_file():
@@ -83,6 +85,10 @@ def expected(expect):
     """The files the volume must hold after a boot checked as `expect`."""
     if expect == "fat-unchanged":
         return dict(FILES)
+    if expect == "fat-lazy":
+        files = dict(FILES)
+        files["LAZY.BIN"] = bytes((at * 7 + 3) % 251 for at in range(LAZY_LENGTH))
+        return files
     files = {name: data for name, data in FILES.items() if name not in ("HELLO.TXT", "EMPTY.TXT")}
     files["RENAMED.TXT"] = FILES["EMPTY.TXT"]
     files["NKWRITE.BIN"] = written_file()

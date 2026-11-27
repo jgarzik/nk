@@ -24,8 +24,16 @@ pub static WRITE: Group = Group {
     manual: true,
 };
 
+/// Writing left to the lazy writer: a scenario of its own, its image
+/// checked for what only the lazy writer and the shutdown flush write.
+pub static LAZY: Group = Group {
+    names: &["fat.lazy"],
+    run: run_lazy,
+    manual: true,
+};
+
 /// This file's test groups, in the order they run.
-pub static GROUPS: &[&Group] = &[&GROUP, &WRITE];
+pub static GROUPS: &[&Group] = &[&GROUP, &WRITE, &LAZY];
 
 /// `GENERIC_READ | SYNCHRONIZE`.
 const READ: u32 = 0x8010_0000;
@@ -273,5 +281,33 @@ fn write() -> Result<(), &'static str> {
         file::set_information(doomed, FILE_DISPOSITION_INFORMATION, &[1]),
     );
     file::close(doomed);
+    result
+}
+
+/// What `fat.lazy` leaves: `LAZY.BIN`, `LAZY_LENGTH` bytes of
+/// [`written`]'s pattern, never flushed by the test.
+const LAZY_LENGTH: usize = 100 * 1024;
+
+fn run_lazy(r: &mut Report, _: &BootInfo) {
+    crate::test::keeps_what_it_started();
+    if crate::ldr::boot_file("fastfat.sys").is_none() {
+        r.skip_rest(format_args!("module fastfat.sys not provided"));
+        return;
+    }
+    if let Err(why) = super::volumes::arrives("\\GLOBAL??\\C:") {
+        r.fail("fat.lazy", format_args!("{why}"));
+        return;
+    }
+    r.check("fat.lazy", lazy);
+}
+
+/// A file written and closed with no flush: only the cache manager's
+/// lazy writer, or its flush at shutdown, puts it on the disk, which
+/// the host checks after the boot (`fat-lazy`).
+fn lazy() -> Result<(), &'static str> {
+    let handle = open_rw("\\??\\C:\\LAZY.BIN", FILE_CREATE)?;
+    let data: alloc::vec::Vec<u8> = (0..LAZY_LENGTH).map(written).collect();
+    let result = must("write", file::write_at(handle, 0, &data));
+    file::close(handle);
     result
 }

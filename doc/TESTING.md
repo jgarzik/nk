@@ -494,6 +494,11 @@ check to that without booting.
   `HELLO.TXT` deleted. `disk_expect = "fat-written"` then requires
   `fsck.fat` to find the volume clean and every file, the new one
   included, to hold what `tools/fatdisk.py` (`expected`) says.
+- `x86_64-fat-write-gpt`: the same writes on the GPT disk.
+- `x86_64-fat-lazy` (`test=fat.lazy`): a file written and closed with
+  no flush, so only the cache manager's lazy writer, or its flush at
+  shutdown, writes it; `disk_expect = "fat-lazy"` requires it on the
+  disk, the volume clean.
 
 - `x86_64-crypto-boot` (`test=crypto.boot`, `registry = ["crypto"]`,
   `kernel/selftest/crypto.rs`): Microsoft's performance-counter,
