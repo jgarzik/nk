@@ -181,13 +181,15 @@ pub unsafe extern "C" fn ZwNotifyChangeKey(
         core::ptr::null_mut()
     } else {
         match handle::reference(event as u64, Some(&raw const object::EVENT_TYPE)) {
-            Ok(body) => body,
+            // The watch's reference from here: given up when it fires
+            // or goes.
+            Ok(body) => body.into_raw(),
             Err(status) => return status,
         }
     };
     let watch = Watch {
         key: held.key().index(),
-        owner: held.body.addr(),
+        owner: held.body().addr(),
         filter,
         subtree: watch_tree != 0,
         what: Telling {

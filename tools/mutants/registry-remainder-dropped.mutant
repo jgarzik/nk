@@ -3,5 +3,5 @@
 scenario: aarch64
 fails: cm.namespace
 file: kernel/cm/mod.rs
-replace:     Ok((unsafe { key_object(body) }?, rest))
-with:     Ok((unsafe { key_object(body) }?, Vec::new()))
+replace:     Ok((key_object(unsafe { ObRef::adopt(body) })?, rest))
+with:     Ok((key_object(unsafe { ObRef::adopt(body) })?, Vec::new()))

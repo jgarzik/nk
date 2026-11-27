@@ -23,7 +23,7 @@
 
 #![allow(non_snake_case)]
 
-use super::object::{self, ObjectType};
+use super::object::{self, ObRef, ObjectType};
 use crate::ke::{Rank, SpinLock};
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
@@ -135,7 +135,7 @@ pub struct Information {
 /// The object a handle names, with a new reference for the caller, if
 /// it is of type `ty` (or of any type, given none). For kernel mode:
 /// the handle's access is not looked at.
-pub fn reference(handle: u64, ty: Option<*const ObjectType>) -> Result<*mut u8, NTSTATUS> {
+pub fn reference(handle: u64, ty: Option<*const ObjectType>) -> Result<ObRef, NTSTATUS> {
     reference_for(handle, ty, 0, Mode::Kernel).map(|(body, _)| body)
 }
 
@@ -148,7 +148,7 @@ pub fn reference_for(
     ty: Option<*const ObjectType>,
     desired: u32,
     mode: Mode,
-) -> Result<(*mut u8, Information), NTSTATUS> {
+) -> Result<(ObRef, Information), NTSTATUS> {
     let current = match handle {
         CURRENT_THREAD => Some((
             crate::ke::thread::current().cast::<u8>(),
@@ -166,7 +166,7 @@ pub fn reference_for(
         }
         // SAFETY: the running thread holds a reference on itself, and
         // the System process lives for ever.
-        unsafe { object::reference(body) };
+        let body = unsafe { ObRef::new(body) };
         let information = Information {
             granted: ALL_ACCESS,
             attributes: Attributes::default(),
@@ -178,12 +178,12 @@ pub fn reference_for(
     let Entry(body) = table.reference(index, desired, mode).map_err(status)?;
     // SAFETY: the table holds a reference, and its lock is held, so the
     // object cannot go away before the new reference is taken.
-    unsafe {
+    let body = unsafe {
         if ty.is_some_and(|ty| !core::ptr::eq(ty, object::type_of(*body))) {
             return Err(STATUS_OBJECT_TYPE_MISMATCH);
         }
-        object::reference(*body);
-    }
+        ObRef::new(*body)
+    };
     let information = table.get(index).map_or(
         Information {
             granted: 0,
@@ -194,7 +194,7 @@ pub fn reference_for(
             attributes: open.attributes,
         },
     );
-    Ok((*body, information))
+    Ok((body, information))
 }
 
 /// Close a handle on the kernel's own behalf: what `ZwClose` returns.
@@ -269,7 +269,8 @@ pub unsafe extern "C" fn ObReferenceObjectByHandle(
     unsafe {
         match reference_for(handle as u64, wanted, desired_access, mode) {
             Ok((body, information)) => {
-                object.write_unaligned(body.cast());
+                // The driver's reference now.
+                object.write_unaligned(body.into_raw().cast());
                 if !handle_information.is_null() {
                     // `HandleAttributes`, then `GrantedAccess`.
                     let mut attributes = 0;
@@ -594,13 +595,13 @@ pub fn thread_test() -> Result<u32, &'static str> {
         object::dereference(long.cast());
         let by_handle = reference(handle, Some(&raw const object::THREAD_TYPE))
             .map_err(|_| "a handle to a thread did not give it back")?;
-        if by_handle != long.cast() || join(long, None) != wait::STATUS_SUCCESS {
+        if by_handle.body() != long.cast() || join(long, None) != wait::STATUS_SUCCESS {
             return Err("a thread could not be waited for through its handle");
         }
         if time::interrupt_time() - started < 3_000_000 {
             return Err("a wait for a thread returned before the thread ended");
         }
-        object::dereference(by_handle);
+        drop(by_handle);
         if close(handle) != STATUS_SUCCESS {
             return Err("the thread's handle could not be closed");
         }
@@ -837,10 +838,7 @@ pub fn protected_close_test(armed: impl FnOnce()) -> &'static str {
         return "user mode was not told that a protected handle cannot be closed";
     }
     match reference(handle, None) {
-        // SAFETY: the reference the look-up took.
-        Ok(found) if found == body => unsafe {
-            object::dereference(found);
-        },
+        Ok(found) if found.body() == body => {}
         _ => return "a protected handle user mode tried to close no longer names its object",
     }
     armed();

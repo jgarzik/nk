@@ -29,6 +29,7 @@ pub use helper::{
 pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
 use crate::ke::{Rank, SpinLock};
+use crate::ob::object::ObRef;
 use crate::ob::{handle, object};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -273,7 +274,7 @@ fn status(error: Error) -> NTSTATUS {
 /// Dropped with the registry's lock released: the object's last
 /// reference going takes that lock ([`closed`]).
 struct Held {
-    body: *mut u8,
+    body: ObRef,
     key: KeyId,
 }
 
@@ -281,12 +282,9 @@ impl Held {
     fn key(&self) -> KeyId {
         self.key
     }
-}
 
-impl Drop for Held {
-    fn drop(&mut self) {
-        // SAFETY: the reference this was made with.
-        unsafe { object::dereference(self.body) };
+    fn body(&self) -> *mut u8 {
+        self.body.body()
     }
 }
 
@@ -329,21 +327,17 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>)
         return absolute(&path);
     }
     let root = handle::reference(root as u64, None)?;
-    let (body, path) = if is(root, &object::DIRECTORY_TYPE) {
-        let found = crate::ob::lookup(Some(root), &path);
-        // SAFETY: the reference taken above.
-        unsafe { object::dereference(root) };
-        found?
+    let (body, path) = if is(root.body(), &object::DIRECTORY_TYPE) {
+        let (found, rest) = crate::ob::lookup(Some(root.body()), &path)?;
+        // SAFETY: the reference the look-up took.
+        (unsafe { ObRef::adopt(found) }, rest)
     } else if path.first() == Some(&u16::from(b'\\')) {
         // Relative to an open object: not from the top.
-        // SAFETY: the reference taken above.
-        unsafe { object::dereference(root) };
         return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
     } else {
         (root, path)
     };
-    // SAFETY: the reference the look-up or the handle gave.
-    Ok((unsafe { key_object(body) }?, path))
+    Ok((key_object(body)?, path))
 }
 
 /// Whether the object `body` is of the type `ty`.
@@ -354,14 +348,8 @@ fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
 
 /// The key the object `body` is, held by the caller's reference. What
 /// leads elsewhere in the namespace names no key.
-///
-/// # Safety
-/// The caller holds a reference to `body`, which is given up here or
-/// when what is returned is dropped.
-unsafe fn key_object(body: *mut u8) -> Result<Held, NTSTATUS> {
-    if !is(body, &object::KEY_TYPE) {
-        // SAFETY: per the contract.
-        unsafe { object::dereference(body) };
+fn key_object(body: ObRef) -> Result<Held, NTSTATUS> {
+    if !is(body.body(), &object::KEY_TYPE) {
         return Err(STATUS_OBJECT_TYPE_MISMATCH);
     }
     // SAFETY: per the contract; a key object's body is the key's
@@ -377,7 +365,7 @@ unsafe fn key_object(body: *mut u8) -> Result<Held, NTSTATUS> {
 fn absolute(path: &[u16]) -> Result<(Held, Vec<u16>), NTSTATUS> {
     let (body, rest) = crate::ob::lookup(None, path)?;
     // SAFETY: the reference the look-up took.
-    Ok((unsafe { key_object(body) }?, rest))
+    Ok((key_object(unsafe { ObRef::adopt(body) })?, rest))
 }
 
 /// A handle to `key`, granted `access`. The caller has counted the key

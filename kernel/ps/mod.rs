@@ -148,10 +148,7 @@ pub extern "C" fn ZwAlertThread(thread_handle: *mut c_void) -> NTSTATUS {
         Ok((thread, _)) => {
             // SAFETY: a thread, referenced by the look-up until the
             // alert is made.
-            unsafe {
-                crate::ke::wait::alert(thread.cast(), nk_ntabi::io::KERNEL_MODE);
-                object::dereference(thread);
-            }
+            unsafe { crate::ke::wait::alert(thread.cast(), nk_ntabi::io::KERNEL_MODE) };
             STATUS_SUCCESS
         }
         Err(status) => status,
@@ -179,12 +176,7 @@ fn with_thread(
         nk_ob::handles::Mode::Kernel,
     );
     match found {
-        Ok((body, _)) => {
-            let status = set(body.cast());
-            // SAFETY: the reference the look-up took.
-            unsafe { object::dereference(body) };
-            status
-        }
+        Ok((body, _)) => set(body.cast()),
         Err(status) => status,
     }
 }

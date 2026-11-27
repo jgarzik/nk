@@ -1086,8 +1086,8 @@ fn cleanup_then_close(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     // SAFETY: the reference taken above keeps the object.
     let flags = unsafe { (*file).Flags };
     let cleanup_at = CLEANUP_AT.load(Ordering::Acquire);
-    // SAFETY: the reference taken above, given up: the last one.
-    unsafe { object::dereference(held) };
+    // The reference taken above, given up: the last one.
+    drop(held);
     if after_handles.0 != cleanups + 2 {
         return Err("the last handle's closing did not send the driver a cleanup");
     }
@@ -1123,8 +1123,8 @@ fn deferred_close(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     };
     let closed = file::close(only);
     let old = irql::raise(irql::DISPATCH_LEVEL);
-    // SAFETY: the reference taken above, given up: the last one.
-    unsafe { object::dereference(held) };
+    // The reference taken above, given up: the last one.
+    drop(held);
     irql::lower(old);
     if closed != STATUS_SUCCESS {
         return Err("the handle of a file with a reference left did not close");

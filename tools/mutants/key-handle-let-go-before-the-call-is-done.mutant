@@ -5,4 +5,4 @@ scenario: x86_64
 fails: cm.delete.closed-in-call
 file: kernel/cm/mod.rs
 replace:     Ok(Held { body, key })
-with:     Ok(Held { body: unsafe { object::dereference(body); object::reference(crate::ps::process::system()); crate::ps::process::system() }, key })
+with:     Ok(Held { body: { drop(body); unsafe { ObRef::new(crate::ps::process::system()) } }, key })

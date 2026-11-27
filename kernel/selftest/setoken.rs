@@ -1703,14 +1703,8 @@ fn open_thread_token() -> (i32, *mut c_void) {
 /// The object a token handle names; the reference taken to find it is
 /// given up again, the handle keeps the object.
 fn token_of(handle: *mut c_void) -> *mut c_void {
-    match crate::ob::handle::reference(handle as u64, None) {
-        Ok(body) => {
-            // SAFETY: the reference just taken.
-            unsafe { object::dereference(body) };
-            body.cast()
-        }
-        Err(_) => core::ptr::null_mut(),
-    }
+    crate::ob::handle::reference(handle as u64, None)
+        .map_or(core::ptr::null_mut(), |body| body.cast())
 }
 
 /// A thread takes on a token, is seen to wear it by every routine that

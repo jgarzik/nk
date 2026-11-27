@@ -211,10 +211,11 @@ pub unsafe extern "C" fn ZwWaitForSingleObject(
     alertable: u8,
     timeout: *const i64,
 ) -> NTSTATUS {
-    let body = match handle::reference_for(handle as u64, None, SYNCHRONIZE, Mode::Kernel) {
-        Ok((body, _)) => body,
+    let held = match handle::reference_for(handle as u64, None, SYNCHRONIZE, Mode::Kernel) {
+        Ok((held, _)) => held,
         Err(status) => return status,
     };
+    let body = held.body();
     // SAFETY: the object is referenced until the wait is over; its
     // type says its body is a dispatcher object; per the contract for
     // the timeout.
@@ -230,9 +231,7 @@ pub unsafe extern "C" fn ZwWaitForSingleObject(
             ));
         }
         let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
-        let status = wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0);
-        object::dereference(body);
-        status as NTSTATUS
+        wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0) as NTSTATUS
     }
 }
 

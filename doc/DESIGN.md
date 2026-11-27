@@ -1044,6 +1044,12 @@ already has, if it is of the type named (`STATUS_OBJECT_TYPE_MISMATCH`
 otherwise, for either mode); with no type named it does so for kernel
 mode only, as the pinned kernel decides it.
 
+Inside the kernel a pointer reference a function takes and gives up
+itself is an `ob::object::ObRef`, which gives it up when dropped, on
+every path out; `into_raw` hands it on to whatever keeps it (a handle,
+a driver, a watch). The handle look-ups (`ob::handle::reference`,
+`reference_for`) return one.
+
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index
 numbers are NK's own. An object's header names its type as Windows 10

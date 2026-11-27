@@ -5,7 +5,7 @@
 #![allow(non_snake_case)]
 
 use super::handle::{self, OBJ_KERNEL_HANDLE};
-use super::object;
+use super::object::{self, ObRef};
 use core::ffi::c_void;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
@@ -91,7 +91,7 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
             Err(status) => return status,
         }
     };
-    let made = match start {
+    let made = match start.as_ref().map(ObRef::body) {
         // SAFETY: the reference just taken.
         Some(start) if !unsafe { is(start, &object::DIRECTORY_TYPE) } => {
             let parses = [&object::DEVICE_TYPE, &object::FILE_TYPE, &object::KEY_TYPE]
@@ -104,17 +104,14 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
                 STATUS_INVALID_HANDLE
             })
         }
-        _ => super::create_directory(
+        start => super::create_directory(
             start,
             &name,
             attributes & OBJ_PERMANENT != 0,
             attributes & OBJ_OPENIF != 0,
         ),
     };
-    if let Some(start) = start {
-        // SAFETY: the reference taken above.
-        unsafe { object::dereference(start) };
-    }
+    drop(start);
     // SAFETY: per the contract for the handle; `body` is the reference
     // the directory came with, given up once the handle holds it.
     unsafe {
@@ -168,10 +165,11 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
 /// takes it away again; making one temporary by handle stops the
 /// system by name: the ledger's "partial".
 pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
-    let body = match handle::reference(handle as u64, None) {
-        Ok(body) => body,
+    let held = match handle::reference(handle as u64, None) {
+        Ok(held) => held,
         Err(status) => return status,
     };
+    let body = held.body();
     // SAFETY: the reference just taken, given up at the end.
     unsafe {
         let ty = object::type_of(body);
@@ -186,7 +184,6 @@ pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
                  implemented"
             ));
         }
-        object::dereference(body);
     }
     STATUS_SUCCESS
 }
@@ -297,11 +294,9 @@ pub fn directory_test() -> Result<u32, &'static str> {
         );
         // SAFETY: the event's header says where it is.
         let in_disk = unsafe { (*object::name_info(event)).Directory.cast::<u8>() };
-        let disk_body = handle::reference(disk, None).unwrap_or(core::ptr::null_mut());
-        if !disk_body.is_null() {
-            // SAFETY: the reference just taken; the handle keeps it.
-            unsafe { object::dereference(disk_body) };
-        }
+        // The handle keeps the directory once the reference goes.
+        let disk_body =
+            handle::reference(disk, None).map_or(core::ptr::null_mut(), |held| held.body());
         // SAFETY: the running thread, an object nothing is below.
         let thread = unsafe { handle::open(crate::ke::thread::current().cast(), 0) }.unwrap_or(0);
         let refused = [
