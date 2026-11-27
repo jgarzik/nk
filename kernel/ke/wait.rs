@@ -1077,11 +1077,13 @@ pub fn alert_test() -> Result<u32, &'static str> {
             Err(_) => Err("no memory for a handle"),
         }
     };
+    // Ten seconds for a thread whose own waits end within five: a
+    // thread an alert left asleep must fail the test, not hang it.
     let end = |(ended, opened): (*mut thread::Thread, u64)| {
         // SAFETY: a thread this test holds a reference to, which it
         // gives up here.
         unsafe {
-            let status = wait(Some(ended.cast()), None);
+            let status = wait(Some(ended.cast()), Some(-100_000_000));
             object::dereference(ended.cast());
             handle::close(opened);
             status
@@ -1184,7 +1186,9 @@ pub fn alert_test() -> Result<u32, &'static str> {
     };
     let no_handle = ZwAlertThread(core::ptr::null_mut());
 
-    settle(before);
+    // Bounded: a thread an alert should have woken may never end, and
+    // the checks below then say why.
+    let settled = thread::settle_within(before, 100_000_000);
     if alerted_it != 0 || ended != STATUS_SUCCESS || in_wait[0] != STATUS_ALERTED {
         return Err("an alert did not end an alertable wait with STATUS_ALERTED");
     }
@@ -1213,6 +1217,9 @@ pub fn alert_test() -> Result<u32, &'static str> {
     }
     if not_a_thread != STATUS_OBJECT_TYPE_MISMATCH || no_handle != STATUS_INVALID_HANDLE {
         return Err("something that is not a thread was alerted");
+    }
+    if !settled {
+        return Err("a thread the test started did not end");
     }
     Ok(19)
 }

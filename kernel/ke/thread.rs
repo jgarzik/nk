@@ -1087,6 +1087,21 @@ pub fn settle(threads: u32) {
     }
 }
 
+/// [`settle`], for at most `ticks` of interrupt time (100 ns each): for
+/// a test that has already failed, whose threads may never end. Says
+/// whether the count came back.
+pub fn settle_within(threads: u32, ticks: u64) -> bool {
+    let until = super::time::interrupt_time() + ticks;
+    while count() != threads {
+        if super::time::interrupt_time() > until {
+            return false;
+        }
+        yield_now();
+        core::hint::spin_loop();
+    }
+    true
+}
+
 /// Threads are created, run on their own stacks at PASSIVE_LEVEL as the
 /// current thread, exit, and leave nothing behind. Returns how many ran.
 pub fn lifecycle_test() -> Result<u32, &'static str> {
@@ -1853,17 +1868,23 @@ pub fn preempt_test() -> Result<(), &'static str> {
     let after_higher = TRACE.load(Ordering::Acquire);
     // SAFETY: the lower thread is still on this processor's queue.
     let moved = unsafe { raise_ready(NORMAL_PRIORITY - 1, NORMAL_PRIORITY) };
-    settle(before);
-    if !moved {
-        return Err("the ready thread of lower priority was not on this processor's queue");
+    let verdict = if !moved {
+        Err("the ready thread of lower priority was not on this processor's queue")
+    } else if after_lower != 0 {
+        Err("a thread of lower priority ran ahead of its creator")
+    } else if after_higher != 0x2 {
+        Err("a thread of higher priority did not run as soon as it was ready")
+    } else {
+        Ok(())
+    };
+    // A scheduler that failed the checks may never run the threads:
+    // the failure is reported whether or not they end.
+    if verdict.is_ok() {
+        settle(before);
+    } else {
+        settle_within(before, 10_000_000);
     }
-    if after_lower != 0 {
-        return Err("a thread of lower priority ran ahead of its creator");
-    }
-    if after_higher != 0x2 {
-        return Err("a thread of higher priority did not run as soon as it was ready");
-    }
-    Ok(())
+    verdict
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
