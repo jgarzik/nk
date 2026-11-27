@@ -18,6 +18,7 @@ pub mod convert;
 pub mod counted;
 pub mod crt;
 pub mod dbgfilter;
+pub mod doserror;
 pub mod fatname;
 pub mod format;
 pub mod gen83;

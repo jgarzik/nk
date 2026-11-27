@@ -13,6 +13,7 @@ pub mod name;
 pub mod nls;
 pub mod oem;
 pub mod once;
+pub mod persist;
 pub mod prefix;
 pub mod print;
 pub mod range;
@@ -133,4 +134,19 @@ pub unsafe extern "C" fn RtlGetVersion(info: *mut RTL_OSVERSIONINFOEXW) -> NTSTA
         }
     }
     STATUS_SUCCESS
+}
+
+/// [`RtlNtStatusToDosErrorNoTeb`](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-rtlntstatustodoserror):
+/// the Windows error code for `status`, by the pinned kernel's table
+/// (`nk_rtl::doserror`).
+pub extern "C" fn RtlNtStatusToDosErrorNoTeb(status: NTSTATUS) -> u32 {
+    nk_rtl::doserror::dos_error(status as u32)
+}
+
+/// [`RtlNtStatusToDosError`](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-rtlntstatustodoserror):
+/// the same. Windows also keeps `status` as the last status in the
+/// calling thread's TEB; NK's threads have no TEB, as Windows' system
+/// threads have none, and for those Windows keeps nothing either.
+pub extern "C" fn RtlNtStatusToDosError(status: NTSTATUS) -> u32 {
+    RtlNtStatusToDosErrorNoTeb(status)
 }

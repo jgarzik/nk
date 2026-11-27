@@ -155,3 +155,17 @@ its flags, a copy of the entry raises the count, an entry freed
 lowers it and frees the block at zero, as the pinned kernel does. An
 alignment of zero is refused by `RtlFindRange`; Windows divides by it.
 The caller serialises the calls on one list.
+
+### Status codes and persisted state
+
+`RtlNtStatusToDosError` and its `NoTeb` form give the Windows error
+code of a status code by the pinned kernel's rules and its own table
+(`nk_rtl::doserror`; `lib/rtl/doserror_table.rs` is written from the
+pinned `ntoskrnl.exe` by `tools/doserror.py`). NK's threads have no
+TEB, so the first keeps no last status, as for Windows' system threads.
+
+`RtlGetPersistedStateLocation` (`kernel/rtl/persist.rs`) follows the
+state-separation redirection maps under
+`Control\StateSeparation\RedirectionMap` when the registry has them,
+and gives the caller's default path when it has not, as Windows does;
+once a map is found absent it is not looked for again.
