@@ -34,6 +34,28 @@ acquisition leaves the critical region; a post-operation callback
 follows a pre-operation callback that succeeded. The device asked is
 the file system's own; NK attaches no filter to a file system.
 
+## Fast I/O through the cache
+
+`FsRtlCopyRead`, `FsRtlCopyWrite`, `FsRtlMdlReadDev`,
+`FsRtlPrepareMdlWriteDev` and their completions (`kernel/fsrtl/fastio.rs`)
+are what a file system's fast-I/O table points at, as the pinned kernel
+does them: FALSE (the caller sends an IRP) when a top-level IRP is set;
+the FCB header's main resource inside a critical region, shared, or
+exclusive for a write that appends or passes the valid data length;
+FALSE unless the file is cached and fast I/O possible; reads clamped to
+the file size (at or past it, TRUE with `STATUS_END_OF_FILE`); writes
+refused when the cache manager throttles them, through a write-through
+file object, at 16 MiB or more, past the allocation size or more than
+8 KiB beyond the valid data length. A write zeroes the gap below it,
+raises the file size first under the paging resource and puts it back
+on failure, and on success raises the valid data length and the cache
+map's file size and marks the file object. The top-level IRP is
+`FSRTL_FAST_IO_TOP_LEVEL_IRP` around the cache manager's call, and a
+failure there is FALSE. NK's difference: a file whose fast I/O is
+questionable takes the IRP path at once, where Windows first asks the
+file system's eight-argument `FastIoCheckIfPossible`, more arguments than
+NK's guarded call into a driver passes.
+
 ## Mapping control blocks
 
 A file system keeps, per file, which runs of its virtual blocks lie at

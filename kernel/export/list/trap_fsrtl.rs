@@ -7,18 +7,12 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    FsRtlCopyRead,
-    FsRtlCopyWrite,
     FsRtlDismountComplete,
     FsRtlGetSectorSizeInformation,
-    FsRtlMdlReadCompleteDev,
-    FsRtlMdlReadDev,
-    FsRtlMdlWriteCompleteDev,
     FsRtlNotifyFullChangeDirectory,
     FsRtlOplockFsctrl,
     FsRtlPostPagingFileStackOverflow,
     FsRtlPostStackOverflow,
-    FsRtlPrepareMdlWriteDev,
     FsRtlPrivateLock,
     FsRtlProcessFileLock,
 );

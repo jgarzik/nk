@@ -10,6 +10,7 @@
 
 pub mod acquire;
 pub mod device;
+pub mod fastio;
 pub mod filter;
 pub mod lock;
 pub mod mcb;

@@ -6,6 +6,16 @@ use crate::fsrtl;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, fsrtl::FsRtlIsSystemPagingFile),
+    export!(Implemented, fsrtl::fastio::FsRtlCopyRead),
+    export!(Implemented, fsrtl::fastio::FsRtlCopyWrite),
+    export!(Implemented, fsrtl::fastio::FsRtlMdlReadDev),
+    export!(Implemented, fsrtl::fastio::FsRtlMdlReadCompleteDev),
+    export!(Implemented, fsrtl::fastio::FsRtlPrepareMdlWriteDev),
+    export_entry!(
+        Implemented,
+        "FsRtlMdlWriteCompleteDev",
+        arch::seh::nk_entry_FsRtlMdlWriteCompleteDev
+    ),
     export!(Partial, fsrtl::FsRtlGetVirtualDiskNestingLevel),
     export!(Implemented, fsrtl::FsRtlTeardownPerStreamContexts),
     export!(

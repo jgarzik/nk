@@ -285,7 +285,7 @@ unsafe extern "C" fn nk_cc_zero_data(
 ///
 /// # Safety
 /// `file` is a live file object of a file system.
-unsafe fn zero_data(
+pub unsafe fn zero_data(
     file: *mut FILE_OBJECT,
     start: u64,
     end: u64,

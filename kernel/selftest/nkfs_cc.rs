@@ -39,6 +39,9 @@ static CC: Group = Group {
         "cc.purge",
         "cc.sizes",
         "cc.attributes",
+        "cc.fast-read",
+        "cc.fast-write",
+        "cc.fast-mdl",
         "cc.lazy-write",
         "cc.defer-write",
         "cc.lazy-close",
@@ -860,6 +863,7 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
         }
     };
     verdicts.push(("cc.attributes", attributes));
+    fast_paths(volume, verdicts);
 
     // Dirty data is written by the lazy writer within the first delay
     // and a second, through the file system's callbacks.
@@ -978,4 +982,191 @@ fn wait_twice() -> Result<(), &'static str> {
         crate::ke::thread::yield_now();
     }
     Ok(())
+}
+
+/// The fast-I/O paths of FsRtl over the cache, the file's fast I/O
+/// possible.
+fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
+    use crate::fsrtl::fastio;
+    use nk_ntabi::cc::{FO_FILE_FAST_IO_READ, FO_FILE_MODIFIED};
+    let file = volume.file;
+    let sop = volume.sop();
+    let fcb = volume.fcb();
+    // SAFETY: nkfs's header, the test's.
+    unsafe { (*fcb).header.Common.IsFastIoPossible = 1 };
+    let mut iosb = IO_STATUS_BLOCK {
+        Status: STATUS_PENDING,
+        Information: 0,
+    };
+    let read = {
+        let mut buffer = [0u8; 0x100];
+        let offset = 0x40000i64;
+        // SAFETY: a cached nkfs file; buffer and block on this stack.
+        let ok = unsafe {
+            fastio::FsRtlCopyRead(
+                file,
+                &raw const offset,
+                0x100,
+                1,
+                0,
+                buffer.as_mut_ptr().cast(),
+                &raw mut iosb,
+                core::ptr::null_mut(),
+            )
+        };
+        // SAFETY: nkfs's file object.
+        let (flags, position) = unsafe { ((*file).Flags, (*file).CurrentByteOffset) };
+        let good = (0..0x100).all(|i| buffer[i] == nkfs::pattern(0x40000 + i));
+        let end = nkfs::FILE_BYTES as i64;
+        let mut eof = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: 0,
+        };
+        // SAFETY: as above.
+        let at_end = unsafe {
+            fastio::FsRtlCopyRead(
+                file,
+                &raw const end,
+                0x10,
+                1,
+                0,
+                buffer.as_mut_ptr().cast(),
+                &raw mut eof,
+                core::ptr::null_mut(),
+            )
+        };
+        // SAFETY: as above.
+        unsafe { (*fcb).header.Common.IsFastIoPossible = 0 };
+        // SAFETY: as above.
+        let refused = unsafe {
+            fastio::FsRtlCopyRead(
+                file,
+                &raw const offset,
+                0x10,
+                1,
+                0,
+                buffer.as_mut_ptr().cast(),
+                &raw mut eof,
+                core::ptr::null_mut(),
+            )
+        };
+        // SAFETY: as above.
+        unsafe { (*fcb).header.Common.IsFastIoPossible = 1 };
+        nkfs::take_log();
+        if ok != 1 || iosb.Information != 0x100 || !good {
+            Err("FsRtlCopyRead did not read through the cache")
+        } else if flags & FO_FILE_FAST_IO_READ == 0 || position != 0x40100 {
+            Err("FsRtlCopyRead did not mark the file object and move its position")
+        } else if at_end != 1 || eof.Status != STATUS_END_OF_FILE {
+            Err("FsRtlCopyRead at the end of the file did not return TRUE with STATUS_END_OF_FILE")
+        } else if refused != 0 {
+            Err("FsRtlCopyRead read with fast I/O not possible")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.fast-read", read));
+
+    let write = {
+        let offset = 0x41000i64;
+        let bytes = [0x5D_u8; 0x10];
+        // SAFETY: as above.
+        let ok = unsafe {
+            fastio::FsRtlCopyWrite(
+                file,
+                &raw const offset,
+                0x10,
+                1,
+                0,
+                bytes.as_ptr().cast_mut().cast(),
+                &raw mut iosb,
+                core::ptr::null_mut(),
+            )
+        };
+        // SAFETY: as above.
+        let flags = unsafe { (*file).Flags };
+        let beyond = nkfs::FILE_BYTES as i64 - 8;
+        // SAFETY: as above.
+        let past = unsafe {
+            fastio::FsRtlCopyWrite(
+                file,
+                &raw const beyond,
+                0x10,
+                1,
+                0,
+                bytes.as_ptr().cast_mut().cast(),
+                &raw mut iosb,
+                core::ptr::null_mut(),
+            )
+        };
+        flush_all(sop);
+        nkfs::take_log();
+        if ok != 1 || flags & FO_FILE_MODIFIED == 0 {
+            Err("FsRtlCopyWrite did not write through the cache and mark the file modified")
+        } else if nkfs::data()[0x41000..0x41010] != bytes {
+            Err("the file does not hold FsRtlCopyWrite's bytes after a flush")
+        } else if past != 0 {
+            Err("FsRtlCopyWrite wrote past the allocation size")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.fast-write", write));
+
+    let mdl = {
+        let offset = 0x42000i64;
+        let mut chain: *mut MDL = core::ptr::null_mut();
+        // SAFETY: as above; the chain on this stack.
+        let read = unsafe {
+            fastio::FsRtlMdlReadDev(
+                file,
+                &raw const offset,
+                0x1000,
+                0,
+                &raw mut chain,
+                &raw mut iosb,
+                core::ptr::null_mut(),
+            )
+        };
+        let got = !chain.is_null();
+        // SAFETY: the chain the read gave.
+        unsafe { fastio::FsRtlMdlReadCompleteDev(file, chain, core::ptr::null_mut()) };
+        let mut chain: *mut MDL = core::ptr::null_mut();
+        let offset = 0x43000i64;
+        // SAFETY: as above.
+        let prepared = unsafe {
+            fastio::FsRtlPrepareMdlWriteDev(
+                file,
+                &raw const offset,
+                0x1000,
+                0,
+                &raw mut chain,
+                &raw mut iosb,
+                core::ptr::null_mut(),
+            )
+        };
+        // SAFETY: the prepared chain, completed once.
+        let completed = !chain.is_null()
+            && unsafe {
+                entry::nk_entry_FsRtlMdlWriteCompleteDev(
+                    file.cast(),
+                    &raw const offset,
+                    chain.cast(),
+                    core::ptr::null_mut(),
+                )
+            } == 1;
+        let dirty = dirty_pages(file);
+        flush_all(sop);
+        nkfs::take_log();
+        if read != 1 || !got {
+            Err("FsRtlMdlReadDev gave no MDL")
+        } else if prepared != 1 || !completed || dirty != 1 {
+            Err("FsRtlPrepareMdlWriteDev and FsRtlMdlWriteCompleteDev did not leave the page dirty")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.fast-mdl", mdl));
+    // SAFETY: nkfs's header.
+    unsafe { (*fcb).header.Common.IsFastIoPossible = 0 };
 }

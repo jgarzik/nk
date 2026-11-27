@@ -234,7 +234,8 @@ tier has, for each architecture:
   `CcDeferWrite` posting at once on a clean cache, and a map closed
   without a truncate size deleted by the lazy writer, its event
   signalled, once `CcWaitForCurrentLazyWriterActivity` returns; two
-  threads waiting for the lazy writer at once both return.
+  threads waiting for the lazy writer at once both return; FsRtl's
+  fast reads, writes and MDL paths over the cache.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

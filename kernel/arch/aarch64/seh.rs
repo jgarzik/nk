@@ -163,6 +163,7 @@ nk_with_caller_context:
     nk_caller_context nk_entry_CcMdlRead, nk_cc_mdl_read
     nk_caller_context nk_entry_CcPrepareMdlWrite, nk_cc_prepare_mdl_write
     nk_caller_context nk_entry_CcMdlWriteComplete, nk_cc_mdl_write_complete
+    nk_caller_context nk_entry_FsRtlMdlWriteCompleteDev, nk_fsrtl_mdl_write_complete_dev
 
     .globl nk_guarded_call
 // x0: a routine. x1-x4: its arguments. x5: the caller's guard record,
@@ -394,6 +395,12 @@ unsafe extern "C" {
         chain: *mut *mut c_void,
         iosb: *mut c_void,
     );
+    pub fn nk_entry_FsRtlMdlWriteCompleteDev(
+        file: *mut c_void,
+        offset: *const i64,
+        chain: *mut c_void,
+        device: *mut c_void,
+    ) -> u8;
     pub fn nk_entry_CcMdlWriteComplete(file: *mut c_void, offset: *const i64, chain: *mut c_void);
 }
 
