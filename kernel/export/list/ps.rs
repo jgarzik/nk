@@ -19,6 +19,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ps::silo::PsCreateSiloContext),
     export!(Implemented, ps::process::PsDereferencePrimaryToken),
     export!(Implemented, ps::silo::PsDereferenceSiloContext),
+    export!(Implemented, ps::silo::PsReferenceSiloContext),
     export!(Implemented, ps::silo::PsDetachSiloFromCurrentThread),
     export!(Implemented, ps::silo::PsFreeSiloContextSlot),
     export!(Implemented, ps::process::PsGetCurrentProcess),
