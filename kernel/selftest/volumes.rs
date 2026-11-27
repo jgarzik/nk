@@ -1,8 +1,9 @@
 //! Microsoft's volume drivers on the disk Microsoft's storage stack
 //! makes: `partmgr.sys`, the disk class's upper filter, reads the
 //! partition table of the FAT disk (`tools/fatdisk.py`) and answers for
-//! it; `volmgr.sys` makes a volume of the partition, which `volume.sys`
-//! serves. The proof is what the drivers answer; the numbers are the FAT
+//! it, on an MBR disk or a GPT one; `volmgr.sys` makes a volume of the
+//! partition, which `volume.sys` serves; `mountmgr.sys` names it and
+//! gives it `C:`. The proof is what the drivers answer; the numbers are the FAT
 //! disk's, which `doc/TESTING.md` states.
 
 use crate::io::file::{self, OpenRequest};
@@ -105,17 +106,54 @@ fn layout(room: &mut [u8]) -> Result<DRIVE_LAYOUT_INFORMATION_EX, &'static str> 
     })
 }
 
-/// `partmgr.sys`, above `disk.sys`, read the MBR and answers with its
-/// one FAT32 partition; the other entries of the table are empty.
+/// The GPT disk's identifiers (`tools/fatdisk.py`): the disk's GUID,
+/// the partition's, and the Basic Data partition type, as stored.
+const DISK_GUID: [u8; 16] = [
+    0x00, 0x00, 0x4B, 0x4E, 0x00, 0x00, 0x00, 0x40, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+];
+const PARTITION_GUID: [u8; 16] = [
+    0x00, 0x00, 0x4B, 0x4E, 0x00, 0x00, 0x00, 0x40, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+];
+const BASIC_DATA: [u8; 16] = [
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+];
+
+/// The bytes of a GUID as stored.
+fn bytes(guid: &nk_ntabi::ex::GUID) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    out[..4].copy_from_slice(&guid.Data1.to_le_bytes());
+    out[4..6].copy_from_slice(&guid.Data2.to_le_bytes());
+    out[6..8].copy_from_slice(&guid.Data3.to_le_bytes());
+    out[8..].copy_from_slice(&guid.Data4);
+    out
+}
+
+/// Which layout the scenario's disk has, as `partmgr.sys` reports it.
+fn style() -> Result<u32, &'static str> {
+    let mut room = [0u8; 4096];
+    Ok(layout(&mut room)?.PartitionStyle)
+}
+
+/// `partmgr.sys`, above `disk.sys`, read the partition table and
+/// answers with its one FAT32 partition: on the MBR disk the disk's
+/// signature, the partition first and the other entries of the table
+/// empty; on the GPT disk the disk's GUID and one Basic Data partition
+/// with its GUID.
 fn partmgr() -> Result<(), &'static str> {
     let mut room = [0u8; 4096];
     let layout = layout(&mut room)?;
-    if layout.PartitionStyle != PARTITION_STYLE_MBR {
-        return Err("the disk is not seen as an MBR disk");
-    }
-    // SAFETY: an MBR layout has the MBR view.
-    if unsafe { layout.Info.Mbr[0] } != SIGNATURE {
-        return Err("the disk's signature is not the MBR's");
+    let style = layout.PartitionStyle;
+    match style {
+        // SAFETY: an MBR layout has the MBR view.
+        PARTITION_STYLE_MBR if unsafe { layout.Info.Mbr[0] } != SIGNATURE => {
+            return Err("the disk's signature is not the MBR's");
+        }
+        // SAFETY: a GPT layout has the GPT view.
+        PARTITION_STYLE_GPT if bytes(&unsafe { layout.Info.Gpt }.DiskId) != DISK_GUID => {
+            return Err("the disk's GUID is not the GPT's");
+        }
+        PARTITION_STYLE_MBR | PARTITION_STYLE_GPT => {}
+        _ => return Err("the disk is seen as neither an MBR nor a GPT disk"),
     }
     let count = layout.PartitionCount as usize;
     let entry_size = core::mem::size_of::<PARTITION_INFORMATION_EX>();
@@ -131,26 +169,33 @@ fn partmgr() -> Result<(), &'static str> {
                 .cast::<PARTITION_INFORMATION_EX>()
                 .read_unaligned()
         };
-        // SAFETY: an MBR entry has the MBR view.
-        let mbr = unsafe { entry.Info.Mbr };
-        if i == 0 {
-            if entry.StartingOffset != START
-                || entry.PartitionLength != LENGTH
-                || entry.PartitionNumber != 1
-                || mbr.PartitionType != FAT32_LBA
-                || mbr.RecognizedPartition == 0
-            {
-                kprintln!(
-                    "vol: partition 1 at {:#x}, {:#x} bytes, number {}, type {:#x}",
-                    entry.StartingOffset,
-                    entry.PartitionLength,
-                    entry.PartitionNumber,
-                    mbr.PartitionType
-                );
-                return Err("the first partition is not the FAT disk's");
+        if i > 0 {
+            if entry.PartitionLength != 0 {
+                return Err("an entry other than the first holds a partition");
             }
-        } else if entry.PartitionLength != 0 {
-            return Err("an entry other than the first holds a partition");
+            continue;
+        }
+        let kind = if style == PARTITION_STYLE_MBR {
+            // SAFETY: an MBR entry has the MBR view.
+            let mbr = unsafe { entry.Info.Mbr };
+            mbr.PartitionType == FAT32_LBA && mbr.RecognizedPartition != 0
+        } else {
+            // SAFETY: a GPT entry has the GPT view.
+            let gpt = unsafe { entry.Info.Gpt };
+            bytes(&gpt.PartitionType) == BASIC_DATA && bytes(&gpt.PartitionId) == PARTITION_GUID
+        };
+        if entry.StartingOffset != START
+            || entry.PartitionLength != LENGTH
+            || entry.PartitionNumber != 1
+            || !kind
+        {
+            kprintln!(
+                "vol: partition 1 at {:#x}, {:#x} bytes, number {}",
+                entry.StartingOffset,
+                entry.PartitionLength,
+                entry.PartitionNumber
+            );
+            return Err("the first partition is not the FAT disk's");
         }
     }
     Ok(())
@@ -272,10 +317,12 @@ fn with_volume(
 /// The drive letter `mountmgr.sys` gives the volume.
 const DRIVE: &str = "\\GLOBAL??\\C:";
 
-/// The volume's name: `volmgr.sys` gives a basic MBR volume a stable
-/// GUID made of the disk's signature and the partition's offset, and
-/// `mountmgr.sys` names the volume by it.
-const VOLUME_NAME: &str = "\\GLOBAL??\\Volume{4e4b0001-0000-0000-0000-100000000000}";
+/// The volume's name: `volmgr.sys` gives a basic volume a stable GUID,
+/// on an MBR disk made of the disk's signature and the partition's
+/// offset, on a GPT disk the partition's GUID, and `mountmgr.sys` names
+/// the volume by it.
+const VOLUME_NAME_MBR: &str = "\\GLOBAL??\\Volume{4e4b0001-0000-0000-0000-100000000000}";
+const VOLUME_NAME_GPT: &str = "\\GLOBAL??\\Volume{4e4b0000-0000-4000-8000-000000000002}";
 
 /// `mountmgr.sys` named the volume and, from its reinitialisation
 /// routine, gave it `C:`: both names lead to the volume, and the
@@ -294,8 +341,13 @@ fn mount() -> Result<(), &'static str> {
             (body, rest.is_empty())
         })
     };
+    let name = if style()? == PARTITION_STYLE_GPT {
+        VOLUME_NAME_GPT
+    } else {
+        VOLUME_NAME_MBR
+    };
     let volume = found(VOLUME);
-    if volume.is_none() || found(DRIVE) != volume || found(VOLUME_NAME) != volume {
+    if volume.is_none() || found(DRIVE) != volume || found(name) != volume {
         return Err("C: or the volume's name does not lead to the volume");
     }
     let names: alloc::vec::Vec<alloc::string::String> =

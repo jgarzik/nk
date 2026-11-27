@@ -428,6 +428,10 @@ check to that without booting.
   mounted-devices key to hold `\DosDevices\C:`, and reads the volume
   through `\??\C:`, by way of RAW: the FAT32 boot sector first, and a
   read past the end refused.
+- `x86_64-volumes-gpt`: the same on the GPT disk (`disk_image =
+  "fat32-gpt"`). `vol.partmgr` requires a GPT layout with the disk's
+  GUID and one Basic Data partition with its GUID; the volume's name is
+  the partition's GUID (`Volume{4e4b0000-...-000000000002}`).
 
 ### Soak
 
