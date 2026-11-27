@@ -17,3 +17,4 @@ ke.expand.inline ok
 ke.expand.raise ok
 ke.expand.unwind-reuse ok
 ke.expand.raise-repeated ok
+ke.expand.raise-nested ok

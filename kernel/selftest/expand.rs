@@ -16,6 +16,7 @@ pub static GROUP: Group = Group {
         "ke.expand.raise",
         "ke.expand.unwind-reuse",
         "ke.expand.raise-repeated",
+        "ke.expand.raise-nested",
     ],
     run,
     manual: false,
@@ -43,6 +44,37 @@ fn run(r: &mut Report, _: &BootInfo) {
         expand::unwind_reuse_test()
     });
     r.check("ke.expand.raise-repeated", raise_repeated);
+    r.check("ke.expand.raise-nested", || {
+        except::raises(raise_two_segments_up, except::CODE as usize, except::CODE)?;
+        expand::after_raise_test()
+    });
+}
+
+/// From a segment, expand to a second and raise there.
+///
+/// # Safety
+/// Takes the status to raise.
+unsafe extern "C" fn raise_from_second_segment(code: *mut c_void) {
+    // SAFETY: the routine takes any status.
+    unsafe { expand::raise_on_segment(code.addr()) };
+}
+
+/// Expand, expand again from that segment, and raise on the second, for
+/// a handler beneath both switches: the unwind crosses two segments.
+///
+/// # Safety
+/// Takes the status to raise.
+unsafe extern "C" fn raise_two_segments_up(code: usize) {
+    // SAFETY: the callout takes any status.
+    unsafe {
+        expand::KeExpandKernelStackAndCalloutEx(
+            raise_from_second_segment,
+            core::ptr::without_provenance_mut(code),
+            0x6000,
+            1,
+            core::ptr::null_mut(),
+        );
+    }
 }
 
 /// Raises on a segment caught on the segment beneath it.
