@@ -11,6 +11,7 @@
 pub mod filter;
 pub mod mcb;
 pub mod name;
+pub mod oplock;
 pub mod status;
 
 use core::sync::atomic::{AtomicBool, Ordering};

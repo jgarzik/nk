@@ -45,3 +45,13 @@ unit at a time where Windows upper-cases copies, so it needs no memory
 and never raises. Which exception statuses a file system lets through
 and which failures mean the device is gone are Windows' lists
 (`nk_fsrtl::status`).
+
+## Oplocks
+
+NK grants no opportunistic locks: `FsRtlOplockFsctrl`, the only routine
+that creates one, is a trap. The rest do what the pinned kernel does
+with a stream that has none (`kernel/fsrtl/oplock.rs`): checks and
+breaks let the operation go on, fast I/O is possible, no batch or
+handle oplock is held. No oplock keys are recorded. An oplock field
+that is not null stops the system by name, so those exports are
+partial.

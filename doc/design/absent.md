@@ -9,7 +9,7 @@ RAW is all there is to mount. RAW enforces no share access between
 opens of a volume, and its answers to information queries and
 file-system control requests stop the system by name.
 
-No APCs, sleep states, device power-down ([Power](power.md)), processes
+No opportunistic locks (a file system's request for one stops the system by name: `doc/design/fsrtl.md`), no APCs, sleep states, device power-down ([Power](power.md)), processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
