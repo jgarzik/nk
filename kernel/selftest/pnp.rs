@@ -1145,8 +1145,10 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             })
         };
         let checks = (|| {
-            if switch(false) != STATUS_OBJECT_NAME_NOT_FOUND {
-                return Err("an interface that is not enabled was disabled");
+            // Disabling answers success whatever came of it, as Windows'
+            // routine does; nothing is told.
+            if switch(false) != STATUS_SUCCESS || seen() != (0, 0) {
+                return Err("disabling an interface that is not enabled did not answer success");
             }
             if switch(true) != STATUS_SUCCESS || seen() != (1, 0) || !linked() {
                 return Err("enabling did not make the link and tell the callback");

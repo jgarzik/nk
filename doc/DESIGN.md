@@ -2324,7 +2324,9 @@ device interface is registered under Windows' link name and
 physical device object (which therefore needs a name) and calls the
 callbacks registered for the class's arrivals, on the caller's thread
 where Windows queues them for a worker; enabled before its device has
-started, an interface waits for the start. Notification registrations
+started, an interface waits for the start. Disabling one answers
+success whatever came of it, as Windows' routine does: `partmgr.sys`
+disables an interface it never enabled on each disk it starts. Notification registrations
 for hardware profile changes and for a target device's removal are
 kept and never called: NK produces neither event.
 `IoInvalidateDeviceState` has a started device asked for its state
