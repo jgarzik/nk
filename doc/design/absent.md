@@ -74,11 +74,10 @@ succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`:
 `SkIsSecureKernel` says `STATUS_NOT_IMPLEMENTED`, the other `Sk*`
 routines stop the system with 0x123 as the normal kernel's one routine
 for them does, and `VslExchangeEntropy` fails with
-`STATUS_DEVICE_NOT_CONNECTED`, the buffer untouched), no boot entropy
-(NK's loader gathers none, so `SystemBootEntropyInformation` has
-nothing to give and `cng.sys`, which asks for it in its `DriverEntry`,
-stops the system with `SECURITY_SYSTEM` (0x5F), as it would on Windows;
-`fixtures/registry-crypto.txt` and `test=crypto.boot` are its boot),
+`STATUS_DEVICE_NOT_CONNECTED`, the buffer untouched), boot entropy
+without a TPM and, on arm64, without the processor's generator (the
+loader reports those sources as Windows' loader reports an absent or
+failed one: `doc/BOOT.md`, Boot entropy),
 the extended processor state limited to the legacy x87 and SSE state
 (the shared data page's `XState.EnabledFeatures`, which
 `RtlGetEnabledExtendedFeatures` reads), no

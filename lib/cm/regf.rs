@@ -459,6 +459,75 @@ impl<'a> Regf<'a> {
     }
 }
 
+/// Why [`Regf::read_value`] found no data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lookup {
+    /// A key on the path is not there.
+    NoKey,
+    /// The key has no value of that name.
+    NoValue,
+    /// The data are longer than the buffer: their length.
+    TooLong(usize),
+    /// The file is malformed on the way.
+    Bad(RegfError),
+}
+
+impl From<RegfError> for Lookup {
+    fn from(error: RegfError) -> Self {
+        Self::Bad(error)
+    }
+}
+
+/// Whether `name` is `text`, letter case aside (ASCII), as registry names
+/// compare for the names a loader looks up.
+fn same_name(name: Name<'_>, text: &str) -> bool {
+    name.len() == text.len()
+        && name
+            .units()
+            .zip(text.bytes())
+            .all(|(a, b)| a < 0x80 && (a as u8).eq_ignore_ascii_case(&b))
+}
+
+impl<'a> Regf<'a> {
+    /// Copy the data of the value `value` of the key at `path` (key
+    /// names from the root, ASCII) into `out`, and give their length: the
+    /// look-up a boot loader makes in the SYSTEM hive before there is a
+    /// registry.
+    pub fn read_value(&self, path: &[&str], value: &str, out: &mut [u8]) -> Result<usize, Lookup> {
+        let mut key = self.root()?;
+        for part in path {
+            let mut found = None;
+            for subkey in self.subkeys(&key)? {
+                let subkey = subkey?;
+                if same_name(subkey.name, part) {
+                    found = Some(subkey);
+                    break;
+                }
+            }
+            key = found.ok_or(Lookup::NoKey)?;
+        }
+        for v in self.values(&key)? {
+            let v = v?;
+            if !same_name(v.name, value) {
+                continue;
+            }
+            let data = self.data(&v)?;
+            let len = data.len();
+            if len > out.len() {
+                return Err(Lookup::TooLong(len));
+            }
+            let mut at = 0;
+            for piece in data {
+                let piece = piece?;
+                out[at..at + piece.len()].copy_from_slice(piece);
+                at += piece.len();
+            }
+            return Ok(at);
+        }
+        Err(Lookup::NoValue)
+    }
+}
+
 /// The subkeys of a key. After an error it yields nothing more.
 #[derive(Debug, Clone)]
 pub struct Subkeys<'a> {

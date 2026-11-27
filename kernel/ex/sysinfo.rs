@@ -159,7 +159,9 @@ unsafe fn basic(to: *mut SYSTEM_BASIC_INFORMATION) {
 /// Answered: `SystemBasicInformation` (0), `SystemModuleInformation`
 /// (11), `SystemKernelDebuggerInformation` (35) and
 /// `SystemIsolatedUserModeInformation` (165), which says there is no
-/// secure kernel. Any other class is `STATUS_INVALID_INFO_CLASS`, and
+/// secure kernel, and `SystemBootEntropyInformation` (0x75), the
+/// loader's entropy, once (`ex::entropy`), into a buffer of exactly its
+/// size. Any other class is `STATUS_INVALID_INFO_CLASS`, and
 /// leaves `return_length` alone, as Windows does for a class it does
 /// not know. Without memory to list the modules, class 11 is
 /// `STATUS_INSUFFICIENT_RESOURCES`, and nothing is written.
@@ -213,6 +215,15 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
                 }
             },
         ),
+        SYSTEM_BOOT_ENTROPY_INFORMATION_CLASS => {
+            let size = SYSTEM_BOOT_ENTROPY_INFORMATION_SIZE as u32;
+            if length == size {
+                // SAFETY: per the contract; the length is the block's.
+                (unsafe { super::entropy::query(buffer) }, size)
+            } else {
+                (STATUS_INFO_LENGTH_MISMATCH, size)
+            }
+        }
         // SAFETY: per the contract.
         SYSTEM_MODULE_INFORMATION_CLASS => match unsafe { modules(buffer, length) } {
             Some(answer) => answer,

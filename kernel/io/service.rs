@@ -214,6 +214,9 @@ pub fn start_boot_services() -> Result<(), &'static str> {
     // other reinitialisation routines.
     STARTED.store(true, core::sync::atomic::Ordering::Release);
     driver::reinitialize_drivers();
+    // Nothing started from here on may have the loader's entropy: Windows
+    // wipes it at this point if no driver asked for it.
+    crate::ex::entropy::wipe();
     Ok(())
 }
 

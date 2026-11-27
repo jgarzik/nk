@@ -12,6 +12,7 @@
 #[cfg_attr(target_arch = "aarch64", path = "arch/aarch64.rs")]
 mod arch;
 mod efi;
+mod entropy;
 
 use nk_bootinfo::{
     BootInfo, FirmwareUse, HHDM_BASE, HIVE_MODULE, KERNEL_BASE, KERNEL_STACK_SIZE, MAX_MODULES,
@@ -20,6 +21,9 @@ use nk_bootinfo::{
 };
 use nk_mm::pt::{self, Prot, TableMem};
 use nk_pe::Pe;
+
+#[global_allocator]
+static POOL: efi::Pool = efi::Pool;
 
 const KERNEL_PATH: &str = "\\NK\\nkkrnl.exe";
 const DRIVER_DIR: &str = "\\NK\\drivers";
@@ -183,6 +187,8 @@ fn serial() -> Serial {
 }
 
 fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
+    // Where the loader's time begins, for the time source.
+    let started = arch::cycles();
     let root_dir = efi::File::boot_volume(image).ok_or("cannot open the boot volume")?;
     let file = root_dir
         .open(KERNEL_PATH)
@@ -219,6 +225,13 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
     info.efi_runtime = efi::runtime() as u64;
     info.serial = serial();
     load_modules(&root_dir, &mut info)?;
+    let hive = info
+        .modules()
+        .iter()
+        .find(|m| m.name() == HIVE_MODULE.as_bytes())
+        .map(|m| efi::page_slice(m.phys, m.size as usize) as &[u8]);
+    let oem0 = nk_acpi::find_table(&Identity, info.rsdp, b"OEM0");
+    info.entropy = entropy::gather(hive, oem0, started)?;
     if let Some(file) = root_dir.open(CMDLINE_PATH) {
         let text = file.read_all().ok_or("cannot read \\NK\\cmdline.txt")?;
         info.set_cmdline(text.trim_ascii())?;

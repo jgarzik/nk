@@ -9,6 +9,9 @@ version = "0.2.0"
 [[package]]
 name = "nk-bootinfo"
 version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
 
 [[package]]
 name = "nk-cc"
@@ -186,7 +189,9 @@ version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
+ "nk-cm",
  "nk-mm",
+ "nk-ntabi",
  "nk-pe",
 ]
 

@@ -392,3 +392,32 @@ fn after_an_error_nothing_more_is_yielded() {
     assert_eq!(next(), Some(Err(RegfError::FreeCell)));
     assert_eq!(next(), None);
 }
+
+#[test]
+fn a_value_is_read_by_its_path() {
+    let (hive, cells) = sample();
+    let file = hive.finish(cells.root);
+    let regf = Regf::parse(&file).unwrap();
+    let mut out = [0u8; 8];
+    assert_eq!(regf.read_value(&[], "THREE", &mut out), Ok(3));
+    assert_eq!(out[..3], [1, 2, 3]);
+    assert_eq!(
+        regf.read_value(&["alpha"], "x", &mut out),
+        Err(Lookup::NoValue)
+    );
+    assert_eq!(
+        regf.read_value(&["Delta"], "x", &mut out),
+        Err(Lookup::NoKey)
+    );
+    assert_eq!(
+        regf.read_value(&["Alpha", "Delta"], "x", &mut out),
+        Err(Lookup::NoKey)
+    );
+    assert_eq!(
+        regf.read_value(&[], "big", &mut out),
+        Err(Lookup::TooLong(40000))
+    );
+    let mut big = vec![0u8; 40000];
+    assert_eq!(regf.read_value(&[], "big", &mut big), Ok(40000));
+    assert_eq!(big, big_data());
+}
