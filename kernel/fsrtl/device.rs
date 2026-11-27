@@ -108,8 +108,8 @@ pub unsafe fn io_control(
 /// [`FsRtlVolumeDeviceToCorrelationId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlvolumedevicetocorrelationid):
 /// the volume's stable GUID, as its device answers
 /// `IOCTL_MOUNTDEV_QUERY_STABLE_GUID`; for a volume that does not
-/// answer, Windows asks `IoVolumeDeviceToGuid`, which NK does not yet
-/// have: that stops the system naming it, as its trap would.
+/// answer, the GUID of its name (`IoVolumeDeviceToGuid`), as Windows
+/// falls back.
 ///
 /// # Safety
 /// `device` is a volume's device object; `guid` is writable for 16
@@ -122,10 +122,8 @@ pub unsafe extern "C" fn FsRtlVolumeDeviceToCorrelationId(
     let (status, answer) =
         unsafe { io_control(device, IOCTL_MOUNTDEV_QUERY_STABLE_GUID, 0, &[], 16) };
     if !nt_success(status) {
-        kd::bugcheck(format_args!(
-            "IoVolumeDeviceToGuid: NK does not implement this routine (called with {device:p}, \
-             {guid:p}, from FsRtlVolumeDeviceToCorrelationId)"
-        ));
+        // SAFETY: per the contract.
+        return unsafe { crate::io::guid::IoVolumeDeviceToGuid(device, guid.cast()) };
     }
     let mut out = [0u8; 16];
     let n = answer.len().min(16);
