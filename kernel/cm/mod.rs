@@ -327,7 +327,7 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>)
         return absolute(&path);
     }
     let root = handle::reference(root as u64, None)?;
-    let (body, path) = if is(root.body(), &object::DIRECTORY_TYPE) {
+    let (body, path) = if root.is(&object::DIRECTORY_TYPE) {
         crate::ob::lookup(Some(root.body()), &path)?
     } else if path.first() == Some(&u16::from(b'\\')) {
         // Relative to an open object: not from the top.
@@ -338,20 +338,14 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>)
     Ok((key_object(body)?, path))
 }
 
-/// Whether the object `body` is of the type `ty`.
-fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
-    // SAFETY: called with objects the caller holds a reference to.
-    core::ptr::eq(unsafe { object::type_of(body) }, ty)
-}
-
 /// The key the object `body` is, held by the caller's reference. What
 /// leads elsewhere in the namespace names no key.
 fn key_object(body: ObRef) -> Result<Held, NTSTATUS> {
-    if !is(body.body(), &object::KEY_TYPE) {
+    if !body.is(&object::KEY_TYPE) {
         return Err(STATUS_OBJECT_TYPE_MISMATCH);
     }
-    // SAFETY: per the contract; a key object's body is the key's
-    // number, written once when it was made.
+    // SAFETY: a key object, alive while `body` holds its reference; its
+    // body is the key's number, written once when it was made.
     let key = KeyId::from_index(unsafe { body.cast::<usize>().read() });
     Ok(Held { body, key })
 }

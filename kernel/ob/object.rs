@@ -765,6 +765,13 @@ impl ObRef {
         self.0.cast()
     }
 
+    /// Whether the object is of the type `ty`.
+    pub fn is(&self, ty: &ObjectType) -> bool {
+        // SAFETY: the reference this owns keeps the object, and its
+        // header, alive.
+        core::ptr::eq(unsafe { type_of(self.0) }, ty)
+    }
+
     /// Hand the reference on: it is the caller's to give up.
     pub fn into_raw(self) -> *mut u8 {
         core::mem::ManuallyDrop::new(self).0

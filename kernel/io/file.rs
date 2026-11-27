@@ -337,15 +337,11 @@ struct Target {
 /// with no access asked of it, as Windows' `ObpLookupObjectName` does:
 /// a kernel handle is no root for user mode.
 fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
-    let is = |body: *mut u8, ty: &'static object::ObjectType| {
-        // SAFETY: called with objects this function holds a reference to.
-        core::ptr::eq(unsafe { object::type_of(body) }, ty)
-    };
     let found = match root {
         None => ob::lookup(None, name),
         Some(root) => {
             let (root, _) = handle::reference_for(root, None, 0, mode)?;
-            if is(root.body(), &object::FILE_TYPE) {
+            if root.is(&object::FILE_TYPE) {
                 // Relative to an open file: the name as given is the
                 // driver's to read, and is not absolute.
                 if name.first() == Some(&u16::from(b'\\')) {
@@ -361,9 +357,9 @@ fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTAT
                     related: Some(root),
                 });
             }
-            if is(root.body(), &object::DIRECTORY_TYPE) {
+            if root.is(&object::DIRECTORY_TYPE) {
                 ob::lookup(Some(root.body()), name)
-            } else if is(root.body(), &object::KEY_TYPE) {
+            } else if root.is(&object::KEY_TYPE) {
                 // A key parses a name into a key, never a file.
                 Err(STATUS_OBJECT_TYPE_MISMATCH)
             } else {
@@ -373,7 +369,7 @@ fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTAT
         }
     };
     let (device, remainder) = found?;
-    if !is(device.body(), &object::DEVICE_TYPE) {
+    if !device.is(&object::DEVICE_TYPE) {
         return Err(STATUS_OBJECT_TYPE_MISMATCH);
     }
     Ok(Target {
