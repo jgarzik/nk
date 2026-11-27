@@ -112,7 +112,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ExAllocatePool2",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
