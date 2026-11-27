@@ -34,6 +34,8 @@ pub enum Rank {
     /// The device tree and what drivers asked of the Plug and Play
     /// manager (`pnp`).
     DeviceTree = 20,
+    /// Making a type of object (`ob::object::MAKING`).
+    ObjectTypes = 21,
     /// Whether a volume parameter block is mounted, on what, and its
     /// reference count (`io::mount`).
     Vpb = 24,

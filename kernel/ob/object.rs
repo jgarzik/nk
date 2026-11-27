@@ -16,6 +16,9 @@
 //! the type's address. An object's header names its type the way
 //! Windows 10 does: by the type's index, hidden behind a cookie chosen
 //! at boot and a byte of the header's own address.
+//!
+//! The kernel's own types are statics. A driver may make more
+//! (`ObCreateObjectType`); those are listed after them, by index.
 
 #![allow(non_snake_case, non_upper_case_globals)]
 
@@ -31,6 +34,7 @@ use nk_ntabi::ob::{
     GENERIC_MAPPING, OB_CLOSE_METHOD, OB_DELETE_METHOD, OB_INFOMASK_NAME, OBJECT_BODY,
     OBJECT_HEADER, OBJECT_HEADER_NAME_INFO, OBJECT_TYPE, OBJECT_TYPE_INITIALIZER,
 };
+use nk_ntabi::status::*;
 use nk_ob::header::{FIRST_TYPE_INDEX, type_index};
 
 /// Pool tag of object-manager allocations.
@@ -332,6 +336,107 @@ static TYPES: [&ObjectType; 15] = [
     &SECTION_TYPE,
 ];
 
+/// How many types drivers may make: Windows' table of types holds 256
+/// indices in all.
+const DRIVER_TYPES: usize = 256 - TYPES.len() - FIRST_TYPE_INDEX as usize;
+
+/// The types drivers have made, in order: index `FIRST_TYPE_INDEX +
+/// TYPES.len() + n`. Never taken back, as on Windows; read without a
+/// lock, from any context.
+static MADE: [AtomicPtr<ObjectType>; DRIVER_TYPES] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; DRIVER_TYPES];
+
+/// Held while a type is made: no two types get one name or one index.
+static MAKING: crate::ke::spinlock::SpinLock<()> =
+    crate::ke::spinlock::SpinLock::new(crate::ke::spinlock::Rank::ObjectTypes, ());
+
+/// The type a slot of [`MADE`] holds, if it holds one.
+fn type_at_ptr(slot: &AtomicPtr<ObjectType>) -> Option<&'static ObjectType> {
+    let ty = slot.load(Ordering::Acquire);
+    // SAFETY: a type, once made, lives for ever.
+    (!ty.is_null()).then(|| unsafe { &*ty })
+}
+
+/// The type with index `index`, if there is one.
+fn type_at(index: u8) -> Option<&'static ObjectType> {
+    let at = usize::from(index.wrapping_sub(FIRST_TYPE_INDEX));
+    if let Some(ty) = TYPES.get(at) {
+        return Some(ty);
+    }
+    type_at_ptr(MADE.get(at - TYPES.len())?)
+}
+
+/// `ObCreateObjectType` (exported, not documented): make a type of
+/// object named `name` from `initializer`, and give its address. As the
+/// pinned kernel checks: a missing or empty name, or one of an odd
+/// length, a missing initializer, one of the wrong length, with invalid
+/// attributes Windows refuses or with flags it does not know, stops at a
+/// breakpoint and then fails with `STATUS_INVALID_PARAMETER`; a name
+/// with a backslash is `STATUS_OBJECT_NAME_INVALID`; a name a type has
+/// already is `STATUS_OBJECT_NAME_COLLISION`.
+///
+/// NK makes no object of a driver's type itself, and creating one
+/// (`ObCreateObject`) stops the system by name; so of the type's
+/// procedures none is called yet.
+///
+/// # Safety
+/// `name` and `initializer` are null or readable as their structures;
+/// `object_type` is writable.
+pub unsafe extern "C" fn ObCreateObjectType(
+    name: *const UNICODE_STRING,
+    initializer: *const OBJECT_TYPE_INITIALIZER,
+    _reserved: *mut c_void,
+    object_type: *mut *const ObjectType,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    let (wide, info) = unsafe {
+        if name.is_null() || initializer.is_null() {
+            crate::arch::driver_breakpoint();
+            return STATUS_INVALID_PARAMETER;
+        }
+        (crate::rtl::copy_unicode(name), initializer.read_unaligned())
+    };
+    // SAFETY: per the contract.
+    let length = unsafe { (*name).Length };
+    if length == 0
+        || length % 2 != 0
+        || info.InvalidAttributes & 0xFFFE_E00D != 0
+        || usize::from(info.Length) != size_of::<OBJECT_TYPE_INITIALIZER>()
+        || info.ObjectTypeFlags >> 8 >= 2
+    {
+        crate::arch::driver_breakpoint();
+        return STATUS_INVALID_PARAMETER;
+    }
+    if wide.contains(&u16::from(b'\\')) {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    let mut chars = alloc::vec::Vec::new();
+    if chars.try_reserve_exact(wide.len()).is_err() {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    chars.extend_from_slice(&wide);
+    let chars: &'static [u16] = alloc::vec::Vec::leak(chars);
+    let making = MAKING.lock();
+    let taken = |ty: &ObjectType| ty.name() == chars;
+    let made = || MADE.iter().map_while(|ty| type_at_ptr(ty));
+    if TYPES.iter().any(|ty| taken(ty)) || made().any(taken) {
+        return STATUS_OBJECT_NAME_COLLISION;
+    }
+    let slot = made().count();
+    if slot == DRIVER_TYPES {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    let index = FIRST_TYPE_INDEX + (TYPES.len() + slot) as u8;
+    let mut ty = ObjectType::new(index, chars, None);
+    ty.0.TypeInfo = info;
+    let ty = alloc::boxed::Box::leak(alloc::boxed::Box::new(ty));
+    MADE[slot].store(ty, Ordering::Release);
+    drop(making);
+    // SAFETY: per the contract.
+    unsafe { object_type.write_unaligned(ty) };
+    STATUS_SUCCESS
+}
+
 /// What hides type indices in object headers. Chosen once, before the
 /// first object is made.
 static COOKIE: AtomicU8 = AtomicU8::new(0);
@@ -603,7 +708,7 @@ pub unsafe fn type_of(body: *mut u8) -> &'static ObjectType {
     // SAFETY: per the contract; the byte was written by `create`.
     let stored = unsafe { (&raw const (*header).TypeIndex).read() };
     let index = type_index(stored, COOKIE.load(Ordering::Relaxed), header as u64);
-    match TYPES.get(usize::from(index.wrapping_sub(FIRST_TYPE_INDEX))) {
+    match type_at(index) {
         Some(ty) => ty,
         None => crate::kd::bugcheck(format_args!(
             "0x00000189 BAD_OBJECT_HEADER: an object's header names no type"

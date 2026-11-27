@@ -66,6 +66,15 @@ does, by the index combined with a cookie chosen at boot and a byte of
 the header's address (`nk_ob::header`). The fields of a type NK does not
 keep (its counts, its lists) are zero.
 
+A driver may make a type (`ObCreateObjectType`; `pcw.sys` makes one):
+the arguments are checked as the pinned kernel checks them (a bad one
+stops at a breakpoint and is then `STATUS_INVALID_PARAMETER`, a name
+with a backslash `STATUS_OBJECT_NAME_INVALID`, a name already taken
+`STATUS_OBJECT_NAME_COLLISION`), and the type, a copy of the caller's
+initializer under the next free index, lives for ever, as on Windows.
+NK makes no object of a driver's type: `ObCreateObject` stops the
+system by name, so none of such a type's procedures is called yet.
+
 ### The namespace
 
 A tree of directories holding named objects and symbolic links

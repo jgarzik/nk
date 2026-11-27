@@ -70,6 +70,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::depend::DEPENDENCIES` | which device depends on which, and the strings devices are bound by; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::notify::REGISTRATIONS` | the Plug and Play notification registrations and each one's count of callbacks in progress; never held with another lock of this rank, nor across a callback | DISPATCH |
+| 21 | `ob::object::MAKING` | making a type of object: the names and indices of the types drivers have made (read without it) | DISPATCH |
 | 24 | `io::mount::VPB_LOCK` | every volume parameter block's `Flags`, `DeviceObject` and `ReferenceCount`; never held across a device's creation or deletion; file systems take it too, through `IoAcquireVpbSpinLock` | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |

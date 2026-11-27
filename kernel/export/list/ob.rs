@@ -15,6 +15,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ob::handle::ObReferenceObjectByHandle),
     export!(Implemented, ob::handle::ObReferenceObjectByHandleWithTag),
     export!(Implemented, ob::security::ObReferenceSecurityDescriptor),
+    export!(Implemented, ob::object::ObCreateObjectType),
     export!(Implemented, ob::object::ObfDereferenceObject),
     export!(Implemented, ob::object::ObfDereferenceObjectWithTag),
     export!(Implemented, ob::object::ObfReferenceObject),
