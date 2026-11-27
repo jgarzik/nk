@@ -1,9 +1,12 @@
 //! The executive pool: the memory behind `ExAllocatePoolWithTag`.
 //!
-//! Small requests come from 1 MiB arenas managed by `nk_mm::heap`; a
-//! request of a page or more gets its own page-aligned run of frames, as
-//! drivers expect of Windows. Both live in the direct map, so pool memory
-//! is non-paged and physically contiguous.
+//! Small requests come from 1 MiB arenas managed by `nk_mm::heap`, as
+//! many as the pool needs, tried next fit; a request of a page or more
+//! gets its own page-aligned run of frames, as drivers expect of
+//! Windows, noted in a table (`nk_mm::pooltab`) that grows with them.
+//! Both live in the direct map, so pool memory is non-paged and
+//! physically contiguous. The pool's own records are in frames of their
+//! own, never in the pool.
 //!
 //! Every allocation is tracked: `usage()` is what the driver-unload leak
 //! check compares, and a bad or overrunning free is reported, not obeyed.
@@ -12,32 +15,100 @@ use super::{PAGE_SIZE, alloc_frames, direct_to_phys, free_frames, phys_to_virt};
 use crate::ke::{Rank, SpinLock};
 use nk_mm::frames::Within;
 use nk_mm::heap::{Arena, HeapError, Usage};
+use nk_mm::pooltab::{self, Entry};
 
 const ARENA_PAGES: usize = 256;
-const MAX_ARENAS: usize = 64;
-const MAX_LARGE: usize = 256;
 /// Requests at least this big bypass the arenas.
 const LARGE_MIN: usize = PAGE_SIZE - 64;
+/// The large-block table's first size, in slots (a power of two).
+const FIRST_SLOTS: usize = 512;
 
-#[derive(Clone, Copy)]
-struct Large {
-    addr: usize,
-    pages: usize,
-    size: usize,
-    tag: u32,
+/// A growable array of `T` in frames of its own, never in the pool it
+/// keeps: the pool's own records, which grow with it.
+struct FrameVec<T> {
+    ptr: *mut T,
+    cap: usize,
+    len: usize,
+}
+
+// SAFETY: the array is reached only under the pool's lock.
+unsafe impl<T> Send for FrameVec<T> {}
+
+impl<T> FrameVec<T> {
+    const fn new() -> Self {
+        Self {
+            ptr: core::ptr::null_mut(),
+            cap: 0,
+            len: 0,
+        }
+    }
+
+    fn pages(cap: usize) -> usize {
+        (cap * size_of::<T>()).div_ceil(PAGE_SIZE)
+    }
+
+    /// The frames the array holds.
+    fn frames(&self) -> usize {
+        Self::pages(self.cap)
+    }
+
+    /// Room for at least `cap` elements, the first `len` moved; the new
+    /// part is zeroed. False without frames, the array unchanged.
+    fn reserve(&mut self, cap: usize) -> bool {
+        if cap <= self.cap {
+            return true;
+        }
+        let Some(pa) = alloc_frames(Self::pages(cap)) else {
+            return false;
+        };
+        let fresh = phys_to_virt(pa).cast::<T>();
+        // SAFETY: fresh, zeroed frames for `cap` elements; the old array
+        // holds `len`, moved bitwise and then given back.
+        unsafe {
+            if !self.ptr.is_null() {
+                core::ptr::copy_nonoverlapping(self.ptr, fresh, self.len);
+                free_frames(direct_to_phys(self.ptr.cast()), Self::pages(self.cap));
+            }
+        }
+        self.ptr = fresh;
+        self.cap = PAGE_SIZE * Self::pages(cap) / size_of::<T>();
+        true
+    }
+
+    fn as_slice(&self) -> &[T] {
+        if self.ptr.is_null() {
+            return &[];
+        }
+        // SAFETY: `len` initialised elements.
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        if self.ptr.is_null() {
+            return &mut [];
+        }
+        // SAFETY: `len` initialised elements, under the pool's lock.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
 }
 
 struct Pool {
-    /// Each arena with the address its offsets are relative to.
-    arenas: [Option<(usize, Arena<'static>)>; MAX_ARENAS],
-    large: [Option<Large>; MAX_LARGE],
+    /// Each arena with the address its offsets are relative to, in order
+    /// of address.
+    arenas: FrameVec<(usize, Arena<'static>)>,
+    /// The arena that last had room: the next request starts there.
+    hint: usize,
+    /// The large blocks: all `cap` slots in use as the table, `len`
+    /// counting the entries.
+    large: FrameVec<Entry>,
 }
 
 static POOL: SpinLock<Pool> = SpinLock::new(
     Rank::Pool,
     Pool {
-        arenas: [const { None }; MAX_ARENAS],
-        large: [None; MAX_LARGE],
+        arenas: FrameVec::new(),
+        hint: 0,
+        large: FrameVec::new(),
     },
 );
 
@@ -49,11 +120,85 @@ pub enum PoolError {
     Overrun { tag: u32, size: usize },
 }
 
+impl Pool {
+    /// The large-block table's slots, all of them.
+    fn slots(&mut self) -> &mut [Entry] {
+        if self.large.ptr.is_null() {
+            return &mut [];
+        }
+        // SAFETY: the table's `cap` slots are initialised (zeroed frames
+        // are empty entries), under the pool's lock.
+        unsafe { core::slice::from_raw_parts_mut(self.large.ptr, self.large.cap) }
+    }
+
+    /// Room for one more large block: the table doubled, its entries
+    /// moved, when it would be more than three quarters full.
+    fn room_for_large(&mut self) -> bool {
+        let (cap, used) = (self.large.cap, self.large.len);
+        if cap != 0 && !pooltab::full(cap, used) {
+            return true;
+        }
+        let want = if cap == 0 { FIRST_SLOTS } else { cap * 2 };
+        let mut bigger = FrameVec::<Entry>::new();
+        if !bigger.reserve(want) {
+            return false;
+        }
+        // The table hashes over a power of two: use exactly `want` slots.
+        bigger.cap = want;
+        bigger.len = used;
+        // SAFETY: `want` zeroed slots in the new frames.
+        let to = unsafe { core::slice::from_raw_parts_mut(bigger.ptr, want) };
+        pooltab::rehash(self.slots(), to);
+        let old = core::mem::replace(&mut self.large, bigger);
+        if !old.ptr.is_null() {
+            free_frames(
+                direct_to_phys(old.ptr.cast()),
+                FrameVec::<Entry>::pages(old.cap),
+            );
+        }
+        true
+    }
+
+    /// Add an arena of fresh frames, keeping the arenas in order of
+    /// address. Its index, or none without frames.
+    fn add_arena(&mut self) -> Option<usize> {
+        let len = self.arenas.len;
+        if !self.arenas.reserve(len + 1) {
+            return None;
+        }
+        let pa = alloc_frames(ARENA_PAGES)?;
+        let base = phys_to_virt(pa);
+        // SAFETY: these frames were just allocated for this arena and are
+        // never freed, so the slice is exclusive and lives for ever.
+        let mem = unsafe { core::slice::from_raw_parts_mut(base, ARENA_PAGES * PAGE_SIZE) };
+        let at = self
+            .arenas
+            .as_slice()
+            .partition_point(|(b, _)| *b < base as usize);
+        // SAFETY: room was reserved for one more; the tail moves up one.
+        unsafe {
+            let p = self.arenas.ptr;
+            core::ptr::copy(p.add(at), p.add(at + 1), len - at);
+            p.add(at).write((base as usize, Arena::new(mem)));
+        }
+        self.arenas.len = len + 1;
+        Some(at)
+    }
+
+    /// The arena holding `addr`.
+    fn arena_of(&mut self, addr: usize) -> Option<&mut (usize, Arena<'static>)> {
+        let arenas = self.arenas.as_mut_slice();
+        let at = arenas.partition_point(|(b, _)| *b <= addr).checked_sub(1)?;
+        let entry = &mut arenas[at];
+        (addr < entry.0 + entry.1.len()).then_some(entry)
+    }
+}
+
 fn alloc_large(pool: &mut Pool, size: usize, tag: u32, within: Option<&Within>) -> *mut u8 {
-    let pages = size.div_ceil(PAGE_SIZE);
-    let Some(slot) = pool.large.iter_mut().find(|s| s.is_none()) else {
+    if !pool.room_for_large() {
         return core::ptr::null_mut();
-    };
+    }
+    let pages = size.div_ceil(PAGE_SIZE);
     let frames = match within {
         Some(within) => super::alloc_frames_within(pages, within),
         None => alloc_frames(pages),
@@ -62,12 +207,16 @@ fn alloc_large(pool: &mut Pool, size: usize, tag: u32, within: Option<&Within>) 
         return core::ptr::null_mut();
     };
     let addr = phys_to_virt(pa);
-    *slot = Some(Large {
-        addr: addr as usize,
-        pages,
-        size,
-        tag,
-    });
+    pooltab::insert(
+        pool.slots(),
+        Entry {
+            addr: addr as usize,
+            pages,
+            size,
+            tag,
+        },
+    );
+    pool.large.len += 1;
     addr
 }
 
@@ -78,31 +227,26 @@ pub fn alloc(size: usize, tag: u32) -> *mut u8 {
     if size >= LARGE_MIN {
         return alloc_large(&mut pool, size, tag, None);
     }
-    for slot in pool.arenas.iter_mut() {
-        match slot {
-            Some((base, arena)) => {
-                if let Some(off) = arena.alloc(size, tag) {
-                    return (*base + off) as *mut u8;
-                }
-            }
-            None => {
-                // Every existing arena is full: add one.
-                let Some(pa) = alloc_frames(ARENA_PAGES) else {
-                    return core::ptr::null_mut();
-                };
-                let base = phys_to_virt(pa);
-                // SAFETY: these frames were just allocated for this arena
-                // and are never freed, so the slice is exclusive and
-                // lives forever.
-                let mem = unsafe { core::slice::from_raw_parts_mut(base, ARENA_PAGES * PAGE_SIZE) };
-                let (base, arena) = slot.insert((base as usize, Arena::new(mem)));
-                return arena
-                    .alloc(size, tag)
-                    .map_or(core::ptr::null_mut(), |off| (*base + off) as *mut u8);
-            }
+    // Next fit over the arenas, from the one that last had room.
+    let count = pool.arenas.len;
+    let first = pool.hint;
+    for step in 0..count {
+        let at = (first + step) % count;
+        let (base, arena) = &mut pool.arenas.as_mut_slice()[at];
+        if let Some(off) = arena.alloc(size, tag) {
+            let block = (*base + off) as *mut u8;
+            pool.hint = at;
+            return block;
         }
     }
-    core::ptr::null_mut()
+    let Some(at) = pool.add_arena() else {
+        return core::ptr::null_mut();
+    };
+    pool.hint = at;
+    let (base, arena) = &mut pool.arenas.as_mut_slice()[at];
+    arena
+        .alloc(size, tag)
+        .map_or(core::ptr::null_mut(), |off| (*base + off) as *mut u8)
 }
 
 /// Allocate `size` bytes labelled `tag` as whole, zeroed pages whose
@@ -116,38 +260,28 @@ pub fn alloc_contiguous(size: usize, tag: u32, within: &Within) -> *mut u8 {
 pub fn free(ptr: *mut u8) -> Result<(usize, u32), PoolError> {
     let addr = ptr as usize;
     let mut pool = POOL.lock();
-    if let Some(slot) = pool
-        .large
-        .iter_mut()
-        .find(|s| s.is_some_and(|l| l.addr == addr))
-    {
-        let l = slot.take().ok_or(PoolError::NotAllocated)?;
+    if let Some(l) = pooltab::remove(pool.slots(), addr) {
+        pool.large.len -= 1;
         free_frames(direct_to_phys(ptr), l.pages);
         return Ok((l.size, l.tag));
     }
-    for (base, arena) in pool.arenas.iter_mut().flatten() {
-        if (*base..*base + arena.len()).contains(&addr) {
-            return arena.free(addr - *base).map_err(|e| match e {
-                HeapError::Overrun { tag, size } => PoolError::Overrun { tag, size },
-                HeapError::NotAllocated | HeapError::Corrupt => PoolError::NotAllocated,
-            });
-        }
-    }
-    Err(PoolError::NotAllocated)
+    let (base, arena) = pool.arena_of(addr).ok_or(PoolError::NotAllocated)?;
+    arena.free(addr - *base).map_err(|e| match e {
+        HeapError::Overrun { tag, size } => PoolError::Overrun { tag, size },
+        HeapError::NotAllocated | HeapError::Corrupt => PoolError::NotAllocated,
+    })
 }
 
 /// Size and tag of the live allocation at `ptr`, if it is one.
 pub fn info(ptr: *const u8) -> Option<(usize, u32)> {
     let addr = ptr as usize;
-    let pool = POOL.lock();
-    if let Some(l) = pool.large.iter().flatten().find(|l| l.addr == addr) {
+    let mut pool = POOL.lock();
+    if let Some(at) = pooltab::find(pool.slots(), addr) {
+        let l = pool.slots()[at];
         return Some((l.size, l.tag));
     }
-    pool.arenas
-        .iter()
-        .flatten()
-        .find(|(base, arena)| (*base..*base + arena.len()).contains(&addr))
-        .and_then(|(base, arena)| arena.info(addr - *base).ok())
+    let (base, arena) = pool.arena_of(addr)?;
+    arena.info(addr - *base).ok()
 }
 
 /// Allocate `size` zeroed bytes. Null if memory is exhausted.
@@ -162,37 +296,43 @@ pub fn alloc_zeroed(size: usize, tag: u32) -> *mut u8 {
 
 /// Live allocations: how many, and how many bytes were asked for.
 pub fn usage() -> Usage {
-    let pool = POOL.lock();
+    let mut pool = POOL.lock();
     let mut total = Usage::default();
-    for (_, arena) in pool.arenas.iter().flatten() {
+    for (_, arena) in pool.arenas.as_slice() {
         total.blocks += arena.usage().blocks;
         total.bytes += arena.usage().bytes;
     }
-    for l in pool.large.iter().flatten() {
+    for l in pool.slots().iter().filter(|l| l.addr != 0) {
         total.blocks += 1;
         total.bytes += l.size;
     }
     total
 }
 
-/// Frames the pool holds: its arenas, which are kept once made, and the
-/// pages of each live block too large for an arena. A leak check counts
-/// blocks and bytes for what the pool hands out, so it must not count
-/// these frames as lost as well: a block that only grew past a page,
-/// and moved from an arena to pages of its own, is not a leak.
+/// Frames the pool holds: its arenas, which are kept once made, the
+/// pages of each live block too large for an arena, and its own records
+/// of both. A leak check counts blocks and bytes for what the pool hands
+/// out, so it must not count these frames as lost as well: a block that
+/// only grew past a page, and moved from an arena to pages of its own,
+/// is not a leak, nor is the record that grew to note it.
 pub fn frames() -> u64 {
-    let pool = POOL.lock();
-    let arenas = pool.arenas.iter().flatten().count() * ARENA_PAGES;
-    let large: usize = pool.large.iter().flatten().map(|l| l.pages).sum();
-    (arenas + large) as u64
+    let mut pool = POOL.lock();
+    let arenas = pool.arenas.len * ARENA_PAGES + pool.arenas.frames();
+    let large: usize = pool
+        .slots()
+        .iter()
+        .filter(|l| l.addr != 0)
+        .map(|l| l.pages)
+        .sum();
+    (arenas + large + pool.large.frames()) as u64
 }
 
 /// Walk every arena checking headers and guard bytes.
 pub fn check() -> Result<(), HeapError> {
     POOL.lock()
         .arenas
+        .as_slice()
         .iter()
-        .flatten()
         .try_for_each(|(_, arena)| arena.walk(|_, _| {}))
 }
 
@@ -234,6 +374,28 @@ pub fn self_test() -> Result<(), &'static str> {
     if free(victim) != Err(PoolError::Overrun { tag: TAG, size: 24 }) {
         return Err("overrun was not detected");
     }
+    // More large blocks at once than the table's first size holds, and
+    // more than the pool once allowed: the record grows and every block
+    // is still found.
+    let mut many = alloc::vec::Vec::new();
+    many.try_reserve_exact(600)
+        .map_err(|_| "no memory for the list")?;
+    for i in 0..600 {
+        let block = alloc(PAGE_SIZE, TAG ^ i);
+        if block.is_null() {
+            return Err("a large block was refused");
+        }
+        many.push(block);
+    }
+    for (i, &block) in many.iter().enumerate() {
+        if info(block) != Some((PAGE_SIZE, TAG ^ i as u32)) {
+            return Err("a large block's record was lost as the table grew");
+        }
+    }
+    for block in many.drain(..) {
+        free(block).map_err(|_| "a large block could not be freed")?;
+    }
+    drop(many);
     if usage() != before {
         return Err("pool leaked");
     }
