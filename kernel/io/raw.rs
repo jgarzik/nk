@@ -74,6 +74,7 @@ pub fn init() -> Result<(), &'static str> {
                 set(major, absent);
             }
             set(IRP_MJ_FILE_SYSTEM_CONTROL, file_system_control);
+            set(IRP_MJ_PNP, pnp);
         }
     })
     .map_err(|_| "RAW's driver object could not be made")?;
@@ -291,6 +292,26 @@ unsafe extern "C" fn pass_down(volume: *mut DEVICE_OBJECT, request: *mut IRP) ->
         (*next).CompletionRoutine = None;
         (*next).Context = core::ptr::null_mut();
         irp::IofCallDriver((*vcb(volume)).target, request)
+    }
+}
+
+/// `IRP_MJ_PNP`, as Windows' `RawDispatch` answers it: a query to
+/// remove the device is refused (`STATUS_DEVICE_BUSY`), the volume being
+/// mounted; anything else, the target-device relation among them, goes
+/// to the device beneath.
+///
+/// # Safety
+/// `volume` is RAW's volume device and `request` a request sent to it.
+unsafe extern "C" fn pnp(volume: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
+    /// `IRP_MN_QUERY_REMOVE_DEVICE` and `STATUS_DEVICE_BUSY`.
+    const IRP_MN_QUERY_REMOVE_DEVICE: u8 = 0x01;
+    const STATUS_DEVICE_BUSY: NTSTATUS = 0x8000_0011_u32 as NTSTATUS;
+    // SAFETY: a request sent to RAW's volume device.
+    unsafe {
+        if (*(*request).CurrentStackLocation).MinorFunction == IRP_MN_QUERY_REMOVE_DEVICE {
+            return complete(request, STATUS_DEVICE_BUSY, 0);
+        }
+        pass_down(volume, request)
     }
 }
 

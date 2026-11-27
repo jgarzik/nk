@@ -90,7 +90,12 @@ opened and nothing in it (a name, a related file, a disposition other
 than "open", or a directory is `STATUS_INVALID_PARAMETER`, as Windows'
 RAW answers), and passes reads, writes, control requests and flushes
 down unchanged; NK's own disk tests read `\Device\Harddisk0\DR0`
-through it. A RAW volume stays mounted until its device is deleted
+through it. Plug and Play requests go down too, the target-device
+relation among them, so a registration for a file on a RAW volume finds
+the device's physical device object, except a query to remove the
+device, which RAW refuses (`STATUS_DEVICE_BUSY`), as Windows' RAW
+does. A target-device registration asks the stack a request on the file
+goes to, as Windows' `IoGetRelatedTargetDevice` does. A RAW volume stays mounted until its device is deleted
 (`VPB_REMOVE_PENDING`) and nothing but the mount holds its block; then
 RAW's device goes. Another file system's volume is its own to dismount.
 

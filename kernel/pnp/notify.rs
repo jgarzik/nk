@@ -192,7 +192,7 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
     // it is (`TargetDeviceRelation`), as Windows asks.
     let (target, file) = if category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE {
         // SAFETY: per the contract, `data` is an open file object.
-        match unsafe { target_of(data.cast_mut().cast()) } {
+        match unsafe { related_target(data.cast_mut().cast()) } {
             Ok(target) => (target, data as usize),
             Err(status) => return status,
         }
@@ -289,24 +289,6 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void)
 pub unsafe extern "C" fn IoUnregisterPlugPlayNotification(handle: *mut c_void) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe { IoUnregisterPlugPlayNotificationEx(handle) }
-}
-
-/// The physical device object of `file`'s stack, with a reference: what
-/// the stack answers `TargetDeviceRelation` with.
-///
-/// # Safety
-/// `file` is an open file object. Called at `PASSIVE_LEVEL`.
-unsafe fn target_of(file: *mut nk_ntabi::io::FILE_OBJECT) -> Result<usize, NTSTATUS> {
-    // SAFETY: per the contract: an open file holds its device.
-    let reported =
-        unsafe { super::query::relations((*file).DeviceObject, TARGET_DEVICE_RELATION) }?
-            .ok_or(STATUS_NOT_SUPPORTED)?;
-    let (first, rest) = reported.split_first().ok_or(STATUS_NOT_SUPPORTED)?;
-    for extra in rest {
-        // SAFETY: each device the driver reported comes referenced.
-        unsafe { object::dereference(*extra as *mut u8) };
-    }
-    Ok(*first)
 }
 
 /// A custom event on its way to a worker: the work item, the device,
