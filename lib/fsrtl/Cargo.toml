@@ -10,5 +10,8 @@ publish.workspace = true
 [lib]
 path = "lib.rs"
 
+[dependencies]
+nk-rtl = { path = "../rtl" }
+
 [lints]
 workspace = true

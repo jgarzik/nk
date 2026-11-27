@@ -41,6 +41,9 @@ dependencies = [
 [[package]]
 name = "nk-fsrtl"
 version = "0.2.0"
+dependencies = [
+ "nk-rtl",
+]
 
 [[package]]
 name = "nk-hal"

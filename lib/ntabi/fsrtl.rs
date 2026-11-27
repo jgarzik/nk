@@ -110,6 +110,18 @@ pub struct FILE_LOCK {
     pub LockRequestsInProgress: i32,
 }
 
+/// `TUNNEL` (`ntifs.h`): a volume's tunnel cache, which a file system
+/// embeds in its volume control block. The public symbols do not
+/// describe it; the offsets are those the pinned kernel's routines use.
+#[repr(C)]
+pub struct TUNNEL {
+    pub Mutex: FAST_MUTEX,
+    /// The kernel's own record of the entries.
+    pub Cache: *mut c_void,
+    pub TimerQueue: LIST_ENTRY,
+    pub NumEntries: u16,
+}
+
 /// `BASE_MCB` (`ntifs.h`): the mapping a `LARGE_MCB` holds. The public
 /// symbols do not describe it; the offsets are those the pinned kernel's
 /// MCB routines use.
@@ -159,6 +171,11 @@ const _: () = {
     assert!(offset_of!(FILE_LOCK, LockInformation) == 0x18);
     assert!(offset_of!(FILE_LOCK, LastReturnedLock) == 0x50);
     assert!(offset_of!(FILE_LOCK, LockRequestsInProgress) == 0x58);
+
+    assert!(size_of::<TUNNEL>() == 0x58);
+    assert!(offset_of!(TUNNEL, Cache) == 0x38);
+    assert!(offset_of!(TUNNEL, TimerQueue) == 0x40);
+    assert!(offset_of!(TUNNEL, NumEntries) == 0x50);
 
     assert!(size_of::<BASE_MCB>() == 0x18);
     assert!(offset_of!(BASE_MCB, PairCount) == 0x04);

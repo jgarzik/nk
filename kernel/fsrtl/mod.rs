@@ -12,10 +12,13 @@ pub mod filter;
 pub mod lock;
 pub mod mcb;
 pub mod name;
+pub mod notify;
 pub mod oplock;
 pub mod status;
+pub mod tunnel;
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use nk_fsrtl::tunnel::Limits;
 
 /// Whether a short name's extension of more than three characters ends
 /// in `~` (`RtlGenerate8dot3Name`): Windows' `FsRtlSafeExtensions`, true
@@ -30,12 +33,37 @@ const FILE_SYSTEM: &str = "Machine\\System\\CurrentControlSet\\Control\\FileSyst
 /// whose first four bytes, whatever the value's type, turn safe
 /// extensions off when they are not zero.
 pub fn init() {
-    if let Ok((_, data)) = crate::cm::read(FILE_SYSTEM, "Win95TruncatedExtensions")
-        && let Some(first) = data.first_chunk::<4>()
-        && u32::from_le_bytes(*first) != 0
-    {
+    if value("Win95TruncatedExtensions").is_some_and(|v| v != 0) {
         SAFE_EXTENSIONS.store(false, Ordering::Relaxed);
     }
+    if let Some(entries) = value("MaximumTunnelEntries") {
+        TUNNEL_ENTRIES.store(entries, Ordering::Relaxed);
+    }
+    if let Some(age) = value("MaximumTunnelEntryAgeInSeconds") {
+        TUNNEL_AGE.store(age, Ordering::Relaxed);
+    }
+}
+
+/// The first four bytes of a value of the file systems' key, whatever
+/// its type, as Windows reads them.
+fn value(name: &str) -> Option<u32> {
+    let (_, data) = crate::cm::read(FILE_SYSTEM, name).ok()?;
+    Some(u32::from_le_bytes(*data.first_chunk::<4>()?))
+}
+
+/// How many entries a tunnel cache keeps (Windows' `TunnelMaxEntries`,
+/// 256 unless the registry says otherwise).
+static TUNNEL_ENTRIES: AtomicU32 = AtomicU32::new(256);
+/// How many seconds an entry is kept (15 unless the registry says
+/// otherwise).
+static TUNNEL_AGE: AtomicU32 = AtomicU32::new(15);
+
+/// The tunnel caches' limits.
+pub fn limits() -> Limits {
+    Limits::from_registry(
+        TUNNEL_AGE.load(Ordering::Relaxed),
+        TUNNEL_ENTRIES.load(Ordering::Relaxed),
+    )
 }
 
 /// [`SAFE_EXTENSIONS`].

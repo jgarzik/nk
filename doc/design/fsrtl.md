@@ -64,3 +64,24 @@ as Windows initialises it, and the other routines do what the pinned
 kernel does with no record of locks (`kernel/fsrtl/lock.rs`): every
 access is allowed, nothing waits, an unlock finds no range locked. A
 record that is not null stops the system by name.
+
+## Tunnel caches
+
+A volume's tunnel cache remembers, for a short while, the names and
+data (a creation time) of files just renamed or deleted, so a file made
+with one of those names gets them back; the rules are the pinned
+kernel's (`nk_fsrtl::tunnel`): keyed by directory and one name without
+regard to case, pruned by age and number on every addition and
+look-up. The limits are Windows' defaults, 256 entries and 15 seconds,
+unless `Control\FileSystem\MaximumTunnelEntries` or
+`MaximumTunnelEntryAgeInSeconds` says otherwise (read at boot); an age
+of 0 turns tunnelling off. The `TUNNEL` structure's mutex serialises
+the routines; NK's record of the entries hangs on its `Cache` field.
+
+## Change notification
+
+The per-volume synchronisation object is Windows' (a fast mutex its
+owner may take again, from the pool). A directory watch is registered
+only by `FsRtlNotifyFullChangeDirectory`, a trap, so the list is always
+empty: reporting a change or cleaning up a handle finds nothing to
+complete, and a watch on the list stops the system by name.
