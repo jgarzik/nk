@@ -593,6 +593,27 @@ const _: () = {
     assert!(offset_of!(FILE_OBJECT, SectionObjectPointer) == 0x28);
 };
 
+/// [`SHARE_ACCESS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocheckshareaccess):
+/// a file system's counts of a file's opens, by what they asked for and
+/// what they share.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SHARE_ACCESS {
+    pub OpenCount: u32,
+    pub Readers: u32,
+    pub Writers: u32,
+    pub Deleters: u32,
+    pub SharedRead: u32,
+    pub SharedWrite: u32,
+    pub SharedDelete: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<SHARE_ACCESS>() == 0x1C);
+    assert!(offset_of!(SHARE_ACCESS, SharedDelete) == 0x18);
+};
+
 #[repr(C)]
 pub struct FILE_OBJECT {
     pub Type: i16,

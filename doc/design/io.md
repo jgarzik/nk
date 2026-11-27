@@ -115,6 +115,20 @@ three control devices. Windows' `PopGracefulShutdown` waits for the
 cache manager's lazy writer right after this step; that is where NK's
 cache manager is to do the same.
 
+**Share access** (`io/share.rs`, rules in `lib/io/share.rs`).
+`IoCheckShareAccess`, `IoSetShareAccess`, `IoUpdateShareAccess` and
+`IoRemoveShareAccess` keep a file system's `SHARE_ACCESS` counts as the
+pinned kernel's `IoCheckLinkShareAccess` does: an open's access is
+recorded in its file object; one with no read, write or delete access
+neither conflicts nor counts.
+
+**Volume GUID names** (`io/guid.rs`). `IoVolumeDeviceToGuidPath` asks
+the volume its device name and the mount point manager that name's
+mount points, and answers the first `\??\Volume...` link, in pool the
+caller frees; `IoVolumeDeviceToGuid` parses the GUID out of it. Without
+the mount point manager both fail with the open's status and leave the
+output as it was, as Windows does.
+
 **File system services** (`io/fs.rs`, `io/file.rs`). `IoGetTopLevelIrp`
 and `IoSetTopLevelIrp` read and write `ETHREAD.TopLevelIrp`;
 `IoGetDeviceToVerify` and `IoSetDeviceToVerify` its `DeviceToVerify`;

@@ -123,6 +123,9 @@ pub const fn nt_error(status: NTSTATUS) -> bool {
     status as u32 >> 30 == 3
 }
 
+/// Another open's access or share mode stands in the way.
+pub const STATUS_SHARING_VIOLATION: NTSTATUS = 0xC000_0043_u32 as NTSTATUS;
+
 #[cfg(test)]
 mod tests {
     use super::*;
