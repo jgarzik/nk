@@ -1138,10 +1138,11 @@ Not covered:
   overflow stub have no entries.
 - Code that starts a processor before it is on the kernel's page tables
   (the x86-64 trampoline, arm64's `nk_ap_stub`).
-- The prebuilt `core`, `alloc` and `compiler_builtins`: Rust ships them
-  without tables. What NK instantiates from them (generic code) is
-  compiled with NK and has entries; their own non-generic functions
-  (formatting, `memcpy`, 128-bit division) do not.
+- The prebuilt `compiler_builtins` (`memcpy`, 128-bit division): Rust
+  ships it without tables, and the link-time optimisation leaves it
+  apart. `core` and `alloc` are optimised with the kernel as one
+  program (`lto = "fat"` in the workspace's release profile), so their
+  code is compiled with NK and has entries.
 - x86-64 MXCSR and arm64 FPCR of interrupted code: they are in the trap
   frame, but unwind codes have no way to name them.
 

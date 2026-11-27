@@ -1,7 +1,5 @@
 # Code of the arm64 kernel image that may be without an unwind entry
 # (tools/unwind_coverage.py): `lib` a whole library, `sym` one symbol.
-lib core	prebuilt by Rust without unwind tables
-lib alloc	prebuilt by Rust without unwind tables
 lib compiler_builtins	prebuilt by Rust without unwind tables
 sym nk_vectors	exception entry: the interrupted pc is in ELR_EL1 alone, where no unwind code reaches
 sym nk_stack_overflow	reports a stack overflow from a stack entered at return address zero
