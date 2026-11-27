@@ -314,4 +314,35 @@ mod tests {
         let root = delete(&mut a, 2);
         assert_eq!(a.check(root), [1, 3]);
     }
+
+    #[test]
+    fn delete_non_root_nodes_with_two_children_and_deep_predecessors() {
+        // Root 6 with left child 3 (two children: 1->2, 4) and right child 9 (two children: 7->8, 10).
+        // Deleting 3 tests !a_root with a as left child and b_parent != a;
+        // deleting 9 tests !a_root with a as right child and b_parent != a.
+        let mut a = Arena::new(10);
+        a.links[6] = [6, 3, 9];
+        a.links[3] = [6, 1, 4];
+        a.links[1] = [3, 0, 2];
+        a.links[2] = [1, 0, 0];
+        a.links[4] = [3, 0, 0];
+        a.links[9] = [6, 7, 10];
+        a.links[7] = [9, 0, 8];
+        a.links[8] = [7, 0, 0];
+        a.links[10] = [9, 0, 0];
+        let root = delete(&mut a, 3);
+        assert_eq!(a.check(root), [1, 2, 4, 6, 7, 8, 9, 10]);
+
+        // Rebuild for deleting 9 as a right child whose predecessor 8 has a left child 7.
+        let mut b = Arena::new(10);
+        b.links[5] = [5, 1, 9];
+        b.links[1] = [5, 0, 0];
+        b.links[9] = [5, 6, 10];
+        b.links[6] = [9, 0, 8];
+        b.links[8] = [6, 7, 0];
+        b.links[7] = [8, 0, 0];
+        b.links[10] = [9, 0, 0];
+        let root = delete(&mut b, 9);
+        assert_eq!(b.check(root), [1, 5, 6, 7, 8, 10]);
+    }
 }

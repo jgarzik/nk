@@ -208,3 +208,28 @@ const _: () = assert!(matches!(
     slot_offset(HAL_DISPATCH_SLOTS, "HalGetCachedAcpiTable"),
     Some(0xa8)
 ));
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slot_offsets_match_and_reject_unknown_names() {
+        assert_eq!(
+            slot_offset(HAL_DISPATCH_SLOTS, "HalInitPowerManagement"),
+            Some(0x68)
+        );
+        assert_eq!(
+            slot_offset(HAL_ACPI_DISPATCH_SLOTS, "HalAcpiGetTable"),
+            Some(0x58)
+        );
+        assert_eq!(
+            slot_offset(HAL_PRIVATE_DISPATCH_SLOTS, "HalHaltSystem"),
+            Some(FIRST_SLOT + 8 * 8)
+        );
+        // Same length as "Spare1" (6 bytes), different characters.
+        assert_eq!(slot_offset(HAL_DISPATCH_SLOTS, "Spare2"), None);
+        // Different length.
+        assert_eq!(slot_offset(HAL_DISPATCH_SLOTS, "NoSuchSlot"), None);
+    }
+}

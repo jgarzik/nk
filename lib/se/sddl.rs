@@ -283,16 +283,26 @@ mod tests {
 
     #[test]
     fn owner_group_and_flags() {
-        let sd = parse("O:BAG:SYD:AI(D;CIOI;0x1f;;;BU)").unwrap();
+        let sd = parse("O:BAG:SYD:AIAR(D;CIOINPIOID;0x1f;;;BU)").unwrap();
         let parts = parse_relative(&sd).unwrap();
         assert_eq!(parts.owner.unwrap()[8..], [32, 0, 0, 0, 0x20, 2, 0, 0]);
         assert_eq!(parts.group.unwrap()[8..], [18, 0, 0, 0]);
         let ace = crate::acl::aces(parts.dacl.unwrap()).next().unwrap();
-        assert_eq!((ace.kind, ace.flags), (1, 3));
+        assert_eq!(
+            (ace.kind, ace.flags),
+            (
+                1,
+                OBJECT_INHERIT_ACE
+                    | CONTAINER_INHERIT_ACE
+                    | NO_PROPAGATE_INHERIT_ACE
+                    | INHERIT_ONLY_ACE
+                    | INHERITED_ACE
+            )
+        );
         assert_eq!(ace.basic().unwrap().0, 0x1F);
         assert_eq!(
-            parts.control & SE_DACL_AUTO_INHERITED,
-            SE_DACL_AUTO_INHERITED
+            parts.control & (SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ),
+            SE_DACL_AUTO_INHERITED | SE_DACL_AUTO_INHERIT_REQ
         );
         // An empty DACL is present and denies everything.
         let parts_empty = parse("D:").unwrap();
@@ -305,7 +315,25 @@ mod tests {
         assert_eq!(parse("D:(A;;GA;;;PU)"), Err(SddlError::Unsupported("PU")));
         assert_eq!(parse("D:(OA;;GA;;;SY)"), Err(SddlError::Unsupported("OA")));
         assert_eq!(parse("S:(AU;;GA;;;SY)"), Err(SddlError::Unsupported("S:")));
+        assert_eq!(parse("D:Q(A;;GA;;;SY)"), Err(SddlError::Unsupported("Q")));
+        assert_eq!(parse("D:(A;SA;GA;;;SY)"), Err(SddlError::Unsupported("SA")));
+        assert_eq!(parse("D:(A;;ZZ;;;SY)"), Err(SddlError::Unsupported("ZZ")));
+        assert_eq!(
+            parse("D:(A;;GA;obj;;SY)"),
+            Err(SddlError::Unsupported("obj"))
+        );
+        assert_eq!(
+            parse("D:(A;;GA;;inh;SY)"),
+            Err(SddlError::Unsupported("inh"))
+        );
         assert_eq!(parse("D:(A;;GA;;SY)"), Err(SddlError::Invalid));
+        assert_eq!(parse("D:(A;O;GA;;;SY)"), Err(SddlError::Invalid));
+        assert_eq!(parse("D:(A;;G;;;SY)"), Err(SddlError::Invalid));
+        assert_eq!(parse("D:(A;;GA;;;S-1-5)"), Err(SddlError::Invalid));
+        assert_eq!(
+            parse("D:(A;;GA;;;S-1-281474976710656-1)"),
+            Err(SddlError::Invalid)
+        );
         assert_eq!(parse("X:"), Err(SddlError::Invalid));
         assert_eq!(parse("D:(A;;GA;;;S-1-x)"), Err(SddlError::Invalid));
     }

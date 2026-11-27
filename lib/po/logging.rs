@@ -92,12 +92,16 @@ mod tests {
 
     #[test]
     fn a_forgotten_reason_can_be_logged_again() {
-        let mut reasons = Reasons::new();
+        let mut reasons = Reasons::default();
         assert_eq!(reasons.log(3, 0x1), Logged::Recorded);
         assert_eq!(reasons.log(4, 0x8), Logged::Recorded);
         reasons.forget(3);
         assert_eq!(reasons.states(3), None);
         assert_eq!(reasons.states(4), Some(0x8));
         assert_eq!(reasons.log(3, 0x2), Logged::Recorded);
+        reasons.forget(3);
+        reasons.forget(4);
+        assert_eq!(reasons.states(3), None);
+        assert_eq!(reasons.states(4), None);
     }
 }
