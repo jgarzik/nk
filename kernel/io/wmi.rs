@@ -14,6 +14,7 @@ use crate::ex::work::ExQueueWorkItem;
 use crate::ke::seh::Guard;
 use crate::ke::{Rank, SpinLock, pcr, wait};
 use crate::mm::pool;
+use crate::ob::object::ObRef;
 use crate::{kd, ob};
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -187,10 +188,10 @@ unsafe fn send(
     // SAFETY: per the contract.
     unsafe {
         // Held while the request is with the stack.
-        let top = device::IoGetAttachedDeviceReference(device);
+        let held = ObRef::adopt(device::IoGetAttachedDeviceReference(device).cast());
+        let top = held.cast::<DEVICE_OBJECT>();
         let request = irp::alloc((*top).StackSize.saturating_add(1));
         if request.is_null() {
-            ob::object::dereference(top.cast());
             return (STATUS_INSUFFICIENT_RESOURCES, 0);
         }
         // An all-zero event is a valid value; it is initialised just
@@ -226,12 +227,13 @@ unsafe fn send(
                 "a driver returned {returned:#010x} from IRP_MJ_SYSTEM_CONTROL without \
                  completing the request"
             ));
+            // Kept with the request the driver may still hold.
+            held.into_raw();
             return (returned, 0);
         }
         wait::wait(Some((&raw mut done).cast()), None);
         let result = ((*request).IoStatus.Status, (*request).IoStatus.Information);
         irp::free(request);
-        ob::object::dereference(top.cast());
         result
     }
 }

@@ -24,7 +24,7 @@ use super::{query, registry};
 use crate::io::{self, device, service};
 use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::{Rank, SpinLock, mutex, wait};
-use crate::ob::object;
+use crate::ob::object::{self, ObRef};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
@@ -1233,15 +1233,14 @@ pub unsafe fn stack_drivers(pdo: *mut DEVICE_OBJECT) -> Vec<String> {
     // device database lock by `IoGetAttachedDeviceReference` only for
     // the top, so the walk goes down from there.
     unsafe {
-        let top = device::IoGetAttachedDeviceReference(pdo);
-        let mut at = top;
+        let top = ObRef::adopt(device::IoGetAttachedDeviceReference(pdo).cast());
+        let mut at = top.cast::<DEVICE_OBJECT>();
         while !at.is_null() {
             let driver = (*at).DriverObject;
             let name = crate::rtl::copy_unicode(&raw const (*driver).DriverName);
             names.push(String::from_utf16_lossy(&name));
             at = (*(*at).DeviceObjectExtension).AttachedTo;
         }
-        object::dereference(top.cast());
     }
     names
 }

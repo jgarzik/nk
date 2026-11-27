@@ -7,7 +7,7 @@
 use super::{device, irp};
 use crate::ke::seh::Guard;
 use crate::ke::{self, irql};
-use crate::ob::object;
+use crate::ob::object::ObRef;
 use alloc::boxed::Box;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -73,10 +73,10 @@ pub unsafe fn send_synchronous_from(
     // the boxed block stays where it is until the request has been
     // seen to complete.
     unsafe {
-        let top = device::IoGetAttachedDeviceReference(device);
+        let held = ObRef::adopt(device::IoGetAttachedDeviceReference(device).cast());
+        let top = held.cast::<DEVICE_OBJECT>();
         let request = irp::alloc((*top).StackSize);
         if request.is_null() {
-            object::dereference(top.cast());
             return (STATUS_INSUFFICIENT_RESOURCES, 0);
         }
         // An all-zero event is a valid value; it is initialised below.
@@ -114,12 +114,10 @@ pub unsafe fn send_synchronous_from(
                 returned as u32
             ));
             Box::leak(waiting);
-            object::dereference(top.cast());
             return (returned, 0);
         }
         ke::wait::wait(Some((&raw mut waiting.done).cast()), None);
         irp::free(request);
-        object::dereference(top.cast());
         let result = (&raw const waiting.status_block).read();
         (result.Status, result.Information)
     }
