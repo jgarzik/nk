@@ -10,9 +10,10 @@ opens of a volume, and its answers to information queries and
 file-system control requests stop the system by name.
 
 No opportunistic locks (a file system's request for one stops the
-system by name: `doc/design/fsrtl.md`). No user-mode APC is delivered
-(one can be queued; an alertable wait does not end for it), no sleep
-states, device power-down ([Power](power.md)), processes
+system by name: `doc/design/fsrtl.md`). No kernel stack segment larger than a thread's stack, and none at
+`DISPATCH_LEVEL` (see [Threads](threads.md), stack expansion). No
+user-mode APC is delivered (one can be queued; an alertable wait
+does not end for it), no sleep states, device power-down ([Power](power.md)), processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft

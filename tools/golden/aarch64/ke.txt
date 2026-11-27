@@ -12,3 +12,6 @@ ke.apc.wait ok
 ke.apc.thread ok
 ke.apc.remove ok
 ke.apc.disabled ok
+ke.expand.switch ok
+ke.expand.inline ok
+ke.expand.raise ok

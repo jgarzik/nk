@@ -26,6 +26,7 @@ mod etw;
 mod ex;
 pub mod except;
 mod exlock;
+mod expand;
 mod fsd;
 mod hal;
 mod interrupt;
@@ -174,6 +175,7 @@ pub static GROUPS: &[&[&Group]] = &[
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,
+    expand::GROUPS,
     wait::GROUPS,
     apc::GROUPS,
     ob::GROUPS,

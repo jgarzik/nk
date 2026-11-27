@@ -94,13 +94,23 @@ impl fmt::Display for WalkError {
     }
 }
 
-/// The stacks code on this processor can be running on right now.
-pub(super) fn stacks() -> [Option<Stack>; 2] {
+/// The stacks code on this processor can be running on right now: the
+/// thread's own, the segments it holds (`ke::expand`), and at
+/// `DISPATCH_LEVEL` the processor's DPC stack.
+pub(super) type Stacks = [Option<Stack>; super::thread::MAX_SEGMENTS + 2];
+
+pub(super) fn stacks() -> Stacks {
+    let mut stacks: Stacks = [None; super::thread::MAX_SEGMENTS + 2];
+    for (slot, stack) in stacks.iter_mut().zip(super::thread::current_stacks()) {
+        *slot = Some(stack);
+    }
     // The DPC stack is the processor's, and a thread below
     // DISPATCH_LEVEL can change processors; but it is not on any DPC
     // stack either.
-    let dpc = (irql::current() >= irql::DISPATCH_LEVEL).then(|| arch::percpu().dpcs().stack());
-    [Some(super::thread::current_stack()), dpc]
+    if irql::current() >= irql::DISPATCH_LEVEL {
+        stacks[super::thread::MAX_SEGMENTS + 1] = Some(arch::percpu().dpcs().stack());
+    }
+    stacks
 }
 
 /// The stack `address` is on, if code on this processor can be
@@ -113,7 +123,7 @@ pub fn stack_holding(address: u64) -> Option<Stack> {
 }
 
 /// Read the stack slot at `address`, if it is one.
-pub(super) fn read_slot(stacks: &[Option<Stack>; 2], address: u64) -> Option<u64> {
+pub(super) fn read_slot(stacks: &Stacks, address: u64) -> Option<u64> {
     let on = |stack: &Stack| {
         address
             .checked_add(8)

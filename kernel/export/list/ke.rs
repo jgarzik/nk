@@ -50,6 +50,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::mutex::KeAreApcsDisabled),
     export!(Implemented, ke::apc::KeAreAllApcsDisabled),
     export!(Implemented, ke::apc::KeEnterGuardedRegion),
+    export!(Implemented, ke::expand::KeExpandKernelStackAndCalloutEx),
     export!(Implemented, ke::apc::KeInitializeApc),
     export!(Implemented, ke::apc::KeInsertQueueApc),
     export!(Implemented, ke::apc::KeLeaveGuardedRegion),

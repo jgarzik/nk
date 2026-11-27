@@ -248,6 +248,33 @@ the decisions are `lib/ke/apc.rs`, tested on the host:
 
 User-mode APCs are queued but never delivered; see [absent](absent.md).
 
+## Stack expansion
+
+`KeExpandKernelStackAndCalloutEx` (`kernel/ke/expand.rs`) runs a
+routine with the stack it asks for, on the current stack when that has
+the room, else on a stack segment: a kernel stack like a thread's
+([Memory](memory.md): same size, alignment and guard, so both
+architectures' overflow checks hold on it). The rules are Windows'
+`KiExpandKernelStackAndCalloutSwitchStack`, read in the pinned kernel:
+a size above 0x11800 fails with `STATUS_INVALID_PARAMETER_3`; above
+`DISPATCH_LEVEL` the system stops; at `DISPATCH_LEVEL` a caller that
+may wait fails with `STATUS_INVALID_PARAMETER_4`; a size equal to the
+kernel stack's, or 0x6000, always gets a segment, as the file systems'
+0x6000 on every create and transfer does.
+
+The switch is `arch::call_on_stack`, whose unwind information leads a
+walk back to the stack it left. While the routine runs on a segment the
+thread's `InitialStack`, `StackBase` and `StackLimit`, `IoGetStackLimits`,
+the overflow check and the unwinder see the segment. An exception the
+routine lets out unwinds across the switch: the guarded call around it
+puts the thread back on its stack as the unwind passes, and the
+segment, still under the unwind, is kept, walkable, until the thread
+next returns from a segment or ends. A segment is never larger than a
+thread's stack, so a size it cannot hold fails with
+`STATUS_INSUFFICIENT_RESOURCES`, as does one at `DISPATCH_LEVEL` the
+current stack cannot hold (Windows may switch there), and a thread runs
+on at most six segments at once.
+
 ## Deferred procedure calls
 
 Each processor has a DPC queue. Queueing puts the DPC on the queueing
