@@ -12,6 +12,9 @@ use crate::kd;
 use crate::ke::mutex;
 use crate::ke::seh::{self, Guard};
 use crate::ob::object::ObRef;
+
+/// The pool tag of the block a nesting-level request writes back to.
+const TAG_NESTING: u32 = u32::from_le_bytes(*b"FsNe");
 use nk_ntabi::fsrtl::*;
 
 /// Take the lock that guards a header's `FilterContexts`: its push
@@ -151,8 +154,9 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
     /// `_DISK_FILE_SYSTEM` and `_VIRTUAL_DISK`.
     const ASKED: [u32; 5] = [0x02, 0x03, 0x07, 0x08, 0x24];
     crate::ke::irql::expect_passive("FsRtlGetVirtualDiskNestingLevel");
-    // SAFETY: per the contract. The event, status block and answer stay
-    // on this stack until the request has been seen to complete.
+    // SAFETY: per the contract. The event, status block and answer are
+    // in a pool block that stays until the request has been seen to
+    // complete, or for good if its driver kept it.
     unsafe {
         level.write(0);
         if !flags.is_null() {
@@ -161,36 +165,59 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
         if !ASKED.contains(&(*device).DeviceType) {
             return STATUS_INVALID_PARAMETER;
         }
-        let held = ObRef::adopt(super::device::IoGetAttachedDeviceReference(device).cast());
-        let top = held.cast::<nk_ntabi::io::DEVICE_OBJECT>();
-        let mut answer = [0u8; 0x14];
-        let mut done: KEVENT = core::mem::zeroed();
-        crate::ke::wait::KeInitializeEvent(&raw mut done, 0, 0);
-        let mut status_block = IO_STATUS_BLOCK {
+        /// What the request writes back: its event, status and answer.
+        #[repr(C)]
+        struct Waiting {
+            done: KEVENT,
+            status_block: IO_STATUS_BLOCK,
+            answer: [u8; 0x14],
+        }
+        let waiting = crate::mm::pool::alloc(size_of::<Waiting>(), TAG_NESTING).cast::<Waiting>();
+        if waiting.is_null() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        let done = &raw mut (*waiting).done;
+        crate::ke::wait::KeInitializeEvent(done, 0, 0);
+        (&raw mut (*waiting).status_block).write(IO_STATUS_BLOCK {
             Status: STATUS_PENDING,
             Information: 0,
-        };
+        });
+        let held = ObRef::adopt(super::device::IoGetAttachedDeviceReference(device).cast());
+        let top = held.cast::<nk_ntabi::io::DEVICE_OBJECT>();
         let request = super::build::IoBuildDeviceIoControlRequest(
             IOCTL_STORAGE_GET_NESTING,
             top,
             core::ptr::null_mut(),
             0,
-            answer.as_mut_ptr().cast(),
-            answer.len() as u32,
+            (&raw mut (*waiting).answer).cast(),
+            0x14,
             0,
-            &raw mut done,
-            &raw mut status_block,
+            done,
+            &raw mut (*waiting).status_block,
         );
         if request.is_null() {
+            let _ = crate::mm::pool::free(waiting.cast());
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         let was_enabled = crate::ps::IoSetThreadHardErrorMode(0);
-        if super::irp::IofCallDriver(top, request) == STATUS_PENDING {
-            crate::ke::wait::wait(Some((&raw mut done).cast()), None);
-        }
+        let returned = super::irp::IofCallDriver(top, request);
         crate::ps::IoSetThreadHardErrorMode(was_enabled);
+        if returned != STATUS_PENDING && crate::ke::wait::KeReadStateEvent(done) == 0 {
+            // The driver may still complete the request, or pass it
+            // down: the block it writes and the stack it names stay
+            // (as `io::stack` leaves a request).
+            kd::verify(format_args!(
+                "a driver returned {:#010x} for IOCTL_STORAGE_GET_NESTING without completing \
+                 the request",
+                returned as u32
+            ));
+            held.into_raw();
+            return returned;
+        }
+        crate::ke::wait::wait(Some(done.cast()), None);
         drop(held);
-        let status = status_block.Status;
+        let status = (&raw const (*waiting).status_block).read().Status;
+        let _ = crate::mm::pool::free(waiting.cast());
         if !nt_success(status) {
             return status;
         }
