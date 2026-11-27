@@ -272,8 +272,16 @@ fn common_buffer() -> Result<u64, &'static str> {
             }
             buffer.cast::<u8>().write_bytes(0xCB, bytes);
             // Below a bound of the caller's that is lower than the
-            // adapter's.
-            let ceiling = logical + (64 * PAGE) as i64;
+            // adapter's: just above a page seen free a moment before, so
+            // there is a page under it whatever the rest of the boot has
+            // taken.
+            let mut probe = 0i64;
+            let seen = allocate(a.adapter, PAGE as u32, &raw mut probe, 1);
+            if seen.is_null() {
+                return Err("AllocateCommonBuffer of one page returned null");
+            }
+            free(a.adapter, PAGE as u32, probe, seen, 1);
+            let ceiling = probe + (16 * PAGE) as i64 - 1;
             let mut low = 0i64;
             let under = allocate_ex(
                 a.adapter,
