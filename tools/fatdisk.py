@@ -3,7 +3,8 @@
 The disk is a raw 64 MiB image with one partition, in an MBR or a GPT
 (`LAYOUTS`), at sector 2048 and 126976 sectors long. The volume is
 FAT32 with one sector a cluster, which gives it more clusters than FAT16
-can count, and holds the files of `FILES`, written by mtools. Every
+can count, and holds the files of `FILES`, written by mtools: a nested
+one, an empty one and one with a long name among them. Every
 identifier is fixed (the disk's signature or GUID, the partition's GUID,
 the volume's serial), so a boot sees the same disk each time.
 
@@ -55,6 +56,8 @@ FILES = {
     "HELLO.TXT": b"NK reads FAT\r\n",
     "PATTERN.BIN": pattern(3 * datadisk.SECTOR + 100),
     "DIR1/NESTED.TXT": b"nested\r\n",
+    "Long File Name.txt": b"a name longer than 8.3\r\n",
+    "EMPTY.TXT": b"",
 }
 
 

@@ -414,9 +414,10 @@ pattern disk, a 64 MiB disk holding one FAT32 volume
 in an MBR (`fat32-mbr`, disk signature `0x4E4B0001`, type `0x0C`) or a
 GPT (`fat32-gpt`, a Basic Data partition, fixed disk and partition
 GUIDs). The volume has one sector a cluster, the serial `4e4b0002`,
-the label `NKVOL`, and three files: `HELLO.TXT`, `PATTERN.BIN` (three
-sectors and 100 bytes of the data disk's original pattern) and
-`DIR1\NESTED.TXT`. After the boot, `disk_expect = "fat-unchanged"`
+the label `NKVOL`, and the files of `fatdisk.FILES`: among them
+`PATTERN.BIN` (three sectors and 100 bytes of the data disk's original
+pattern, so a misplaced cluster shows), `DIR1\NESTED.TXT`, an empty
+file and one with a long name. After the boot, `disk_expect = "fat-unchanged"`
 requires `fsck.fat -n` to find the volume clean, every file to hold
 what it was given, and no other file. `tools/test_fatdisk.py` holds the
 check to that without booting.
