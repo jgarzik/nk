@@ -171,7 +171,17 @@ pub fn builtin(
     name: &str,
     setup: impl FnOnce(*mut DRIVER_OBJECT),
 ) -> Result<*mut DRIVER_OBJECT, DriverError> {
-    let mut driver_name = wide("\\Driver\\", name);
+    builtin_in("\\Driver\\", name, setup)
+}
+
+/// [`builtin`] for a driver object in the directory `prefix` names:
+/// `\FileSystem\` for the kernel's own file system (`io::raw`).
+pub fn builtin_in(
+    prefix: &str,
+    name: &str,
+    setup: impl FnOnce(*mut DRIVER_OBJECT),
+) -> Result<*mut DRIVER_OBJECT, DriverError> {
+    let mut driver_name = wide(prefix, name);
     let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
     let path = &driver_name[..driver_name.len() - 1];
     let body = ob::object::create_named(&ob::object::DRIVER_TYPE, size, ob::leaf(path))
@@ -190,7 +200,7 @@ pub fn builtin(
     unsafe {
         let extension = object.add(1).cast::<DRIVER_EXTENSION>();
         (*extension).DriverObject = object;
-        (*extension).ServiceKeyName = counted(&mut driver_name[8..]);
+        (*extension).ServiceKeyName = counted(&mut driver_name[prefix.len()..]);
         (*object).Type = IO_TYPE_DRIVER;
         (*object).Size = size_of::<DRIVER_OBJECT>() as i16;
         (*object).DriverExtension = extension;

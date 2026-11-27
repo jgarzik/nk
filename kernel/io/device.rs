@@ -298,6 +298,9 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
         if (*device).Flags & super::shutdown::DO_SHUTDOWN_REGISTERED != 0 {
             super::shutdown::IoUnregisterShutdownNotification(device);
         }
+        if !(*device).Vpb.is_null() {
+            super::mount::device_deleted(device);
+        }
         ob::remove(device.cast());
         let unreferenced = {
             let database = DATABASE.lock();

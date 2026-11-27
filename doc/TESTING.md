@@ -369,6 +369,18 @@ a test disk that loses a write, writes a sector it was not asked to,
 reads a sector from the wrong place, or reports fewer bytes than it
 moved.
 
+The test disk is a disk device, so it has a volume parameter block,
+and the proof reads it through RAW, as every open of a disk for data
+goes (`doc/DESIGN.md`, Mounting). `disk.raw.*` hold the mount to that:
+an open of the disk for its attributes alone mounts nothing
+(`disk.raw.direct`); an open of a name on the unmounted disk, whose
+block does not allow a raw mount, is `STATUS_UNRECOGNIZED_VOLUME`
+(`disk.raw.unrecognized`); an open of the disk for data mounts RAW,
+whose device then serves the disk's first sector, and a name on the
+mounted disk is RAW's `STATUS_INVALID_PARAMETER` (`disk.raw.mount`).
+The group deletes its disk at the end, which dismounts it; its count
+of what it leaves behind would show a volume left mounted.
+
 Against Microsoft's disk the proof is `stor.direct.io` of the
 `x86_64-storage-direct` scenario, whose image is held to
 `disk_expect = "written"`, and `stor.io` of the `x86_64-storage`

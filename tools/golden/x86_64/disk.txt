@@ -3,3 +3,6 @@ disk.io.answers ok
 disk.io.proof ok
 disk.io.image ok
 disk.io.detects ok
+disk.raw.direct ok
+disk.raw.unrecognized ok
+disk.raw.mount ok

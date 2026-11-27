@@ -1716,6 +1716,27 @@ file stays counted on the device that was named, and
 `IoGetDeviceObjectPointer` hands out the top. How a read's or a write's
 buffer travels is the top device's choice (`DO_BUFFERED_IO`).
 
+**Mounting** (`io/mount.rs`, `io/raw.rs`). A device a file system can be
+mounted on has a volume parameter block (`VPB`), and an open of it that
+is not a direct device open (the device itself, for its attributes,
+synchronisation or security alone) mounts the block first, as Windows'
+`IopCheckVpbMounted` does: the file object gets the block, with a
+reference, and its requests go to the top of the mounted volume
+device's stack. NK has one file system, RAW, the kernel's own as on
+Windows (`\FileSystem\RAW`): it mounts when the device itself is
+opened, or when the block allows a raw mount (`VPB_RAW_MOUNT`), and
+otherwise the open fails with `STATUS_UNRECOGNIZED_VOLUME`. RAW's
+volume device takes the buffering of the device beneath, lets the
+volume itself be opened and nothing in it (a name, a related file, a
+disposition other than "open", or a directory is
+`STATUS_INVALID_PARAMETER`, as Windows' RAW answers), and passes
+reads, writes, control requests and flushes down unchanged; NK's own
+disk tests read `\Device\Harddisk0\DR0` through it. Mounting clears
+the device's `DO_VERIFY_VOLUME`. Two opens mounting at once make two
+volume devices; the first published wins and the other is deleted. A
+volume stays mounted until its device is deleted (`VPB_REMOVE_PENDING`)
+and nothing is open on it; then RAW's device goes.
+
 A deleted device with another still attached to it stays, deletion
 pending, until that one detaches. The driver of the attached device is
 told at once if it has a `FastIoDetachDevice` routine, as the pinned
@@ -3219,6 +3240,11 @@ power handlers register and deregister (`lib/ke/kdpower.rs`); no
 transition calls them.
 
 ## What is absent
+
+**File systems.** None registers (`IoRegisterFileSystem` is absent):
+RAW is all there is to mount. RAW enforces no share access between
+opens of a volume, and its answers to information queries and
+file-system control requests stop the system by name.
 
 No APCs, sleep states, device power-down ("Power"), processes
 other than System, user-mode code, ALPC ports, I/O completion ports,

@@ -46,6 +46,7 @@ mod pnp;
 mod po;
 mod pofx;
 mod range;
+mod rawfs;
 mod request;
 mod requestor;
 mod resource;
@@ -206,6 +207,7 @@ pub static GROUPS: &[&[&Group]] = &[
     iosupport::GROUPS,
     startio::GROUPS,
     diskio::GROUPS,
+    rawfs::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

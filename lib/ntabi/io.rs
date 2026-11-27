@@ -153,7 +153,10 @@ pub const IRP_MJ_CREATE_NAMED_PIPE: u8 = 0x01;
 pub const IRP_MJ_CLOSE: u8 = 0x02;
 pub const IRP_MJ_READ: u8 = 0x03;
 pub const IRP_MJ_WRITE: u8 = 0x04;
+pub const IRP_MJ_QUERY_INFORMATION: u8 = 0x05;
+pub const IRP_MJ_SET_INFORMATION: u8 = 0x06;
 pub const IRP_MJ_FLUSH_BUFFERS: u8 = 0x09;
+pub const IRP_MJ_QUERY_VOLUME_INFORMATION: u8 = 0x0A;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_INTERNAL_DEVICE_CONTROL: u8 = 0x0F;
@@ -181,6 +184,22 @@ pub const IO_TYPE_VPB: i16 = 0x0A;
 pub const fn device_type_has_vpb(device_type: u32) -> bool {
     matches!(device_type, 0x02 | 0x07 | 0x1F | 0x24)
 }
+
+/// `VPB.Flags`: a file system is mounted on the device; the device
+/// accepts the raw file system even when a file in it is opened.
+pub const VPB_MOUNTED: u16 = 0x0001;
+pub const VPB_RAW_MOUNT: u16 = 0x0010;
+/// `VPB_REMOVE_PENDING`: the device is being deleted; the volume is
+/// dismounted once nothing is open on it.
+pub const VPB_REMOVE_PENDING: u16 = 0x0008;
+
+/// `DO_VERIFY_VOLUME`: the volume must be verified before its file
+/// system uses it again; mounting clears it.
+pub const DO_VERIFY_VOLUME: u32 = 0x0000_0002;
+
+/// `FILE_DEVICE_DISK_FILE_SYSTEM`: the type of a disk file system's
+/// devices.
+pub const FILE_DEVICE_DISK_FILE_SYSTEM: u32 = 0x08;
 
 /// [`VPB`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_vpb):
 /// the volume parameter block of a device a file system can be mounted
