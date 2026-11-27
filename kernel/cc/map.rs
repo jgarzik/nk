@@ -206,7 +206,14 @@ unsafe fn initialize(
         } else {
             release(scm);
         }
-        free_unused(core::ptr::null_mut(), spare);
+        free_unused(
+            if created {
+                core::ptr::null_mut()
+            } else {
+                fresh
+            },
+            spare,
+        );
         return Err(status);
     }
     // The file object's private map.

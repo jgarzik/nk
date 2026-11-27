@@ -5,3 +5,4 @@ cc.pin ok
 cc.pin-write-through ok
 cc.prepare-pin-write ok
 cc.uninitialize ok
+cc.initialize-extend-fails ok

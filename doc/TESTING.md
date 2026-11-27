@@ -222,7 +222,8 @@ tier has, for each architecture:
   pins get the covering BCB; a repinned dirty BCB written through is
   written with paging I/O and left clean; `CcPreparePinWrite` of a whole
   page reads nothing and leaves it dirty; the last of two file objects
-  to uninitialize deletes the map and signals both events.
+  to uninitialize deletes the map and signals both events; a second
+  caller whose allocation size cannot be had raises and keeps no pool.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

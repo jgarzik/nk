@@ -26,6 +26,7 @@ static CC: Group = Group {
         "cc.pin-write-through",
         "cc.prepare-pin-write",
         "cc.uninitialize",
+        "cc.initialize-extend-fails",
     ],
     run: cc_tests,
     manual: false,
@@ -141,6 +142,29 @@ fn holds_pattern(va: usize, offset: usize, len: usize) -> bool {
 
 fn reads(log: &[Record]) -> impl Iterator<Item = &Record> {
     log.iter().filter(|r| r.major == IRP_MJ_READ)
+}
+
+/// Sizes no section can be extended to: the memory manager has no
+/// directory that large.
+static HUGE: CC_FILE_SIZES = CC_FILE_SIZES {
+    AllocationSize: 1 << 46,
+    FileSize: nkfs::FILE_BYTES as i64,
+    ValidDataLength: nkfs::FILE_BYTES as i64,
+};
+
+/// A body for `except::raises`: cache the file object at `file` again
+/// with sizes its section cannot be extended to.
+extern "C" fn initialize_huge(file: usize) {
+    // SAFETY: a cached nkfs file object.
+    unsafe {
+        entry::nk_entry_CcInitializeCacheMap(
+            file as *mut c_void,
+            (&raw const HUGE).cast(),
+            1,
+            (&raw const CALLBACKS).cast(),
+            core::ptr::null_mut(),
+        )
+    }
 }
 
 /// The file the raise test maps, for its body.
@@ -337,6 +361,24 @@ fn run(verdicts: &mut Verdicts) -> Result<(), &'static str> {
 
     // Two file objects cache the file: the first one's uninitialize keeps
     // the map, the second deletes it and signals both events, once.
+    // A cache map that cannot be extended for a second caller raises,
+    // and gives back every block the call took.
+    let before = crate::mm::pool::usage();
+    let raised = except::raises(
+        initialize_huge,
+        file.addr(),
+        STATUS_INSUFFICIENT_RESOURCES as u32,
+    );
+    let after = crate::mm::pool::usage();
+    verdicts.push((
+        "cc.initialize-extend-fails",
+        raised.and(if after.blocks == before.blocks {
+            Ok(())
+        } else {
+            Err("a failed CcInitializeCacheMap kept pool blocks")
+        }),
+    ));
+
     let uninit = (|| {
         let (handle, second) = volume.open_another()?;
         initialize(second, true);
