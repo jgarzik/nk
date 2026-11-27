@@ -11,6 +11,7 @@ use crate::ex::pushlock;
 use crate::kd;
 use crate::ke::mutex;
 use crate::ke::seh::{self, Guard};
+use crate::ob::object::ObRef;
 use nk_ntabi::fsrtl::*;
 
 /// Take the lock that guards a header's `FilterContexts`: its push
@@ -160,7 +161,8 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
         if !ASKED.contains(&(*device).DeviceType) {
             return STATUS_INVALID_PARAMETER;
         }
-        let top = super::device::IoGetAttachedDeviceReference(device);
+        let held = ObRef::adopt(super::device::IoGetAttachedDeviceReference(device).cast());
+        let top = held.cast::<nk_ntabi::io::DEVICE_OBJECT>();
         let mut answer = [0u8; 0x14];
         let mut done: KEVENT = core::mem::zeroed();
         crate::ke::wait::KeInitializeEvent(&raw mut done, 0, 0);
@@ -180,7 +182,6 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
             &raw mut status_block,
         );
         if request.is_null() {
-            crate::ob::object::dereference(top.cast());
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         let was_enabled = crate::ps::IoSetThreadHardErrorMode(0);
@@ -188,7 +189,7 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
             crate::ke::wait::wait(Some((&raw mut done).cast()), None);
         }
         crate::ps::IoSetThreadHardErrorMode(was_enabled);
-        crate::ob::object::dereference(top.cast());
+        drop(held);
         let status = status_block.Status;
         if !nt_success(status) {
             return status;

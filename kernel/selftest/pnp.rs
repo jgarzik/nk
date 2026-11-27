@@ -374,9 +374,11 @@ unsafe extern "C" fn dispatch(device: *mut DEVICE_OBJECT, request: *mut IRP) -> 
             }
             Role::Layer => {
                 if minor == IRP_MN_START_DEVICE && (*own).number == 2 {
-                    let child = device::IoGetDeviceAttachmentBaseRef(device);
-                    let number = (*extension(child)).number;
-                    crate::ob::object::dereference(child.cast());
+                    let child = crate::ob::object::ObRef::adopt(
+                        device::IoGetDeviceAttachmentBaseRef(device).cast(),
+                    );
+                    let number = (*extension(child.cast())).number;
+                    drop(child);
                     if number == FAILING.load(Ordering::Acquire) {
                         return complete(request, STATUS_DEVICE_NOT_READY, 0);
                     }
