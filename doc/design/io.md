@@ -99,6 +99,22 @@ goes to, as Windows' `IoGetRelatedTargetDevice` does. A RAW volume stays mounted
 (`VPB_REMOVE_PENDING`) and nothing but the mount holds its block; then
 RAW's device goes. Another file system's volume is its own to dismount.
 
+**Associated requests** (`io/irp.rs`). `IoMakeAssociatedIrp` makes a
+request for the master's thread whose `AssociatedIrp.MasterIrp` is the
+master; the file system sets the master's `IrpCount`. An associated
+request's completion frees its MDLs and the request and counts the
+master down, and the last completes the master with the status the
+file system left in it, as the pinned kernel's `IopfCompleteRequest`
+does.
+
+**Shutdown.** Between the shutdown-notification queue and the
+last-chance one (`io/shutdown.rs`, [Power](power.md)), each base file
+system's control device is sent `IRP_MJ_SHUTDOWN` and mounting stops.
+RAW's answer, as Windows' `RawShutdown`, unregisters and deletes its
+three control devices. Windows' `PopGracefulShutdown` waits for the
+cache manager's lazy writer right after this step; that is where NK's
+cache manager is to do the same.
+
 **File system services** (`io/fs.rs`, `io/file.rs`). `IoGetTopLevelIrp`
 and `IoSetTopLevelIrp` read and write `ETHREAD.TopLevelIrp`;
 `IoGetDeviceToVerify` and `IoSetDeviceToVerify` its `DeviceToVerify`;

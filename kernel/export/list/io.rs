@@ -91,6 +91,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::irpinfo::IoGetPagingIoPriority),
     export!(Implemented, io::irpinfo::IoGetRequestorProcessId),
     export!(Implemented, io::irpinfo::IoGetStackLimits),
+    export!(Implemented, io::irp::IoMakeAssociatedIrp),
     export!(Implemented, io::mount::IoAcquireVpbSpinLock),
     export!(Implemented, io::mount::IoReleaseVpbSpinLock),
     export!(Implemented, io::file::IoCreateStreamFileObject),

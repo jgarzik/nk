@@ -2,11 +2,15 @@
 //! `IRP_MJ_SHUTDOWN` before the machine goes off.
 //!
 //! Two queues, as Windows keeps them. The first is told before the file
-//! systems would be flushed, the last-chance queue after. NK has no
-//! file system to flush between them yet, so [`shutdown_system`] sends
-//! the one after the other. Each queue is sent newest registration
-//! first, to the top of the registered device's stack, one request at
-//! a time and waited for.
+//! systems are shut down, the last-chance queue after. Between them each
+//! file system registered on the disk, CD-ROM and tape queues is sent
+//! its `IRP_MJ_SHUTDOWN` (Windows' `IopShutdownBaseFileSystems`), and
+//! from then on nothing is mounted. Windows' `PopGracefulShutdown`
+//! waits for the cache manager's lazy writer right after this step
+//! (`CcWaitForCurrentLazyWriterActivity`): the place for NK's cache
+//! manager to do the same is the end of `shutdown_file_systems`.
+//! Each queue is sent newest registration first, to the top of the
+//! registered device's stack, one request at a time and waited for.
 
 use super::stack;
 use crate::ke::spinlock::{Rank, SpinLock};
@@ -99,12 +103,34 @@ pub unsafe extern "C" fn IoUnregisterShutdownNotification(device: *mut DEVICE_OB
     }
 }
 
+/// Send each base file system's control device, at the top of its
+/// stack, its shutdown request, waiting for each; from then on no
+/// volume mounts (`io::fs`).
+fn shutdown_file_systems() {
+    super::fs::stop_mounting();
+    let mut sent = Vec::new();
+    while let Some(device) = super::fs::next_base(&sent) {
+        sent.push(device);
+        // SAFETY: `next_base` counted the device for this.
+        let (status, _) = unsafe { stack::send_synchronous(device, IRP_MJ_SHUTDOWN, 0, [0; 4]) };
+        super::fs::trace(format_args!(
+            "file system {device:p} shut down: {:#x}",
+            status as u32
+        ));
+        // SAFETY: as above.
+        unsafe { super::device::dereference(device) };
+    }
+}
+
 /// Send every registered device its shutdown request: the first queue,
-/// then the last-chance one. Each leaves its queue as it is sent, and
-/// its reference is given up after. Called at `PASSIVE_LEVEL` by
-/// whatever ends a run.
+/// then the file systems, then the last-chance queue. A queued device
+/// leaves its queue as it is sent, and its reference is given up
+/// after. Called at `PASSIVE_LEVEL` by whatever ends a run.
 pub fn shutdown_system() {
     for last_chance in [false, true] {
+        if last_chance {
+            shutdown_file_systems();
+        }
         loop {
             // One at a time, newest first; the lock is not held across
             // a driver's dispatch routine.

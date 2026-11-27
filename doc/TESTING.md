@@ -207,6 +207,13 @@ tier has, for each architecture:
   locked page holds its frame and refuses a purge, a flush writes exactly the modified pages
   with the cache manager's mark, a purge is refused while a view is mapped
   and afterwards gives every page and block back.
+- `x86_64-io-mount` (`test=io.mount.* trace=mount`): the mount path
+  with nkfs's mount half (`kernel/selftest/nkfs_mount.rs`): two control
+  devices on the disk queue asked in order on a first open, the block
+  marked and counted as Windows does, a stream file object's cleanup at
+  once and close at its last reference, creates on a 0x6000 stack
+  expansion and a raise across one, a read split into associated
+  requests, and the file systems' shutdown at the end of the boot.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

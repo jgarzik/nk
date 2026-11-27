@@ -40,6 +40,7 @@ mod mutex;
 mod neg;
 mod nkfs;
 mod nkfs_mm;
+mod nkfs_mount;
 mod null;
 mod ob;
 mod open;
@@ -214,6 +215,7 @@ pub static GROUPS: &[&[&Group]] = &[
     startio::GROUPS,
     diskio::GROUPS,
     rawfs::GROUPS,
+    nkfs_mount::GROUPS,
     nkfs_mm::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,

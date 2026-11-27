@@ -16,7 +16,6 @@ trap_list!(
     IoCsqInsertIrpEx,
     IoDuplicateDependency,
     IoGetFsZeroingOffset,
-    IoMakeAssociatedIrp,
     IoQueryFullDriverPath,
     IoRaiseHardError,
     IoRaiseInformationalHardError,

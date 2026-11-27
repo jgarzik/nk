@@ -66,3 +66,11 @@ io.activity-id.thread ok
 io.request-facts ok
 io.device-vpb ok
 io.mdl.fixed-size ok
+io.mount.queue ok
+io.mount.block ok
+io.mount.stream ok
+io.mount.expanded ok
+io.mount.again ok
+io.mount.associated ok
+io.mount.expand-raise ok
+io.mount.close ok

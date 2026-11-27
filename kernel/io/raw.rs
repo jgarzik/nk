@@ -75,6 +75,7 @@ pub fn init() -> Result<(), &'static str> {
             }
             set(IRP_MJ_FILE_SYSTEM_CONTROL, file_system_control);
             set(IRP_MJ_PNP, pnp);
+            set(IRP_MJ_SHUTDOWN, shutdown);
         }
     })
     .map_err(|_| "RAW's driver object could not be made")?;
@@ -292,6 +293,26 @@ unsafe extern "C" fn pass_down(volume: *mut DEVICE_OBJECT, request: *mut IRP) ->
         (*next).CompletionRoutine = None;
         (*next).Context = core::ptr::null_mut();
         irp::IofCallDriver((*vcb(volume)).target, request)
+    }
+}
+
+/// `IRP_MJ_SHUTDOWN`, sent to RAW's first control device the file
+/// systems' shutdown reaches: as Windows' `RawShutdown`, all three leave
+/// their queues and are deleted.
+///
+/// # Safety
+/// `_device` is RAW's and `request` a request sent to it.
+unsafe extern "C" fn shutdown(_device: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
+    // SAFETY: RAW's own control devices, made at boot.
+    unsafe {
+        for control in &CONTROL {
+            let control = control.swap(core::ptr::null_mut(), Ordering::AcqRel);
+            if !control.is_null() {
+                super::fs::IoUnregisterFileSystem(control);
+                device::IoDeleteDevice(control);
+            }
+        }
+        complete(request, STATUS_SUCCESS, 0)
     }
 }
 

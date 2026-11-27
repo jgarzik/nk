@@ -119,6 +119,29 @@ pub fn trace(what: core::fmt::Arguments<'_>) {
     }
 }
 
+/// From now on no volume mounts (`STATUS_TOO_LATE`): the file systems
+/// are being shut down.
+pub fn stop_mounting() {
+    DATABASE.lock().shut_down = true;
+}
+
+/// The first control device on the disk, CD-ROM and tape queues that is
+/// not in `sent`, counted: the next base file system to send its
+/// shutdown request. The queues are looked at afresh each time, as
+/// Windows walks them, since a file system unregisters as it shuts down.
+pub fn next_base(sent: &[*mut DEVICE_OBJECT]) -> Option<*mut DEVICE_OBJECT> {
+    let database = DATABASE.lock();
+    let device = database.queues[..3]
+        .iter()
+        .flatten()
+        .map(|&d| core::ptr::with_exposed_provenance_mut::<DEVICE_OBJECT>(d))
+        .find(|d| !sent.contains(d))?;
+    // SAFETY: a registered device is counted, so live; the lock keeps it
+    // registered while it is counted again.
+    unsafe { device::reference(device) };
+    Some(device)
+}
+
 /// Mount a volume on `real`, a device with a volume parameter block,
 /// as Windows' `IopMountVolume` does. `allow_raw`: the open names the
 /// device itself. `STATUS_SUCCESS` also when another mount got there

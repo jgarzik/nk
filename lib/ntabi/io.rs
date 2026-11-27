@@ -208,6 +208,9 @@ pub const SL_ALLOW_RAW_MOUNT: u8 = 0x01;
 /// `IRP_MOUNT_COMPLETION | IRP_SYNCHRONOUS_PAGING_IO`: the flags of
 /// the mount request the I/O manager sends.
 pub const IRP_MOUNT_COMPLETION: u32 = 0x0000_0002;
+/// `IRP_ASSOCIATED_IRP`: the request is one of a master's associated
+/// requests (`IoMakeAssociatedIrp`); `AssociatedIrp.MasterIrp` names it.
+pub const IRP_ASSOCIATED_IRP: u32 = 0x0000_0008;
 /// `DO_LOW_PRIORITY_FILESYSTEM`: a file system that registers behind
 /// the others, just ahead of RAW.
 pub const DO_LOW_PRIORITY_FILESYSTEM: u32 = 0x0001_0000;

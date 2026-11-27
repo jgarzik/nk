@@ -101,6 +101,17 @@ arch = "aarch64"
 tier = "gate"
 cmdline = "test=ke.apc.*"
 
+# The mount path with nkfs's mount half: a file system registered on the
+# disk queue mounted by a first open, its stream file object's cleanup
+# and close, a create on a 0x6000 stack expansion, a raise across one,
+# and a read split into associated requests; the mount path traced.
+
+[x86_64-io-mount]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/io/", "lib/io/", "kernel/ke/expand.rs", "kernel/selftest/nkfs_mount.rs"]
+cmdline = "test=io.mount.* trace=mount"
+
 # A data disk on the machine changes nothing for a kernel that does not
 # write it: the boot passes, and the disk is as it was made. This is the
 # harness's own proof that the disk is attached, kept and compared.

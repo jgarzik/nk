@@ -267,7 +267,7 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
 unsafe fn finish(irp: *mut IRP) {
     // SAFETY: per the contract.
     unsafe {
-        if complete_paging(irp) {
+        if complete_associated(irp) || complete_paging(irp) {
             return;
         }
         let mut result = (*irp).IoStatus;
@@ -363,6 +363,67 @@ unsafe fn complete_paging(irp: *mut IRP) -> bool {
         ke::wait::KeSetEvent(event, 0, 0);
     }
     true
+}
+
+/// Final completion of an associated request, as the pinned kernel's
+/// `IopfCompleteRequest` does it: its MDLs go and it is freed, and its
+/// master's count of associated requests falls; the last one completes
+/// the master, whose status is what the file system left in it. False
+/// for a request that is not associated.
+///
+/// # Safety
+/// `irp` must be a live IRP whose stack has fully unwound.
+unsafe fn complete_associated(irp: *mut IRP) -> bool {
+    // SAFETY: per the contract; an associated request's master lives
+    // until its count reaches zero, which happens here.
+    unsafe {
+        if (*irp).Flags & IRP_ASSOCIATED_IRP == 0 {
+            return false;
+        }
+        let master = (*irp).SystemBuffer.cast::<IRP>();
+        super::mdl::release_chain(irp);
+        free(irp);
+        if irp_count(master).fetch_sub(1, Ordering::AcqRel) == 1 {
+            IofCompleteRequest(master, 0);
+        }
+    }
+    true
+}
+
+/// A master request's `AssociatedIrp.IrpCount`: the low 32 bits of the
+/// union that is `SystemBuffer` in other requests.
+///
+/// # Safety
+/// `master` is a live IRP that is a master of associated requests.
+unsafe fn irp_count<'a>(master: *mut IRP) -> &'a core::sync::atomic::AtomicI32 {
+    // SAFETY: per the contract; drivers change the count with
+    // interlocked operations too.
+    unsafe { core::sync::atomic::AtomicI32::from_ptr((&raw mut (*master).SystemBuffer).cast()) }
+}
+
+/// [`IoMakeAssociatedIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iomakeassociatedirp):
+/// a request of `stack_size` locations associated with `master`, for
+/// the same thread. The caller sets the master's `IrpCount`; the master
+/// completes when its last associated request does.
+///
+/// # Safety
+/// `master` is a live IRP.
+pub unsafe extern "C" fn IoMakeAssociatedIrp(master: *mut IRP, stack_size: i8) -> *mut IRP {
+    if stack_size <= 0 {
+        return core::ptr::null_mut();
+    }
+    let irp = alloc(stack_size);
+    if irp.is_null() {
+        return irp;
+    }
+    // SAFETY: a fresh IRP, and the caller's live master.
+    unsafe {
+        (*irp).Flags = IRP_ASSOCIATED_IRP;
+        (*irp).SystemBuffer = master.cast();
+        (*irp).Thread = (*master).Thread;
+        (*irp).RequestorMode = (*master).RequestorMode;
+    }
+    irp
 }
 
 /// Free an IRP (`IoFreeIrp`).
