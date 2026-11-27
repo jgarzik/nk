@@ -160,9 +160,15 @@ fn spawner(_: usize) {
                     continue;
                 }
                 let (_, _, priority) = WORKERS[index];
-                match thread::create_uncounted(worker, index, priority, thread::ANYWHERE) {
-                    Ok(_) => {
+                match thread::create_uncounted_unstarted(worker, index, priority, thread::ANYWHERE)
+                {
+                    Ok(thread) => {
+                        // Record the new worker before making it ready so
+                        // `pool.workers()` already includes it when it
+                        // begins executing.
                         queue.state.lock().pool.spawn_succeeded();
+                        // SAFETY: `thread` is whole and not yet started.
+                        unsafe { thread::begin(thread) };
                         spawned = true;
                     }
                     Err(_) => {
@@ -814,6 +820,7 @@ pub fn dynamic_test() -> Result<u64, &'static str> {
     static EXTRA_RAN: Slot<KEVENT> = Slot::new();
     static ENTERED: AtomicU32 = AtomicU32::new(0);
     static BLOCK_DONE: AtomicU32 = AtomicU32::new(0);
+    static PEAK_WORKERS: AtomicU32 = AtomicU32::new(0);
     static DYN_ITEMS: [Slot<WORK_QUEUE_ITEM>; 16] = [const { Slot::new() }; 16];
 
     /// # Safety
@@ -828,6 +835,7 @@ pub fn dynamic_test() -> Result<u64, &'static str> {
     /// # Safety
     /// Called as a work routine while `EXTRA_RAN` is live.
     unsafe extern "C" fn extra(_: *mut c_void) {
+        PEAK_WORKERS.store(QUEUE[1].state.lock().pool.workers(), Ordering::Release);
         // SAFETY: static notification event, initialised before queueing.
         unsafe { wait::KeSetEvent(EXTRA_RAN.ptr(), 0, 0) };
     }
@@ -837,6 +845,7 @@ pub fn dynamic_test() -> Result<u64, &'static str> {
     let blockers = current_workers.min(12);
     ENTERED.store(0, Ordering::Relaxed);
     BLOCK_DONE.store(0, Ordering::Relaxed);
+    PEAK_WORKERS.store(0, Ordering::Relaxed);
     // SAFETY: static notification events, not waited on yet.
     unsafe {
         wait::KeInitializeEvent(BLOCK_RELEASE.ptr(), 0, 0);
@@ -873,7 +882,7 @@ pub fn dynamic_test() -> Result<u64, &'static str> {
     }
     // SAFETY: static event.
     let status = unsafe { wait::wait(Some(EXTRA_RAN.ptr().cast()), Some(-50_000_000)) };
-    let peak_workers = QUEUE[1].state.lock().pool.workers() as usize;
+    let peak_workers = PEAK_WORKERS.load(Ordering::Acquire) as usize;
     // Release the blockers and wait for them to finish before returning.
     // SAFETY: static event.
     unsafe { wait::KeSetEvent(BLOCK_RELEASE.ptr(), 0, 0) };

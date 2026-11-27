@@ -672,10 +672,22 @@ pub fn create_uncounted(
     thread_priority: u8,
     affinity: u64,
 ) -> Result<*mut Thread, &'static str> {
-    let thread = new_thread(entry, argument, thread_priority, affinity, false)?;
+    let thread = create_uncounted_unstarted(entry, argument, thread_priority, affinity)?;
     // SAFETY: the thread is whole and on no queue.
     unsafe { make_ready(thread) };
     Ok(thread)
+}
+
+/// As [`create_uncounted`], but not yet made ready: the caller records
+/// the thread in its pool state and then calls [`begin`], so the thread
+/// cannot run before its pool counts it.
+pub fn create_uncounted_unstarted(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    new_thread(entry, argument, thread_priority, affinity, false)
 }
 
 /// Create a thread and keep a reference to it, to wait for its end. The
