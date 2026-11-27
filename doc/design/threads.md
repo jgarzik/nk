@@ -372,10 +372,16 @@ Windows' value for a `KTIMER2`.
 
 ## Work items
 
-Three queues (critical, delayed, hypercritical), each with worker threads
-at that queue's priority, free to run on any processor. Windows 10's
-other kinds map onto them: normal and background to delayed, real-time
-to hypercritical, super-critical to critical. A work item is the
+Three queues (critical, delayed, hypercritical), each with a dynamic
+pool of worker threads (`nk_ex::work::Pool`, host-tested) at that
+queue's priority, free to run on any processor. Each queue starts with
+its base workers (2, 2 and 1) and a dedicated spawner thread grows a
+queue up to its cap (16, 16 and 4) when items remain queued with no
+idle worker past a short grace period; extra workers retire after five
+seconds idle with an empty queue. Executive worker threads are not
+counted in `ke::thread::count()`. Windows 10's other kinds map onto
+them: normal and background to delayed, real-time to hypercritical,
+super-critical to critical. A work item is the
 driver's memory, linked through its list entry, whose forward link is
 null exactly while it is on no queue, as Windows keeps it. A worker
 unlinks an item before running it, so a routine may requeue or free its

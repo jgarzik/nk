@@ -23,9 +23,10 @@ use crate::mm::pool;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
+use nk_ex::work::Pool;
 use nk_ntabi::ex::{IO_WORKITEM, WORK_QUEUE_ITEM, WORK_QUEUES, work_queue};
 use nk_ntabi::io::DEVICE_OBJECT;
-use nk_ntabi::ke::{KSEMAPHORE, LIST_ENTRY};
+use nk_ntabi::ke::{KEVENT, KSEMAPHORE, LIST_ENTRY};
 
 /// The queues NK keeps.
 const QUEUES: usize = WORK_QUEUES;
@@ -35,37 +36,77 @@ const QUEUES: usize = WORK_QUEUES;
 fn queue_of(queue_type: u32) -> Option<&'static Queue> {
     work_queue(queue_type).map(|index| &QUEUE[index])
 }
-/// Each queue's worker threads: how many, and at what priority. Indexed
-/// by `WORK_QUEUE_TYPE`: critical, delayed, hypercritical.
-const WORKERS: [(usize, u8); QUEUES] = [(2, 13), (2, 12), (1, 15)];
+/// Each queue's worker threads: `(min, max, priority)`. Indexed by
+/// `WORK_QUEUE_TYPE`: critical, delayed, hypercritical.
+const WORKERS: [(u32, u32, u8); QUEUES] = [(2, 16, 13), (2, 16, 12), (1, 4, 15)];
+
+/// How long an extra dynamic worker waits idle before retiring (5 s,
+/// relative 100 ns units).
+const IDLE_TIMEOUT: i64 = -50_000_000;
+/// Grace period before the spawner creates another worker, so brief
+/// non-blocking bursts drain without spawning threads (15 ms, relative
+/// 100 ns units).
+const SPAWN_GRACE: i64 = -150_000;
 
 /// Pool tag of I/O work items.
 const TAG: u32 = u32::from_le_bytes(*b"IoWI");
 
-struct Queue {
+struct QueueState {
     /// The items waiting, oldest first: a circular list through the
     /// items' list entries, with this head.
-    items: SpinLock<UnsafeCell<LIST_ENTRY>>,
+    head: LIST_ENTRY,
+    /// Dynamic worker counts (`nk_ex::work::Pool`).
+    pool: Pool,
+}
+
+// SAFETY: the list and pool counts are only touched under the queue's lock.
+unsafe impl Send for QueueState {}
+
+struct Queue {
+    /// Items waiting and worker pool state.
+    state: SpinLock<QueueState>,
     /// Counts the items waiting; the workers wait on it.
     waiting: UnsafeCell<MaybeUninit<KSEMAPHORE>>,
 }
 
-// SAFETY: the list is only touched under its lock; the semaphore only
+// SAFETY: the state is only touched under its lock; the semaphore only
 // through the kernel routines, which lock for themselves.
 unsafe impl Sync for Queue {}
 
-static QUEUE: [Queue; QUEUES] = [const {
+const fn new_queue(min: u32, max: u32) -> Queue {
     Queue {
-        items: SpinLock::new(
+        state: SpinLock::new(
             Rank::WorkQueue,
-            UnsafeCell::new(LIST_ENTRY {
-                Flink: core::ptr::null_mut(),
-                Blink: core::ptr::null_mut(),
-            }),
+            QueueState {
+                head: LIST_ENTRY {
+                    Flink: core::ptr::null_mut(),
+                    Blink: core::ptr::null_mut(),
+                },
+                pool: Pool::new(min, max),
+            },
         ),
         waiting: UnsafeCell::new(MaybeUninit::uninit()),
     }
-}; QUEUES];
+}
+
+static QUEUE: [Queue; QUEUES] = [
+    new_queue(WORKERS[0].0, WORKERS[0].1),
+    new_queue(WORKERS[1].0, WORKERS[1].1),
+    new_queue(WORKERS[2].0, WORKERS[2].1),
+];
+
+/// Wakes the spawner thread when a queue has work waiting with no idle
+/// worker to take it.
+struct SpawnEvent(UnsafeCell<MaybeUninit<KEVENT>>);
+
+// SAFETY: a dispatcher object, used only through the kernel wait routines.
+unsafe impl Sync for SpawnEvent {}
+
+static SPAWN_EVENT: SpawnEvent = SpawnEvent(UnsafeCell::new(MaybeUninit::uninit()));
+
+fn spawn_event() -> *mut KEVENT {
+    SPAWN_EVENT.0.get().cast()
+}
 
 impl Queue {
     fn semaphore(&self) -> *mut KSEMAPHORE {
@@ -73,12 +114,15 @@ impl Queue {
     }
 }
 
-/// Start the worker threads. Once, after every processor is running.
+/// Start the base worker threads and the dynamic-worker spawner. Once,
+/// after every processor is running.
 pub fn init() -> Result<(), &'static str> {
+    // SAFETY: static storage for a synchronization event nothing waits on yet.
+    unsafe { wait::KeInitializeEvent(spawn_event(), 1, 0) };
     for (index, queue) in QUEUE.iter().enumerate() {
         {
-            let items = queue.items.lock();
-            let head = items.get();
+            let mut state = queue.state.lock();
+            let head = &raw mut state.head;
             // SAFETY: the head is this queue's own, under its lock. An
             // empty list points at itself.
             unsafe {
@@ -90,40 +134,88 @@ pub fn init() -> Result<(), &'static str> {
         }
         // SAFETY: static storage for a semaphore nothing waits on yet.
         unsafe { wait::KeInitializeSemaphore(queue.semaphore(), 0, i32::MAX) };
-        let (workers, priority) = WORKERS[index];
-        for _ in 0..workers {
-            thread::create(worker, index, priority, thread::ANYWHERE)?;
+        let (min, _, priority) = WORKERS[index];
+        for _ in 0..min {
+            thread::create_uncounted(worker, index, priority, thread::ANYWHERE)?;
         }
     }
+    thread::create(spawner, 0, 15, thread::ANYWHERE)?;
     Ok(())
 }
 
-/// A worker thread: run the items of queue `index`, for ever.
+/// Dynamic worker spawner: grows any queue whose items stay waiting
+/// with no idle worker beyond [`SPAWN_GRACE`], up to its cap. Runs at
+/// `PASSIVE_LEVEL` so `ExQueueWorkItem` never allocates stacks or
+/// touches memory-manager locks at `DISPATCH_LEVEL`.
+fn spawner(_: usize) {
+    loop {
+        // SAFETY: the static synchronization event, initialised at start.
+        unsafe { wait::wait(Some(spawn_event().cast()), None) };
+        loop {
+            // SAFETY: no object is involved.
+            unsafe { wait::wait(None, Some(SPAWN_GRACE)) };
+            let mut spawned = false;
+            for (index, queue) in QUEUE.iter().enumerate() {
+                if !queue.state.lock().pool.begin_spawn() {
+                    continue;
+                }
+                let (_, _, priority) = WORKERS[index];
+                match thread::create_uncounted(worker, index, priority, thread::ANYWHERE) {
+                    Ok(_) => {
+                        queue.state.lock().pool.spawn_succeeded();
+                        spawned = true;
+                    }
+                    Err(_) => {
+                        queue.state.lock().pool.spawn_failed();
+                    }
+                }
+            }
+            if !spawned || !QUEUE.iter().any(|q| q.state.lock().pool.wants_worker()) {
+                break;
+            }
+        }
+    }
+}
+
+/// A worker thread: run items of queue `index`, retiring on an idle
+/// timeout when extra dynamic workers are no longer needed.
 fn worker(index: usize) {
     let queue = &QUEUE[index];
     loop {
         // SAFETY: the queue's semaphore, initialised before any worker
         // was created.
-        unsafe { wait::wait(Some(queue.semaphore().cast()), None) };
-        let (routine, parameter);
-        {
-            let items = queue.items.lock();
-            let head = items.get();
+        let status = unsafe { wait::wait(Some(queue.semaphore().cast()), Some(IDLE_TIMEOUT)) };
+        if status == wait::STATUS_TIMEOUT {
+            if queue.state.lock().pool.on_idle_timeout() {
+                return;
+            }
+            continue;
+        }
+        let (routine, parameter, need_spawn) = {
+            let mut state = queue.state.lock();
+            let head = &raw mut state.head;
             // SAFETY: the semaphore counted an item in, so the list is
             // not empty; queued items are live, and their list entries
             // belong to this lock.
-            unsafe {
+            let (routine, parameter) = unsafe {
                 let entry = (*head).Flink;
                 let next = (*entry).Flink;
                 (&raw mut (*head).Flink).write(next);
                 (&raw mut (*next).Blink).write(head);
                 let item = entry.cast::<WORK_QUEUE_ITEM>();
-                routine = (&raw const (*item).WorkerRoutine).read();
-                parameter = (&raw const (*item).Parameter).read();
+                let routine = (&raw const (*item).WorkerRoutine).read();
+                let parameter = (&raw const (*item).Parameter).read();
                 // On no queue again: its owner may queue it, or free it,
                 // from the routine on.
                 (&raw mut (*entry).Flink).write(core::ptr::null_mut());
-            }
+                (routine, parameter)
+            };
+            let need_spawn = state.pool.on_dequeue();
+            (routine, parameter, need_spawn)
+        };
+        if need_spawn {
+            // SAFETY: the static event, initialised before any worker started.
+            unsafe { wait::KeSetEvent(spawn_event(), 0, 0) };
         }
         let Some(routine) = routine else {
             crate::kd::bugcheck(format_args!(
@@ -153,6 +245,7 @@ fn worker(index: usize) {
                 }
             ));
         }
+        queue.state.lock().pool.on_done();
     }
 }
 
@@ -169,9 +262,9 @@ pub unsafe extern "C" fn ExQueueWorkItem(item: *mut WORK_QUEUE_ITEM, queue_type:
             "0x000000E4 WORKER_INVALID: a work item for queue {queue_type}"
         ));
     };
-    {
-        let items = queue.items.lock();
-        let head = items.get();
+    let need_spawn = {
+        let mut state = queue.state.lock();
+        let head = &raw mut state.head;
         // SAFETY: per the contract; the list belongs to this lock.
         unsafe {
             let entry = item.cast::<LIST_ENTRY>();
@@ -188,9 +281,14 @@ pub unsafe extern "C" fn ExQueueWorkItem(item: *mut WORK_QUEUE_ITEM, queue_type:
             (&raw mut (*last).Flink).write(entry);
             (&raw mut (*head).Blink).write(entry);
         }
-    }
+        state.pool.on_queue()
+    };
     // SAFETY: the queue's semaphore; one more item waits.
     unsafe { wait::KeReleaseSemaphore(queue.semaphore(), 0, 1, 0) };
+    if need_spawn {
+        // SAFETY: the static event, initialised before any worker started.
+        unsafe { wait::KeSetEvent(spawn_event(), 0, 0) };
+    }
 }
 
 /// `ExTryQueueWorkItem` (exported, not documented): `ExQueueWorkItem`
@@ -435,7 +533,7 @@ pub unsafe extern "C" fn IoQueueWorkItemEx(
 use crate::ke::{dpc, time};
 use crate::test::Slot;
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use nk_ntabi::ke::{KDPC, KEVENT};
+use nk_ntabi::ke::KDPC;
 
 const ITEMS: usize = 256;
 static WORK: [Slot<WORK_QUEUE_ITEM>; ITEMS] = [const { Slot::new() }; ITEMS];
@@ -676,7 +774,8 @@ pub fn delete_race_test(
     }
     const ROUNDS: u64 = 400;
     reset();
-    let pool_before = pool::usage().blocks;
+    let live_blocks = || pool::usage().blocks - thread::uncounted_storage().0;
+    let pool_before = live_blocks();
     for round in 0..ROUNDS {
         let device_object = make_device().ok_or("could not create a device object")?;
         // SAFETY: a live device; the item frees itself in its routine.
@@ -698,13 +797,104 @@ pub fn delete_race_test(
     }
     // The last reference goes a moment after the routine returns.
     let deadline = time::interrupt_time() + 20_000_000;
-    while pool::usage().blocks != pool_before && time::interrupt_time() < deadline {
+    while live_blocks() != pool_before && time::interrupt_time() < deadline {
         thread::yield_now();
     }
-    if pool::usage().blocks != pool_before {
+    if live_blocks() != pool_before {
         return Err("a device deleted with a work item on the way was never freed");
     }
     Ok(ROUNDS)
+}
+
+/// Blocking every existing worker on a queue and queueing another item
+/// grows the pool dynamically so the extra item still runs, without
+/// perturbing `thread::count()`. Returns the items run.
+pub fn dynamic_test() -> Result<u64, &'static str> {
+    static BLOCK_RELEASE: Slot<KEVENT> = Slot::new();
+    static EXTRA_RAN: Slot<KEVENT> = Slot::new();
+    static ENTERED: AtomicU32 = AtomicU32::new(0);
+    static BLOCK_DONE: AtomicU32 = AtomicU32::new(0);
+    static DYN_ITEMS: [Slot<WORK_QUEUE_ITEM>; 16] = [const { Slot::new() }; 16];
+
+    /// # Safety
+    /// Called as a work routine while `BLOCK_RELEASE` is live.
+    unsafe extern "C" fn blocker(_: *mut c_void) {
+        ENTERED.fetch_add(1, Ordering::AcqRel);
+        // SAFETY: static notification event, initialised before queueing.
+        unsafe { wait::wait(Some(BLOCK_RELEASE.ptr().cast()), None) };
+        BLOCK_DONE.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// # Safety
+    /// Called as a work routine while `EXTRA_RAN` is live.
+    unsafe extern "C" fn extra(_: *mut c_void) {
+        // SAFETY: static notification event, initialised before queueing.
+        unsafe { wait::KeSetEvent(EXTRA_RAN.ptr(), 0, 0) };
+    }
+
+    let before_threads = thread::count();
+    let current_workers = QUEUE[1].state.lock().pool.workers() as usize;
+    let blockers = current_workers.min(12);
+    ENTERED.store(0, Ordering::Relaxed);
+    BLOCK_DONE.store(0, Ordering::Relaxed);
+    // SAFETY: static notification events, not waited on yet.
+    unsafe {
+        wait::KeInitializeEvent(BLOCK_RELEASE.ptr(), 0, 0);
+        wait::KeInitializeEvent(EXTRA_RAN.ptr(), 0, 0);
+    }
+    for slot in &DYN_ITEMS[..blockers] {
+        // SAFETY: static work item off any queue.
+        unsafe {
+            let item = slot.ptr();
+            (&raw mut (*item).WorkerRoutine).write(Some(blocker));
+            (&raw mut (*item).Parameter).write(core::ptr::null_mut());
+            (&raw mut (*item).List.Flink).write(core::ptr::null_mut());
+            ExQueueWorkItem(item, 1);
+        }
+    }
+    let deadline = time::interrupt_time() + 50_000_000;
+    while (ENTERED.load(Ordering::Acquire) as usize) < blockers {
+        if time::interrupt_time() > deadline {
+            // SAFETY: release any workers already blocked before returning.
+            unsafe { wait::KeSetEvent(BLOCK_RELEASE.ptr(), 0, 0) };
+            return Err("base workers did not all start the blocking items");
+        }
+        // SAFETY: no object is involved.
+        unsafe { wait::wait(None, Some(-10_000)) };
+    }
+    // Every worker on queue 1 is blocked; this item needs a dynamic worker.
+    // SAFETY: static work item off any queue.
+    unsafe {
+        let item = DYN_ITEMS[blockers].ptr();
+        (&raw mut (*item).WorkerRoutine).write(Some(extra));
+        (&raw mut (*item).Parameter).write(core::ptr::null_mut());
+        (&raw mut (*item).List.Flink).write(core::ptr::null_mut());
+        ExQueueWorkItem(item, 1);
+    }
+    // SAFETY: static event.
+    let status = unsafe { wait::wait(Some(EXTRA_RAN.ptr().cast()), Some(-50_000_000)) };
+    let peak_workers = QUEUE[1].state.lock().pool.workers() as usize;
+    // Release the blockers and wait for them to finish before returning.
+    // SAFETY: static event.
+    unsafe { wait::KeSetEvent(BLOCK_RELEASE.ptr(), 0, 0) };
+    let deadline = time::interrupt_time() + 50_000_000;
+    while (BLOCK_DONE.load(Ordering::Acquire) as usize) < blockers {
+        if time::interrupt_time() > deadline {
+            return Err("blocked workers did not finish after release");
+        }
+        // SAFETY: no object is involved.
+        unsafe { wait::wait(None, Some(-10_000)) };
+    }
+    if status != wait::STATUS_SUCCESS {
+        return Err("a dynamic worker was not spawned when all workers were blocked");
+    }
+    if peak_workers <= blockers {
+        return Err("the queue's worker count did not grow");
+    }
+    if thread::count() != before_threads {
+        return Err("a dynamic executive worker changed thread::count()");
+    }
+    Ok(blockers as u64 + 1)
 }
 
 /// A work routine that returns with the IRQL raised. The system must

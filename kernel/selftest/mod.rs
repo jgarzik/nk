@@ -277,11 +277,26 @@ pub fn resources() -> Resources {
     let (whea_blocks, whea_bytes) = crate::whea::storage();
     // The HAL keeps the list of firmware tables it once made.
     let (hal_blocks, hal_bytes) = crate::hal::acpi::storage();
+    // Executive worker threads come and go as work waits for them.
+    let (worker_blocks, worker_bytes, worker_frames) = crate::ke::thread::uncounted_storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks - hal_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes - hal_bytes,
+        pool_blocks: pool.blocks
+            - table_blocks
+            - registry_blocks
+            - whea_blocks
+            - hal_blocks
+            - worker_blocks,
+        pool_bytes: pool.bytes
+            - table_bytes
+            - registry_bytes
+            - whea_bytes
+            - hal_bytes
+            - worker_bytes,
         irql: crate::ke::irql::current(),
-        spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
+        spare_frames: mm::free_frame_count()
+            + mm::pool::frames()
+            + mm::map::table_frames()
+            + worker_frames,
         names: crate::ob::count(),
         threads: crate::ke::thread::count(),
         handles: crate::ob::handle::count(),

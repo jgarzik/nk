@@ -94,7 +94,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::pfn::PFN` | the frame bitmap; every entry of the page-frame-number database and its page lists; every control area's counts and flags and subsection directory, every subsection's counts and prototype PTEs, the entries of the system-cache views, and each file's `SectionObjectPointer->DataSectionObject`; never held across I/O, a wait or a pool allocation | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
-| 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
+| 210 | a work queue (`ex::work`) | the work items waiting for a worker thread and the queue's dynamic worker counts | DISPATCH |
 | 212 | `ke::kinterrupt::CONNECT` | which interrupt objects are connected: each object's `Connected` mark, and each vector's chain together with whether its line is unmasked | DISPATCH |
 | 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
 | 216 | a thread's APC queues (`ke::apc`) | the lists of its two `KAPC_STATE`s, each queued APC's `Inserted` mark, and whether APCs may still be queued to it (`ApcQueueable`); readying the thread for an APC that ends its wait takes rank 220 after it | DISPATCH |

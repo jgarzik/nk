@@ -44,6 +44,7 @@ pub mod sysinfo_ex;
 pub mod timer;
 pub mod uuid;
 pub mod wnf;
+pub mod work;
 
 #[cfg(test)]
 mod model;

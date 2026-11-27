@@ -49,7 +49,9 @@ use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
 use crate::mm::{self, stack::Stack};
 use crate::ob;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 use nk_ke::sched::{self, Leaving};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
@@ -77,6 +79,9 @@ pub struct Thread {
     swap_busy: AtomicBool,
     /// A processor's idle thread: never queued.
     idle: bool,
+    /// Counted in [`count`]: every thread but the idle threads and the
+    /// executive's worker threads.
+    counted: bool,
     /// Clock ticks left before threads of this priority get a turn.
     quantum: AtomicU8,
     /// Where the thread stands with respect to waiting.
@@ -141,11 +146,35 @@ impl Dispatcher {
     }
 }
 
-/// Threads that exist, idle threads not counted.
+/// Threads that exist, idle threads and the executive's worker threads
+/// not counted.
 static THREADS: AtomicU32 = AtomicU32::new(0);
+/// Live uncounted worker thread objects (for leak-check accounting).
+static UNCOUNTED_OBJECTS: AtomicUsize = AtomicUsize::new(0);
+/// Live uncounted worker thread stacks (for leak-check accounting).
+static UNCOUNTED_STACKS: AtomicUsize = AtomicUsize::new(0);
 
+/// The threads that exist, but for the idle threads and the executive's
+/// worker threads, which come and go as work waits for them
+/// ([`create_uncounted`]): a test waits for this to fall back to what it
+/// was, once the threads it made have ended.
 pub fn count() -> u32 {
     THREADS.load(Ordering::Acquire)
+}
+
+/// Pool blocks, pool bytes and stack frames currently held by live
+/// uncounted worker threads (`create_uncounted`), so leak checks around
+/// test groups do not mistake dynamic worker scaling for a leak.
+pub fn uncounted_storage() -> (usize, usize, u64) {
+    let blocks = UNCOUNTED_OBJECTS.load(Ordering::Acquire);
+    let block_bytes =
+        (nk_ntabi::ob::OBJECT_BODY + size_of::<Thread>()).next_multiple_of(align_of::<u16>());
+    let stacks = UNCOUNTED_STACKS.load(Ordering::Acquire);
+    (
+        blocks,
+        blocks * block_bytes,
+        (stacks * mm::stack::STACK_PAGES) as u64,
+    )
 }
 
 /// A field of the thread's Windows-shaped block.
@@ -458,6 +487,7 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).entry).write(None);
         (&raw mut (*thread).swap_busy).write(AtomicBool::new(false));
         (&raw mut (*thread).idle).write(false);
+        (&raw mut (*thread).counted).write(false);
         (&raw mut (*thread).quantum).write(AtomicU8::new(QUANTUM_TICKS));
         (&raw mut (*thread).wait).write(WaitRegister::new());
         (&raw mut (*thread).wake_link).write(core::ptr::null_mut());
@@ -526,7 +556,7 @@ fn create_thread(
     affinity: u64,
     keep: bool,
 ) -> Result<*mut Thread, &'static str> {
-    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    let thread = new_thread(entry, argument, thread_priority, affinity, true)?;
     // SAFETY: the thread is whole and on no queue. The caller's
     // reference is taken first: the thread may run and end at once.
     unsafe {
@@ -548,7 +578,7 @@ pub fn create_unstarted(
     thread_priority: u8,
     affinity: u64,
 ) -> Result<*mut Thread, &'static str> {
-    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    let thread = new_thread(entry, argument, thread_priority, affinity, true)?;
     // SAFETY: a live thread nothing else has.
     unsafe { ob::object::reference(thread.cast()) };
     Ok(thread)
@@ -580,13 +610,14 @@ pub unsafe fn discard(thread: *mut Thread) {
     THREADS.fetch_sub(1, Ordering::AcqRel);
 }
 
-/// A new thread that will run `entry(argument)`, whole, counted and on
-/// no queue: not yet ready.
+/// A new thread that will run `entry(argument)`, whole, on no queue
+/// and, if `counted`, counted: not yet ready.
 fn new_thread(
     entry: Entry,
     argument: usize,
     thread_priority: u8,
     affinity: u64,
+    counted: bool,
 ) -> Result<*mut Thread, &'static str> {
     let allowed = affinity & super::smp::online();
     if allowed == 0 {
@@ -610,8 +641,14 @@ fn new_thread(
         field::<u32>(thread, layout::IDEAL_PROCESSOR).write(ideal as u32);
         field::<u32>(thread, layout::USER_IDEAL_PROCESSOR).write(ideal as u32);
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
+        (&raw mut (*thread).counted).write(counted);
     }
-    THREADS.fetch_add(1, Ordering::AcqRel);
+    if counted {
+        THREADS.fetch_add(1, Ordering::AcqRel);
+    } else {
+        UNCOUNTED_OBJECTS.fetch_add(1, Ordering::AcqRel);
+        UNCOUNTED_STACKS.fetch_add(1, Ordering::AcqRel);
+    }
     Ok(thread)
 }
 
@@ -624,6 +661,21 @@ pub fn create(
     affinity: u64,
 ) -> Result<*mut Thread, &'static str> {
     create_thread(entry, argument, thread_priority, affinity, false)
+}
+
+/// Create a thread as [`create`] does, one [`count`] does not count: an
+/// executive worker thread, which the work queues make when work waits
+/// and end when it has long been idle (`ex::work`).
+pub fn create_uncounted(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    let thread = new_thread(entry, argument, thread_priority, affinity, false)?;
+    // SAFETY: the thread is whole and on no queue.
+    unsafe { make_ready(thread) };
+    Ok(thread)
 }
 
 /// Create a thread and keep a reference to it, to wait for its end. The
@@ -1024,7 +1076,11 @@ fn after_switch() {
                 "a thread exited with its wait timer pending"
             );
             super::mutex::check_none_held(previous);
+            let counted = (*previous).counted;
             mm::stack::free((*previous).stack);
+            if !counted {
+                UNCOUNTED_STACKS.fetch_sub(1, Ordering::AcqRel);
+            }
             let (segments, stranded) = ((*previous).segments, (*previous).stranded);
             let in_use = usize::from((*previous).segments_in_use);
             let left = usize::from((*previous).stranded_count);
@@ -1043,7 +1099,7 @@ fn after_switch() {
                 super::object::signal(header).store(1, Ordering::Release);
                 let woken = super::object::satisfy(header);
                 let buried = ob::object::dereference_unless_last(previous.cast());
-                if buried {
+                if buried && counted {
                     THREADS.fetch_sub(1, Ordering::AcqRel);
                 }
                 (woken, buried)
@@ -1054,7 +1110,9 @@ fn after_switch() {
                 // thread to see it end. Counted out once the memory is
                 // back, for whoever waits for the count to fall.
                 ob::object::dereference(previous.cast());
-                THREADS.fetch_sub(1, Ordering::AcqRel);
+                if counted {
+                    THREADS.fetch_sub(1, Ordering::AcqRel);
+                }
             }
         } else {
             (*previous).swap_busy.store(false, Ordering::Release);
@@ -1074,6 +1132,10 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
     unsafe {
         drop(super::object::ObjectLock::take(body.cast()));
         crate::se::impersonate::thread_deleted(body);
+        let thread = body.cast::<Thread>();
+        if !(*thread).counted && !(*thread).idle {
+            UNCOUNTED_OBJECTS.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 

@@ -13,7 +13,7 @@ use super::{PAGE_SIZE, alloc_frames, free_frames, map};
 use nk_bootinfo::KERNEL_STACK_SIZE;
 use nk_mm::pt::Prot;
 
-const STACK_PAGES: usize = KERNEL_STACK_SIZE as usize / PAGE_SIZE;
+pub const STACK_PAGES: usize = KERNEL_STACK_SIZE as usize / PAGE_SIZE;
 
 /// A mapped kernel stack: `[base, top)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
