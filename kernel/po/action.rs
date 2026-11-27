@@ -12,8 +12,9 @@ use nk_po::action::{Outcome, outcome};
 /// A request the pinned kernel refuses outright is refused the same
 /// way (`nk_po::action`). A shutdown that ends with the power off
 /// powers the machine off now, through the path the kernel itself ends
-/// a run by: NK has no user mode to ask and no file system to flush.
-/// It does not return.
+/// a run by: the devices registered for it are sent their shutdown
+/// requests, and the power goes off. NK has no user mode to ask and no
+/// file system to flush. It does not return.
 ///
 /// Partial: any other action (sleep, hibernation, a restart, none)
 /// goes to Windows' policy manager, which NK lacks, and stops the
@@ -28,6 +29,7 @@ pub extern "C" fn ZwInitiatePowerAction(
         Outcome::Invalid => STATUS_INVALID_PARAMETER,
         Outcome::PowerOff => {
             kprintln!("po: a driver asked for a shutdown (flags {flags:#x}): powering off");
+            crate::io::shutdown::shutdown_system();
             crate::hal::power_off_or_halt()
         }
         Outcome::NotImplemented => crate::kd::bugcheck(format_args!(

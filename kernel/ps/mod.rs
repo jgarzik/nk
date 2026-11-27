@@ -406,3 +406,70 @@ pub fn thread_information_test() -> Result<u32, &'static str> {
 pub extern "C" fn KeGetCurrentThread() -> *mut c_void {
     thread::current().cast()
 }
+
+/// `ETHREAD.CrossThreadFlags` of `thread`, changed by atomic operations
+/// only, as Windows changes them.
+///
+/// # Safety
+/// `thread` is a live thread.
+unsafe fn cross_thread_flags<'a>(thread: *mut thread::Thread) -> &'a core::sync::atomic::AtomicU32 {
+    // SAFETY: per the contract: an aligned 32-bit field of its block.
+    unsafe {
+        core::sync::atomic::AtomicU32::from_ptr(thread::object_field(
+            thread,
+            nk_ntabi::thread::CROSS_THREAD_FLAGS,
+        ))
+    }
+}
+
+/// `PsGetThreadHardErrorsAreDisabled` (`ntifs.h`): whether `thread`
+/// asked for no hard-error message.
+///
+/// # Safety
+/// `thread` is a live thread.
+pub unsafe extern "C" fn PsGetThreadHardErrorsAreDisabled(thread: *mut thread::Thread) -> u8 {
+    use core::sync::atomic::Ordering;
+    // SAFETY: per the contract.
+    let flags = unsafe { cross_thread_flags(thread) }.load(Ordering::Relaxed);
+    u8::from(flags & nk_ntabi::thread::HARD_ERRORS_ARE_DISABLED != 0)
+}
+
+/// `PsSetThreadHardErrorsAreDisabled` (`ntifs.h`): set or clear the
+/// flag `PsGetThreadHardErrorsAreDisabled` reads.
+///
+/// # Safety
+/// `thread` is a live thread.
+pub unsafe extern "C" fn PsSetThreadHardErrorsAreDisabled(
+    thread: *mut thread::Thread,
+    disabled: u8,
+) {
+    use core::sync::atomic::Ordering;
+    use nk_ntabi::thread::HARD_ERRORS_ARE_DISABLED;
+    // SAFETY: per the contract.
+    let flags = unsafe { cross_thread_flags(thread) };
+    if disabled != 0 {
+        flags.fetch_or(HARD_ERRORS_ARE_DISABLED, Ordering::Relaxed);
+    } else {
+        flags.fetch_and(!HARD_ERRORS_ARE_DISABLED, Ordering::Relaxed);
+    }
+}
+
+/// [`IoSetThreadHardErrorMode`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iosetthreadharderrormode):
+/// whether the calling thread's hard errors are shown from now on;
+/// returns whether they were. NK shows none in any case: the flag is
+/// kept for whoever reads it.
+pub extern "C" fn IoSetThreadHardErrorMode(enable: u8) -> u8 {
+    let current = thread::current();
+    // SAFETY: the calling thread is live.
+    unsafe {
+        let was = PsGetThreadHardErrorsAreDisabled(current) == 0;
+        PsSetThreadHardErrorsAreDisabled(current, u8::from(enable == 0));
+        u8::from(was)
+    }
+}
+
+/// `PsGetHostSilo` (`ntddk.h`): the host silo, which NK's silo routines
+/// name by null (`silo`).
+pub extern "C" fn PsGetHostSilo() -> *mut c_void {
+    core::ptr::null_mut()
+}

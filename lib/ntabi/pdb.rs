@@ -364,6 +364,14 @@ fn thread_matches_the_kernel() {
         impersonating.bits,
         Some((ACTIVE_IMPERSONATION_INFO.trailing_zeros() as u8, 1))
     );
+    let hard_errors = ethread
+        .member("HardErrorsAreDisabled")
+        .expect("_ETHREAD.HardErrorsAreDisabled");
+    assert_eq!(hard_errors.offset as usize, CROSS_THREAD_FLAGS);
+    assert_eq!(
+        hard_errors.bits,
+        Some((HARD_ERRORS_ARE_DISABLED.trailing_zeros() as u8, 1))
+    );
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));

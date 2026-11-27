@@ -60,7 +60,8 @@ already held has a lower rank; two locks of one rank never nest.
 | Rank | Lock | Protects | Level |
 | --- | --- | --- | --- |
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
-| 10 | `io::driver::BOOT_REINITIALIZE` | the routines boot drivers registered for reinitialisation, and whether they have been run; never held with `DRIVERS` | DISPATCH |
+| 10 | `io::driver::REINITIALIZE` | the routines drivers registered for reinitialisation, boot and other, and whether the boot queue has been run; never held with `DRIVERS` | DISPATCH |
+| 11 | `io::shutdown::QUEUES` | the devices registered for a shutdown request, before the file systems and last chance; never held across a driver's routine | DISPATCH |
 | 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
 | 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and its thread has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
 | 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |

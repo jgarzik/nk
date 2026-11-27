@@ -7,9 +7,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    PsGetHostSilo,
-    PsGetThreadHardErrorsAreDisabled,
-    PsSetThreadHardErrorsAreDisabled,
-    PsUpdateComponentPower,
-);
+trap_list!(PsUpdateComponentPower,);

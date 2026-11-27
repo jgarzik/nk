@@ -22,7 +22,6 @@ mod ps;
 mod rtl;
 mod se;
 mod trap;
-mod trap_ex;
 mod trap_io;
 mod trap_ke;
 mod trap_mm;
@@ -57,7 +56,6 @@ pub(super) static ALL: &[&[Export]] = &[
     trap_ke::EXPORTS,
     trap_mm::EXPORTS,
     trap_po::EXPORTS,
-    trap_ex::EXPORTS,
     trap_ob::EXPORTS,
     trap_ps::EXPORTS,
     trap_rtl::EXPORTS,

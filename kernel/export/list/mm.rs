@@ -15,6 +15,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, mm::io::MmGetVirtualForPhysical),
     export!(Implemented, mm::io::MmMapIoSpaceEx),
     export!(Implemented, mm::io::MmUnmapIoSpace),
+    export!(Partial, mm::pool::ExAllocatePool2),
     export!(Implemented, mm::pool::ExAllocatePoolWithQuotaTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTag),
     export!(Implemented, mm::pool::ExAllocatePoolWithTagPriority),

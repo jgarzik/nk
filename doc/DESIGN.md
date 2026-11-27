@@ -1646,6 +1646,17 @@ reinitialised; one may register again from within itself. Afterwards
 the queue is closed, and a routine registered later is never called, as
 on Windows.
 
+The routines drivers registered with `IoRegisterDriverReinitialization`
+are called at the three points the pinned kernel calls them: after a
+driver is loaded for a device, after one is loaded by `ZwLoadDriver`,
+and when the system has finished starting (after the boot queue). Each
+point calls the routines registered before it, in order; a routine
+registered meanwhile, or by itself again, waits for the next point.
+`mountmgr.sys` names drive letters only from its reinitialisation
+routine. `IoGetBootDiskInformationLite` lists the disks the loader
+names, which for NK's UEFI loader are none, and answers
+`STATUS_TOO_LATE` once the system has started, as Windows does.
+
 - A service whose image is not among the boot files is passed over,
   with a line in the log: a test image holds only the drivers it was
   given.
@@ -2138,7 +2149,12 @@ itself.
 the power off (`ZwInitiatePowerAction`: `acpi.sys`, for the power button
 and for a critical temperature) powers the machine off at once, by the
 path the kernel ends a run by: there is no user mode to ask and nothing
-to flush. What the pinned kernel refuses outright is refused; every
+to flush. That path first sends `IRP_MJ_SHUTDOWN` to the devices
+registered for it (`io::shutdown`), to the top of each one's stack, one
+at a time and waited for, newest first: the
+`IoRegisterShutdownNotification` queue, then the last-chance one, which
+on Windows comes after the file systems are flushed. A device deleted
+while registered leaves its queue. What the pinned kernel refuses outright is refused; every
 other action is its policy manager's, which NK lacks, and stops the
 system naming the action.
 

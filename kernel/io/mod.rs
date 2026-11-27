@@ -20,6 +20,7 @@ pub mod mdl;
 pub mod priority;
 pub mod remlock;
 pub mod service;
+pub mod shutdown;
 pub mod stack;
 pub mod startio;
 pub mod symlink;

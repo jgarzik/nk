@@ -27,6 +27,8 @@ use nk_ke::TicketLock;
 pub enum Rank {
     /// The loaded-driver records (`io::driver`).
     Drivers = 10,
+    /// The devices registered for a shutdown request (`io::shutdown`).
+    Shutdown = 11,
     /// The device tree and what drivers asked of the Plug and Play
     /// manager (`pnp`).
     DeviceTree = 20,

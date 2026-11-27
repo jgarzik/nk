@@ -295,6 +295,9 @@ pub unsafe extern "C" fn IoDeleteDevice(device: *mut DEVICE_OBJECT) {
     // SAFETY: `device` is readable per the contract; `check` validates it.
     unsafe {
         check(device, "IoDeleteDevice");
+        if (*device).Flags & super::shutdown::DO_SHUTDOWN_REGISTERED != 0 {
+            super::shutdown::IoUnregisterShutdownNotification(device);
+        }
         ob::remove(device.cast());
         let unreferenced = {
             let database = DATABASE.lock();

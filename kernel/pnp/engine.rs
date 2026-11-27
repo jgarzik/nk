@@ -728,6 +728,7 @@ fn start_service(name: &str) -> Result<*mut DRIVER_OBJECT, u32> {
     match service::start(name) {
         Ok(driver) => {
             kprintln!("pnp: service {name} started for a device");
+            io::driver::reinitialize_drivers();
             Ok(driver)
         }
         Err(service::ServiceError::Driver(io::driver::DriverError::EntryFailed(status))) => {
