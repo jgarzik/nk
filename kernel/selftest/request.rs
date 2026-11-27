@@ -726,7 +726,47 @@ fn partial_mdl_test() -> Result<u32, &'static str> {
             if !shares || !same {
                 return Err("a part of a mapped buffer does not share its mapping");
             }
-            Ok(9)
+            // An empty part, at the end of a buffer that ends on a page
+            // boundary: it maps no page, and taking that mapping down
+            // gives back what mapping it took.
+            let end = (va.addr() + 0x1000) & !0xFFF;
+            let short = mdl::IoAllocateMdl(
+                va.cast(),
+                (end - va.addr()) as u32,
+                0,
+                0,
+                core::ptr::null_mut(),
+            );
+            let part = mdl::IoAllocateMdl(va.cast(), LEN as u32, 0, 0, core::ptr::null_mut());
+            if short.is_null() || part.is_null() {
+                return Err("no memory for an MDL");
+            }
+            let empty = (|| {
+                mdl::probe_and_lock(short, KERNEL_MODE, IO_WRITE_ACCESS)
+                    .map_err(|_| "a pool buffer could not be locked")?;
+                mdl::IoBuildPartialMdl(
+                    short,
+                    part,
+                    core::ptr::with_exposed_provenance_mut::<c_void>(end),
+                    0,
+                );
+                if (*part).ByteCount != 0 || (*part).ByteOffset != 0 {
+                    return Err("a part at a buffer's end is not empty");
+                }
+                let view = stack::mapped(part);
+                if view.is_null() {
+                    return Err("an empty partial MDL was not mapped");
+                }
+                mdl::MmUnmapLockedPages(view.cast(), part);
+                Ok(())
+            })();
+            mdl::IoFreeMdl(part);
+            if (*short).MdlFlags & MDL_PAGES_LOCKED != 0 {
+                mdl::MmUnlockPages(short);
+            }
+            mdl::IoFreeMdl(short);
+            empty?;
+            Ok(10)
         })();
         if !source.is_null() {
             if (*source).MdlFlags & MDL_PAGES_LOCKED != 0 {
