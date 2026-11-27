@@ -102,7 +102,10 @@ NK-TEST-COMPLETE pass=<n> fail=<n> skip=<n>
 
 A declared verdict never reported is a FAIL, as is one reported twice,
 one not declared, and a group that does not give back what it took
-(`NK-TEST leak:FAIL`).
+(`NK-TEST leak:FAIL`). Kernel tables that keep their room are given it
+at boot, before any group runs (the record of mapped kernel address
+space has room for 512 live ranges); a test that holds more at once
+grows it, and the comparison sees that as a leak.
 
 A test reaches what the kernel does without memory by watching its own
 thread's allocations from the kernel's heap (`kernel/rt.rs`): it counts

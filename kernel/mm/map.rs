@@ -60,12 +60,21 @@ impl TableMem for Tables {
 /// The ranges `alloc_va` handed out and that are not given back yet,
 /// sorted by address: what may be unmapped and given back. A mapping
 /// made for good (`map_device_for_good`) is not among them. Room for
-/// [`ROOM`] ranges is taken once, at the first reservation, so that the
+/// [`ROOM`] ranges is taken once, at boot ([`init`]), so that the
 /// record does not grow while drivers and tests come and go.
 static LIVE: SpinLock<Vec<(u64, usize)>> = SpinLock::new(Rank::Mappings, Vec::new());
 
 /// The ranges [`LIVE`] has room for from the start.
 const ROOM: usize = 512;
+
+/// Give the record of handed-out ranges its room, once, at boot before
+/// any test measures the pool: it then grows only when more than
+/// [`ROOM`] ranges are live at once.
+pub fn init() -> Result<(), &'static str> {
+    LIVE.lock()
+        .try_reserve_exact(ROOM)
+        .map_err(|_| "no memory for the record of mapped kernel address space")
+}
 
 /// Reserve `pages` pages of kernel address space. A gap page follows each
 /// reservation, so running off the end of one mapping faults.
@@ -79,9 +88,6 @@ pub fn alloc_va_aligned(pages: usize, align: u64) -> Option<u64> {
     let va = NEXT_VA.lock().take(pages, align)?;
     let recorded = {
         let mut live = LIVE.lock();
-        if live.capacity() == 0 {
-            let _ = live.try_reserve_exact(ROOM);
-        }
         let room = live.try_reserve(1).is_ok();
         if room {
             let at = live.partition_point(|&(start, _)| start < va);
@@ -109,8 +115,10 @@ pub fn check_held(va: u64, pages: usize) {
 
 /// Give back the `pages` pages at `va`, all of them held by one range
 /// `alloc_va` handed out ([`check_held`] stops the system otherwise).
-/// A whole range goes back for reuse; part of one is given up but not
-/// reused, as the rest stays mapped beside it without a gap page.
+/// The pieces of a range given back one by one are not reused while
+/// any of it is still handed out, as the rest stays mapped beside them
+/// without a gap page; the piece given back last, whole by then, goes
+/// back for reuse, and the earlier pieces stay given up.
 ///
 /// # Safety
 /// Nothing is mapped in the pages any more, and nothing refers to them.

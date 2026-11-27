@@ -51,7 +51,7 @@ written at any IRQL, as Windows allows.
   is mapped as uncached: it makes a run of writes cheaper and changes
   nothing a driver reads.
 - **Giving the dynamic region back** (`kernel/mm/map.rs`). The ranges
-  handed out are recorded (room for 512 is taken at the first, so the
+  handed out are recorded (room for 512 is taken at boot, so the
   record does not grow under drivers and tests). A release must lie
   wholly in one recorded range, else the system stops as Windows'
   `MiReleasePtes` stops for system PTEs that were not allocated:
