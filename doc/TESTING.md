@@ -392,8 +392,9 @@ and the proof reads it through RAW, as every open of a disk for data
 goes (`doc/design/io.md`, Mounting). `disk.raw.*` hold the mount to that:
 an open of the disk for its attributes alone mounts nothing
 (`disk.raw.direct`); an open of a name on the unmounted disk, whose
-block does not allow a raw mount, is `STATUS_UNRECOGNIZED_VOLUME`
-(`disk.raw.unrecognized`); an open of the disk for data mounts RAW,
+block does not allow a raw mount, is offered to RAW all the same, RAW
+being the only file system on the disk queue, and RAW refuses the name
+(`disk.raw.named`); an open of the disk for data mounts RAW,
 whose device then serves the disk's first sector, and a name on the
 mounted disk is RAW's `STATUS_INVALID_PARAMETER` (`disk.raw.mount`).
 The group deletes its disk at the end, which dismounts it; its count

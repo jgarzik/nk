@@ -477,6 +477,15 @@ fn thread_matches_the_kernel() {
     }
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
     assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
+    assert_eq!(TOP_LEVEL_IRP, offset(&ethread, "_ETHREAD", "TopLevelIrp"));
+    let system = kthread
+        .member("SystemThread")
+        .expect("_KTHREAD.SystemThread");
+    assert_eq!(system.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        system.bits,
+        Some((MISC_FLAG_SYSTEM_THREAD.trailing_zeros() as u8, 1))
+    );
     assert_eq!(
         DEVICE_TO_VERIFY,
         offset(&ethread, "_ETHREAD", "DeviceToVerify")

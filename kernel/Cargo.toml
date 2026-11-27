@@ -32,6 +32,7 @@ nk-pe = { path = "../lib/pe" }
 nk-ps = { path = "../lib/ps" }
 nk-whea = { path = "../lib/whea" }
 nk-po = { path = "../lib/po" }
+nk-io = { path = "../lib/io" }
 nk-rtl = { path = "../lib/rtl" }
 nk-cm = { path = "../lib/cm" }
 nk-se = { path = "../lib/se" }

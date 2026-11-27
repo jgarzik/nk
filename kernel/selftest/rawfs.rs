@@ -12,7 +12,7 @@ use nk_ntabi::io::*;
 use nk_ntabi::status::*;
 
 pub static GROUP: Group = Group {
-    names: &["disk.raw.direct", "disk.raw.unrecognized", "disk.raw.mount"],
+    names: &["disk.raw.direct", "disk.raw.named", "disk.raw.mount"],
     run,
     manual: false,
 };
@@ -59,16 +59,26 @@ fn direct() -> Result<(), &'static str> {
 }
 
 /// An open of a name on the disk, whose block does not allow a raw
-/// mount, finds no file system that claims it.
-fn unrecognized() -> Result<(), &'static str> {
+/// mount, is offered to RAW all the same when RAW is the only file
+/// system on the disk queue, as Windows' `IopMountVolume` offers it:
+/// RAW mounts the disk and refuses the name, as Windows' RAW does.
+fn named() -> Result<(), &'static str> {
     let name = alloc::format!("{}\\FILE.TXT", testdisk::NAME);
     match open(&name, 0xC010_0000) {
-        Err(STATUS_UNRECOGNIZED_VOLUME) => Ok(()),
+        Err(STATUS_INVALID_PARAMETER) => {}
         Ok(handle) => {
             file::close(handle);
-            Err("a name on an unmounted disk was opened")
+            return Err("a name on a raw disk was opened");
         }
-        Err(_) => Err("a name on an unmounted disk was not refused as unrecognized"),
+        Err(_) => {
+            return Err(
+                "a name on a disk with RAW alone registered was not refused as RAW refuses it",
+            );
+        }
+    }
+    match block() {
+        Some((_, flags, _)) if flags & VPB_MOUNTED != 0 => Ok(()),
+        _ => Err("RAW, the only file system, was not mounted for a name on the disk"),
     }
 }
 
@@ -122,7 +132,7 @@ fn run(r: &mut Report, _: &BootInfo) {
         }
     };
     r.check("disk.raw.direct", direct);
-    r.check("disk.raw.unrecognized", unrecognized);
+    r.check("disk.raw.named", named);
     r.check("disk.raw.mount", mount);
     drop(disk);
 }

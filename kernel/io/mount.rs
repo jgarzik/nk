@@ -2,16 +2,18 @@
 //! be mounted on (one with a volume parameter block, `VPB`) is opened.
 //!
 //! Unless the open is a direct device open ([`direct_open`]), the
-//! block must be mounted first ([`mounted`]): a file system claims the
-//! device, its volume device is put in the block, and the open's
-//! requests go to that volume device (`file::related_device`). NK has
-//! one file system to mount, the kernel's own RAW (`io::raw`), and
-//! mounts it as Windows does when no other claims the device: for an
-//! open of the device itself, or of any name on a device whose block
-//! allows a raw mount (`VPB_RAW_MOUNT`). Otherwise the open fails with
-//! `STATUS_UNRECOGNIZED_VOLUME`. A mount clears the device's
-//! `DO_VERIFY_VOLUME`. A volume stays mounted until its device is
-//! deleted and nothing is open on it ([`device_deleted`]).
+//! block must be mounted first ([`mounted`]), as Windows'
+//! `IopCheckVpbMounted` does: a locked volume refuses the open
+//! (`STATUS_ACCESS_DENIED`); an unmounted one is offered to the
+//! registered file systems (`io::fs`), the open's requests then going to
+//! the volume device the one that took it put in the block
+//! (`file::related_device`). The block is then initialised as
+//! `IopMountInitializeVpb` does it ([`mounted_by`]). A RAW volume stays
+//! mounted until its device is deleted and nothing is open on it
+//! ([`device_deleted`]); another file system's volume is that file
+//! system's to dismount.
+
+#![allow(non_snake_case)]
 
 use super::raw;
 use crate::ke::{Rank, SpinLock};
@@ -40,43 +42,110 @@ pub fn direct_open(itself: bool, access: u32) -> bool {
 /// itself, which allows a raw mount.
 ///
 /// # Safety
-/// `device` is a live device with a volume parameter block. Called at
-/// `PASSIVE_LEVEL`.
+/// `device` is a live device with a volume parameter block, counted.
+/// Called at `PASSIVE_LEVEL`.
 pub unsafe fn mounted(device: *mut DEVICE_OBJECT, itself: bool) -> Result<*mut VPB, NTSTATUS> {
     // SAFETY: per the contract; the block is the device's for its life,
     // and its fields change under the lock.
     unsafe {
         let vpb = (*device).Vpb.cast::<VPB>();
-        let raw_allowed = {
-            let _lock = VPB_LOCK.lock();
-            if (*vpb).Flags & VPB_MOUNTED != 0 {
-                (*vpb).ReferenceCount += 1;
-                return Ok(vpb);
+        loop {
+            {
+                let _lock = VPB_LOCK.lock();
+                let flags = (*vpb).Flags;
+                if flags & VPB_MOUNTED != 0 {
+                    if flags & VPB_LOCKED != 0 {
+                        return Err(STATUS_ACCESS_DENIED);
+                    }
+                    (*vpb).ReferenceCount += 1;
+                    return Ok(vpb);
+                }
             }
-            itself || (*vpb).Flags & VPB_RAW_MOUNT != 0
-        };
-        if !raw_allowed {
-            return Err(STATUS_UNRECOGNIZED_VOLUME);
-        }
-        // Made with no lock held; published only if no other mount came
-        // first, else given up.
-        let volume = raw::mount(device, vpb)?;
-        let lost = {
-            let _lock = VPB_LOCK.lock();
-            let lost = (*vpb).Flags & VPB_MOUNTED != 0;
-            if !lost {
-                (*vpb).DeviceObject = volume;
-                (*vpb).Flags |= VPB_MOUNTED;
-                (*device).Flags &= !DO_VERIFY_VOLUME;
+            let status = super::fs::mount_volume(device, itself);
+            if !nt_success(status) {
+                return Err(status);
             }
-            (*vpb).ReferenceCount += 1;
-            lost
-        };
-        if lost {
-            raw::discard(volume);
         }
-        Ok(vpb)
     }
+}
+
+/// `VPB.Flags` of `vpb`, read under the lock.
+///
+/// # Safety
+/// `vpb` is a live block.
+pub unsafe fn flags(vpb: *mut VPB) -> u16 {
+    let _lock = VPB_LOCK.lock();
+    // SAFETY: per the contract.
+    unsafe { (*vpb).Flags }
+}
+
+/// A file system took the volume on `real`, whose stack's top is
+/// `target`, and filled in the block: mark it mounted (raw-mountable
+/// still if it was, and open to direct writes if `last`, RAW, took it),
+/// size the volume device's stack for the device beneath it, point its
+/// extension at the block and count the mount, as Windows'
+/// `IopMountInitializeVpb` does.
+///
+/// # Safety
+/// `real` and `target` are live; the file system has put its volume
+/// device in the block.
+pub unsafe fn mounted_by(
+    real: *mut DEVICE_OBJECT,
+    target: *mut DEVICE_OBJECT,
+    raw: bool,
+    last: bool,
+) {
+    // SAFETY: per the contract.
+    let volume = unsafe {
+        let vpb = (*real).Vpb.cast::<VPB>();
+        let _lock = VPB_LOCK.lock();
+        let mut flags = VPB_MOUNTED;
+        if raw {
+            flags |= VPB_RAW_MOUNT;
+        }
+        if last {
+            flags |= VPB_DIRECT_WRITES_ALLOWED;
+        }
+        (*vpb).Flags = flags;
+        let volume = (*vpb).DeviceObject;
+        (*volume).StackSize = (*target).StackSize + 1;
+        (*(*volume).DeviceObjectExtension).Vpb = vpb.cast();
+        (*vpb).ReferenceCount += 1;
+        volume
+    };
+    super::fs::trace(format_args!("{real:p} mounted, volume device {volume:p}"));
+}
+
+/// [`IoAcquireVpbSpinLock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioacquirevpbspinlock):
+/// take the lock every block's mount state is under.
+///
+/// # Safety
+/// `irql` is writable.
+pub unsafe extern "C" fn IoAcquireVpbSpinLock(irql: *mut u8) {
+    let old = VPB_LOCK.acquire_split();
+    // SAFETY: per the contract.
+    unsafe { irql.write(old) };
+}
+
+/// [`IoReleaseVpbSpinLock`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioreleasevpbspinlock).
+///
+/// # Safety
+/// The caller holds the lock from `IoAcquireVpbSpinLock`, which gave
+/// `irql`.
+pub unsafe extern "C" fn IoReleaseVpbSpinLock(irql: u8) {
+    // SAFETY: per the contract.
+    unsafe { VPB_LOCK.release_split(irql) };
+}
+
+/// Count one more reference to `vpb`: a stream file object's
+/// (`IoCreateStreamFileObject`).
+///
+/// # Safety
+/// `vpb` is a live block.
+pub unsafe fn reference(vpb: *mut VPB) {
+    let _lock = VPB_LOCK.lock();
+    // SAFETY: per the contract.
+    unsafe { (*vpb).ReferenceCount += 1 };
 }
 
 /// Give up an open's reference to `vpb`; the last one of a device being
@@ -114,8 +183,10 @@ pub unsafe fn device_deleted(device: *mut DEVICE_OBJECT) {
 }
 
 /// The volume device of `vpb`, taken out of it, if its device is being
-/// deleted, a volume is mounted and nothing is open on it. The caller
-/// holds the lock.
+/// deleted and RAW's volume is mounted with nothing open on it: its one
+/// reference left is the mount's own ([`mounted_by`]). Another file
+/// system's volume is that file system's to dismount. The caller holds
+/// the lock.
 ///
 /// # Safety
 /// `vpb` is a live block.
@@ -123,21 +194,25 @@ unsafe fn take_if_free(vpb: *mut VPB) -> *mut DEVICE_OBJECT {
     // SAFETY: per the contract; the lock is held.
     unsafe {
         let flags = (*vpb).Flags;
-        if flags & VPB_REMOVE_PENDING == 0 || flags & VPB_MOUNTED == 0 || (*vpb).ReferenceCount != 0
+        if flags & VPB_REMOVE_PENDING == 0
+            || flags & VPB_MOUNTED == 0
+            || (*vpb).ReferenceCount != 1
+            || !raw::owns((*vpb).DeviceObject)
         {
             return core::ptr::null_mut();
         }
         let volume = (*vpb).DeviceObject;
         (*vpb).DeviceObject = core::ptr::null_mut();
         (*vpb).Flags &= !VPB_MOUNTED;
+        (*vpb).ReferenceCount = 0;
         volume
     }
 }
 
-/// Delete a volume device taken out of its block, if there is one.
+/// Delete a RAW volume device taken out of its block, if there is one.
 fn dismount(volume: *mut DEVICE_OBJECT) {
     if !volume.is_null() {
-        // SAFETY: out of its block, so nothing new reaches it; RAW's.
+        // SAFETY: RAW's, out of its block, so nothing new reaches it.
         unsafe { raw::discard(volume) };
     }
 }

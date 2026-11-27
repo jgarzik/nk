@@ -29,6 +29,8 @@ pub enum Rank {
     Drivers = 10,
     /// The devices registered for a shutdown request (`io::shutdown`).
     Shutdown = 11,
+    /// The registered file systems (`io::fs`).
+    FileSystems = 12,
     /// The device tree and what drivers asked of the Plug and Play
     /// manager (`pnp`).
     DeviceTree = 20,
@@ -257,6 +259,24 @@ impl<T> SpinLock<T> {
         arch::set_irql(irql::HIGH_LEVEL);
         self.lock.force();
         Forced(self)
+    }
+}
+
+impl SpinLock<()> {
+    /// Take a lock that guards no value of its own, for a pair of
+    /// exports that take it in one call and release it in another
+    /// (`IoAcquireVpbSpinLock`). Returns the IRQL to give back.
+    pub fn acquire_split(&self) -> u8 {
+        acquire(&self.lock, self.id(), self.rank)
+    }
+
+    /// Release a lock taken with [`acquire_split`](Self::acquire_split).
+    ///
+    /// # Safety
+    /// This processor holds the lock from `acquire_split`, which
+    /// returned `old_irql`.
+    pub unsafe fn release_split(&self, old_irql: u8) {
+        release(&self.lock, self.id(), old_irql);
     }
 }
 

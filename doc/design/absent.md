@@ -4,13 +4,14 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
 
 ## What is absent
 
-**File systems.** None registers (`IoRegisterFileSystem` is absent):
-RAW is all there is to mount. RAW enforces no share access between
-opens of a volume, and its answers to information queries and
-file-system control requests stop the system by name.
+**File systems.** None registers but RAW and the ones NK's tests
+make; no file system recognizer (`fs_rec.sys`) is loaded, so RAW takes
+any volume no other file system claims, whatever is opened on it
+([I/O](io.md), Mounting). RAW enforces no share access between opens of
+a volume, and its answers to information queries and to file-system
+control requests other than mounting stop the system by name.
 
-No opportunistic locks (a file system's request for one stops the
-system by name: `doc/design/fsrtl.md`). No kernel stack segment larger than a thread's stack, and none at
+No kernel stack segment larger than a thread's stack, and none at
 `DISPATCH_LEVEL` (see [Threads](threads.md), stack expansion). No
 user-mode APC is delivered (one can be queued; an alertable wait
 does not end for it), no sleep states, device power-down ([Power](power.md)), processes

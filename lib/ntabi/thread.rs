@@ -12,6 +12,10 @@
 
 /// Size of `ETHREAD`, which begins with the `KTHREAD`.
 pub const ETHREAD_SIZE: usize = 0x898;
+/// `ETHREAD.TopLevelIrp`: the file system request at the top of the
+/// thread's stack, or one of the `FSRTL_*_TOP_LEVEL_IRP` values
+/// (`IoGetTopLevelIrp`).
+pub const TOP_LEVEL_IRP: usize = 0x4C0;
 /// `ETHREAD.DeviceToVerify`: the device a file system asked to have
 /// verified (`IoSetHardErrorOrVerifyDevice`).
 pub const DEVICE_TO_VERIFY: usize = 0x4C8;
@@ -58,6 +62,9 @@ pub const MISC_FLAGS: usize = 0x74;
 pub const MISC_FLAG_SYSTEM_AFFINITY_ACTIVE: u32 = 1 << 3;
 /// `MiscFlags.Alertable`: the thread is in a wait an alert may end.
 pub const MISC_FLAG_ALERTABLE: u32 = 1 << 4;
+/// `MiscFlags.SystemThread`: a thread of the kernel's, not a user
+/// process's (`IoIsSystemThread`). Every NK thread is one.
+pub const MISC_FLAG_SYSTEM_THREAD: u32 = 1 << 10;
 /// `MiscFlags.ApcQueueable`: APCs may be queued to the thread; cleared
 /// as it ends.
 pub const MISC_FLAG_APC_QUEUEABLE: u32 = 1 << 14;

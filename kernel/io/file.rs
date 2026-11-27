@@ -1348,3 +1348,70 @@ unsafe fn control(
     // SAFETY: per the contract.
     unsafe { send(handle, major, parameters, mode, needs, build) }
 }
+
+/// [`IoCreateStreamFileObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iocreatestreamfileobject):
+/// a file object a file system uses to cache a stream it keeps for
+/// itself (a volume's metadata), on the device of `file` if one is
+/// given, else on `device`, with that device's volume parameter block.
+/// As Windows does, it is marked `FO_STREAM_FILE` and given a handle
+/// that is closed at once, so the file system is sent its cleanup
+/// request now; it is returned with the reference the caller drops,
+/// whose going sends the close. Running out of memory raises
+/// `STATUS_INSUFFICIENT_RESOURCES`, as there.
+///
+/// # Safety
+/// `file`, if not null, is an open file object; else `device` is a live
+/// device. At `PASSIVE_LEVEL`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoCreateStreamFileObject(
+    file: *mut FILE_OBJECT,
+    device: *mut DEVICE_OBJECT,
+) -> *mut FILE_OBJECT {
+    // SAFETY: per the contract.
+    unsafe {
+        let device = if file.is_null() {
+            device
+        } else {
+            (*file).DeviceObject
+        };
+        let Some(body) = object::create(&object::FILE_TYPE, size_of::<FILE_OBJECT>()) else {
+            crate::arch::seh::nk_entry_ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+            unreachable!("ExRaiseStatus returned");
+        };
+        let stream = body.cast::<FILE_OBJECT>();
+        let vpb = (*device).Vpb.cast::<VPB>();
+        device::reference(device);
+        if !vpb.is_null() {
+            super::mount::reference(vpb);
+        }
+        (*stream).Type = IO_TYPE_FILE;
+        (*stream).Size = size_of::<FILE_OBJECT>() as i16;
+        (*stream).DeviceObject = device;
+        (*stream).Vpb = vpb.cast();
+        (*stream).Flags = FO_STREAM_FILE | FO_HANDLE_CREATED;
+        ke::wait::KeInitializeEvent(&raw mut (*stream).Lock, 1, 0);
+        ke::wait::KeInitializeEvent(&raw mut (*stream).Event, 0, 0);
+        (*stream).IrpList.Flink = &raw mut (*stream).IrpList;
+        (*stream).IrpList.Blink = &raw mut (*stream).IrpList;
+        let attributes = nk_ob::handles::Attributes {
+            inherit: false,
+            protect_from_close: false,
+        };
+        // Without a handle the cleanup request goes with the close.
+        match handle::open_with(body, 0, attributes, true) {
+            Ok(handle) => {
+                close(handle);
+            }
+            Err(_) => (*stream).Flags &= !FO_HANDLE_CREATED,
+        }
+        super::fs::trace(format_args!(
+            "stream file object {stream:p} on volume device {:p}",
+            if vpb.is_null() {
+                core::ptr::null_mut()
+            } else {
+                (*vpb).DeviceObject
+            }
+        ));
+        stream
+    }
+}

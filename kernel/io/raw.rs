@@ -5,10 +5,14 @@
 //! the device beneath, which is how a disk or a volume is read raw
 //! (`\Device\Harddisk0\DR0`, `\Device\HarddiskVolume1`).
 //!
-//! A mount ([`mount`]) is a volume device of RAW's whose extension says
+//! RAW registers a control device on the disk, CD-ROM and tape queues
+//! at boot (`\Device\RawDisk`, `\Device\RawCdRom`, `\Device\RawTape`),
+//! before any other file system, so it stays last on each (`io::fs`).
+//! It takes every volume it is asked to mount, as Windows' RAW does
+//! (`RawMountVolume`); the I/O manager decides when it is asked. A
+//! mount ([`mount`]) is a volume device of RAW's whose extension says
 //! which block it serves and which device its requests go to (the top
-//! of the real device's stack, held from then on). The I/O manager's
-//! mount path is `io::mount`.
+//! of the real device's stack, held from then on).
 
 #![allow(non_snake_case)]
 
@@ -21,6 +25,9 @@ use nk_ntabi::status::*;
 
 /// RAW's driver object.
 static DRIVER: AtomicPtr<DRIVER_OBJECT> = AtomicPtr::new(core::ptr::null_mut());
+/// RAW's control devices: disk, CD-ROM, tape.
+static CONTROL: [AtomicPtr<DEVICE_OBJECT>; 3] =
+    [const { AtomicPtr::new(core::ptr::null_mut()) }; 3];
 
 /// What a RAW volume device keeps: the block it is mounted for and the
 /// device its requests go to.
@@ -63,20 +70,91 @@ pub fn init() -> Result<(), &'static str> {
                 IRP_MJ_QUERY_INFORMATION,
                 IRP_MJ_SET_INFORMATION,
                 IRP_MJ_QUERY_VOLUME_INFORMATION,
-                IRP_MJ_FILE_SYSTEM_CONTROL,
             ] {
                 set(major, absent);
             }
+            set(IRP_MJ_FILE_SYSTEM_CONTROL, file_system_control);
         }
     })
     .map_err(|_| "RAW's driver object could not be made")?;
     DRIVER.store(made, Ordering::Release);
+    for (slot, (name, device_type)) in CONTROL.iter().zip([
+        ("\\Device\\RawDisk", FILE_DEVICE_DISK_FILE_SYSTEM),
+        ("\\Device\\RawCdRom", FILE_DEVICE_CD_ROM_FILE_SYSTEM),
+        ("\\Device\\RawTape", FILE_DEVICE_TAPE_FILE_SYSTEM),
+    ]) {
+        let mut wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+        let name = UNICODE_STRING {
+            Length: (wide.len() * 2) as u16,
+            MaximumLength: (wide.len() * 2) as u16,
+            Buffer: wide.as_mut_ptr(),
+        };
+        let mut control = core::ptr::null_mut();
+        // SAFETY: RAW's driver object; the name is copied by the call.
+        unsafe {
+            if !nt_success(device::IoCreateDevice(
+                made,
+                0,
+                &raw const name,
+                device_type,
+                0,
+                0,
+                &raw mut control,
+            )) {
+                return Err("a RAW control device could not be made");
+            }
+            slot.store(control, Ordering::Release);
+            super::fs::IoRegisterFileSystem(control);
+        }
+    }
     Ok(())
 }
 
+/// Whether `volume` is a device of RAW's.
+///
+/// # Safety
+/// `volume` is a live device.
+pub unsafe fn owns(volume: *mut DEVICE_OBJECT) -> bool {
+    // SAFETY: per the contract.
+    unsafe { (*volume).DriverObject == DRIVER.load(Ordering::Acquire) }
+}
+
+/// `IRP_MJ_FILE_SYSTEM_CONTROL`. To a control device: `IRP_MN_MOUNT_VOLUME`,
+/// which RAW always takes (its volume device in the block, the serial
+/// number all ones and no label, as `RawInitializeVcb` leaves them).
+/// Anything else is what NK's RAW does not answer yet.
+///
+/// # Safety
+/// `device` is RAW's and `request` a request sent to it.
+unsafe extern "C" fn file_system_control(
+    device: *mut DEVICE_OBJECT,
+    request: *mut IRP,
+) -> NTSTATUS {
+    // SAFETY: the request's location is the I/O manager's mount request:
+    // the block and the top of the real device's stack.
+    unsafe {
+        let location = (*request).CurrentStackLocation;
+        let control = CONTROL.iter().any(|c| c.load(Ordering::Acquire) == device);
+        if (*location).MinorFunction != IRP_MN_MOUNT_VOLUME || !control {
+            return absent(device, request);
+        }
+        let vpb = (*location).Parameters[0] as usize as *mut VPB;
+        let target = (*location).Parameters[1] as usize as *mut DEVICE_OBJECT;
+        let status = match mount(target, vpb) {
+            Ok(volume) => {
+                (*vpb).DeviceObject = volume;
+                (*vpb).SerialNumber = u32::MAX;
+                (*vpb).VolumeLabelLength = 0;
+                STATUS_SUCCESS
+            }
+            Err(status) => status,
+        };
+        complete(request, status, 0)
+    }
+}
+
 /// Mount RAW on `real`, whose block is `vpb`: a new volume device of
-/// RAW's, not yet published in the block (the caller does that, or
-/// gives the device up with [`discard`] if another mount came first).
+/// RAW's, not yet in the block.
 ///
 /// # Safety
 /// `real` is a live device with the block `vpb`. Called at

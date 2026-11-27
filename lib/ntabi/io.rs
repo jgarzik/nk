@@ -192,6 +192,31 @@ pub const VPB_RAW_MOUNT: u16 = 0x0010;
 /// `VPB_REMOVE_PENDING`: the device is being deleted; the volume is
 /// dismounted once nothing is open on it.
 pub const VPB_REMOVE_PENDING: u16 = 0x0008;
+/// `VPB_LOCKED`: the volume is locked; opens of it are refused.
+pub const VPB_LOCKED: u16 = 0x0002;
+/// `VPB_DIRECT_WRITES_ALLOWED`: set by the I/O manager when the last
+/// file system on the queue, RAW, mounted the volume.
+pub const VPB_DIRECT_WRITES_ALLOWED: u16 = 0x0020;
+
+/// `IRP_MN_MOUNT_VOLUME` and `IRP_MN_VERIFY_VOLUME`, minor functions
+/// of `IRP_MJ_FILE_SYSTEM_CONTROL`.
+pub const IRP_MN_USER_FS_REQUEST: u8 = 0x00;
+pub const IRP_MN_MOUNT_VOLUME: u8 = 0x01;
+/// `SL_ALLOW_RAW_MOUNT`: a mount request's location flag, the open
+/// that caused it allowing RAW.
+pub const SL_ALLOW_RAW_MOUNT: u8 = 0x01;
+/// `IRP_MOUNT_COMPLETION | IRP_SYNCHRONOUS_PAGING_IO`: the flags of
+/// the mount request the I/O manager sends.
+pub const IRP_MOUNT_COMPLETION: u32 = 0x0000_0002;
+/// `DO_LOW_PRIORITY_FILESYSTEM`: a file system that registers behind
+/// the others, just ahead of RAW.
+pub const DO_LOW_PRIORITY_FILESYSTEM: u32 = 0x0001_0000;
+/// `DRVO_BASE_FILESYSTEM_DRIVER`: the driver registered a disk, CD-ROM
+/// or tape file system; it is sent the file systems' shutdown request.
+pub const DRVO_BASE_FILESYSTEM_DRIVER: u32 = 0x80;
+/// `FO_STREAM_FILE` and `FO_DIRECT_DEVICE_OPEN`.
+pub const FO_STREAM_FILE: u32 = 0x0000_0100;
+pub const FO_DIRECT_DEVICE_OPEN: u32 = 0x0000_0800;
 
 /// `DO_VERIFY_VOLUME`: the volume must be verified before its file
 /// system uses it again; mounting clears it.

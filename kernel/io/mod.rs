@@ -11,6 +11,7 @@ pub mod device;
 pub mod driver;
 pub mod errlog;
 pub mod file;
+pub mod fs;
 pub mod interrupt;
 pub mod irp;
 pub mod irpext;

@@ -21,6 +21,17 @@ pub fn console_init(info: &BootInfo) {
     };
     TRACE_REGISTRY.store(traced("registry"), Ordering::Relaxed);
     TRACE_MM.store(traced("mm"), Ordering::Relaxed);
+    TRACE_MOUNT.store(traced("mount"), Ordering::Relaxed);
+}
+
+/// The command line asked (`trace=mount`) for a line in the log for
+/// every file system registered or unregistered, every mount request
+/// and its answer, and every stream file object made.
+static TRACE_MOUNT: AtomicBool = AtomicBool::new(false);
+
+/// Whether the mount path is logged.
+pub fn trace_mount() -> bool {
+    TRACE_MOUNT.load(Ordering::Relaxed)
 }
 
 /// The command line asked (`trace=registry`) for a line in the log for

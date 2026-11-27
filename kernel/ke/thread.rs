@@ -469,6 +469,8 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).entered_from).write([0; MAX_SEGMENTS]);
         (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_STRANDED]);
         (&raw mut (*thread).stranded_count).write(0);
+        // Every thread NK makes is a system thread.
+        field::<u32>(thread, layout::MISC_FLAGS).write(layout::MISC_FLAG_SYSTEM_THREAD);
         super::apc::init_thread(thread);
         super::wait::init_thread(thread);
         super::mutex::init_thread(thread);

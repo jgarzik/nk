@@ -54,6 +54,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-io"
+version = "0.2.0"
+dependencies = [
+ "nk-fsrtl",
+]
+
+[[package]]
 name = "nk-ke"
 version = "0.2.0"
 dependencies = [
@@ -151,6 +158,7 @@ dependencies = [
  "nk-ex",
  "nk-fsrtl",
  "nk-hal",
+ "nk-io",
  "nk-ke",
  "nk-mm",
  "nk-ntabi",

@@ -64,12 +64,13 @@ already held has a lower rank; two locks of one rank never nest.
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 10 | `io::driver::REINITIALIZE` | the routines drivers registered for reinitialisation, boot and other, and whether the boot queue has been run; never held with `DRIVERS` | DISPATCH |
 | 11 | `io::shutdown::QUEUES` | the devices registered for a shutdown request, before the file systems and last chance; never held across a driver's routine | DISPATCH |
+| 12 | `io::fs::DATABASE` | the queues of registered file systems' control devices and the count of registrations; never held across a request or with another lock | DISPATCH |
 | 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
 | 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and its thread has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
 | 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::depend::DEPENDENCIES` | which device depends on which, and the strings devices are bound by; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::notify::REGISTRATIONS` | the Plug and Play notification registrations and each one's count of callbacks in progress; never held with another lock of this rank, nor across a callback | DISPATCH |
-| 24 | `io::mount::VPB_LOCK` | every volume parameter block's `Flags`, `DeviceObject` and `ReferenceCount`; never held across a device's creation or deletion | DISPATCH |
+| 24 | `io::mount::VPB_LOCK` | every volume parameter block's `Flags`, `DeviceObject` and `ReferenceCount`; never held across a device's creation or deletion; file systems take it too, through `IoAcquireVpbSpinLock` | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
