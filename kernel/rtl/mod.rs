@@ -9,6 +9,7 @@ pub mod crt;
 pub mod feature;
 pub mod image;
 pub mod name;
+pub mod nls;
 pub mod once;
 pub mod prefix;
 pub mod print;

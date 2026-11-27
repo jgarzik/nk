@@ -8,15 +8,25 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
+    NtDuplicateObject,
+    NtFreeVirtualMemory,
+    ZwAllocateVirtualMemory,
+    ZwDeviceIoControlFile,
+    ZwDuplicateObject,
     ZwFlushKey,
+    ZwFreeVirtualMemory,
     ZwFsControlFile,
     ZwOpenSymbolicLinkObject,
     ZwQueryDirectoryFile,
     ZwQueryInformationFile,
+    ZwQueryInformationProcess,
+    ZwQuerySecurityAttributesToken,
     ZwQuerySymbolicLinkObject,
+    ZwQueryVirtualMemory,
     ZwQueryVolumeInformationFile,
     ZwReadFile,
     ZwSetInformationFile,
+    ZwUnloadDriver,
     ZwUpdateWnfStateData,
     ZwWriteFile,
 );

@@ -1,4 +1,4 @@
-//! Routines Microsoft's storage stack imports that NK does not
+//! Routines Microsoft's binaries import that NK does not
 //! implement: each stops the system, naming itself, if called. A name
 //! leaves this list in the commit that implements the routine.
 
@@ -6,4 +6,14 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(MmLockPagableDataSection, MmUnlockPagableImageSection,);
+trap_list!(
+    MmCanFileBeTruncated,
+    MmCopyVirtualMemory,
+    MmDoesFileHaveUserWritableReferences,
+    MmFlushImageSection,
+    MmLockPagableDataSection,
+    MmMdlPageContentsState,
+    MmPrefetchPages,
+    MmQuerySystemSize,
+    MmUnlockPagableImageSection,
+);

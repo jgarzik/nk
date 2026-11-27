@@ -372,6 +372,33 @@ status = "microsoft-inbox"
 note = "mountmgr.sys 10.0.19041.1, the mount manager: gives volumes their names and drive letters"
 
 [[fixture]]
+name = "fastfat"
+arch = "x86_64"
+file = "fastfat.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/fastfat.sys/473D1B046c000/fastfat.sys"
+sha256 = "f2666e697f43c525cd572fda5ef83ad1f427be1a60b4a4aeb75defde38096b89"
+status = "microsoft-inbox"
+note = "fastfat.sys 10.0.19041.1826, the FAT file system"
+
+[[fixture]]
+name = "ksecdd"
+arch = "x86_64"
+file = "ksecdd.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/ksecdd.sys/A3C78A6829000/ksecdd.sys"
+sha256 = "99c567eb9316b0cfc2dbffecc4818b576f2286c0819dba7f5d2f3c0388e688fb"
+status = "microsoft-inbox"
+note = "ksecdd.sys 10.0.19041.1586, the kernel security support provider: a boot driver, and an export driver fastfat.sys imports from"
+
+[[fixture]]
+name = "cng"
+arch = "x86_64"
+file = "cng.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/cng.sys/24A2F192bb000/cng.sys"
+sha256 = "087a998aa02b2bb2f57d57d8d48f285f939cc87346d5c3c34450671205a70408"
+status = "microsoft-inbox"
+note = "cng.sys 10.0.19041.2006, the kernel cryptography provider: a boot driver ksecdd.sys opens"
+
+[[fixture]]
 name = "nkc-thread"
 arch = "x86_64"
 file = "nkc-thread.x64.sys"

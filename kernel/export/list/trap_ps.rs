@@ -7,4 +7,20 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(PsUpdateComponentPower,);
+trap_list!(
+    PsGetCurrentThreadTeb,
+    PsGetProcessCreateTimeQuadPart,
+    PsGetProcessSecurityPort,
+    PsGetSiloIdentifier,
+    PsGetThreadProcess,
+    PsImpersonateClient,
+    PsIsCurrentThreadInServerSilo,
+    PsIsDiskCountersEnabled,
+    PsIsProtectedProcess,
+    PsLookupProcessByProcessId,
+    PsRevertToSelf,
+    PsSetCreateProcessNotifyRoutine,
+    PsSetCreateProcessNotifyRoutineEx2,
+    PsUpdateComponentPower,
+    PsUpdateDiskCounters,
+);

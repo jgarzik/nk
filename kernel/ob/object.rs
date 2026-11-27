@@ -347,6 +347,10 @@ pub static ExEventObjectType: TypeVariable = TypeVariable(&raw const EVENT_TYPE)
 /// what a driver passes to insist on a thread.
 pub static PsThreadType: TypeVariable = TypeVariable(&raw const THREAD_TYPE);
 
+/// [`PsProcessType`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-obreferenceobjectbyhandle):
+/// what a driver passes to insist on a process.
+pub static PsProcessType: TypeVariable = TypeVariable(&raw const PROCESS_TYPE);
+
 /// `IoDeviceObjectType` (`wdm.h`): what a driver passes to insist on a
 /// device.
 pub static IoDeviceObjectType: TypeVariable = TypeVariable(&raw const DEVICE_TYPE);

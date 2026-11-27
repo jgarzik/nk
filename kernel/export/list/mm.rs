@@ -26,5 +26,10 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         "MmUserProbeAddress",
         mm::user::MmUserProbeAddress
     ),
+    export_variable!(
+        Implemented,
+        "MmHighestUserAddress",
+        mm::user::MmHighestUserAddress
+    ),
     export!(Implemented, mm::pool::ExAllocatePool),
 ];

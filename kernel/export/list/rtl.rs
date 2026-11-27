@@ -6,6 +6,16 @@ use crate::rtl;
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
+    export_variable!(
+        Implemented,
+        "NlsMbOemCodePageTag",
+        rtl::nls::NlsMbOemCodePageTag
+    ),
+    export_variable!(
+        Implemented,
+        "NlsOemLeadByteInfo",
+        rtl::nls::NlsOemLeadByteInfo
+    ),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export_entry!(
         Implemented,
