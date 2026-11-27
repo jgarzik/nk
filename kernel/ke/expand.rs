@@ -24,8 +24,11 @@
 //! (`thread::push_segment`). An exception the routine lets out unwinds
 //! across the switch to a handler beneath: the guarded call's undo puts
 //! the thread back on its stack as the unwind passes, and the segment,
-//! still under the unwind's feet, is kept and given back at the thread's
-//! next return from a segment, or when it ends.
+//! still under the unwind's feet, is never used again: it is freed once
+//! the thread is back on its own stack, where no frame can be left on
+//! it, or when the thread ends. The bookkeeping is done at
+//! `DISPATCH_LEVEL`, after the segment is allocated, so an APC that
+//! expands the stack in between finds it whole.
 //!
 //! What NK does not do as Windows does: a segment is never larger than a
 //! thread's stack, so a size it cannot hold fails with
@@ -113,14 +116,20 @@ pub unsafe extern "C" fn KeExpandKernelStackAndCalloutEx(
     if size > KERNEL_STACK_SIZE as usize - SWITCH_FRAMES {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    let Some(segment) = thread::push_segment(stack::alloc) else {
+    // Allocated first, installed after: the thread may block for the
+    // memory, and an APC may expand its stack meanwhile.
+    let Some(segment) = stack::alloc() else {
         return STATUS_INSUFFICIENT_RESOURCES;
     };
+    if let Err(segment) = thread::push_segment(segment) {
+        stack::free(segment);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     let callout = Callout { routine, parameter };
     // SAFETY: the segment is mapped, the thread's own and unused; the
     // callout outlives the call.
     unsafe { arch::call_on_stack(segment.top, on_segment, (&raw const callout).addr()) };
-    thread::pop_segment(true);
+    thread::pop_segment(false);
     STATUS_SUCCESS
 }
 
@@ -149,7 +158,7 @@ extern "C" fn on_segment(callout: usize) {
 /// # Safety
 /// Called once by the unwind, on the segment.
 unsafe fn unwound(_: *mut c_void) {
-    thread::pop_segment(false);
+    thread::pop_segment(true);
 }
 
 // ---- tests --------------------------------------------------------------
@@ -275,4 +284,53 @@ pub fn after_raise_test() -> Result<(), &'static str> {
         return Err("an unwind out of a segment did not put the thread back on its own stack");
     }
     switch_test()
+}
+
+/// The base of the stack the undo below ran on.
+static UNDO_STACK: AtomicU64 = AtomicU64::new(0);
+
+/// An undo that expands again while the unwind out of a segment is
+/// still running on that segment.
+///
+/// # Safety
+/// Called once by the unwind.
+unsafe fn expand_in_undo(_: *mut c_void) {
+    let on = super::unwind::stack_holding(stack_pointer() as u64);
+    UNDO_STACK.store(on.map_or(0, |stack| stack.base), Ordering::Relaxed);
+    expand(FILE_SYSTEM_SIZE);
+}
+
+/// Raise on a segment beneath a frame whose undo expands again.
+///
+/// # Safety
+/// Takes the status to raise.
+pub unsafe extern "C" fn raise_expanding_in_unwind(code: usize) {
+    UNDO_STACK.store(0, Ordering::Relaxed);
+    let guard = Guard::Undo {
+        undo: expand_in_undo,
+        context: core::ptr::null_mut(),
+    };
+    // SAFETY: `raise_on_segment` takes any status.
+    unsafe {
+        seh::call(
+            raise_on_segment as *const () as usize,
+            [code, 0, 0, 0],
+            &guard,
+        )
+    };
+}
+
+/// After [`raise_expanding_in_unwind`]: the expansion made during the
+/// unwind ran on a segment of its own, not on the one the unwind was
+/// still running on, and the thread is back on its own stack.
+pub fn unwind_reuse_test() -> Result<(), &'static str> {
+    let undo = UNDO_STACK.load(Ordering::Relaxed);
+    let sp = SEEN_SP.load(Ordering::Relaxed) as u64;
+    if undo == 0 || sp == 0 {
+        return Err("the undo did not run on a stack, or its callout did not run");
+    }
+    if (undo..undo + KERNEL_STACK_SIZE).contains(&sp) {
+        return Err("a segment still under an unwind was used again");
+    }
+    after_raise_test()
 }

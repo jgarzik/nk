@@ -8,7 +8,12 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["ke.expand.switch", "ke.expand.inline", "ke.expand.raise"],
+    names: &[
+        "ke.expand.switch",
+        "ke.expand.inline",
+        "ke.expand.raise",
+        "ke.expand.unwind-reuse",
+    ],
     run,
     manual: false,
 };
@@ -25,5 +30,13 @@ fn run(r: &mut Report, _: &BootInfo) {
             except::CODE,
         )?;
         expand::after_raise_test()
+    });
+    r.check("ke.expand.unwind-reuse", || {
+        except::raises(
+            expand::raise_expanding_in_unwind,
+            except::CODE as usize,
+            except::CODE,
+        )?;
+        expand::unwind_reuse_test()
     });
 }

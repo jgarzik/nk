@@ -92,11 +92,13 @@ pub struct Thread {
     apc: SpinLock<()>,
     /// Stack segments the thread has been given to expand its stack
     /// (`ke::expand`): the first `segments_in_use` of them it is running
-    /// on, outermost first; the rest it keeps for the next expansion.
-    /// Only the thread itself changes these, and whoever buries it.
+    /// on, outermost first. Only the thread itself changes these, and whoever buries it.
     segments: [Stack; MAX_SEGMENTS],
-    segments_held: u8,
     segments_in_use: u8,
+    /// Segments an unwind left while still running on them, freed once
+    /// the thread is back on its own stack.
+    stranded: [Stack; MAX_SEGMENTS],
+    stranded_count: u8,
 }
 
 /// The most stack segments a thread runs on at once, beyond its own
@@ -262,69 +264,105 @@ unsafe fn active_stack(thread: *mut Thread) -> Stack {
 }
 
 /// Every stack the running thread may have frames on: its own first,
-/// then the segments it holds, outermost first. Those it holds but no
-/// longer runs on are among them: an unwind out of a segment goes on
-/// walking its frames there after the thread has left it.
+/// then the segments it runs on, outermost first, then those an unwind
+/// left (`pop_segment`): an unwind out of a segment goes on walking,
+/// and running, there after the thread has left it.
 pub fn current_stacks() -> impl Iterator<Item = Stack> {
     let me = current();
     // SAFETY: the running thread, which alone changes its segments.
-    let (own, segments, held) = unsafe {
+    let (own, segments, in_use, stranded, left) = unsafe {
         (
             (*me).stack,
             (*me).segments,
-            usize::from((*me).segments_held),
+            usize::from((*me).segments_in_use),
+            (*me).stranded,
+            usize::from((*me).stranded_count),
         )
     };
-    core::iter::once(own).chain(segments.into_iter().take(held))
+    core::iter::once(own)
+        .chain(segments.into_iter().take(in_use))
+        .chain(stranded.into_iter().take(left))
 }
 
-/// Run the running thread on a further segment from now on, one it
-/// holds already or `fresh`, which it then keeps; and say so where
-/// drivers and the overflow check look. Returns the segment, or `None`
-/// if the thread runs on as many as it may.
-pub fn push_segment(fresh: impl FnOnce() -> Option<Stack>) -> Option<Stack> {
+/// Run the running thread on `fresh`, a stack from `mm::stack`, as one
+/// more segment from now on, and say so where drivers and the overflow
+/// check look. Gives `fresh` back if the thread runs on as many as it
+/// may. The counts are read and changed at `DISPATCH_LEVEL`, so an APC
+/// that expands the stack in between finds them whole.
+pub fn push_segment(fresh: Stack) -> Result<(), Stack> {
+    reap_stranded();
     let me = current();
-    // SAFETY: the running thread, which alone changes its segments.
+    // SAFETY: the running thread, which alone changes its segments; at
+    // DISPATCH_LEVEL nothing else runs on it meanwhile.
     unsafe {
-        let in_use = usize::from((*me).segments_in_use);
-        if in_use == MAX_SEGMENTS {
-            return None;
-        }
-        if in_use == usize::from((*me).segments_held) {
-            (*me).segments[in_use] = fresh()?;
-            (*me).segments_held += 1;
-        }
-        let segment = (*me).segments[in_use];
-        // Not moved to another processor between the two records.
         let old = irql::raise(irql::DISPATCH_LEVEL);
-        (*me).segments_in_use += 1;
-        publish_stack(me, segment);
+        let in_use = usize::from((*me).segments_in_use);
+        let pushed = in_use < MAX_SEGMENTS;
+        if pushed {
+            (*me).segments[in_use] = fresh;
+            (*me).segments_in_use += 1;
+            publish_stack(me, fresh);
+        }
         irql::lower(old);
-        Some(segment)
+        if pushed { Ok(()) } else { Err(fresh) }
     }
 }
 
 /// The running thread is back on the stack it ran on before its last
-/// segment. With `release`, it is running there already, and gives back
-/// the segments it holds beyond those in use; an unwind out of a
-/// segment, which still runs on it, keeps them for the next expansion
-/// or the next release.
-pub fn pop_segment(release: bool) {
+/// segment. Unless `unwinding`, it is running there already and the
+/// segment is freed. An unwind out of a segment still runs on it: the
+/// segment is kept, walkable, until the thread is next on its own
+/// stack (`reap_stranded`), when no frame can be left on it.
+pub fn pop_segment(unwinding: bool) {
     let me = current();
-    // SAFETY: the running thread, which alone changes its segments.
-    unsafe {
+    // SAFETY: the running thread, which alone changes its segments; at
+    // DISPATCH_LEVEL nothing else runs on it meanwhile.
+    let segment = unsafe {
         let old = irql::raise(irql::DISPATCH_LEVEL);
         (*me).segments_in_use -= 1;
+        let segment = (*me).segments[usize::from((*me).segments_in_use)];
         publish_stack(me, active_stack(me));
-        irql::lower(old);
-        if release {
-            let in_use = usize::from((*me).segments_in_use);
-            let segments = (*me).segments;
-            for &segment in &segments[in_use..usize::from((*me).segments_held)] {
-                mm::stack::free(segment);
+        if unwinding {
+            let left = usize::from((*me).stranded_count);
+            if left == MAX_SEGMENTS {
+                crate::kd::bugcheck(format_args!(
+                    "more unwinds out of stack segments under way than a thread can run on"
+                ));
             }
-            (*me).segments_held = (*me).segments_in_use;
+            (*me).stranded[left] = segment;
+            (*me).stranded_count += 1;
         }
+        irql::lower(old);
+        segment
+    };
+    if !unwinding {
+        mm::stack::free(segment);
+        reap_stranded();
+    }
+}
+
+/// Free the segments unwinds left, if the running thread is on its own
+/// stack: every frame on a segment, an unwind's included, is then gone.
+fn reap_stranded() {
+    let me = current();
+    let here = 0u8;
+    let sp = core::hint::black_box(&raw const here).addr() as u64;
+    // SAFETY: the running thread, which alone changes its segments; at
+    // DISPATCH_LEVEL nothing else runs on it meanwhile.
+    let (freed, count) = unsafe {
+        let own = (*me).stack;
+        if !(own.base..own.top).contains(&sp) {
+            return;
+        }
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let count = usize::from((*me).stranded_count);
+        let freed = (*me).stranded;
+        (*me).stranded_count = 0;
+        irql::lower(old);
+        (freed, count)
+    };
+    for &segment in &freed[..count] {
+        mm::stack::free(segment);
     }
 }
 
@@ -384,8 +422,9 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).queued_at).write(AtomicU8::new(0));
         (&raw mut (*thread).apc).write(SpinLock::new(Rank::Apc, ()));
         (&raw mut (*thread).segments).write([Stack { base: 0, top: 0 }; MAX_SEGMENTS]);
-        (&raw mut (*thread).segments_held).write(0);
         (&raw mut (*thread).segments_in_use).write(0);
+        (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_SEGMENTS]);
+        (&raw mut (*thread).stranded_count).write(0);
         super::apc::init_thread(thread);
         super::wait::init_thread(thread);
         super::mutex::init_thread(thread);
@@ -938,8 +977,10 @@ fn after_switch() {
             );
             super::mutex::check_none_held(previous);
             mm::stack::free((*previous).stack);
-            let segments = (*previous).segments;
-            for &segment in &segments[..usize::from((*previous).segments_held)] {
+            let (segments, stranded) = ((*previous).segments, (*previous).stranded);
+            let in_use = usize::from((*previous).segments_in_use);
+            let left = usize::from((*previous).stranded_count);
+            for &segment in segments[..in_use].iter().chain(&stranded[..left]) {
                 mm::stack::free(segment);
             }
             // It has ended: whoever waits for it may go on. They are
