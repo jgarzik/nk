@@ -13,6 +13,7 @@ trap_list!(
     IoCancelFileOpen,
     IoCreateFile,
     IoDuplicateDependency,
+    IoFreeMiniCompletionPacket,
     IoQueryFullDriverPath,
     IoRaiseHardError,
     IoRaiseInformationalHardError,
