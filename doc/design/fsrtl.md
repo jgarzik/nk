@@ -34,6 +34,14 @@ acquisition leaves the critical region; a post-operation callback
 follows a pre-operation callback that succeeded. The device asked is
 the file system's own; NK attaches no filter to a file system.
 
+The lazy writer's deletion of a cache map takes the file the same way
+through `FsRtlAcquireFileExclusive` and `FsRtlReleaseFile`: the file
+system's `PreAcquireForSectionSynchronization` (asked for a section of
+no particular kind), then `AcquireFileForNtCreateSection` of its fast-I/O
+table, then the main resource exclusive. The acquisitions for the
+modified-page writer and for creating a section are not built: nothing
+in NK calls them yet.
+
 ## Fast I/O through the cache
 
 `FsRtlCopyRead`, `FsRtlCopyWrite`, `FsRtlMdlReadDev`,
