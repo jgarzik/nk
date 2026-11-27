@@ -3,7 +3,7 @@
 # whose ordinals do not start at zero is bound to another export's
 # address, or to none.
 scenario: x86_64
-fails: oracle.nkc-lib
+fails: ldr.lib.forwarder
 file: lib/pe/exports.rs
 replace:         let slot = ordinal.wrapping_sub(self.base);
 with:         let slot = ordinal;

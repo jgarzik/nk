@@ -78,8 +78,10 @@ def run(name):
         if built.returncode != 0:
             print(f"{name}: the mutant does not build:\n{built.stderr[-2000:]}")
             return False
-        # A broken kernel may well hang: do not wait two minutes for it.
-        env = {**os.environ, "BOOT_TEST_TIMEOUT": os.environ.get("MUTANT_TIMEOUT", "30")}
+        # A broken kernel may well hang: do not wait the boot test's two
+        # minutes for it. Long enough for a whole boot of either
+        # architecture under emulation, or the named test is never reached.
+        env = {**os.environ, "BOOT_TEST_TIMEOUT": os.environ.get("MUTANT_TIMEOUT", "90")}
         boot = subprocess.run([ROOT / "tools" / "boot_test.py", fields["scenario"]],
                               cwd=ROOT, capture_output=True, text=True, env=env)
         out = boot.stdout
