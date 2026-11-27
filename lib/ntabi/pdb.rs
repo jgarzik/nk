@@ -1013,6 +1013,41 @@ fn section_object_pointers_match_the_kernel() {
 }
 
 #[test]
+fn cache_manager_structures_match_the_kernel() {
+    use crate::cc::{CACHE_MANAGER_CALLBACKS, CACHE_UNINITIALIZE_EVENT};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let callbacks = types
+        .layout("_CACHE_MANAGER_CALLBACKS")
+        .expect("_CACHE_MANAGER_CALLBACKS");
+    let field = |name| offset(&callbacks, "_CACHE_MANAGER_CALLBACKS", name);
+    assert_eq!(
+        size_of::<CACHE_MANAGER_CALLBACKS>(),
+        callbacks.size as usize
+    );
+    assert_eq!(
+        offset_of!(CACHE_MANAGER_CALLBACKS, ReleaseFromLazyWrite),
+        field("ReleaseFromLazyWrite")
+    );
+    assert_eq!(
+        offset_of!(CACHE_MANAGER_CALLBACKS, AcquireForReadAhead),
+        field("AcquireForReadAhead")
+    );
+    assert_eq!(
+        offset_of!(CACHE_MANAGER_CALLBACKS, ReleaseFromReadAhead),
+        field("ReleaseFromReadAhead")
+    );
+    let event = types
+        .layout("_CACHE_UNINITIALIZE_EVENT")
+        .expect("_CACHE_UNINITIALIZE_EVENT");
+    assert_eq!(size_of::<CACHE_UNINITIALIZE_EVENT>(), event.size as usize);
+    assert_eq!(
+        offset_of!(CACHE_UNINITIALIZE_EVENT, Event),
+        offset(&event, "_CACHE_UNINITIALIZE_EVENT", "Event")
+    );
+}
+
+#[test]
 fn lists_match_the_kernel() {
     use crate::ex::{GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST, PAGED_LOOKASIDE_LIST, SLIST_HEADER};
     use core::mem::{offset_of, size_of};

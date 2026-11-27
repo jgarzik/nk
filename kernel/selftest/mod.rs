@@ -40,6 +40,7 @@ mod mslib;
 mod mutex;
 mod neg;
 mod nkfs;
+mod nkfs_cc;
 mod nkfs_mm;
 mod nkfs_mount;
 mod null;
@@ -218,6 +219,7 @@ pub static GROUPS: &[&[&Group]] = &[
     rawfs::GROUPS,
     nkfs_mount::GROUPS,
     nkfs_mm::GROUPS,
+    nkfs_cc::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,

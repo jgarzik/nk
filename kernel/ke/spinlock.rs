@@ -72,6 +72,14 @@ pub enum Rank {
     FirmwareVariables = 39,
     /// The executive pool (`mm::pool`).
     Pool = 40,
+    /// The cache manager's shared cache maps, their counts and lists
+    /// (`cc::MASTER`).
+    CcMaster = 41,
+    /// The cache manager's views (`cc::VACBS`).
+    CcVacbs = 42,
+    /// The cache manager's dirty-page counts, dirty marks, deferred
+    /// writes and work queue (`cc::DIRTY`).
+    CcDirty = 43,
     /// Kernel address space and page tables (`mm::map`).
     AddressSpace = 50,
     /// The page-frame-number database and the frame allocator

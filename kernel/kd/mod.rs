@@ -22,6 +22,7 @@ pub fn console_init(info: &BootInfo) {
     TRACE_REGISTRY.store(traced("registry"), Ordering::Relaxed);
     TRACE_MM.store(traced("mm"), Ordering::Relaxed);
     TRACE_MOUNT.store(traced("mount"), Ordering::Relaxed);
+    TRACE_CC.store(traced("cc"), Ordering::Relaxed);
 }
 
 /// The command line asked (`trace=mount`) for a line in the log for
@@ -54,6 +55,16 @@ static TRACE_MM: AtomicBool = AtomicBool::new(false);
 /// Whether the memory manager's work on files is logged.
 pub fn trace_mm() -> bool {
     TRACE_MM.load(Ordering::Relaxed)
+}
+
+/// The command line asked (`trace=cc`) for a line in the log for every
+/// cache map made and deleted, view mapped, pin, flush and write-behind:
+/// what the cache manager does for a file system.
+static TRACE_CC: AtomicBool = AtomicBool::new(false);
+
+/// Whether the cache manager's work is logged.
+pub fn trace_cc() -> bool {
+    TRACE_CC.load(Ordering::Relaxed)
 }
 
 /// A kernel debugger is attached and tells the kernel to go on at every

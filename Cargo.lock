@@ -156,6 +156,7 @@ version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
+ "nk-cc",
  "nk-cm",
  "nk-disk",
  "nk-etw",

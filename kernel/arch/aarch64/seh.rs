@@ -150,6 +150,11 @@ nk_with_caller_context:
     nk_caller_context nk_entry_FsRtlAddLargeMcbEntry, nk_fsrtl_add_large_mcb_entry
     nk_caller_context nk_entry_FsRtlRemoveLargeMcbEntry, nk_fsrtl_remove_large_mcb_entry
     nk_caller_context nk_entry_FsRtlTruncateLargeMcb, nk_fsrtl_truncate_large_mcb
+    nk_caller_context nk_entry_CcInitializeCacheMap, nk_cc_initialize_cache_map
+    nk_caller_context nk_entry_CcMapData, nk_cc_map_data
+    nk_caller_context nk_entry_CcPinRead, nk_cc_pin_read
+    nk_caller_context nk_entry_CcPinMappedData, nk_cc_pin_mapped_data
+    nk_caller_context nk_entry_CcPreparePinWrite, nk_cc_prepare_pin_write
 
     .globl nk_guarded_call
 // x0: a routine. x1-x4: its arguments. x5: the caller's guard record,
@@ -297,6 +302,45 @@ unsafe extern "C" {
     pub fn nk_entry_FsRtlAddLargeMcbEntry(mcb: *mut c_void, vbn: i64, lbn: i64, count: i64) -> u8;
     pub fn nk_entry_FsRtlRemoveLargeMcbEntry(mcb: *mut c_void, vbn: i64, count: i64);
     pub fn nk_entry_FsRtlTruncateLargeMcb(mcb: *mut c_void, vbn: i64);
+    pub fn nk_entry_CcInitializeCacheMap(
+        file: *mut c_void,
+        sizes: *const c_void,
+        pin_access: u8,
+        callbacks: *const c_void,
+        context: *mut c_void,
+    );
+    pub fn nk_entry_CcMapData(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        flags: u32,
+        bcb: *mut *mut c_void,
+        buffer: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcPinRead(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        flags: u32,
+        bcb: *mut *mut c_void,
+        buffer: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcPinMappedData(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        flags: u32,
+        bcb: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcPreparePinWrite(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        zero: u8,
+        flags: u32,
+        bcb: *mut *mut c_void,
+        buffer: *mut *mut c_void,
+    ) -> u8;
 }
 
 /// The fourth argument of a routine entered through
@@ -304,6 +348,17 @@ unsafe extern "C" {
 /// register it arrived in, as the context records it.
 pub fn fourth_argument(context: &Context) -> u64 {
     context.X[3]
+}
+
+/// Argument `n` (counting from 0; 4 to 7) of a routine entered through
+/// `nk_with_caller_context`: in its register, as the context records
+/// it. No routine entered so has more than eight.
+///
+/// # Safety
+/// The routine was called with more than `n` arguments.
+pub unsafe fn stack_argument(context: &Context, n: usize) -> u64 {
+    assert!((4..8).contains(&n), "argument {n} is not in a register");
+    context.X[n]
 }
 
 /// Call `routine` with `args` through the guarded frame.

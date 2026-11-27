@@ -5,6 +5,7 @@
 use super::Export;
 
 mod arch;
+mod cc;
 mod cm;
 mod etw;
 mod ex;
@@ -41,6 +42,7 @@ mod whea;
 /// Every list.
 pub(super) static ALL: &[&[Export]] = &[
     arch::EXPORTS,
+    cc::EXPORTS,
     cm::EXPORTS,
     etw::EXPORTS,
     ex::EXPORTS,

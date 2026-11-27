@@ -86,6 +86,9 @@ already held has a lower rank; two locks of one rank never nest.
 | 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |
 | 39 | `hal::variables::FIRMWARE` | the firmware's variable services: one call into them at a time, held across the call and nothing else | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
+| 41 | `cc::MASTER` | the cache manager's shared cache maps: `SectionObjectPointer->SharedCacheMap`, each map's open count, references, flags and sizes, the list of maps, each map's private cache maps and `FileObject->PrivateCacheMap`, and its chain of uninitialize events | DISPATCH |
+| 42 | `cc::vacb::VACBS` | the cache manager's views: each VACB's map, view, users and state, and every map's index of its views; never held across a call to the memory manager | DISPATCH |
+| 43 | `cc::DIRTY` | the dirty pages of the cache and of each map, and each BCB's dirty mark | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
 | 60 | `mm::pfn::PFN` | the frame bitmap; every entry of the page-frame-number database and its page lists; every control area's counts and flags and subsection directory, every subsection's counts and prototype PTEs, the entries of the system-cache views, and each file's `SectionObjectPointer->DataSectionObject`; never held across I/O, a wait or a pool allocation | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
@@ -327,6 +330,19 @@ spin lock held and nothing ranked is held across a callback. An
 exception that unwinds a callback releases it (the guard of that call,
 `doc/design/exceptions.md`). What a monitor's slot holds is let go after the mutex
 is released.
+
+### The cache manager's mutexes
+
+Each shared cache map has a guarded mutex over its list of BCBs (their
+pin counts and views) and its dirty-page bitmap, as Windows guards them
+with a fast mutex: it is taken with no spin lock held, at or below
+`APC_LEVEL`, and the pool is used under it. A BCB's own resource is
+taken by pins of a metadata stream after the mutex is released (or, for
+a BCB just made, before), and by the writer of that BCB; the cache
+manager takes it only inside a call a file system makes with its own
+resources held, so a file system's order (its resources, then the
+BCB's) is never inverted. None of these is held across a call to a
+file system's routine.
 
 ### Per-processor state
 

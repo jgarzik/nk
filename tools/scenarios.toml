@@ -267,6 +267,21 @@ paths = [
 cmdline = "test=mm.section trace=mm"
 golden = "x86_64-mm-section"
 
+# The cache manager over nkfs, called as a file system calls it: cache
+# maps made and deleted, maps and pins, and what each reads and writes.
+
+[x86_64-cc]
+arch = "x86_64"
+tier = "gate"
+paths = [
+    "kernel/cc/",
+    "lib/cc/",
+    "kernel/selftest/nkfs.rs",
+    "kernel/selftest/nkfs_cc.rs",
+]
+cmdline = "test=cc.* trace=cc"
+golden = "x86_64-cc"
+
 # Unmapping system address space a mapping does not hold stops the
 # system as Windows does.
 

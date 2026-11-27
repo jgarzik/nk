@@ -103,6 +103,16 @@ impl SectionRef {
     }
 }
 
+impl Clone for SectionRef {
+    /// Another reference to the same section, as the cache manager
+    /// takes one for each view it maps.
+    fn clone(&self) -> Self {
+        // SAFETY: the reference held keeps the object alive while a new
+        // one is taken.
+        Self(unsafe { ObRef::new(self.0.body()) })
+    }
+}
+
 impl ControlArea {
     /// The subsection for 256 KiB index `index`, if made.
     pub fn subsection(&self, _: &Guard, index: usize) -> *mut Subsection {

@@ -281,11 +281,44 @@ impl Volume {
         Ok(volume)
     }
 
+    /// Open the file again: another file object for the same file, its
+    /// handle and a reference, for the caller to give up with
+    /// [`close_another`].
+    pub fn open_another(&self) -> Result<(u64, *mut FILE_OBJECT), &'static str> {
+        let handle = file::open(&OpenRequest::new(DEVICE))
+            .map_err(|_| "the nkfs file did not open again")?
+            .0;
+        let mut object: *mut c_void = core::ptr::null_mut();
+        // SAFETY: a kernel handle just opened.
+        let status = unsafe {
+            handle::ObReferenceObjectByHandle(
+                handle as *mut c_void,
+                0,
+                core::ptr::null(),
+                KERNEL_MODE,
+                &raw mut object,
+                core::ptr::null_mut(),
+            )
+        };
+        if status != STATUS_SUCCESS {
+            file::close(handle);
+            return Err("the nkfs file's second handle names no object");
+        }
+        Ok((handle, object.cast()))
+    }
+
     /// The file's section object pointers.
     pub fn sop(&self) -> *mut SECTION_OBJECT_POINTERS {
         // SAFETY: the file is open; nkfs set the pointer at create.
         unsafe { (*self.file).SectionObjectPointer.cast() }
     }
+}
+
+/// Give up what [`Volume::open_another`] gave.
+pub fn close_another(handle: u64, file: *mut FILE_OBJECT) {
+    // SAFETY: the reference `open_another` took.
+    unsafe { object::dereference(file.cast()) };
+    file::close(handle);
 }
 
 impl Drop for Volume {

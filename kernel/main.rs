@@ -12,6 +12,7 @@ extern crate alloc;
 #[macro_use]
 mod kd;
 mod arch;
+mod cc;
 mod cm;
 mod etw;
 mod ex;
@@ -127,6 +128,9 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
         test::abort("cm", format_args!("{why}"));
     }
     fsrtl::init();
+    if let Err(why) = cc::init() {
+        test::abort("cc.init", format_args!("{why}"));
+    }
     ex::timezone::init();
     if let Err(why) = hal::description::publish() {
         test::abort("hal.description", format_args!("{why}"));

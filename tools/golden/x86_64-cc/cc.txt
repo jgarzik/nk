@@ -1,0 +1,7 @@
+cc.map ok
+cc.map-nowait ok
+cc.map-error ok
+cc.pin ok
+cc.pin-write-through ok
+cc.prepare-pin-write ok
+cc.uninitialize ok

@@ -214,6 +214,15 @@ tier has, for each architecture:
   once and close at its last reference, creates on a 0x6000 stack
   expansion and a raise across one, a read split into associated
   requests, and the file systems' shutdown at the end of the boot.
+- `x86_64-cc` (`test=cc.* trace=cc`): the cache manager over nkfs,
+  called as a file system calls it (`kernel/selftest/nkfs_cc.rs`): a
+  cache map is made with its section; `CcMapData` reads the range and
+  hands back a view's handle, without waiting returns FALSE leaving the
+  handle alone and reading nothing, and raises a failed read's status;
+  pins get the covering BCB; a repinned dirty BCB written through is
+  written with paging I/O and left clean; `CcPreparePinWrite` of a whole
+  page reads nothing and leaves it dirty; the last of two file objects
+  to uninitialize deletes the map and signals both events.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,
