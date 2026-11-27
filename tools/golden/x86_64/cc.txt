@@ -3,6 +3,7 @@ cc.map-nowait ok
 cc.map-error ok
 cc.pin ok
 cc.pin-write-through ok
+cc.flush-acquire ok
 cc.prepare-pin-write ok
 cc.uninitialize ok
 cc.initialize-extend-fails ok

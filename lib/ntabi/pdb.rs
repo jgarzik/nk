@@ -1048,6 +1048,49 @@ fn cache_manager_structures_match_the_kernel() {
 }
 
 #[test]
+fn filter_callbacks_match_the_kernel() {
+    use crate::fsrtl::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let callbacks = types
+        .layout("_FS_FILTER_CALLBACKS")
+        .expect("_FS_FILTER_CALLBACKS");
+    let field = |name| offset(&callbacks, "_FS_FILTER_CALLBACKS", name);
+    assert_eq!(size_of::<FS_FILTER_CALLBACKS>(), callbacks.size as usize);
+    assert_eq!(
+        PRE_ACQUIRE_FOR_SECTION_SYNCHRONIZATION,
+        field("PreAcquireForSectionSynchronization")
+    );
+    assert_eq!(
+        PRE_RELEASE_FOR_SECTION_SYNCHRONIZATION,
+        field("PreReleaseForSectionSynchronization")
+    );
+    assert_eq!(PRE_ACQUIRE_FOR_CC_FLUSH, field("PreAcquireForCcFlush"));
+    assert_eq!(PRE_RELEASE_FOR_CC_FLUSH, field("PreReleaseForCcFlush"));
+    let data = types
+        .layout("_FS_FILTER_CALLBACK_DATA")
+        .expect("_FS_FILTER_CALLBACK_DATA");
+    let field = |name| offset(&data, "_FS_FILTER_CALLBACK_DATA", name);
+    assert_eq!(size_of::<FS_FILTER_CALLBACK_DATA>(), data.size as usize);
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, Operation),
+        field("Operation")
+    );
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, DeviceObject),
+        field("DeviceObject")
+    );
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, FileObject),
+        field("FileObject")
+    );
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, Parameters),
+        field("Parameters")
+    );
+}
+
+#[test]
 fn lists_match_the_kernel() {
     use crate::ex::{GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST, PAGED_LOOKASIDE_LIST, SLIST_HEADER};
     use core::mem::{offset_of, size_of};

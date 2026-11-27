@@ -12,7 +12,7 @@ use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::cc::*;
-use nk_ntabi::io::{FILE_OBJECT, IO_STATUS_BLOCK, IRP_MJ_READ, IRP_MJ_WRITE};
+use nk_ntabi::io::{FAST_IO_DISPATCH, FILE_OBJECT, IO_STATUS_BLOCK, IRP_MJ_READ, IRP_MJ_WRITE};
 use nk_ntabi::status::*;
 
 pub static GROUPS: &[&Group] = &[&CC];
@@ -24,6 +24,7 @@ static CC: Group = Group {
         "cc.map-error",
         "cc.pin",
         "cc.pin-write-through",
+        "cc.flush-acquire",
         "cc.prepare-pin-write",
         "cc.uninitialize",
         "cc.initialize-extend-fails",
@@ -167,6 +168,31 @@ extern "C" fn initialize_huge(file: usize) {
     }
 }
 
+/// Calls of the fast-I/O flush routines: acquisitions in the low four
+/// bits, releases in the next four.
+static ACQUIRED: AtomicUsize = AtomicUsize::new(0);
+
+/// `AcquireForCcFlush`.
+///
+/// # Safety
+/// Takes any arguments.
+unsafe extern "C" fn acquire_for_flush(_: *mut FILE_OBJECT, _: *mut c_void) -> NTSTATUS {
+    ACQUIRED.fetch_add(1, Ordering::Relaxed);
+    STATUS_SUCCESS
+}
+
+/// `ReleaseForCcFlush`.
+///
+/// # Safety
+/// Takes any arguments.
+unsafe extern "C" fn release_for_flush(_: *mut FILE_OBJECT, _: *mut c_void) -> NTSTATUS {
+    ACQUIRED.fetch_add(0x10, Ordering::Relaxed);
+    STATUS_SUCCESS
+}
+
+/// The tests' fast-I/O table: only the flush routines.
+static FAST_IO: crate::test::Slot<FAST_IO_DISPATCH> = crate::test::Slot::new();
+
 /// The file the raise test maps, for its body.
 static RAISING_FILE: AtomicUsize = AtomicUsize::new(0);
 
@@ -292,6 +318,7 @@ fn run(verdicts: &mut Verdicts) -> Result<(), &'static str> {
         // SAFETY: the repinned BCB; a status block on this stack.
         unsafe { cc::pin::CcUnpinRepinnedBcb(bcb as *mut c_void, 1, &raw mut iosb) };
         let log = nkfs::take_log();
+        let held = nkfs::held_at_write();
         // SAFETY: as above.
         let after = unsafe { (*cc::scm_of(file)).dirty_pages.get() };
         let written = log
@@ -305,11 +332,57 @@ fn run(verdicts: &mut Verdicts) -> Result<(), &'static str> {
             Err("CcUnpinRepinnedBcb did not write the range through to the file")
         } else if after != 0 {
             Err("a range written through is still dirty")
+        } else if held != (true, true) {
+            Err(
+                "with no fast-I/O routine, the write did not hold the main resource exclusive \
+                 and the paging resource shared",
+            )
         } else {
             Ok(())
         }
     })();
     verdicts.push(("cc.pin-write-through", through));
+
+    // With the file system's own routines, those take the file for the
+    // flush, and the header's resources are left alone.
+    let fast = (|| {
+        let table = FAST_IO.ptr();
+        // SAFETY: the test's own table, nobody else's until set.
+        unsafe {
+            core::ptr::write_bytes(table, 0, 1);
+            (*table).SizeOfFastIoDispatch = size_of::<FAST_IO_DISPATCH>() as u32;
+            // AcquireForCcFlush and ReleaseForCcFlush, at 0xD0 and 0xD8.
+            (*table).Routines[25] = acquire_for_flush as *mut c_void;
+            (*table).Routines[26] = release_for_flush as *mut c_void;
+        }
+        volume.set_fast_io(table);
+        ACQUIRED.store(0, Ordering::Relaxed);
+        let (ok, bcb, _) = pin(file, 0x7000, 0x20, PIN_WAIT);
+        if ok != 1 {
+            return Err("CcPinRead failed");
+        }
+        // SAFETY: a pinned BCB.
+        unsafe {
+            cc::pin::CcSetDirtyPinnedData(bcb as *mut c_void, core::ptr::null());
+            cc::pin::CcRepinBcb(bcb as *mut c_void);
+        }
+        unpin(bcb);
+        let mut iosb = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: 0,
+        };
+        // SAFETY: the repinned BCB; a status block on this stack.
+        unsafe { cc::pin::CcUnpinRepinnedBcb(bcb as *mut c_void, 1, &raw mut iosb) };
+        volume.set_fast_io(core::ptr::null_mut());
+        nkfs::take_log();
+        let held = nkfs::held_at_write();
+        match ACQUIRED.load(Ordering::Relaxed) {
+            0x11 if held == (false, false) && iosb.Status == STATUS_SUCCESS => Ok(()),
+            0x11 => Err("with the file system's routines, the header's resources were taken too"),
+            _ => Err("AcquireForCcFlush and ReleaseForCcFlush were not each called once"),
+        }
+    })();
+    verdicts.push(("cc.flush-acquire", fast));
 
     // A page overwritten whole is not read, starts zeroed and is dirty.
     let prepared = (|| {

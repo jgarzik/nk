@@ -16,7 +16,8 @@ use crate::io::{device, irp, mdl};
 use crate::mm::pool;
 use crate::ob::{handle, object};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use nk_ntabi::ex::ERESOURCE;
 use nk_ntabi::fsrtl::FSRTL_ADVANCED_FCB_HEADER;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -35,6 +36,9 @@ const TOP_LEVEL_IRP: usize = 0x4C0;
 pub struct Fcb {
     pub header: FSRTL_ADVANCED_FCB_HEADER,
     pub sop: SECTION_OBJECT_POINTERS,
+    /// The header's main and paging resources.
+    pub resource: ERESOURCE,
+    pub paging_io_resource: ERESOURCE,
 }
 
 /// What byte `offset` of the file holds before anything is written.
@@ -60,6 +64,16 @@ static LOGGED: AtomicUsize = AtomicUsize::new(0);
 static FAIL_AT: AtomicU64 = AtomicU64::new(0);
 static DATA: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 static FCB: AtomicPtr<Fcb> = AtomicPtr::new(core::ptr::null_mut());
+/// At the last paging write: bit 0, the writing thread held the main
+/// resource exclusive; bit 1, the paging resource shared.
+static HELD_AT_WRITE: AtomicU32 = AtomicU32::new(0);
+
+/// What the writing thread held at the last paging write, as
+/// (main resource exclusive, paging resource shared).
+pub fn held_at_write() -> (bool, bool) {
+    let held = HELD_AT_WRITE.swap(0, Ordering::AcqRel);
+    (held & 1 != 0, held & 2 != 0)
+}
 
 /// The paging requests recorded since the last call, oldest first.
 pub fn take_log() -> alloc::vec::Vec<Record> {
@@ -148,6 +162,18 @@ unsafe fn transfer(irp: *mut IRP, location: *mut IO_STACK_LOCATION) -> (NTSTATUS
                 }
             }
         }
+        if major == IRP_MJ_WRITE && flags & IRP_PAGING_IO != 0 {
+            let fcb = FCB.load(Ordering::Acquire);
+            let held = u32::from(
+                crate::ex::resource::ExIsResourceAcquiredExclusiveLite(&raw mut (*fcb).resource)
+                    != 0,
+            ) | u32::from(
+                crate::ex::resource::ExIsResourceAcquiredSharedLite(
+                    &raw mut (*fcb).paging_io_resource,
+                ) != 0,
+            ) << 1;
+            HELD_AT_WRITE.store(held, Ordering::Release);
+        }
         if major == IRP_MJ_READ && FAIL_AT.load(Ordering::Acquire) == offset + 1 {
             return (STATUS_DEVICE_DATA_ERROR, 0);
         }
@@ -211,6 +237,10 @@ impl Volume {
             (*header).AllocationSize = FILE_BYTES as i64;
             (*header).FileSize = FILE_BYTES as i64;
             (*header).ValidDataLength = FILE_BYTES as i64;
+            crate::ex::resource::ExInitializeResourceLite(&raw mut (*fcb).resource);
+            crate::ex::resource::ExInitializeResourceLite(&raw mut (*fcb).paging_io_resource);
+            (*header).Resource = &raw mut (*fcb).resource;
+            (*header).PagingIoResource = &raw mut (*fcb).paging_io_resource;
         }
         DATA.store(data, Ordering::Release);
         FCB.store(fcb, Ordering::Release);
@@ -224,6 +254,8 @@ impl Volume {
         // SAFETY: the test's own driver object, set up as `driver::load`
         // sets one up.
         unsafe {
+            (*driver).DriverExtension = driver.add(1).cast();
+            (*(*driver).DriverExtension).DriverObject = driver;
             (*driver).MajorFunction =
                 [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
             for major in [
@@ -307,6 +339,12 @@ impl Volume {
         Ok((handle, object.cast()))
     }
 
+    /// Give the driver a fast-I/O dispatch table.
+    pub fn set_fast_io(&self, table: *mut FAST_IO_DISPATCH) {
+        // SAFETY: the test's own driver object.
+        unsafe { (*self.driver).FastIoDispatch = table.cast() };
+    }
+
     /// The file's section object pointers.
     pub fn sop(&self) -> *mut SECTION_OBJECT_POINTERS {
         // SAFETY: the file is open; nkfs set the pointer at create.
@@ -334,6 +372,13 @@ impl Drop for Volume {
         // the device any more (a section's reference to the file was
         // dropped by the test, which checks it).
         unsafe { device::IoDeleteDevice(self.device) };
+        let fcb = FCB.load(Ordering::Acquire);
+        // SAFETY: the FCB's resources, initialised by `new`, held by
+        // nobody now.
+        unsafe {
+            crate::ex::resource::ExDeleteResourceLite(&raw mut (*fcb).resource);
+            crate::ex::resource::ExDeleteResourceLite(&raw mut (*fcb).paging_io_resource);
+        }
         for block in [
             self.driver.cast(),
             FCB.swap(core::ptr::null_mut(), Ordering::AcqRel).cast(),

@@ -276,6 +276,7 @@ tier = "gate"
 paths = [
     "kernel/cc/",
     "lib/cc/",
+    "kernel/fsrtl/acquire.rs",
     "kernel/selftest/nkfs.rs",
     "kernel/selftest/nkfs_cc.rs",
 ]

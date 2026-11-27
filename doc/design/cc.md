@@ -117,7 +117,8 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   `MmFlushSection`). A BCB nobody pins goes when clean; a dirty one
   stays for its writer. `CcRepinBcb` adds a pin;
   `CcUnpinRepinnedBcb` with write-through writes a dirty range
-  synchronously, never raises, and leaves the range dirty again after a
+  synchronously (the file taken for the flush through FsRtl,
+  [FsRtl](fsrtl.md)), never raises, and leaves the range dirty again after a
   failure the memory manager does not call fatal.
 - **Not built**: a map or pin across a view's end stops the system by
   name (Windows reads past the view for a map and gives an OBCB for a

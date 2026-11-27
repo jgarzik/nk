@@ -17,6 +17,23 @@ object goes, as on Windows. The kernel calls them around the operations
 it starts on the file system's behalf, before it falls back to the
 fast-I/O dispatch entries and then to its own defaults.
 
+## Taking a file for the kernel's own I/O
+
+When the memory manager flushes for the cache manager, it takes the file
+through `FsRtlAcquireFileForCcFlushEx` and gives it back through
+`FsRtlReleaseFileForCcFlush` (`kernel/fsrtl/acquire.rs`), as the pinned
+kernel does: inside a critical region kept until the release, first the
+file system's own filter callback for the operation (its
+`STATUS_FSFILTER_OP_COMPLETED_SUCCESSFULLY` means it did the work), then
+`AcquireForCcFlush` of its fast-I/O table if the table reaches it, and
+when there is none, or it answers `STATUS_INVALID_DEVICE_REQUEST`, the
+default: the FCB header's main resource exclusive (shared again by a
+thread that holds it shared), then the paging resource shared; the
+release gives back the paging resource, then the main one. A failed
+acquisition leaves the critical region; a post-operation callback
+follows a pre-operation callback that succeeded. The device asked is
+the file system's own; NK attaches no filter to a file system.
+
 ## Mapping control blocks
 
 A file system keeps, per file, which runs of its virtual blocks lie at

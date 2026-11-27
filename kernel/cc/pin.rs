@@ -675,7 +675,11 @@ pub unsafe extern "C" fn CcUnpinRepinnedBcb(
     if b.is_dirty() {
         cache::set_range_modified(b.base(), b.byte_length as usize);
         set_clean(b);
-        let result = flush::flush_section(scm.sop, Some((b.file_offset, b.byte_length)), None);
+        let result = flush::flush_section(
+            scm.sop,
+            Some((b.file_offset, b.byte_length)),
+            Some(crate::fsrtl::acquire::CC_FLUSH),
+        );
         // SAFETY: per the contract.
         unsafe { (&raw mut (*iosb).Status).write(result.Status) };
         if nt_error(result.Status)

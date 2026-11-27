@@ -220,7 +220,9 @@ tier has, for each architecture:
   hands back a view's handle, without waiting returns FALSE leaving the
   handle alone and reading nothing, and raises a failed read's status;
   pins get the covering BCB; a repinned dirty BCB written through is
-  written with paging I/O and left clean; `CcPreparePinWrite` of a whole
+  written with paging I/O and left clean, the file taken for the flush
+  by the FCB header's resources or, when the file system has them, by
+  its fast-I/O flush routines alone; `CcPreparePinWrite` of a whole
   page reads nothing and leaves it dirty; the last of two file objects
   to uninitialize deletes the map and signals both events; a second
   caller whose allocation size cannot be had raises and keeps no pool.
