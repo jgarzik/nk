@@ -3,8 +3,9 @@
 
 Every file is verified against its pinned SHA-256. A mismatch is a hard
 error: the fixture is deleted and the exit status is 1. A download that
-fails is tried again a few times, a little later each time: a server
-that is busy for a moment is not the same as no network. One that still
+fails is tried again, a little later each time, and for longer when the
+server answers that it is busy: a server that is busy for a while is
+not the same as no network. One that still
 cannot be made (offline) is reported and the exit status is 2, so
 callers can tell "wrong bytes" from "no network". What could not be had
 is named again in the last lines, where a caller that shows only the
@@ -22,6 +23,7 @@ import os
 import sys
 import time
 import tomllib
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -32,8 +34,15 @@ CACHE = ROOT / "target" / "fixtures"
 USER_AGENT = "Microsoft-Symbol-Server/10.0.0.0"
 # How often a download is attempted, and how long to wait before the
 # second attempt, in seconds; each later wait is twice the one before.
+# A failure to reach the server at all (offline) gets the short
+# schedule. A server that answers that it is busy (HTTP 429, or 5xx:
+# Microsoft's symbol server answers 503 under load) gets the long one,
+# about three minutes in all, and a wait it names (`Retry-After`, in
+# seconds) when that is longer.
 ATTEMPTS = 4
 FIRST_WAIT = 2
+BUSY_ATTEMPTS = 7
+BUSY_FIRST_WAIT = 3
 
 pause = time.sleep
 
@@ -46,6 +55,14 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def retry_after(error):
+    """The seconds a busy server asks to be left alone for, or 0."""
+    try:
+        return max(0, int(error.headers.get("Retry-After", "0")))
+    except (AttributeError, ValueError):
+        return 0
+
+
 def fetch(fx):
     """Return 'ok', 'fetched', 'missing' or 'bad'."""
     dest = CACHE / fx["file"]
@@ -56,9 +73,11 @@ def fetch(fx):
     if "--check" in sys.argv:
         return "missing"
     tmp = dest.with_suffix(dest.suffix + ".part")
-    for attempt in range(ATTEMPTS):
+    attempt, wait = 0, 0
+    while True:
         if attempt:
-            pause(FIRST_WAIT * 2 ** (attempt - 1))
+            pause(wait)
+        attempt += 1
         try:
             req = urllib.request.Request(fx["url"], headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -68,9 +87,14 @@ def fetch(fx):
         # status, or a body that ended early.
         except (OSError, http.client.HTTPException) as e:
             tmp.unlink(missing_ok=True)
-            print(f"  {fx['file']}: download failed (attempt {attempt + 1} of {ATTEMPTS}): {e}")
-    else:
-        return "missing"
+            busy = isinstance(e, urllib.error.HTTPError) and (e.code == 429 or e.code >= 500)
+            limit, first = (BUSY_ATTEMPTS, BUSY_FIRST_WAIT) if busy else (ATTEMPTS, FIRST_WAIT)
+            print(f"  {fx['file']}: download failed (attempt {attempt} of {limit}): {e}")
+            if attempt >= limit:
+                return "missing"
+            wait = first * 2 ** (attempt - 1)
+            if busy:
+                wait = max(wait, retry_after(e))
     if sha256(tmp) != fx["sha256"]:
         got = sha256(tmp)
         tmp.unlink()

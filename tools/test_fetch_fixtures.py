@@ -9,6 +9,7 @@ import hashlib
 import io
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -46,6 +47,24 @@ class Server:
         self.requests += 1
         if self.requests <= self.failures:
             raise TimeoutError("timed out")
+        return Answer(self.data)
+
+
+class Busy:
+    """Answers the first `busy` requests with HTTP 503 (and a
+    `Retry-After` of `after` seconds, if given), then with `data`."""
+
+    def __init__(self, busy, after=None, data=BYTES):
+        self.busy = busy
+        self.after = after
+        self.data = data
+        self.requests = 0
+
+    def __call__(self, request, timeout):
+        self.requests += 1
+        if self.requests <= self.busy:
+            headers = {} if self.after is None else {"Retry-After": str(self.after)}
+            raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", headers, None)
         return Answer(self.data)
 
 
@@ -89,6 +108,27 @@ class Fetch(unittest.TestCase):
         self.assertEqual(len(self.pauses), fetch_fixtures.ATTEMPTS - 1)
         self.assertEqual(list(Path(self.cache.name).iterdir()), [])
         self.assertIn("download failed", said)
+
+    def test_a_busy_server_is_waited_out(self):
+        # Microsoft's symbol server answers 503 for a while when it is
+        # busy: CI once lost a run to four of them in fourteen seconds.
+        server = Busy(busy=6)
+        result, _ = self.fetch(server)
+        self.assertEqual(result, "fetched")
+        self.assertEqual(server.requests, 7)
+        self.assertGreaterEqual(sum(self.pauses), 60)
+
+    def test_a_busy_server_s_retry_after_is_honoured(self):
+        server = Busy(busy=1, after=45)
+        result, _ = self.fetch(server)
+        self.assertEqual(result, "fetched")
+        self.assertGreaterEqual(self.pauses[0], 45)
+
+    def test_no_network_is_not_waited_for_long(self):
+        # Offline, every fixture fails at once: a few short tries each.
+        server = Server(failures=1000)
+        self.fetch(server)
+        self.assertLess(sum(self.pauses), 30)
 
     def test_wrong_bytes_are_not_asked_for_again(self):
         server = Server(failures=0, data=b"other bytes")
