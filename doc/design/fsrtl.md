@@ -55,3 +55,12 @@ breaks let the operation go on, fast I/O is possible, no batch or
 handle oplock is held. No oplock keys are recorded. An oplock field
 that is not null stops the system by name, so those exports are
 partial.
+
+## Byte-range locks
+
+NK takes no byte-range locks: `FsRtlProcessFileLock` and
+`FsRtlPrivateLock`, which lock, are traps. A `FILE_LOCK` is initialised
+as Windows initialises it, and the other routines do what the pinned
+kernel does with no record of locks (`kernel/fsrtl/lock.rs`): every
+access is allowed, nothing waits, an unlock finds no range locked. A
+record that is not null stops the system by name.

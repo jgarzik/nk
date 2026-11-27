@@ -92,6 +92,24 @@ pub const fn with_fcb_header_version(reserved_and_version: u8, version: u8) -> u
     (reserved_and_version & 0x0F) | (version << 4)
 }
 
+/// `FILE_LOCK` (`ntifs.h`): a stream's byte-range locks, which a file
+/// system embeds in its control block. The public symbols do not
+/// describe it; the size and offsets are those the pinned kernel's
+/// routines use (initialising writes a `LONG` at 0x58).
+#[repr(C)]
+pub struct FILE_LOCK {
+    pub CompleteLockIrpRoutine: *mut c_void,
+    pub UnlockRoutine: *mut c_void,
+    pub FastIoIsQuestionable: u8,
+    pub SpareC: [u8; 3],
+    /// The kernel's own record of the locks, made with the first lock.
+    pub LockInformation: *mut c_void,
+    /// `FILE_LOCK_INFO LastReturnedLockInfo`.
+    pub LastReturnedLockInfo: [u64; 6],
+    pub LastReturnedLock: *mut c_void,
+    pub LockRequestsInProgress: i32,
+}
+
 /// `BASE_MCB` (`ntifs.h`): the mapping a `LARGE_MCB` holds. The public
 /// symbols do not describe it; the offsets are those the pinned kernel's
 /// MCB routines use.
@@ -135,6 +153,12 @@ const _: () = {
     assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, FileContextSupportPointer) == 0x50);
     assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, Oplock) == 0x58);
     assert!(offset_of!(FSRTL_ADVANCED_FCB_HEADER, ReservedContext) == 0x60);
+
+    assert!(size_of::<FILE_LOCK>() == 0x60);
+    assert!(offset_of!(FILE_LOCK, FastIoIsQuestionable) == 0x10);
+    assert!(offset_of!(FILE_LOCK, LockInformation) == 0x18);
+    assert!(offset_of!(FILE_LOCK, LastReturnedLock) == 0x50);
+    assert!(offset_of!(FILE_LOCK, LockRequestsInProgress) == 0x58);
 
     assert!(size_of::<BASE_MCB>() == 0x18);
     assert!(offset_of!(BASE_MCB, PairCount) == 0x04);

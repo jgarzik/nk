@@ -9,6 +9,7 @@
 #![allow(non_snake_case)]
 
 pub mod filter;
+pub mod lock;
 pub mod mcb;
 pub mod name;
 pub mod oplock;
