@@ -8,6 +8,8 @@
 
 #![allow(non_snake_case)]
 
+pub mod filter;
+
 use crate::ex::pushlock;
 use crate::kd;
 use crate::ke::mutex;

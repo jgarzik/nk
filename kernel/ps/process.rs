@@ -595,3 +595,12 @@ pub fn token_test() -> Result<u32, &'static str> {
         Ok(threads as u32 * ROUNDS + 2)
     }
 }
+
+/// [`PsIsDiskCountersEnabled`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psisdiskcountersenabled):
+/// whether file systems are to count each process's disk I/O. Windows
+/// turns the counters off only for the registry value
+/// `Session Manager\kernel\DisableDiskCounters`, which NK does not
+/// read: the counters are on, as on Windows without the value.
+pub extern "C" fn PsIsDiskCountersEnabled() -> u8 {
+    1
+}

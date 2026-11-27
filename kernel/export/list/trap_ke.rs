@@ -12,7 +12,6 @@ trap_list!(
     KeExpandKernelStackAndCalloutEx,
     KeIsExecutingDpc,
     KeLeaveGuardedRegion,
-    KeQueryActiveProcessorCount,
     KeRestoreExtendedProcessorState,
     KeSaveExtendedProcessorState,
     KeStartDynamicProcessor,

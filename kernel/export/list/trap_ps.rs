@@ -15,7 +15,6 @@ trap_list!(
     PsGetThreadProcess,
     PsImpersonateClient,
     PsIsCurrentThreadInServerSilo,
-    PsIsDiskCountersEnabled,
     PsIsProtectedProcess,
     PsLookupProcessByProcessId,
     PsRevertToSelf,

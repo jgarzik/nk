@@ -11,6 +11,7 @@ pub mod contig;
 pub mod io;
 pub mod map;
 pub mod pool;
+pub mod query;
 pub mod stack;
 pub mod user;
 

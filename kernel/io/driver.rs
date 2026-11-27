@@ -413,7 +413,9 @@ pub unsafe extern "C" fn IoGetDriverObjectExtension(
 }
 
 /// The object manager's call when the last pointer to a driver object
-/// has gone: free the extensions the driver allocated for it.
+/// has gone: free the extensions the driver allocated for it, and the
+/// copy of its file-system filter callbacks
+/// (`fsrtl::filter::FsRtlRegisterFileSystemFilterCallbacks`).
 ///
 /// # Safety
 /// `body` is a driver object nothing refers to any more.
@@ -432,6 +434,11 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
             let this = next;
             next = (*this).NextExtension;
             let _ = pool::free(this.cast());
+        }
+        let callbacks = (*extension).FsFilterCallbacks;
+        (*extension).FsFilterCallbacks = core::ptr::null_mut();
+        if !callbacks.is_null() {
+            let _ = pool::free(callbacks.cast());
         }
     }
 }

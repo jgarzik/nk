@@ -168,6 +168,7 @@ One document per part of the kernel, each with the decisions NK made there:
 - [Exceptions](design/exceptions.md): Structured exception handling and unwinding.
 - [Loading and starting drivers](design/drivers.md): The loader and driver start-up.
 - [I/O](design/io.md): The I/O manager.
+- [The file-system runtime library](design/fsrtl.md): What the kernel does for file systems.
 - [Power](design/power.md): The power manager and the power framework.
 - [Plug and Play](design/pnp.md): The Plug and Play manager.
 - [The registry](design/registry.md): Hives, keys, watches and query tables.

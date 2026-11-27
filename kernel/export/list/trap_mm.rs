@@ -14,6 +14,5 @@ trap_list!(
     MmLockPagableDataSection,
     MmMdlPageContentsState,
     MmPrefetchPages,
-    MmQuerySystemSize,
     MmUnlockPagableImageSection,
 );

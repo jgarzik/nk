@@ -24,6 +24,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::dpc::KeInsertQueueDpc),
     export!(Implemented, ke::kspin::KeLowerIrql),
     export!(Implemented, ke::smp::KeQueryActiveProcessorCountEx),
+    export!(Implemented, ke::smp::KeQueryActiveProcessorCount),
     export!(Implemented, ke::time::KeQueryPerformanceCounter),
     export!(Implemented, ke::time::KeQueryTimeIncrement),
     export!(Implemented, ke::bugcheck::KeRegisterBugCheckReasonCallback),

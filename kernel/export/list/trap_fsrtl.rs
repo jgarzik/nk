@@ -66,7 +66,6 @@ trap_list!(
     FsRtlPrepareMdlWriteDev,
     FsRtlPrivateLock,
     FsRtlProcessFileLock,
-    FsRtlRegisterFileSystemFilterCallbacks,
     FsRtlRemoveLargeMcbEntry,
     FsRtlResetLargeMcb,
     FsRtlTruncateLargeMcb,
