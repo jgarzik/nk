@@ -10,9 +10,5 @@ trap_list!(
     ExDeleteLookasideListEx,
     ExInitializeLookasideListEx,
     ExInterlockedAddUlong,
-    ExRegisterExtension,
     ExTryConvertPushLockSharedToExclusiveEx,
-    ExUnregisterExtension,
-    PcwAddInstance,
-    PcwRegister,
 );

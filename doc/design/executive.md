@@ -222,6 +222,24 @@ making one relative to a directory handle is refused.
 (`nk_rtl::once`). A thread that finds the initialisation under way
 sleeps a millisecond and looks again, where Windows queues it.
 
+### Extension hosts and performance counters
+
+`ExRegisterExtension` plugs a driver's table of routines into one of
+the kernel's extension hosts (`kernel/ex/extension.rs`). Windows makes
+sixteen at boot; NK makes the ones its drivers use, as Windows makes
+them: `ksecdd.sys`'s authorization routines (id 2) and `cng.sys`'s
+cryptography (id 3). A registration is checked as the pinned kernel
+checks it (version, table, number of routines, a null routine, one
+table per host). A host Windows has and NK does not stops the system
+naming it; one Windows does not have either is `STATUS_NOT_FOUND`.
+Nothing on NK calls a registered table yet.
+
+The performance-counter routines (`Pcw*`, `kernel/ex/pcw.rs`) are
+`pcw.sys`'s, reached on Windows through its extension host. With no
+`pcw.sys` registered they give the status Windows gives then: not
+implemented when the `pcw` service is to start (or has no key),
+success with nothing registered when it is not.
+
 ### The time zone
 
 Local time is UTC (`kernel/ex/timezone.rs`): Windows' bias comes from
