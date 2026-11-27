@@ -399,6 +399,15 @@ status = "microsoft-inbox"
 note = "cng.sys 10.0.19041.2006, the kernel cryptography provider: a boot driver ksecdd.sys opens"
 
 [[fixture]]
+name = "pcw"
+arch = "x86_64"
+file = "pcw.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/pcw.sys/CD678B8914000/pcw.sys"
+sha256 = "e69fcbc80fc35618f9f96d0b43ca5a9e91f7b8b322e16a9f6f6440d1535e46b6"
+status = "microsoft-inbox"
+note = "pcw.sys 10.0.19041.2728, the performance counter provider: a boot driver, as the reference installation loads it, that the kernel's Pcw* routines and so ksecdd.sys's start depend on"
+
+[[fixture]]
 name = "nkc-thread"
 arch = "x86_64"
 file = "nkc-thread.x64.sys"

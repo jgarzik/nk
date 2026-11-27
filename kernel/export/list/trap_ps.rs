@@ -15,6 +15,7 @@ trap_list!(
     PsImpersonateClient,
     PsIsCurrentThreadInServerSilo,
     PsIsProtectedProcess,
+    PsIsThreadTerminating,
     PsLookupProcessByProcessId,
     PsRevertToSelf,
     PsUpdateComponentPower,

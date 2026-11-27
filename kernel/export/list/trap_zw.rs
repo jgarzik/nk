@@ -10,6 +10,7 @@ use super::super::{Export, NT, State};
 trap_list!(
     NtDuplicateObject,
     NtFreeVirtualMemory,
+    ZwAllocateLocallyUniqueId,
     ZwAllocateVirtualMemory,
     ZwDeviceIoControlFile,
     ZwDuplicateObject,

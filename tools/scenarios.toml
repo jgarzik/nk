@@ -1253,3 +1253,14 @@ registry = ["storage", "volumes", "mount", "fat"]
 disk = "ahci"
 disk_image = "fat32-mbr"
 disk_expect = "fat-written"
+
+# Microsoft's kernel cryptography and security drivers start as boot
+# drivers, as on Windows: pcw.sys, cng.sys, then ksecdd.sys, which
+# opens \Device\CNG and registers performance counters with pcw.sys.
+
+[x86_64-crypto-boot]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/registry-crypto.txt"]
+cmdline = "test=crypto.boot"
+registry = ["crypto"]

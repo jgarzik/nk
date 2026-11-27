@@ -495,6 +495,15 @@ check to that without booting.
   `fsck.fat` to find the volume clean and every file, the new one
   included, to hold what `tools/fatdisk.py` (`expected`) says.
 
+- `x86_64-crypto-boot` (`test=crypto.boot`, `registry = ["crypto"]`,
+  `kernel/selftest/crypto.rs`): Microsoft's performance-counter,
+  cryptography and security drivers start as boot drivers, as on
+  Windows: `pcw.sys`, `cng.sys` (whose start needs the loader's boot
+  entropy, `doc/BOOT.md`) and `ksecdd.sys`, which opens `\Device\CNG`
+  and registers performance counters with `pcw.sys`. The test requires
+  CNG and KSecDD running and both devices there. The registry values
+  are the WinPE image's own (`fixtures/registry-crypto.txt`).
+
 ### Soak
 
 `make soak` runs the soak tier `SOAK_REPEAT` times each: the whole list

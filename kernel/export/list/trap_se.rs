@@ -12,6 +12,7 @@ trap_list!(
     SeQueryAuthenticationIdToken,
     SeQuerySecurityAttributesToken,
     SeQuerySecurityAttributesTokenAccessInformation,
+    SeReleaseSecurityDescriptor,
     SeReportSecurityEventWithSubCategory,
     SeSetAuditParameter,
     SeSetSessionIdTokenWithLinked,

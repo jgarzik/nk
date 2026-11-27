@@ -1,8 +1,9 @@
 //! Microsoft's kernel cryptography and security drivers as boot
 //! drivers, as Windows starts them: `cng.sys` (which stops the system
 //! with `0x121` if any part of its start fails, so its start is whole or
-//! the boot is over) and then `ksecdd.sys`, which opens `\Device\CNG`.
-//! The proof is that both ran and their devices are there.
+//! the boot is over) and then `ksecdd.sys`, which opens `\Device\CNG`
+//! and registers performance counters with `pcw.sys`, a boot driver
+//! before both. The proof is that both ran and their devices are there.
 
 use crate::io::service;
 use crate::ldr;
@@ -23,8 +24,11 @@ fn exists(name: &str) -> bool {
 }
 
 fn run(r: &mut Report, _: &BootInfo) {
-    if ldr::boot_file("cng.sys").is_none() || ldr::boot_file("ksecdd.sys").is_none() {
-        r.skip_rest(format_args!("cng.sys or ksecdd.sys not provided"));
+    if ["pcw.sys", "cng.sys", "ksecdd.sys"]
+        .iter()
+        .any(|file| ldr::boot_file(file).is_none())
+    {
+        r.skip_rest(format_args!("pcw.sys, cng.sys or ksecdd.sys not provided"));
         return;
     }
     let running = service::running("CNG") && service::running("KSecDD");

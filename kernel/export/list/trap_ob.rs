@@ -8,7 +8,9 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
+    ObCreateObject,
     ObDereferenceObjectDeferDelete,
+    ObInsertObject,
     ObIsDosDeviceLocallyMapped,
     ObQueryNameString,
     ObReferenceObjectSafe,

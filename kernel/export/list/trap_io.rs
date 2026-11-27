@@ -8,6 +8,7 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     IoAdjustStackSizeForRedirection,
+    IoAllocateMiniCompletionPacket,
     IoAssignResources,
     IoCancelFileOpen,
     IoCreateFile,
