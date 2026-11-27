@@ -50,6 +50,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::mdl::MmUnmapLockedPages),
     export!(Implemented, io::csq::IoCsqInitialize),
     export!(Implemented, io::csq::IoCsqInsertIrp),
+    export!(Implemented, io::csq::IoCsqInsertIrpEx),
+    export!(Implemented, io::csq::IoCsqInitializeEx),
     export!(Implemented, io::csq::IoCsqRemoveNextIrp),
     export!(Implemented, io::csq::IoIsWdmVersionAvailable),
     export!(Implemented, io::device::IoAttachDeviceToDeviceStack),

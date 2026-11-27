@@ -427,7 +427,10 @@ queued its fourth driver-context pointer names the queue (or the
 caller's context block) and its cancel routine is the I/O manager's,
 which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
-canceller has it.
+canceller has it. A queue made by `IoCsqInitializeEx` has an insert
+routine that may refuse a request (`IoCsqInsertIrpEx`): the request is
+then neither marked pending nor made cancellable, and the refusal is
+returned, its mark of the queue left as Windows leaves it.
 
 **Stream contexts** (`kernel/fsrtl/mod.rs`). A file system puts an
 `FSRTL_ADVANCED_FCB_HEADER` at the front of each stream's control block

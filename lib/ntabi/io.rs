@@ -35,9 +35,13 @@ pub struct IO_STATUS_BLOCK {
 /// `IO_CSQ.Type` and `IO_CSQ_IRP_CONTEXT.Type`.
 pub const IO_TYPE_CSQ_IRP_CONTEXT: u32 = 1;
 pub const IO_TYPE_CSQ: u32 = 2;
+/// A queue set up by `IoCsqInitializeEx`, whose insert routine returns
+/// a status.
+pub const IO_TYPE_CSQ_EX: u32 = 3;
 
 /// A cancel-safe queue's callbacks, which the driver supplies.
 pub type CSQ_INSERT = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
+pub type CSQ_INSERT_EX = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP, PVOID) -> NTSTATUS;
 pub type CSQ_REMOVE = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
 pub type CSQ_PEEK = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP, PVOID) -> *mut IRP;
 pub type CSQ_ACQUIRE = unsafe extern "C" fn(*mut IO_CSQ, *mut u8);
@@ -49,7 +53,9 @@ pub type CSQ_COMPLETE = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
 #[repr(C)]
 pub struct IO_CSQ {
     pub Type: u32,
-    pub CsqInsertIrp: Option<CSQ_INSERT>,
+    /// A [`CSQ_INSERT`], or a [`CSQ_INSERT_EX`] when `Type` is
+    /// [`IO_TYPE_CSQ_EX`].
+    pub CsqInsertIrp: PVOID,
     pub CsqRemoveIrp: Option<CSQ_REMOVE>,
     pub CsqPeekNextIrp: Option<CSQ_PEEK>,
     pub CsqAcquireLock: Option<CSQ_ACQUIRE>,

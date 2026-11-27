@@ -11,8 +11,6 @@ trap_list!(
     IoAssignResources,
     IoCancelFileOpen,
     IoCreateFile,
-    IoCsqInitializeEx,
-    IoCsqInsertIrpEx,
     IoDuplicateDependency,
     IoQueryFullDriverPath,
     IoRaiseHardError,
