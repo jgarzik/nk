@@ -4,9 +4,9 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
 
 ## What is absent
 
-**File systems.** None registers but RAW and the ones NK's tests
-make; no file system recognizer (`fs_rec.sys`) is loaded, so RAW takes
-any volume no other file system claims, whatever is opened on it
+**File systems.** Only `fastfat.sys`, RAW and the ones NK's tests make
+register; no file system recognizer (`fs_rec.sys`) is loaded, so RAW
+takes any volume no other file system claims, whatever is opened on it
 ([I/O](io.md), Mounting). RAW enforces no share access between opens of
 a volume, and its answers to information queries and to file-system
 control requests other than mounting stop the system by name.

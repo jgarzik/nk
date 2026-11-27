@@ -14,11 +14,9 @@
  "looked_up_absent": {
   "note": "names MmGetSystemRoutineAddress was asked for during the boot test, by the fixtures and by the kernel's own test of the routine, that the kernel does not export; in no import table",
   "names": [
-   "IoCreateDeviceSecure",
    "IoValidateDeviceIoControlAccess",
    "NkcNoSuchRoutine",
    "NoSuchRoutineInAnyKernel",
-   "SeConvertStringSecurityDescriptorToSecurityDescriptor",
    "kesetevent"
   ]
  },

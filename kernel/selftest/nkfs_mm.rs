@@ -238,12 +238,19 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
         Ok(())
     })();
     verdicts.push(("mm.section-overwrite", overwrite));
+    let hw_dirty = {
+        use nk_mm::pt::{Arch, Prot};
+        let a = crate::arch::pt_arch();
+        !a.dirty(a.leaf(0, 0, Prot::RW))
+    };
     let [_, standby, _, no_write] = pfn::counts();
     cache::unmap_cache_view(&s, slot, false);
     let [_, standby_after, _, no_write_after] = pfn::counts();
     // Mapped: pages 1 to 16, 32 to 47, 49 and 63 clean, 48 dirty, of a
-    // section only the cache manager writes.
-    if no_write_after != no_write + 1 || standby_after != standby + 34 {
+    // section only the cache manager writes. Without hardware dirty
+    // tracking every writable mapping counts as dirty (arm64).
+    let (want_standby, want_no_write) = if hw_dirty { (34, 1) } else { (0, 35) };
+    if no_write_after != no_write + want_no_write || standby_after != standby + want_standby {
         return Err(
             "unmapping the view did not put its pages on standby and the dirty one on modified-no-write",
         );
@@ -338,20 +345,24 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
         unsafe { ((v + 0x2008) as *mut u64).write_volatile(0x1122_3344_5566_7788) };
         let result = flush::flush_section(sop, Some((0, VIEW as u32)), None);
         let log = nkfs::take_log();
-        let write = |r: &Record, offset| {
-            r.major == IRP_MJ_WRITE
-                && r.flags == PAGING_READ
-                && r.cache_manager_active
-                && r.offset == offset
-                && r.length == PAGE_SIZE as u32
+        let is_paging_write = |r: &Record| {
+            r.major == IRP_MJ_WRITE && r.flags == PAGING_READ && r.cache_manager_active
         };
-        if result.Status != STATUS_SUCCESS || result.Information != 2 * PAGE_SIZE {
-            return Err("a flush did not write two pages");
+        let want_pages = if hw_dirty { 2 } else { 35 };
+        if result.Status != STATUS_SUCCESS || result.Information != want_pages * PAGE_SIZE {
+            return Err("a flush did not write the expected modified pages");
         }
-        if log.len() != 2 || !write(&log[0], 0x2000) || !write(&log[1], 0x30000) {
-            return Err(
-                "a flush's writes are not the modified pages, with paging flags and the cache manager's mark",
-            );
+        if hw_dirty {
+            let write = |r: &Record, offset| {
+                is_paging_write(r) && r.offset == offset && r.length == PAGE_SIZE as u32
+            };
+            if log.len() != 2 || !write(&log[0], 0x2000) || !write(&log[1], 0x30000) {
+                return Err(
+                    "a flush's writes are not the modified pages, with paging flags and the cache manager's mark",
+                );
+            }
+        } else if log.is_empty() || !log.iter().all(is_paging_write) {
+            return Err("a flush's writes do not carry paging flags and the cache manager's mark");
         }
         let data = nkfs::data();
         if data[0x2008..0x2010] != 0x1122_3344_5566_7788u64.to_le_bytes()
@@ -372,8 +383,17 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
             return Err("no page is available");
         }
         let again = flush::flush_section(sop, None, None);
-        if again.Information != 0 || !nkfs::take_log().is_empty() {
-            return Err("a second flush wrote clean pages");
+        let again_log = nkfs::take_log();
+        if hw_dirty {
+            if again.Information != 0 || !again_log.is_empty() {
+                return Err("a second flush wrote clean pages");
+            }
+        } else if again.Status != STATUS_SUCCESS
+            || again_log
+                .iter()
+                .any(|r| r.offset <= 0x30000 && r.offset + u64::from(r.length) > 0x30000)
+        {
+            return Err("a second flush rewrote an unmapped clean page");
         }
         Ok(())
     })();

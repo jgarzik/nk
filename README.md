@@ -28,11 +28,15 @@ On x86-64, Microsoft's `acpi.sys` and `pci.sys` enumerate QEMU's q35
 machine through NK's Plug and Play and power managers;
 `storport.sys`, `storahci.sys` and `disk.sys` read and write its AHCI
 disk with device interrupts and DMA; `partmgr.sys`, `volmgr.sys` and
-`mountmgr.sys` find the volume on it and name it `C:`, which NK's RAW
-file system serves.
+`mountmgr.sys` find the volume on it and name it `C:`; Microsoft's
+`fastfat.sys` mounts that FAT32 volume through NK's cache manager,
+memory sections, paging I/O, `FsRtl` and kernel APCs, reading and
+writing files verified afterwards by host tools; and `pcw.sys`,
+`cng.sys` and `ksecdd.sys` start as boot drivers with boot entropy
+gathered by `nkload`.
 
-Absent: APCs, the cache manager, file systems other than RAW, user mode,
-physical hardware ([doc/design/absent.md](doc/design/absent.md)).
+Absent: user mode, physical hardware, file systems beyond FAT and RAW
+([doc/design/absent.md](doc/design/absent.md)).
 
 ## What it intends to do
 
