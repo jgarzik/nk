@@ -226,7 +226,10 @@ fn run(r: &mut Report, _: &BootInfo) {
         },
     );
     // A real driver that needs a module the kernel does not provide: the
-    // KMDF sample imports the framework loader.
+    // KMDF sample imports the framework loader. It is refused for the
+    // first import that cannot be bound: a kernel routine NK has no
+    // export for, if it imports one, else the library that is not
+    // there.
     expect_refusal(
         r,
         "ldr.reject.unresolved-import",
@@ -234,6 +237,10 @@ fn run(r: &mut Report, _: &BootInfo) {
         |e| match e {
             LoadError::Unresolved { module, symbol } => {
                 kprintln!("ldr: refused image, unresolved import {module}!{symbol}");
+                true
+            }
+            LoadError::NoLibrary { module } => {
+                kprintln!("ldr: refused image, no library {module}");
                 true
             }
             _ => false,

@@ -9,6 +9,7 @@ use super::super::{Export, NT, State};
 trap_list!(
     PoCreateThermalRequest,
     PoDeleteThermalRequest,
+    PoEnergyEstimationEnabled,
     PoFxIssueComponentPerfStateChange,
     PoGetThermalRequestSupport,
     PoSetThermalActiveCooling,

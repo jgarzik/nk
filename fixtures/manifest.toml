@@ -336,6 +336,33 @@ status = "microsoft-inbox"
 note = "disk.sys 10.0.19041.1865, the disk class driver"
 
 [[fixture]]
+name = "partmgr"
+arch = "x86_64"
+file = "partmgr.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/partmgr.sys/2D3C45FE31000/partmgr.sys"
+sha256 = "34f5e9db0cd91ed74b54f39fc4745ba165cb0af24c3ff28bef027a2f1ee5938f"
+status = "microsoft-inbox"
+note = "partmgr.sys 10.0.19041.1889, the partition manager: the upper filter of every disk, which reads the partition table"
+
+[[fixture]]
+name = "volmgr"
+arch = "x86_64"
+file = "volmgr.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/volmgr.sys/1177989B19000/volmgr.sys"
+sha256 = "e8e08c6a8682920e7e62def3c5681e0d30688106976e1baee71dab70fdc0e66c"
+status = "microsoft-inbox"
+note = "volmgr.sys 10.0.19041.1806, the volume manager: makes a volume device of each partition"
+
+[[fixture]]
+name = "mountmgr"
+arch = "x86_64"
+file = "mountmgr.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/mountmgr.sys/6FA7424A1e000/mountmgr.sys"
+sha256 = "1e1259530988e7c6147527b70bc9f641e7231a709cdc46d4eb26a27fd6640423"
+status = "microsoft-inbox"
+note = "mountmgr.sys 10.0.19041.1, the mount manager: gives volumes their names and drive letters"
+
+[[fixture]]
 name = "nkc-thread"
 arch = "x86_64"
 file = "nkc-thread.x64.sys"
