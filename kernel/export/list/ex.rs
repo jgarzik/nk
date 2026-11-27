@@ -150,4 +150,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::callback::ExUnregisterCallback),
     export!(Implemented, ex::callback::ExNotifyCallback),
     export!(Partial, ex::timer::ExAllocateTimerInternal2),
+    export!(Implemented, ex::resource::ExSetResourceOwnerPointer),
+    export!(Implemented, ex::timezone::ExSystemTimeToLocalTime),
+    export!(Implemented, ex::timezone::ExLocalTimeToSystemTime),
 ];

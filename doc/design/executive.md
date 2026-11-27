@@ -109,6 +109,13 @@ for each routine. NK's decisions:
 - `ExEnterCriticalRegionAndAcquireResource...` are not exported: what
   they return is not documented.
 
+An owner may pass what it holds to an owner pointer
+(`ExSetResourceOwnerPointer`), an address with its low two bits set
+that another thread later names to `ExReleaseResourceForThreadLite`:
+a file system does so when its I/O completes elsewhere. If the pointer
+already owns the resource shared, the two are one entry with both
+counts.
+
 ### Executive timers
 
 An
@@ -214,3 +221,11 @@ making one relative to a directory handle is refused.
 `RtlRunOnceExecuteOnce` keeps Windows' values in the driver's word
 (`nk_rtl::once`). A thread that finds the initialisation under way
 sleeps a millisecond and looks again, where Windows queues it.
+
+### The time zone
+
+Local time is UTC (`kernel/ex/timezone.rs`): Windows' bias comes from
+the registry's `Control\TimeZoneInformation`, and NK's registry has
+none, so the bias is zero as on Windows without that key. NK computes
+no bias from a configured zone; a registry with one stops the system at
+boot by name.

@@ -459,6 +459,32 @@ pub unsafe extern "C" fn ExReleaseResourceForThreadLite(resource: *mut ERESOURCE
     }
 }
 
+/// [`ExSetResourceOwnerPointer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exsetresourceownerpointer):
+/// the calling thread's ownership passes to `owner`, which another
+/// thread later names to `ExReleaseResourceForThreadLite`. A resource
+/// not owned by the caller is `RESOURCE_NOT_OWNED`; one with the "fast"
+/// flag (bit 0 of `Flag`) is Windows' bugcheck 0x1C6.
+///
+/// # Safety
+/// `resource` points to an initialised `ERESOURCE`.
+pub unsafe extern "C" fn ExSetResourceOwnerPointer(resource: *mut ERESOURCE, owner: usize) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (&raw const (*resource).Flag).read() & 1 != 0 {
+            crate::kd::bugcheck(format_args!(
+                "0x000001C6 FAST_ERESOURCE_PRECONDITION_VIOLATION: (parameter 1 0xe) resource {resource:p}"
+            ));
+        }
+        let me = thread::current() as usize;
+        let _lock = Locked::take(resource);
+        let mut state = read(resource);
+        if state.set_owner(owners(resource), me, owner).is_err() {
+            not_owned(resource, me);
+        }
+        write(resource, &state);
+    }
+}
+
 /// [`ExReleaseResourceLite`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exreleaseresourcelite).
 ///
 /// # Safety
