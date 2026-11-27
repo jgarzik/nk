@@ -409,13 +409,14 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             files = {}
             for test, verdict, _ in log.tests:
                 files.setdefault(golden_file(test), []).append(f"{test} {verdict.lower()}")
-            directory = golden_dir(sc["golden"])
-            directory.mkdir(exist_ok=True)
-            for stale in set(p.name for p in directory.glob("*.txt")) - set(files):
-                (directory / stale).unlink()
+            # Not `directory`: that is the run's own, deleted on a pass.
+            listed = golden_dir(sc["golden"])
+            listed.mkdir(exist_ok=True)
+            for stale in set(p.name for p in listed.glob("*.txt")) - set(files):
+                (listed / stale).unlink()
             for file, lines in files.items():
-                (directory / file).write_text("\n".join(lines) + "\n")
-            print(f"  wrote {directory.relative_to(ROOT)}/")
+                (listed / file).write_text("\n".join(lines) + "\n")
+            print(f"  wrote {listed.relative_to(ROOT)}/")
         expect = sc.get("expect", "ok")
         counts = log.completes[0] if log.completes else (0, 0, 0)
         detail = f"pass={counts[0]} skip={counts[2]}" if expect == "ok" else f"expected {expect}"
