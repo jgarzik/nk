@@ -98,6 +98,15 @@ fn shared_data_page_matches_the_kernel() {
     assert_eq!(SHARED_INTERRUPT_TIME, field("InterruptTime"));
     assert_eq!(SHARED_SYSTEM_TIME, field("SystemTime"));
     assert_eq!(SHARED_TICK_COUNT, field("TickCount"));
+    let xstate = types
+        .layout("_XSTATE_CONFIGURATION")
+        .expect("_XSTATE_CONFIGURATION");
+    let config = |name| field("XState") + offset(&xstate, "_XSTATE_CONFIGURATION", name);
+    assert_eq!(SHARED_XSTATE_ENABLED, config("EnabledFeatures"));
+    assert_eq!(
+        SHARED_XSTATE_SUPERVISOR,
+        config("EnabledUserVisibleSupervisorFeatures")
+    );
     assert!(page.size <= 4096, "it must fit the one page NK maps");
     // Each time is low word, high word, high word again.
     let time = types.layout("_KSYSTEM_TIME").expect("_KSYSTEM_TIME");

@@ -16,6 +16,7 @@ mod clock;
 mod cm;
 mod cmnotify;
 mod counted;
+mod crypto;
 mod csq;
 mod diskio;
 mod dma;
@@ -232,6 +233,7 @@ pub static GROUPS: &[&[&Group]] = &[
     storage::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
+    crypto::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

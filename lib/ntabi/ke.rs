@@ -434,6 +434,15 @@ pub const SHARED_INTERRUPT_TIME: usize = 0x008;
 pub const SHARED_SYSTEM_TIME: usize = 0x014;
 /// `TickCount`: clock ticks since boot.
 pub const SHARED_TICK_COUNT: usize = 0x320;
+/// `XState.EnabledFeatures`: the processor state components the kernel
+/// saves and lets code use, a mask of `XSTATE_*` bits.
+pub const SHARED_XSTATE_ENABLED: usize = 0x3D8;
+/// `XState.EnabledUserVisibleSupervisorFeatures`: the supervisor
+/// components user code sees.
+pub const SHARED_XSTATE_SUPERVISOR: usize = 0x708;
+/// `XSTATE_MASK_LEGACY`: the x87 and SSE state, which every x64
+/// processor has and every thread's context holds.
+pub const XSTATE_MASK_LEGACY: u64 = 0x3;
 
 /// `KBUGCHECK_CALLBACK_REASON`: why a bugcheck callback is called. Only
 /// the values NK acts on are named.

@@ -70,7 +70,18 @@ callbacks), no
 driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
 reported to it goes nowhere), no headless terminal (the same file:
 it cannot be enabled, questions are answered with zeros, output
-succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no
+succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`:
+`SkIsSecureKernel` says `STATUS_NOT_IMPLEMENTED`, the other `Sk*`
+routines stop the system with 0x123 as the normal kernel's one routine
+for them does, and `VslExchangeEntropy` fails with
+`STATUS_DEVICE_NOT_CONNECTED`, the buffer untouched), no boot entropy
+(NK's loader gathers none, so `SystemBootEntropyInformation` has
+nothing to give and `cng.sys`, which asks for it in its `DriverEntry`,
+stops the system with `SECURITY_SYSTEM` (0x5F), as it would on Windows;
+`fixtures/registry-crypto.txt` and `test=crypto.boot` are its boot),
+the extended processor state limited to the legacy x87 and SSE state
+(the shared data page's `XState.EnabledFeatures`, which
+`RtlGetEnabledExtendedFeatures` reads), no
 notification states (`kernel/ex/wnf.rs`: a WNF state name is unknown,
 `STATUS_OBJECT_NAME_NOT_FOUND`, as Windows answers for a name that has
 no instance and that its registry does not list; a name NK's registry

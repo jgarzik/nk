@@ -14,7 +14,6 @@ trap_list!(
     RtlDowncaseUnicodeString,
     RtlEqualString,
     RtlFindClearBits,
-    RtlGetEnabledExtendedFeatures,
     RtlGetPersistedStateLocation,
     RtlMapSecurityErrorToNtStatus,
     RtlNtStatusToDosError,

@@ -16,12 +16,4 @@ trap_list!(
     SeSetAuditParameter,
     SeSetSessionIdTokenWithLinked,
     SeTokenImpersonationLevel,
-    SkAcquirePushLockExclusive,
-    SkAllocatePool,
-    SkFreePool,
-    SkInitializePushLock,
-    SkIsSecureKernel,
-    SkQuerySecureKernelInformation,
-    SkReleasePushLockExclusive,
-    VslExchangeEntropy,
 );

@@ -1,0 +1,27 @@
+# Registry content for Microsoft's kernel cryptography and security
+# drivers, laid over the SYSTEM hive with registry-overlay.txt in the
+# boots that ask for it (a scenario's `registry = ["crypto"]`;
+# tools/mkesp.py).
+#
+# cng.sys and ksecdd.sys are boot drivers on Windows: the reference
+# installation's driver list shows both "Boot", "Running", "Kernel"
+# (sc/driverquery). The values are those Windows 10 setup writes for the
+# two services: Type 1 (kernel driver), Start 0 (boot), ErrorControl 3
+# (critical), CNG in group Core, KSecDD in group Base. ksecdd.sys opens
+# \Device\CNG in its DriverEntry, so CNG starts first.
+
+key ControlSet001\Services\CNG
+value ImagePath expand_sz System32\Drivers\cng.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz Core
+value DisplayName sz CNG
+
+key ControlSet001\Services\KSecDD
+value ImagePath expand_sz System32\Drivers\ksecdd.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz Base
+value DisplayName sz KSecDD

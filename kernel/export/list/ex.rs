@@ -18,6 +18,30 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         ex::vsl::VslGetSecurePciDeviceAlternateFunctionNumberForVtl0Dma
     ),
     export!(Implemented, ex::vsl::VslQuerySecureDevice),
+    export!(Implemented, ex::vsl::SkIsSecureKernel),
+    export!(Implemented, ex::vsl::VslExchangeEntropy),
+    export_entry!(
+        Implemented,
+        "SkAcquirePushLockExclusive",
+        ex::vsl::secure_kernel_only
+    ),
+    export_entry!(Implemented, "SkAllocatePool", ex::vsl::secure_kernel_only),
+    export_entry!(Implemented, "SkFreePool", ex::vsl::secure_kernel_only),
+    export_entry!(
+        Implemented,
+        "SkInitializePushLock",
+        ex::vsl::secure_kernel_only
+    ),
+    export_entry!(
+        Implemented,
+        "SkQuerySecureKernelInformation",
+        ex::vsl::secure_kernel_only
+    ),
+    export_entry!(
+        Implemented,
+        "SkReleasePushLockExclusive",
+        ex::vsl::secure_kernel_only
+    ),
     export!(Partial, ex::em::EmClientQueryRuleState),
     export!(Partial, ex::em::EmClientRuleEvaluate),
     export!(Implemented, ex::em::EmProviderDeregister),
