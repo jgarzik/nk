@@ -248,11 +248,15 @@ pub fn interrupt_enable(vector: u32, level: u8) {
 }
 
 /// Send software-generated interrupt `vector` to the processor with
-/// MPIDR affinity `id`.
+/// MPIDR affinity `id`. What this processor wrote before (the request
+/// the target is to act on) is made visible to the target first
+/// (`dsb ish`): the register write that raises the interrupt is not a
+/// memory access, and nothing else orders the two. Not `nomem`, so the
+/// compiler keeps those writes before it too.
 fn send(id: u64, vector: u32) {
     let value = sgi(id, vector).expect("affinity level 0 above 15 needs a range selector");
-    // SAFETY: generating an interrupt for a processor.
-    unsafe { asm!("msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nomem, nostack)) };
+    // SAFETY: a barrier, then generating an interrupt for a processor.
+    unsafe { asm!("dsb ish", "msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nostack)) };
 }
 
 /// Send software-generated interrupt `vector` to this processor.

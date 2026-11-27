@@ -532,6 +532,22 @@ IRQL or because Windows defines it as one word changed atomically:
   itself; Windows forbids that too (`IoDisconnectInterruptEx` is for
   `PASSIVE_LEVEL`).
 
+### Barriers on arm64
+
+Locks and atomics order memory between processors; these orderings
+are not memory accesses, so each has its barrier where it is made:
+
+| Before | Barrier | Store it orders | Observer |
+| --- | --- | --- | --- |
+| a broadcast TLB invalidation (`flush_tlb_page`) | `dsb ishst` | the page-table entry just written | every processor's table walker |
+| after the invalidation | `dsb ish; isb` | the invalidation itself | this processor's later accesses |
+| using a new mapping (`mapping_sync`) | `dsb ishst; isb` | the page-table entry | this processor's walker |
+| raising a software interrupt (`gic::send`) | `dsb ish` | the request the target is to act on | the target processor |
+
+On x86-64 the processor orders these itself: a page-table write is
+seen by the next walk, and an interrupt command register write is
+ordered after earlier stores.
+
 ## What drivers get
 
 Drivers use Windows' routines, not `ke::SpinLock`
