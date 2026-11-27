@@ -86,6 +86,17 @@ a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
 
+### Splay trees
+
+`RtlSplay` and `RtlDelete` work on a tree of the caller's
+`RTL_SPLAY_LINKS` (a file system's tree of names), which the caller
+builds and searches itself with the header's macros. The algorithm is
+`nk_rtl::splay`, written against a store of links like the prefix
+table's and tested on the host. Which rotations a splay makes, and
+which node a node with two children trades places with before it is
+deleted (the one before it in order), are NK's choice: only the order
+and the root returned are a caller's concern.
+
 ### The AVL table
 
 An [AVL generic table](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlinitializegenerictableavl)

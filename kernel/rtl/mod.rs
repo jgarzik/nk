@@ -17,6 +17,7 @@ pub mod prefix;
 pub mod print;
 pub mod range;
 pub mod resource;
+pub mod splay;
 pub mod string;
 
 use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};

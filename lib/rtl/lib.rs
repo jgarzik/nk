@@ -25,6 +25,7 @@ pub mod once;
 pub mod prefix;
 pub mod range;
 pub mod resource;
+pub mod splay;
 pub mod string;
 pub mod upcase;
 pub mod wildcard;

@@ -160,4 +160,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, rtl::oem::RtlFreeOemString),
     export!(Implemented, rtl::gen83::RtlGenerate8dot3Name),
+    export!(Implemented, rtl::splay::RtlSplay),
+    export!(Implemented, rtl::splay::RtlDelete),
 ];
