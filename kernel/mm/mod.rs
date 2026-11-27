@@ -16,7 +16,6 @@ pub mod io;
 pub mod map;
 pub mod pfn;
 pub mod pool;
-pub mod query;
 pub mod section;
 pub mod stack;
 pub mod user;
