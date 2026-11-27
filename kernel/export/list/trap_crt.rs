@@ -6,12 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    _snwprintf_s,
-    _vsnprintf_s,
-    qsort,
-    strcpy_s,
-    wcscmp,
-    wcscpy_s,
-    wcsrchr,
-);
+trap_list!(_snwprintf_s, _vsnprintf_s, qsort,);

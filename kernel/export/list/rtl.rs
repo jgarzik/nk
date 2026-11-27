@@ -162,4 +162,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::gen83::RtlGenerate8dot3Name),
     export!(Implemented, rtl::splay::RtlSplay),
     export!(Implemented, rtl::splay::RtlDelete),
+    export!(Implemented, rtl::crt::wcscmp),
+    export!(Implemented, rtl::crt::wcsrchr),
+    export!(Implemented, rtl::crt::strcpy_s),
+    export!(Implemented, rtl::crt::wcscpy_s),
 ];

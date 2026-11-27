@@ -88,10 +88,10 @@ pub fn strncmp(a: impl Iterator<Item = u16>, b: impl Iterator<Item = u16>, count
 
 /// `strrchr`: where `c` last occurs in the string. The terminator is
 /// part of the string, so a `c` of zero finds it.
-pub fn strrchr(string: impl Iterator<Item = u16>, c: u8) -> Option<usize> {
+pub fn strrchr(string: impl Iterator<Item = u16>, c: u16) -> Option<usize> {
     let (mut last, mut length) = (None, 0);
     for (at, x) in string.enumerate() {
-        if x == u16::from(c) {
+        if x == c {
             last = Some(at);
         }
         length = at + 1;
@@ -258,12 +258,13 @@ pub const STRUNCATE: i32 = 80;
 /// The kernel's C runtime has no handler to call for a bad argument: the
 /// function empties the destination, if it has one, and returns the
 /// error.
-pub fn strncpy_s(
-    destination: Option<impl FnMut(usize, u8)>,
+pub fn strncpy_s<T: Copy + Default + PartialEq>(
+    destination: Option<impl FnMut(usize, T)>,
     size: usize,
-    source: Option<impl Fn(usize) -> u8>,
+    source: Option<impl Fn(usize) -> T>,
     count: usize,
 ) -> i32 {
+    let zero = T::default();
     let null = destination.is_none();
     let Some(mut write) = destination.filter(|_| size != 0) else {
         // Nothing asked of no buffer is no error.
@@ -274,11 +275,11 @@ pub fn strncpy_s(
         };
     };
     if count == 0 {
-        write(0, 0);
+        write(0, zero);
         return 0;
     }
     let Some(source) = source else {
-        write(0, 0);
+        write(0, zero);
         return EINVAL;
     };
     let mut at = 0;
@@ -286,24 +287,36 @@ pub fn strncpy_s(
         if at == size {
             // No room for the terminator.
             return if count == TRUNCATE {
-                write(size - 1, 0);
+                write(size - 1, zero);
                 STRUNCATE
             } else {
-                write(0, 0);
+                write(0, zero);
                 ERANGE
             };
         }
         if at == count {
-            write(at, 0);
+            write(at, zero);
             return 0;
         }
         let c = source(at);
         write(at, c);
-        if c == 0 {
+        if c == zero {
             return 0;
         }
         at += 1;
     }
+}
+
+/// [`strcpy_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strcpy-s-wcscpy-s-mbscpy-s)
+/// and `wcscpy_s`: all of `source` and a terminator into a buffer of
+/// `size` characters, as [`strncpy_s`] with no count: a source that does
+/// not fit empties the buffer and is `ERANGE`.
+pub fn strcpy_s<T: Copy + Default + PartialEq>(
+    destination: Option<impl FnMut(usize, T)>,
+    size: usize,
+    source: Option<impl Fn(usize) -> T>,
+) -> i32 {
+    strncpy_s(destination, size, source, TRUNCATE - 1)
 }
 
 /// One step of
@@ -647,7 +660,11 @@ mod tests {
             (b"\0", 0, Some(0)),
             (b"", 0, Some(0)),
         ] {
-            assert_eq!(strrchr(of(string), c), expected, "{string:?} {c}");
+            assert_eq!(
+                strrchr(of(string), u16::from(c)),
+                expected,
+                "{string:?} {c}"
+            );
         }
     }
 
@@ -716,5 +733,36 @@ mod tests {
         assert_eq!(wcsstr(strict(HAY), strict(LONG)), None);
         assert_eq!(wcsstr(strict(HAY), strict(END)), Some(1));
         assert_eq!(wcsstr(strict(LONG), strict(HAY)), Some(0));
+    }
+
+    #[test]
+    fn strcpy_s_copies_all_or_empties() {
+        let mut buf = [0xFFu16; 4];
+        let src: std::vec::Vec<u16> = "abc\0".encode_utf16().collect();
+        let long: std::vec::Vec<u16> = "abcd\0".encode_utf16().collect();
+        let r = strcpy_s(
+            Some(|i: usize, c: u16| buf[i] = c),
+            4,
+            Some(|i: usize| src[i]),
+        );
+        assert_eq!(r, 0);
+        assert_eq!(buf, [97, 98, 99, 0]);
+        let r = strcpy_s(
+            Some(|i: usize, c: u16| buf[i] = c),
+            4,
+            Some(|i: usize| long[i]),
+        );
+        assert_eq!(r, ERANGE);
+        assert_eq!(buf[0], 0);
+        let r = strcpy_s(
+            Some(|i: usize, c: u16| buf[i] = c),
+            4,
+            None::<fn(usize) -> u16>,
+        );
+        assert_eq!(r, EINVAL);
+        assert_eq!(
+            strcpy_s(None::<fn(usize, u16)>, 4, Some(|i: usize| src[i])),
+            EINVAL
+        );
     }
 }
