@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: wmi.refused
 file: kernel/io/wmi.rs
-replace:                 (status, _) if !nt_success(status) && status != STATUS_BUFFER_TOO_SMALL => {
-with:                 (status, _) if !nt_success(status) && status == STATUS_BUFFER_TOO_SMALL => {
+replace:                 Some((status, _)) if !nt_success(status) && status != STATUS_BUFFER_TOO_SMALL => {
+with:                 Some((status, _)) if !nt_success(status) && status == STATUS_BUFFER_TOO_SMALL => {
