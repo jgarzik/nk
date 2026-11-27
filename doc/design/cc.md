@@ -208,8 +208,9 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   share flushed, the file given back with `ReleaseFromLazyWrite`; the
   cache manager sets no top-level IRP, the file system's callbacks do.
   Deferred writes are posted after it.
-- **Lazy close.** A map nobody has open, nothing dirties and no work
-  holds is deleted after its write-behind, with its file taken through
+- **Lazy close.** A map nobody has open, nothing dirties and no other
+  work holds is deleted after its write-behind, which keeps its own
+  reference on the map until the decision is taken, with its file taken through
   `FsRtlAcquireFileExclusive` and given back with `FsRtlReleaseFile`
   ([FsRtl](fsrtl.md)); dropping the map's file object then may send a
   stream file object's close from the worker.
@@ -228,6 +229,8 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   for the write are not built.
 - **Waiting for it.** `CcWaitForCurrentLazyWriterActivity` runs a scan at
   once, which writes every dirty page (NK's choice for a scan asked
-  for), queues itself behind the scan's work and waits until every item
-  before it has ended. The I/O manager's shutdown calls it after every
+  for), queues itself behind the scan's work, and returns once its
+  item is reached with no other work running: an item that finds work
+  still running goes back to the end of the queue, as Windows' event
+  items do, and waiting items never count each other. The I/O manager's shutdown calls it after every
   file system has had its shutdown request, where Windows calls it.

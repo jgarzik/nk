@@ -18,3 +18,4 @@ cc.attributes ok
 cc.lazy-write ok
 cc.defer-write ok
 cc.lazy-close ok
+cc.wait-twice ok

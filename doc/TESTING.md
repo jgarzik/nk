@@ -233,7 +233,8 @@ tier has, for each architecture:
   dirty page within 4.5 s through the file system's callbacks,
   `CcDeferWrite` posting at once on a clean cache, and a map closed
   without a truncate size deleted by the lazy writer, its event
-  signalled, once `CcWaitForCurrentLazyWriterActivity` returns.
+  signalled, once `CcWaitForCurrentLazyWriterActivity` returns; two
+  threads waiting for the lazy writer at once both return.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

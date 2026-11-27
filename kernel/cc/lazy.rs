@@ -17,7 +17,10 @@
 //! Read-ahead runs on them too, between the file system's
 //! `AcquireForReadAhead` and `ReleaseFromReadAhead`, and never raises.
 //! `CcWaitForCurrentLazyWriterActivity` queues an item behind the work
-//! of a scan run at once, which waits for every item before it to end.
+//! of a scan run at once; the item is done when a worker reaches it with
+//! no other work running, and goes back to the end of the queue if some
+//! is. Such items are not counted as running, so two never wait for
+//! each other.
 
 use super::flush::flush_scm;
 use super::{DIRTY, MASTER, Scm, flag, map, short_delay, trace};
@@ -227,16 +230,40 @@ fn worker(_: usize) {
         let (scan, entry) = {
             let mut d = DIRTY.lock();
             let q = &mut d.queue;
-            q.running += 1;
             if core::mem::replace(&mut q.scan_pending, false) {
+                q.running += 1;
                 (true, core::ptr::null_mut())
             } else {
-                (false, q.pop())
+                let e = q.pop();
+                // SAFETY: an entry taken off the queue, now this worker's.
+                match unsafe { e.as_ref() } {
+                    None => continue,
+                    Some(entry) => {
+                        if let Work::Barrier(event) = entry.work {
+                            if q.running == 0 {
+                                drop(d);
+                                // SAFETY: the waiter's event, valid until
+                                // signalled; the entry is the waiter's.
+                                unsafe { wait::KeSetEvent(event, 0, 0) };
+                            } else {
+                                // Work dequeued before it still runs: to
+                                // the back of the queue again.
+                                q.push(e);
+                                drop(d);
+                                short_delay();
+                                wake();
+                            }
+                            continue;
+                        }
+                    }
+                }
+                q.running += 1;
+                (false, e)
             }
         };
         if scan {
             lazy_write_scan();
-        } else if !entry.is_null() {
+        } else {
             // SAFETY: an entry taken off the queue, now this worker's.
             let work = unsafe { core::ptr::read(&raw const (*entry).work) };
             // The entry's work was moved out: only its block is left.
@@ -268,13 +295,7 @@ fn run(work: Work) {
             // SAFETY: the reference the queuing took.
             unsafe { crate::ob::object::dereference(file.cast()) };
         }
-        Work::Barrier(event) => {
-            while DIRTY.lock().queue.running > 1 {
-                short_delay();
-            }
-            // SAFETY: the waiter's event, valid until signalled.
-            unsafe { wait::KeSetEvent(event, 0, 0) };
-        }
+        Work::Barrier(_) => unreachable!("a barrier is run by the worker loop"),
     }
 }
 
@@ -435,38 +456,41 @@ fn write_behind(scm: &Scm) {
             result.Information
         ));
     }
-    unqueue(scm);
     super::throttle::post_deferred();
     lazy_close(scm);
 }
 
-/// Delete a map nobody has open and nothing dirties, with its file taken
+/// After a write-behind, which holds the queued reference on `scm` and
+/// gives it up here: delete the map if nobody has it open, nothing
+/// dirties it and no other work holds it, with its file taken
 /// exclusive.
 fn lazy_close(scm: &Scm) {
+    // With the write-behind's own reference the only one.
     let closing = |scm: &Scm| {
         let _d = DIRTY.lock();
         scm.open_count.get() == 0
-            && scm.refs.get() == 0
+            && scm.refs.get() == 1
             && scm.dirty_pages.get() == 0
-            && scm.flags.get() & (flag::WRITE_QUEUED | flag::BEING_DELETED) == 0
+            && scm.flags.get() & flag::BEING_DELETED == 0
     };
     let file = {
         let _m = MASTER.lock();
+        scm.flags.set(scm.flags.get() & !flag::WRITE_QUEUED);
         if !closing(scm) {
+            scm.refs.set(scm.refs.get() - 1);
             return;
         }
-        // The map holds the file; one more reference keeps it past the
-        // deletion until it is given back.
-        scm.refs.set(scm.refs.get() + 1);
         scm.file_object.get()
     };
-    // SAFETY: the map's file object, live while it does.
+    // The map holds its file; one more reference keeps it past the
+    // deletion until the file is given back.
+    // SAFETY: the map's file object, live while the map is.
     unsafe { crate::ob::object::reference(file.cast()) };
     crate::fsrtl::acquire::acquire_file_exclusive(file);
     let delete = {
         let mut m = MASTER.lock();
-        scm.refs.set(scm.refs.get() - 1);
         let now = closing(scm);
+        scm.refs.set(scm.refs.get() - 1);
         if now {
             map::begin_delete(&mut m, scm);
         }
@@ -552,16 +576,11 @@ pub extern "C" fn CcWaitForCurrentLazyWriterActivity() -> NTSTATUS {
     let mut event = MaybeUninit::<KEVENT>::uninit();
     // SAFETY: an event on this stack, signalled before it ends.
     unsafe { wait::KeInitializeEvent(event.as_mut_ptr(), 0, 0) };
-    let e = super::alloc_in_pool(
-        Entry {
-            next: core::ptr::null_mut(),
-            work: Work::Barrier(event.as_mut_ptr()),
-        },
-        TAG_WORK,
-    );
-    if e.is_null() {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    let mut barrier = Entry {
+        next: core::ptr::null_mut(),
+        work: Work::Barrier(event.as_mut_ptr()),
+    };
+    let e = &raw mut barrier;
     let first = {
         let mut d = DIRTY.lock();
         let q = &mut d.queue;

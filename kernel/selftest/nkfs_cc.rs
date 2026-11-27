@@ -42,6 +42,7 @@ static CC: Group = Group {
         "cc.lazy-write",
         "cc.defer-write",
         "cc.lazy-close",
+        "cc.wait-twice",
     ],
     run: cc_tests,
     manual: false,
@@ -945,5 +946,36 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
         }
     };
     verdicts.push(("cc.lazy-close", close));
+    verdicts.push(("cc.wait-twice", wait_twice()));
+    Ok(())
+}
+
+/// A thread's call of `CcWaitForCurrentLazyWriterActivity`.
+fn wait_on_a_thread(_: usize) {
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+}
+
+/// Two threads waiting for the lazy writer at once both return.
+fn wait_twice() -> Result<(), &'static str> {
+    let before = crate::ke::thread::count();
+    let thread = crate::ke::thread::create_referenced(
+        wait_on_a_thread,
+        0,
+        crate::ke::thread::NORMAL_PRIORITY,
+        crate::ke::thread::ANYWHERE,
+    )
+    .map_err(|_| "no memory for a thread")?;
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+    let timeout: i64 = -50_000_000;
+    // SAFETY: the thread, referenced until here; the wait is for its end.
+    let ended = unsafe { crate::ke::wait::wait(Some(thread.cast()), Some(timeout)) };
+    if ended != STATUS_SUCCESS as u32 {
+        return Err("a second waiter for the lazy writer did not return within 5 s");
+    }
+    // SAFETY: as above.
+    unsafe { crate::ob::object::dereference(thread.cast()) };
+    while crate::ke::thread::count() != before {
+        crate::ke::thread::yield_now();
+    }
     Ok(())
 }
