@@ -173,11 +173,28 @@ const RUNS: [Run; 134] = [
 ];
 
 /// The upper case of one UTF-16 unit, as `RtlUpcaseUnicodeChar` gives
-/// it: one unit for one unit.
+/// it: one unit for one unit. ASCII, which is nearly every unit of a
+/// name the kernel compares, is answered inline; the rest is looked up
+/// in [`RUNS`].
+#[inline]
 pub fn upcase_char(c: u16) -> u16 {
+    if c < 0x80 {
+        return if (0x61..=0x7A).contains(&c) {
+            c - 0x20
+        } else {
+            c
+        };
+    }
+    upcase_beyond_ascii(c)
+}
+
+/// [`upcase_char`] for a unit above ASCII: the run that may hold it,
+/// found by binary search. A run's step is 1 or 2 (a test holds the
+/// table to that), so being on its step is a mask, not a division.
+fn upcase_beyond_ascii(c: u16) -> u16 {
     let at = RUNS.partition_point(|run| run.1 < c);
     match RUNS.get(at) {
-        Some(&(first, _, step, delta)) if c >= first && (c - first) % step == 0 => {
+        Some(&(first, _, step, delta)) if c >= first && (c - first) & (step - 1) == 0 => {
             c.wrapping_add(delta)
         }
         _ => c,
