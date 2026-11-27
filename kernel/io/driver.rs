@@ -149,7 +149,14 @@ pub(super) fn load(
                  driver is kept loaded",
                 status as u32
             ));
-            core::mem::forget(image);
+            // Kept whole, as `unload` keeps a record: the object
+            // points into its name and registry path too.
+            core::mem::forget(Record {
+                object,
+                image: Some(image),
+                _driver_name: driver_name,
+                _registry_path: registry_path,
+            });
             return Err(DriverError::EntryFailed(status));
         }
         // SAFETY: the object is this module's, out of the records, and has no device.
