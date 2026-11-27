@@ -24,8 +24,15 @@ what they answer matches a recording made on real Windows 10, request
 by request. Their `__try` blocks work: exceptions, kernel-raised or
 from a processor fault, are dispatched and unwound as on Windows.
 
-Absent: APCs, device interrupts, Plug and Play, user mode, physical
-hardware ([doc/design/absent.md](doc/design/absent.md)).
+On x86-64, Microsoft's `acpi.sys` and `pci.sys` enumerate QEMU's q35
+machine through NK's Plug and Play and power managers;
+`storport.sys`, `storahci.sys` and `disk.sys` read and write its AHCI
+disk with device interrupts and DMA; `partmgr.sys`, `volmgr.sys` and
+`mountmgr.sys` find the volume on it and name it `C:`, which NK's RAW
+file system serves.
+
+Absent: APCs, the cache manager, file systems other than RAW, user mode,
+physical hardware ([doc/design/absent.md](doc/design/absent.md)).
 
 ## What it intends to do
 
