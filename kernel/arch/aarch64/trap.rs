@@ -718,7 +718,7 @@ fn deliver(frame: &mut Frame, code: u32, parameters: &[u64]) {
 extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
     use crate::ke::seh::{
         ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE, STATUS_ACCESS_VIOLATION, STATUS_BREAKPOINT,
-        STATUS_ILLEGAL_INSTRUCTION, STATUS_INTEGER_DIVIDE_BY_ZERO,
+        STATUS_ILLEGAL_INSTRUCTION, STATUS_IN_PAGE_ERROR, STATUS_INTEGER_DIVIDE_BY_ZERO,
     };
     // Vectors come in fours: synchronous, IRQ, FIQ, SError.
     let class = (vector & 3 == 0).then_some(frame.esr >> 26);
@@ -755,11 +755,24 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
                 _ if frame.esr & ABORT_WRITE != 0 => ACCESS_WRITE,
                 _ => ACCESS_READ,
             };
+            // A page of a file the memory manager can bring in.
+            let in_page = match crate::mm::fault::page_fault(frame.far, frame.spsr & SPSR_I == 0) {
+                Some(Ok(())) => return,
+                Some(Err(status)) => Some(status),
+                None => None,
+            };
             // The kernel's own access to memory that may not be there:
             // the routine returns an error instead.
             if let Some(resume) = seh::fixup(frame.elr) {
                 (frame.elr, frame.x[9], frame.x[10]) = (resume, frame.far, access);
                 return;
+            }
+            if let Some(status) = in_page {
+                return deliver(
+                    frame,
+                    STATUS_IN_PAGE_ERROR,
+                    &[access, frame.far, u64::from(status as u32)],
+                );
             }
             stop = crate::ke::seh::memory_fault(frame.far, access, frame.elr);
             if stop.is_none() {

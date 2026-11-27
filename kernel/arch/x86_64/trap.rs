@@ -416,7 +416,7 @@ fn deliver(frame: &mut Frame, code: u32, parameters: &[u64]) {
 extern "C" fn trap_handler(frame: &mut Frame) {
     use crate::ke::seh::{
         ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE, STATUS_ACCESS_VIOLATION, STATUS_BREAKPOINT,
-        STATUS_ILLEGAL_INSTRUCTION, STATUS_INTEGER_DIVIDE_BY_ZERO,
+        STATUS_ILLEGAL_INSTRUCTION, STATUS_IN_PAGE_ERROR, STATUS_INTEGER_DIVIDE_BY_ZERO,
     };
     /// What the overflow trap, which only x86-64 has, is delivered as.
     const STATUS_INTEGER_OVERFLOW: u32 = 0xC000_0095;
@@ -479,12 +479,28 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     } else {
         (u64::MAX, ACCESS_READ, None)
     };
+    // A page of a file the memory manager can bring in.
+    let mut in_page = None;
+    if vector == PAGE_FAULT && !overflow {
+        match crate::mm::fault::page_fault(cr2, frame.rflags & FLAG_IF != 0) {
+            Some(Ok(())) => return,
+            Some(Err(status)) => in_page = Some(status),
+            None => {}
+        }
+    }
     if memory {
         // The kernel's own access to memory that may not be there: the
         // routine returns an error instead.
         if let Some(resume) = seh::fixup(frame.rip) {
             (frame.rip, frame.rax, frame.rdx) = (resume, address, access);
             return;
+        }
+        if let Some(status) = in_page {
+            return deliver(
+                frame,
+                STATUS_IN_PAGE_ERROR,
+                &[access, address, u64::from(status as u32)],
+            );
         }
         if stop.is_none() {
             return deliver(frame, STATUS_ACCESS_VIOLATION, &[access, address]);

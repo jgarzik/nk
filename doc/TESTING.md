@@ -203,7 +203,8 @@ tier has, for each architecture:
   (`kernel/selftest/nkfs.rs`) that records every paging request: views
   map without reading, a fault reads a cluster of at most 16 pages in
   one request flagged 0x43, overwritten pages are not read, a failed
-  read is the fault's status, a flush writes exactly the modified pages
+  read is the fault's status, touching a view's page brings it in, a
+  locked page holds its frame and refuses a purge, a flush writes exactly the modified pages
   with the cache manager's mark, a purge is refused while a view is mapped
   and afterwards gives every page and block back.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and

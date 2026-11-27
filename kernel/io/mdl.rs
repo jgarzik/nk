@@ -12,9 +12,11 @@
 //! written whatever they were locked for, as on Windows.
 //!
 //! Limits:
-//! - Nothing is ever paged out, so "locking" pages records their frame
-//!   numbers and marks the MDL; there is no pin count to take, and
-//!   nothing keeps a user page mapped while it is locked.
+//! - A page of a file in a system-cache view is brought in and its
+//!   frame held (`mm::cache::lock_page`) until `MmUnlockPages`. Nothing
+//!   else is ever paged out, so locking any other page records its frame
+//!   number and marks the MDL; nothing keeps a user page mapped while it
+//!   is locked.
 //! - System mappings are always non-executable, whatever the caller's
 //!   priority flags say.
 //! - `MmAllocatePagesForMdlEx` gives all the pages asked for or none,
@@ -184,6 +186,19 @@ pub unsafe fn probe_and_lock(
         let start = (*mdl).StartVa as u64;
         for i in 0..pages(mdl) {
             let va = start + (i * PAGE_SIZE) as u64;
+            if mm::cache::is_cache_va(va) {
+                // A page of a file: in memory, and kept there until unlocked.
+                match mm::cache::lock_page(va) {
+                    Ok(frame) => {
+                        pfns(mdl).add(i).write(frame);
+                        continue;
+                    }
+                    Err(status) => {
+                        unlock_cached(mdl, i);
+                        return Err(status);
+                    }
+                }
+            }
             // User mode can name only pages of the user range.
             let found = if access_mode == KERNEL_MODE || user::frame_of(va).is_some() {
                 map::lookup(va)
@@ -191,6 +206,7 @@ pub unsafe fn probe_and_lock(
                 None
             };
             let Some((pa, _)) = found.filter(|(_, writable)| allowed(*writable)) else {
+                unlock_cached(mdl, i);
                 return Err(STATUS_ACCESS_VIOLATION);
             };
             pfns(mdl).add(i).write(pa / PAGE_SIZE as u64);
@@ -198,6 +214,19 @@ pub unsafe fn probe_and_lock(
         (*mdl).MdlFlags |= MDL_PAGES_LOCKED;
     }
     Ok(())
+}
+
+/// Let go of the pages of files among the first `count` pages the MDL
+/// records: the locks [`probe_and_lock`] took.
+///
+/// # Safety
+/// `mdl` must be a live MDL whose first `count` frame numbers are
+/// recorded.
+unsafe fn unlock_cached(mdl: *mut MDL, count: usize) {
+    for i in 0..count {
+        // SAFETY: per the contract.
+        mm::cache::unlock_page(unsafe { pfns(mdl).add(i).read() });
+    }
 }
 
 /// What [`MmProbeAndLockPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmprobeandlockpages)
@@ -236,6 +265,7 @@ pub unsafe extern "C" fn MmUnlockPages(mdl: *mut MDL) {
         if (*mdl).MdlFlags & MDL_MAPPED_TO_SYSTEM_VA != 0 {
             unmap(mdl);
         }
+        unlock_cached(mdl, pages(mdl));
         (*mdl).MdlFlags &= !(MDL_PAGES_LOCKED | MDL_MAPPED_TO_SYSTEM_VA);
     }
 }

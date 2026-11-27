@@ -290,6 +290,67 @@ fn resolve(va: u64, mode: Mode) -> Result<Got, NTSTATUS> {
     fault::resolve(ss, index, Some(entry(va)), mode)
 }
 
+/// What the trap handler asks of a fault on `va`: `None` if `va` is not
+/// in a mapped page of a view; else the page made valid, or the status
+/// of the read that failed.
+pub fn fault(va: u64) -> Option<Result<(), NTSTATUS>> {
+    if !is_cache_va(va) {
+        return None;
+    }
+    let va = va & !(PAGE_SIZE as u64 - 1);
+    if pte::prototype_target(entry(va).load(Ordering::Acquire)).is_none()
+        && !arch::pt_arch().present(entry(va).load(Ordering::Acquire))
+    {
+        return None;
+    }
+    Some(resolve(va, Mode::FaultIn).map(|_| ()))
+}
+
+/// The frame behind `va`, a page of a mapped view, made valid and
+/// locked for I/O (`MmProbeAndLockPages`): the frame stays in memory
+/// until [`unlock_page`].
+pub fn lock_page(va: u64) -> Result<u64, NTSTATUS> {
+    loop {
+        resolve(va & !(PAGE_SIZE as u64 - 1), Mode::FaultIn)?;
+        let mut g = pfn::lock();
+        let e = entry(va).load(Ordering::Acquire);
+        let a = arch::pt_arch();
+        if !a.present(e) {
+            continue; // trimmed meanwhile: again
+        }
+        let frame = a.addr(e) / PAGE_SIZE as u64;
+        if let Err(e) = pfn::frames(&mut g).db.reference(frame) {
+            crate::kd::bugcheck(format_args!("mm: locking a cache page: {}", e.0));
+        }
+        let (ss, _) = owner(va);
+        // SAFETY: a mapped view keeps its subsection and control area.
+        let ca = unsafe { &*(*ss).ca };
+        ca.locked_pages.set(ca.locked_pages.get() + 1);
+        return Ok(frame);
+    }
+}
+
+/// Undo [`lock_page`] for frame `frame`. False, changing nothing, if
+/// the frame is not a section's.
+pub fn unlock_page(frame: u64) -> bool {
+    let mut g = pfn::lock();
+    let e = *pfn::frames(&mut g).db.get(frame);
+    if !e.has(nk_mm::pfn::flag::PROTOTYPE) {
+        return false;
+    }
+    let (ss, _) = section::locate_proto(e.original_pte, e.pte);
+    // SAFETY: a page in memory keeps its subsection and control area.
+    let ca = unsafe { &*(*ss).ca };
+    ca.locked_pages.set(ca.locked_pages.get() - 1);
+    if let Err(e) = pfn::frames(&mut g)
+        .db
+        .dereference(frame, ca.no_write(), false)
+    {
+        crate::kd::bugcheck(format_args!("mm: unlocking a cache page: {}", e.0));
+    }
+    true
+}
+
 /// `MmCopyToCachedPage`: put the `len` bytes at `src` at
 /// `offset_in_page` in the page of a mapped view at `va`, with no read:
 /// a page that is in the file only gets a zeroed frame first, so its

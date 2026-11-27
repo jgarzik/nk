@@ -19,6 +19,7 @@ static SECTION: Group = Group {
         "mm.section-read",
         "mm.section-overwrite",
         "mm.section-inpage-error",
+        "mm.section-fault",
         "mm.section-flush",
         "mm.section-truncate",
         "mm.section-purge",
@@ -273,6 +274,58 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
             Ok(())
         },
     ));
+
+    // Touching a page of a view brings it in; a read that fails is the
+    // touch's fault; a locked page stays and refuses a purge.
+    let touched = (|| {
+        let mut bytes = [0u8; 8];
+        let at = slot2.0 + 0x5000;
+        // SAFETY: a kernel buffer and a page of a mapped view; the copy
+        // turns a fault it cannot resolve into an error.
+        unsafe { crate::mm::user::copy(bytes.as_mut_ptr(), at as *const u8, 8) }
+            .map_err(|_| "touching a page of a view faulted")?;
+        if bytes != core::array::from_fn::<u8, 8, _>(|i| nkfs::pattern(VIEW + 0x5000 + i)) {
+            return Err("a touched page does not hold the file's bytes");
+        }
+        one_read(&nkfs::take_log(), (VIEW + 0x5000) as u64, 16)?;
+        nkfs::fail_read_at(Some((VIEW + 0x30000) as u64));
+        // SAFETY: as above.
+        let failed = unsafe {
+            crate::mm::user::copy(bytes.as_mut_ptr(), (slot2.0 + 0x30000) as *const u8, 8)
+        };
+        nkfs::fail_read_at(None);
+        if failed.is_ok() || nkfs::take_log().len() != 1 {
+            return Err("a touch whose read failed did not fault");
+        }
+        // SAFETY: an MDL over two resident pages of the view, locked
+        // and unlocked here.
+        unsafe {
+            let mdl =
+                crate::io::mdl::IoAllocateMdl(at as *mut _, 0x2000, 0, 0, core::ptr::null_mut());
+            if mdl.is_null() {
+                return Err("no MDL");
+            }
+            let locked = crate::io::mdl::probe_and_lock(mdl, 0, 0);
+            let held = flush::page_of_file(sop, (VIEW + 0x5000) as u64);
+            let purge = flush::purge_section(sop, None, false);
+            if locked.is_ok() {
+                crate::io::mdl::MmUnlockPages(mdl);
+            }
+            crate::io::mdl::IoFreeMdl(mdl);
+            let after = flush::page_of_file(sop, (VIEW + 0x5000) as u64);
+            if locked.is_err() {
+                return Err("pages of a view could not be locked");
+            }
+            if !matches!(held, flush::FilePage::Resident { references: 2, .. }) || purge {
+                return Err("a locked page of a file is not held, or let a purge through");
+            }
+            if !matches!(after, flush::FilePage::Resident { references: 1, .. }) {
+                return Err("unlocking did not let go of the page");
+            }
+        }
+        Ok(())
+    })();
+    verdicts.push(("mm.section-fault", touched));
 
     // A flush writes exactly the modified pages, each run with the
     // paging flags and the cache manager's mark on the thread.

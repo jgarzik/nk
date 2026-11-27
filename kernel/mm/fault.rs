@@ -63,6 +63,26 @@ pub enum Got {
     NeedsIo,
 }
 
+/// What the trap handler asks of a page fault on kernel address `va`,
+/// taken by code that ran with interrupts on (`interrupts`): `None` if
+/// the memory manager has nothing there to resolve, or the fault may not
+/// wait (interrupts off, or `DISPATCH_LEVEL` and above: the caller's
+/// rules then stop the system); else the page made valid, or the status
+/// of the read that failed, which the faulting code gets as
+/// `STATUS_IN_PAGE_ERROR`.
+pub fn page_fault(va: u64, interrupts: bool) -> Option<Result<(), NTSTATUS>> {
+    if !interrupts
+        || !super::cache::is_cache_va(va)
+        || crate::ke::irql::current() >= crate::ke::irql::DISPATCH_LEVEL
+    {
+        return None;
+    }
+    crate::arch::enable_interrupts();
+    let outcome = super::cache::fault(va);
+    crate::arch::disable_interrupts();
+    outcome
+}
+
 /// One read in flight: what its waiters wait on, and the MDL it reads
 /// into, with room for a cluster.
 #[repr(C)]

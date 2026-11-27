@@ -84,6 +84,17 @@ Windows' x64 software PTE formats, `lib/mm/pte.rs`).
   the PFN entry, drops the translations on every processor in one
   request, and lists the pages nothing else holds. On arm64 NK does not
   enable hardware dirty tracking, so a writable entry counts as dirty.
+- **Page faults.** A fault on a mapped page of a view, taken with
+  interrupts on below `DISPATCH_LEVEL`, is resolved before the kernel's
+  rule that a fault on a kernel address stops the system (bugcheck 0x50
+  stays for an address nothing maps; 0xA/0xD1 for a fault that may not
+  wait). A read that fails is raised in the faulting code as
+  `STATUS_IN_PAGE_ERROR` with the access, the address and the read's
+  status, as Microsoft documents `EXCEPTION_IN_PAGE_ERROR`; a kernel
+  copy routine with a fix-up returns its error instead.
+  `MmProbeAndLockPages` brings a view's page in and holds its frame
+  (a reference, and one more locked page in the control area) until
+  `MmUnlockPages`.
 - **Resolving a page** (`kernel/mm/fault.rs`), one path for every
   caller: valid, soft (off a list), collided (wait for the read in
   flight, then again) or hard. A hard fault reads the page and up to 15
