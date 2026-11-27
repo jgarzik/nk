@@ -2183,13 +2183,16 @@ resource lists a start carries, the keys under `Enum`. The rest is NK's.
 
 **The tree.** One node per device (`pnp/node.rs`), NK's own structure,
 found by the address of the device's physical device object. Windows'
-`DEVICE_NODE` is private to its kernel; the device extension's
-`DeviceNode` field holds the address of NK's node, so that it is
-non-null for an enumerated device as on Windows, and NK never reads it
-back. The disassembly of `acpi.sys`, `pci.sys`, `storport.sys`,
-`classpnp.sys` and `disk.sys` was searched for reads through that field
-and none was found; that is a search, not a proof. The root is
-`HTREE\ROOT\0`, a device of `\Driver\PnpManager` (`pnp/root.rs`).
+`DEVICE_NODE` is private to its kernel, yet its drivers read its front:
+`partmgr.sys` follows a disk's `DeviceNode` to its `Parent` and that
+node's `PhysicalDeviceObject`. So each node has a `DEVICE_NODE` of
+Windows' size (`nk_ntabi::pnp`, checked against the kernel's symbols),
+a pool block the device extension's `DeviceNode` field points to, whose
+tree links (`Sibling`, `Child`, `Parent`, `LastChild`) and device NK
+keeps as nodes come and go, under the tree's lock; the rest of it is
+zero, and NK never reads it back. The field is cleared before the block
+is freed. The root is `HTREE\ROOT\0`, a device of
+`\Driver\PnpManager` (`pnp/root.rs`).
 
 **Reported devices.** A driver that detects its own device reports it
 (`pnp::report_detected_device`, Windows' `IoReportDetectedDevice` for a
@@ -2317,8 +2320,12 @@ is no query-remove, no eject, no stop and no rebalance.
 from its node and its key; `IoOpenDeviceRegistryKey` opens its
 `Device Parameters` key or its driver key. A property set with
 `IoSetDevicePropertyData` is kept in the key where Windows keeps it and
-read back by `IoGetDevicePropertyData`; the properties Windows computes
-(`DEVPKEY_Device_*`) are not answered unless a driver set them. A
+read back by `IoGetDevicePropertyData`. Of the properties Windows
+computes, NK answers those Microsoft's binaries ask of a disk:
+`DEVPKEY_Device_ClassGuid`, `_BusNumber` and `_Address` (from what
+`IoGetDeviceProperty` answers) and `DEVPKEY_Device_Parent` (the
+parent's instance path); any other is not found unless a driver set
+it. A
 device interface is registered under Windows' link name and
 `DeviceClasses` record; enabling it makes the symbolic link to the
 physical device object (which therefore needs a name) and calls the
@@ -3227,7 +3234,11 @@ rebalance, and so none of the notifications that go with them. A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver
-outside the corpus) and `partmgr` for disks.
+outside the corpus) for disks. `IoCreateArcName` names no disk: the
+loader's table of ARC disks is empty (UEFI names none), and the answer
+is Windows' for a disk not in it, `STATUS_NOT_SUPPORTED`.
+`FsRtlGetVirtualDiskNestingLevel` asks the disk as Windows does; a
+disk that answers as a virtual disk stops the system by name.
 
 **Traps.** Where a binary imports a routine in territory NK lacks and
 does not reach it on the paths NK runs, the export is `Traps`

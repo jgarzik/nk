@@ -274,9 +274,11 @@ tier has, for each architecture:
   and the device reset interface; the test's bus completes the
   request unchanged, as `pci.sys` completes a request for an
   interface it has no entry for, and Storport goes on without them.
-  The class filters the reference machine registers for disks
-  (`partmgr`, `EhStorClass`) have no image among the boot files and
-  are left out (`doc/DESIGN.md`, What is absent).
+  The class filters the reference machine registers for disks are
+  left out: `EhStorClass` has no image among the boot files
+  (`doc/DESIGN.md`, What is absent), and the storage scenarios boot
+  `without=partmgr.sys`, since the pattern disk has no partition table
+  for it to read. The volume scenarios have it.
 
   The two paths never both have the controller. The direct path
   exists only in this group, which runs only when named
@@ -373,6 +375,29 @@ Against Microsoft's disk the proof is `stor.direct.io` of the
 scenario. That scenario says `disk_expect = "unchanged"` for as long as
 `stor.io` is skipped; the boot in which the disk device first exists
 writes the write range, and its scenario says `disk_expect = "written"`.
+
+### The FAT disk
+
+A scenario with `disk_image` as well as `disk` gets, in place of the
+pattern disk, a 64 MiB disk holding one FAT32 volume
+(`tools/fatdisk.py`): one partition at sector 2048, 126976 sectors long,
+in an MBR (`fat32-mbr`, disk signature `0x4E4B0001`, type `0x0C`) or a
+GPT (`fat32-gpt`, a Basic Data partition, fixed disk and partition
+GUIDs). The volume has one sector a cluster, the serial `4e4b0002`,
+the label `NKVOL`, and three files: `HELLO.TXT`, `PATTERN.BIN` (three
+sectors and 100 bytes of the data disk's original pattern) and
+`DIR1\NESTED.TXT`. After the boot, `disk_expect = "fat-unchanged"`
+requires `fsck.fat -n` to find the volume clean, every file to hold
+what it was given, and no other file. `tools/test_fatdisk.py` holds the
+check to that without booting.
+
+- `x86_64-volumes-partmgr` (`test=vol.partmgr`,
+  `kernel/selftest/volumes.rs`): the storage stack with `partmgr.sys`
+  as the disk class's upper filter, on the MBR disk. `vol.partmgr`
+  asks the disk for its layout (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`),
+  which `partmgr.sys` answers from the partition table it read: an
+  MBR disk with the disk's signature, the FAT32 partition first, the
+  other entries empty.
 
 ### Soak
 

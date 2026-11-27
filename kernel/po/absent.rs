@@ -53,3 +53,10 @@ pub extern "C" fn PoShutdownBugCheck(
 ) -> ! {
     KeBugCheckEx(code, p1, p2, p3, p4)
 }
+
+/// `PoEnergyEstimationEnabled` (undocumented): whether the kernel
+/// estimates each component's energy use, for which drivers then count
+/// their work (`partmgr.sys` counts its writes). NK estimates nothing.
+pub extern "C" fn PoEnergyEstimationEnabled() -> u8 {
+    0
+}

@@ -25,6 +25,10 @@ pub const IOCTL_DISK_GET_DRIVE_GEOMETRY_EX: u32 =
 /// answers a [`GET_LENGTH_INFORMATION`].
 pub const IOCTL_DISK_GET_LENGTH_INFO: u32 =
     ctl_code(FILE_DEVICE_DISK, 0x17, METHOD_BUFFERED, FILE_READ_ACCESS);
+/// [`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ni-ntdddisk-ioctl_disk_get_drive_layout_ex):
+/// answers a [`DRIVE_LAYOUT_INFORMATION_EX`] and its entries.
+pub const IOCTL_DISK_GET_DRIVE_LAYOUT_EX: u32 =
+    ctl_code(FILE_DEVICE_DISK, 0x14, METHOD_BUFFERED, 0);
 /// [`IOCTL_STORAGE_GET_DEVICE_NUMBER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddstor/ni-ntddstor-ioctl_storage_get_device_number):
 /// answers a [`STORAGE_DEVICE_NUMBER`].
 pub const IOCTL_STORAGE_GET_DEVICE_NUMBER: u32 =
@@ -74,6 +78,78 @@ pub struct DISK_PARTITION_INFO {
     pub SizeOfPartitionInfo: u32,
     pub PartitionStyle: u32,
     pub Id: GUID,
+}
+
+/// [`PARTITION_INFORMATION_MBR`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_partition_information_mbr).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PARTITION_INFORMATION_MBR {
+    pub PartitionType: u8,
+    pub BootIndicator: u8,
+    pub RecognizedPartition: u8,
+    pub HiddenSectors: u32,
+    pub PartitionId: GUID,
+}
+
+/// [`PARTITION_INFORMATION_GPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_partition_information_gpt).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PARTITION_INFORMATION_GPT {
+    pub PartitionType: GUID,
+    pub PartitionId: GUID,
+    pub Attributes: u64,
+    pub Name: [u16; 36],
+}
+
+/// The style-dependent part of a [`PARTITION_INFORMATION_EX`].
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union PARTITION_INFORMATION_STYLE {
+    pub Mbr: PARTITION_INFORMATION_MBR,
+    pub Gpt: PARTITION_INFORMATION_GPT,
+}
+
+/// [`PARTITION_INFORMATION_EX`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_partition_information_ex).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PARTITION_INFORMATION_EX {
+    pub PartitionStyle: u32,
+    pub StartingOffset: i64,
+    pub PartitionLength: i64,
+    pub PartitionNumber: u32,
+    pub RewritePartition: u8,
+    pub IsServicePartition: u8,
+    pub Info: PARTITION_INFORMATION_STYLE,
+}
+
+/// [`DRIVE_LAYOUT_INFORMATION_GPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_drive_layout_information_gpt).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DRIVE_LAYOUT_INFORMATION_GPT {
+    pub DiskId: GUID,
+    pub StartingUsableOffset: i64,
+    pub UsableLength: i64,
+    pub MaxPartitionCount: u32,
+}
+
+/// The style-dependent part of a [`DRIVE_LAYOUT_INFORMATION_EX`]: an
+/// MBR disk's signature and checksum, or the GPT header's facts.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union DRIVE_LAYOUT_STYLE {
+    pub Mbr: [u32; 2],
+    pub Gpt: DRIVE_LAYOUT_INFORMATION_GPT,
+}
+
+/// [`DRIVE_LAYOUT_INFORMATION_EX`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_drive_layout_information_ex):
+/// `PartitionCount` entries follow from `PartitionEntry`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DRIVE_LAYOUT_INFORMATION_EX {
+    pub PartitionStyle: u32,
+    pub PartitionCount: u32,
+    pub Info: DRIVE_LAYOUT_STYLE,
+    pub PartitionEntry: [PARTITION_INFORMATION_EX; 1],
 }
 
 /// [`DISK_INT13_INFO`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ns-ntdddisk-_disk_int13_info).
@@ -225,6 +301,23 @@ const _: () = {
     assert!(IOCTL_DISK_GET_LENGTH_INFO == 0x0007_405C);
     assert!(IOCTL_STORAGE_GET_DEVICE_NUMBER == 0x002D_1080);
     assert!(IOCTL_STORAGE_QUERY_PROPERTY == 0x002D_1400);
+    assert!(IOCTL_DISK_GET_DRIVE_LAYOUT_EX == 0x0007_0050);
+
+    assert!(size_of::<PARTITION_INFORMATION_MBR>() == 24);
+    assert!(offset_of!(PARTITION_INFORMATION_MBR, HiddenSectors) == 4);
+    assert!(offset_of!(PARTITION_INFORMATION_MBR, PartitionId) == 8);
+    assert!(size_of::<PARTITION_INFORMATION_GPT>() == 112);
+    assert!(offset_of!(PARTITION_INFORMATION_GPT, Attributes) == 32);
+    assert!(offset_of!(PARTITION_INFORMATION_GPT, Name) == 40);
+    assert!(size_of::<PARTITION_INFORMATION_EX>() == 144);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, StartingOffset) == 8);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, PartitionLength) == 16);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, PartitionNumber) == 24);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, IsServicePartition) == 29);
+    assert!(offset_of!(PARTITION_INFORMATION_EX, Info) == 32);
+    assert!(size_of::<DRIVE_LAYOUT_INFORMATION_GPT>() == 40);
+    assert!(offset_of!(DRIVE_LAYOUT_INFORMATION_EX, Info) == 8);
+    assert!(offset_of!(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry) == 48);
 
     assert!(size_of::<DISK_GEOMETRY>() == 24);
     assert!(offset_of!(DISK_GEOMETRY, MediaType) == 8);

@@ -5,8 +5,12 @@ use crate::io;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::fsrtl::FsRtlIsSystemPagingFile),
+    export!(Partial, io::fsrtl::FsRtlGetVirtualDiskNestingLevel),
     export!(Implemented, io::driver::IoRegisterDriverReinitialization),
+    export!(Implemented, io::irp::IoForwardIrpSynchronously),
+    export!(Implemented, io::build::IoBuildAsynchronousFsdRequest),
     export!(Implemented, io::service::IoGetBootDiskInformationLite),
+    export!(Implemented, io::service::IoCreateArcName),
     export!(Implemented, io::shutdown::IoRegisterShutdownNotification),
     export!(
         Implemented,

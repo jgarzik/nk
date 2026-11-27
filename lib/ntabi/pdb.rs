@@ -1405,6 +1405,12 @@ fn plug_and_play_structures_match_the_kernel() {
     );
     same_layout!(
         types,
+        DEVICE_NODE,
+        "_DEVICE_NODE",
+        [Sibling, Child, Parent, LastChild, PhysicalDeviceObject]
+    );
+    same_layout!(
+        types,
         DEVICE_CAPABILITIES,
         "_DEVICE_CAPABILITIES",
         [

@@ -1205,8 +1205,8 @@ pub fn remove(pdo: usize, surprise: bool) {
             registry::service_stopped_serving(service, &found.instance);
         }
         registry::clear_allocation(&found.instance);
-        node::remove(pdo);
         (&raw mut (*(*device).DeviceObjectExtension).DeviceNode).write(core::ptr::null_mut());
+        node::remove(pdo);
         kprintln!("pnp: {}: removed", found.instance);
         object::dereference(device.cast());
     }

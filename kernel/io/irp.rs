@@ -495,6 +495,64 @@ pub unsafe extern "C" fn IofCallDriver(device: *mut DEVICE_OBJECT, irp: *mut IRP
     unsafe { call_driver(device, irp, &Guard::Nothing) }
 }
 
+/// The completion routine [`IoForwardIrpSynchronously`] sets: wake the
+/// forwarder, and keep the request for it.
+///
+/// # Safety
+/// `context` is the forwarder's event.
+unsafe extern "C" fn forwarded(
+    _device: *mut DEVICE_OBJECT,
+    _irp: *mut IRP,
+    context: *mut core::ffi::c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract; the forwarder waits on it.
+    unsafe { crate::ke::wait::KeSetEvent(context.cast(), 0, 0) };
+    STATUS_MORE_PROCESSING_REQUIRED
+}
+
+/// [`IoForwardIrpSynchronously`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioforwardirpsynchronously):
+/// pass `irp` down to `device` with the caller's stack location copied
+/// to the next, and wait for the drivers below to complete it. The
+/// request comes back to the caller, its status in `IoStatus`, for the
+/// caller to complete. FALSE, and nothing sent, if the request has no
+/// location left below the current one.
+///
+/// # Safety
+/// `device` is a live device object and `irp` a live IRP its caller
+/// owns. Called at `PASSIVE_LEVEL`.
+pub unsafe extern "C" fn IoForwardIrpSynchronously(
+    device: *mut DEVICE_OBJECT,
+    irp: *mut IRP,
+) -> u8 {
+    crate::ke::irql::expect_passive("IoForwardIrpSynchronously");
+    // SAFETY: per the contract. The event lives on this stack until the
+    // completion routine has set it and this has seen it set.
+    unsafe {
+        if (*irp).CurrentLocation <= 1 {
+            return 0;
+        }
+        let current = (*irp).CurrentStackLocation;
+        let next = next_location(irp);
+        // `IoCopyCurrentIrpStackLocationToNext`: all but the completion
+        // routine, its context and its control bits.
+        (*next).MajorFunction = (*current).MajorFunction;
+        (*next).MinorFunction = (*current).MinorFunction;
+        (*next).Flags = (*current).Flags;
+        (*next).Parameters = (*current).Parameters;
+        (*next).DeviceObject = (*current).DeviceObject;
+        (*next).FileObject = (*current).FileObject;
+        let mut done: KEVENT = core::mem::zeroed();
+        crate::ke::wait::KeInitializeEvent(&raw mut done, 0, 0);
+        (*next).CompletionRoutine = Some(forwarded);
+        (*next).Context = (&raw mut done).cast();
+        (*next).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
+        if IofCallDriver(device, irp) == STATUS_PENDING {
+            crate::ke::wait::wait(Some((&raw mut done).cast()), None);
+        }
+    }
+    1
+}
+
 /// [`PoCallDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pocalldriver):
 /// send a power request to the next driver. Since Windows Vista a power
 /// request is sent as any other; the pinned kernel's `PoCallDriver` is

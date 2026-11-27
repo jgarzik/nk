@@ -65,6 +65,7 @@ mod testdisk;
 mod thread;
 mod timer;
 mod timer2;
+mod volumes;
 mod wait;
 mod whea;
 mod without;
@@ -218,6 +219,7 @@ pub static GROUPS: &[&[&Group]] = &[
     oracle::GROUPS,
     neg::GROUPS,
     storage::GROUPS,
+    volumes::GROUPS,
     stordirect::GROUPS,
 ];
 

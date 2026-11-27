@@ -3,12 +3,12 @@
 //!
 //! A node is NK's own structure. Windows keeps a `DEVICE_NODE` that a
 //! physical device object's `DeviceObjectExtension->DeviceNode` points
-//! to; NK sets that field to the address of its node, so that the field
-//! says what it says on Windows (non-null: the device has been
-//! enumerated), and never reads it back: a node is found by its
-//! device's address in the tree. The Microsoft drivers NK runs were
-//! searched for reads through the field and none was found
-//! (`doc/DESIGN.md`, Plug and Play).
+//! to, and Microsoft's drivers read the front of it (`partmgr.sys`
+//! follows `Parent` to the parent's device). Each node has one, a pool
+//! block of Windows' size (`nk_ntabi::pnp::DEVICE_NODE`) whose tree
+//! links and device NK keeps as the tree changes, under the tree's
+//! lock; the rest of it is zero. NK never reads it back: a node is
+//! found by its device's address in the tree.
 //!
 //! The tree is one list under one lock, [`TREE`]. Nodes change only in
 //! the hands of the thread that holds the engine's mutex
@@ -20,6 +20,9 @@ use crate::ke::{Rank, SpinLock};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::mem::size_of;
+use nk_ntabi::io::DEVICE_OBJECT;
+use nk_ntabi::pnp::DEVICE_NODE;
 
 /// How far a device has come.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +124,8 @@ pub struct Node {
     /// The prefix this device's children carry in their instance
     /// identifiers, once one of them needed it.
     pub child_prefix: Option<String>,
+    /// The address of the node's `DEVICE_NODE`, which the tree owns.
+    pub visible: usize,
 }
 
 impl Node {
@@ -154,6 +159,7 @@ impl Node {
             translated: Vec::new(),
             vectors: Vec::new(),
             child_prefix: None,
+            visible: 0,
         }
     }
 }
@@ -166,39 +172,93 @@ impl Node {
 )]
 static TREE: SpinLock<Vec<Box<Node>>> = SpinLock::new(Rank::DeviceTree, Vec::new());
 
+/// Pool tag of the `DEVICE_NODE` blocks.
+const TAG: u32 = u32::from_le_bytes(*b"PpDn");
+
 /// Enter `node` in the tree, as a child of its parent if it has one,
-/// and return the address its device's `DeviceNode` field is to hold.
-/// `None` if there is no memory or the device has a node already.
-pub fn insert(node: Node) -> Option<usize> {
+/// and return the address its device's `DeviceNode` field is to hold:
+/// its `DEVICE_NODE`, linked in as its parent's last child. `None` if
+/// there is no memory or the device has a node already.
+pub fn insert(mut node: Node) -> Option<usize> {
     let mut tree = TREE.lock();
     if tree.iter().any(|known| known.pdo == node.pdo) || tree.try_reserve_exact(1).is_err() {
         return None;
     }
     let (pdo, parent) = (node.pdo, node.parent);
-    if let Some(above) = tree.iter_mut().find(|known| known.pdo == parent) {
-        if above.children.try_reserve_exact(1).is_err() {
-            return None;
-        }
-        above.children.push(pdo);
+    let above = tree.iter().position(|known| known.pdo == parent);
+    if let Some(at) = above
+        && tree[at].children.try_reserve_exact(1).is_err()
+    {
+        return None;
     }
-    let boxed = Box::new(node);
-    let address = core::ptr::from_ref::<Node>(&boxed) as usize;
-    tree.push(boxed);
-    Some(address)
+    let visible = crate::mm::pool::alloc(size_of::<DEVICE_NODE>(), TAG).cast::<DEVICE_NODE>();
+    if visible.is_null() {
+        return None;
+    }
+    // SAFETY: a fresh block of the structure's size; the parent's block
+    // is the tree's, changed only under its lock, which is held.
+    unsafe {
+        visible
+            .cast::<u8>()
+            .write_bytes(0, size_of::<DEVICE_NODE>());
+        (*visible).PhysicalDeviceObject = pdo as *mut DEVICE_OBJECT;
+        if let Some(at) = above {
+            let up = tree[at].visible as *mut DEVICE_NODE;
+            (*visible).Parent = up;
+            match (*up).LastChild {
+                last if last.is_null() => (*up).Child = visible,
+                last => (*last).Sibling = visible,
+            }
+            (*up).LastChild = visible;
+        }
+    }
+    if let Some(at) = above {
+        tree[at].children.push(pdo);
+    }
+    node.visible = visible as usize;
+    tree.push(Box::new(node));
+    Some(visible as usize)
 }
 
 /// Take the node of the device `pdo` out of the tree, and out of its
-/// parent's children. Its own children are the caller's to have taken
-/// out first.
+/// parent's children, and free its `DEVICE_NODE`. Its own children are
+/// the caller's to have taken out first, and the device's `DeviceNode`
+/// field the caller's to have cleared.
 pub fn remove(pdo: usize) -> Option<Node> {
     let mut tree = TREE.lock();
     let at = tree.iter().position(|node| node.pdo == pdo)?;
     let node = tree.swap_remove(at);
+    let visible = node.visible as *mut DEVICE_NODE;
     if let Some(above) = tree.iter_mut().find(|known| known.pdo == node.parent) {
         above.children.retain(|child| *child != pdo);
         above.children.shrink_to_fit();
+        // SAFETY: both blocks are the tree's, changed only under its
+        // lock, which is held.
+        unsafe {
+            let up = above.visible as *mut DEVICE_NODE;
+            let mut before: *mut DEVICE_NODE = core::ptr::null_mut();
+            let mut at = (*up).Child;
+            while !at.is_null() && at != visible {
+                (before, at) = (at, (*at).Sibling);
+            }
+            if at == visible {
+                let after = (*visible).Sibling;
+                if before.is_null() {
+                    (*up).Child = after;
+                } else {
+                    (*before).Sibling = after;
+                }
+                if (*up).LastChild == visible {
+                    (*up).LastChild = before;
+                }
+            }
+        }
     }
     tree.shrink_to_fit();
+    drop(tree);
+    // The block was the node's alone and is now unlinked; the device's
+    // field was cleared by the caller.
+    let _ = crate::mm::pool::free(visible.cast());
     Some(*node)
 }
 

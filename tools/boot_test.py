@@ -73,6 +73,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datadisk  # noqa: E402
+import fatdisk  # noqa: E402
 import judge  # noqa: E402
 import mkesp  # noqa: E402
 
@@ -305,6 +306,22 @@ def kill(proc):
     proc.wait()
 
 
+def make_disk(sc, data):
+    """Write the scenario's data disk: a FAT volume if it names one
+    (`disk_image`), else the pattern disk."""
+    if "disk_image" in sc:
+        fatdisk.create(data, sc["disk_image"])
+    else:
+        datadisk.create(data, sc.get("disk_size", datadisk.DEFAULT_MIB))
+
+
+def check_disk(sc, data):
+    """What is wrong with the data disk after the boot."""
+    if "disk_image" in sc:
+        return fatdisk.verify(data, sc["disk_expect"])
+    return datadisk.verify(data, sc["disk_expect"], sc.get("disk_size", datadisk.DEFAULT_MIB))
+
+
 def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=None):
     arch = sc["arch"]
     for f in FIRMWARE[arch]:
@@ -322,7 +339,6 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
     directory.mkdir(parents=True)
     esp = directory / "esp.img"
     disk, data = sc.get("disk"), directory / "data.img"
-    disk_mib = sc.get("disk_size", datadisk.DEFAULT_MIB)
     passed, disk_wrong = False, False
     try:
         if image:
@@ -334,7 +350,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
                                   registry=sc.get("registry", ()))
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
         if disk:
-            datadisk.create(data, disk_mib)
+            make_disk(sc, data)
         timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
         if interactive:
             passed = True
@@ -351,7 +367,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
                     (directory / kept).rename(directory / f"firmware-hang.{kept}")
             shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
             if disk:
-                datadisk.create(data, disk_mib)
+                make_disk(sc, data)
             timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
             text = (directory / "serial.log").read_text(errors="replace")
         log = judge.Log(text)
@@ -365,7 +381,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         if disk:
             # QEMU has exited, or been killed: either way what it wrote
             # is in the file.
-            wrong = datadisk.verify(data, sc["disk_expect"], disk_mib)
+            wrong = check_disk(sc, data)
             disk_wrong = bool(wrong)
             problems += wrong
         if sc.get("canonical") and not image:

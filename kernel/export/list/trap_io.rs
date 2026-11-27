@@ -7,15 +7,11 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    FsRtlGetVirtualDiskNestingLevel,
     IoAcquireVpbSpinLock,
     IoAdjustStackSizeForRedirection,
     IoAssignResources,
-    IoBuildAsynchronousFsdRequest,
-    IoCreateArcName,
     IoCreateFile,
     IoDuplicateDependency,
-    IoForwardIrpSynchronously,
     IoMakeAssociatedIrp,
     IoQueryFullDriverPath,
     IoReadPartitionTableEx,

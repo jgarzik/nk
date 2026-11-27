@@ -20,6 +20,19 @@ use nk_ntabi::status::*;
 /// Where service keys live, from the registry's root.
 const SERVICES: &str = "Machine\\System\\CurrentControlSet\\Services";
 
+/// `IoCreateArcName` (undocumented; `ntddk.h` declares it): give the
+/// disk `device` its ARC names (`\ArcName\multi(0)disk(0)rdisk(N)`),
+/// as links to its partitions, if the loader named it among the disks
+/// it saw. Windows matches the disk against the loader's table of ARC
+/// disks and answers `STATUS_NOT_SUPPORTED` when the table holds none
+/// that matches; `partmgr.sys` notes a success. NK's loader is UEFI's
+/// and its table is empty, so that is the answer for every disk, as on
+/// Windows with such a loader, and no name is made.
+#[allow(non_snake_case)]
+pub extern "C" fn IoCreateArcName(_device: *mut nk_ntabi::io::DEVICE_OBJECT) -> NTSTATUS {
+    STATUS_NOT_SUPPORTED
+}
+
 /// Whether the boot-start and system-start drivers have all been
 /// started: Windows' second phase of initialisation has begun.
 static STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);

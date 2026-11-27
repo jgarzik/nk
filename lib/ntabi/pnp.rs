@@ -534,6 +534,27 @@ const _: () = {
     assert!(offset_of!(IO_RESOURCE_REQUIREMENTS_LIST, List) == 32);
 };
 
+/// `DEVICE_NODE` (private): what Windows keeps of a device, which a
+/// physical device object's `DeviceObjectExtension->DeviceNode` points
+/// to. Microsoft's drivers read the front of it: `partmgr.sys` follows
+/// `Parent` to the parent's `PhysicalDeviceObject`. NK keeps the tree's
+/// links and the device in it; the rest is zero.
+#[repr(C)]
+pub struct DEVICE_NODE {
+    pub Sibling: *mut DEVICE_NODE,
+    pub Child: *mut DEVICE_NODE,
+    pub Parent: *mut DEVICE_NODE,
+    pub LastChild: *mut DEVICE_NODE,
+    pub PhysicalDeviceObject: *mut DEVICE_OBJECT,
+    pub Rest: [u8; 0x310 - 0x28],
+}
+
+const _: () = {
+    assert!(size_of::<DEVICE_NODE>() == 0x310);
+    assert!(core::mem::offset_of!(DEVICE_NODE, Parent) == 0x10);
+    assert!(core::mem::offset_of!(DEVICE_NODE, PhysicalDeviceObject) == 0x20);
+};
+
 /// [`DEVPROPKEY`](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/devpropkey):
 /// the name of a device property: its category, a GUID, and its number
 /// in the category.

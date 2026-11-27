@@ -420,8 +420,10 @@ pub unsafe extern "C" fn IoSetDevicePropertyData(
 /// was not given is not found (`STATUS_OBJECT_NAME_NOT_FOUND`, as the
 /// pinned kernel answers).
 ///
-/// Only properties that were set are found: NK computes none of the
-/// properties Windows derives from what it knows of a device.
+/// A property that was set is found as it was set. Of the properties
+/// Windows derives from what it knows of a device, NK computes the ones
+/// Microsoft's binaries ask of a disk (`computed`): its class GUID, bus
+/// number, address and parent. Any other is not found.
 ///
 /// # Safety
 /// `device` is a live device object; `key` points to a `DEVPROPKEY`;
@@ -456,8 +458,12 @@ pub unsafe extern "C" fn IoGetDevicePropertyData(
         if lcid != 0 || key.is_null() {
             return STATUS_INVALID_PARAMETER;
         }
-        let Ok((stored, value)) = crate::cm::read(&property_key(&found, key), "") else {
-            return STATUS_OBJECT_NAME_NOT_FOUND;
+        let (stored, value) = match crate::cm::read(&property_key(&found, key), "") {
+            Ok(set) => set,
+            Err(_) => match computed(&found, device, &*key) {
+                Some(derived) => derived,
+                None => return STATUS_OBJECT_NAME_NOT_FOUND,
+            },
         };
         report(value.len() as u32, stored & 0xFFFF);
         if value.len() > size as usize {
@@ -466,6 +472,41 @@ pub unsafe extern "C" fn IoGetDevicePropertyData(
         data.copy_from_nonoverlapping(value.as_ptr(), value.len());
     }
     STATUS_SUCCESS
+}
+
+/// The category of `DEVPKEY_Device_*` (`devpkey.h`).
+const DEVICE_CATEGORY: [u8; 16] = [
+    0x4E, 0x25, 0x5C, 0xA4, 0x1C, 0xDF, 0xFD, 0x4E, 0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0,
+];
+/// The category of `DEVPKEY_Device_Parent` and its kin.
+const RELATIONS_CATEGORY: [u8; 16] = [
+    0xC5, 0xA6, 0x40, 0x43, 0xFA, 0x93, 0x06, 0x47, 0x97, 0x2C, 0x7B, 0x64, 0x80, 0x08, 0xA5, 0xA7,
+];
+
+/// `DEVPROP_TYPE_UINT32`, `DEVPROP_TYPE_GUID` and `DEVPROP_TYPE_STRING`.
+const DEVPROP_TYPE_UINT32: u32 = 0x07;
+const DEVPROP_TYPE_GUID: u32 = 0x0D;
+const DEVPROP_TYPE_STRING: u32 = 0x12;
+
+/// A property of `found` Windows derives rather than stores: its type
+/// and value. The ones Microsoft's binaries ask of a disk:
+/// `DEVPKEY_Device_ClassGuid`, `_BusNumber` and `_Address`, from what
+/// `IoGetDeviceProperty` answers, and `DEVPKEY_Device_Parent`, the
+/// parent's instance path.
+fn computed(found: &Node, device: *mut DEVICE_OBJECT, key: &DEVPROPKEY) -> Option<(u32, Vec<u8>)> {
+    match (key.fmtid, key.pid) {
+        (DEVICE_CATEGORY, 10) => {
+            let text = registry::string(&registry::enum_key(&found.instance), "ClassGUID")?;
+            Some((DEVPROP_TYPE_GUID, ids::guid_from_text(&text)?.to_vec()))
+        }
+        (DEVICE_CATEGORY, 23) => Some((DEVPROP_TYPE_UINT32, property(found, device, BUS_NUMBER)?)),
+        (DEVICE_CATEGORY, 30) => Some((DEVPROP_TYPE_UINT32, property(found, device, ADDRESS)?)),
+        (RELATIONS_CATEGORY, 8) => {
+            let parent = node::get(found.parent)?;
+            Some((DEVPROP_TYPE_STRING, wide_bytes(&parent.instance)))
+        }
+        _ => None,
+    }
 }
 
 /// The name of the device `device` in the object namespace, if it has

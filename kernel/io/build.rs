@@ -1,9 +1,12 @@
 //! Requests a driver has the I/O manager build for it, to send to
 //! another driver and wait for:
 //! [`IoBuildSynchronousFsdRequest`], [`IoBuildDeviceIoControlRequest`],
-//! and [`IoSynchronousCallDriver`], which sends any request and waits.
+//! and [`IoSynchronousCallDriver`], which sends any request and waits;
+//! and [`IoBuildAsynchronousFsdRequest`], which the caller completes
+//! itself.
 //!
-//! A built request is the I/O manager's: when it has completed all the
+//! A built request is the I/O manager's unless a completion routine of
+//! the caller's keeps it: when it has completed all the
 //! way up, final completion hands the results to the caller's buffers
 //! and status block, frees the IRP with its system buffer and its MDL,
 //! and sets the caller's event (`irp::finish`). The caller never frees
@@ -92,10 +95,10 @@ unsafe fn direct(request: *mut IRP, buffer: *mut c_void, len: u32, operation: u3
     }
 }
 
-/// [`IoBuildSynchronousFsdRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildsynchronousfsdrequest):
-/// a request of `major` for `device`'s stack, which the caller sends
-/// with `IoCallDriver` and waits for on `event`. Null without memory,
-/// or if a direct-I/O device's buffer cannot be locked.
+/// A read, write, flush, shutdown, power or Plug and Play request of
+/// `major` for `device`'s stack, with its buffer set up: what the two
+/// FSD builders share. Null without memory, or if a direct-I/O device's
+/// buffer cannot be locked.
 ///
 /// As in the pinned kernel, a flush, a shutdown, a power and a Plug and
 /// Play request get no buffer; every other gets `buffer` the way the
@@ -105,15 +108,14 @@ unsafe fn direct(request: *mut IRP, buffer: *mut c_void, len: u32, operation: u3
 ///
 /// # Safety
 /// `device` is a live device object; `buffer` is kernel memory valid
-/// for `length` bytes until the request completes, as are `event` and
+/// for `length` bytes until the request completes, as is
 /// `status_block`; `starting_offset` is null or readable.
-pub unsafe extern "C" fn IoBuildSynchronousFsdRequest(
+unsafe fn fsd_request(
     major: u32,
     device: *mut DEVICE_OBJECT,
     buffer: *mut c_void,
     length: u32,
     starting_offset: *const i64,
-    event: *mut KEVENT,
     status_block: *mut IO_STATUS_BLOCK,
 ) -> *mut IRP {
     // SAFETY: per the contract.
@@ -162,9 +164,54 @@ pub unsafe extern "C" fn IoBuildSynchronousFsdRequest(
             (*location).Parameters = rw_parameters(length, offset);
         }
         (*request).UserIosb = status_block;
-        (*request).UserEvent = event;
         request
     }
+}
+
+/// [`IoBuildSynchronousFsdRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildsynchronousfsdrequest):
+/// a request of `major` for `device`'s stack ([`fsd_request`]), which
+/// the caller sends with `IoCallDriver` and waits for on `event`.
+///
+/// # Safety
+/// As [`fsd_request`]; `event` is valid until the request completes.
+pub unsafe extern "C" fn IoBuildSynchronousFsdRequest(
+    major: u32,
+    device: *mut DEVICE_OBJECT,
+    buffer: *mut c_void,
+    length: u32,
+    starting_offset: *const i64,
+    event: *mut KEVENT,
+    status_block: *mut IO_STATUS_BLOCK,
+) -> *mut IRP {
+    // SAFETY: per the contract.
+    unsafe {
+        let request = fsd_request(major, device, buffer, length, starting_offset, status_block);
+        if !request.is_null() {
+            (*request).UserEvent = event;
+        }
+        request
+    }
+}
+
+/// [`IoBuildAsynchronousFsdRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuildasynchronousfsdrequest):
+/// [`IoBuildSynchronousFsdRequest`] with no event. A caller whose
+/// completion routine keeps the request (`STATUS_MORE_PROCESSING_REQUIRED`)
+/// frees it, unlocking and freeing its MDL first, as `partmgr.sys` does
+/// after each sector it reads; one that lets it complete has final
+/// completion free it.
+///
+/// # Safety
+/// As [`fsd_request`].
+pub unsafe extern "C" fn IoBuildAsynchronousFsdRequest(
+    major: u32,
+    device: *mut DEVICE_OBJECT,
+    buffer: *mut c_void,
+    length: u32,
+    starting_offset: *const i64,
+    status_block: *mut IO_STATUS_BLOCK,
+) -> *mut IRP {
+    // SAFETY: per the contract.
+    unsafe { fsd_request(major, device, buffer, length, starting_offset, status_block) }
 }
 
 /// [`IoBuildDeviceIoControlRequest`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iobuilddeviceiocontrolrequest):
