@@ -76,6 +76,12 @@ class ExpectOk(unittest.TestCase):
         self.assertProblem(edit(GOOD, "NK-TEST-PLAN 3\n", ""),
                            "expected one NK-TEST-PLAN line, found 0")
 
+    def test_a_plan_of_nothing_fails(self):
+        # A test= pattern that selects no group runs nothing; that is no
+        # pass.
+        text = "NK-TEST-PLAN 0\nNK-TEST-COMPLETE pass=0 fail=0 skip=0\n"
+        self.assertProblem(text, "the boot planned no tests: test= selected no group")
+
     def test_fewer_verdicts_than_planned(self):
         text = edit(GOOD, "NK-TEST mm.pool:OK\n", "")
         text = edit(text, "pass=2", "pass=1")
