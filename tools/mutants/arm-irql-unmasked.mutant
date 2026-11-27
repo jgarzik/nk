@@ -1,6 +1,9 @@
 # Raising the IRQL no longer moves the GIC's priority mask: the level is
 # recorded but nothing is held back.
 scenario: aarch64
-fails: ke.interrupts
+# Whichever comes first stops the boot: `ke.interrupts`, or an interrupt
+# that arrives while a HIGH_LEVEL lock (such as `kd::CONSOLE`) is held
+# and takes a lock ranked below it.
+fails: scenario
 file: kernel/arch/aarch64/cpu.rs
 remove:     super::gic::set_mask(level);
