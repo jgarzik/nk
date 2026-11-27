@@ -432,6 +432,14 @@ routine that may refuse a request (`IoCsqInsertIrpEx`): the request is
 then neither marked pending nor made cancellable, and the refusal is
 returned, its mark of the queue left as Windows leaves it.
 
+**Secure devices** (`kernel/io/secure.rs`). `IoCreateDeviceSecure`, which
+Microsoft's device-security library asks the kernel for by name before
+using a copy of its own, makes the device and sets on it the
+descriptor its SDDL string describes (`nk_se::sddl`), those parts the
+string gives. A class GUID whose class key has settings of its own
+(`Control\Class\{guid}\Properties`) stops the system: NK does not
+apply them. A class without them overrides nothing, as on Windows.
+
 **Stream contexts** (`kernel/fsrtl/mod.rs`). A file system puts an
 `FSRTL_ADVANCED_FCB_HEADER` at the front of each stream's control block
 and initialises it with code compiled into the driver; `npfs.sys` and

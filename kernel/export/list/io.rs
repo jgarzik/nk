@@ -21,6 +21,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::interrupt::IoReportInterruptActive),
     export!(Implemented, io::interrupt::IoReportInterruptInactive),
     export!(Implemented, io::device::IoCreateDevice),
+    export!(Implemented, io::secure::IoCreateDeviceSecure),
     export!(Implemented, io::symlink::IoCreateSymbolicLink),
     export!(Implemented, io::device::IoDeleteDevice),
     export!(Implemented, io::symlink::IoDeleteSymbolicLink),

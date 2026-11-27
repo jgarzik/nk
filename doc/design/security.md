@@ -76,6 +76,20 @@ Where a descriptor lives:
   its bytes) is NK's own. Giving up more references than are held stops
   the system, as Windows' fast fail does (`0x139`).
 
+A descriptor can also come as an SDDL string (`nk_se::sddl`), which
+`IoCreateDeviceSecure` takes for the device it makes
+([I/O](io.md)): an owner, a group and a DACL, with the ACE types,
+flags, rights and SID names `nk_se::sddl` lists, and SIDs written out
+in full. SDDL beyond that stops the system naming what was not
+understood; a string that is not SDDL is refused.
+
+`RtlDeriveCapabilitySidsFromName` gives the two SIDs of a capability
+(`nk_se::capability`): the SHA-256 hash of its name in capitals, as
+`S-1-5-32-...` for its group and `S-1-15-3-1024-...` for itself, the
+twelve capabilities of the first Windows 8 applications keeping their
+`S-1-15-3-n`. A missing buffer is a fast fail (`0x139`), as on
+Windows.
+
 ## Tokens and access state
 
 A token is an object whose body is NK's own (`nk_se::token::Token`):

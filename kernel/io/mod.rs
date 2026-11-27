@@ -23,6 +23,7 @@ pub mod paging;
 pub mod priority;
 pub mod raw;
 pub mod remlock;
+pub mod secure;
 pub mod service;
 pub mod share;
 pub mod shutdown;

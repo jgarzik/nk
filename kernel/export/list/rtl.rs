@@ -7,6 +7,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, rtl::persist::RtlGetPersistedStateLocation),
+    export!(Implemented, rtl::RtlDeriveCapabilitySidsFromName),
     export!(Implemented, rtl::RtlNtStatusToDosError),
     export!(Implemented, rtl::RtlNtStatusToDosErrorNoTeb),
     export_variable!(

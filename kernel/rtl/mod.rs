@@ -150,3 +150,42 @@ pub extern "C" fn RtlNtStatusToDosErrorNoTeb(status: NTSTATUS) -> u32 {
 pub extern "C" fn RtlNtStatusToDosError(status: NTSTATUS) -> u32 {
     RtlNtStatusToDosErrorNoTeb(status)
 }
+
+/// The room `RtlDeriveCapabilitySidsFromName` clears in its callers'
+/// buffers: a SID of nine and of ten sub-authorities.
+const GROUP_SID_ROOM: usize = 0x2C;
+const CAPABILITY_SID_ROOM: usize = 0x30;
+
+/// `RtlDeriveCapabilitySidsFromName` (exported, not documented): the
+/// group SID and the capability SID of the capability named `name`
+/// (`nk_se::capability`), written into the caller's buffers. A missing
+/// argument is a fast fail, as on Windows.
+///
+/// # Safety
+/// `name` is a counted string; the buffers are writable for a SID of
+/// nine and of ten sub-authorities.
+pub unsafe extern "C" fn RtlDeriveCapabilitySidsFromName(
+    name: *const UNICODE_STRING,
+    group_sid: *mut u8,
+    capability_sid: *mut u8,
+) -> NTSTATUS {
+    if name.is_null() || group_sid.is_null() || capability_sid.is_null() {
+        crate::kd::bugcheck(format_args!(
+            "0x00000139 KERNEL_SECURITY_CHECK_FAILURE: RtlDeriveCapabilitySidsFromName was given no buffer (parameter 1 0x0000000000000005)"
+        ));
+    }
+    // SAFETY: per the contract.
+    let upper: alloc::vec::Vec<u16> = unsafe { copy_unicode(name) }
+        .into_iter()
+        .map(nk_rtl::upcase::upcase_char)
+        .collect();
+    let (group, capability) = nk_se::capability::derive(&upper);
+    // SAFETY: per the contract; each SID fits the room it is given.
+    unsafe {
+        group_sid.write_bytes(0, GROUP_SID_ROOM);
+        capability_sid.write_bytes(0, CAPABILITY_SID_ROOM);
+        group_sid.copy_from_nonoverlapping(group.as_ptr(), group.len());
+        capability_sid.copy_from_nonoverlapping(capability.as_ptr(), capability.len());
+    }
+    STATUS_SUCCESS
+}
