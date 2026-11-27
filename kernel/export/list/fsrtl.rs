@@ -41,4 +41,12 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, fsrtl::mcb::FsRtlGetNextLargeMcbEntry),
     export!(Implemented, fsrtl::mcb::FsRtlNumberOfRunsInLargeMcb),
+    export!(Implemented, fsrtl::name::FsRtlDissectName),
+    export!(Implemented, fsrtl::name::FsRtlAreNamesEqual),
+    export!(Implemented, fsrtl::name::FsRtlDoesNameContainWildCards),
+    export!(Partial, fsrtl::name::FsRtlIsFatDbcsLegal),
+    export!(Implemented, fsrtl::name::FsRtlIsDbcsInExpression),
+    export!(Implemented, fsrtl::status::FsRtlIsNtstatusExpected),
+    export!(Implemented, fsrtl::status::FsRtlNormalizeNtstatus),
+    export!(Implemented, fsrtl::status::FsRtlIsTotalDeviceFailure),
 ];

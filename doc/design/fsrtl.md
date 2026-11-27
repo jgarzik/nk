@@ -31,3 +31,17 @@ runs out the routine raises `STATUS_INSUFFICIENT_RESOURCES` in its
 caller, entered through `nk_with_caller_context` so the exception
 starts in the file system's own frame. The array grows by doubling and
 never shrinks.
+
+## Names and statuses
+
+Taking a path apart (`FsRtlDissectName`), comparing names, finding
+wildcards and judging a FAT short name (`FsRtlIsFatDbcsLegal`) follow
+the pinned kernel (`nk_rtl::fatname`); the OEM page has no double-byte
+characters, so Windows' double-byte branches never apply. The branches
+of `FsRtlIsFatDbcsLegal` that permit a path or a leading backslash were
+not read, and no binary NK runs asks for them: asking stops the system
+by name, and the export is partial. `FsRtlAreNamesEqual` compares a
+unit at a time where Windows upper-cases copies, so it needs no memory
+and never raises. Which exception statuses a file system lets through
+and which failures mean the device is gone are Windows' lists
+(`nk_fsrtl::status`).
