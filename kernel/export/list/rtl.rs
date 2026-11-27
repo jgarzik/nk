@@ -169,6 +169,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::splay::RtlSplay),
     export!(Implemented, rtl::splay::RtlDelete),
     export!(Implemented, rtl::bitmap::RtlFindClearBits),
+    export!(Implemented, rtl::counted::RtlTimeFieldsToTime),
     export!(Implemented, rtl::crt::wcscmp),
     export!(Implemented, rtl::crt::wcsrchr),
     export!(Implemented, rtl::crt::strcpy_s),

@@ -18,7 +18,6 @@ trap_list!(
     RtlNtStatusToDosError,
     RtlNtStatusToDosErrorNoTeb,
     RtlSetSaclSecurityDescriptor,
-    RtlTimeFieldsToTime,
     RtlUpperString,
     _purecall,
 );

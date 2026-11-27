@@ -437,6 +437,36 @@ pub unsafe extern "C" fn RtlTimeToTimeFields(time: *const i64, fields: *mut TIME
     }
 }
 
+/// [`RtlTimeFieldsToTime`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtltimefieldstotime):
+/// the time the fields name; false, the time left alone, for fields
+/// Windows refuses (`nk_rtl::convert::fields_time`). The weekday is not
+/// looked at. NK keeps no leap seconds, as Windows without them.
+///
+/// # Safety
+/// `fields` is readable and `time` writable.
+pub unsafe extern "C" fn RtlTimeFieldsToTime(fields: *const TIME_FIELDS, time: *mut i64) -> u8 {
+    // SAFETY: per the contract.
+    unsafe {
+        let f = fields.read_unaligned();
+        match convert::fields_time([
+            f.Year,
+            f.Month,
+            f.Day,
+            f.Hour,
+            f.Minute,
+            f.Second,
+            f.Milliseconds,
+            f.Weekday,
+        ]) {
+            Some(t) => {
+                time.write_unaligned(t as i64);
+                1
+            }
+            None => 0,
+        }
+    }
+}
+
 /// `RtlComputeCrc32` (exported, not documented): the CRC-32 of a block,
 /// carried on from the sum of what came before it.
 ///
