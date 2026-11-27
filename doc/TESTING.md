@@ -486,6 +486,13 @@ check to that without booting.
   `C:` by name, which mounts `fastfat.sys` on the volume, and requires
   each of the host's files to read back as written, through the cache
   manager. The image must be unchanged.
+- `x86_64-fat-write` (`test=fat.write`): writing through it. A new
+  file is written over a hole and across two of the cache manager's
+  views, rewritten in part, cut short (its size asked back) and
+  flushed, and reads back as written; `EMPTY.TXT` is renamed and
+  `HELLO.TXT` deleted. `disk_expect = "fat-written"` then requires
+  `fsck.fat` to find the volume clean and every file, the new one
+  included, to hold what `tools/fatdisk.py` (`expected`) says.
 
 ### Soak
 

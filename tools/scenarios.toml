@@ -1238,3 +1238,17 @@ registry = ["storage", "volumes", "mount", "fat"]
 disk = "ahci"
 disk_image = "fat32-mbr"
 disk_expect = "fat-unchanged"
+
+# And writing through it: a new file over a hole and across two of the
+# cache manager's views, rewritten in part, cut short and flushed; a
+# file renamed and one deleted. The host checks the image afterwards.
+
+[x86_64-fat-write]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.write"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-written"

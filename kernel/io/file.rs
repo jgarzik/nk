@@ -1129,6 +1129,79 @@ pub fn flush(handle: u64) -> Result<IoResult, IoError> {
     .wait()
 }
 
+/// Set information `class` of the file to `input`
+/// (`IRP_MJ_SET_INFORMATION`, what `NtSetInformationFile` sends for the
+/// kernel), through a system buffer holding a copy of it. A rename gets
+/// no target file object: the new name is in the same directory, as
+/// Windows sends a rename whose name names no other directory.
+pub fn set_information(handle: u64, class: u32, input: &[u8]) -> Result<IoResult, IoError> {
+    let input = Buffer::of(input);
+    // SAFETY: the slice is borrowed until the request has been waited
+    // for, here; the system buffer is the request's own.
+    unsafe {
+        send(
+            handle,
+            IRP_MJ_SET_INFORMATION,
+            |_| [u64::from(input.len as u32), u64::from(class), 0, 0],
+            KERNEL_MODE,
+            Needs::All(0),
+            |_, irp| system_buffer(irp, input, 0),
+        )
+    }?
+    .wait()
+}
+
+/// Query information `class` of the file into `output`
+/// (`IRP_MJ_QUERY_INFORMATION`, what `NtQueryInformationFile` sends for
+/// the kernel): the driver writes a system buffer, copied back on
+/// completion.
+pub fn query_information(handle: u64, class: u32, output: &mut [u8]) -> Result<IoResult, IoError> {
+    let output = Buffer::of(output);
+    // SAFETY: as in `set_information`; the output is written back on
+    // completion, while it is still borrowed.
+    unsafe {
+        send(
+            handle,
+            IRP_MJ_QUERY_INFORMATION,
+            |_| [u64::from(output.len as u32), u64::from(class), 0, 0],
+            KERNEL_MODE,
+            Needs::All(0),
+            |_, irp| {
+                system_buffer(irp, Buffer::NONE, output.len).map(|()| {
+                    if output.len != 0 {
+                        (*irp).Flags |= IRP_INPUT_OPERATION;
+                        (*irp).UserBuffer = output.ptr().cast();
+                        irp::set_requestor_room(irp, output.len);
+                    }
+                })
+            },
+        )
+    }?
+    .wait()
+}
+
+/// Give a fresh request a system buffer of at least `input`'s length and
+/// `room` bytes, holding a copy of `input`, freed with the request.
+///
+/// # Safety
+/// `irp` is fresh; `input` is valid kernel memory.
+unsafe fn system_buffer(irp: *mut IRP, input: Buffer, room: usize) -> Result<(), IoError> {
+    let len = input.len.max(room);
+    if len == 0 {
+        return Ok(());
+    }
+    let system = pool::alloc(len, TAG_IO_BUFFER);
+    if system.is_null() {
+        return Err(IoError::NoMemory);
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        (*irp).SystemBuffer = system.cast();
+        (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER;
+        copy_in(system, input, KERNEL_MODE)
+    }
+}
+
 /// Send a read without waiting for it.
 ///
 /// # Safety

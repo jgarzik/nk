@@ -12,7 +12,7 @@ from pathlib import Path
 import fatdisk
 
 TARGET = Path(__file__).resolve().parent.parent / "target"
-TOOLS = ("sfdisk", "mformat", "mcopy", "mtype", "mdir", "mdel", "fsck.fat")
+TOOLS = ("sfdisk", "mformat", "mcopy", "mtype", "mdir", "mdel", "mren", "fsck.fat")
 
 
 @unittest.skipUnless(all(shutil.which(t) for t in TOOLS), "host disk tools absent")
@@ -58,6 +58,21 @@ class FatDisk(unittest.TestCase):
         subprocess.run(["mdel", "-i", f"{path}@@{fatdisk.START * 512}", "::HELLO.TXT"],
                        check=True, env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
         self.assertEqual(fatdisk.verify(path, "fat-unchanged"), ["FAT disk: HELLO.TXT is gone"])
+
+
+    def test_the_written_check_holds_the_image_to_fat_write(self):
+        path = self.image("fat32-mbr")
+        self.assertNotEqual(fatdisk.verify(path, "fat-written"), [])
+        volume = f"{path}@@{fatdisk.START * 512}"
+        env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+        new = Path(self.dir.name) / "NKWRITE.BIN"
+        new.write_bytes(fatdisk.written_file())
+        for command in (["mcopy", "-i", volume, str(new), "::NKWRITE.BIN"],
+                        ["mren", "-i", volume, "::EMPTY.TXT", "::RENAMED.TXT"],
+                        ["mdel", "-i", volume, "::HELLO.TXT"]):
+            subprocess.run(command, check=True, capture_output=True, env=env)
+        self.assertEqual(fatdisk.verify(path, "fat-written"), [])
+        self.assertNotEqual(fatdisk.verify(path, "fat-unchanged"), [])
 
 
 if __name__ == "__main__":
