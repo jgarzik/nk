@@ -136,7 +136,22 @@ pub(super) fn load(
     };
     if !nt_success(status) {
         // Windows does not call the unload routine of a driver whose entry
-        // failed; the driver must have cleaned up after itself.
+        // failed; the driver must have cleaned up after itself. One that
+        // left a device behind has its image and object kept, as
+        // `unload` keeps them: the device's dispatch routines and its
+        // `DriverObject` point into them. On Windows the devices keep
+        // the driver object, and so its image, alive.
+        // SAFETY: the object is this module's; its device list was
+        // written by the driver, which has returned.
+        if unsafe { !(*object).DeviceObject.is_null() } {
+            crate::kd::verify(format_args!(
+                "{name}: DriverEntry failed ({:#010x}) and left device objects behind; the \
+                 driver is kept loaded",
+                status as u32
+            ));
+            core::mem::forget(image);
+            return Err(DriverError::EntryFailed(status));
+        }
         // SAFETY: the object is this module's, out of the records, and has no device.
         unsafe { free(object, Some(&image)) };
         return Err(DriverError::EntryFailed(status));

@@ -60,7 +60,11 @@ contents of `\NK\drivers`, which stand for `System32\drivers`: NK
 reads no file system. Nothing else starts a driver; a library is
 loaded when an image imports from it ([Exports](image.md)). The driver's entry
 point is given the path to its key. Stopping a service runs the driver's
-unload routine and frees its image; the key stays.
+unload routine and frees its image; the key stays. An entry point that
+fails gets no unload call, as on Windows, and its image is freed;
+one that fails or unloads with device objects left behind keeps its
+image and object, which the devices point into (on Windows the devices
+keep the driver object alive), and `NK-VERIFY` says so.
 
 **At boot**, before anything else is done with drivers, the system
 thread starts those whose keys say `Start` 0 (boot) or 1 (system), in
