@@ -83,6 +83,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         fsrtl::device::FsRtlAreVolumeStartupApplicationsComplete
     ),
     export!(Implemented, fsrtl::device::FsRtlUpdateDiskCounters),
+    export!(Implemented, fsrtl::device::FsRtlBalanceReads),
     export!(Implemented, fsrtl::status::FsRtlIsNtstatusExpected),
     export!(Implemented, fsrtl::status::FsRtlNormalizeNtstatus),
     export!(Implemented, fsrtl::status::FsRtlIsTotalDeviceFailure),

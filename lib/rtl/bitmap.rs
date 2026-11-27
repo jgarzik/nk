@@ -137,16 +137,16 @@ pub fn are_clear<B: Bits + ?Sized>(bits: &B, size: u32, start: u32, length: u32)
     next(bits, u64::from(start), end, true) == end
 }
 
-/// The first run of `count` set bits that lies in `from..end`.
-fn set_run_in<B: Bits + ?Sized>(bits: &B, from: u64, end: u64, count: u32) -> Option<u32> {
+/// The first run of `count` bits of `value` that lies in `from..end`.
+fn run_in<B: Bits + ?Sized>(bits: &B, from: u64, end: u64, count: u32, value: bool) -> Option<u32> {
     let count = u64::from(count);
     let mut at = from;
     loop {
-        let start = next(bits, at, end, true);
+        let start = next(bits, at, end, value);
         if end - start < count {
             return None;
         }
-        at = next(bits, start, start + count, false);
+        at = next(bits, start, start + count, !value);
         if at - start == count {
             return Some(start as u32);
         }
@@ -156,18 +156,30 @@ fn set_run_in<B: Bits + ?Sized>(bits: &B, from: u64, end: u64, count: u32) -> Op
 /// `RtlFindSetBits`: where a run of `count` set bits starts, `None` for
 /// the routine's 0xFFFFFFFF.
 pub fn find_set<B: Bits + ?Sized>(bits: &B, size: u32, count: u32, hint: u32) -> Option<u32> {
+    find(bits, size, count, hint, true)
+}
+
+/// `RtlFindClearBits`: [`find_set`] for clear bits, the same search in
+/// the pinned kernel.
+pub fn find_clear<B: Bits + ?Sized>(bits: &B, size: u32, count: u32, hint: u32) -> Option<u32> {
+    find(bits, size, count, hint, false)
+}
+
+/// A run of `count` bits of `value`, from `hint` to the end and then
+/// from the start.
+fn find<B: Bits + ?Sized>(bits: &B, size: u32, count: u32, hint: u32, value: bool) -> Option<u32> {
     let hint = if hint < size { hint } else { 0 };
     if count == 0 {
         return Some(hint & !7);
     }
     let size_wide = u64::from(size);
-    set_run_in(bits, u64::from(hint), size_wide, count).or_else(|| {
+    run_in(bits, u64::from(hint), size_wide, count, value).or_else(|| {
         if hint == 0 {
             return None;
         }
         // Windows adds the two as 32-bit numbers.
         let end = u64::from(hint.wrapping_add(count)).min(size_wide);
-        set_run_in(bits, 0, end, count)
+        run_in(bits, 0, end, count, value)
     })
 }
 
@@ -540,6 +552,21 @@ mod tests {
                         find_set(&model.bytes[..], size, count, hint),
                         expected,
                         "size {size} count {count} hint {hint}"
+                    );
+                    let fits_clear = |from: u32, end: u32| {
+                        (from..end).find(|&at| {
+                            end - at >= count && model.run_from(at, false) >= count.min(end - at)
+                        })
+                    };
+                    let expected_clear = fits_clear(start, size).or_else(|| {
+                        (start != 0)
+                            .then(|| fits_clear(0, (start + count).min(size)))
+                            .flatten()
+                    });
+                    assert_eq!(
+                        find_clear(&model.bytes[..], size, count, hint),
+                        expected_clear,
+                        "clear: size {size} count {count} hint {hint}"
                     );
                 }
             }

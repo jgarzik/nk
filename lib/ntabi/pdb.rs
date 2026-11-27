@@ -381,6 +381,15 @@ fn thread_matches_the_kernel() {
         hard_errors.bits,
         Some((HARD_ERRORS_ARE_DISABLED.trailing_zeros() as u8, 1))
     );
+    for (name, shift) in [
+        ("ThreadIoPriority", THREAD_IO_PRIORITY_SHIFT),
+        ("ThreadPagePriority", THREAD_PAGE_PRIORITY_SHIFT),
+    ] {
+        let member = ethread.member(name).expect(name);
+        assert_eq!(member.offset as usize, CROSS_THREAD_FLAGS);
+        assert_eq!(member.bits, Some((shift as u8, 3)));
+    }
+    assert_eq!(SCHEDULING_GROUP, field("SchedulingGroup"));
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
@@ -537,6 +546,21 @@ fn process_matches_the_kernel() {
     assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
     assert_eq!(DISK_COUNTERS, field("DiskCounters"));
+    assert_eq!(FLAGS2, field("Flags2"));
+    assert_eq!(FLAGS, field("Flags"));
+    let bits = |name| eprocess.member(name).and_then(|m| m.bits);
+    assert_eq!(
+        bits("DefaultPagePriority"),
+        Some((DEFAULT_PAGE_PRIORITY_SHIFT as u8, 3))
+    );
+    assert_eq!(
+        bits("DefaultIoPriority"),
+        Some((DEFAULT_IO_PRIORITY_SHIFT as u8, 3))
+    );
+    assert_eq!(
+        bits("Background"),
+        Some((BACKGROUND.trailing_zeros() as u8, 1))
+    );
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.
     let fast = types.layout("_EX_FAST_REF").expect("_EX_FAST_REF");

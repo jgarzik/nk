@@ -25,6 +25,14 @@ unsafe extern "C" {
     pub fn nk_variadic__snwprintf(buffer: *mut u16, count: usize, format: *const u16, ...) -> i32;
     /// [`sprintf_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/sprintf-s-sprintf-s-l-swprintf-s-swprintf-s-l).
     pub fn nk_variadic_sprintf_s(buffer: *mut u8, size: usize, format: *const u8, ...) -> i32;
+    /// [`_snwprintf_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/snprintf-s-snprintf-s-l-snwprintf-s-snwprintf-s-l).
+    pub fn nk_variadic__snwprintf_s(
+        buffer: *mut u16,
+        size: usize,
+        count: usize,
+        format: *const u16,
+        ...
+    ) -> i32;
 }
 
 /// The arguments of a variadic call, as the entry stub laid them out.
@@ -275,6 +283,122 @@ unsafe extern "C" fn nk_sprintf_s(args: *const u64) -> i32 {
                 -1
             }
         }
+    }
+}
+
+/// The secure C runtime's rule for printing into a buffer of `size`
+/// characters at most `count` of them (`_snwprintf_s`, `_vsnprintf_s`):
+/// with `_TRUNCATE`, as much as fits and -1 if that was not all; with a
+/// count below the size, at most that many and -1 if the text was
+/// longer; with a count at or above the size, the whole text if it fits
+/// and otherwise an emptied buffer and -1. A terminator always follows
+/// what was written. A null buffer or a size of 0 is -1, the buffer
+/// untouched (the kernel's C runtime has no invalid-parameter handler to
+/// stop in); a null format empties the buffer and is -1. `produce` runs
+/// the format, calling its argument with each character.
+///
+/// # Safety
+/// `write(i, c)` writes character `i` of a buffer of `size` characters.
+unsafe fn print_s(
+    size: usize,
+    count: usize,
+    null_buffer: bool,
+    null_format: bool,
+    mut write: impl FnMut(usize, u16),
+    produce: impl FnOnce(&mut dyn FnMut(u16)),
+) -> i32 {
+    const TRUNCATE: usize = usize::MAX;
+    if null_buffer || size == 0 {
+        return -1;
+    }
+    if null_format {
+        write(0, 0);
+        return -1;
+    }
+    let limit = if count != TRUNCATE && count < size {
+        count
+    } else {
+        size - 1
+    };
+    let mut produced = 0usize;
+    produce(&mut |c| {
+        if produced < limit {
+            write(produced, c);
+        }
+        produced += 1;
+    });
+    if produced <= limit {
+        write(produced, 0);
+        return produced as i32;
+    }
+    if count == TRUNCATE || count < size {
+        write(limit, 0);
+    } else {
+        write(0, 0);
+    }
+    -1
+}
+
+/// `_snwprintf_s`, entered from its stub: buffer, its size, the count,
+/// the format, then the format's arguments ([`print_s`]).
+///
+/// # Safety
+/// `args` is the argument array of an `_snwprintf_s` call.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn nk_snwprintf_s(args: *const u64) -> i32 {
+    // SAFETY: per the contract; the buffer holds `size` characters.
+    unsafe {
+        let buffer = args.read() as *mut u16;
+        let size = args.add(1).read() as usize;
+        let count = args.add(2).read() as usize;
+        let format_string = args.add(3).read() as *const u16;
+        print_s(
+            size,
+            count,
+            buffer.is_null(),
+            format_string.is_null(),
+            |i, c| buffer.add(i).write_unaligned(c),
+            |sink| {
+                let mut passed = Passed(args.add(4));
+                format(&mut characters(format_string), true, &mut passed, sink);
+            },
+        )
+    }
+}
+
+/// [`_vsnprintf_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/vsnprintf-s-vsnprintf-s-vsnprintf-s-l-vsnwprintf-s-vsnwprintf-s-l):
+/// [`print_s`] into a buffer of bytes, from a format of bytes and a
+/// `va_list`; wide characters among the arguments are written in the
+/// ANSI code page.
+///
+/// # Safety
+/// `buffer` is null or writable for `size` bytes, `format` is null or
+/// NUL-terminated, and `arguments` is a `va_list` of at least the
+/// arguments the format names.
+pub unsafe extern "C" fn _vsnprintf_s(
+    buffer: *mut u8,
+    size: usize,
+    count: usize,
+    format_string: *const u8,
+    arguments: *const u64,
+) -> i32 {
+    // SAFETY: per the contract.
+    unsafe {
+        print_s(
+            size,
+            count,
+            buffer.is_null(),
+            format_string.is_null(),
+            |i, c| {
+                buffer
+                    .add(i)
+                    .write(nk_rtl::codepage::ANSI_1252.from_unicode(c))
+            },
+            |sink| {
+                let mut passed = Passed(arguments);
+                format(&mut characters(format_string), false, &mut passed, sink);
+            },
+        )
     }
 }
 

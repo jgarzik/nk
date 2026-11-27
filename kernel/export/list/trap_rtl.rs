@@ -13,7 +13,6 @@ trap_list!(
     RtlCreateSystemVolumeInformationFolder,
     RtlDowncaseUnicodeString,
     RtlEqualString,
-    RtlFindClearBits,
     RtlGetPersistedStateLocation,
     RtlMapSecurityErrorToNtStatus,
     RtlNtStatusToDosError,

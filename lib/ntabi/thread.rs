@@ -87,6 +87,9 @@ pub const SPECIAL_APC_DISABLE: usize = 0x1E6;
 pub const WAIT_MODE: usize = 0x187;
 /// `Priority`: the current priority, one signed byte.
 pub const PRIORITY: usize = 0xC3;
+/// `KTHREAD.SchedulingGroup`: the CPU-rate group the thread runs in;
+/// none of NK's threads is in one.
+pub const SCHEDULING_GROUP: usize = 0x68;
 /// `WaitListEntry`: links the thread into a ready queue.
 pub const WAIT_LIST_ENTRY: usize = 0xD8;
 /// `State`: one byte, a `KTHREAD_STATE`.
@@ -105,6 +108,10 @@ pub const CLIENT_SECURITY: usize = 0x4A8;
 /// `ETHREAD.CrossThreadFlags`: 32 bits of flags, of which
 /// [`ACTIVE_IMPERSONATION_INFO`] says the thread impersonates.
 pub const CROSS_THREAD_FLAGS: usize = 0x510;
+/// `CrossThreadFlags.ThreadIoPriority`: bits 9 to 11.
+pub const THREAD_IO_PRIORITY_SHIFT: u32 = 9;
+/// `CrossThreadFlags.ThreadPagePriority`: bits 12 to 14.
+pub const THREAD_PAGE_PRIORITY_SHIFT: u32 = 12;
 /// `CrossThreadFlags.ActiveImpersonationInfo`.
 pub const ACTIVE_IMPERSONATION_INFO: u32 = 1 << 3;
 /// `CrossThreadFlags.HardErrorsAreDisabled`: the thread asked for no

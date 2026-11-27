@@ -12,7 +12,6 @@ trap_list!(
     PsGetProcessCreateTimeQuadPart,
     PsGetProcessSecurityPort,
     PsGetSiloIdentifier,
-    PsGetThreadProcess,
     PsImpersonateClient,
     PsIsCurrentThreadInServerSilo,
     PsIsProtectedProcess,

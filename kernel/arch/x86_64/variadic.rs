@@ -35,5 +35,6 @@ global_asm!(
     nk_variadic nk_variadic_DbgPrintEx, nk_dbg_print_ex
     nk_variadic nk_variadic__snwprintf, nk_snwprintf
     nk_variadic nk_variadic_sprintf_s, nk_sprintf_s
+    nk_variadic nk_variadic__snwprintf_s, nk_snwprintf_s
 "#
 );

@@ -61,6 +61,12 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::crt::wcsstr),
     export!(Implemented, rtl::crt::wcsncmp),
     export_entry!(Implemented, "sprintf_s", rtl::print::nk_variadic_sprintf_s),
+    export_entry!(
+        Implemented,
+        "_snwprintf_s",
+        rtl::print::nk_variadic__snwprintf_s
+    ),
+    export!(Implemented, rtl::print::_vsnprintf_s),
     export!(Implemented, rtl::RtlCheckPortableOperatingSystem),
     export!(Implemented, rtl::avl::RtlInitializeGenericTableAvl),
     export!(Implemented, rtl::avl::RtlInsertElementGenericTableAvl),
@@ -162,6 +168,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::gen83::RtlGenerate8dot3Name),
     export!(Implemented, rtl::splay::RtlSplay),
     export!(Implemented, rtl::splay::RtlDelete),
+    export!(Implemented, rtl::bitmap::RtlFindClearBits),
     export!(Implemented, rtl::crt::wcscmp),
     export!(Implemented, rtl::crt::wcsrchr),
     export!(Implemented, rtl::crt::strcpy_s),

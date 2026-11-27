@@ -177,3 +177,18 @@ pub extern "C" fn FsRtlUpdateDiskCounters(read: u64, written: u64) {
         DISK_WRITTEN.fetch_add(written, Ordering::Relaxed);
     }
 }
+
+/// `FT_BALANCED_READ_MODE`: a mirrored volume reads from all its members.
+const FT_BALANCED_READ_MODE: u32 = 0x0066_001B;
+
+/// [`FsRtlBalanceReads`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtlbalancereads):
+/// ask a volume to spread reads over its mirrors, as Windows asks it: a
+/// control request to the device named, whose answer is the status (a
+/// volume that is no mirror refuses it).
+///
+/// # Safety
+/// `device` is a live device object. Called at `PASSIVE_LEVEL`.
+pub unsafe extern "C" fn FsRtlBalanceReads(device: *mut DEVICE_OBJECT) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { io_control(device, FT_BALANCED_READ_MODE, 0, &[], 0).0 }
+}

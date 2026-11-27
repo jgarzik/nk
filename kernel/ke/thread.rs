@@ -484,6 +484,8 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         let process = crate::ps::process::system();
         field::<usize>(thread, layout::SILO).write(nk_ntabi::silo::THREAD_NOT_ATTACHED);
         field::<*mut u8>(thread, layout::PROCESS).write(process);
+        field::<u32>(thread, nk_ntabi::thread::CROSS_THREAD_FLAGS)
+            .write(crate::ps::process::thread_priorities(process));
         field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
         field::<[u64; 2]>(thread, layout::CID).write([
             nk_ntabi::process::SYSTEM_PROCESS_ID,

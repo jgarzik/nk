@@ -262,6 +262,39 @@ pub fn create_cache_manager_section(
     Ok(SectionRef(section))
 }
 
+/// A reference to the data section `file` already has, as Windows'
+/// prefetcher takes one: `None` if it has none; the section is never
+/// made here.
+pub fn existing_section(file: *mut FILE_OBJECT) -> Option<Result<SectionRef, NTSTATUS>> {
+    // SAFETY: the caller's file object is live.
+    let sop = unsafe { (*file).SectionObjectPointer }.cast::<SECTION_OBJECT_POINTERS>();
+    if sop.is_null() {
+        return None;
+    }
+    let Some(body) = object::create(&SECTION_TYPE, size_of::<Section>()) else {
+        return Some(Err(STATUS_INSUFFICIENT_RESOURCES));
+    };
+    // SAFETY: a fresh object body of that size; the reference is ours.
+    let section = unsafe { ObRef::adopt(body) };
+    let (ca, size) = {
+        let _g = pfn::lock();
+        // SAFETY: the lock guards the pointer; a control area it names
+        // is live under the lock.
+        let ca = unsafe { (*sop).DataSectionObject }.cast::<ControlArea>();
+        // SAFETY: as above.
+        let live = unsafe { ca.as_ref() }?;
+        live.section_refs.set(live.section_refs.get() + 1);
+        (ca, live.size.get())
+    };
+    // SAFETY: the body is ours alone until the reference is handed out.
+    unsafe {
+        let s = section.cast::<Section>();
+        (&raw mut (*s).ca).write(ca);
+        (*s).size.store(size, Ordering::Relaxed);
+    }
+    Some(Ok(SectionRef(section)))
+}
+
 /// `MmExtendSection` as the cache manager calls it
 /// (`IgnoreFileSizeChecking`): grow the section to `new_size` bytes if
 /// it is smaller. Returns the section's size.

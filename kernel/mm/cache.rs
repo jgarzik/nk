@@ -498,3 +498,53 @@ pub fn prefetch_for_cc(
 pub fn wait_prefetch(p: Prefetch) -> NTSTATUS {
     p.0
 }
+
+/// `READ_LIST` (`ntifs.h`): a file and the page-aligned offsets of it to
+/// read, `FILE_SEGMENT_ELEMENT`s after the header.
+#[repr(C)]
+struct ReadList {
+    file: *mut nk_ntabi::io::FILE_OBJECT,
+    entries: u32,
+    is_image: u32,
+}
+
+/// [`MmPrefetchPages`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-mmprefetchpages):
+/// read the listed pages of each file's data section into memory, onto
+/// standby, for later views and faults to find; read before returning.
+/// A failed read is not the caller's concern, as it is not on Windows: a
+/// fault on the page later reads it again. Image sections, which NK does
+/// not yet have, stop the system by name; a file with no data section,
+/// which Windows does not check for, is `STATUS_INVALID_PARAMETER_2`.
+///
+/// # Safety
+/// `lists` holds `count` pointers to read lists whose files are live.
+/// Called at `PASSIVE_LEVEL`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn MmPrefetchPages(count: u32, lists: *const *const u8) -> NTSTATUS {
+    for i in 0..count as usize {
+        // SAFETY: per the contract; each list is read field by field, its
+        // elements after the header.
+        unsafe {
+            let list = lists.add(i).read();
+            let header = list.cast::<ReadList>().read_unaligned();
+            if header.is_image != 0 {
+                crate::kd::bugcheck(format_args!(
+                    "MmPrefetchPages: NK does not implement prefetching an image section"
+                ));
+            }
+            let s = match section::existing_section(header.file) {
+                Some(Ok(s)) => s,
+                Some(Err(status)) => return status,
+                None => return STATUS_INVALID_PARAMETER_2,
+            };
+            let elements = list.add(size_of::<ReadList>()).cast::<u64>();
+            for e in 0..header.entries as usize {
+                let offset = elements.add(e).read_unaligned();
+                if let Ok(p) = prefetch_for_cc(&s, offset, PAGE_SIZE as u32, 0) {
+                    let _ = wait_prefetch(p);
+                }
+            }
+        }
+    }
+    STATUS_SUCCESS
+}

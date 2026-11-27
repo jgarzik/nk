@@ -749,3 +749,40 @@ pub fn thread_activity_test() -> Result<(), &'static str> {
     unsafe { irp::IoFreeIrp(request) };
     verdict
 }
+
+/// [`IoGetFsZeroingOffset`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetfszeroingoffset):
+/// the offset from which a file system must zero a read's buffer, if
+/// whoever issued the request asked for it (its zeroing-offset
+/// extension); else `STATUS_NOT_FOUND`, as on Windows.
+///
+/// # Safety
+/// `irp` is a live IRP; `offset` is writable.
+pub unsafe extern "C" fn IoGetFsZeroingOffset(irp: *mut IRP, offset: *mut u32) -> NTSTATUS {
+    // SAFETY: per the contract; the block holds the extension.
+    unsafe {
+        if !has(irp, IRP_EXTENSION_FS_ZEROING_OFFSET) {
+            return STATUS_NOT_FOUND;
+        }
+        offset.write_unaligned((&raw const (*block(irp)).Parameters).cast::<u32>().read());
+    }
+    STATUS_SUCCESS
+}
+
+/// [`IoSetFsZeroingOffset`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iosetfszeroingoffset):
+/// record the offset in the request's zeroing-offset extension, if it
+/// has one; else `STATUS_NOT_FOUND`, as on Windows.
+///
+/// # Safety
+/// `irp` is a live IRP the caller owns.
+pub unsafe extern "C" fn IoSetFsZeroingOffset(irp: *mut IRP, offset: u32) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        if !has(irp, IRP_EXTENSION_FS_ZEROING_OFFSET) {
+            return STATUS_NOT_FOUND;
+        }
+        (&raw mut (*block(irp)).Parameters)
+            .cast::<u32>()
+            .write(offset);
+    }
+    STATUS_SUCCESS
+}

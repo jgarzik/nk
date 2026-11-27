@@ -22,6 +22,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ps::process::PsGetCurrentProcess),
     export!(Implemented, ps::process::PsIsDiskCountersEnabled),
     export!(Implemented, ps::process::PsUpdateDiskCounters),
+    export!(Implemented, ps::process::PsGetThreadProcess),
     export!(Implemented, ps::process::PsGetCurrentProcessId),
     export!(Implemented, ps::silo::PsGetCurrentServerSilo),
     export!(Implemented, ps::silo::PsGetCurrentSilo),

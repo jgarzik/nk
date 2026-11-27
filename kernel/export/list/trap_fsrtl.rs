@@ -7,7 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    FsRtlBalanceReads,
     FsRtlCopyRead,
     FsRtlCopyWrite,
     FsRtlDismountComplete,
