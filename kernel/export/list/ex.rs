@@ -62,6 +62,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::timer::ExCancelTimer),
     export!(Implemented, ex::resource::ExConvertExclusiveToSharedLite),
     export!(Implemented, ex::lookaside::ExDeleteNPagedLookasideList),
+    export!(Implemented, ex::lookaside::ExDeleteLookasideListEx),
+    export!(Implemented, ex::lookaside::ExInitializeLookasideListEx),
     export!(Implemented, ex::lookaside::ExDeletePagedLookasideList),
     export!(Implemented, ex::resource::ExDeleteResourceLite),
     export!(Implemented, ex::timer::ExDeleteTimer),

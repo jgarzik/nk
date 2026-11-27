@@ -7,8 +7,6 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    ExDeleteLookasideListEx,
-    ExInitializeLookasideListEx,
     ExInterlockedAddUlong,
     ExTryConvertPushLockSharedToExclusiveEx,
 );

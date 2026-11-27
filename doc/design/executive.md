@@ -227,18 +227,27 @@ sleeps a millisecond and looks again, where Windows queues it.
 `ExRegisterExtension` plugs a driver's table of routines into one of
 the kernel's extension hosts (`kernel/ex/extension.rs`). Windows makes
 sixteen at boot; NK makes the ones its drivers use, as Windows makes
-them: `ksecdd.sys`'s authorization routines (id 2) and `cng.sys`'s
-cryptography (id 3). A registration is checked as the pinned kernel
-checks it (version, table, number of routines, a null routine, one
-table per host). A host Windows has and NK does not stops the system
-naming it; one Windows does not have either is `STATUS_NOT_FOUND`.
-Nothing on NK calls a registered table yet.
+them: `pcw.sys`'s performance counters (id 1), `ksecdd.sys`'s
+authorization routines (id 2) and `cng.sys`'s cryptography (id 3). A
+registration is checked as the pinned kernel checks it (version,
+table, number of routines, a null routine, one table per host). A host
+Windows has and NK does not stops the system naming it; one Windows
+does not have either is `STATUS_NOT_FOUND`. A host's table is used
+under run-down protection that is run down until a table is registered
+and again, waiting for its users, when it is taken back. Nothing on NK
+calls the tables of hosts 2 and 3 yet.
 
 The performance-counter routines (`Pcw*`, `kernel/ex/pcw.rs`) are
-`pcw.sys`'s, reached on Windows through its extension host. With no
-`pcw.sys` registered they give the status Windows gives then: not
-implemented when the `pcw` service is to start (or has no key),
-success with nothing registered when it is not.
+`pcw.sys`'s: each passes its arguments to the routine of `pcw.sys`'s
+table. With no `pcw.sys` registered they give the status Windows gives
+then: not implemented when the `pcw` service is to start (or has no
+key), success with nothing registered when it is not.
+
+`ExInitializeLookasideListEx` fills in a lookaside list as the plain
+forms do, from the pool type given, with the flags joining it as pool
+flags, an optional maximum depth and routines that take the list as
+well; its arguments are checked as the pinned kernel checks them
+(`nk_ex::lookaside::ex`).
 
 ### The time zone
 
