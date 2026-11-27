@@ -175,9 +175,10 @@ unsafe extern "C" fn completed(
 /// and wait for it: the status it completed with and the bytes the
 /// driver says it wrote. None if the driver returned without
 /// completing the request or saying it would: it may still hold the
-/// IRP, so the IRP, the event its completion signals and the buffer
-/// are left to it (as `io::stack` leaves a request), and the breach is
-/// reported (`NK-VERIFY`).
+/// IRP, so the IRP, the event its completion signals, the buffer and
+/// the reference to the top of the stack are left to it (as
+/// `io::stack` leaves a request), and the breach is reported
+/// (`NK-VERIFY`).
 ///
 /// The IRP is built as Windows builds it: a stack location of WMI's own
 /// above the driver's, the buffer as the system buffer, the status
@@ -236,7 +237,11 @@ unsafe fn send(
                 "a driver returned {returned:#010x} from IRP_MJ_SYSTEM_CONTROL without \
                  completing the request"
             ));
+            // The driver may still pass the request down or complete
+            // it: the stack it names stays referenced, the event stays
+            // where the completion routine signals it.
             Box::leak(done);
+            held.into_raw();
             return None;
         }
         wait::wait(Some((&raw mut *done).cast()), None);

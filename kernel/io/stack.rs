@@ -36,8 +36,9 @@ struct Waiting {
 /// and referenced once: the IRP has a location for each device of the
 /// stack as it is then. A driver that returns other than
 /// `STATUS_PENDING` without completing the request may still hold it:
-/// the request is left to it, the breach is reported (`NK-VERIFY`),
-/// and the status the driver returned is the answer.
+/// the request, and the reference to the top of the stack, are left
+/// to it, the breach is reported (`NK-VERIFY`), and the status the
+/// driver returned is the answer.
 ///
 /// # Safety
 /// `device` is a live device object, and `parameters` names nothing
@@ -113,7 +114,11 @@ pub unsafe fn send_synchronous_from(
                  it had not completed",
                 returned as u32
             ));
+            // The driver may still pass the request down or complete
+            // it: the stack it names stays referenced, and the block
+            // its completion writes stays where it is.
             Box::leak(waiting);
+            held.into_raw();
             return (returned, 0);
         }
         ke::wait::wait(Some((&raw mut waiting.done).cast()), None);
