@@ -68,9 +68,14 @@ QEMU arm64 and a Dell OptiPlex.
    Linux-compatible kernel [hk](https://github.com/jgarzik/hk), which is
    a reference for hardware bring-up and the model for the gate, the boot
    harness and differential testing.
-10. **Both architectures are first class.** Every commit builds and boots
-    both. Where a Microsoft arm64 binary cannot be obtained its test
-    prints SKIP; the NK code beneath it is still built and run.
+10. **x86-64 first, arm64 kept portable.** arm64 boots are paused until
+    x86-64 reaches `cmd.exe`; meanwhile every merged batch still
+    compiles for arm64 and nothing generic assumes x86-64. Every commit
+    passes the fast gate, every merged tip the batch gate, and the full
+    gate (both architectures booted) runs nightly and at milestones
+    ([TESTING.md](TESTING.md)). Where a Microsoft arm64 binary cannot be
+    obtained its test prints SKIP; the NK code beneath it is still built
+    and run.
 
 Drivers are trusted but memory-unsafe: NK never holds a Rust reference
 into memory a driver can write.
