@@ -16,7 +16,6 @@ use crate::ke::{Rank, SpinLock, pcr, wait};
 use crate::mm::pool;
 use crate::ob::object::ObRef;
 use crate::{kd, ob};
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -206,10 +205,13 @@ unsafe fn send(
         if request.is_null() {
             return Some((STATUS_INSUFFICIENT_RESOURCES, 0));
         }
-        // An all-zero event is a valid value; it is initialised just
-        // below, and outlives the request.
-        let mut done: Box<KEVENT> = Box::new(core::mem::zeroed());
-        wait::KeInitializeEvent(&raw mut *done, 0, 0);
+        // Initialised just below, and outlives the request.
+        let done = pool::alloc(size_of::<KEVENT>(), TAG).cast::<KEVENT>();
+        if done.is_null() {
+            irp::free(request);
+            return Some((STATUS_INSUFFICIENT_RESOURCES, 0));
+        }
+        wait::KeInitializeEvent(done, 0, 0);
         // WMI's own location.
         (*request).CurrentLocation -= 1;
         (*request).CurrentStackLocation = (*request).CurrentStackLocation.sub(1);
@@ -227,12 +229,12 @@ unsafe fn send(
             buffer.addr() as u64,
         ];
         (*location).CompletionRoutine = Some(completed);
-        (*location).Context = (&raw mut *done).cast();
+        (*location).Context = done.cast();
         (*location).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
         // Nothing is owed if the routine does not return: beneath it is
         // the worker, where an exception is unhandled.
         let returned = irp::call_driver(top, request, &Guard::Nothing);
-        if returned != STATUS_PENDING && wait::KeReadStateEvent(&raw mut *done) == 0 {
+        if returned != STATUS_PENDING && wait::KeReadStateEvent(done) == 0 {
             kd::verify(format_args!(
                 "a driver returned {returned:#010x} from IRP_MJ_SYSTEM_CONTROL without \
                  completing the request"
@@ -240,13 +242,13 @@ unsafe fn send(
             // The driver may still pass the request down or complete
             // it: the stack it names stays referenced, the event stays
             // where the completion routine signals it.
-            Box::leak(done);
             held.into_raw();
             return None;
         }
-        wait::wait(Some((&raw mut *done).cast()), None);
+        wait::wait(Some(done.cast()), None);
         let result = ((*request).IoStatus.Status, (*request).IoStatus.Information);
         irp::free(request);
+        let _ = pool::free(done.cast());
         Some(result)
     }
 }
