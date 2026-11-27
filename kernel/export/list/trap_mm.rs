@@ -7,12 +7,8 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    MmCanFileBeTruncated,
     MmCopyVirtualMemory,
-    MmDoesFileHaveUserWritableReferences,
-    MmFlushImageSection,
     MmLockPagableDataSection,
-    MmMdlPageContentsState,
     MmPrefetchPages,
     MmUnlockPagableImageSection,
 );

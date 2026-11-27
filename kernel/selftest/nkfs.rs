@@ -84,6 +84,13 @@ pub fn fail_read_at(offset: Option<u64>) {
     FAIL_AT.store(offset.map_or(0, |o| o + 1), Ordering::Release);
 }
 
+/// The file's bytes as nkfs holds them.
+pub fn data() -> &'static [u8] {
+    // SAFETY: the buffer lives while the volume does, which outlives
+    // every test that asks.
+    unsafe { core::slice::from_raw_parts(DATA.load(Ordering::Acquire), FILE_BYTES) }
+}
+
 /// The dispatch routine.
 ///
 /// # Safety

@@ -67,7 +67,10 @@ pub enum Got {
 /// into, with room for a cluster.
 #[repr(C)]
 struct InPage {
+    /// Signalled once the pages are settled, for the waiters.
     event: KEVENT,
+    /// The paging request's own event.
+    io_event: KEVENT,
     iosb: IO_STATUS_BLOCK,
     /// The reader's reference and each waiter's.
     refs: AtomicU32,
@@ -81,7 +84,10 @@ impl InPage {
         let block = pool::alloc_zeroed(size_of::<InPage>(), TAG_IN_PAGE).cast::<InPage>();
         if !block.is_null() {
             // SAFETY: a fresh block of the right size.
-            unsafe { wait::KeInitializeEvent(&raw mut (*block).event, 0, 0) };
+            unsafe {
+                wait::KeInitializeEvent(&raw mut (*block).event, 0, 0);
+                wait::KeInitializeEvent(&raw mut (*block).io_event, 0, 0);
+            }
         }
         block
     }
@@ -340,14 +346,16 @@ fn hard_fault(
     // event and status block are the block's, which lives until the
     // event is signalled and seen.
     let status = unsafe {
-        paging::page_read(
+        let sent = paging::page_read(
             file,
             &raw mut (*block).mdl,
             offset as i64,
-            &raw mut (*block).event,
+            &raw mut (*block).io_event,
             &raw mut (*block).iosb,
         );
-        wait_for(&raw mut (*block).event);
+        if sent == STATUS_PENDING {
+            wait_for(&raw mut (*block).io_event);
+        }
         unmap_system(&raw mut (*block).mdl);
         let iosb = (*block).iosb;
         if !nt_error(iosb.Status) && iosb.Information < bytes {

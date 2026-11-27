@@ -7,7 +7,7 @@ use crate::mm::{PAGE_SIZE, flush, pfn, section};
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
-use nk_ntabi::io::{IRP_MJ_READ, IRP_PRIORITY_HINT_NORMAL, SECTION_OBJECT_POINTERS};
+use nk_ntabi::io::{IRP_MJ_READ, IRP_MJ_WRITE, IRP_PRIORITY_HINT_NORMAL, SECTION_OBJECT_POINTERS};
 use nk_ntabi::status::*;
 
 pub static GROUPS: &[&Group] = &[&SECTION];
@@ -19,6 +19,8 @@ static SECTION: Group = Group {
         "mm.section-read",
         "mm.section-overwrite",
         "mm.section-inpage-error",
+        "mm.section-flush",
+        "mm.section-truncate",
         "mm.section-purge",
     ],
     run: section_tests,
@@ -254,14 +256,85 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
     let failed = cache::make_resident(slot2.0, 1, Resident::FaultIn);
     nkfs::fail_read_at(None);
     let reads = nkfs::take_log().len();
+    // No IRP for the read: the fault fails, and waits for nothing.
+    crate::io::paging::fail_next_allocation();
+    let no_irp = cache::make_resident(slot2.0, 1, Resident::FaultIn);
     verdicts.push((
         "mm.section-inpage-error",
         if failed != Err(STATUS_DEVICE_DATA_ERROR) {
             Err("a failed read is not the fault's status")
         } else if reads != 1 {
             Err("a failed read was not one paging read")
+        } else if no_irp != Err(STATUS_INSUFFICIENT_RESOURCES) || !nkfs::take_log().is_empty() {
+            Err("a read with no IRP is not the fault's failure for want of resources")
         } else if cache::hard_fault_bytes(slot2.0, VIEW) != VIEW {
             Err("a page whose read failed is not in the file only")
+        } else {
+            Ok(())
+        },
+    ));
+
+    // A flush writes exactly the modified pages, each run with the
+    // paging flags and the cache manager's mark on the thread.
+    cache::map_cache_view(&s, slot, 0, VIEW as u32).map_err(|_| "the view did not map again")?;
+    let flushed = (|| {
+        if cache::make_resident(v + 0x2000, 1, Resident::NoIo) != Ok(true) {
+            return Err("a page on standby is not found again");
+        }
+        // SAFETY: the page was just made valid in the view.
+        unsafe { ((v + 0x2008) as *mut u64).write_volatile(0x1122_3344_5566_7788) };
+        let result = flush::flush_section(sop, Some((0, VIEW as u32)), None);
+        let log = nkfs::take_log();
+        let write = |r: &Record, offset| {
+            r.major == IRP_MJ_WRITE
+                && r.flags == PAGING_READ
+                && r.cache_manager_active
+                && r.offset == offset
+                && r.length == PAGE_SIZE as u32
+        };
+        if result.Status != STATUS_SUCCESS || result.Information != 2 * PAGE_SIZE {
+            return Err("a flush did not write two pages");
+        }
+        if log.len() != 2 || !write(&log[0], 0x2000) || !write(&log[1], 0x30000) {
+            return Err(
+                "a flush's writes are not the modified pages, with paging flags and the cache manager's mark",
+            );
+        }
+        let data = nkfs::data();
+        if data[0x2008..0x2010] != 0x1122_3344_5566_7788u64.to_le_bytes()
+            || data[0x30010..0x30030] != [0xC3; 0x20]
+            || data[0x30000] != 0
+        {
+            return Err("the file does not hold what was flushed");
+        }
+        match flush::page_of_file(sop, 0x2000) {
+            flush::FilePage::Resident {
+                modified: false,
+                references: 1,
+                ..
+            } => {}
+            _ => return Err("a flushed page is not clean and mapped"),
+        }
+        if flush::available_pages() == 0 {
+            return Err("no page is available");
+        }
+        let again = flush::flush_section(sop, None, None);
+        if again.Information != 0 || !nkfs::take_log().is_empty() {
+            return Err("a second flush wrote clean pages");
+        }
+        Ok(())
+    })();
+    verdicts.push(("mm.section-flush", flushed));
+    cache::unmap_cache_view(&s, slot, false);
+    let size = 0x1000i64;
+    // SAFETY: the file's section object pointers and a size on this stack.
+    let truncatable = unsafe { flush::MmCanFileBeTruncated(sop, &raw const size) } != 0;
+    verdicts.push((
+        "mm.section-truncate",
+        if !truncatable || !flush::can_file_be_truncated(sop, None) {
+            Err("a file only the cache maps cannot be truncated")
+        } else if !flush::only_system_cache_views(sop) {
+            Err("the system cache's views are not all the file has")
         } else {
             Ok(())
         },

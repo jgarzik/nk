@@ -101,6 +101,21 @@ Windows' x64 software PTE formats, `lib/mm/pte.rs`).
   at the first that would need one; `MmCopyToCachedPage` never reads.
   Read-ahead for the cache manager reads into standby before it
   returns.
+- **Paging requests** are waited for only when the file system
+  returns `STATUS_PENDING`; a request that could not be sent for want of
+  an IRP fails the fault or the write with
+  `STATUS_INSUFFICIENT_RESOURCES`.
+- **Flush** (`kernel/mm/flush.rs`, `MmFlushSection`): the range's
+  modified pages (a view's dirty bits first moved to the PFN entries)
+  are written in runs of at most 16 contiguous pages by synchronous
+  paging writes, with `ETHREAD.CacheManagerActive` set around them; the
+  cache manager passes FsRtl's acquire and release routines when the
+  file is to be acquired. A page is clean once its write starts; a
+  failed write leaves its pages modified, and one that failed for want
+  of memory or over a bad sector is tried again page by page
+  (`MiIsRetryIoStatus`). `MmCanFileBeTruncated`, `MmFlushImageSection`
+  and `MmDoesFileHaveUserWritableReferences` follow Windows' checks; NK
+  makes no image sections.
 - **Purge** (`kernel/mm/flush.rs`): Windows' rule
   (`MiCanFileBeTruncatedInternal` with the purge's checks, host-tested
   in `lib/mm/section.rs`) decides; a page a view still maps leaves the

@@ -13,14 +13,26 @@
 //!   `OriginalFileObject` the file; the next location holds the major
 //!   function, the file, the MDL's byte count and the offset (key 0).
 //!
-//! The caller waits on its event for the status, whatever the call
-//! returned.
+//! The caller waits on its event only when the call returns
+//! `STATUS_PENDING`; otherwise the request is already complete (or was
+//! never sent, for want of an IRP) and the status block holds its
+//! result.
 
 use super::irp;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicBool, Ordering};
 use nk_ntabi::io::*;
 use nk_ntabi::ke::KEVENT;
 use nk_ntabi::status::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES};
+
+/// The next request finds no IRP, as when the pool has none: for the
+/// tests of what the memory manager does then.
+static FAIL_NEXT: AtomicBool = AtomicBool::new(false);
+
+/// Have the next paging request fail for want of an IRP.
+pub fn fail_next_allocation() {
+    FAIL_NEXT.store(true, Ordering::Release);
+}
 
 /// Build and send one synchronous paging request.
 ///
@@ -40,8 +52,17 @@ unsafe fn send(
     // SAFETY: per the contract.
     unsafe {
         let device = super::file::related_device(file);
-        let irp = irp::alloc((*device).StackSize);
+        let irp = if FAIL_NEXT.swap(false, Ordering::AcqRel) {
+            core::ptr::null_mut()
+        } else {
+            irp::alloc((*device).StackSize)
+        };
         if irp.is_null() {
+            // Nothing is sent, so nothing will signal the event.
+            iosb.write(IO_STATUS_BLOCK {
+                Status: STATUS_INSUFFICIENT_RESOURCES,
+                Information: 0,
+            });
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         (*irp).Flags =
@@ -86,4 +107,20 @@ pub unsafe fn page_read(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe { send(IRP_MJ_READ, file, mdl, offset, event, iosb, 0) }
+}
+/// `IoSynchronousPageWriteEx`: write the MDL's pages to `file` at
+/// `offset`; `sl_flags` go to the location's `Flags`.
+///
+/// # Safety
+/// As [`send`].
+pub unsafe fn synchronous_page_write(
+    file: *mut FILE_OBJECT,
+    mdl: *mut MDL,
+    offset: i64,
+    event: *mut KEVENT,
+    iosb: *mut IO_STATUS_BLOCK,
+    sl_flags: u8,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { send(IRP_MJ_WRITE, file, mdl, offset, event, iosb, sl_flags) }
 }
