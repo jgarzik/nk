@@ -74,7 +74,11 @@ succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`:
 `SkIsSecureKernel` says `STATUS_NOT_IMPLEMENTED`, the other `Sk*`
 routines stop the system with 0x123 as the normal kernel's one routine
 for them does, and `VslExchangeEntropy` fails with
-`STATUS_DEVICE_NOT_CONNECTED`, the buffer untouched), boot entropy
+`STATUS_DEVICE_NOT_CONNECTED`, the buffer untouched), no performance counter
+sets of the kernel's own (when `pcw.sys` registers, Windows' kernel
+registers its synchronization, processor, thermal, event-tracing and
+file-system counter sets with it; NK registers none, `kernel/ex/pcw.rs`),
+boot entropy
 without a TPM and, on arm64, without the processor's generator (the
 loader reports those sources as Windows' loader reports an absent or
 failed one: `doc/BOOT.md`, Boot entropy),
