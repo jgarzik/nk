@@ -3,5 +3,5 @@
 # the file system's thread is left one region deep for good.
 scenario: x86_64
 fails: fsrtl.teardown-stream-contexts
-file: kernel/io/fsrtl.rs
+file: kernel/fsrtl/mod.rs
 remove:             mutex::KeLeaveCriticalRegion();

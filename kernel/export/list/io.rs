@@ -4,8 +4,6 @@ use super::super::{Export, NT, State};
 use crate::io;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
-    export!(Implemented, io::fsrtl::FsRtlIsSystemPagingFile),
-    export!(Partial, io::fsrtl::FsRtlGetVirtualDiskNestingLevel),
     export!(Implemented, io::driver::IoRegisterDriverReinitialization),
     export!(Implemented, io::irp::IoForwardIrpSynchronously),
     export!(Implemented, io::build::IoBuildAsynchronousFsdRequest),
@@ -50,7 +48,6 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, io::mdl::MmProtectMdlSystemAddress),
     export!(Implemented, io::mdl::MmUnlockPages),
     export!(Implemented, io::mdl::MmUnmapLockedPages),
-    export!(Implemented, io::fsrtl::FsRtlTeardownPerStreamContexts),
     export!(Implemented, io::csq::IoCsqInitialize),
     export!(Implemented, io::csq::IoCsqInsertIrp),
     export!(Implemented, io::csq::IoCsqRemoveNextIrp),

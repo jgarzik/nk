@@ -735,7 +735,7 @@ match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
 [x86_64-neg-stream-context-list]
 arch = "x86_64"
 tier = "gate"
-paths = ["kernel/io/fsrtl.rs"]
+paths = ["kernel/fsrtl/mod.rs"]
 cmdline = "test=neg.stream-context-list"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"

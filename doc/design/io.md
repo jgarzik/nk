@@ -353,7 +353,7 @@ which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
 canceller has it.
 
-**Stream contexts** (`kernel/io/fsrtl.rs`). A file system puts an
+**Stream contexts** (`kernel/fsrtl/mod.rs`). A file system puts an
 `FSRTL_ADVANCED_FCB_HEADER` at the front of each stream's control block
 and initialises it with code compiled into the driver; `npfs.sys` and
 `msfs.sys` make it version 3, advanced, supporting filter contexts.

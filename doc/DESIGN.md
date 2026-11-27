@@ -87,7 +87,7 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `pnp`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `fsrtl`, `pnp`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |

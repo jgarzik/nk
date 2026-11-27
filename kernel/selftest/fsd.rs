@@ -5,8 +5,9 @@
 //! needed, is here in Rust.
 
 use crate::ex::pushlock;
+use crate::fsrtl;
 use crate::io::file::{self, OpenRequest};
-use crate::io::{device, fsrtl, irp};
+use crate::io::{device, irp};
 use crate::mm::pool;
 use crate::ob::object;
 use crate::ps::process;

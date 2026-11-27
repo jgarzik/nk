@@ -1,5 +1,6 @@
-//! What the kernel does for file systems with the header at the front
-//! of each stream's control block (`FSRTL_ADVANCED_FCB_HEADER`).
+//! The file-system runtime library: what the kernel does for file
+//! systems. Here, the header at the front of each stream's control
+//! block (`FSRTL_ADVANCED_FCB_HEADER`).
 //!
 //! The header is the file system's memory, set up by code compiled into
 //! the driver; NK reads and writes it through raw pointers, under the
@@ -182,9 +183,9 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
             Status: STATUS_PENDING,
             Information: 0,
         });
-        let held = ObRef::adopt(super::device::IoGetAttachedDeviceReference(device).cast());
+        let held = ObRef::adopt(crate::io::device::IoGetAttachedDeviceReference(device).cast());
         let top = held.cast::<nk_ntabi::io::DEVICE_OBJECT>();
-        let request = super::build::IoBuildDeviceIoControlRequest(
+        let request = crate::io::build::IoBuildDeviceIoControlRequest(
             IOCTL_STORAGE_GET_NESTING,
             top,
             core::ptr::null_mut(),
@@ -200,7 +201,7 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         let was_enabled = crate::ps::IoSetThreadHardErrorMode(0);
-        let returned = super::irp::IofCallDriver(top, request);
+        let returned = crate::io::irp::IofCallDriver(top, request);
         crate::ps::IoSetThreadHardErrorMode(was_enabled);
         if returned != STATUS_PENDING && crate::ke::wait::KeReadStateEvent(done) == 0 {
             // The driver may still complete the request, or pass it

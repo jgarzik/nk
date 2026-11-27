@@ -16,6 +16,7 @@ mod cm;
 mod etw;
 mod ex;
 mod export;
+mod fsrtl;
 mod hal;
 mod io;
 mod ke;

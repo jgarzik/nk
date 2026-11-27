@@ -615,7 +615,7 @@ too. The critical region is the caller's to enter, as for a push lock.
 
 The lock of a stream's FCB header is the file system's too: the push
 lock in the header, or in an old header the fast mutex it points to.
-`FsRtlTeardownPerStreamContexts` (`kernel/io/fsrtl.rs`) takes it, in a
+`FsRtlTeardownPerStreamContexts` (`kernel/fsrtl/mod.rs`) takes it, in a
 critical region it enters itself, only to unlink one context at a
 time; it holds neither while the context's `FreeCallback` runs, and
 takes no ranked lock inside it.
