@@ -48,9 +48,11 @@ gives access to the `T` inside until the guard is dropped, which restores
 the IRQL.
 
 Per processor, the kernel records which locks are held
-(`ke::percpu::PerCpu`). The record is updated at `HIGH_LEVEL`, whatever
-the lock's own level: an interrupt handler may take a lock too, and must
-never find the record half written.
+(`ke::percpu::PerCpu`). The record is updated with interrupts masked
+(`arch::interrupts_off`), whatever the lock's own level: an interrupt
+handler may take a lock too, and must never find the record half
+written. Masking is cheaper than raising the IRQL to `HIGH_LEVEL` and
+back, and the IRQL a driver reads never shows the update.
 
 ### Order
 

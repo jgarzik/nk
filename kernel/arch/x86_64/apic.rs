@@ -240,6 +240,25 @@ pub fn disable_interrupts() {
     unsafe { core::arch::asm!("cli", options(nomem, nostack)) };
 }
 
+/// Mask interrupts on this processor and return whether they were on,
+/// for [`interrupts_restore`]. Not `nomem`: what is done with them off
+/// stays between the two.
+pub fn interrupts_off() -> bool {
+    let flags: u64;
+    // SAFETY: reads RFLAGS through the stack, then masks interrupts.
+    unsafe { core::arch::asm!("pushfq", "pop {}", "cli", out(reg) flags) };
+    flags & (1 << 9) != 0
+}
+
+/// Undo [`interrupts_off`]: unmask interrupts if they were on.
+pub fn interrupts_restore(were_on: bool) {
+    if were_on {
+        // SAFETY: interrupts were on before the matching
+        // `interrupts_off`.
+        unsafe { core::arch::asm!("sti", options(nostack)) };
+    }
+}
+
 /// Start the timer counting down from its maximum, with its interrupt
 /// masked: the first half of measuring its rate.
 pub fn timer_count_down() {

@@ -311,3 +311,19 @@ pub fn disable_interrupts() {
     // SAFETY: masking interrupts touches no memory.
     unsafe { asm!("msr daifset, #2", options(nomem, nostack)) };
 }
+
+/// Mask interrupts (IRQ and FIQ) on this processor and return the mask
+/// bits as they were, for [`interrupts_restore`]. Not `nomem`: what is
+/// done with them off stays between the two.
+pub fn interrupts_off() -> u64 {
+    let daif: u64;
+    // SAFETY: reads the mask bits, then masks interrupts.
+    unsafe { asm!("mrs {}, daif", "msr daifset, #3", out(reg) daif, options(nostack)) };
+    daif
+}
+
+/// Undo [`interrupts_off`]: put the mask bits back as they were.
+pub fn interrupts_restore(daif: u64) {
+    // SAFETY: the value `interrupts_off` read on this processor.
+    unsafe { asm!("msr daif, {}", in(reg) daif, options(nostack)) };
+}
