@@ -143,6 +143,14 @@ nk_with_caller_context:
     nk_caller_context nk_entry_CcPinRead, nk_cc_pin_read
     nk_caller_context nk_entry_CcPinMappedData, nk_cc_pin_mapped_data
     nk_caller_context nk_entry_CcPreparePinWrite, nk_cc_prepare_pin_write
+    nk_caller_context nk_entry_CcCopyReadEx, nk_cc_copy_read_ex
+    nk_caller_context nk_entry_CcCopyWrite, nk_cc_copy_write_ex
+    nk_caller_context nk_entry_CcCopyWriteEx, nk_cc_copy_write_ex
+    nk_caller_context nk_entry_CcSetFileSizes, nk_cc_set_file_sizes
+    nk_caller_context nk_entry_CcZeroData, nk_cc_zero_data
+    nk_caller_context nk_entry_CcMdlRead, nk_cc_mdl_read
+    nk_caller_context nk_entry_CcPrepareMdlWrite, nk_cc_prepare_mdl_write
+    nk_caller_context nk_entry_CcMdlWriteComplete, nk_cc_mdl_write_complete
 
     .globl nk_guarded_call
 // rcx: a routine. rdx, r8, r9 and the fifth argument: its arguments.
@@ -362,6 +370,52 @@ unsafe extern "C" {
         bcb: *mut *mut c_void,
         buffer: *mut *mut c_void,
     ) -> u8;
+    pub fn nk_entry_CcCopyReadEx(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        wait: u8,
+        buffer: *mut c_void,
+        iosb: *mut c_void,
+        thread: *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcCopyWrite(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        wait: u8,
+        buffer: *const c_void,
+    ) -> u8;
+    pub fn nk_entry_CcCopyWriteEx(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        wait: u8,
+        buffer: *const c_void,
+        thread: *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcSetFileSizes(file: *mut c_void, sizes: *const c_void);
+    pub fn nk_entry_CcZeroData(
+        file: *mut c_void,
+        start: *const i64,
+        end: *const i64,
+        wait: u8,
+    ) -> u8;
+    pub fn nk_entry_CcMdlRead(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        chain: *mut *mut c_void,
+        iosb: *mut c_void,
+    );
+    pub fn nk_entry_CcPrepareMdlWrite(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        chain: *mut *mut c_void,
+        iosb: *mut c_void,
+    );
+    pub fn nk_entry_CcMdlWriteComplete(file: *mut c_void, offset: *const i64, chain: *mut c_void);
 }
 
 /// The fourth argument of a routine entered through

@@ -26,11 +26,16 @@ use nk_ntabi::cc::*;
 use nk_ntabi::io::{FILE_OBJECT, SECTION_OBJECT_POINTERS};
 use nk_ntabi::status::*;
 
+/// The read-ahead granularity a private map starts with, minus one.
+const READ_AHEAD_MASK: u32 = 0xFFFF;
+
 fn new_pcm(file: *mut FILE_OBJECT, scm: *mut Scm) -> Pcm {
     Pcm {
         file_object: Cell::new(file),
         scm: Cell::new(scm),
         next: Cell::new(core::ptr::null_mut()),
+        history: Cell::new(nk_cc::readahead::History::default()),
+        read_ahead_mask: Cell::new(READ_AHEAD_MASK),
     }
 }
 
@@ -89,6 +94,16 @@ fn link(m: &mut super::Master, scm: &Scm) {
         head.prev.set(core::ptr::from_ref(scm).cast_mut());
     }
     m.head = core::ptr::from_ref(scm).cast_mut();
+}
+
+/// Every shared cache map, under the lock.
+pub fn each(m: &super::Master, mut f: impl FnMut(&Scm)) {
+    let mut at = m.head;
+    // SAFETY: maps on the list are live under the lock.
+    while let Some(scm) = unsafe { at.as_ref() } {
+        f(scm);
+        at = scm.next.get();
+    }
 }
 
 /// Take `scm` off the list.

@@ -23,8 +23,12 @@
 
 #![allow(non_snake_case)]
 
+pub mod copy;
+pub mod flush;
 pub mod map;
+pub mod mdl;
 pub mod pin;
+pub mod size;
 pub mod vacb;
 
 use crate::arch::seh::Context;
@@ -53,6 +57,8 @@ pub const STATUS_UNEXPECTED_MM_EXTEND_ERR: NTSTATUS = 0xC000_00EC_u32 as NTSTATU
 
 /// A shared cache map's `Flags`, Windows' values.
 pub mod flag {
+    pub const DISABLE_READ_AHEAD: u32 = 0x1;
+    pub const DISABLE_WRITE_BEHIND: u32 = 0x2;
     pub const PIN_ACCESS: u32 = 0x4;
     pub const TRUNCATE_REQUIRED: u32 = 0x10;
     pub const WRITE_QUEUED: u32 = 0x20;
@@ -68,6 +74,10 @@ pub struct Pcm {
     pub scm: Cell<*mut Scm>,
     /// The next on the shared cache map's list, under [`MASTER`].
     next: Cell<*mut Pcm>,
+    /// The last two reads, under [`MASTER`].
+    pub history: Cell<nk_cc::readahead::History>,
+    /// The read-ahead granularity minus one.
+    pub read_ahead_mask: Cell<u32>,
 }
 
 /// A shared cache map: one per cached file.
@@ -181,6 +191,39 @@ pub unsafe fn or_raise<T>(context: *mut Context, r: Result<T, NTSTATUS>) -> T {
     }
 }
 
+/// `STATUS_INVALID_USER_BUFFER`, what a fault on a caller's buffer
+/// becomes; `STATUS_UNEXPECTED_IO_ERROR`, what a status a file system
+/// would not expect does.
+pub const STATUS_INVALID_USER_BUFFER: NTSTATUS = 0xC000_00E8_u32 as NTSTATUS;
+pub const STATUS_UNEXPECTED_IO_ERROR: NTSTATUS = 0xC000_00E9_u32 as NTSTATUS;
+
+/// An I/O status as the cache manager raises it: itself if a file
+/// system expects it, else `STATUS_UNEXPECTED_IO_ERROR`.
+pub fn io_status(status: NTSTATUS) -> NTSTATUS {
+    nk_fsrtl::status::normalize(status as u32, STATUS_UNEXPECTED_IO_ERROR as u32) as NTSTATUS
+}
+
+/// The private cache map of `file`, if it caches its file.
+///
+/// # Safety
+/// `file` is a live file object.
+pub unsafe fn pcm_of(file: *mut FILE_OBJECT) -> Option<&'static Pcm> {
+    // SAFETY: per the contract; the field is the cache manager's.
+    unsafe { (*file).PrivateCacheMap.cast::<Pcm>().as_ref() }
+}
+
+/// Take a reference on `scm` for the cache manager's own work.
+pub fn reference(scm: &Scm) {
+    let _m = MASTER.lock();
+    scm.refs.set(scm.refs.get() + 1);
+}
+
+/// Give back a [`reference`].
+pub fn dereference(scm: &Scm) {
+    let _m = MASTER.lock();
+    scm.refs.set(scm.refs.get() - 1);
+}
+
 /// Wait about 10 ms (`Cc10Milliseconds`), as the cache manager waits for
 /// a map being made or deleted elsewhere.
 pub fn short_delay() {
@@ -210,6 +253,11 @@ impl Scm {
             crate::ke::mutex::KeReleaseGuardedMutex(self.bcb_lock.get());
             r
         }
+    }
+
+    /// The first private map on the list, or null. Under [`MASTER`].
+    pub fn first_private(&self) -> *mut Pcm {
+        self.privates.get()
     }
 
     /// The file object's FCB header's `Flags2` and whether it is a

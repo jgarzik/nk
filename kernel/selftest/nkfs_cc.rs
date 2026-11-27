@@ -12,7 +12,10 @@ use core::ffi::c_void;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::cc::*;
-use nk_ntabi::io::{FAST_IO_DISPATCH, FILE_OBJECT, IO_STATUS_BLOCK, IRP_MJ_READ, IRP_MJ_WRITE};
+use nk_ntabi::io::{
+    FAST_IO_DISPATCH, FILE_OBJECT, IO_STATUS_BLOCK, IRP_MJ_READ, IRP_MJ_WRITE, MDL,
+    SECTION_OBJECT_POINTERS,
+};
 use nk_ntabi::status::*;
 
 pub static GROUPS: &[&Group] = &[&CC];
@@ -28,6 +31,14 @@ static CC: Group = Group {
         "cc.prepare-pin-write",
         "cc.uninitialize",
         "cc.initialize-extend-fails",
+        "cc.copy-read",
+        "cc.copy-write",
+        "cc.copy-write-beyond-valid",
+        "cc.mdl",
+        "cc.zero",
+        "cc.purge",
+        "cc.sizes",
+        "cc.attributes",
     ],
     run: cc_tests,
     manual: false,
@@ -489,8 +500,347 @@ fn run(verdicts: &mut Verdicts) -> Result<(), &'static str> {
         }
     })();
     verdicts.push(("cc.uninitialize", uninit));
+    copies(&volume, verdicts)?;
     // The file's pages go before the volume does.
     flush::purge_section(sop, None, true);
     drop(volume);
+    Ok(())
+}
+
+/// `CcCopyReadEx`: the result and the status block.
+fn copy_read(
+    file: *mut FILE_OBJECT,
+    offset: i64,
+    buffer: &mut [u8],
+    wait: bool,
+) -> (u8, IO_STATUS_BLOCK) {
+    let mut iosb = IO_STATUS_BLOCK {
+        Status: STATUS_PENDING,
+        Information: 0,
+    };
+    // SAFETY: a cached nkfs file; the buffer and block on the caller's
+    // stack.
+    let ok = unsafe {
+        entry::nk_entry_CcCopyReadEx(
+            file.cast(),
+            &raw const offset,
+            buffer.len() as u32,
+            u8::from(wait),
+            buffer.as_mut_ptr().cast(),
+            (&raw mut iosb).cast(),
+            core::ptr::null_mut(),
+        )
+    };
+    (ok, iosb)
+}
+
+/// `CcCopyWrite`, waiting.
+fn copy_write(file: *mut FILE_OBJECT, offset: i64, bytes: &[u8]) -> u8 {
+    // SAFETY: as in `copy_read`.
+    unsafe {
+        entry::nk_entry_CcCopyWrite(
+            file.cast(),
+            &raw const offset,
+            bytes.len() as u32,
+            1,
+            bytes.as_ptr().cast(),
+        )
+    }
+}
+
+/// `CcFlushCache` of the whole file.
+fn flush_all(sop: *mut SECTION_OBJECT_POINTERS) -> IO_STATUS_BLOCK {
+    let mut iosb = IO_STATUS_BLOCK {
+        Status: STATUS_PENDING,
+        Information: 0,
+    };
+    // SAFETY: nkfs's pointers; a block on this stack.
+    unsafe { cc::flush::CcFlushCache(sop, core::ptr::null(), 0, &raw mut iosb) };
+    iosb
+}
+
+fn dirty_pages(file: *mut FILE_OBJECT) -> u64 {
+    // SAFETY: nkfs's cached file's map.
+    unsafe { (*cc::scm_of(file)).dirty_pages.get() }
+}
+
+/// The copy, flush, size and MDL interfaces on a file cached for copying.
+fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> {
+    let file = volume.file;
+    let sop = volume.sop();
+    initialize(file, false);
+    nkfs::take_log();
+
+    let read = (|| {
+        let mut buffer = [0u8; 0x3000];
+        let (ok, iosb) = copy_read(file, 0x20100, &mut buffer, true);
+        if ok != 1 || iosb.Status != STATUS_SUCCESS || iosb.Information != 0x3000 {
+            return Err("CcCopyReadEx did not return TRUE with the length read");
+        }
+        if (0..buffer.len()).any(|i| buffer[i] != nkfs::pattern(0x20100 + i)) {
+            return Err("CcCopyReadEx did not copy the file's bytes");
+        }
+        let mut other = [0u8; 0x10];
+        let (ok, iosb) = copy_read(file, 0x2A0000, &mut other, false);
+        if ok != 0 || iosb.Status != STATUS_PENDING {
+            return Err(
+                "CcCopyReadEx without waiting on a page not in memory did not return \
+                        FALSE, leaving the status block",
+            );
+        }
+        Ok(())
+    })();
+    nkfs::take_log();
+    verdicts.push(("cc.copy-read", read));
+
+    // A write into part of a valid page reads it; the flush writes it and
+    // leaves the file clean; the volume has no dirty data after.
+    let write = (|| {
+        if copy_write(file, 0x30080, &[0xA7; 0x100]) != 1 {
+            return Err("CcCopyWrite failed");
+        }
+        let read = reads(&nkfs::take_log()).any(|r| r.offset == 0x30000);
+        let dirty = dirty_pages(file);
+        // SAFETY: nkfs's file has no volume parameter block.
+        let any = unsafe { cc::flush::CcIsThereDirtyData(core::ptr::null_mut()) };
+        let iosb = flush_all(sop);
+        let log = nkfs::take_log();
+        // SAFETY: as above.
+        let after = unsafe { cc::flush::CcIsThereDirtyData(core::ptr::null_mut()) };
+        let written = log
+            .iter()
+            .any(|r| r.major == IRP_MJ_WRITE && r.offset == 0x30000);
+        if !read {
+            Err("a write into part of a valid page did not read it")
+        } else if dirty != 1 || any != 1 {
+            Err("a copied write did not leave one dirty page")
+        } else if iosb.Status != STATUS_SUCCESS || !written {
+            Err("CcFlushCache did not write the dirty page")
+        } else if nkfs::data()[0x30080..0x30180] != [0xA7; 0x100]
+            || nkfs::data()[0x3007F] != nkfs::pattern(0x3007F)
+        {
+            Err("the file does not hold the write after the flush")
+        } else if dirty_pages(file) != 0 || after != 0 {
+            Err("the file is still dirty after the flush")
+        } else {
+            Ok(())
+        }
+    })();
+    verdicts.push(("cc.copy-write", write));
+
+    // Beyond the valid data length nothing is read and the rest of the
+    // page is zero.
+    let beyond = {
+        let fcb = volume.fcb();
+        // SAFETY: nkfs's FCB header, the test's.
+        unsafe { (*fcb).header.Common.ValidDataLength = 0x50000 };
+        let ok = copy_write(file, 0x50800, &[0x3C; 0x10]);
+        let read = reads(&nkfs::take_log()).next().is_some();
+        flush_all(sop);
+        nkfs::take_log();
+        // SAFETY: as above.
+        unsafe { (*fcb).header.Common.ValidDataLength = nkfs::FILE_BYTES as i64 };
+        let data = nkfs::data();
+        if ok != 1 {
+            Err("CcCopyWrite failed")
+        } else if read {
+            Err("a write beyond the valid data length read the file")
+        } else if data[0x50000..0x50800].iter().any(|&b| b != 0) || data[0x50800] != 0x3C {
+            Err("the page beyond the valid data length is not zero around the write")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.copy-write-beyond-valid", beyond));
+
+    let mdl = (|| {
+        let offset = 0x10000i64;
+        let mut chain: *mut MDL = core::ptr::null_mut();
+        let mut iosb = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: 0,
+        };
+        // SAFETY: a cached nkfs file; outputs on this stack.
+        unsafe {
+            entry::nk_entry_CcMdlRead(
+                file.cast(),
+                &raw const offset,
+                0x2000,
+                (&raw mut chain).cast(),
+                (&raw mut iosb).cast(),
+            )
+        };
+        if chain.is_null() || iosb.Information != 0x2000 {
+            return Err("CcMdlRead gave no MDL or not the length");
+        }
+        // SAFETY: the locked MDL CcMdlRead gave.
+        let va = unsafe {
+            crate::io::mdl::MmMapLockedPagesSpecifyCache(chain, 0, 1, core::ptr::null_mut(), 0, 16)
+        };
+        let good = !va.is_null() && holds_pattern(va.addr(), 0x10000, 0x2000);
+        // SAFETY: as above.
+        unsafe {
+            if !va.is_null() {
+                crate::io::mdl::MmUnmapLockedPages(va, chain);
+            }
+            cc::mdl::CcMdlReadComplete(file, chain);
+        }
+        if !good {
+            return Err("an MDL read's pages do not hold the file's bytes");
+        }
+        nkfs::take_log();
+        let offset = 0x70000i64;
+        let mut chain: *mut MDL = core::ptr::null_mut();
+        // SAFETY: as above.
+        unsafe {
+            entry::nk_entry_CcPrepareMdlWrite(
+                file.cast(),
+                &raw const offset,
+                0x1000,
+                (&raw mut chain).cast(),
+                (&raw mut iosb).cast(),
+            )
+        };
+        let read = reads(&nkfs::take_log()).next().is_some();
+        // SAFETY: nkfs's map.
+        let open = unsafe { (*cc::scm_of(file)).open_count.get() };
+        // SAFETY: the locked MDL; written through a system mapping.
+        unsafe {
+            let va = crate::io::mdl::MmMapLockedPagesSpecifyCache(
+                chain,
+                0,
+                1,
+                core::ptr::null_mut(),
+                0,
+                16,
+            );
+            if !va.is_null() {
+                core::ptr::write_bytes(va.cast::<u8>(), 0x6E, 0x1000);
+                crate::io::mdl::MmUnmapLockedPages(va, chain);
+            }
+            entry::nk_entry_CcMdlWriteComplete(file.cast(), &raw const offset, chain.cast());
+        }
+        let dirty = dirty_pages(file);
+        flush_all(sop);
+        nkfs::take_log();
+        // SAFETY: as above.
+        let after = unsafe { (*cc::scm_of(file)).open_count.get() };
+        if read {
+            Err("CcPrepareMdlWrite of a whole page read it")
+        } else if open != 2 || after != 1 {
+            Err("a prepared MDL write did not hold the map open until completed")
+        } else if dirty != 1 || nkfs::data()[0x70000..0x71000] != [0x6E; 0x1000] {
+            Err("a completed MDL write was not dirty and then written")
+        } else {
+            Ok(())
+        }
+    })();
+    verdicts.push(("cc.mdl", mdl));
+
+    let zero = {
+        let (start, end) = (0x90000i64, 0x91000i64);
+        // SAFETY: a cached nkfs file; offsets on this stack.
+        let ok =
+            unsafe { entry::nk_entry_CcZeroData(file.cast(), &raw const start, &raw const end, 1) };
+        let read = reads(&nkfs::take_log()).next().is_some();
+        let dirty = dirty_pages(file);
+        flush_all(sop);
+        nkfs::take_log();
+        if ok != 1 || read || dirty != 1 {
+            Err("CcZeroData of a whole page read it or did not leave it dirty")
+        } else if nkfs::data()[0x90000..0x91000].iter().any(|&b| b != 0) {
+            Err("the zeroed page did not reach the file")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.zero", zero));
+
+    // A purge fails while a view in the range is in use, then discards the
+    // dirty data with the pages.
+    let purge = {
+        let (ok, handle, _) = map(file, 0xA0000, 0x10, MAP_WAIT);
+        copy_write(file, 0xA1000, &[1; 0x10]);
+        // SAFETY: nkfs's pointers.
+        let busy = unsafe { cc::size::CcPurgeCacheSection(sop, core::ptr::null(), 0, 0) };
+        if ok == 1 {
+            unpin(handle);
+        }
+        // SAFETY: as above.
+        let purged = unsafe { cc::size::CcPurgeCacheSection(sop, core::ptr::null(), 0, 0) };
+        nkfs::take_log();
+        let dirty = dirty_pages(file);
+        let gone = matches!(flush::page_of_file(sop, 0xA1000), flush::FilePage::Absent);
+        if busy != 0 {
+            Err("a purge succeeded with a view in use")
+        } else if purged != 1 || !gone {
+            Err("a purge with no view in use did not discard the pages")
+        } else if dirty != 0 {
+            Err("a purge left dirty data")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.purge", purge));
+
+    // Shrinking the file takes back what lies beyond; growing the
+    // allocation extends the section to a whole mebibyte.
+    let sizes = {
+        copy_write(file, 0x2F0000, &[2; 0x10]);
+        let small = CC_FILE_SIZES {
+            AllocationSize: nkfs::FILE_BYTES as i64,
+            FileSize: 0x200000,
+            ValidDataLength: 0x200000,
+        };
+        // SAFETY: a cached nkfs file; sizes on this stack.
+        unsafe { entry::nk_entry_CcSetFileSizes(file.cast(), (&raw const small).cast()) };
+        let dirty = dirty_pages(file);
+        let big = CC_FILE_SIZES {
+            AllocationSize: (4 << 20) + 1,
+            FileSize: 0x200000,
+            ValidDataLength: 0x200000,
+        };
+        // SAFETY: as above.
+        let status = unsafe { cc::size::CcSetFileSizesEx(file, &raw const big) };
+        // SAFETY: nkfs's map.
+        let (section, size) = unsafe {
+            let scm = &*cc::scm_of(file);
+            (scm.section_size.get(), scm.file_size.get())
+        };
+        if dirty != 0 {
+            Err("shrinking the file left dirty data beyond its end")
+        } else if status != STATUS_SUCCESS || section != 5 << 20 || size != 0x200000 {
+            Err("growing the allocation did not extend the section to a whole mebibyte")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.sizes", sizes));
+
+    let attributes = {
+        // SAFETY: a cached nkfs file.
+        unsafe { cc::size::CcSetAdditionalCacheAttributes(file, 1, 1) };
+        // SAFETY: nkfs's map.
+        let flags = unsafe { (*cc::scm_of(file)).flags.get() };
+        // SAFETY: as above.
+        unsafe { cc::size::CcSetAdditionalCacheAttributes(file, 0, 0) };
+        // SAFETY: as above.
+        let after = unsafe { (*cc::scm_of(file)).flags.get() };
+        if flags & 0x203 != 0x203 || after & 0x3 != 0 || after & 0x200 == 0 {
+            Err("disabling write-behind did not also disable modified writing, kept after")
+        } else {
+            Ok(())
+        }
+    };
+    verdicts.push(("cc.attributes", attributes));
+
+    // A file cached for copying closes at once when truncated.
+    let size = 0i64;
+    // SAFETY: a cached nkfs file; the size on this stack.
+    let deleted =
+        unsafe { cc::map::CcUninitializeCacheMap(file, &raw const size, core::ptr::null_mut()) };
+    if deleted != 1 {
+        return Err("a truncating uninitialize did not delete the map");
+    }
     Ok(())
 }

@@ -719,3 +719,98 @@ pub fn delete_bcbs(scm: &Scm) {
         }
     }
 }
+
+/// A run of dirty BCBs taken for writing: its range and its BCBs, each
+/// held by one more pin (and its resource, where the stream uses it)
+/// until [`finish_run`].
+pub struct DirtyRun {
+    pub offset: u64,
+    pub length: u32,
+    bcbs: alloc::vec::Vec<*mut Bcb>,
+    resource: bool,
+}
+
+/// `CcAcquireByteRangeForWrite` for pins: the next dirty run of `scm`
+/// at or after `from` and before `end`, of at most `most` bytes. Its
+/// BCBs' resources are taken exclusive, waiting for their pinners; the
+/// BCBs are clean from now on, their pages handed to the memory manager
+/// as modified.
+pub fn take_dirty_run(scm: &Scm, from: u64, end: u64, most: u64) -> Option<DirtyRun> {
+    let resource = uses_resource(scm);
+    let run = scm.with_bcbs(|bcbs, _| {
+        // SAFETY: BCBs on the list are live under the mutex.
+        let entries: alloc::vec::Vec<Entry> =
+            bcbs.iter().map(|&b| unsafe { (*b).entry() }).collect();
+        let (start, stop, members) = bcblist::dirty_run(&entries, from, most)?;
+        if start >= end {
+            return None;
+        }
+        let taken: alloc::vec::Vec<*mut Bcb> = members.iter().map(|&i| bcbs[i]).collect();
+        for &b in &taken {
+            // SAFETY: as above.
+            let b = unsafe { &*b };
+            b.pin_count.set(b.pin_count.get() + 1);
+        }
+        Some(DirtyRun {
+            offset: start,
+            length: (stop - start) as u32,
+            bcbs: taken,
+            resource,
+        })
+    })?;
+    for &b in &run.bcbs {
+        // SAFETY: held by the run's pin.
+        let b = unsafe { &*b };
+        if resource {
+            // SAFETY: the BCB's resource.
+            unsafe { resource::ExAcquireResourceExclusiveLite(b.resource(), 1) };
+        }
+        if b.vacb.get() != NO_VACB {
+            cache::set_range_modified(b.base(), b.byte_length as usize);
+        }
+        set_clean(b);
+    }
+    Some(run)
+}
+
+/// `CcReleaseByteRangeFromWrite` for pins: the run's write is over;
+/// after a failure that is not fatal its BCBs are dirty again.
+pub fn finish_run(run: DirtyRun, redirty: bool) {
+    for b in run.bcbs {
+        // SAFETY: held by the run's pin.
+        let b = unsafe { &*b };
+        if redirty {
+            set_dirty(b, core::ptr::null());
+        }
+        unpin(b, run.resource);
+    }
+}
+
+/// Forget the dirt of the BCBs of `scm` that reach `from` or beyond (a
+/// file cut or purged there): they are clean, and those nobody pins go.
+pub fn discard_from(scm: &Scm, from: u64) {
+    let gone = scm.with_bcbs(|bcbs, _| {
+        let mut gone = alloc::vec::Vec::new();
+        bcbs.retain(|&b| {
+            // SAFETY: BCBs on the list are live under the mutex.
+            let bcb = unsafe { &*b };
+            if bcb.beyond_last_byte <= from {
+                return true;
+            }
+            set_clean(bcb);
+            if bcb.pin_count.get() != 0 {
+                return true;
+            }
+            gone.push(b);
+            false
+        });
+        gone
+    });
+    for b in gone {
+        // SAFETY: off the list and pinned by nobody.
+        unsafe {
+            resource::ExDeleteResourceLite((*b).resource());
+            free_in_pool(b);
+        }
+    }
+}

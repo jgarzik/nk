@@ -339,6 +339,11 @@ impl Volume {
         Ok((handle, object.cast()))
     }
 
+    /// The file's FCB.
+    pub fn fcb(&self) -> *mut Fcb {
+        FCB.load(Ordering::Acquire)
+    }
+
     /// Give the driver a fast-I/O dispatch table.
     pub fn set_fast_io(&self, table: *mut FAST_IO_DISPATCH) {
         // SAFETY: the test's own driver object.

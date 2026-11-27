@@ -226,6 +226,10 @@ tier has, for each architecture:
   page reads nothing and leaves it dirty; the last of two file objects
   to uninitialize deletes the map and signals both events; a second
   caller whose allocation size cannot be had raises and keeps no pool.
+  On a file cached for copying: copy reads, writes that read only the
+  pages they cover in part and below the valid data length, flushes,
+  MDL reads and writes, zeroing, purges refused while a view is in use,
+  shrinking and growing, and the attributes.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,

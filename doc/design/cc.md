@@ -124,3 +124,71 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   name (Windows reads past the view for a map and gives an OBCB for a
   pin; no file system of the set does either), as does
   `PIN_CALLER_TRACKS_DIRTY_DATA`.
+
+## Copies, MDLs and dirty data
+
+- **Copy reads** (`kernel/cc/copy.rs`). `CcCopyReadEx` of bytes past
+  the file size stops the system (0x34, 0x273), as Windows' does: a file
+  system clamps first. View by view, the pages are made resident (or,
+  without waiting, the call returns FALSE, the status block untouched)
+  and copied; a fault on the buffer raises
+  `STATUS_INVALID_USER_BUFFER`, a failed read its status (or
+  `STATUS_UNEXPECTED_IO_ERROR` when a file system would not expect it).
+  The file object's read history is rotated. Read-ahead is not
+  scheduled yet.
+- **Copy writes.** `CcCopyWrite` and `CcCopyWriteEx` make no read of a
+  page they overwrite whole or of one wholly at or beyond the valid
+  data length in the FCB header (`MmCopyToCachedPage`: the rest of such
+  a page is zero); other pages are read in. The range is marked in the
+  map's dirty-page bitmap and charged. Without waiting, a write-through
+  file object returns FALSE at once; with write-through the range is
+  flushed before returning and a failure raised.
+- **MDLs** (`kernel/cc/mdl.rs`). `CcMdlRead` and `CcPrepareMdlWrite`
+  lock the cache's pages into one MDL per view, chained. A prepared
+  write reads only pages it covers in part and keeps the map open until
+  `CcMdlWriteComplete` (which marks the range modified in the memory
+  manager, as locking pages for writing does on Windows, then dirty, or
+  writes it through) or `CcMdlWriteAbort`. The completions go through
+  the file system's `MdlReadComplete`/`MdlWriteComplete` when it has
+  them.
+- **Flushes** (`kernel/cc/flush.rs`). A flush takes the dirty runs in
+  offset order, the dirty BCBs' first (each BCB's resource taken
+  exclusive on a metadata stream, waiting for its pinners, and its
+  range handed to the memory manager as modified), then the bitmap's,
+  at most 16 pages a write, each written by `MmFlushSection` with the
+  file taken through FsRtl. A failed write leaves its run dirty unless
+  the memory manager calls the error fatal; a range flush ends with a
+  flush of the whole range for pages dirtied elsewhere. Write errors are
+  returned, never raised. With no cache map the section is flushed.
+  `CcIsThereDirtyData` looks for a map on the volume with dirty pages.
+
+## Sizes and purges
+
+- **`CcSetFileSizes`** (`kernel/cc/size.rs`) extends the section for a
+  larger allocation (rounded up to 1 MiB; an unexpected failure becomes
+  `STATUS_UNEXPECTED_MM_EXTEND_ERR`, raised by `CcSetFileSizes` and
+  returned by `CcSetFileSizesEx`). A smaller file size, on a map not
+  cached for pinning, takes back the views beyond it, forgets the dirt
+  there and purges from the page boundary at or after it; the valid data
+  length only goes down. With no map, the section is purged beyond the
+  new size. Windows zeroes the tail of the last page when a purge is
+  refused; NK leaves it, and purges whole pages only.
+- **`CcPurgeCacheSection`** fails if a view in the range is in use or
+  the memory manager refuses (and, for a purge to the end, if the file
+  cannot be truncated there); otherwise the pages are discarded with
+  their dirt. Bit 0 stops every file object caching the file first.
+  A purge that collides with I/O in progress fails rather than waiting
+  and trying again. **`CcCoherencyFlushAndPurgeCache`** flushes, then
+  purges unless told not to; a refused purge makes the status
+  `STATUS_CACHE_PAGE_LOCKED`. NK maps files in no user view, so there is
+  no user view's dirt to gather.
+- **`CcZeroData`** zeroes through the cache, reading no page it zeroes
+  whole, and marks the range dirty. Zeroing a file that is not cached
+  (on disk, `MmZeroPageWrite`) is not built and stops the system by
+  name.
+- **Attributes.** `CcSetReadAheadGranularity` sets the file object's
+  read-ahead mask unchecked. `CcSetAdditionalCacheAttributes` sets the
+  map's no-read-ahead and no-write-behind flags; turning write-behind off
+  also turns modified writing off, which turning it on does not undo.
+  The `Ex` form takes those from bits 1 and 2 and records its other bits
+  as the pinned kernel records them.

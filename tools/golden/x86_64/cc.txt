@@ -7,3 +7,11 @@ cc.flush-acquire ok
 cc.prepare-pin-write ok
 cc.uninitialize ok
 cc.initialize-extend-fails ok
+cc.copy-read ok
+cc.copy-write ok
+cc.copy-write-beyond-valid ok
+cc.mdl ok
+cc.zero ok
+cc.purge ok
+cc.sizes ok
+cc.attributes ok
