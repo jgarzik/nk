@@ -251,13 +251,12 @@ pub unsafe extern "C" fn ZwLoadDriver(
     // SAFETY: the look-up's reference; the type is read before it is
     // given up.
     let is_key = unsafe {
-        let is_key = core::ptr::eq(
-            crate::ob::object::type_of(root),
+        core::ptr::eq(
+            crate::ob::object::type_of(root.body()),
             &raw const crate::ob::object::KEY_TYPE,
-        );
-        crate::ob::object::dereference(root);
-        is_key
+        )
     };
+    drop(root);
     if !is_key {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }

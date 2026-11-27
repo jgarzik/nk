@@ -173,15 +173,17 @@ pub unsafe extern "C" fn ExCreateCallback(
             Ok((body, rest)) => {
                 // SAFETY: `lookup` returned the object referenced.
                 let is_callback = unsafe {
-                    core::ptr::eq(object::type_of(body), &raw const object::CALLBACK_TYPE)
+                    core::ptr::eq(
+                        object::type_of(body.body()),
+                        &raw const object::CALLBACK_TYPE,
+                    )
                 };
                 if rest.is_empty() && is_callback {
-                    // SAFETY: per the contract.
-                    unsafe { callback_object.write_unaligned(body.cast()) };
+                    // SAFETY: per the contract; the reference is the
+                    // driver's.
+                    unsafe { callback_object.write_unaligned(body.into_raw().cast()) };
                     return STATUS_SUCCESS;
                 }
-                // SAFETY: the reference `lookup` took.
-                unsafe { object::dereference(body) };
                 status = if rest.is_empty() {
                     STATUS_OBJECT_TYPE_MISMATCH
                 } else {

@@ -1048,7 +1048,7 @@ Inside the kernel a pointer reference a function takes and gives up
 itself is an `ob::object::ObRef`, which gives it up when dropped, on
 every path out; `into_raw` hands it on to whatever keeps it (a handle,
 a driver, a watch). The handle look-ups (`ob::handle::reference`,
-`reference_for`) return one.
+`reference_for`) and the namespace's (`ob::lookup`) return one.
 
 A type is an `OBJECT_TYPE` with Windows' layout, named by its address: a
 driver imports a variable holding it (`ExEventObjectType`). Its index

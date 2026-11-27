@@ -328,9 +328,7 @@ unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>)
     }
     let root = handle::reference(root as u64, None)?;
     let (body, path) = if is(root.body(), &object::DIRECTORY_TYPE) {
-        let (found, rest) = crate::ob::lookup(Some(root.body()), &path)?;
-        // SAFETY: the reference the look-up took.
-        (unsafe { ObRef::adopt(found) }, rest)
+        crate::ob::lookup(Some(root.body()), &path)?
     } else if path.first() == Some(&u16::from(b'\\')) {
         // Relative to an open object: not from the top.
         return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
@@ -364,8 +362,7 @@ fn key_object(body: ObRef) -> Result<Held, NTSTATUS> {
 /// over.
 fn absolute(path: &[u16]) -> Result<(Held, Vec<u16>), NTSTATUS> {
     let (body, rest) = crate::ob::lookup(None, path)?;
-    // SAFETY: the reference the look-up took.
-    Ok((key_object(unsafe { ObRef::adopt(body) })?, rest))
+    Ok((key_object(body)?, rest))
 }
 
 /// A handle to `key`, granted `access`. The caller has counted the key

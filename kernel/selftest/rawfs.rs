@@ -42,9 +42,7 @@ fn block() -> Option<(*mut DEVICE_OBJECT, u16, *mut DEVICE_OBJECT)> {
     unsafe {
         let device = body.cast::<DEVICE_OBJECT>();
         let vpb = (*device).Vpb.cast::<VPB>();
-        let found = (device, (*vpb).Flags, (*vpb).DeviceObject);
-        crate::ob::object::dereference(body);
-        Some(found)
+        Some((device, (*vpb).Flags, (*vpb).DeviceObject))
     }
 }
 

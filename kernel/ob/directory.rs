@@ -223,9 +223,7 @@ fn create(name: &str, root: u64, flags: u32) -> (NTSTATUS, u64) {
 /// Whether `path` leads to something.
 fn there(path: &str) -> Result<(), NTSTATUS> {
     let path: alloc::vec::Vec<u16> = path.encode_utf16().collect();
-    let (body, _) = super::lookup(None, &path)?;
-    // SAFETY: the look-up's reference.
-    unsafe { object::dereference(body) };
+    super::lookup(None, &path)?;
     Ok(())
 }
 

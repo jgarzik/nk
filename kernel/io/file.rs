@@ -372,9 +372,7 @@ fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTAT
             }
         }
     };
-    let (body, remainder) = found?;
-    // SAFETY: the look-up's reference.
-    let device = unsafe { ObRef::adopt(body) };
+    let (device, remainder) = found?;
     if !is(device.body(), &object::DEVICE_TYPE) {
         return Err(STATUS_OBJECT_TYPE_MISMATCH);
     }

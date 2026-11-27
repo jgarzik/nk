@@ -322,11 +322,8 @@ fn zw_file(_: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
         let (directory, _) = ob::lookup(None, &path).map_err(|_| "no \\Device")?;
         // SAFETY: the look-up's reference, given up once the handle
         // holds the directory.
-        let directory = unsafe {
-            let opened = handle::open(directory, 0);
-            object::dereference(directory);
-            opened.map_err(|_| "no handle to \\Device")?
-        };
+        let directory =
+            unsafe { handle::open(directory.body(), 0) }.map_err(|_| "no handle to \\Device")?;
         // OBJ_FORCE_ACCESS_CHECK | OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE.
         let below = open_file("nkopen\\below", directory as *mut c_void, 0x640);
         let (below_seen, below_name) = (last(), seen_name());
@@ -654,12 +651,10 @@ fn relative(device: *mut DEVICE_OBJECT) -> Result<u32, &'static str> {
     // SAFETY: the look-up's reference, handed to the handle and then
     // given up; a thread is an object too.
     let (directory, thread) = unsafe {
-        let handles = (
-            handle::open(directory, 0).unwrap_or(0),
+        (
+            handle::open(directory.body(), 0).unwrap_or(0),
             handle::open(crate::ke::thread::current().cast(), 0).unwrap_or(0),
-        );
-        object::dereference(directory);
-        handles
+        )
     };
     let verdict = (|| {
         let below = open_from("NkOpen\\below", directory)
