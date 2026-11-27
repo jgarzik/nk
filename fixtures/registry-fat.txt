@@ -1,0 +1,15 @@
+# Registry content for Microsoft's FAT file system, laid over the SYSTEM
+# hive with the storage, volume and mount overlays in the boots that
+# ask for it (a scenario's `registry = [..., "fat"]`; tools/mkesp.py).
+#
+# fastfat.sys starts with the boot drivers, in the group Windows' loader
+# gives the file system of the volume it boots from ("Boot File
+# System"): the FAT volume is where NK's destination boots from. Type 2
+# is a file-system driver.
+
+key ControlSet001\Services\fastfat
+value ImagePath expand_sz System32\drivers\fastfat.sys
+value Type dword 2
+value Start dword 0
+value ErrorControl dword 1
+value Group sz "Boot File System"

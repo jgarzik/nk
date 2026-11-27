@@ -28,6 +28,7 @@ mod ex;
 pub mod except;
 mod exlock;
 mod expand;
+mod fat;
 mod fsd;
 mod hal;
 mod interrupt;
@@ -218,6 +219,7 @@ pub static GROUPS: &[&[&Group]] = &[
     diskio::GROUPS,
     rawfs::GROUPS,
     nkfs_mount::GROUPS,
+    fat::GROUPS,
     nkfs_mm::GROUPS,
     nkfs_cc::GROUPS,
     service::GROUPS,

@@ -475,6 +475,12 @@ check to that without booting.
   "fat32-gpt"`). `vol.partmgr` requires a GPT layout with the disk's
   GUID and one Basic Data partition with its GUID; the volume's name is
   the partition's GUID (`Volume{4e4b0000-...-000000000002}`).
+- `x86_64-fat-volume` (`test=fat.read`): the same machine with
+  Microsoft's `fastfat.sys` as a boot driver (`registry-fat.txt`).
+  `fat.load` requires its control devices; `fat.read` opens files on
+  `C:` by name, which mounts `fastfat.sys` on the volume, and requires
+  each of the host's files to read back as written, through the cache
+  manager. The image must be unchanged.
 
 ### Soak
 

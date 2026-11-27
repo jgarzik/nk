@@ -1223,3 +1223,17 @@ registry = ["storage", "volumes", "mount"]
 disk = "ahci"
 disk_image = "fat32-gpt"
 disk_expect = "fat-unchanged"
+
+# Microsoft's FAT file system: fastfat.sys starts with the boot drivers
+# and mounts the volume mountmgr.sys names C: on the first open of a
+# file there; the host's files read back as written.
+
+[x86_64-fat-volume]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.read"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
