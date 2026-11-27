@@ -269,14 +269,15 @@ the overflow check and the unwinder see the segment. An exception the
 routine lets out unwinds across the switch: the guarded call around it
 puts the thread back on its stack as the unwind passes, and the
 segment, still under the unwind, stays walkable and is never handed
-out again; it is freed once the thread is back on its own stack, or
-ends. A segment is allocated before it is installed, and the counts
+out again; it is freed once neither the stack pointer nor the place a
+segment in use was entered from is on it, or the thread ends. A segment is allocated before it is installed, and the counts
 change at `DISPATCH_LEVEL`, so an APC that expands the stack meanwhile
 finds them whole. A segment is never larger than a
 thread's stack, so a size it cannot hold fails with
 `STATUS_INSUFFICIENT_RESOURCES`, as does one at `DISPATCH_LEVEL` the
 current stack cannot hold (Windows may switch there), and a thread runs
-on at most six segments at once.
+on at most six segments at once; beyond, and when no memory is left,
+the call fails with `STATUS_NO_MEMORY`, as Windows' does.
 
 ## Deferred procedure calls
 

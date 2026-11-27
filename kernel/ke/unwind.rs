@@ -97,10 +97,10 @@ impl fmt::Display for WalkError {
 /// The stacks code on this processor can be running on right now: the
 /// thread's own, the segments it holds (`ke::expand`), and at
 /// `DISPATCH_LEVEL` the processor's DPC stack.
-pub(super) type Stacks = [Option<Stack>; super::thread::MAX_SEGMENTS + 2];
+pub(super) type Stacks = [Option<Stack>; 2 * super::thread::MAX_SEGMENTS + 3];
 
 pub(super) fn stacks() -> Stacks {
-    let mut stacks: Stacks = [None; super::thread::MAX_SEGMENTS + 2];
+    let mut stacks: Stacks = [None; 2 * super::thread::MAX_SEGMENTS + 3];
     for (slot, stack) in stacks.iter_mut().zip(super::thread::current_stacks()) {
         *slot = Some(stack);
     }
@@ -108,7 +108,7 @@ pub(super) fn stacks() -> Stacks {
     // DISPATCH_LEVEL can change processors; but it is not on any DPC
     // stack either.
     if irql::current() >= irql::DISPATCH_LEVEL {
-        stacks[super::thread::MAX_SEGMENTS + 1] = Some(arch::percpu().dpcs().stack());
+        stacks[2 * super::thread::MAX_SEGMENTS + 2] = Some(arch::percpu().dpcs().stack());
     }
     stacks
 }

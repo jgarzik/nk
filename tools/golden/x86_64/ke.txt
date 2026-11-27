@@ -16,3 +16,4 @@ ke.expand.switch ok
 ke.expand.inline ok
 ke.expand.raise ok
 ke.expand.unwind-reuse ok
+ke.expand.raise-repeated ok

@@ -25,8 +25,9 @@
 //! across the switch to a handler beneath: the guarded call's undo puts
 //! the thread back on its stack as the unwind passes, and the segment,
 //! still under the unwind's feet, is never used again: it is freed once
-//! the thread is back on its own stack, where no frame can be left on
-//! it, or when the thread ends. The bookkeeping is done at
+//! neither the stack pointer nor the place a segment in use was entered
+//! from is on it, when no frame can be left there, or when the thread
+//! ends. The bookkeeping is done at
 //! `DISPATCH_LEVEL`, after the segment is allocated, so an APC that
 //! expands the stack in between finds it whole.
 //!
@@ -34,7 +35,8 @@
 //! thread's stack, so a size it cannot hold fails with
 //! `STATUS_INSUFFICIENT_RESOURCES`, as does one at `DISPATCH_LEVEL` the
 //! current stack cannot hold, where Windows may switch; and nesting
-//! stops at `thread::MAX_SEGMENTS`.
+//! stops at `thread::MAX_SEGMENTS`, with `STATUS_NO_MEMORY`, Windows'
+//! answer when it cannot have a segment.
 
 #![allow(non_snake_case)]
 
@@ -45,6 +47,9 @@ use crate::mm::stack::{self, Stack};
 use core::ffi::c_void;
 use nk_bootinfo::KERNEL_STACK_SIZE;
 use nk_ntabi::status::{NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_SUCCESS};
+
+/// What Windows answers when it cannot have a segment: `STATUS_NO_MEMORY`.
+const STATUS_NO_MEMORY: NTSTATUS = 0xC000_0017_u32 as NTSTATUS;
 
 /// The largest size a caller may ask for.
 pub const MAXIMUM_EXPANSION: usize = 0x11800;
@@ -119,11 +124,11 @@ pub unsafe extern "C" fn KeExpandKernelStackAndCalloutEx(
     // Allocated first, installed after: the thread may block for the
     // memory, and an APC may expand its stack meanwhile.
     let Some(segment) = stack::alloc() else {
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return STATUS_NO_MEMORY;
     };
     if let Err(segment) = thread::push_segment(segment) {
         stack::free(segment);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return STATUS_NO_MEMORY;
     }
     let callout = Callout { routine, parameter };
     // SAFETY: the segment is mapped, the thread's own and unused; the

@@ -92,14 +92,22 @@ pub struct Thread {
     apc: SpinLock<()>,
     /// Stack segments the thread has been given to expand its stack
     /// (`ke::expand`): the first `segments_in_use` of them it is running
-    /// on, outermost first. Only the thread itself changes these, and whoever buries it.
+    /// on, outermost first, and where the stack pointer was when each
+    /// was switched to. Only the thread itself changes these, and
+    /// whoever buries it.
     segments: [Stack; MAX_SEGMENTS],
+    entered_from: [u64; MAX_SEGMENTS],
     segments_in_use: u8,
-    /// Segments an unwind left while still running on them, freed once
-    /// the thread is back on its own stack.
-    stranded: [Stack; MAX_SEGMENTS],
+    /// Segments an unwind left while it may still run on them, freed
+    /// once no frame can be left there (`reap_stranded`).
+    stranded: [Stack; MAX_STRANDED],
     stranded_count: u8,
 }
+
+/// The most segments unwinds can have left with frames still on them:
+/// each such segment holds the stack pointer, or the place a segment in
+/// use was switched to from.
+const MAX_STRANDED: usize = MAX_SEGMENTS + 1;
 
 /// The most stack segments a thread runs on at once, beyond its own
 /// stack.
@@ -284,86 +292,121 @@ pub fn current_stacks() -> impl Iterator<Item = Stack> {
         .chain(stranded.into_iter().take(left))
 }
 
+/// The stack pointer, near enough: the address of a local of the caller.
+#[inline(always)]
+fn stack_pointer() -> u64 {
+    let here = 0u8;
+    core::hint::black_box(&raw const here).addr() as u64
+}
+
 /// Run the running thread on `fresh`, a stack from `mm::stack`, as one
 /// more segment from now on, and say so where drivers and the overflow
 /// check look. Gives `fresh` back if the thread runs on as many as it
 /// may. The counts are read and changed at `DISPATCH_LEVEL`, so an APC
 /// that expands the stack in between finds them whole.
 pub fn push_segment(fresh: Stack) -> Result<(), Stack> {
-    reap_stranded();
     let me = current();
+    let sp = stack_pointer();
     // SAFETY: the running thread, which alone changes its segments; at
     // DISPATCH_LEVEL nothing else runs on it meanwhile.
-    unsafe {
+    let (pushed, dead) = unsafe {
         let old = irql::raise(irql::DISPATCH_LEVEL);
+        let dead = reap_stranded(me, sp);
         let in_use = usize::from((*me).segments_in_use);
         let pushed = in_use < MAX_SEGMENTS;
         if pushed {
             (*me).segments[in_use] = fresh;
+            (*me).entered_from[in_use] = sp;
             (*me).segments_in_use += 1;
             publish_stack(me, fresh);
         }
         irql::lower(old);
-        if pushed { Ok(()) } else { Err(fresh) }
-    }
+        (pushed, dead)
+    };
+    dead.free();
+    if pushed { Ok(()) } else { Err(fresh) }
 }
 
 /// The running thread is back on the stack it ran on before its last
 /// segment. Unless `unwinding`, it is running there already and the
 /// segment is freed. An unwind out of a segment still runs on it: the
-/// segment is kept, walkable, until the thread is next on its own
-/// stack (`reap_stranded`), when no frame can be left on it.
+/// segment is kept, walkable, until no frame can be left on it
+/// (`reap_stranded`).
 pub fn pop_segment(unwinding: bool) {
     let me = current();
+    let sp = stack_pointer();
     // SAFETY: the running thread, which alone changes its segments; at
     // DISPATCH_LEVEL nothing else runs on it meanwhile.
-    let segment = unsafe {
+    let (segment, dead) = unsafe {
         let old = irql::raise(irql::DISPATCH_LEVEL);
         (*me).segments_in_use -= 1;
         let segment = (*me).segments[usize::from((*me).segments_in_use)];
         publish_stack(me, active_stack(me));
+        let dead = reap_stranded(me, sp);
         if unwinding {
+            // Room by the bound on segments with live frames
+            // (`MAX_STRANDED`), once the dead ones are gone.
             let left = usize::from((*me).stranded_count);
-            if left == MAX_SEGMENTS {
-                crate::kd::bugcheck(format_args!(
-                    "more unwinds out of stack segments under way than a thread can run on"
-                ));
-            }
             (*me).stranded[left] = segment;
             (*me).stranded_count += 1;
         }
         irql::lower(old);
-        segment
+        (segment, dead)
     };
+    dead.free();
     if !unwinding {
         mm::stack::free(segment);
-        reap_stranded();
     }
 }
 
-/// Free the segments unwinds left, if the running thread is on its own
-/// stack: every frame on a segment, an unwind's included, is then gone.
-fn reap_stranded() {
-    let me = current();
-    let here = 0u8;
-    let sp = core::hint::black_box(&raw const here).addr() as u64;
-    // SAFETY: the running thread, which alone changes its segments; at
-    // DISPATCH_LEVEL nothing else runs on it meanwhile.
-    let (freed, count) = unsafe {
-        let own = (*me).stack;
-        if !(own.base..own.top).contains(&sp) {
-            return;
+/// Segments taken off a thread, to free once the IRQL is down.
+struct Dead {
+    stacks: [Stack; MAX_STRANDED],
+    count: usize,
+}
+
+impl Dead {
+    fn free(self) {
+        for &segment in &self.stacks[..self.count] {
+            mm::stack::free(segment);
         }
-        let old = irql::raise(irql::DISPATCH_LEVEL);
-        let count = usize::from((*me).stranded_count);
-        let freed = (*me).stranded;
-        (*me).stranded_count = 0;
-        irql::lower(old);
-        (freed, count)
-    };
-    for &segment in &freed[..count] {
-        mm::stack::free(segment);
     }
+}
+
+/// Take off `me`'s stranded segments those no frame can be on: neither
+/// the stack pointer `sp` nor the place any segment in use was switched
+/// to from is on them.
+///
+/// # Safety
+/// `me` is the running thread, at `DISPATCH_LEVEL`.
+unsafe fn reap_stranded(me: *mut Thread, sp: u64) -> Dead {
+    let mut dead = Dead {
+        stacks: [Stack { base: 0, top: 0 }; MAX_STRANDED],
+        count: 0,
+    };
+    // SAFETY: per the contract.
+    unsafe {
+        let in_use = usize::from((*me).segments_in_use);
+        let entered = (*me).entered_from;
+        let live = |stack: &Stack| {
+            core::iter::once(sp)
+                .chain(entered[..in_use].iter().copied())
+                .any(|at| (stack.base..stack.top).contains(&at))
+        };
+        let mut kept = 0;
+        for index in 0..usize::from((*me).stranded_count) {
+            let stack = (*me).stranded[index];
+            if live(&stack) {
+                (*me).stranded[kept] = stack;
+                kept += 1;
+            } else {
+                dead.stacks[dead.count] = stack;
+                dead.count += 1;
+            }
+        }
+        (*me).stranded_count = kept as u8;
+    }
+    dead
 }
 
 /// How many segments the running thread runs on.
@@ -423,7 +466,8 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).apc).write(SpinLock::new(Rank::Apc, ()));
         (&raw mut (*thread).segments).write([Stack { base: 0, top: 0 }; MAX_SEGMENTS]);
         (&raw mut (*thread).segments_in_use).write(0);
-        (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_SEGMENTS]);
+        (&raw mut (*thread).entered_from).write([0; MAX_SEGMENTS]);
+        (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_STRANDED]);
         (&raw mut (*thread).stranded_count).write(0);
         super::apc::init_thread(thread);
         super::wait::init_thread(thread);
