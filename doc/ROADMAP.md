@@ -76,19 +76,23 @@ each. What NK has of each part is in `doc/design/`.
 
 In order. Phase 4 mounts FAT on the volume NK already reads, so hardware
 and file systems are one line up to there. After it, 5 (more hardware)
-and 6, 7, 8 (toward user mode) depend only on their own predecessors, so
-work can alternate; 9 and 10 need both. QEMU proves a phase first; the
+and the foundation, 6, 7, 8 (toward user mode) depend only on their own
+predecessors, so work can alternate; 9 and 10 need both. The foundation
+changes what Phase 4 built on a single process and a boot-time scale
+(one address space, one handle table, spin locks around every table)
+before user mode builds on it. QEMU proves a phase first; the
 OptiPlex follows.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 4 | Memory, cache, FAT | the libraries `fastfat.sys` imports from (`ksecdd.sys`, `msrpc.sys`, API sets); sections, fault path, paging I/O, cache manager, FsRtl, mounting a file system; APCs | `fastfat.sys` mounts the volume `mountmgr.sys` names `C:`; files read and written; the image checked afterwards by host tools |
+| 4 | Memory, cache, FAT | the libraries `fastfat.sys` imports from (`ksecdd.sys`, `msrpc.sys`, API sets); `cng.sys` and `ksecdd.sys` started as boot drivers, with boot entropy from the loader; sections, fault path, paging I/O, cache manager, FsRtl, mounting a file system; APCs | `fastfat.sys` mounts the volume `mountmgr.sys` names `C:`; files read and written; the image checked afterwards by host tools |
 | 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond what NK has | KMDF echo sample; first boot on the OptiPlex: its disk through `stornvme`, `usbxhci` + hub + HID keyboard; `serial.sys` |
-| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens; `cng.sys` | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
+| | Foundation for user mode | what processes need of the kernel's own structure: the caller's previous mode and the capture of its arguments, one way to create and open objects by name (each type's parse routine), locks taken at `PASSIVE_LEVEL` for the tables a system call reaches, I/O completion in the requesting thread, a handle table per process, firmware's runtime regions out of the user half | every earlier scenario still passes; NK's own tests of each piece |
+| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
 | 7 | Session manager | ALPC, writable registry, known DLLs, sessions, process creation as `smss.exe` drives it | `smss.exe` runs from a real hive up to starting the Windows subsystem |
 | 8 | Win32 base | what `csrss.exe`, its server DLLs, `kernelbase.dll` and `kernel32.dll` ask: the first Win32 processes | `cmd.exe /c ver` with its output redirected to a file |
 | 9 | Window system and console | session space, user-mode callbacks, the second system-call table, display through `dxgkrnl.sys` and `BasicDisplay.sys`, `condrv.sys` and `conhost.exe` | `win32k` loads; an interactive `cmd.exe` in its console window |
-| 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services) | the Destination above |
+| 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services); release images without the boot self-tests | the Destination above |
 
 After the rescue disk, unordered: `ntfs.sys`; networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
@@ -120,6 +124,10 @@ Its scope follows what its proof binaries import
 - The libraries `fastfat.sys` imports from, `ksecdd.sys` and
   `msrpc.sys`; what they import that phase 4 does not reach (ALPC among
   it) stays a named trap until its phase.
+- `cng.sys` and then `ksecdd.sys` started as boot drivers, as Windows
+  starts them, so `fastfat.sys`'s encryption support starts as it does
+  there; `cng.sys` needs the boot entropy Windows' loader gathers, which
+  `nkload` gathers too.
 
 What NK lacks is listed in `doc/design/absent.md`.
 
