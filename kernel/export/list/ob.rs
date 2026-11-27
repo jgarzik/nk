@@ -24,7 +24,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export_variable!(Implemented, "PsThreadType", ob::object::PsThreadType),
     export_variable!(Implemented, "PsProcessType", ob::object::PsProcessType),
     export!(Partial, ob::event::ZwCreateEvent),
-    export!(Partial, ob::event::ZwOpenEvent),
+    export!(Implemented, ob::event::ZwOpenEvent),
     export_variable!(
         Implemented,
         "IoDeviceObjectType",

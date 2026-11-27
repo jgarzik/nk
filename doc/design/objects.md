@@ -44,9 +44,9 @@ may have: a handle is granted what its opener asked for, generic rights
 turned into what they mean for the object's type. A use of a handle on
 behalf of user mode is refused (`STATUS_ACCESS_DENIED`) access the handle
 lacks; kernel mode is not held to it, as `ObReferenceObjectByHandle`
-documents. A type's generic rights are Windows' for files and registry
-keys; the other types have none recorded, and a generic right asked of
-them grants nothing. `NtCurrentThread()` (-2) names the caller and
+documents. A type's generic rights are Windows' for files, directories, events
+and registry keys; the other types have none recorded, and a generic
+right asked of them grants nothing. `NtCurrentThread()` (-2) names the caller and
 `NtCurrentProcess()` (-1) its process, with every access.
 `ObReferenceObjectByPointer` takes a reference to an object the caller
 already has, if it is of the type named (`STATUS_OBJECT_TYPE_MISMATCH`
@@ -116,8 +116,8 @@ whatever is in a directory holds one too (its name information points
 there), so a directory that has lost its name stays, reachable by
 handle and by what is in it but by no path, until it is empty; its
 old name is free at once. A directory made without a name is reached
-by handle alone. NK makes only directories permanent by handle: a
-device's or a link's name is its maker's to take away, and
+by handle alone. NK makes directories and named events permanent by handle (`ZwCreateDirectoryObject`,
+`ZwCreateEvent`): a device's or a link's name is its maker's to take away, and
 `ZwMakeTemporaryObject` on a handle to such a named object stops the
 system by name.
 

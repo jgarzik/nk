@@ -32,8 +32,17 @@ pub static LAZY: Group = Group {
     manual: true,
 };
 
+/// `fastfat.sys` booted alongside `pcw.sys`, `cng.sys` and `ksecdd.sys`,
+/// as on Windows: its reinitialisation routine initialises EFS
+/// (`\EFSInitEvent`) and it mounts and reads `C:`.
+pub static EFS: Group = Group {
+    names: &["fat.efs"],
+    run: run_efs,
+    manual: true,
+};
+
 /// This file's test groups, in the order they run.
-pub static GROUPS: &[&Group] = &[&GROUP, &WRITE, &LAZY];
+pub static GROUPS: &[&Group] = &[&GROUP, &WRITE, &LAZY, &EFS];
 
 /// `GENERIC_READ | SYNCHRONIZE`.
 const READ: u32 = 0x8010_0000;
@@ -310,4 +319,47 @@ fn lazy() -> Result<(), &'static str> {
     let result = must("write", file::write_at(handle, 0, &data));
     file::close(handle);
     result
+}
+
+fn exists(name: &str) -> bool {
+    let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+    crate::ob::lookup(None, &wide).is_ok_and(|(_, rest)| rest.is_empty())
+}
+
+fn run_efs(r: &mut Report, _: &BootInfo) {
+    crate::test::keeps_what_it_started();
+    if [
+        "fastfat.sys",
+        "pcw.sys",
+        "cng.sys",
+        "ksecdd.sys",
+        "msrpc.sys",
+    ]
+    .iter()
+    .any(|file| crate::ldr::boot_file(file).is_none())
+    {
+        r.skip_rest(format_args!(
+            "fastfat.sys or a driver it needs is not provided"
+        ));
+        return;
+    }
+    let running = crate::io::service::running("fastfat")
+        && crate::io::service::running("CNG")
+        && crate::io::service::running("KSecDD");
+    let objects = exists("\\Fat")
+        && exists("\\FatCdrom")
+        && exists("\\Device\\CNG")
+        && exists("\\Device\\KsecDD")
+        && exists("\\EFSInitEvent");
+    if !running || !objects {
+        r.fail(
+            "fat.efs",
+            format_args!(
+                "running {running}, objects {objects} (EFSInitEvent {})",
+                exists("\\EFSInitEvent")
+            ),
+        );
+        return;
+    }
+    r.check("fat.efs", read);
 }

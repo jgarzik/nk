@@ -9,12 +9,12 @@
 
 #![allow(non_snake_case)]
 
+use super::directory::resolve_root;
 use super::handle::{self, OBJ_KERNEL_HANDLE};
-use super::object::{self, ObjectType};
+use super::object::{self, ObRef, ObjectType};
 use crate::ke::wait;
 use core::ffi::c_void;
 use nk_ntabi::io::KERNEL_MODE;
-use nk_ntabi::ke::KEVENT;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
 use nk_ob::handles::{Attributes, Mode};
@@ -23,9 +23,11 @@ use nk_ob::handles::{Attributes, Mode};
 const SYNCHRONIZE: u32 = 0x0010_0000;
 /// `OBJ_INHERIT`.
 const OBJ_INHERIT: u32 = 0x2;
-/// `OBJ_PERMANENT`, `OBJ_EXCLUSIVE`: about an object's name.
+/// `OBJ_PERMANENT`, `OBJ_EXCLUSIVE`, `OBJ_OPENIF`, `OBJ_OPENLINK`.
 const OBJ_PERMANENT: u32 = 0x10;
 const OBJ_EXCLUSIVE: u32 = 0x20;
+const OBJ_OPENIF: u32 = 0x80;
+const OBJ_OPENLINK: u32 = 0x100;
 /// `OBJ_VALID_ATTRIBUTES` (`wdm.h`): every attribute there is.
 const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 
@@ -35,12 +37,16 @@ const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 /// for: a kernel handle with `OBJ_KERNEL_HANDLE` or without, as every
 /// handle made in the System process is on Windows.
 ///
-/// Only events without a name are made. Object attributes that name
-/// the event, or ask for it to be permanent or exclusive (which is
-/// about names), are refused with `STATUS_NOT_IMPLEMENTED`; that is
-/// the gap the ledger's "partial" stands for. A security descriptor in
-/// the attributes is not looked at: nothing checks access to an
-/// object.
+/// With a name in the attributes, the event is entered in the
+/// namespace at that path (from the root or from `RootDirectory`): a
+/// temporary event loses its name when its last handle closes, a
+/// permanent one (`OBJ_PERMANENT`) keeps it until made temporary; a
+/// collision fails with `STATUS_OBJECT_NAME_COLLISION`, or with
+/// `OBJ_OPENIF` opens an existing event and returns
+/// `STATUS_OBJECT_NAME_EXISTS`. `OBJ_EXCLUSIVE` is refused with
+/// `STATUS_NOT_IMPLEMENTED` (the gap the ledger's "partial" stands
+/// for). A security descriptor in the attributes is not looked at:
+/// nothing checks access to an object.
 ///
 /// # Safety
 /// `event_handle` points to room for a handle; `object_attributes` is
@@ -55,32 +61,51 @@ pub unsafe extern "C" fn ZwCreateEvent(
     if event_type > 1 {
         return STATUS_INVALID_PARAMETER;
     }
-    let mut attributes = 0;
+    let (mut root, mut name, mut attributes) = (core::ptr::null_mut(), alloc::vec::Vec::new(), 0);
     if !object_attributes.is_null() {
         // SAFETY: per the contract; the driver's memory, read field by
         // field through its pointer.
-        let (length, name, given) = unsafe {
+        let (length, object_name, given) = unsafe {
+            root = (&raw const (*object_attributes).RootDirectory).read_unaligned();
             (
                 (&raw const (*object_attributes).Length).read_unaligned(),
                 (&raw const (*object_attributes).ObjectName).read_unaligned(),
                 (&raw const (*object_attributes).Attributes).read_unaligned(),
             )
         };
-        if length as usize != size_of::<OBJECT_ATTRIBUTES>() || given & !OBJ_VALID_ATTRIBUTES != 0 {
+        if length as usize != size_of::<OBJECT_ATTRIBUTES>()
+            || given & !OBJ_VALID_ATTRIBUTES != 0
+            || given & OBJ_OPENLINK != 0
+        {
             return STATUS_INVALID_PARAMETER;
         }
-        if !name.is_null() || given & (OBJ_PERMANENT | OBJ_EXCLUSIVE) != 0 {
+        if given & OBJ_EXCLUSIVE != 0 {
             return STATUS_NOT_IMPLEMENTED;
         }
+        // SAFETY: per the contract.
+        name = unsafe { crate::rtl::copy_unicode(object_name) };
         attributes = given;
     }
-    let Some(body) = object::create(&object::EVENT_TYPE, size_of::<KEVENT>()) else {
-        return STATUS_INSUFFICIENT_RESOURCES;
+    let start = match resolve_root(root, name.is_empty()) {
+        Ok(start) => start,
+        Err(status) => return status,
     };
-    // SAFETY: fresh storage of an event's size; the creating reference
-    // is given up once the handle, if there is one, holds the event.
+    let made = super::create_event(
+        start.as_ref().map(ObRef::body),
+        &name,
+        attributes & OBJ_PERMANENT != 0,
+        attributes & OBJ_OPENIF != 0,
+        event_type,
+        initial_state,
+    );
+    drop(start);
+    let (body, existed) = match made {
+        Ok(made) => made,
+        Err(status) => return status,
+    };
+    // SAFETY: the reference `create_event` returned is given up once
+    // the handle, if there is one, holds the event.
     unsafe {
-        wait::KeInitializeEvent(body.cast(), event_type, initial_state);
         let opened = handle::open_with(
             body,
             desired_access,
@@ -90,11 +115,19 @@ pub unsafe extern "C" fn ZwCreateEvent(
             },
             true,
         );
+        if opened.is_err() && !existed && !name.is_empty() {
+            // No handle was ever open: undo the namespace entry.
+            super::make_temporary(body);
+        }
         object::dereference(body);
         match opened {
             Ok(opened) => {
                 event_handle.write_unaligned(opened as *mut c_void);
-                STATUS_SUCCESS
+                if existed {
+                    STATUS_OBJECT_NAME_EXISTS
+                } else {
+                    STATUS_SUCCESS
+                }
             }
             Err(status) => status,
         }
@@ -103,14 +136,12 @@ pub unsafe extern "C" fn ZwCreateEvent(
 
 /// [`ZwOpenEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwopenevent):
 /// a handle, granted the access asked for, to the event the attributes
-/// name. A name that leads to nothing is what the namespace says of it
+/// name (absolute, or relative to `RootDirectory`). A name that leads
+/// to nothing is what the namespace says of it
 /// (`STATUS_OBJECT_NAME_NOT_FOUND`, `STATUS_OBJECT_PATH_NOT_FOUND`); to
 /// an object that is not an event, `STATUS_OBJECT_TYPE_MISMATCH`.
 /// `mountmgr.sys` asks for an event the session manager makes on
 /// Windows, which no one makes on NK: it is not found.
-///
-/// Partial: a name relative to a directory handle stops the system by
-/// name.
 ///
 /// # Safety
 /// `event_handle` points to room for a handle; `object_attributes`
@@ -133,20 +164,24 @@ pub unsafe extern "C" fn ZwOpenEvent(
             (&raw const (*object_attributes).Attributes).read_unaligned(),
         )
     };
-    if length as usize != size_of::<OBJECT_ATTRIBUTES>() || given & !OBJ_VALID_ATTRIBUTES != 0 {
+    if length as usize != size_of::<OBJECT_ATTRIBUTES>()
+        || given & !OBJ_VALID_ATTRIBUTES != 0
+        || given & OBJ_OPENLINK != 0
+    {
         return STATUS_INVALID_PARAMETER;
     }
     if name.is_null() {
         return STATUS_OBJECT_NAME_INVALID;
     }
-    if !root.is_null() {
-        crate::kd::bugcheck(format_args!(
-            "ZwOpenEvent: a name relative to a directory handle is not implemented"
-        ));
-    }
     // SAFETY: per the contract.
     let wide = unsafe { crate::rtl::copy_unicode(name) };
-    let (held, rest) = match super::lookup(None, &wide) {
+    let start = match resolve_root(root, wide.is_empty()) {
+        Ok(start) => start,
+        Err(status) => return status,
+    };
+    let found = super::lookup(start.as_ref().map(ObRef::body), &wide);
+    drop(start);
+    let (held, rest) = match found {
         Ok(found) => found,
         Err(status) => return status,
     };
@@ -318,17 +353,63 @@ pub fn self_test() -> Result<u32, &'static str> {
         return Err("a synchronization event by handle did not satisfy exactly one wait");
     }
 
-    // What is refused, and that a refusal writes no handle.
-    let named: [u16; 3] = [0x5C, 0x4E, 0x4B];
+    // Named events: temporary, collision, OBJ_OPENIF, ZwOpenEvent,
+    // permanent + ZwMakeTemporaryObject, and what is still refused.
+    let named: alloc::vec::Vec<u16> = "\\NkNamedEvent".encode_utf16().collect();
     let name = nk_ntabi::io::UNICODE_STRING {
-        Length: 6,
-        MaximumLength: 6,
+        Length: (named.len() * 2) as u16,
+        MaximumLength: (named.len() * 2) as u16,
         Buffer: named.as_ptr().cast_mut(),
     };
-    let with_name = OBJECT_ATTRIBUTES {
+    let with_name = |flags: u32| OBJECT_ATTRIBUTES {
         ObjectName: &raw const name,
-        ..attributes(OBJ_KERNEL_HANDLE)
+        ..attributes(flags)
     };
+    let open = |given: &OBJECT_ATTRIBUTES| {
+        let mut opened = core::ptr::dangling_mut::<c_void>();
+        // SAFETY: locals that outlive the call.
+        let status = unsafe { ZwOpenEvent(&raw mut opened, EVENT_ALL_ACCESS, given) };
+        (status, opened)
+    };
+    let (status, first) = create(Some(&with_name(OBJ_KERNEL_HANDLE)), 0, 1);
+    if status != STATUS_SUCCESS {
+        return Err("a named event could not be created");
+    }
+    let collision = create(Some(&with_name(OBJ_KERNEL_HANDLE)), 0, 0).0;
+    let (existed, second) = create(Some(&with_name(OBJ_KERNEL_HANDLE | OBJ_OPENIF)), 0, 0);
+    let (opened_status, third) = open(&with_name(OBJ_KERNEL_HANDLE));
+    let waited = (wait_on(second, 0, Some(0)), wait_on(third, 0, Some(0)));
+    close(first);
+    close(second);
+    close(third);
+    // Temporary: the name is gone once the last handle closes.
+    let gone = open(&with_name(OBJ_KERNEL_HANDLE)).0;
+    if collision != STATUS_OBJECT_NAME_COLLISION
+        || existed != STATUS_OBJECT_NAME_EXISTS
+        || opened_status != STATUS_SUCCESS
+        || waited != (0, 0)
+        || gone != STATUS_OBJECT_NAME_NOT_FOUND
+    {
+        return Err("a temporary named event did not follow Windows' rules");
+    }
+    // Permanent: outlives its handle until ZwMakeTemporaryObject.
+    let (status, perm) = create(Some(&with_name(OBJ_KERNEL_HANDLE | OBJ_PERMANENT)), 0, 0);
+    if status != STATUS_SUCCESS {
+        return Err("a permanent named event could not be created");
+    }
+    close(perm);
+    let (reopened_status, reopened) = open(&with_name(OBJ_KERNEL_HANDLE));
+    if reopened_status != STATUS_SUCCESS {
+        return Err("a permanent named event lost its name with its handle");
+    }
+    let made_temp = super::directory::ZwMakeTemporaryObject(reopened);
+    close(reopened);
+    let gone_after = open(&with_name(OBJ_KERNEL_HANDLE)).0;
+    if made_temp != STATUS_SUCCESS || gone_after != STATUS_OBJECT_NAME_NOT_FOUND {
+        return Err("a permanent event made temporary kept its name after close");
+    }
+
+    // What is refused, and that a refusal writes no handle.
     let short = OBJECT_ATTRIBUTES {
         Length: 24,
         ..attributes(0)
@@ -338,14 +419,14 @@ pub fn self_test() -> Result<u32, &'static str> {
         create(Some(&kernel), 2, 0),
         create(Some(&short), 0, 0),
         create(Some(&attributes(0x1)), 0, 0),
-        create(Some(&with_name), 0, 0),
-        create(Some(&attributes(OBJ_PERMANENT)), 0, 0),
+        create(Some(&with_name(OBJ_OPENLINK)), 0, 0),
+        create(Some(&with_name(OBJ_EXCLUSIVE)), 0, 0),
     ];
     let expected = [
         STATUS_INVALID_PARAMETER,
         STATUS_INVALID_PARAMETER,
         STATUS_INVALID_PARAMETER,
-        STATUS_NOT_IMPLEMENTED,
+        STATUS_INVALID_PARAMETER,
         STATUS_NOT_IMPLEMENTED,
     ];
     if refused

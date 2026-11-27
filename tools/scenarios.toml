@@ -1254,8 +1254,6 @@ disk = "ahci"
 disk_image = "fat32-mbr"
 disk_expect = "fat-written"
 
-# Microsoft's kernel cryptography and security drivers start as boot
-# drivers, as on Windows: pcw.sys, cng.sys, then ksecdd.sys, which
 # The same writes on the disk with a GUID partition table.
 
 [x86_64-fat-write-gpt]
@@ -1281,6 +1279,22 @@ disk = "ahci"
 disk_image = "fat32-mbr"
 disk_expect = "fat-lazy"
 
+# fastfat.sys started with pcw.sys, cng.sys and ksecdd.sys, as on
+# Windows: its reinitialisation routine runs EFS initialisation and
+# creates \EFSInitEvent, and C: mounts and reads cleanly.
+
+[x86_64-fat-efs]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.efs"
+registry = ["storage", "volumes", "mount", "fat", "crypto"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
+
+# Microsoft's kernel cryptography and security drivers start as boot
+# drivers, as on Windows: pcw.sys, cng.sys, then ksecdd.sys, which
 # opens \Device\CNG and registers performance counters with pcw.sys.
 
 [x86_64-crypto-boot]

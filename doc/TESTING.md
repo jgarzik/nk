@@ -499,6 +499,11 @@ check to that without booting.
   no flush, so only the cache manager's lazy writer, or its flush at
   shutdown, writes it; `disk_expect = "fat-lazy"` requires it on the
   disk, the volume clean.
+- `x86_64-fat-efs` (`test=fat.efs`, `registry = ["storage", "volumes",
+  "mount", "fat", "crypto"]`): `fastfat.sys` started alongside
+  `pcw.sys`, `cng.sys` and `ksecdd.sys`, as on Windows; requires its
+  reinitialisation routine to finish EFS initialisation (`\EFSInitEvent`
+  present) and `C:` to mount and read cleanly.
 
 - `x86_64-crypto-boot` (`test=crypto.boot`, `registry = ["crypto"]`,
   `kernel/selftest/crypto.rs`): Microsoft's performance-counter,

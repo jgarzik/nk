@@ -23,9 +23,34 @@ const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 ///
 /// # Safety
 /// The caller holds a reference to `body`.
-unsafe fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
+pub(super) unsafe fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
     // SAFETY: per the contract.
     core::ptr::eq(unsafe { object::type_of(body) }, ty)
+}
+
+/// Resolve an `OBJECT_ATTRIBUTES.RootDirectory` handle for a relative
+/// namespace path. A handle to a non-directory object fails with
+/// `STATUS_OBJECT_TYPE_MISMATCH` if that type parses names itself
+/// (device, file, key), or `STATUS_INVALID_HANDLE` otherwise.
+pub(super) fn resolve_root(root: *mut c_void, name_empty: bool) -> Result<Option<ObRef>, NTSTATUS> {
+    if root.is_null() || name_empty {
+        return Ok(None);
+    }
+    let start = handle::reference(root as u64, None)?;
+    let body = start.body();
+    // SAFETY: the reference just taken.
+    if !unsafe { is(body, &object::DIRECTORY_TYPE) } {
+        let parses = [&object::DEVICE_TYPE, &object::FILE_TYPE, &object::KEY_TYPE]
+            .into_iter()
+            // SAFETY: the same reference.
+            .any(|ty| unsafe { is(body, ty) });
+        return Err(if parses {
+            STATUS_OBJECT_TYPE_MISMATCH
+        } else {
+            STATUS_INVALID_HANDLE
+        });
+    }
+    Ok(Some(start))
 }
 
 /// [`ZwCreateDirectoryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatedirectoryobject):
@@ -79,38 +104,20 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
             return STATUS_NOT_IMPLEMENTED;
         }
     }
-    // The root directory is held while the name is looked up from it.
-    // A name is relative to a directory; an object of a type that
-    // parses names itself (a device, a file, a key) parses none into
-    // a directory, and nothing is below any other object.
-    let start = if root.is_null() || name.is_empty() {
-        None
-    } else {
-        match handle::reference(root as u64, None) {
-            Ok(start) => Some(start),
-            Err(status) => return status,
+    let start = match resolve_root(root, name.is_empty()) {
+        Ok(start) => start,
+        Err(status) => {
+            // SAFETY: per the contract.
+            unsafe { directory_handle.write_unaligned(core::ptr::null_mut()) };
+            return status;
         }
     };
-    let made = match start.as_ref().map(ObRef::body) {
-        // SAFETY: the reference just taken.
-        Some(start) if !unsafe { is(start, &object::DIRECTORY_TYPE) } => {
-            let parses = [&object::DEVICE_TYPE, &object::FILE_TYPE, &object::KEY_TYPE]
-                .into_iter()
-                // SAFETY: the same reference.
-                .any(|ty| unsafe { is(start, ty) });
-            Err(if parses {
-                STATUS_OBJECT_TYPE_MISMATCH
-            } else {
-                STATUS_INVALID_HANDLE
-            })
-        }
-        start => super::create_directory(
-            start,
-            &name,
-            attributes & OBJ_PERMANENT != 0,
-            attributes & OBJ_OPENIF != 0,
-        ),
-    };
+    let made = super::create_directory(
+        start.as_ref().map(ObRef::body),
+        &name,
+        attributes & OBJ_PERMANENT != 0,
+        attributes & OBJ_OPENIF != 0,
+    );
     drop(start);
     // SAFETY: per the contract for the handle; `body` is the reference
     // the directory came with, given up once the handle holds it.
@@ -159,11 +166,11 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
 /// goes when its last handle closes. Kernel mode's handle is asked
 /// for no access.
 ///
-/// Directories are the objects NK makes permanent by handle. An
-/// object without a name has no permanence to lose. A named object of
-/// another type has its name from the kernel code that made it, which
-/// takes it away again; making one temporary by handle stops the
-/// system by name: the ledger's "partial".
+/// Directories and named events are the objects NK makes permanent by
+/// handle. An object without a name has no permanence to lose. A named
+/// object of another type has its name from the kernel code that made
+/// it, which takes it away again; making one temporary by handle stops
+/// the system by name: the ledger's "partial".
 pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
     let held = match handle::reference(handle as u64, None) {
         Ok(held) => held,
@@ -173,7 +180,9 @@ pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
     // SAFETY: the reference just taken, given up at the end.
     unsafe {
         let ty = object::type_of(body);
-        if core::ptr::eq(ty, &raw const object::DIRECTORY_TYPE) {
+        if core::ptr::eq(ty, &raw const object::DIRECTORY_TYPE)
+            || core::ptr::eq(ty, &raw const object::EVENT_TYPE)
+        {
             super::make_temporary(body);
         } else if object::has_name(body) {
             let name: alloc::string::String = char::decode_utf16(ty.name().iter().copied())

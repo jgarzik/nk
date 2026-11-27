@@ -397,6 +397,87 @@ pub fn create_directory(
     }
 }
 
+/// Make an event object (`event_type` 0 for notification, 1 for
+/// synchronization, initial signal state `initial_state`): called
+/// `path` (absolute, or relative to the directory object `start`), or
+/// without a name if `path` is empty. `permanent` is `OBJ_PERMANENT`.
+/// If the name is taken the creation fails, unless `open_if`
+/// (`OBJ_OPENIF`) and an event has it: that event is then the result.
+/// Returns the event with a reference for the caller, and whether it
+/// existed already.
+pub fn create_event(
+    start: Option<*mut u8>,
+    path: &[u16],
+    permanent: bool,
+    open_if: bool,
+    event_type: u32,
+    initial_state: u8,
+) -> Result<(*mut u8, bool), NTSTATUS> {
+    let body = if path.is_empty() {
+        object::create(&object::EVENT_TYPE, size_of::<KEVENT>())
+    } else {
+        object::create_named(&object::EVENT_TYPE, size_of::<KEVENT>(), leaf(path))
+    }
+    .ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    // SAFETY: fresh storage of an event's size, initialised before
+    // anything else can see it.
+    unsafe { crate::ke::wait::KeInitializeEvent(body.cast(), event_type, initial_state) };
+    if path.is_empty() {
+        return Ok((body, false));
+    }
+    let made = (|| {
+        let mut ns = NAMESPACE.lock();
+        let start = match start {
+            None => None,
+            Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
+        };
+        match ns.tree.insert_object(start, path, OPTIONS, Entry(body)) {
+            Ok(dir) => {
+                let parent = directory(&ns, dir);
+                // SAFETY: the object made above, named now: the name
+                // holds a reference to it, and it one to the directory
+                // it is in.
+                unsafe {
+                    object::set_permanent(body, permanent);
+                    object::reference(body);
+                    object::entered(body, parent);
+                }
+                Ok((body, false))
+            }
+            Err(Error::Collision) if open_if => {
+                let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
+                match outcome.found {
+                    Found::Object(&Entry(existing)) if outcome.remainder.is_empty() => {
+                        // SAFETY: an object in the namespace is live under
+                        // this lock.
+                        let is_event = unsafe {
+                            core::ptr::eq(object::type_of(existing), &raw const object::EVENT_TYPE)
+                        };
+                        if is_event {
+                            // SAFETY: as above.
+                            unsafe { object::reference(existing) };
+                            Ok((existing, true))
+                        } else {
+                            Err(STATUS_OBJECT_TYPE_MISMATCH)
+                        }
+                    }
+                    _ => Err(STATUS_OBJECT_TYPE_MISMATCH),
+                }
+            }
+            Err(error) => Err(status(error)),
+        }
+    })();
+    match made {
+        Ok((made, false)) => Ok((made, false)),
+        other => {
+            // SAFETY: the new object was not used: its only reference,
+            // given up with the lock released.
+            unsafe { object::dereference(body) };
+            other
+        }
+    }
+}
+
 /// A temporary directory with no handle open loses its name: no path
 /// leads to it any more, and the name's reference goes. What is in it
 /// stays in it.
@@ -433,12 +514,47 @@ unsafe fn delete_name_check(body: *mut u8) {
     }
 }
 
-/// What `ObMakeTemporaryObject` does to a directory: it is no longer
-/// permanent, and loses its name now if no handle is open to it, or
-/// else when the last one closes.
+/// A temporary named non-directory object (such as an event) with no
+/// handle open loses its name: no path leads to it any more, and the
+/// name's reference goes.
 ///
 /// # Safety
-/// `body` is a directory object the caller holds a reference to.
+/// `body` is a named object made through the namespace (whose name
+/// holds a reference to it), and the caller holds a reference to it.
+unsafe fn delete_object_name_check(body: *mut u8) {
+    let parent = {
+        let mut ns = NAMESPACE.lock();
+        // SAFETY: per the contract.
+        let keeps = unsafe {
+            object::permanent(body)
+                || object::handle_count(body).load(core::sync::atomic::Ordering::Acquire) != 0
+        };
+        if keeps {
+            return;
+        }
+        if ns.tree.remove_object(&Entry(body)) == 0 {
+            // It has no name: never had one, or lost it already.
+            return;
+        }
+        // SAFETY: an object that had a name was made with one.
+        unsafe { object::left(body) }
+    };
+    // SAFETY: the reference the object held on the directory it was in,
+    // and the name's on the object, with the lock released; the
+    // caller's own keeps `body` meanwhile.
+    unsafe {
+        object::dereference(parent);
+        object::dereference(body);
+    }
+}
+
+/// What `ObMakeTemporaryObject` does to a directory or a named event:
+/// it is no longer permanent, and loses its name now if no handle is
+/// open to it, or else when the last one closes.
+///
+/// # Safety
+/// `body` is a directory or event object the caller holds a reference
+/// to.
 pub unsafe fn make_temporary(body: *mut u8) {
     {
         let _ns = NAMESPACE.lock();
@@ -446,7 +562,31 @@ pub unsafe fn make_temporary(body: *mut u8) {
         unsafe { object::set_permanent(body, false) };
     }
     // SAFETY: per the contract.
-    unsafe { delete_name_check(body) };
+    unsafe {
+        if core::ptr::eq(object::type_of(body), &raw const object::DIRECTORY_TYPE) {
+            delete_name_check(body);
+        } else {
+            delete_object_name_check(body);
+        }
+    }
+}
+
+/// The event type's close procedure: a handle to an event has been
+/// closed. When it was the last, a temporary named event loses its
+/// name.
+///
+/// # Safety
+/// `object` is an event object the caller holds a reference to.
+pub unsafe extern "C" fn event_handle_closed(
+    _process: *mut core::ffi::c_void,
+    object: *mut core::ffi::c_void,
+    _process_handle_count: usize,
+    system_handle_count: usize,
+) {
+    if system_handle_count == 1 {
+        // SAFETY: per the contract.
+        unsafe { delete_object_name_check(object.cast()) };
+    }
 }
 
 /// The directory type's close procedure: a handle to a directory has

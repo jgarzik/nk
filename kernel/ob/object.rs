@@ -201,8 +201,17 @@ static SECTION_NAME: [u16; 7] = wide(b"Section");
 static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
 static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
-/// Events (`KEVENT`).
-pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None);
+/// Events (`KEVENT`): a temporary named event loses its name when its
+/// last handle closes. The generic rights are Windows'
+/// `ExpEventMapping`.
+pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAME, None)
+    .closing(super::event_handle_closed)
+    .rights(GENERIC_MAPPING {
+        GenericRead: 0x0002_0001,
+        GenericWrite: 0x0002_0002,
+        GenericExecute: 0x0012_0000,
+        GenericAll: 0x001F_0003,
+    });
 /// Threads (`ETHREAD`).
 pub static THREAD_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 1,
