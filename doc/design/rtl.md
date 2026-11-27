@@ -18,6 +18,14 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   Windows' table (a fullwidth or accented letter to its plain form),
   recorded from Windows 10 like the upper-case table, and `?` where
   that has none.
+- **The OEM code page is 437**, the same installation's
+  (`nk_rtl::codepage::OEM_437`, from the Unicode Consortium's table),
+  in which FAT keeps short names. Every byte maps both ways. Windows
+  best-fits some characters 437 lacks; NK has no record of those, so
+  each becomes `?`, and a conversion to a counted OEM string reports
+  `STATUS_UNMAPPABLE_CHARACTER` for it, as Windows does for a character
+  with no best fit. The variables file systems read say 437 has no
+  double-byte characters (`kernel/rtl/nls.rs`).
 - **Upper case** is one table, `nk_rtl::upcase`: Windows' own, every
   unit as `RtlUpcaseUnicodeChar` answers on Windows 10, recorded there
   by the conformance driver `nkc-rtl`. It is older than the Unicode

@@ -149,4 +149,14 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::once::RtlRunOnceExecuteOnce),
     export!(Partial, rtl::image::RtlFindMessage),
     export!(Implemented, rtl::image::RtlPcToFileName),
+    export!(Implemented, rtl::oem::RtlOemToUnicodeN),
+    export!(Implemented, rtl::oem::RtlxOemStringToUnicodeSize),
+    export!(Implemented, rtl::oem::RtlOemStringToUnicodeString),
+    export!(Implemented, rtl::oem::RtlOemStringToCountedUnicodeString),
+    export!(Implemented, rtl::oem::RtlUnicodeStringToCountedOemString),
+    export!(
+        Implemented,
+        rtl::oem::RtlUpcaseUnicodeStringToCountedOemString
+    ),
+    export!(Implemented, rtl::oem::RtlFreeOemString),
 ];

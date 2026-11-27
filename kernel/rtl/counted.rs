@@ -10,13 +10,13 @@ use super::string::{Wide, buffer};
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::rtl::{ANSI_STRING, GUID, STRING, TIME_FIELDS};
 use nk_ntabi::status::*;
-use nk_rtl::codepage::{self, ANSI_1252};
+use nk_rtl::codepage::{self, ANSI_1252, CodePage};
 use nk_rtl::counted::{self, DuplicateError, Header};
 use nk_rtl::{convert, upcase};
 
 /// A driver's byte string, where it lies.
 #[derive(Clone, Copy)]
-struct Narrow {
+pub(crate) struct Narrow {
     buffer: *const u8,
     length: usize,
 }
@@ -25,7 +25,7 @@ impl Narrow {
     /// # Safety
     /// `string` points to a counted string whose buffer holds `Length`
     /// bytes, and stays so while the result is used.
-    unsafe fn of(string: *const STRING) -> Self {
+    pub(crate) unsafe fn of(string: *const STRING) -> Self {
         // SAFETY: per the contract. Drivers may pack strings, so read
         // unaligned.
         unsafe {
@@ -37,7 +37,7 @@ impl Narrow {
     }
 
     /// The bytes in order, each read when it is asked for.
-    fn bytes(self) -> impl ExactSizeIterator<Item = u8> {
+    pub(crate) fn bytes(self) -> impl ExactSizeIterator<Item = u8> {
         // SAFETY: `of`'s contract: the buffer holds `length` bytes.
         (0..self.length).map(move |at| unsafe { self.buffer.add(at).read() })
     }
@@ -107,17 +107,18 @@ pub unsafe extern "C" fn RtlAnsiCharToUnicodeChar(source: *mut *mut u8) -> u16 {
     }
 }
 
-/// Fill `destination` with `bytes` of the ANSI page as UTF-16 and a
+/// Fill `destination` with `bytes` of `page` as UTF-16 and a
 /// terminator, in its own buffer or in one allocated for it: the body
-/// of `RtlAnsiStringToUnicodeString`.
+/// of `RtlAnsiStringToUnicodeString` and `RtlOemStringToUnicodeString`.
 ///
 /// # Safety
 /// `destination` is writable and, unless a buffer is to be allocated,
 /// its buffer has `MaximumLength` bytes.
-unsafe fn from_ansi(
+pub(crate) unsafe fn from_narrow(
     destination: *mut UNICODE_STRING,
     bytes: impl ExactSizeIterator<Item = u8>,
     allocate: bool,
+    page: &CodePage,
 ) -> NTSTATUS {
     let Some((length, needed)) = codepage::ansi_to_unicode_lengths(bytes.len() as u16) else {
         return STATUS_INVALID_PARAMETER_2;
@@ -143,7 +144,7 @@ unsafe fn from_ansi(
         };
         let mut at = 0;
         for byte in bytes {
-            to.add(at).write_unaligned(ANSI_1252.to_unicode(byte));
+            to.add(at).write_unaligned(page.to_unicode(byte));
             at += 1;
         }
         to.add(at).write_unaligned(0);
@@ -167,7 +168,14 @@ pub unsafe extern "C" fn RtlAnsiStringToUnicodeString(
     allocate: u8,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
-    unsafe { from_ansi(destination, Narrow::of(source).bytes(), allocate != 0) }
+    unsafe {
+        from_narrow(
+            destination,
+            Narrow::of(source).bytes(),
+            allocate != 0,
+            &ANSI_1252,
+        )
+    }
 }
 
 /// [`RtlIntegerToUnicodeString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlintegertounicodestring):
@@ -185,7 +193,7 @@ pub unsafe extern "C" fn RtlIntegerToUnicodeString(
         return STATUS_INVALID_PARAMETER;
     };
     // SAFETY: per the contract.
-    unsafe { from_ansi(string, text[..count].iter().copied(), false) }
+    unsafe { from_narrow(string, text[..count].iter().copied(), false, &ANSI_1252) }
 }
 
 /// [`RtlUnicodeStringToInteger`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlunicodestringtointeger).

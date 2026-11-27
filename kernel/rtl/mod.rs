@@ -10,6 +10,7 @@ pub mod feature;
 pub mod image;
 pub mod name;
 pub mod nls;
+pub mod oem;
 pub mod once;
 pub mod prefix;
 pub mod print;
