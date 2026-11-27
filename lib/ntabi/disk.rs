@@ -29,6 +29,10 @@ pub const IOCTL_DISK_GET_LENGTH_INFO: u32 =
 /// answers a [`DRIVE_LAYOUT_INFORMATION_EX`] and its entries.
 pub const IOCTL_DISK_GET_DRIVE_LAYOUT_EX: u32 =
     ctl_code(FILE_DEVICE_DISK, 0x14, METHOD_BUFFERED, 0);
+/// [`IOCTL_DISK_GET_PARTITION_INFO_EX`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntdddisk/ni-ntdddisk-ioctl_disk_get_partition_info_ex):
+/// answers a [`PARTITION_INFORMATION_EX`].
+pub const IOCTL_DISK_GET_PARTITION_INFO_EX: u32 =
+    ctl_code(FILE_DEVICE_DISK, 0x12, METHOD_BUFFERED, 0);
 /// [`IOCTL_STORAGE_GET_DEVICE_NUMBER`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddstor/ni-ntddstor-ioctl_storage_get_device_number):
 /// answers a [`STORAGE_DEVICE_NUMBER`].
 pub const IOCTL_STORAGE_GET_DEVICE_NUMBER: u32 =
@@ -302,6 +306,7 @@ const _: () = {
     assert!(IOCTL_STORAGE_GET_DEVICE_NUMBER == 0x002D_1080);
     assert!(IOCTL_STORAGE_QUERY_PROPERTY == 0x002D_1400);
     assert!(IOCTL_DISK_GET_DRIVE_LAYOUT_EX == 0x0007_0050);
+    assert!(IOCTL_DISK_GET_PARTITION_INFO_EX == 0x0007_0048);
 
     assert!(size_of::<PARTITION_INFORMATION_MBR>() == 24);
     assert!(offset_of!(PARTITION_INFORMATION_MBR, HiddenSectors) == 4);

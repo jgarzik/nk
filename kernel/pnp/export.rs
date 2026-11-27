@@ -11,9 +11,10 @@ use nk_ntabi::io::{DEVICE_OBJECT, UNICODE_STRING};
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::pnp::{
     BUS_RELATIONS, CONFIGURATION_INFORMATION, DEVICE_CAPABILITY_REMOVABLE, DEVPROPKEY,
+    SINGLE_BUS_RELATIONS,
 };
 use nk_ntabi::status::*;
-use nk_pnp::ids;
+use nk_pnp::{database, ids};
 
 /// [`IoInvalidateDeviceRelations`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioinvalidatedevicerelations):
 /// the relations of `device`, a physical device object, have changed.
@@ -22,9 +23,11 @@ use nk_pnp::ids;
 /// `DISPATCH_LEVEL`. A device that is not started when its turn comes
 /// is not asked: it is asked when it starts.
 ///
-/// The other relation types change nothing NK keeps: ejection, power
-/// and removal relations are asked for when a device is ejected,
-/// powered or removed, none of which NK does.
+/// `SingleBusRelations` is the same for NK, which asks only the device
+/// itself in either case (`volmgr.sys` passes it when a volume
+/// arrives). The other relation types change nothing NK keeps:
+/// ejection, power and removal relations are asked for when a device
+/// is ejected, powered or removed, none of which NK does.
 ///
 /// # Safety
 /// `device` is a live device object.
@@ -32,7 +35,7 @@ pub unsafe extern "C" fn IoInvalidateDeviceRelations(device: *mut DEVICE_OBJECT,
     // SAFETY: per the contract.
     unsafe {
         crate::io::device::check(device, "IoInvalidateDeviceRelations");
-        if relation == BUS_RELATIONS {
+        if relation == BUS_RELATIONS || relation == SINGLE_BUS_RELATIONS {
             engine::enumerate_later(device);
         }
     }
@@ -422,7 +425,7 @@ pub unsafe extern "C" fn IoSetDevicePropertyData(
 ///
 /// A property that was set is found as it was set. Of the properties
 /// Windows derives from what it knows of a device, NK computes the ones
-/// Microsoft's binaries ask of a disk (`computed`): its class GUID, bus
+/// Microsoft's binaries ask (`computed`): class GUID, service, bus
 /// number, address and parent. Any other is not found.
 ///
 /// # Safety
@@ -489,15 +492,23 @@ const DEVPROP_TYPE_GUID: u32 = 0x0D;
 const DEVPROP_TYPE_STRING: u32 = 0x12;
 
 /// A property of `found` Windows derives rather than stores: its type
-/// and value. The ones Microsoft's binaries ask of a disk:
+/// and value. The ones Microsoft's volume drivers ask:
 /// `DEVPKEY_Device_ClassGuid`, `_BusNumber` and `_Address`, from what
-/// `IoGetDeviceProperty` answers, and `DEVPKEY_Device_Parent`, the
-/// parent's instance path.
+/// `IoGetDeviceProperty` answers; `DEVPKEY_Device_Service`, the
+/// service's name (`partmgr.sys` asks it of the volume manager's
+/// device); and `DEVPKEY_Device_Parent`, the parent's instance path.
 fn computed(found: &Node, device: *mut DEVICE_OBJECT, key: &DEVPROPKEY) -> Option<(u32, Vec<u8>)> {
     match (key.fmtid, key.pid) {
         (DEVICE_CATEGORY, 10) => {
             let text = registry::string(&registry::enum_key(&found.instance), "ClassGUID")?;
             Some((DEVPROP_TYPE_GUID, ids::guid_from_text(&text)?.to_vec()))
+        }
+        (DEVICE_CATEGORY, 6) => {
+            let value = registry::string(&registry::enum_key(&found.instance), "Service")?;
+            Some((
+                DEVPROP_TYPE_STRING,
+                wide_bytes(database::service_name(&value)),
+            ))
         }
         (DEVICE_CATEGORY, 23) => Some((DEVPROP_TYPE_UINT32, property(found, device, BUS_NUMBER)?)),
         (DEVICE_CATEGORY, 30) => Some((DEVPROP_TYPE_UINT32, property(found, device, ADDRESS)?)),

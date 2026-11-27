@@ -345,7 +345,7 @@ pub fn init() -> Result<(), &'static str> {
         }
     })
     .map_err(|_| "the HAL's driver object could not be made")?;
-    let reported = crate::pnp::report_detected_device(SERVICE, "Internal")
+    let reported = crate::pnp::report_detected_device(SERVICE, Some("Internal"))
         .map_err(|_| "the HAL's device could not be reported")?;
     let function = make(driver, Kind::Function, 0)?;
     let child = make(

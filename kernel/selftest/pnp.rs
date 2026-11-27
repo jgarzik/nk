@@ -565,7 +565,7 @@ impl Bench {
             unsafe { (*child).Flags &= !DO_DEVICE_INITIALIZING };
             slot.store(child, Ordering::Release);
         }
-        bench.reported = pnp::report_detected_device(BUS, "Internal")
+        bench.reported = pnp::report_detected_device(BUS, Some("Internal"))
             .map_err(|_| "the bus's device could not be reported")?;
         bench.function = make(bus, Role::BusFunction, 0)?;
         // SAFETY: devices just made: the bus driver attaches to the

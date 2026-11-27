@@ -354,6 +354,15 @@ status = "microsoft-inbox"
 note = "volmgr.sys 10.0.19041.1806, the volume manager: makes a volume device of each partition"
 
 [[fixture]]
+name = "volume"
+arch = "x86_64"
+file = "volume.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/volume.sys/83CF10C9b000/volume.sys"
+sha256 = "ba775f373bc80ca77e42578f689d87c961b6548777e10724fea192443f0c9839"
+status = "microsoft-inbox"
+note = "volume.sys 10.0.19041.1, the function driver of the volumes volmgr.sys reports"
+
+[[fixture]]
 name = "mountmgr"
 arch = "x86_64"
 file = "mountmgr.x64.sys"

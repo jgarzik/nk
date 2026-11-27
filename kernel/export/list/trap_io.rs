@@ -16,7 +16,6 @@ trap_list!(
     IoQueryFullDriverPath,
     IoReadPartitionTableEx,
     IoReleaseVpbSpinLock,
-    IoReportDetectedDevice,
     IoReportTargetDeviceChangeAsynchronous,
     IoRequestDeviceEject,
     IoRequestDeviceEjectEx,

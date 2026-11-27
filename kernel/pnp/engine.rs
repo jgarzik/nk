@@ -583,6 +583,10 @@ fn add_drivers(pdo: usize) -> bool {
         // The driver that reported the device serves it: its device is
         // on the stack, and the device counts as started.
         node::with(pdo, |node| node.state = State::Started);
+        // What its driver enabled while it set the device up exists now
+        // (`volmgr.sys` enables its manager's interface in its own
+        // `AddDevice`, before the device counts as started).
+        super::interface::device_started(pdo);
         kprintln!("pnp: {}: started (reported by its driver)", found.instance);
         return true;
     }

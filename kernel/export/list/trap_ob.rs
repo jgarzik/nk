@@ -12,5 +12,4 @@ trap_list!(
     ObIsDosDeviceLocallyMapped,
     ObQueryNameString,
     ObReferenceObjectSafe,
-    ObSetSecurityObjectByPointer,
 );

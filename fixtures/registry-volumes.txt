@@ -1,0 +1,55 @@
+# Registry content for Microsoft's volume drivers over the storage stack,
+# laid over the SYSTEM hive with registry-overlay.txt and
+# registry-storage.txt in the boots that ask for it (a scenario's
+# `registry = ["storage", "volumes"]`; tools/mkesp.py).
+#
+# NK's own: the least each driver needs to be started and to be found
+# for its device, written from what the drivers are (boot-start kernel
+# drivers, the volume class, the device id volmgr.sys gives a volume),
+# not copied from an installation. partmgr.sys's key is in
+# registry-storage.txt.
+
+# --- Services --------------------------------------------------------------------
+
+# volmgr.sys: a boot-start driver that reports its own root device and
+# makes a volume device of each partition. Started after partmgr.sys
+# ("Boot Bus Extender") and before disk.sys ("SCSI Class").
+key ControlSet001\Services\volmgr
+value ImagePath expand_sz System32\drivers\volmgr.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz "System Bus Extender"
+
+# volume.sys: the function driver of each volume device.
+key ControlSet001\Services\volume
+value ImagePath expand_sz System32\drivers\volume.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 1
+
+# --- Device classes ----------------------------------------------------------------
+
+key ControlSet001\Control\Class\{71a27cdd-812a-11d0-bec7-08002be2092f}
+value Class sz Volume
+
+# --- Device id -> driver matching (the format of registry-storage.txt) -----------
+#
+# A volume device's id is STORAGE\Volume. The package's Version names
+# the class at bytes 8..24; the rest of it is zero.
+key DriverDatabase\DeviceIds\STORAGE\Volume
+value volume.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\volume.inf
+value "" multi_sz volume.inf_nk
+value Active sz volume.inf_nk
+value Configurations multi_sz volume_install.NT
+key DriverDatabase\DriverPackages\volume.inf_nk
+value Version binary hex:ffff090000000000dd7ca2712a81d011bec708002be2092f00000000000000000000000000000000000000000000000000
+value Provider sz Microsoft
+value "" sz volume.inf
+key DriverDatabase\DriverPackages\volume.inf_nk\Configurations\volume_install.NT
+value Service sz volume
+value ConfigScope dword 5
+value ConfigFlags dword 0
+key DriverDatabase\DriverPackages\volume.inf_nk\Descriptors\STORAGE\Volume
+value Configuration sz volume_install.NT

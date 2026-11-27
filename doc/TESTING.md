@@ -398,6 +398,15 @@ check to that without booting.
   which `partmgr.sys` answers from the partition table it read: an
   MBR disk with the disk's signature, the FAT32 partition first, the
   other entries empty.
+- `x86_64-volumes-volmgr` (`registry = ["storage", "volumes"]`): and
+  `volmgr.sys`, which reports its own root device, takes the partition
+  from `partmgr.sys` and makes `\Device\HarddiskVolume1`, a
+  `STORAGE\Volume` device that `volume.sys` is installed on and serves.
+  `vol.volume` waits for the volume (the drivers hand partitions and
+  volumes on in work items of their own) and asks which partition it is
+  (`IOCTL_DISK_GET_PARTITION_INFO_EX`, with the verify override, since
+  no file system has mounted it). The volume is offline until
+  `mountmgr.sys` brings it online, so it is not read here.
 
 ### Soak
 

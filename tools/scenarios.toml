@@ -1105,3 +1105,16 @@ registry = ["storage"]
 disk = "ahci"
 disk_image = "fat32-mbr"
 disk_expect = "fat-unchanged"
+
+# And the volume manager: volmgr.sys makes a volume of the partition,
+# volume.sys serves it.
+
+[x86_64-volumes-volmgr]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=vol.partmgr"
+registry = ["storage", "volumes"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"

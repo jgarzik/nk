@@ -2195,12 +2195,15 @@ is freed. The root is `HTREE\ROOT\0`, a device of
 `\Driver\PnpManager` (`pnp/root.rs`).
 
 **Reported devices.** A driver that detects its own device reports it
-(`pnp::report_detected_device`, Windows' `IoReportDetectedDevice` for a
-report without resources; kernel-internal, no driver NK runs imports
-the export): the device becomes `ROOT\<service>\0000`, a child of the
-root, with a physical device object of the manager's. The reporting
-driver attaches its own device and serves it; the manager adds no
-driver and sends no start. The HAL does this at boot, as on Windows
+(`pnp::report_detected_device`; the export `IoReportDetectedDevice`,
+which `volmgr.sys` calls, for a report without resources): the device
+becomes `ROOT\<service>\0000`, a child of the root, with a physical
+device object of the manager's. The reporting driver attaches its own
+device and serves it; the manager adds no driver and sends no start,
+and the interfaces the driver enabled meanwhile arrive when the device
+counts as started (`volmgr.sys` enables its manager's interface in its
+own `AddDevice`). A report that names resources, or hands back a device
+of an earlier boot, stops the system by name. The HAL does this at boot, as on Windows
 (`hal/bus.rs`): `ROOT\ACPI_HAL\0000`, on whose bus the HAL's driver
 `\Driver\ACPI_HAL` enumerates `ACPI_HAL\PNP0C08\0`, the device the ACPI
 driver serves. What those two devices answer is read from the pinned
@@ -2215,7 +2218,9 @@ cache coherency); NK's hands out none.
 device is done by the thread that holds the engine's mutex
 (`pnp/engine.rs`): the boot thread as it starts drivers, the engine's
 own thread for what drivers ask for (`IoInvalidateDeviceRelations`
-queues, wakes it and returns), a test. `pnp::settle` does all there is
+queues, wakes it and returns; `SingleBusRelations` is taken as
+`BusRelations`, since NK asks only the device itself in either case),
+a test. `pnp::settle` does all there is
 to do and returns when nothing moves. Windows queues device actions for
 one worker of its own in the same way. The engine's thread is not a
 thread of the system's work queues: the engine waits for drivers with
@@ -2713,8 +2718,9 @@ driver that guards its own objects asks
 [`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck)
 and gets Windows' answer (below). Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
-replaces the named parts of a device's descriptor; for other objects it
-answers `STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
+and `ObSetSecurityObjectByPointer` (by handle and by pointer) replace
+the named parts of a device's descriptor; for other objects they answer
+`STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
 is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
 forced, returns a self-relative pool copy, the caller's to free.
 
@@ -3234,7 +3240,8 @@ rebalance, and so none of the notifications that go with them. A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver
-outside the corpus) for disks. `IoCreateArcName` names no disk: the
+outside the corpus) for disks, and `volsnap` for volumes, which NK's
+volume overlay leaves out of the class. `IoCreateArcName` names no disk: the
 loader's table of ARC disks is empty (UEFI names none), and the answer
 is Windows' for a disk not in it, `STATUS_NOT_SUPPORTED`.
 `FsRtlGetVirtualDiskNestingLevel` asks the disk as Windows does; a
