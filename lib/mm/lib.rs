@@ -1,6 +1,7 @@
 //! Memory-management logic that needs no hardware: page-table
-//! construction, frame, pool and address-space allocator arithmetic, and
-//! what Windows' page protections ask of a mapping.
+//! construction, frame, pool and address-space allocator arithmetic, the
+//! page-frame-number database, and what Windows' page protections ask of
+//! a mapping.
 //!
 //! Memory is reached through traits, so the same code runs in the loader,
 //! in the kernel and in host unit tests against fake memory. No `unsafe`.
@@ -9,6 +10,7 @@
 
 pub mod frames;
 pub mod heap;
+pub mod pfn;
 pub mod protect;
 pub mod pt;
 pub mod space;

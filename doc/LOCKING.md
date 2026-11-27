@@ -86,7 +86,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 39 | `hal::variables::FIRMWARE` | the firmware's variable services: one call into them at a time, held across the call and nothing else | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
-| 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
+| 60 | `mm::pfn::PFN` | the frame bitmap; every entry of the page-frame-number database and its page lists | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
 | 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
 | 212 | `ke::kinterrupt::CONNECT` | which interrupt objects are connected: each object's `Connected` mark, and each vector's chain together with whether its line is unmasked | DISPATCH |

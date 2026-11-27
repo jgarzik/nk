@@ -6,7 +6,21 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
 
 - **Frames.** A bitmap allocator over `EfiConventionalMemory` only,
   never below 1 MiB. Loader allocations and firmware boot-services memory
-  stay reserved.
+  stay reserved. The bitmap hands out single frames and the contiguous
+  runs the pool, stacks and DMA buffers need.
+- **PFN database.** One entry per frame up to the highest usable one
+  (`lib/mm/pfn.rs`, `kernel/mm/pfn.rs`), allocated at boot, behind the
+  same lock as the bitmap (rank 60). The states are Windows' `_MMLISTS`:
+  zeroed, free, standby, modified, modified-no-write, bad, active,
+  transition. Free and zeroed frames are the bitmap's: NK zeroes a frame
+  as it hands it out, so no zeroed list is kept and no zeroing thread
+  runs. Standby, modified, modified-no-write and bad are lists linked
+  through the entries. The counts follow Windows: `share_count` counts
+  the valid PTEs mapping a frame, `ref_count` one for "mapped" plus one
+  per I/O or lock; a frame goes onto a list only when `ref_count` reaches
+  zero, standby if clean, modified if dirty, modified-no-write if its
+  section is written only by the cache manager. The entry's layout is
+  NK's (no driver sees `_MMPFN`).
 - **Pool.** Small requests come from 1 MiB arenas at 16-byte alignment;
   requests of about a page or more get their own page-aligned frames, as
   on Windows. All pool is in the direct map: non-paged and physically

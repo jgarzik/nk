@@ -72,8 +72,9 @@ pub enum Rank {
     Pool = 40,
     /// Kernel address space and page tables (`mm::map`).
     AddressSpace = 50,
-    /// The frame allocator (`mm`).
-    Frames = 60,
+    /// The page-frame-number database and the frame allocator
+    /// (`mm::pfn`).
+    Pfn = 60,
     /// The interprocessor call in progress (`ke::ipi`).
     Ipi = 200,
     /// A queue of work items (`ex::work`).
