@@ -11,10 +11,28 @@ pub const SYSTEM_BASIC_INFORMATION_CLASS: u32 = 0;
 pub const SYSTEM_MODULE_INFORMATION_CLASS: u32 = 11;
 pub const SYSTEM_KERNEL_DEBUGGER_INFORMATION_CLASS: u32 = 35;
 pub const SYSTEM_ISOLATED_USER_MODE_INFORMATION_CLASS: u32 = 165;
+/// `SystemHypervisorInformation`: 16 bytes of Hyper-V enlightenment flags
+/// (`HvlQueryEnlightenmentInfo`).
+pub const SYSTEM_HYPERVISOR_INFORMATION_CLASS: u32 = 91;
+pub const SYSTEM_HYPERVISOR_INFORMATION_SIZE: usize = 16;
+/// `SystemCodeIntegrityInformation`: answered by `ci.dll`; without it
+/// `ntoskrnl` returns `STATUS_UNSUCCESSFUL`.
+pub const SYSTEM_CODEINTEGRITY_INFORMATION_CLASS: u32 = 103;
+/// `SystemBootGraphicsInformation`: 32 bytes (`BgkQueryBootGraphicsInformation`).
+pub const SYSTEM_BOOT_GRAPHICS_INFORMATION_CLASS: u32 = 126;
+pub const SYSTEM_BOOT_GRAPHICS_INFORMATION_SIZE: usize = 0x20;
+/// `SystemPoolZeroingInformation`: 1 byte (`BOOLEAN`, non-zero when pool
+/// zeroing is active).
+pub const SYSTEM_POOL_ZEROING_INFORMATION_CLASS: u32 = 227;
 
 /// `SystemRegisterFirmwareTableInformationHandler`, which
 /// `ZwSetSystemInformation` takes.
 pub const SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS: u32 = 75;
+/// `SystemFirmwareTableInformation`: query a registered firmware table
+/// provider (`ExpGetSystemFirmwareTableInformation`).
+pub const SYSTEM_FIRMWARE_TABLE_INFORMATION_CLASS: u32 = 76;
+/// Header size of `SYSTEM_FIRMWARE_TABLE_INFORMATION`.
+pub const SYSTEM_FIRMWARE_TABLE_INFORMATION_HEADER: usize = 0x10;
 
 /// `SYSTEM_FIRMWARE_TABLE_HANDLER`: a driver registers (`Register`
 /// non-zero) or takes back the routine that serves the firmware tables

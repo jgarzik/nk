@@ -27,6 +27,253 @@ fn kernel_types() -> Option<Types> {
     Some(pdb.types().expect("the kernel PDB's types"))
 }
 
+/// `ntdll.dll`'s type records, or `None` (with a note) without the fixture.
+fn ntdll_types() -> Option<Types> {
+    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "target", "fixtures"]
+        .iter()
+        .collect();
+    let Ok(file) = std::fs::read(path.join("ntdll.x64.pdb")) else {
+        eprintln!("SKIP: no ntdll symbols (target/fixtures/ntdll.x64.pdb)");
+        return None;
+    };
+    let pdb = Pdb::parse(&file).expect("the ntdll PDB");
+    Some(pdb.types().expect("the ntdll PDB's types"))
+}
+
+#[test]
+fn ntdll_pdb_exposes_user_structures() {
+    use crate::user::{
+        ACTIVATION_CONTEXT_STACK, CLIENT_ID, CURDIR, NT_TIB, PEB, RTL_DRIVE_LETTER_CURDIR,
+        RTL_USER_PROCESS_PARAMETERS, TEB,
+    };
+    use core::mem::{offset_of, size_of};
+    let Some(types) = ntdll_types() else { return };
+    for name in ["_PEB_LDR_DATA", "_LDR_DATA_TABLE_ENTRY"] {
+        let layout = types
+            .layout(name)
+            .unwrap_or_else(|e| panic!("ntdll.pdb missing {name}: {e:?}"));
+        assert!(layout.size > 0, "{name} has zero size");
+    }
+    let tib = types.layout("_NT_TIB").expect("_NT_TIB");
+    assert_eq!(size_of::<NT_TIB>(), tib.size as usize);
+    assert_eq!(
+        offset_of!(NT_TIB, ExceptionList),
+        offset(&tib, "_NT_TIB", "ExceptionList")
+    );
+    assert_eq!(
+        offset_of!(NT_TIB, StackBase),
+        offset(&tib, "_NT_TIB", "StackBase")
+    );
+    assert_eq!(
+        offset_of!(NT_TIB, StackLimit),
+        offset(&tib, "_NT_TIB", "StackLimit")
+    );
+    assert_eq!(offset_of!(NT_TIB, SelfPtr), offset(&tib, "_NT_TIB", "Self"));
+
+    let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
+    assert_eq!(size_of::<CLIENT_ID>(), cid.size as usize);
+    assert_eq!(
+        offset_of!(CLIENT_ID, UniqueProcess),
+        offset(&cid, "_CLIENT_ID", "UniqueProcess")
+    );
+    assert_eq!(
+        offset_of!(CLIENT_ID, UniqueThread),
+        offset(&cid, "_CLIENT_ID", "UniqueThread")
+    );
+
+    let cur = types.layout("_CURDIR").expect("_CURDIR");
+    assert_eq!(size_of::<CURDIR>(), cur.size as usize);
+    assert_eq!(
+        offset_of!(CURDIR, DosPath),
+        offset(&cur, "_CURDIR", "DosPath")
+    );
+    assert_eq!(
+        offset_of!(CURDIR, Handle),
+        offset(&cur, "_CURDIR", "Handle")
+    );
+
+    let drv = types
+        .layout("_RTL_DRIVE_LETTER_CURDIR")
+        .expect("_RTL_DRIVE_LETTER_CURDIR");
+    assert_eq!(size_of::<RTL_DRIVE_LETTER_CURDIR>(), drv.size as usize);
+    assert_eq!(
+        offset_of!(RTL_DRIVE_LETTER_CURDIR, DosPath),
+        offset(&drv, "_RTL_DRIVE_LETTER_CURDIR", "DosPath")
+    );
+
+    let act = types
+        .layout("_ACTIVATION_CONTEXT_STACK")
+        .expect("_ACTIVATION_CONTEXT_STACK");
+    assert_eq!(size_of::<ACTIVATION_CONTEXT_STACK>(), act.size as usize);
+    assert_eq!(
+        offset_of!(ACTIVATION_CONTEXT_STACK, ActiveFrame),
+        offset(&act, "_ACTIVATION_CONTEXT_STACK", "ActiveFrame")
+    );
+    assert_eq!(
+        offset_of!(ACTIVATION_CONTEXT_STACK, StackId),
+        offset(&act, "_ACTIVATION_CONTEXT_STACK", "StackId")
+    );
+
+    let pp = types
+        .layout("_RTL_USER_PROCESS_PARAMETERS")
+        .expect("_RTL_USER_PROCESS_PARAMETERS");
+    assert_eq!(size_of::<RTL_USER_PROCESS_PARAMETERS>(), pp.size as usize);
+    for (actual, field_name) in [
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, MaximumLength),
+            "MaximumLength",
+        ),
+        (offset_of!(RTL_USER_PROCESS_PARAMETERS, Length), "Length"),
+        (offset_of!(RTL_USER_PROCESS_PARAMETERS, Flags), "Flags"),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, ConsoleHandle),
+            "ConsoleHandle",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, StandardInput),
+            "StandardInput",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, StandardOutput),
+            "StandardOutput",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, StandardError),
+            "StandardError",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, CurrentDirectory),
+            "CurrentDirectory",
+        ),
+        (offset_of!(RTL_USER_PROCESS_PARAMETERS, DllPath), "DllPath"),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, ImagePathName),
+            "ImagePathName",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, CommandLine),
+            "CommandLine",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, Environment),
+            "Environment",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, WindowTitle),
+            "WindowTitle",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, CurrentDirectores),
+            "CurrentDirectores",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, EnvironmentSize),
+            "EnvironmentSize",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, DefaultThreadpoolThreadMaximum),
+            "DefaultThreadpoolThreadMaximum",
+        ),
+    ] {
+        assert_eq!(
+            actual,
+            offset(&pp, "_RTL_USER_PROCESS_PARAMETERS", field_name),
+            "{field_name}"
+        );
+    }
+
+    let peb = types.layout("_PEB").expect("_PEB");
+    assert_eq!(size_of::<PEB>(), peb.size as usize);
+    for (actual, field_name) in [
+        (
+            offset_of!(PEB, InheritedAddressSpace),
+            "InheritedAddressSpace",
+        ),
+        (offset_of!(PEB, BeingDebugged), "BeingDebugged"),
+        (offset_of!(PEB, Mutant), "Mutant"),
+        (offset_of!(PEB, ImageBaseAddress), "ImageBaseAddress"),
+        (offset_of!(PEB, Ldr), "Ldr"),
+        (offset_of!(PEB, ProcessParameters), "ProcessParameters"),
+        (offset_of!(PEB, ProcessHeap), "ProcessHeap"),
+        (offset_of!(PEB, FastPebLock), "FastPebLock"),
+        (offset_of!(PEB, CrossProcessFlags), "CrossProcessFlags"),
+        (offset_of!(PEB, KernelCallbackTable), "KernelCallbackTable"),
+        (offset_of!(PEB, ApiSetMap), "ApiSetMap"),
+        (offset_of!(PEB, TlsBitmap), "TlsBitmap"),
+        (offset_of!(PEB, AnsiCodePageData), "AnsiCodePageData"),
+        (offset_of!(PEB, OemCodePageData), "OemCodePageData"),
+        (
+            offset_of!(PEB, UnicodeCaseTableData),
+            "UnicodeCaseTableData",
+        ),
+        (offset_of!(PEB, NumberOfProcessors), "NumberOfProcessors"),
+        (offset_of!(PEB, NtGlobalFlag), "NtGlobalFlag"),
+        (
+            offset_of!(PEB, CriticalSectionTimeout),
+            "CriticalSectionTimeout",
+        ),
+        (offset_of!(PEB, HeapSegmentReserve), "HeapSegmentReserve"),
+        (offset_of!(PEB, ProcessHeaps), "ProcessHeaps"),
+        (offset_of!(PEB, LoaderLock), "LoaderLock"),
+        (offset_of!(PEB, OSMajorVersion), "OSMajorVersion"),
+        (offset_of!(PEB, OSMinorVersion), "OSMinorVersion"),
+        (offset_of!(PEB, OSBuildNumber), "OSBuildNumber"),
+        (offset_of!(PEB, OSPlatformId), "OSPlatformId"),
+        (offset_of!(PEB, ImageSubsystem), "ImageSubsystem"),
+        (
+            offset_of!(PEB, ActiveProcessAffinityMask),
+            "ActiveProcessAffinityMask",
+        ),
+        (offset_of!(PEB, SessionId), "SessionId"),
+        (offset_of!(PEB, MinimumStackCommit), "MinimumStackCommit"),
+    ] {
+        assert_eq!(
+            actual,
+            offset(&peb, "_PEB", field_name),
+            "_PEB.{field_name}"
+        );
+    }
+
+    let teb = types.layout("_TEB").expect("_TEB");
+    assert_eq!(size_of::<TEB>(), teb.size as usize);
+    for (actual, field_name) in [
+        (offset_of!(TEB, NtTib), "NtTib"),
+        (offset_of!(TEB, ClientId), "ClientId"),
+        (
+            offset_of!(TEB, ProcessEnvironmentBlock),
+            "ProcessEnvironmentBlock",
+        ),
+        (offset_of!(TEB, LastErrorValue), "LastErrorValue"),
+        (offset_of!(TEB, CurrentLocale), "CurrentLocale"),
+        (offset_of!(TEB, ActivationStack), "_ActivationStack"),
+        (
+            offset_of!(TEB, ActivationContextStackPointer),
+            "ActivationContextStackPointer",
+        ),
+        (offset_of!(TEB, RealClientId), "RealClientId"),
+        (offset_of!(TEB, LastStatusValue), "LastStatusValue"),
+        (offset_of!(TEB, StaticUnicodeString), "StaticUnicodeString"),
+        (offset_of!(TEB, StaticUnicodeBuffer), "StaticUnicodeBuffer"),
+        (offset_of!(TEB, DeallocationStack), "DeallocationStack"),
+        (offset_of!(TEB, TlsSlots), "TlsSlots"),
+        (offset_of!(TEB, TlsLinks), "TlsLinks"),
+        (offset_of!(TEB, HardErrorMode), "HardErrorMode"),
+        (offset_of!(TEB, IdealProcessorValue), "IdealProcessorValue"),
+        (
+            offset_of!(TEB, GuaranteedStackBytes),
+            "GuaranteedStackBytes",
+        ),
+        (offset_of!(TEB, CrossTebFlags), "CrossTebFlags"),
+        (offset_of!(TEB, SameTebFlags), "SameTebFlags"),
+    ] {
+        assert_eq!(
+            actual,
+            offset(&teb, "_TEB", field_name),
+            "_TEB.{field_name}"
+        );
+    }
+}
+
 fn offset(layout: &Layout, ty: &str, field: &str) -> usize {
     let member = layout
         .member(field)
@@ -97,7 +344,39 @@ fn shared_data_page_matches_the_kernel() {
     assert_eq!(SHARED_TICK_MULTIPLIER, field("TickCountMultiplier"));
     assert_eq!(SHARED_INTERRUPT_TIME, field("InterruptTime"));
     assert_eq!(SHARED_SYSTEM_TIME, field("SystemTime"));
+    assert_eq!(SHARED_TIME_ZONE_BIAS, field("TimeZoneBias"));
+    assert_eq!(SHARED_IMAGE_NUMBER_LOW, field("ImageNumberLow"));
+    assert_eq!(SHARED_IMAGE_NUMBER_HIGH, field("ImageNumberHigh"));
+    assert_eq!(SHARED_NT_SYSTEM_ROOT, field("NtSystemRoot"));
+    assert_eq!(SHARED_LARGE_PAGE_MINIMUM, field("LargePageMinimum"));
+    assert_eq!(SHARED_NT_BUILD_NUMBER, field("NtBuildNumber"));
+    assert_eq!(SHARED_NT_PRODUCT_TYPE, field("NtProductType"));
+    assert_eq!(SHARED_PRODUCT_TYPE_IS_VALID, field("ProductTypeIsValid"));
+    assert_eq!(
+        SHARED_NATIVE_PROCESSOR_ARCHITECTURE,
+        field("NativeProcessorArchitecture")
+    );
+    assert_eq!(SHARED_NT_MAJOR_VERSION, field("NtMajorVersion"));
+    assert_eq!(SHARED_NT_MINOR_VERSION, field("NtMinorVersion"));
+    assert_eq!(SHARED_PROCESSOR_FEATURES, field("ProcessorFeatures"));
+    assert_eq!(SHARED_MITIGATION_POLICIES, field("MitigationPolicies"));
+    assert_eq!(
+        SHARED_NUMBER_OF_PHYSICAL_PAGES,
+        field("NumberOfPhysicalPages")
+    );
+    assert_eq!(SHARED_TEST_RET_INSTRUCTION, field("TestRetInstruction"));
+    assert_eq!(SHARED_QPC_FREQUENCY, field("QpcFrequency"));
+    assert_eq!(SHARED_SYSTEM_CALL, field("SystemCall"));
     assert_eq!(SHARED_TICK_COUNT, field("TickCount"));
+    assert_eq!(SHARED_COOKIE, field("Cookie"));
+    assert_eq!(
+        SHARED_UNPARKED_PROCESSOR_COUNT,
+        field("UnparkedProcessorCount")
+    );
+    assert_eq!(SHARED_ACTIVE_PROCESSOR_COUNT, field("ActiveProcessorCount"));
+    assert_eq!(SHARED_ACTIVE_GROUP_COUNT, field("ActiveGroupCount"));
+    assert_eq!(SHARED_QPC_DATA, field("QpcData"));
+    assert_eq!(SHARED_XSTATE, field("XState"));
     let xstate = types
         .layout("_XSTATE_CONFIGURATION")
         .expect("_XSTATE_CONFIGURATION");
@@ -341,6 +620,11 @@ fn thread_matches_the_kernel() {
     assert_eq!(STACK_LIMIT, field("StackLimit"));
     assert_eq!(STACK_BASE, field("StackBase"));
     assert_eq!(KERNEL_STACK, field("KernelStack"));
+    assert_eq!(STATE_SAVE_AREA, field("StateSaveArea"));
+    assert_eq!(SYSTEM_CALL_NUMBER, field("SystemCallNumber"));
+    assert_eq!(FIRST_ARGUMENT, field("FirstArgument"));
+    assert_eq!(TRAP_FRAME, field("TrapFrame"));
+    assert_eq!(TEB, field("Teb"));
     assert_eq!(RUNNING, field("Running"));
     assert_eq!(PRIORITY, field("Priority"));
     assert_eq!(ALERTED, field("Alerted"));
@@ -355,6 +639,7 @@ fn thread_matches_the_kernel() {
     assert_eq!(WAIT_LIST_ENTRY, field("WaitListEntry"));
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
+    assert_eq!(PREVIOUS_MODE, field("PreviousMode"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
     assert_eq!(SATURATION, field("Saturation"));
     assert_eq!(
@@ -534,12 +819,28 @@ fn process_matches_the_kernel() {
     assert_eq!(field("Pcb"), 0);
     assert_eq!(offset(&kprocess, "_KPROCESS", "Header"), 0);
     assert_eq!(
+        DIRECTORY_TABLE_BASE,
+        offset(&kprocess, "_KPROCESS", "DirectoryTableBase")
+    );
+    assert_eq!(
         BASE_PRIORITY,
         offset(&kprocess, "_KPROCESS", "BasePriority")
     );
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
+    assert_eq!(ACTIVE_PROCESS_LINKS, field("ActiveProcessLinks"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
+    assert_eq!(SECTION_OBJECT, field("SectionObject"));
+    assert_eq!(SECTION_BASE_ADDRESS, field("SectionBaseAddress"));
+    assert_eq!(
+        INHERITED_FROM_UNIQUE_PROCESS_ID,
+        field("InheritedFromUniqueProcessId")
+    );
+    assert_eq!(PEB, field("Peb"));
+    assert_eq!(OBJECT_TABLE, field("ObjectTable"));
+    assert_eq!(ACTIVE_THREADS, field("ActiveThreads"));
+    assert_eq!(EXIT_STATUS, field("ExitStatus"));
+    assert_eq!(VAD_ROOT, field("VadRoot"));
     assert_eq!(SESSION, field("Session"));
     assert_eq!(JOB, field("Job"));
     assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));
@@ -756,6 +1057,59 @@ fn exception_structures_match_the_kernel() {
     use crate::seh::*;
     use core::mem::{offset_of, size_of};
     let Some(types) = kernel_types() else { return };
+    let ktrap = types.layout("_KTRAP_FRAME").expect("_KTRAP_FRAME");
+    {
+        use crate::seh::x64::KTRAP_FRAME;
+        assert_eq!(size_of::<KTRAP_FRAME>(), ktrap.size as usize);
+        let f = |n| offset(&ktrap, "_KTRAP_FRAME", n);
+        assert_eq!(offset_of!(KTRAP_FRAME, PreviousMode), f("PreviousMode"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Rax), f("Rax"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Xmm0), f("Xmm0"));
+        assert_eq!(offset_of!(KTRAP_FRAME, FaultAddress), f("FaultAddress"));
+        assert_eq!(offset_of!(KTRAP_FRAME, TrapFrame), f("TrapFrame"));
+        assert_eq!(offset_of!(KTRAP_FRAME, ErrorCode), f("ErrorCode"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Rip), f("Rip"));
+        assert_eq!(offset_of!(KTRAP_FRAME, SegCs), f("SegCs"));
+        assert_eq!(offset_of!(KTRAP_FRAME, EFlags), f("EFlags"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Rsp), f("Rsp"));
+        assert_eq!(offset_of!(KTRAP_FRAME, SegSs), f("SegSs"));
+    }
+    let kexc = types
+        .layout("_KEXCEPTION_FRAME")
+        .expect("_KEXCEPTION_FRAME");
+    {
+        use crate::seh::x64::KEXCEPTION_FRAME;
+        assert_eq!(size_of::<KEXCEPTION_FRAME>(), kexc.size as usize);
+        let f = |n| offset(&kexc, "_KEXCEPTION_FRAME", n);
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, Xmm6), f("Xmm6"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, TrapFrame), f("TrapFrame"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, MxCsr), f("MxCsr"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, R12), f("R12"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, Return), f("Return"));
+    }
+    {
+        use crate::seh::x64::{XSTATE_CONFIGURATION, XSTATE_CONTEXT, XSTATE_SAVE};
+        let xc = types
+            .layout("_XSTATE_CONFIGURATION")
+            .expect("_XSTATE_CONFIGURATION");
+        assert_eq!(size_of::<XSTATE_CONFIGURATION>(), xc.size as usize);
+        let xctx = types.layout("_XSTATE_CONTEXT").expect("_XSTATE_CONTEXT");
+        assert_eq!(size_of::<XSTATE_CONTEXT>(), xctx.size as usize);
+        assert_eq!(
+            offset_of!(XSTATE_CONTEXT, Area),
+            offset(&xctx, "_XSTATE_CONTEXT", "Area")
+        );
+        assert_eq!(
+            offset_of!(XSTATE_CONTEXT, Buffer),
+            offset(&xctx, "_XSTATE_CONTEXT", "Buffer")
+        );
+        let xs = types.layout("_XSTATE_SAVE").expect("_XSTATE_SAVE");
+        assert_eq!(size_of::<XSTATE_SAVE>(), xs.size as usize);
+        assert_eq!(
+            offset_of!(XSTATE_SAVE, XStateContext),
+            offset(&xs, "_XSTATE_SAVE", "XStateContext")
+        );
+    }
     let context = types.layout("_CONTEXT").expect("_CONTEXT");
     let field = |name| offset(&context, "_CONTEXT", name);
     assert_eq!(size_of::<CONTEXT>(), context.size as usize);
@@ -1377,6 +1731,36 @@ macro_rules! same_layout {
             );
         )*
     }};
+}
+
+#[test]
+fn section_image_information_matches_the_kernel() {
+    use crate::mm::SECTION_IMAGE_INFORMATION;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        SECTION_IMAGE_INFORMATION,
+        "_SECTION_IMAGE_INFORMATION",
+        [
+            TransferAddress,
+            ZeroBits,
+            MaximumStackSize,
+            CommittedStackSize,
+            SubSystemType,
+            SubSystemMinorVersion,
+            SubSystemMajorVersion,
+            MajorOperatingSystemVersion,
+            MinorOperatingSystemVersion,
+            ImageCharacteristics,
+            DllCharacteristics,
+            Machine,
+            ImageContainsCode,
+            ImageFlags,
+            LoaderFlags,
+            ImageFileSize,
+            CheckSum,
+        ]
+    );
 }
 
 #[test]

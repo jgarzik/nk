@@ -14,7 +14,17 @@ mod smp;
 mod switch;
 mod trap;
 pub mod unwind;
+pub mod user;
 mod variadic;
+pub mod xstate;
+
+pub use xstate::{
+    AREA_BUF_SIZE as XSTATE_BUF_SIZE, align_area as xstate_align_area,
+    area_size as xstate_area_size, enabled_mask as xstate_enabled_mask,
+    init_area as xstate_init_area, restore as xstate_restore, restore_mask as xstate_restore_mask,
+    save as xstate_save, save_mask as xstate_save_mask, self_test as xstate_self_test,
+    write_kusd_features, write_kusd_xstate,
+};
 
 pub use atomic::swap_pair;
 pub use chkstk::{chkstk_test, nk_chkstk};
@@ -32,9 +42,10 @@ pub use apic::{
 
 pub use cpu::{
     current_thread, irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql,
-    set_kernel_stack,
+    set_kernel_stack, set_user_gs_base,
 };
 pub use smp::{finish as smp_finish, prepare as smp_prepare};
+pub use user::{NtContinue, NtContinueEx, NtRaiseException, enter_user_mode};
 /// The hardware's own name for the processor running this code: its
 /// local APIC id, asked of the processor itself.
 pub fn hardware_processor() -> u64 {
@@ -172,10 +183,68 @@ pub fn cpu_init() {
 
 pub fn mm_init(_info: &BootInfo) {}
 
-/// The low half is already NK's own: nkload built it, in the one table
-/// tree, holding firmware's runtime regions and nothing else.
+/// Physical address of the System process's PML4: holds firmware's runtime
+/// regions in the low half and pre-allocated kernel PDPTs in every high-half
+/// slot (`256..512`).
+static SYSTEM_CR3: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Record the System PML4 and pre-allocate an empty PDPT for every unused
+/// high-half slot (`256..512`), so every user process PML4 that copies the
+/// high half shares all future kernel mappings without PML4 synchronization.
 pub fn low_half_init() -> Result<(), &'static str> {
+    use crate::mm::map::Tables;
+    use nk_mm::pt::{Arch, TableMem};
+
+    let root = pt_root();
+    SYSTEM_CR3.store(root, core::sync::atomic::Ordering::Release);
+    let arch_pt = pt_arch();
+    let mut tables = Tables;
+    for slot in 256..512 {
+        let entry = tables.read(root, slot);
+        if !arch_pt.present(entry) {
+            let pdpt = tables
+                .alloc_table()
+                .ok_or("no memory for kernel PML4 slots")?;
+            tables.write(root, slot, arch_pt.table(pdpt));
+        }
+    }
     Ok(())
+}
+
+/// Physical address of the System process's root page table.
+pub fn kernel_address_space() -> u64 {
+    SYSTEM_CR3.load(core::sync::atomic::Ordering::Acquire)
+}
+
+/// Physical address of the active address space's root page table (`CR3`).
+pub fn current_address_space() -> u64 {
+    pt_root()
+}
+
+/// Switch this CPU to the address space rooted at physical address `root`.
+/// A switch to the current root is a no-op; kernel global mappings survive
+/// via `CR4.PGE`.
+pub fn switch_address_space(root: u64) {
+    if pt_root() != root {
+        // SAFETY: `root` is a valid PML4 whose high half matches `SYSTEM_CR3`,
+        // so the running kernel code and stack remain identically mapped.
+        unsafe { core::arch::asm!("mov cr3, {}", in(reg) root, options(nostack)) };
+    }
+}
+
+/// Copy the shared kernel half (`256..512`) from `SYSTEM_CR3` into a fresh,
+/// zeroed process PML4 at physical address `dst_root`.
+pub fn copy_kernel_half(dst_root: u64) {
+    let src_root = kernel_address_space();
+    assert!(src_root != 0, "copy_kernel_half before low_half_init");
+    // SAFETY: both `src_root` and `dst_root` are live page-table frames
+    // reachable through the direct map; entries 256..512 of `src_root` are
+    // immutable once `low_half_init` has populated them.
+    unsafe {
+        let src = crate::mm::phys_to_virt(src_root).cast::<u64>().add(256);
+        let dst = crate::mm::phys_to_virt(dst_root).cast::<u64>().add(256);
+        core::ptr::copy_nonoverlapping(src, dst, 256);
+    }
 }
 
 /// Physical address of the root of the table tree that translates `va`:
@@ -184,13 +253,25 @@ pub fn pt_root_of(_va: u64) -> u64 {
     pt_root()
 }
 
-/// Before a call into firmware's runtime code: nothing to do. Its
-/// regions are identity-mapped in the low half of the one address space
-/// every processor runs on.
-pub fn firmware_enter() {}
+/// Before a call into firmware's runtime code: switch to `SYSTEM_CR3`, where
+/// firmware's regions are identity-mapped in the low half, and return the
+/// caller's previous root.
+pub fn firmware_enter() -> u64 {
+    let saved = current_address_space();
+    let system = kernel_address_space();
+    if system != 0 && saved != system {
+        switch_address_space(system);
+    }
+    saved
+}
 
-/// After a firmware call that returned: nothing to undo.
-pub fn firmware_leave() {}
+/// After a firmware call that returned: restore the address space saved by
+/// [`firmware_enter`].
+pub fn firmware_leave(saved: u64) {
+    if saved != 0 && current_address_space() != saved {
+        switch_address_space(saved);
+    }
+}
 
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::X86_64 {

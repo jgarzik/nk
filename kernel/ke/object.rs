@@ -40,6 +40,8 @@ pub unsafe fn signal<'a>(object: *mut DISPATCHER_HEADER) -> &'a AtomicI32 {
 
 /// `KWAIT_BLOCK.WaitType`: the block is part of a wait for all.
 const WAIT_ALL: u8 = 0;
+/// `KWAIT_BLOCK.WaitType`: the block belongs to a `WaitCompletionPacket` (`ex::tp`).
+pub const WAIT_WCP: u8 = 2;
 
 /// An object's lock, held at `DISPATCH_LEVEL` until dropped.
 pub struct ObjectLock {
@@ -171,19 +173,26 @@ pub unsafe fn unlink(block: *mut KWAIT_BLOCK) {
     }
 }
 
-/// Threads a waker has claimed and must make ready, once it has let go
-/// of the object.
+/// Threads a waker has claimed and must make ready, plus any wait completion
+/// packets fired by the signal, once it has let go of the object.
 #[must_use = "claimed threads sleep for ever unless they are made ready"]
-pub struct Woken(*mut thread::Thread);
+pub struct Woken {
+    threads: *mut thread::Thread,
+    wcps: *mut u8,
+}
 
 impl Woken {
     pub const fn none() -> Self {
-        Self(core::ptr::null_mut())
+        Self {
+            threads: core::ptr::null_mut(),
+            wcps: core::ptr::null_mut(),
+        }
     }
 
-    /// Make them ready. No object lock may be held.
+    /// Make claimed threads ready and fire associated wait completion packets.
+    /// No object lock may be held.
     pub fn ready(self) {
-        let mut next = self.0;
+        let mut next = self.threads;
         while !next.is_null() {
             let thread = next;
             // SAFETY: claimed asleep, the thread is this waker's alone
@@ -191,6 +200,15 @@ impl Woken {
             unsafe {
                 next = thread::take_wake_link(thread);
                 thread::make_ready(thread);
+            }
+        }
+        let mut wcp = self.wcps;
+        while !wcp.is_null() {
+            let cur = wcp;
+            // SAFETY: `cur` was unlinked and owns a reference transferred from `satisfy`.
+            unsafe {
+                wcp = crate::ex::tp::take_wcp_wake_link(cur);
+                crate::ex::tp::fire_wcp(cur);
             }
         }
     }
@@ -205,9 +223,8 @@ impl Woken {
 /// `object` is live and its lock is held.
 pub unsafe fn satisfy(object: *mut DISPATCHER_HEADER) -> Woken {
     let mut woken = Woken::none();
-    // SAFETY: per the contract. Linked blocks belong to live threads:
-    // a thread unlinks its blocks, under this lock, before its wait
-    // returns.
+    // SAFETY: per the contract. Linked blocks belong to live threads or WCPs:
+    // a thread unlinks its blocks, under this lock, before its wait returns.
     unsafe {
         let state = signal(object);
         let head = &raw mut (*object).WaitListHead;
@@ -215,6 +232,17 @@ pub unsafe fn satisfy(object: *mut DISPATCHER_HEADER) -> Woken {
         while entry != head && state.load(Ordering::Relaxed) > 0 {
             let block = entry.cast::<KWAIT_BLOCK>();
             entry = (*entry).Flink;
+            let wait_type = (&raw const (*block).WaitType).read();
+            if wait_type == WAIT_WCP {
+                let wcp = (&raw const (*block).Thread).read().cast::<u8>();
+                unlink(block);
+                if kind(object) != MUTANT_OBJECT {
+                    take(object, core::ptr::null_mut());
+                }
+                crate::ex::tp::set_wcp_wake_link(wcp, woken.wcps);
+                woken.wcps = wcp;
+                continue;
+            }
             let waiter = (&raw const (*block).Thread).read().cast::<thread::Thread>();
             let key = u32::from((&raw const (*block).WaitKey).read());
             // A thread already woken by something else keeps its block
@@ -229,8 +257,8 @@ pub unsafe fn satisfy(object: *mut DISPATCHER_HEADER) -> Woken {
                 take(object, waiter);
             }
             if found == Claimed::Asleep {
-                thread::set_wake_link(waiter, woken.0);
-                woken.0 = waiter;
+                thread::set_wake_link(waiter, woken.threads);
+                woken.threads = waiter;
             }
         }
     }

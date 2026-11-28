@@ -286,7 +286,12 @@ fn x64_run_prolog(chain: &[x64::UnwindInfo<'_>], limit: Option<u32>) -> X64Frame
         let addr = place.unwrap_or_else(|offset| frame + u64::from(offset));
         // The first save of a register holds the caller's value.
         if is_xmm {
-            xmm_at[reg as usize - 6].get_or_insert(addr);
+            if let Some(slot) = (reg as usize)
+                .checked_sub(6)
+                .and_then(|i| xmm_at.get_mut(i))
+            {
+                slot.get_or_insert(addr);
+            }
         } else {
             gpr_at[reg as usize].get_or_insert(addr);
         }
@@ -452,12 +457,19 @@ fn x64_epilog_table_agrees_with_instruction_decode() {
 /// and from the epilog at `start` just after it, with the registers the
 /// trim leaves, must reach the same caller.
 fn x64_trim_agrees(img: &Image, f: &x64::RuntimeFunction, pc: u32, start: u32, e: &x64::Epilog) {
+    let info = x64::UnwindInfo::parse(&img.bytes, f.unwind).unwrap();
     let mut before = x64::Regs {
         gpr: core::array::from_fn(|i| CALLER - 0x10_0000 + 0x1000 * i as u64),
         rip: 0,
         xmm: [0; 10],
     };
     before.gpr[x64::RSP] = CALLER - 0x20_0000;
+    if info.frame_reg != 0 && matches!(e.trim, x64::Trim::Add(_)) {
+        // A frame-pointer function that ends with `add rsp, N` has already
+        // restored `rsp = frame_reg - frame_offset` before the trim.
+        before.gpr[info.frame_reg as usize] =
+            before.gpr[x64::RSP].wrapping_add(u64::from(info.frame_offset));
+    }
     let mut after = before;
     after.gpr[x64::RSP] = match e.trim {
         x64::Trim::Add(n) => before.gpr[x64::RSP].wrapping_add_signed(i64::from(n)),

@@ -140,7 +140,10 @@ pub fn smp_finish() {}
 
 /// Record the kernel stack this processor now runs on. Nothing to do
 /// here: exception entry recognises an overflow from the stack pointer.
-pub fn set_kernel_stack(_base: u64) {}
+pub fn set_kernel_stack(_base: u64, _top: u64) {}
+
+/// Set the user-mode thread-local base (`TPIDR_EL0` / x86 `KERNEL_GS_BASE`).
+pub fn set_user_gs_base(_base: u64) {}
 
 /// Take over the boot CPU, processor 0: exception vectors, PCR. Prints
 /// nothing and takes no lock: it runs before either works.
@@ -176,22 +179,69 @@ static LOW_ROOT: AtomicU64 = AtomicU64::new(0);
 pub fn low_half_init() -> Result<(), &'static str> {
     use crate::mm::map::Tables;
     use nk_bootinfo::FirmwareUse;
-    use nk_mm::pt::{Prot, TableMem};
+    use nk_mm::pt::{self, Prot, TableMem};
 
     let root = Tables.alloc_table().ok_or("no memory for the low half")?;
-    LOW_ROOT.store(root, Ordering::Relaxed);
+    LOW_ROOT.store(root, Ordering::Release);
+    let arch_pt = pt_arch();
     for (region, used_as) in crate::mm::firmware_regions() {
         let prot = match used_as {
             FirmwareUse::RuntimeCode => Prot::RWX,
             _ if region.is_ram() => Prot::RW,
             _ => Prot::DEVICE,
         };
-        crate::mm::map::map(region.phys, region.phys, region.pages as usize, prot)
-            .map_err(|_| "cannot map firmware's runtime regions")?;
+        pt::map_range(
+            &mut Tables,
+            &arch_pt,
+            root,
+            region.phys,
+            region.phys,
+            region.pages * 4096,
+            0,
+            prot,
+        )
+        .map_err(|_| "cannot map firmware's runtime regions")?;
     }
+    mapping_sync();
     adopt_low_half();
     Ok(())
 }
+
+/// Physical address of the System process's low-half (`TTBR0_EL1`) root table.
+pub fn kernel_address_space() -> u64 {
+    LOW_ROOT.load(Ordering::Acquire)
+}
+
+/// Physical address of the active low-half (`TTBR0_EL1`) root page table.
+pub fn current_address_space() -> u64 {
+    let ttbr: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr, options(nomem, nostack)) };
+    ttbr & 0x0000_FFFF_FFFF_F000
+}
+
+/// Switch this CPU's low half (`TTBR0_EL1`) to the root page table at `root`.
+pub fn switch_address_space(root: u64) {
+    if current_address_space() != root {
+        // SAFETY: `root` is a valid L0 table in NK's format; the kernel runs
+        // in TTBR1 so switching TTBR0 and invalidating local TLBs is safe.
+        unsafe {
+            core::arch::asm!(
+                "msr ttbr0_el1, {root}",
+                "isb",
+                "tlbi vmalle1",
+                "dsb nsh",
+                "isb",
+                root = in(reg) root,
+                options(nostack),
+            );
+        }
+    }
+}
+
+/// Nothing to copy on arm64: `TTBR1_EL1` holds the kernel half independently
+/// of each process's `TTBR0_EL1`.
+pub fn copy_kernel_half(_dst_root: u64) {}
 
 /// Make NK's low half this processor's. The caller runs in the upper
 /// half with interrupts masked, so nothing uses the lower one while the
@@ -222,19 +272,31 @@ pub fn adopt_low_half() {
 /// each half of the address space has its own.
 pub fn pt_root_of(va: u64) -> u64 {
     if va >> 63 == 0 {
-        LOW_ROOT.load(Ordering::Relaxed)
+        current_address_space()
     } else {
         pt_root()
     }
 }
 
-/// Before a call into firmware's runtime code: nothing to do. The low
-/// half of every processor holds the runtime regions at their physical
-/// addresses.
-pub fn firmware_enter() {}
+/// Before a call into firmware's runtime code: switch `TTBR0_EL1` to
+/// `LOW_ROOT` (where firmware's runtime regions are identity-mapped) and
+/// return the caller's previous root.
+pub fn firmware_enter() -> u64 {
+    let saved = current_address_space();
+    let system = kernel_address_space();
+    if system != 0 && saved != system {
+        switch_address_space(system);
+    }
+    saved
+}
 
-/// After a firmware call that returned: nothing to undo.
-pub fn firmware_leave() {}
+/// After a firmware call that returned: restore the low-half root saved by
+/// [`firmware_enter`].
+pub fn firmware_leave(saved: u64) {
+    if saved != 0 && current_address_space() != saved {
+        switch_address_space(saved);
+    }
+}
 
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::Aarch64 {
@@ -324,6 +386,109 @@ pub fn sync_icache(start: *const u8, len: usize) {
     }
     // SAFETY: as above.
     unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
+}
+
+/// Size of the per-thread extended-state inline buffer (unused on arm64).
+pub const XSTATE_BUF_SIZE: usize = 64;
+
+pub fn xstate_align_area(buf: *mut u8) -> *mut u8 {
+    buf
+}
+
+pub fn xstate_area_size() -> usize {
+    0
+}
+
+pub fn xstate_enabled_mask() -> u64 {
+    0
+}
+
+/// # Safety
+/// No-op on arm64; `context_switch` preserves NEON state directly.
+pub unsafe fn xstate_init_area(_area: *mut u8) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_save(_area: *mut u8) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_restore(_area: *mut u8) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_save_mask(_area: *mut u8, _mask: u64) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_restore_mask(_area: *mut u8, _mask: u64) {}
+
+/// # Safety
+/// `page` points to the mapped `KUSER_SHARED_DATA` page.
+pub unsafe fn write_kusd_features(page: *mut u8) {
+    use nk_ntabi::ke::{SHARED_PROCESSOR_FEATURES, pf};
+    // SAFETY: per the contract.
+    unsafe {
+        let base = page.add(SHARED_PROCESSOR_FEATURES);
+        base.add(pf::NX_ENABLED).write_volatile(1);
+        base.add(pf::FASTFAIL_AVAILABLE).write_volatile(1);
+    }
+}
+
+/// # Safety
+/// `page` points to the mapped `KUSER_SHARED_DATA` page.
+pub unsafe fn write_kusd_xstate(_page: *mut u8) {}
+
+pub fn xstate_self_test() -> Result<(), &'static str> {
+    Ok(())
+}
+
+/// Transition to user mode (not yet implemented on arm64).
+///
+/// # Safety
+/// Never returns on arm64.
+#[allow(dead_code)]
+pub unsafe fn enter_user_mode(_rip: u64, _rsp: u64, _arg0: u64, _arg1: u64) -> ! {
+    crate::kd::bugcheck(format_args!(
+        "arm64 user-mode transition is not implemented"
+    ))
+}
+
+/// `NtContinue` stub on arm64.
+///
+/// # Safety
+/// Not supported on arm64.
+#[allow(non_snake_case, dead_code)]
+pub unsafe extern "C" fn NtContinue(
+    _context: *const nk_ntabi::seh::x64::CONTEXT,
+    _test_alert: u8,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
+}
+
+/// `NtContinueEx` stub on arm64.
+///
+/// # Safety
+/// Not supported on arm64.
+#[allow(non_snake_case, dead_code)]
+pub unsafe extern "C" fn NtContinueEx(
+    _context: *const nk_ntabi::seh::x64::CONTEXT,
+    _continue_arg: *const core::ffi::c_void,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
+}
+
+/// `NtRaiseException` stub on arm64.
+///
+/// # Safety
+/// Not supported on arm64.
+#[allow(non_snake_case, dead_code)]
+pub unsafe extern "C" fn NtRaiseException(
+    _exc: *const nk_ntabi::seh::EXCEPTION_RECORD,
+    _context: *const nk_ntabi::seh::x64::CONTEXT,
+    _first_chance: u8,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
 }
 
 /// Make memory hold what the data cache holds of a range, and drop

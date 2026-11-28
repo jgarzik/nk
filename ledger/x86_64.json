@@ -5,9 +5,9 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 1176,
-  "implemented": 809,
-  "partial": 94,
-  "traps": 118,
+  "implemented": 818,
+  "partial": 95,
+  "traps": 108,
   "missing": 15,
   "library": 140
  },
@@ -9961,7 +9961,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlDowncaseUnicodeString",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -10571,7 +10571,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "FsRtlDismountComplete",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -10976,7 +10976,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "SeFilterToken",
-     "state": "traps"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -11116,7 +11116,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsGetCurrentThreadTeb",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -11690,7 +11690,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsIsProtectedProcess",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -12319,7 +12319,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsLookupProcessByProcessId",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -12399,7 +12399,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsGetProcessCreateTimeQuadPart",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -12439,7 +12439,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeRestoreExtendedProcessorState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -12449,7 +12449,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeSaveExtendedProcessorState",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -12778,7 +12778,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsIsThreadTerminating",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -21951,15 +21951,2121 @@
    ]
   }
  ],
+ "services": {
+  "note": "NT system service dispatch table (SSDT) entries registered in kernel/svc/mod.rs",
+  "total": 471,
+  "implemented": 95,
+  "partial": 57,
+  "traps": 0,
+  "missing": 319,
+  "registered": [
+   {
+    "number": 1,
+    "name": "NtWorkerFactoryWorkerReady",
+    "state": "partial"
+   },
+   {
+    "number": 4,
+    "name": "NtWaitForSingleObject",
+    "state": "partial"
+   },
+   {
+    "number": 6,
+    "name": "NtReadFile",
+    "state": "partial"
+   },
+   {
+    "number": 7,
+    "name": "NtDeviceIoControlFile",
+    "state": "implemented"
+   },
+   {
+    "number": 8,
+    "name": "NtWriteFile",
+    "state": "partial"
+   },
+   {
+    "number": 9,
+    "name": "NtRemoveIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 10,
+    "name": "NtReleaseSemaphore",
+    "state": "implemented"
+   },
+   {
+    "number": 13,
+    "name": "NtSetInformationThread",
+    "state": "partial"
+   },
+   {
+    "number": 14,
+    "name": "NtSetEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 15,
+    "name": "NtClose",
+    "state": "implemented"
+   },
+   {
+    "number": 16,
+    "name": "NtQueryObject",
+    "state": "partial"
+   },
+   {
+    "number": 17,
+    "name": "NtQueryInformationFile",
+    "state": "implemented"
+   },
+   {
+    "number": 18,
+    "name": "NtOpenKey",
+    "state": "implemented"
+   },
+   {
+    "number": 19,
+    "name": "NtEnumerateValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 21,
+    "name": "NtQueryDefaultLocale",
+    "state": "implemented"
+   },
+   {
+    "number": 22,
+    "name": "NtQueryKey",
+    "state": "implemented"
+   },
+   {
+    "number": 23,
+    "name": "NtQueryValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 24,
+    "name": "NtAllocateVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 25,
+    "name": "NtQueryInformationProcess",
+    "state": "partial"
+   },
+   {
+    "number": 28,
+    "name": "NtSetInformationProcess",
+    "state": "partial"
+   },
+   {
+    "number": 29,
+    "name": "NtCreateKey",
+    "state": "implemented"
+   },
+   {
+    "number": 30,
+    "name": "NtFreeVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 32,
+    "name": "NtReleaseMutant",
+    "state": "implemented"
+   },
+   {
+    "number": 33,
+    "name": "NtQueryInformationToken",
+    "state": "implemented"
+   },
+   {
+    "number": 35,
+    "name": "NtQueryVirtualMemory",
+    "state": "partial"
+   },
+   {
+    "number": 36,
+    "name": "NtOpenThreadToken",
+    "state": "implemented"
+   },
+   {
+    "number": 37,
+    "name": "NtQueryInformationThread",
+    "state": "partial"
+   },
+   {
+    "number": 38,
+    "name": "NtOpenProcess",
+    "state": "implemented"
+   },
+   {
+    "number": 39,
+    "name": "NtSetInformationFile",
+    "state": "implemented"
+   },
+   {
+    "number": 40,
+    "name": "NtMapViewOfSection",
+    "state": "partial"
+   },
+   {
+    "number": 42,
+    "name": "NtUnmapViewOfSection",
+    "state": "implemented"
+   },
+   {
+    "number": 44,
+    "name": "NtTerminateProcess",
+    "state": "partial"
+   },
+   {
+    "number": 45,
+    "name": "NtSetEventBoostPriority",
+    "state": "implemented"
+   },
+   {
+    "number": 47,
+    "name": "NtOpenThreadTokenEx",
+    "state": "implemented"
+   },
+   {
+    "number": 48,
+    "name": "NtOpenProcessTokenEx",
+    "state": "implemented"
+   },
+   {
+    "number": 49,
+    "name": "NtQueryPerformanceCounter",
+    "state": "implemented"
+   },
+   {
+    "number": 50,
+    "name": "NtEnumerateKey",
+    "state": "implemented"
+   },
+   {
+    "number": 51,
+    "name": "NtOpenFile",
+    "state": "partial"
+   },
+   {
+    "number": 52,
+    "name": "NtDelayExecution",
+    "state": "implemented"
+   },
+   {
+    "number": 53,
+    "name": "NtQueryDirectoryFile",
+    "state": "implemented"
+   },
+   {
+    "number": 54,
+    "name": "NtQuerySystemInformation",
+    "state": "partial"
+   },
+   {
+    "number": 55,
+    "name": "NtOpenSection",
+    "state": "implemented"
+   },
+   {
+    "number": 57,
+    "name": "NtFsControlFile",
+    "state": "implemented"
+   },
+   {
+    "number": 58,
+    "name": "NtWriteVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 60,
+    "name": "NtDuplicateObject",
+    "state": "partial"
+   },
+   {
+    "number": 61,
+    "name": "NtQueryAttributesFile",
+    "state": "partial"
+   },
+   {
+    "number": 62,
+    "name": "NtClearEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 63,
+    "name": "NtReadVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 64,
+    "name": "NtOpenEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 65,
+    "name": "NtAdjustPrivilegesToken",
+    "state": "partial"
+   },
+   {
+    "number": 66,
+    "name": "NtDuplicateToken",
+    "state": "implemented"
+   },
+   {
+    "number": 67,
+    "name": "NtContinue",
+    "state": "implemented"
+   },
+   {
+    "number": 68,
+    "name": "NtQueryDefaultUILanguage",
+    "state": "implemented"
+   },
+   {
+    "number": 69,
+    "name": "NtQueueApcThread",
+    "state": "implemented"
+   },
+   {
+    "number": 70,
+    "name": "NtYieldExecution",
+    "state": "implemented"
+   },
+   {
+    "number": 72,
+    "name": "NtCreateEvent",
+    "state": "partial"
+   },
+   {
+    "number": 73,
+    "name": "NtQueryVolumeInformationFile",
+    "state": "implemented"
+   },
+   {
+    "number": 74,
+    "name": "NtCreateSection",
+    "state": "partial"
+   },
+   {
+    "number": 75,
+    "name": "NtFlushBuffersFile",
+    "state": "implemented"
+   },
+   {
+    "number": 76,
+    "name": "NtApphelpCacheControl",
+    "state": "partial"
+   },
+   {
+    "number": 80,
+    "name": "NtProtectVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 81,
+    "name": "NtQuerySection",
+    "state": "implemented"
+   },
+   {
+    "number": 82,
+    "name": "NtResumeThread",
+    "state": "implemented"
+   },
+   {
+    "number": 83,
+    "name": "NtTerminateThread",
+    "state": "partial"
+   },
+   {
+    "number": 85,
+    "name": "NtCreateFile",
+    "state": "partial"
+   },
+   {
+    "number": 88,
+    "name": "NtOpenDirectoryObject",
+    "state": "implemented"
+   },
+   {
+    "number": 90,
+    "name": "NtQuerySystemTime",
+    "state": "implemented"
+   },
+   {
+    "number": 91,
+    "name": "NtWaitForMultipleObjects",
+    "state": "implemented"
+   },
+   {
+    "number": 93,
+    "name": "NtCancelIoFile",
+    "state": "partial"
+   },
+   {
+    "number": 94,
+    "name": "NtTraceEvent",
+    "state": "partial"
+   },
+   {
+    "number": 95,
+    "name": "NtPowerInformation",
+    "state": "partial"
+   },
+   {
+    "number": 96,
+    "name": "NtSetValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 111,
+    "name": "NtAlertThread",
+    "state": "implemented"
+   },
+   {
+    "number": 112,
+    "name": "NtAlertThreadByThreadId",
+    "state": "implemented"
+   },
+   {
+    "number": 113,
+    "name": "NtAllocateLocallyUniqueId",
+    "state": "implemented"
+   },
+   {
+    "number": 118,
+    "name": "NtAllocateVirtualMemoryEx",
+    "state": "partial"
+   },
+   {
+    "number": 144,
+    "name": "NtAssociateWaitCompletionPacket",
+    "state": "implemented"
+   },
+   {
+    "number": 148,
+    "name": "NtCancelTimer2",
+    "state": "implemented"
+   },
+   {
+    "number": 149,
+    "name": "NtCancelWaitCompletionPacket",
+    "state": "implemented"
+   },
+   {
+    "number": 161,
+    "name": "NtContinueEx",
+    "state": "implemented"
+   },
+   {
+    "number": 166,
+    "name": "NtCreateDirectoryObject",
+    "state": "partial"
+   },
+   {
+    "number": 172,
+    "name": "NtCreateIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 179,
+    "name": "NtCreateMutant",
+    "state": "implemented"
+   },
+   {
+    "number": 191,
+    "name": "NtCreateSemaphore",
+    "state": "implemented"
+   },
+   {
+    "number": 192,
+    "name": "NtCreateSymbolicLinkObject",
+    "state": "implemented"
+   },
+   {
+    "number": 193,
+    "name": "NtCreateThreadEx",
+    "state": "partial"
+   },
+   {
+    "number": 195,
+    "name": "NtCreateTimer2",
+    "state": "implemented"
+   },
+   {
+    "number": 201,
+    "name": "NtCreateWaitCompletionPacket",
+    "state": "implemented"
+   },
+   {
+    "number": 204,
+    "name": "NtCreateWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 210,
+    "name": "NtDeleteFile",
+    "state": "implemented"
+   },
+   {
+    "number": 211,
+    "name": "NtDeleteKey",
+    "state": "implemented"
+   },
+   {
+    "number": 214,
+    "name": "NtDeleteValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 219,
+    "name": "NtDisplayString",
+    "state": "implemented"
+   },
+   {
+    "number": 220,
+    "name": "NtDrawText",
+    "state": "implemented"
+   },
+   {
+    "number": 226,
+    "name": "NtExtendSection",
+    "state": "implemented"
+   },
+   {
+    "number": 230,
+    "name": "NtFlushBuffersFileEx",
+    "state": "partial"
+   },
+   {
+    "number": 232,
+    "name": "NtFlushInstructionCache",
+    "state": "implemented"
+   },
+   {
+    "number": 235,
+    "name": "NtFlushVirtualMemory",
+    "state": "partial"
+   },
+   {
+    "number": 246,
+    "name": "NtGetMUIRegistryInfo",
+    "state": "partial"
+   },
+   {
+    "number": 249,
+    "name": "NtGetNlsSectionPtr",
+    "state": "partial"
+   },
+   {
+    "number": 252,
+    "name": "NtImpersonateAnonymousToken",
+    "state": "implemented"
+   },
+   {
+    "number": 255,
+    "name": "NtInitializeNlsFiles",
+    "state": "partial"
+   },
+   {
+    "number": 257,
+    "name": "NtInitiatePowerAction",
+    "state": "partial"
+   },
+   {
+    "number": 259,
+    "name": "NtIsUILanguageComitted",
+    "state": "implemented"
+   },
+   {
+    "number": 261,
+    "name": "NtLoadDriver",
+    "state": "partial"
+   },
+   {
+    "number": 271,
+    "name": "NtMakeTemporaryObject",
+    "state": "partial"
+   },
+   {
+    "number": 281,
+    "name": "NtNotifyChangeKey",
+    "state": "partial"
+   },
+   {
+    "number": 286,
+    "name": "NtOpenIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 288,
+    "name": "NtOpenKeyEx",
+    "state": "implemented"
+   },
+   {
+    "number": 292,
+    "name": "NtOpenMutant",
+    "state": "implemented"
+   },
+   {
+    "number": 296,
+    "name": "NtOpenProcessToken",
+    "state": "implemented"
+   },
+   {
+    "number": 299,
+    "name": "NtOpenSemaphore",
+    "state": "implemented"
+   },
+   {
+    "number": 301,
+    "name": "NtOpenSymbolicLinkObject",
+    "state": "implemented"
+   },
+   {
+    "number": 302,
+    "name": "NtOpenThread",
+    "state": "implemented"
+   },
+   {
+    "number": 322,
+    "name": "NtQueryDirectoryFileEx",
+    "state": "implemented"
+   },
+   {
+    "number": 323,
+    "name": "NtQueryDirectoryObject",
+    "state": "implemented"
+   },
+   {
+    "number": 326,
+    "name": "NtQueryFullAttributesFile",
+    "state": "implemented"
+   },
+   {
+    "number": 335,
+    "name": "NtQueryInformationWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 336,
+    "name": "NtQueryInstallUILanguage",
+    "state": "implemented"
+   },
+   {
+    "number": 338,
+    "name": "NtQueryIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 339,
+    "name": "NtQueryLicenseValue",
+    "state": "implemented"
+   },
+   {
+    "number": 346,
+    "name": "NtQuerySecurityAttributesToken",
+    "state": "partial"
+   },
+   {
+    "number": 347,
+    "name": "NtQuerySecurityObject",
+    "state": "implemented"
+   },
+   {
+    "number": 350,
+    "name": "NtQuerySymbolicLinkObject",
+    "state": "implemented"
+   },
+   {
+    "number": 353,
+    "name": "NtQuerySystemInformationEx",
+    "state": "partial"
+   },
+   {
+    "number": 355,
+    "name": "NtQueryWnfStateData",
+    "state": "partial"
+   },
+   {
+    "number": 356,
+    "name": "NtQueryWnfStateNameInformation",
+    "state": "partial"
+   },
+   {
+    "number": 357,
+    "name": "NtQueueApcThreadEx",
+    "state": "partial"
+   },
+   {
+    "number": 358,
+    "name": "NtRaiseException",
+    "state": "implemented"
+   },
+   {
+    "number": 359,
+    "name": "NtRaiseHardError",
+    "state": "partial"
+   },
+   {
+    "number": 367,
+    "name": "NtReleaseWorkerFactoryWorker",
+    "state": "partial"
+   },
+   {
+    "number": 368,
+    "name": "NtRemoveIoCompletionEx",
+    "state": "implemented"
+   },
+   {
+    "number": 376,
+    "name": "NtResetEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 390,
+    "name": "NtSerializeBoot",
+    "state": "implemented"
+   },
+   {
+    "number": 414,
+    "name": "NtSetInformationVirtualMemory",
+    "state": "partial"
+   },
+   {
+    "number": 415,
+    "name": "NtSetInformationWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 417,
+    "name": "NtSetIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 418,
+    "name": "NtSetIoCompletionEx",
+    "state": "partial"
+   },
+   {
+    "number": 423,
+    "name": "NtSetSecurityObject",
+    "state": "implemented"
+   },
+   {
+    "number": 426,
+    "name": "NtSetSystemInformation",
+    "state": "partial"
+   },
+   {
+    "number": 429,
+    "name": "NtSetThreadExecutionState",
+    "state": "implemented"
+   },
+   {
+    "number": 430,
+    "name": "NtSetTimer2",
+    "state": "implemented"
+   },
+   {
+    "number": 436,
+    "name": "NtShutdownSystem",
+    "state": "partial"
+   },
+   {
+    "number": 437,
+    "name": "NtShutdownWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 444,
+    "name": "NtSuspendThread",
+    "state": "partial"
+   },
+   {
+    "number": 448,
+    "name": "NtTestAlert",
+    "state": "implemented"
+   },
+   {
+    "number": 451,
+    "name": "NtTraceControl",
+    "state": "partial"
+   },
+   {
+    "number": 454,
+    "name": "NtUnloadDriver",
+    "state": "partial"
+   },
+   {
+    "number": 460,
+    "name": "NtUnmapViewOfSectionEx",
+    "state": "implemented"
+   },
+   {
+    "number": 462,
+    "name": "NtUpdateWnfStateData",
+    "state": "partial"
+   },
+   {
+    "number": 464,
+    "name": "NtWaitForAlertByThreadId",
+    "state": "implemented"
+   },
+   {
+    "number": 467,
+    "name": "NtWaitForWorkViaWorkerFactory",
+    "state": "partial"
+   }
+  ]
+ },
  "corpus": {
   "note": "Microsoft's kernel-mode binaries of the pinned build (fixtures/corpus.toml): distinct names they import from ntoskrnl.exe and hal.dll, by what NK does about each. Those that are fixtures too are loaded; the rest are not.",
   "binaries": 60,
   "kernel_names": {
    "total": 1740,
-   "implemented": 808,
-   "partial": 94,
-   "traps": 116,
-   "missing": 722
+   "implemented": 822,
+   "partial": 95,
+   "traps": 106,
+   "missing": 717
+  },
+  "high_priority": {
+   "note": "high-priority Microsoft driver subsystems (storport.sys, tcpip.sys, ndis.sys, afd.sys, ntfs.sys): static kernel import gaps, shared cross-subsystem gaps, and transitive in-corpus closure (static import coverage is not functional completion; private ABI layouts, dynamic lookups, and runtime semantics are not captured)",
+   "binaries": [
+    "storport.sys",
+    "tcpip.sys",
+    "ndis.sys",
+    "afd.sys",
+    "ntfs.sys"
+   ],
+   "kernel_names": {
+    "total": 1021,
+    "implemented": 585,
+    "partial": 66,
+    "traps": 39,
+    "missing": 331
+   },
+   "by_binary": [
+    {
+     "file": "storport.sys",
+     "version": "10.0.19041.1949",
+     "kernel": {
+      "total": 269,
+      "implemented": 247,
+      "partial": 20,
+      "traps": 2,
+      "missing": 0
+     },
+     "by_ordinal": 0,
+     "other_modules": {},
+     "not_implemented": {
+      "missing": [],
+      "traps": [
+       "IoQueryFullDriverPath",
+       "PoFxIssueComponentPerfStateChange"
+      ],
+      "partial": [
+       "EmClientQueryRuleState",
+       "ExAllocateTimer",
+       "ExSetTimer",
+       "IoAllocateMdl",
+       "IoGetDevicePropertyData",
+       "IoGetDmaAdapter",
+       "IoPropagateIrpExtension",
+       "IoWMIRegistrationControl",
+       "MmAllocatePagesForMdlEx",
+       "MmMapLockedPagesSpecifyCache",
+       "MmProbeAndLockPages",
+       "PoFxRegisterDevice",
+       "PoRegisterPowerSettingCallback",
+       "PoRequestPowerIrp",
+       "WheaReportFatalHwErrorDeviceDriverEx",
+       "WheaReportHwErrorDeviceDriverEx",
+       "ZwNotifyChangeKey",
+       "ZwPowerInformation",
+       "ZwQuerySystemInformation",
+       "ZwQueryWnfStateData"
+      ]
+     }
+    },
+    {
+     "file": "tcpip.sys",
+     "version": "10.0.19041.2006",
+     "kernel": {
+      "total": 329,
+      "implemented": 250,
+      "partial": 15,
+      "traps": 7,
+      "missing": 57
+     },
+     "by_ordinal": 0,
+     "other_modules": {
+      "cng.sys": 15,
+      "fltmgr.sys": 2,
+      "fwpkclnt.sys": 54,
+      "ksecdd.sys": 7,
+      "msrpc.sys": 11,
+      "ndis.sys": 49,
+      "netio.sys": 304
+     },
+     "not_implemented": {
+      "missing": [
+       "CmRegisterMachineHiveLoadedNotification",
+       "CmUnregisterMachineHiveLoadedNotification",
+       "ExAcquireRundownProtectionCacheAwareEx",
+       "ExGetCurrentProcessorCounts",
+       "ExReInitializeRundownProtection",
+       "ExReleaseRundownProtectionCacheAwareEx",
+       "ExRundownCompleted",
+       "ExSetTimerResolution",
+       "KeAllocateCalloutStack",
+       "KeFreeCalloutStack",
+       "KeIsAttachedProcess",
+       "KeQuerySystemTimePrecise",
+       "KeShouldYieldProcessor",
+       "KeTestSpinLock",
+       "ObCloseHandle",
+       "PsGetEffectiveContainerId",
+       "PsGetProcessStartKey",
+       "PsGetThreadTeb",
+       "PsQueryProcessAttributesByToken",
+       "PsQueryProcessCommandLine",
+       "RtlAddAccessAllowedAceEx",
+       "RtlContractHashTable",
+       "RtlCreateHashTable",
+       "RtlCreateHashTableEx",
+       "RtlDeleteHashTable",
+       "RtlEndEnumerationHashTable",
+       "RtlEndStrongEnumerationHashTable",
+       "RtlEndWeakEnumerationHashTable",
+       "RtlEnumerateEntryHashTable",
+       "RtlEnumerateGenericTableLikeADirectory",
+       "RtlExpandHashTable",
+       "RtlGetNextEntryHashTable",
+       "RtlInitEnumerationHashTable",
+       "RtlInitStrongEnumerationHashTable",
+       "RtlInitWeakEnumerationHashTable",
+       "RtlInsertEntryHashTable",
+       "RtlInt64ToUnicodeString",
+       "RtlIpv4AddressToStringExW",
+       "RtlIpv4AddressToStringW",
+       "RtlIpv4StringToAddressW",
+       "RtlIpv6AddressToStringExW",
+       "RtlIpv6AddressToStringW",
+       "RtlIpv6StringToAddressW",
+       "RtlLookupElementGenericTableFullAvl",
+       "RtlLookupEntryHashTable",
+       "RtlMapGenericMask",
+       "RtlQueryPackageIdentity",
+       "RtlRemoveEntryHashTable",
+       "RtlStronglyEnumerateEntryHashTable",
+       "RtlWeaklyEnumerateEntryHashTable",
+       "SeAccessCheckFromState",
+       "SeCaptureSubjectContextEx",
+       "SeLocateProcessImageName",
+       "SeOpenObjectAuditAlarmForNonObObject",
+       "SeSecurityAttributePresent",
+       "SeSrpAccessCheck",
+       "SeTokenFromAccessInformation"
+      ],
+      "traps": [
+       "KeIsExecutingDpc",
+       "SeQuerySecurityAttributesToken",
+       "SeQuerySecurityAttributesTokenAccessInformation",
+       "SeReportSecurityEventWithSubCategory",
+       "SeSetAuditParameter",
+       "ZwQuerySecurityAttributesToken",
+       "qsort"
+      ],
+      "partial": [
+       "ExAllocateTimer",
+       "ExCreateCallback",
+       "ExSetTimer",
+       "ExSubscribeWnfStateChange",
+       "ExUnsubscribeWnfStateChange",
+       "IoAllocateMdl",
+       "IoWMIRegistrationControl",
+       "MmMapLockedPagesSpecifyCache",
+       "MmProbeAndLockPages",
+       "PoRegisterPowerSettingCallback",
+       "ZwCreateEvent",
+       "ZwCreateFile",
+       "ZwQuerySystemInformation",
+       "ZwQueryWnfStateData",
+       "ZwWaitForSingleObject"
+      ]
+     }
+    },
+    {
+     "file": "ndis.sys",
+     "version": "10.0.19041.1387",
+     "kernel": {
+      "total": 359,
+      "implemented": 274,
+      "partial": 23,
+      "traps": 8,
+      "missing": 54
+     },
+     "by_ordinal": 0,
+     "other_modules": {
+      "netio.sys": 14,
+      "wpprecorder.sys": 4
+     },
+     "not_implemented": {
+      "missing": [
+       "ExGetCurrentProcessorCounts",
+       "ExGetCurrentProcessorCpuUsage",
+       "ExInterlockedAddLargeInteger",
+       "ExReInitializeRundownProtection",
+       "ExReleaseRundownProtectionEx",
+       "ExRundownCompleted",
+       "KeDeregisterBugCheckCallback",
+       "KeQueryTotalCycleTimeThread",
+       "KeRegisterBugCheckCallback",
+       "KeSetActualBasePriorityThread",
+       "KeSetIdealProcessorThread",
+       "KeTestSpinLock",
+       "MmAllocateMappingAddress",
+       "MmAllocateNodePagesForMdlEx",
+       "MmAllocateNonCachedMemory",
+       "MmFreeMappingAddress",
+       "MmFreeNonCachedMemory",
+       "MmIsDriverVerifyingByAddress",
+       "MmMapLockedPages",
+       "MmMapLockedPagesWithReservedMapping",
+       "MmSystemRangeStart",
+       "ObGetObjectSecurity",
+       "ObReleaseObjectSecurity",
+       "PoFxEnableDStateReporting",
+       "PsGetCurrentProcessSessionId",
+       "PsGetJobProperty",
+       "PsGetJobSessionId",
+       "PsGetProcessJob",
+       "PsGetThreadProperty",
+       "PsSetJobProperty",
+       "PsSetThreadProperty",
+       "RtlCharToInteger",
+       "RtlClearBitEx",
+       "RtlCreateHashTable",
+       "RtlCreateUnicodeString",
+       "RtlFindClearBitsAndSetEx",
+       "RtlGetAce",
+       "RtlImageDirectoryEntryToData",
+       "RtlInitializeBitMapEx",
+       "RtlInsertEntryHashTable",
+       "RtlInt64ToUnicodeString",
+       "RtlLookupEntryHashTable",
+       "RtlMapGenericMask",
+       "RtlRemoveEntryHashTable",
+       "RtlRunOnceInitialize",
+       "RtlSelfRelativeToAbsoluteSD",
+       "RtlSetBitEx",
+       "RtlTestBitEx",
+       "VfQueryDispatchTable",
+       "WmiGetClock",
+       "bsearch",
+       "swprintf_s",
+       "vswprintf_s",
+       "wcsnlen"
+      ],
+      "traps": [
+       "ExInterlockedAddUlong",
+       "ObCreateObject",
+       "RtlCompareUnicodeStrings",
+       "ZwAllocateLocallyUniqueId",
+       "ZwQueryInformationFile",
+       "ZwReadFile",
+       "ZwUpdateWnfStateData",
+       "qsort"
+      ],
+      "partial": [
+       "ExAllocatePool2",
+       "ExAllocateTimer",
+       "ExCreateCallback",
+       "ExQueryWnfStateData",
+       "ExSetTimer",
+       "ExSubscribeWnfStateChange",
+       "HalPrivateDispatchTable",
+       "IoAllocateMdl",
+       "IoGetDevicePropertyData",
+       "IoGetDmaAdapter",
+       "IoRegisterPlugPlayNotification",
+       "IoWMIOpenBlock",
+       "IoWMIRegistrationControl",
+       "MmMapLockedPagesSpecifyCache",
+       "NtQuerySystemInformationEx",
+       "PoRegisterPowerSettingCallback",
+       "PoRequestPowerIrp",
+       "ZwCreateFile",
+       "ZwLoadDriver",
+       "ZwOpenFile",
+       "ZwPowerInformation",
+       "ZwQuerySystemInformation",
+       "ZwUnloadDriver"
+      ]
+     }
+    },
+    {
+     "file": "afd.sys",
+     "version": "10.0.19041.1766",
+     "kernel": {
+      "total": 251,
+      "implemented": 194,
+      "partial": 10,
+      "traps": 6,
+      "missing": 41
+     },
+     "by_ordinal": 0,
+     "other_modules": {
+      "msrpc.sys": 10,
+      "netio.sys": 35,
+      "tdi.sys": 6
+     },
+     "not_implemented": {
+      "missing": [
+       "ExEnterCriticalRegionAndAcquireResourceExclusive",
+       "ExEnterCriticalRegionAndAcquireResourceShared",
+       "ExReleaseResourceAndLeaveCriticalRegion",
+       "ExRundownCompleted",
+       "FsRtlAllocateExtraCreateParameter",
+       "FsRtlAllocateExtraCreateParameterList",
+       "FsRtlFindExtraCreateParameter",
+       "FsRtlFreeExtraCreateParameterList",
+       "FsRtlInsertExtraCreateParameter",
+       "FsRtlMdlRead",
+       "FsRtlMdlReadComplete",
+       "IoCreateFileEx",
+       "IoFreeErrorLogEntry",
+       "IoInitializeMiniCompletionPacket",
+       "IoQueryFileInformation",
+       "IoSetIoCompletion",
+       "IoThreadToProcess",
+       "KeAcquireQueuedSpinLock",
+       "KeAttachProcess",
+       "KeDetachProcess",
+       "KePulseEvent",
+       "KeReleaseQueuedSpinLock",
+       "KeTestSpinLock",
+       "MmAdvanceMdl",
+       "MmIsThisAnNtAsSystem",
+       "MmMapLockedPages",
+       "MmSystemRangeStart",
+       "ObCloseHandle",
+       "ObFindHandleForObject",
+       "ObGetObjectSecurity",
+       "ObGetObjectType",
+       "ObOpenObjectByName",
+       "ObReleaseObjectSecurity",
+       "PsChargeProcessPoolQuota",
+       "PsGetProcessExitTime",
+       "PsReturnPoolQuota",
+       "RtlIntegerToUnicode",
+       "RtlMapGenericMask",
+       "SeCaptureSubjectContextEx",
+       "SeCreateClientSecurityFromSubjectContext",
+       "towlower"
+      ],
+      "traps": [
+       "IoCreateFile",
+       "IoSetIoCompletionEx",
+       "PsGetSiloIdentifier",
+       "PsRevertToSelf",
+       "RtlEqualString",
+       "ZwUpdateWnfStateData"
+      ],
+      "partial": [
+       "ExCreateCallback",
+       "ExQueryWnfStateData",
+       "ExSubscribeWnfStateChange",
+       "IoAllocateMdl",
+       "IoWMIRegistrationControl",
+       "MmMapLockedPagesSpecifyCache",
+       "MmProbeAndLockPages",
+       "ZwCreateEvent",
+       "ZwNotifyChangeKey",
+       "ZwQueryWnfStateData"
+      ]
+     }
+    },
+    {
+     "file": "ntfs.sys",
+     "version": "10.0.19041.1949",
+     "kernel": {
+      "total": 625,
+      "implemented": 328,
+      "partial": 46,
+      "traps": 26,
+      "missing": 225
+     },
+     "by_ordinal": 0,
+     "other_modules": {
+      "ext-ms-win-crypto-xbox-l1-1-0.dll": 5,
+      "ext-ms-win-fs-clfs-l1-1-0.dll": 36,
+      "ext-ms-win-ntos-clipsp-l1-1-0.dll": 1,
+      "ext-ms-win-ntos-ksr-l1-1-1.dll": 7,
+      "ksecdd.sys": 15,
+      "msrpc.sys": 6
+     },
+     "not_implemented": {
+      "missing": [
+       "CcAsyncCopyRead",
+       "CcCopyWriteWontFlush",
+       "CcErrorCallbackRoutine",
+       "CcFlushCacheToLsn",
+       "CcGetCachedDirtyPageCountForFile",
+       "CcGetDirtyPages",
+       "CcInitializeCacheMapEx",
+       "CcIsCacheManagerCallbackNeeded",
+       "CcIsThereDirtyLoggedPages",
+       "CcRemapBcb",
+       "CcSetLogHandleForFileEx",
+       "CcSetLoggedDataThreshold",
+       "CcSetParallelFlushFile",
+       "CcUnmapFileOffsetFromSystemCache",
+       "ExAcquireAutoExpandPushLockExclusive",
+       "ExAcquireAutoExpandPushLockShared",
+       "ExCleanupAutoExpandPushLock",
+       "ExInitializeAutoExpandPushLock",
+       "ExReleaseAutoExpandPushLockExclusive",
+       "ExReleaseAutoExpandPushLockShared",
+       "ExSetResourceOwnerPointerEx",
+       "FsRtlAcknowledgeEcp",
+       "FsRtlAcquireEofLock",
+       "FsRtlAcquireHeaderMutex",
+       "FsRtlAddBaseMcbEntry",
+       "FsRtlAddBaseMcbEntryEx",
+       "FsRtlAddToTunnelCacheEx",
+       "FsRtlAllocateFileLock",
+       "FsRtlAreThereCurrentOrInProgressFileLocks",
+       "FsRtlCancellableWaitForSingleObject",
+       "FsRtlChangeBackingFileObject",
+       "FsRtlCheckOplockEx2",
+       "FsRtlCurrentOplock",
+       "FsRtlFindExtraCreateParameter",
+       "FsRtlFindInTunnelCacheEx",
+       "FsRtlFreeFileLock",
+       "FsRtlGetCurrentProcessLoaderList",
+       "FsRtlGetIoAtEof",
+       "FsRtlGetNextBaseMcbEntry",
+       "FsRtlHeatInit",
+       "FsRtlHeatLogIo",
+       "FsRtlHeatUninit",
+       "FsRtlIncrementCcFastMdlReadWait",
+       "FsRtlIncrementCcFastReadNoWait",
+       "FsRtlIncrementCcFastReadNotPossible",
+       "FsRtlIncrementCcFastReadResourceMiss",
+       "FsRtlIncrementCcFastReadWait",
+       "FsRtlInitializeBaseMcbEx",
+       "FsRtlInitializeEofLock",
+       "FsRtlIs32BitProcess",
+       "FsRtlIsEcpFromUserMode",
+       "FsRtlIsExtentDangling",
+       "FsRtlIsMobileOS",
+       "FsRtlIsNameInUnUpcasedExpression",
+       "FsRtlIsNonEmptyDirectoryReparsePointAllowed",
+       "FsRtlLookupBaseMcbEntry",
+       "FsRtlLookupLastBaseMcbEntry",
+       "FsRtlLookupLastBaseMcbEntryAndIndex",
+       "FsRtlMdlReadEx",
+       "FsRtlNotifyFilterChangeDirectory",
+       "FsRtlNotifyFilterChangeDirectoryLite",
+       "FsRtlNotifyFilterReportChange",
+       "FsRtlNotifyFilterReportChangeLiteEx",
+       "FsRtlNotifyVolumeEventEx",
+       "FsRtlNumberOfRunsInBaseMcb",
+       "FsRtlOplockBreakToNoneEx",
+       "FsRtlOplockFsctrlEx",
+       "FsRtlOplockGetAnyBreakOwnerProcess",
+       "FsRtlOplockKeysEqual",
+       "FsRtlPrepareMdlWriteEx",
+       "FsRtlQueryMaximumVirtualDiskNestingLevel",
+       "FsRtlReleaseEofLock",
+       "FsRtlReleaseHeaderMutex",
+       "FsRtlRemoveBaseMcbEntry",
+       "FsRtlResetBaseMcb",
+       "FsRtlTeardownPerFileContexts",
+       "FsRtlTruncateBaseMcb",
+       "FsRtlTryToAcquireHeaderMutex",
+       "FsRtlUninitializeBaseMcb",
+       "FsRtlValidateReparsePointBuffer",
+       "HviGetHardwareFeatures",
+       "HviIsHypervisorVendorMicrosoft",
+       "IoApplyPriorityInfoThread",
+       "IoCheckEaBufferValidity",
+       "IoCheckLinkShareAccess",
+       "IoCheckQuotaBufferValidity",
+       "IoCheckRedirectionTrustLevel",
+       "IoClearFsTrackOffsetState",
+       "IoComputeRedirectionTrustLevel",
+       "IoCopyDeviceObjectHint",
+       "IoCreateFileSpecifyDeviceObjectHint",
+       "IoCreateStreamFileObjectEx",
+       "IoCreateStreamFileObjectLite",
+       "IoFreeErrorLogEntry",
+       "IoGetIrpExtraCreateParameter",
+       "IoGetSilo",
+       "IoGetTransactionParameterBlock",
+       "IoIrpHasFsTrackOffsetExtensionType",
+       "IoMakeAssociatedIrpEx",
+       "IoPageRead",
+       "IoRemoveLinkShareAccessEx",
+       "IoSetActivityIdThread",
+       "IoSetInformation",
+       "IoSetIoPriorityHint",
+       "IoSetIoPriorityHintIntoThread",
+       "IoSetLinkShareAccess",
+       "IoSynchronousPageWrite",
+       "IoTransferActivityId",
+       "IoUpdateLinkShareAccessEx",
+       "IoWithinStackLimits",
+       "KeAcquireQueuedSpinLock",
+       "KeAllocateCalloutStack",
+       "KeAllocateCalloutStackEx",
+       "KeFreeCalloutStack",
+       "KeQueryPriorityThread",
+       "KeReleaseQueuedSpinLock",
+       "KeTryToAcquireGuardedMutex",
+       "MmAllocateMappingAddress",
+       "MmForceSectionClosed",
+       "MmFreeMappingAddress",
+       "MmIsThisAnNtAsSystem",
+       "MmMapLockedPagesWithReservedMapping",
+       "MmMdlPagesAreZero",
+       "MmSetAddressRangeModified",
+       "MmUnmapReservedMapping",
+       "ObGetObjectSecurity",
+       "ObQueryObjectAuditingByHandle",
+       "ObReleaseObjectSecurity",
+       "PsEnterPriorityRegion",
+       "PsLeavePriorityRegion",
+       "RtlAreBitsSet",
+       "RtlCompressBuffer",
+       "RtlCopyString",
+       "RtlCrc64",
+       "RtlCreateHashTable",
+       "RtlDecompressBufferEx2",
+       "RtlDecompressFragmentEx",
+       "RtlDeleteHashTable",
+       "RtlEndEnumerationHashTable",
+       "RtlEnumerateEntryHashTable",
+       "RtlEnumerateGenericTableAvl",
+       "RtlEnumerateGenericTableLikeADirectory",
+       "RtlEnumerateGenericTableWithoutSplayingAvl",
+       "RtlExtractBitMap",
+       "RtlFillNonVolatileMemory",
+       "RtlFindAceByType",
+       "RtlFindClearRuns",
+       "RtlFormatMessage",
+       "RtlFreeNonVolatileToken",
+       "RtlGetCompressionWorkSpaceSize",
+       "RtlGetNextEntryHashTable",
+       "RtlGetNonVolatileToken",
+       "RtlGetNtSystemRoot",
+       "RtlInitEnumerationHashTable",
+       "RtlInsertElementGenericTableFullAvl",
+       "RtlInsertEntryHashTable",
+       "RtlIsGenericTableEmptyAvl",
+       "RtlIsNonEmptyDirectoryReparsePointAllowed",
+       "RtlIsSandboxedToken",
+       "RtlLookupElementGenericTableFullAvl",
+       "RtlLookupEntryHashTable",
+       "RtlLookupFirstMatchingElementGenericTableAvl",
+       "RtlMapGenericMask",
+       "RtlNormalizeSecurityDescriptor",
+       "RtlNumberGenericTableElementsAvl",
+       "RtlNumberOfClearBitsInRange",
+       "RtlNumberOfSetBitsInRange",
+       "RtlOwnerAcesPresent",
+       "RtlPrefixString",
+       "RtlQueryPackageIdentity",
+       "RtlRandomEx",
+       "RtlRemoveEntryHashTable",
+       "RtlReplaceSidInSd",
+       "RtlSelfRelativeToAbsoluteSD",
+       "RtlWalkFrameChain",
+       "SeAccessCheckEx",
+       "SeAccessCheckWithHint",
+       "SeAdjustAccessStateForAccessConstraints",
+       "SeAdjustObjectSecurity",
+       "SeAssignSecurityEx",
+       "SeAuditHardLinkCreation",
+       "SeAuditHardLinkCreationWithTransaction",
+       "SeAuditTransactionStateChange",
+       "SeAuditingAnyFileEventsWithContextEx",
+       "SeAuditingFileEventsWithContextEx",
+       "SeAuditingHardLinkEventsWithContext",
+       "SeCaptureSubjectContextEx",
+       "SeCheckForCriticalAceRemoval",
+       "SeComputeAutoInheritByObjectType",
+       "SeDeleteObjectAuditAlarm",
+       "SeDeleteObjectAuditAlarmWithTransaction",
+       "SeOpenObjectAuditAlarmWithTransaction",
+       "SeOpenObjectForDeleteAuditAlarm",
+       "SeOpenObjectForDeleteAuditAlarmWithTransaction",
+       "SeSetSecurityDescriptorInfoEx",
+       "SeShouldCheckForAccessRightsFromParent",
+       "SeValidSecurityDescriptor",
+       "TmCommitComplete",
+       "TmCreateEnlistment",
+       "TmCurrentTransaction",
+       "TmDereferenceEnlistmentKey",
+       "TmEnableCallbacks",
+       "TmEnlistmentObjectType",
+       "TmGetTransactionId",
+       "TmIsKTMCommitCoordinator",
+       "TmIsTransactionActive",
+       "TmPrepareComplete",
+       "TmReadOnlyEnlistment",
+       "TmRecoverResourceManager",
+       "TmReferenceEnlistmentKey",
+       "TmRequestOutcomeEnlistment",
+       "TmResourceManagerObjectType",
+       "TmRollbackComplete",
+       "TmRollbackEnlistment",
+       "TmTransactionObjectType",
+       "ZwCreateResourceManager",
+       "ZwCreateTransactionManager",
+       "ZwOpenEnlistment",
+       "ZwOpenResourceManager",
+       "ZwQueryInformationTransactionManager",
+       "ZwQuerySecurityObject",
+       "ZwRecoverEnlistment",
+       "ZwRecoverTransactionManager",
+       "_snprintf_s",
+       "isprint"
+      ],
+      "traps": [
+       "FsRtlGetSectorSizeInformation",
+       "FsRtlOplockFsctrl",
+       "FsRtlPrivateLock",
+       "FsRtlProcessFileLock",
+       "IoCancelFileOpen",
+       "IoRaiseInformationalHardError",
+       "IoSetFsTrackOffsetState",
+       "IoVerifyVolume",
+       "IoVolumeDeviceToDosName",
+       "KeIsExecutingDpc",
+       "ObDereferenceObjectDeferDelete",
+       "ObQueryNameString",
+       "PsImpersonateClient",
+       "PsRevertToSelf",
+       "RtlEqualString",
+       "RtlUpperString",
+       "RtlValidRelativeSecurityDescriptor",
+       "SeQuerySecurityAttributesToken",
+       "SeQuerySecurityAttributesTokenAccessInformation",
+       "ZwDeviceIoControlFile",
+       "ZwQueryDirectoryFile",
+       "ZwQueryInformationProcess",
+       "ZwQuerySecurityAttributesToken",
+       "ZwSetInformationFile",
+       "ZwUpdateWnfStateData",
+       "qsort"
+      ],
+      "partial": [
+       "CcCanIWrite",
+       "CcMapData",
+       "CcPinMappedData",
+       "CcPinRead",
+       "CcPreparePinWrite",
+       "CcPurgeCacheSection",
+       "CcZeroData",
+       "ExAllocateTimer",
+       "ExQueryWnfStateData",
+       "ExSetTimer",
+       "ExSubscribeWnfStateChange",
+       "FsRtlAreThereWaitingFileLocks",
+       "FsRtlCheckLockForOplockRequest",
+       "FsRtlCheckLockForReadAccess",
+       "FsRtlCheckLockForWriteAccess",
+       "FsRtlCheckOplock",
+       "FsRtlCheckOplockEx",
+       "FsRtlCurrentBatchOplock",
+       "FsRtlCurrentOplockH",
+       "FsRtlFastCheckLockForRead",
+       "FsRtlFastCheckLockForWrite",
+       "FsRtlFastUnlockAll",
+       "FsRtlFastUnlockAllByKey",
+       "FsRtlFastUnlockSingle",
+       "FsRtlGetVirtualDiskNestingLevel",
+       "FsRtlIsFatDbcsLegal",
+       "FsRtlNotifyCleanup",
+       "FsRtlNotifyVolumeEvent",
+       "FsRtlOplockBreakH",
+       "FsRtlOplockIsFastIoPossible",
+       "FsRtlUninitializeOplock",
+       "IoAllocateMdl",
+       "IoRegisterPlugPlayNotification",
+       "IoRetrievePriorityInfo",
+       "IoWMIRegistrationControl",
+       "MmMapLockedPagesSpecifyCache",
+       "MmPrefetchPages",
+       "MmProbeAndLockPages",
+       "NtQuerySystemInformation",
+       "RtlFindMessage",
+       "ZwCreateEvent",
+       "ZwNotifyChangeKey",
+       "ZwOpenFile",
+       "ZwPowerInformation",
+       "ZwQueryWnfStateData",
+       "ZwWaitForSingleObject"
+      ]
+     }
+    }
+   ],
+   "shared_gaps": [
+    {
+     "name": "IoAllocateMdl",
+     "state": "partial",
+     "count": 5,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "IoWMIRegistrationControl",
+     "state": "partial",
+     "count": 5,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "MmMapLockedPagesSpecifyCache",
+     "state": "partial",
+     "count": 5,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExAllocateTimer",
+     "state": "partial",
+     "count": 4,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExSetTimer",
+     "state": "partial",
+     "count": 4,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExSubscribeWnfStateChange",
+     "state": "partial",
+     "count": 4,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "MmProbeAndLockPages",
+     "state": "partial",
+     "count": 4,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlMapGenericMask",
+     "state": "missing",
+     "count": 4,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwQueryWnfStateData",
+     "state": "partial",
+     "count": 4,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExCreateCallback",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExQueryWnfStateData",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "ExRundownCompleted",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "KeTestSpinLock",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ObGetObjectSecurity",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "ObReleaseObjectSecurity",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "PoRegisterPowerSettingCallback",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlCreateHashTable",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlInsertEntryHashTable",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlLookupEntryHashTable",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlRemoveEntryHashTable",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "SeCaptureSubjectContextEx",
+     "state": "missing",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwCreateEvent",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwNotifyChangeKey",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys",
+      "storport.sys"
+     ]
+    },
+    {
+     "name": "ZwPowerInformation",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "storport.sys"
+     ]
+    },
+    {
+     "name": "ZwQuerySystemInformation",
+     "state": "partial",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "storport.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwUpdateWnfStateData",
+     "state": "traps",
+     "count": 3,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "qsort",
+     "state": "traps",
+     "count": 3,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExGetCurrentProcessorCounts",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ExReInitializeRundownProtection",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "FsRtlFindExtraCreateParameter",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "IoFreeErrorLogEntry",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "IoGetDevicePropertyData",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "storport.sys"
+     ]
+    },
+    {
+     "name": "IoGetDmaAdapter",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "storport.sys"
+     ]
+    },
+    {
+     "name": "IoRegisterPlugPlayNotification",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "KeAcquireQueuedSpinLock",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "KeAllocateCalloutStack",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "KeFreeCalloutStack",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "KeIsExecutingDpc",
+     "state": "traps",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "KeReleaseQueuedSpinLock",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "MmAllocateMappingAddress",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "MmFreeMappingAddress",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "MmIsThisAnNtAsSystem",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "MmMapLockedPages",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys"
+     ]
+    },
+    {
+     "name": "MmMapLockedPagesWithReservedMapping",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "MmSystemRangeStart",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ndis.sys"
+     ]
+    },
+    {
+     "name": "ObCloseHandle",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "PoRequestPowerIrp",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "storport.sys"
+     ]
+    },
+    {
+     "name": "PsRevertToSelf",
+     "state": "traps",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "RtlDeleteHashTable",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlEndEnumerationHashTable",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlEnumerateEntryHashTable",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlEnumerateGenericTableLikeADirectory",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlEqualString",
+     "state": "traps",
+     "count": 2,
+     "binaries": [
+      "afd.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "RtlGetNextEntryHashTable",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlInitEnumerationHashTable",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlInt64ToUnicodeString",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlLookupElementGenericTableFullAvl",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlQueryPackageIdentity",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "RtlSelfRelativeToAbsoluteSD",
+     "state": "missing",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "SeQuerySecurityAttributesToken",
+     "state": "traps",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "SeQuerySecurityAttributesTokenAccessInformation",
+     "state": "traps",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwCreateFile",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwOpenFile",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ndis.sys",
+      "ntfs.sys"
+     ]
+    },
+    {
+     "name": "ZwQuerySecurityAttributesToken",
+     "state": "traps",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    },
+    {
+     "name": "ZwWaitForSingleObject",
+     "state": "partial",
+     "count": 2,
+     "binaries": [
+      "ntfs.sys",
+      "tcpip.sys"
+     ]
+    }
+   ],
+   "with_dependencies": {
+    "binaries": [
+     "afd.sys",
+     "clfs.sys",
+     "cng.sys",
+     "fltmgr.sys",
+     "fwpkclnt.sys",
+     "ksecdd.sys",
+     "msrpc.sys",
+     "ndis.sys",
+     "netio.sys",
+     "ntfs.sys",
+     "storport.sys",
+     "tcpip.sys",
+     "tdi.sys",
+     "wpprecorder.sys"
+    ],
+    "kernel_names": {
+     "total": 1197,
+     "implemented": 646,
+     "partial": 69,
+     "traps": 76,
+     "missing": 406
+    }
+   }
   },
   "by_binary": [
    {
@@ -21984,10 +24090,10 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 192,
+     "implemented": 194,
      "partial": 10,
-     "traps": 7,
-     "missing": 42
+     "traps": 6,
+     "missing": 41
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22030,10 +24136,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 240,
-     "implemented": 144,
+     "implemented": 150,
      "partial": 10,
-     "traps": 18,
-     "missing": 68
+     "traps": 15,
+     "missing": 65
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22059,10 +24165,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 186,
-     "implemented": 147,
+     "implemented": 148,
      "partial": 9,
      "traps": 6,
-     "missing": 24
+     "missing": 23
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22072,9 +24178,9 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 121,
-     "implemented": 101,
+     "implemented": 105,
      "partial": 10,
-     "traps": 10,
+     "traps": 6,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -22085,10 +24191,10 @@
     "version": "10.0.19041.1110",
     "kernel": {
      "total": 85,
-     "implemented": 57,
+     "implemented": 59,
      "partial": 3,
      "traps": 3,
-     "missing": 22
+     "missing": 20
     },
     "by_ordinal": 2,
     "other_modules": {}
@@ -22113,10 +24219,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 486,
-     "implemented": 313,
+     "implemented": 320,
      "partial": 25,
-     "traps": 28,
-     "missing": 120
+     "traps": 25,
+     "missing": 116
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -22130,9 +24236,9 @@
     "version": "10.0.19041.1826",
     "kernel": {
      "total": 326,
-     "implemented": 260,
-     "partial": 38,
-     "traps": 28,
+     "implemented": 263,
+     "partial": 39,
+     "traps": 24,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -22148,10 +24254,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 190,
+     "implemented": 191,
      "partial": 25,
      "traps": 10,
-     "missing": 100
+     "missing": 99
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22303,9 +24409,9 @@
     "version": "10.0.19041.1586",
     "kernel": {
      "total": 120,
-     "implemented": 102,
+     "implemented": 103,
      "partial": 2,
-     "traps": 16,
+     "traps": 15,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -22385,10 +24491,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 273,
+     "implemented": 274,
      "partial": 23,
      "traps": 8,
-     "missing": 55
+     "missing": 54
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22431,10 +24537,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 324,
+     "implemented": 328,
      "partial": 46,
-     "traps": 29,
-     "missing": 226
+     "traps": 26,
+     "missing": 225
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22509,10 +24615,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 71,
-     "implemented": 58,
+     "implemented": 59,
      "partial": 3,
      "traps": 2,
-     "missing": 8
+     "missing": 7
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22608,10 +24714,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 246,
+     "implemented": 250,
      "partial": 15,
-     "traps": 9,
-     "missing": 59
+     "traps": 7,
+     "missing": 57
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22738,9 +24844,9 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 89,
-     "implemented": 76,
+     "implemented": 77,
      "partial": 2,
-     "traps": 6,
+     "traps": 5,
      "missing": 5
     },
     "by_ordinal": 0,
@@ -22782,10 +24888,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 38,
-     "implemented": 31,
+     "implemented": 32,
      "partial": 1,
      "traps": 1,
-     "missing": 5
+     "missing": 4
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22816,10 +24922,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 451,
-     "implemented": 217,
+     "implemented": 224,
      "partial": 19,
-     "traps": 33,
-     "missing": 182
+     "traps": 29,
+     "missing": 179
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22836,10 +24942,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 439,
-     "implemented": 216,
+     "implemented": 223,
      "partial": 17,
-     "traps": 32,
-     "missing": 174
+     "traps": 28,
+     "missing": 171
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22884,7 +24990,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 1028,
+   "exported_by_nk": 1039,
    "nk_names_it_lacks": [
     "ExAllocateTimerInternal2",
     "KeRemoveQueueApc",

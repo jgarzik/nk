@@ -11,7 +11,7 @@
 #![allow(non_snake_case)]
 
 use super::table::{by_handle, relative, terminated};
-use super::{HIVE, KeyId, create_below, delete_value_of, set_value, status};
+use super::{HIVE, KeyId, create_below_id, delete_value_of, set_value, status};
 use nk_ntabi::status::*;
 
 /// Run `with` on the key `relative_to` and `path` name, opened, or
@@ -37,7 +37,7 @@ unsafe fn on_key(
         return with(start.key());
     }
     let key = if create {
-        create_below(&start, &rest, &[]).map(|(key, _)| key)
+        create_below_id(start.key(), &rest, &[]).map(|(key, _)| key)
     } else {
         let mut hive = HIVE.lock();
         let found = hive.open(start.key(), &rest).map_err(status);

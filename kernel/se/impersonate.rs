@@ -334,7 +334,7 @@ pub unsafe extern "C" fn SeImpersonateClientEx(
 /// (`token::anonymous`), at `SecurityImpersonation`, so that opening
 /// its token copies it: so the pinned kernel. Windows refuses a
 /// process whose own token is restricted; the System process's is not.
-pub extern "C" fn ZwImpersonateAnonymousToken(thread_handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtImpersonateAnonymousToken(thread_handle: *mut c_void) -> NTSTATUS {
     let found = handle::reference_for(
         thread_handle as u64,
         Some(&raw const object::THREAD_TYPE),
@@ -416,7 +416,7 @@ pub unsafe fn set_thread_impersonation_token(
 ///
 /// # Safety
 /// `token_handle` is writable for a handle.
-pub unsafe extern "C" fn ZwOpenThreadTokenEx(
+pub unsafe extern "C" fn NtOpenThreadTokenEx(
     thread_handle: *mut c_void,
     desired_access: u32,
     _open_as_self: u8,
@@ -470,3 +470,5 @@ pub unsafe extern "C" fn ZwOpenThreadTokenEx(
         }
     }
 }
+
+pub use crate::svc::zw::{ZwImpersonateAnonymousToken, ZwOpenThreadTokenEx};

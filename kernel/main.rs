@@ -31,6 +31,7 @@ mod rt;
 mod rtl;
 mod se;
 mod selftest;
+mod svc;
 mod test;
 mod whea;
 
@@ -78,7 +79,7 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     let Some(stack) = mm::stack::alloc() else {
         test::abort("mm.stack", format_args!("cannot allocate the boot stack"));
     };
-    arch::set_kernel_stack(stack.base);
+    arch::set_kernel_stack(stack.base, stack.top);
     ke::smp::set_stack(0, stack);
     arch::switch_stack(stack.top, on_kernel_stack, info)
 }
@@ -112,7 +113,10 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     }
     ke::apc::init();
     match ke::smp::start_all(info) {
-        Ok(running) => kprintln!("ke: {running} processors running"),
+        Ok(running) => {
+            ke::time::update_processor_count(running);
+            kprintln!("ke: {running} processors running");
+        }
         Err(why) => test::abort("ke.smp", format_args!("{why}")),
     }
     if let Err(why) = ex::work::init() {
@@ -130,6 +134,12 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     fsrtl::init();
     if let Err(why) = cc::init() {
         test::abort("cc.init", format_args!("{why}"));
+    }
+    if let Err(why) = mm::writer::init() {
+        test::abort("mm.writer", format_args!("{why}"));
+    }
+    if let Err(why) = mm::trim::init() {
+        test::abort("mm.trim", format_args!("{why}"));
     }
     ex::timezone::init();
     ex::entropy::init(info);
@@ -153,6 +163,7 @@ fn system_thread(info: usize) {
     // for ever and is never written.
     let info = unsafe { &*(info as *const BootInfo) };
     export::print_all();
+    svc::print_all();
     if let Err(why) = io::raw::init()
         .and_then(|()| pnp::init())
         .and_then(|()| hal::bus::init())

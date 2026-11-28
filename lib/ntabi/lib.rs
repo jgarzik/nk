@@ -28,6 +28,7 @@ pub mod hal;
 pub mod interrupt;
 pub mod io;
 pub mod ke;
+pub mod mm;
 pub mod ob;
 pub mod pcr;
 pub mod pnp;
@@ -41,6 +42,7 @@ pub mod silo;
 pub mod status;
 pub mod sysinfo;
 pub mod thread;
+pub mod user;
 pub mod whea;
 
 #[cfg(test)]

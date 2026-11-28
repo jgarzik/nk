@@ -3,5 +3,5 @@
 scenario: aarch64
 fails: cm.namespace
 file: kernel/cm/mod.rs
-replace:     Ok((key_object(body)?, rest))
-with:     Ok((key_object(body)?, Vec::new()))
+replace:         let key = match hive.open(start_key, remaining) {
+with:         let key = match hive.open(start_key, &[]) {

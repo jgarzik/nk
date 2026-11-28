@@ -8,7 +8,6 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     SeAuditFipsCryptoSelftests,
-    SeFilterToken,
     SeQueryAuthenticationIdToken,
     SeQuerySecurityAttributesToken,
     SeQuerySecurityAttributesTokenAccessInformation,

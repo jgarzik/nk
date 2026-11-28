@@ -310,10 +310,13 @@ pub unsafe fn wait_objects(
             let mut linked = 0;
             // An alert left for the thread comes before everything
             // else: nothing is looked at, nothing taken.
-            if let Some(mode) = alert
-                && alertable_wait_begins(me, mode)
-            {
-                let _ = register.claim(STATUS_ALERTED);
+            if let Some(mode) = alert {
+                if alertable_wait_begins(me, mode) {
+                    let _ = register.claim(STATUS_ALERTED);
+                } else if mode == nk_ntabi::io::USER_MODE && !super::apc::user_queue_empty(me) {
+                    super::apc::set_user_pending(me);
+                    let _ = register.claim(nk_ntabi::status::STATUS_USER_APC as u32);
+                }
             }
             if register.status().is_some() {
                 // Alerted already.
@@ -448,6 +451,47 @@ pub unsafe fn init_thread(thread: *mut thread::Thread) {
     }
 }
 
+/// [`NtDelayExecution`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kedelayexecutionthread):
+/// sleep for `delay_interval` (negative = relative 100ns, positive = absolute).
+///
+/// # Safety
+/// `delay_interval` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtDelayExecution(
+    alertable: u8,
+    delay_interval: *const i64,
+) -> nk_ntabi::status::NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; `capture::read` probes user pointers.
+    let interval = match unsafe { crate::svc::capture::read(delay_interval, mode) } {
+        Ok(v) => v,
+        Err(st) => return st,
+    };
+    if interval == 0 {
+        if alertable != 0
+            && mode == nk_ntabi::io::USER_MODE
+            && !super::apc::user_queue_empty(thread::current())
+        {
+            super::apc::set_user_pending(thread::current());
+            return nk_ntabi::status::STATUS_USER_APC;
+        }
+        thread::yield_now();
+        return 0;
+    }
+    // SAFETY: no dispatcher object waited on; `interval` is a valid timeout.
+    let status = unsafe { wait_as(None, Some(interval), mode, alertable != 0) };
+    if status == STATUS_TIMEOUT {
+        0
+    } else {
+        status as nk_ntabi::status::NTSTATUS
+    }
+}
+
+/// `NtYieldExecution`: yield the current processor timeslice.
+pub extern "C" fn NtYieldExecution() -> nk_ntabi::status::NTSTATUS {
+    thread::yield_now();
+    0
+}
+
 /// [`KeInitializeEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializeevent).
 /// `kind` is 0 for a notification event, 1 for a synchronization event.
 ///
@@ -573,6 +617,37 @@ pub unsafe extern "C" fn KeReleaseSemaphore(
         };
         woken.ready();
         previous
+    }
+}
+
+/// Release `semaphore` by `adjustment` without bugchecking on limit overflow
+/// (returns `Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED)` for `NtReleaseSemaphore`).
+///
+/// # Safety
+/// `semaphore` is a live, initialized `KSEMAPHORE`.
+pub unsafe fn try_release_semaphore(
+    semaphore: *mut KSEMAPHORE,
+    adjustment: i32,
+) -> Result<i32, nk_ntabi::status::NTSTATUS> {
+    if adjustment <= 0 {
+        return Err(nk_ntabi::status::STATUS_INVALID_PARAMETER);
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        let header = &raw mut (*semaphore).Header;
+        let (previous, woken) = {
+            let _lock = ObjectLock::take(header);
+            let state = object::signal(header);
+            let previous = state.load(Ordering::Relaxed);
+            let limit = (&raw const (*semaphore).Limit).read();
+            let Some(count) = nk_ke::wait::semaphore_release(previous, adjustment, limit) else {
+                return Err(nk_ntabi::status::STATUS_SEMAPHORE_LIMIT_EXCEEDED);
+            };
+            state.store(count, Ordering::Relaxed);
+            (previous, object::satisfy(header))
+        };
+        woken.ready();
+        Ok(previous)
     }
 }
 

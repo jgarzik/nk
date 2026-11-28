@@ -244,7 +244,9 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         (*irp).UserEvent = &raw mut waiting.done;
         irp::requestor_keeps(irp);
         (*irp).RequestorMode = mode;
-        (*irp).Thread = ke::pcr::current_thread().cast();
+        let cur_thread = ke::pcr::current_thread();
+        (*irp).Thread = cur_thread.cast();
+        (*irp).ApcEnvironment = cur_thread.add(nk_ntabi::thread::APC_STATE_INDEX).read() as i8;
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
         // Windows calls the driver for a synchronous request with kernel
@@ -333,55 +335,135 @@ struct Target {
     related: Option<ObRef>,
 }
 
-/// Find what `name` leads to, from the namespace's root or from what
-/// the handle `root` names: a directory, where the look-up starts, or
-/// an open file, whose device parses the whole name. The look-up ends
-/// at a device; whatever else it ends at is no file.
+/// Parse context passed through `ob::open_by_name` to `parse_device` and
+/// `parse_file`.
+struct FileParseContext {
+    target: Option<Target>,
+    related: Option<ObRef>,
+}
+
+/// `DEVICE_TYPE`'s `OB_PARSE_METHOD` (`IopParseDevice` entry): records the
+/// target device, remaining path, and optional related file object in the
+/// parse context and returns a referenced pointer to the device.
 ///
-/// The root handle is the requestor's, referenced on behalf of `mode`
-/// with no access asked of it, as Windows' `ObpLookupObjectName` does:
-/// a kernel handle is no root for user mode.
-fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
-    let found = match root {
-        None => ob::lookup(None, name),
-        Some(root) => {
-            let (root, _) = handle::reference_for(root, None, 0, mode)?;
-            if root.is(&object::FILE_TYPE) {
-                // Relative to an open file: the name as given is the
-                // driver's to read, and is not absolute.
-                if name.first() == Some(&u16::from(b'\\')) {
-                    return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
-                }
-                // SAFETY: an open file holds a reference on its device,
-                // so the device's memory is there to be referenced.
-                let device =
-                    unsafe { ObRef::new((*root.cast::<FILE_OBJECT>()).DeviceObject.cast()) };
-                return Ok(Target {
-                    device,
-                    remainder: name.to_vec(),
-                    related: Some(root),
-                });
-            }
-            if root.is(&object::DIRECTORY_TYPE) {
-                ob::lookup(Some(root.body()), name)
-            } else if root.is(&object::KEY_TYPE) {
-                // A key parses a name into a key, never a file.
-                Err(STATUS_OBJECT_TYPE_MISMATCH)
-            } else {
-                // Nothing parses a name below such an object.
-                Err(STATUS_INVALID_HANDLE)
-            }
-        }
-    };
-    let (device, remainder) = found?;
-    if !device.is(&object::DEVICE_TYPE) {
-        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+/// # Safety
+/// Called by `ob::open_by_name` with a live `DEVICE_OBJECT` in `parse_object`,
+/// a valid `UNICODE_STRING` in `remaining_name`, a `FileParseContext` in
+/// `context`, and a writable `*mut *mut c_void` in `object`.
+pub unsafe extern "C" fn parse_device(
+    parse_object: *mut c_void,
+    object_type: *mut c_void,
+    _access_state: *mut c_void,
+    _access_mode: i8,
+    _attributes: u32,
+    _complete_name: *mut UNICODE_STRING,
+    remaining_name: *mut UNICODE_STRING,
+    context: *mut c_void,
+    _security_qos: *mut c_void,
+    object: *mut *mut c_void,
+) -> NTSTATUS {
+    if !core::ptr::eq(
+        object_type.cast::<object::ObjectType>(),
+        &raw const object::FILE_TYPE,
+    ) || context.is_null()
+    {
+        return STATUS_OBJECT_TYPE_MISMATCH;
     }
-    Ok(Target {
-        device,
-        remainder,
+    // SAFETY: per the contract.
+    unsafe {
+        let remainder = if remaining_name.is_null() || (*remaining_name).Length == 0 {
+            Vec::new()
+        } else {
+            core::slice::from_raw_parts(
+                (*remaining_name).Buffer,
+                usize::from((*remaining_name).Length) / 2,
+            )
+            .to_vec()
+        };
+        let device = ObRef::new(parse_object.cast());
+        let out_ref = ObRef::new(parse_object.cast());
+        let ctx = &mut *context.cast::<FileParseContext>();
+        ctx.target = Some(Target {
+            device,
+            remainder,
+            related: ctx.related.take(),
+        });
+        object.write_unaligned(out_ref.into_raw().cast());
+    }
+    STATUS_SUCCESS
+}
+
+/// `FILE_TYPE`'s `OB_PARSE_METHOD` (`IopParseFile` entry): records the related
+/// open `FILE_OBJECT` and delegates parsing to its underlying `DEVICE_OBJECT`.
+///
+/// # Safety
+/// Called by `ob::open_by_name` with a live `FILE_OBJECT` in `parse_object`,
+/// a valid `UNICODE_STRING` in `remaining_name`, a `FileParseContext` in
+/// `context`, and a writable `*mut *mut c_void` in `object`.
+pub unsafe extern "C" fn parse_file(
+    parse_object: *mut c_void,
+    object_type: *mut c_void,
+    access_state: *mut c_void,
+    access_mode: i8,
+    attributes: u32,
+    complete_name: *mut UNICODE_STRING,
+    remaining_name: *mut UNICODE_STRING,
+    context: *mut c_void,
+    security_qos: *mut c_void,
+    object: *mut *mut c_void,
+) -> NTSTATUS {
+    if !core::ptr::eq(
+        object_type.cast::<object::ObjectType>(),
+        &raw const object::FILE_TYPE,
+    ) || context.is_null()
+    {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    // SAFETY: per the contract; an open file holds a reference on its device.
+    unsafe {
+        let ctx = &mut *context.cast::<FileParseContext>();
+        ctx.related = Some(ObRef::new(parse_object.cast()));
+        let dev = (*parse_object.cast::<FILE_OBJECT>()).DeviceObject;
+        parse_device(
+            dev.cast(),
+            object_type,
+            access_state,
+            access_mode,
+            attributes,
+            complete_name,
+            remaining_name,
+            context,
+            security_qos,
+            object,
+        )
+    }
+}
+
+/// Find what `name` leads to, through the unified `ob::open_by_name` path and
+/// `DEVICE_TYPE`/`FILE_TYPE` parse procedures.
+fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
+    let root_ptr = root.map_or(core::ptr::null_mut(), |h| h as *mut c_void);
+    let access_mode = match mode {
+        Mode::Kernel => KERNEL_MODE,
+        Mode::User => USER_MODE,
+    };
+    let mut ctx = FileParseContext {
+        target: None,
         related: None,
-    })
+    };
+    // SAFETY: `ctx` is a valid `FileParseContext` for the duration of the call.
+    let _ = unsafe {
+        ob::open_by_name(
+            root_ptr,
+            name,
+            0,
+            Some(&object::FILE_TYPE),
+            0,
+            access_mode,
+            (&raw mut ctx).cast(),
+        )
+    }?;
+    ctx.target.ok_or(STATUS_OBJECT_TYPE_MISMATCH)
 }
 
 /// Give a new file object its name: a counted string in a pool block
@@ -517,8 +599,30 @@ pub fn open_as(
     // one mounted on it, unless the open is a direct device open
     // (`io::mount`).
     let itself = target.remainder.is_empty() && target.related.is_none();
+    const FILE_DEVICE_SECURE_OPEN: u32 = 0x100;
     // SAFETY: the device is counted.
-    let has_vpb = unsafe { !(*device).Vpb.is_null() };
+    let (has_vpb, secure_open) = unsafe {
+        (
+            !(*device).Vpb.is_null(),
+            (*device).Characteristics & FILE_DEVICE_SECURE_OPEN != 0,
+        )
+    };
+    let force_check = extra.location_flags & SL_FORCE_ACCESS_CHECK != 0;
+    if itself || secure_open {
+        // SAFETY: `device` is a live counted device object.
+        if let Err(status) = unsafe {
+            ob::check_access(
+                device.cast(),
+                request.desired_access,
+                request.requestor_mode,
+                force_check,
+            )
+        } {
+            // SAFETY: the count taken above.
+            unsafe { device::dereference(device) };
+            return Err(status);
+        }
+    }
     let vpb = if has_vpb && !super::mount::direct_open(itself, desired) {
         // SAFETY: as above; at `PASSIVE_LEVEL`, as an open is.
         match unsafe { super::mount::mounted(device, itself) } {
@@ -596,6 +700,9 @@ pub fn open_as(
         if request.create_options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT) != 0
         {
             (*file).Flags = FO_SYNCHRONOUS_IO;
+            if request.create_options & FILE_SYNCHRONOUS_IO_ALERT != 0 {
+                (*file).Flags |= FO_ALERTABLE_IO;
+            }
         }
         ke::wait::KeInitializeEvent(&raw mut (*file).Lock, 1, 0);
         ke::wait::KeInitializeEvent(&raw mut (*file).Event, 0, 0);
@@ -1151,6 +1258,304 @@ pub fn set_information(handle: u64, class: u32, input: &[u8]) -> Result<IoResult
             KERNEL_MODE,
             Needs::All(0),
             |_, irp, _| system_buffer(irp, input, 0),
+        )
+    }?
+    .wait()
+}
+
+/// Acquire a synchronous file object's per-file serialization lock
+/// (`IopAcquireFileObjectLock`).
+///
+/// # Safety
+/// `file` is a live `FILE_OBJECT` the caller holds a reference to.
+pub unsafe fn acquire_file_lock(file: *mut FILE_OBJECT, mode: i8) -> NTSTATUS {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    // SAFETY: per the contract; `Busy`, `Waiters`, and `Lock` are fields of `FILE_OBJECT`.
+    unsafe {
+        let busy = AtomicU32::from_ptr(&raw mut (*file).Busy);
+        let waiters = AtomicU32::from_ptr(&raw mut (*file).Waiters);
+        let alertable = (*file).Flags & FO_ALERTABLE_IO != 0;
+        loop {
+            if busy
+                .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return STATUS_SUCCESS;
+            }
+            waiters.fetch_add(1, Ordering::AcqRel);
+            let st = ke::wait::wait_as(Some((&raw mut (*file).Lock).cast()), None, mode, alertable)
+                as NTSTATUS;
+            if !nt_success(st) {
+                waiters.fetch_sub(1, Ordering::AcqRel);
+                return st;
+            }
+        }
+    }
+}
+
+/// Release a synchronous file object's per-file serialization lock
+/// (`IopReleaseFileObjectLock`).
+///
+/// # Safety
+/// `file` is a live `FILE_OBJECT` whose lock the caller acquired via
+/// [`acquire_file_lock`].
+pub unsafe fn release_file_lock(file: *mut FILE_OBJECT) {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    // SAFETY: per the contract.
+    unsafe {
+        let busy = AtomicU32::from_ptr(&raw mut (*file).Busy);
+        let waiters = AtomicU32::from_ptr(&raw mut (*file).Waiters);
+        busy.store(0, Ordering::Release);
+        if waiters
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n > 0).then(|| n - 1)
+            })
+            .is_ok()
+        {
+            ke::wait::KeSetEvent(&raw mut (*file).Lock, 0, 0);
+        }
+    }
+}
+
+/// Query volume information `class` of the file into `output`
+/// (`IRP_MJ_QUERY_VOLUME_INFORMATION`, what `NtQueryVolumeInformationFile`
+/// sends): the driver writes a system buffer, copied back on completion.
+pub fn query_volume_information(
+    handle: u64,
+    class: u32,
+    output: &mut [u8],
+) -> Result<IoResult, IoError> {
+    query_volume_information_as(handle, class, Buffer::of(output), KERNEL_MODE)
+}
+
+/// As [`query_volume_information`], on behalf of `mode`.
+pub fn query_volume_information_as(
+    handle: u64,
+    class: u32,
+    output: Buffer,
+    mode: i8,
+) -> Result<IoResult, IoError> {
+    // SAFETY: user-mode buffer is probed before sending; kernel-mode buffer
+    // stays live until waited for here.
+    let pending = unsafe {
+        send(
+            handle,
+            IRP_MJ_QUERY_VOLUME_INFORMATION,
+            |_| [u64::from(output.len as u32), u64::from(class), 0, 0],
+            mode,
+            Needs::All(0),
+            |_, irp, _| {
+                if mode != KERNEL_MODE {
+                    probe_write(output)?;
+                }
+                system_buffer(irp, Buffer::NONE, output.len).map(|()| {
+                    if output.len != 0 {
+                        (*irp).Flags |= IRP_INPUT_OPERATION;
+                        (*irp).UserBuffer = output.ptr().cast();
+                        irp::set_requestor_room(irp, output.len);
+                    }
+                })
+            },
+        )
+    };
+    refused(pending.and_then(Pending::wait))
+}
+
+/// Start an asynchronous read on a file opened without `FO_SYNCHRONOUS_IO`:
+/// returns `STATUS_PENDING` immediately if the driver pends the request,
+/// completing later through the `IopCompleteRequest` special kernel APC
+/// (writing `iosb` and signalling `event` / `FileObject->Event`).
+///
+/// # Safety
+/// `buffer` and `iosb` must remain valid until the request completes (signalled
+/// through `event` or the file object).
+pub unsafe fn read_async(
+    handle: u64,
+    event_handle: Option<u64>,
+    iosb: *mut IO_STATUS_BLOCK,
+    buffer: Buffer,
+    offset: Option<i64>,
+    mode: i8,
+) -> Result<NTSTATUS, NTSTATUS> {
+    let handle_mode = if mode == KERNEL_MODE {
+        Mode::Kernel
+    } else {
+        Mode::User
+    };
+    let (file, _) = file_for(handle, mode, Needs::All(FILE_READ_DATA)).map_err(|e| match e {
+        IoError::Handle(st) | IoError::Refused(st) => st,
+        IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+        _ => STATUS_UNSUCCESSFUL,
+    })?;
+    let event_ref = match event_handle {
+        Some(eh) => {
+            match handle::reference_for(eh, Some(&raw const object::EVENT_TYPE), 0x2, handle_mode) {
+                Ok((ev, _)) => Some(ev),
+                Err(st) => {
+                    // SAFETY: `file_for` took a reference on `file`.
+                    unsafe { object::dereference(file.cast()) };
+                    return Err(st);
+                }
+            }
+        }
+        None => None,
+    };
+    // SAFETY: `file` is live and referenced.
+    let Ok(irp) = (unsafe {
+        let off = offset.unwrap_or((*file).CurrentByteOffset);
+        request(file, IRP_MJ_READ, rw_parameters(buffer.len as u32, off))
+    }) else {
+        // SAFETY: `file_for` took a reference on `file`.
+        unsafe { object::dereference(file.cast()) };
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
+    };
+    let build_res: Result<(), IoError> = (|| {
+        // SAFETY: `irp` is fresh and `file` is referenced.
+        unsafe {
+            if mode != KERNEL_MODE {
+                probe_write(buffer)?;
+            }
+            let dev_flags = (*(*irp::next_location(irp)).DeviceObject).Flags;
+            if dev_flags & DO_BUFFERED_IO != 0 {
+                if buffer.len != 0 {
+                    let system = pool::alloc(buffer.len, TAG_IO_BUFFER);
+                    if system.is_null() {
+                        return Err(IoError::NoMemory);
+                    }
+                    (*irp).SystemBuffer = system.cast();
+                    (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER | IRP_INPUT_OPERATION;
+                    (*irp).UserBuffer = buffer.ptr().cast();
+                    irp::set_requestor_room(irp, buffer.len);
+                }
+            } else if dev_flags & DO_DIRECT_IO != 0 {
+                if buffer.len != 0 {
+                    let described =
+                        mdl::IoAllocateMdl(buffer.ptr().cast(), buffer.len as u32, 0, 0, irp);
+                    if described.is_null() {
+                        return Err(IoError::NoMemory);
+                    }
+                    mdl::probe_and_lock(described, mode, IO_WRITE_ACCESS)
+                        .map_err(IoError::Refused)?;
+                }
+            } else {
+                (*irp).UserBuffer = buffer.ptr().cast();
+            }
+            Ok(())
+        }
+    })();
+    if let Err(err) = build_res {
+        // SAFETY: `irp` was not sent; `file` was referenced by `file_for`.
+        unsafe {
+            discard(irp);
+            object::dereference(file.cast());
+        }
+        return Err(match err {
+            IoError::Refused(st) | IoError::Handle(st) => st,
+            IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            _ => STATUS_UNSUCCESSFUL,
+        });
+    }
+    // SAFETY: `file` and optional `event_ref` ownership transfers to `irp`'s
+    // `IopCompleteRequest` APC, which signals and dereferences them on completion.
+    unsafe {
+        ke::wait::KeResetEvent(&raw mut (*file).Event);
+        let held_event = match event_ref {
+            Some(ev) => {
+                let ptr = ev.into_raw();
+                ke::wait::KeResetEvent(ptr.cast());
+                (*irp).UserEvent = ptr.cast();
+                ptr
+            }
+            None => {
+                (*irp).UserEvent = &raw mut (*file).Event;
+                core::ptr::null_mut()
+            }
+        };
+        (*irp).UserIosb = iosb;
+        (*irp).RequestorMode = mode;
+        let cur_thread = ke::pcr::current_thread();
+        (*irp).Thread = cur_thread.cast();
+        (*irp).ApcEnvironment = cur_thread.add(nk_ntabi::thread::APC_STATE_INDEX).read() as i8;
+        (*irp).OriginalFileObject = file;
+        (*irp::next_location(irp)).FileObject = file;
+        irp::set_async_completion(irp, file, held_event, true, mode != KERNEL_MODE);
+        let device_object = (*irp::next_location(irp)).DeviceObject;
+        let guard = Guard::Undo {
+            undo: leave_critical_region,
+            context: core::ptr::null_mut(),
+        };
+        Ok(ke::mutex::in_critical_region(|| {
+            irp::call_driver(device_object, irp, &guard)
+        }))
+    }
+}
+
+/// Query directory entries (`IRP_MJ_DIRECTORY_CONTROL` / `IRP_MN_QUERY_DIRECTORY`).
+/// `file_name` is an optional UTF-16 wildcard pattern (e.g. `*` or `*.LOG`);
+/// `flags` is a bitmask of `SL_RESTART_SCAN`, `SL_RETURN_SINGLE_ENTRY`, `SL_INDEX_SPECIFIED`.
+pub fn query_directory(
+    handle: u64,
+    class: u32,
+    file_name: Option<&[u16]>,
+    flags: u8,
+    file_index: u32,
+    output: &mut [u8],
+) -> Result<IoResult, IoError> {
+    let mut name_buf: Vec<u16> = file_name.map(|s| s.to_vec()).unwrap_or_default();
+    let mut name_us = UNICODE_STRING {
+        Length: (name_buf.len() * 2) as u16,
+        MaximumLength: (name_buf.len() * 2) as u16,
+        Buffer: name_buf.as_mut_ptr(),
+    };
+    let name_ptr = if file_name.is_some() {
+        (&raw mut name_us).addr() as u64
+    } else {
+        0
+    };
+    let len = output.len();
+    let out_buf = Buffer::of(output);
+    // SAFETY: `name_us`, `name_buf`, and `output` remain live until `.wait()` returns.
+    unsafe {
+        send(
+            handle,
+            IRP_MJ_DIRECTORY_CONTROL,
+            |_| {
+                [
+                    u64::from(len as u32),
+                    name_ptr,
+                    u64::from(class),
+                    u64::from(file_index),
+                ]
+            },
+            KERNEL_MODE,
+            Needs::All(FILE_READ_DATA),
+            |_, irp, _| {
+                let next = irp::next_location(irp);
+                (*next).MinorFunction = IRP_MN_QUERY_DIRECTORY;
+                (*next).Flags |= flags;
+                let dev_flags = (*(*next).DeviceObject).Flags;
+                if dev_flags & DO_BUFFERED_IO != 0 {
+                    system_buffer(irp, Buffer::NONE, len)?;
+                    if len != 0 {
+                        (*irp).Flags |= IRP_INPUT_OPERATION;
+                        (*irp).UserBuffer = out_buf.ptr().cast();
+                        irp::set_requestor_room(irp, len);
+                    }
+                } else if dev_flags & DO_DIRECT_IO != 0 {
+                    if len != 0 {
+                        let described =
+                            mdl::IoAllocateMdl(out_buf.ptr().cast(), len as u32, 0, 0, irp);
+                        if described.is_null() {
+                            return Err(IoError::NoMemory);
+                        }
+                        mdl::probe_and_lock(described, KERNEL_MODE, IO_WRITE_ACCESS)
+                            .map_err(IoError::Refused)?;
+                    }
+                } else {
+                    (*irp).UserBuffer = out_buf.ptr().cast();
+                }
+                Ok(())
+            },
         )
     }?
     .wait()

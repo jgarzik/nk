@@ -25,7 +25,7 @@ pub mod handle;
 pub mod object;
 pub mod security;
 
-use crate::ke::{Rank, SpinLock};
+use crate::ex::pushlock::PushLock;
 use alloc::vec::Vec;
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::{OBJECT_DIRECTORY_SIZE, OBJECT_SYMBOLIC_LINK};
@@ -38,8 +38,11 @@ use object::ObRef;
 struct Entry(*mut u8);
 
 // SAFETY: the pointer is an identity here, and is used only under the
-// namespace's lock or with a reference taken there.
+// namespace's lock or with a reference taken there. Shared readers only read
+// the pointer identity and bump the atomic reference count.
 unsafe impl Send for Entry {}
+// SAFETY: as above.
+unsafe impl Sync for Entry {}
 
 struct Namespace {
     tree: Tree<Entry>,
@@ -49,14 +52,11 @@ struct Namespace {
     directories: Vec<(DirId, Entry)>,
 }
 
-static NAMESPACE: SpinLock<Namespace> = SpinLock::new(
-    Rank::Namespace,
-    Namespace {
-        tree: Tree::new(),
-        root: Entry(core::ptr::null_mut()),
-        directories: Vec::new(),
-    },
-);
+static NAMESPACE: PushLock<Namespace> = PushLock::new(Namespace {
+    tree: Tree::new(),
+    root: Entry(core::ptr::null_mut()),
+    directories: Vec::new(),
+});
 
 /// How every path is read: any case, links followed.
 const OPTIONS: Options = Options::new(true);
@@ -67,7 +67,7 @@ const THE_LINK: Options = Options {
 };
 
 /// The directories in the root, as on Windows.
-const DIRECTORIES: [&str; 7] = [
+const DIRECTORIES: [&str; 8] = [
     "Device",
     "Driver",
     "FileSystem",
@@ -75,6 +75,7 @@ const DIRECTORIES: [&str; 7] = [
     "BaseNamedObjects",
     "KernelObjects",
     "Callback",
+    "KnownDlls",
 ];
 
 fn status(error: Error) -> NTSTATUS {
@@ -167,6 +168,13 @@ pub fn init() -> Result<(), &'static str> {
             object::entered(body, root);
         }
     }
+    if insert_link(
+        &wide("\\KnownDlls\\KnownDllPath"),
+        &wide("C:\\Windows\\System32"),
+    ) != STATUS_SUCCESS
+    {
+        return Err(NO_MEMORY);
+    }
     match insert_link(&wide("\\DosDevices"), &wide("\\??")) {
         STATUS_SUCCESS => Ok(()),
         _ => Err(NO_MEMORY),
@@ -230,6 +238,83 @@ fn new_link(name: &[u16], target: &[u16]) -> Option<*mut u8> {
         });
     }
     Some(body)
+}
+
+/// Make the symbolic link `path` (absolute, or relative to `start`), leading to
+/// `target`. Returns the referenced `SYMBOLIC_LINK_TYPE` body on success.
+pub fn create_link(
+    start: Option<*mut u8>,
+    path: &[u16],
+    target: &[u16],
+    permanent: bool,
+) -> Result<*mut u8, NTSTATUS> {
+    let Some(link) = new_link(leaf(path), target) else {
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
+    };
+    let inserted = {
+        let mut ns = NAMESPACE.lock();
+        let start_dir = match start {
+            Some(dir_body) => match dir_of(&ns, dir_body) {
+                Some(id) => Some(id),
+                None => return Err(STATUS_INVALID_HANDLE),
+            },
+            None => None,
+        };
+        let inserted = ns
+            .tree
+            .insert_link(start_dir, path, OPTIONS, target, Entry(link));
+        if let Ok(dir) = inserted {
+            // SAFETY: a named object made above; take an extra reference for the caller.
+            unsafe {
+                object::set_permanent(link, permanent);
+                object::entered(link, directory(&ns, dir));
+                object::reference(link);
+            }
+        }
+        inserted
+    };
+    match inserted {
+        Ok(_) => Ok(link),
+        Err(error) => {
+            // SAFETY: the link never got its name: this is its only reference.
+            unsafe { object::dereference(link) };
+            Err(status(error))
+        }
+    }
+}
+
+/// One entry returned by [`list_directory`] for `NtQueryDirectoryObject`.
+pub struct DirectoryEntry {
+    pub name: Vec<u16>,
+    pub type_name: Vec<u16>,
+}
+
+/// Snapshot `(entry_name_utf16, type_name_utf16)` for every entry currently in
+/// the namespace directory object `dir_body` (used by `NtQueryDirectoryObject`).
+pub fn list_directory(dir_body: *mut u8) -> Result<Vec<DirectoryEntry>, NTSTATUS> {
+    let ns = NAMESPACE.read();
+    let Some(dir_id) = dir_of(&ns, dir_body) else {
+        return Err(STATUS_INVALID_HANDLE);
+    };
+    let Some(iter) = ns.tree.entries(dir_id) else {
+        return Err(STATUS_INVALID_HANDLE);
+    };
+    let mut out = Vec::new();
+    for (name, found) in iter {
+        let type_name: Vec<u16> = match found {
+            Found::Directory(_) => object::DIRECTORY_TYPE.name().to_vec(),
+            Found::SymbolicLink(_, _) => object::SYMBOLIC_LINK_TYPE.name().to_vec(),
+            Found::Object(Entry(ptr)) => {
+                // SAFETY: namespace lock keeps the named object alive.
+                unsafe { object::type_of(*ptr).name().to_vec() }
+            }
+        };
+        out.push(DirectoryEntry {
+            name: name.to_vec(),
+            type_name,
+        });
+    }
+    Ok(out)
 }
 
 /// Make the symbolic link `path`, which leads to `target`. The target
@@ -298,12 +383,23 @@ pub fn remove_link(path: &[u16]) -> NTSTATUS {
 /// The path is absolute, or relative to the directory object `start`
 /// (the `RootDirectory` of `OBJECT_ATTRIBUTES`).
 pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(ObRef, Vec<u16>), NTSTATUS> {
-    let ns = NAMESPACE.lock();
+    lookup_with(start, path, false)
+}
+
+/// As [`lookup`], stopping at a trailing symbolic link when `open_link` is
+/// set (`OBJ_OPENLINK`).
+pub fn lookup_with(
+    start: Option<*mut u8>,
+    path: &[u16],
+    open_link: bool,
+) -> Result<(ObRef, Vec<u16>), NTSTATUS> {
+    let options = if open_link { THE_LINK } else { OPTIONS };
+    let ns = NAMESPACE.read();
     let start = match start {
         None => None,
         Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
     };
-    let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
+    let outcome = ns.tree.lookup(start, path, options).map_err(status)?;
     let body = match outcome.found {
         Found::Object(object) | Found::SymbolicLink(_, object) => object.0,
         Found::Directory(dir) => directory(&ns, dir),
@@ -313,6 +409,186 @@ pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(ObRef, Vec<u16>),
     // name is alive. A directory's name holds a reference to it, and
     // the directory a look-up starts at is the caller's to hold.
     Ok((unsafe { ObRef::new(body) }, outcome.remainder))
+}
+
+/// Resolve an `OBJECT_ATTRIBUTES.RootDirectory` handle for creating a named
+/// namespace object (directory, event, symbolic link, section). A handle to a
+/// non-directory object fails with `STATUS_OBJECT_TYPE_MISMATCH` if that type
+/// has a `ParseProcedure` (device, file, key), or `STATUS_INVALID_HANDLE`
+/// otherwise.
+pub fn resolve_namespace_root(
+    root: *mut core::ffi::c_void,
+    name_empty: bool,
+    mode: i8,
+) -> Result<Option<ObRef>, NTSTATUS> {
+    if root.is_null() || name_empty {
+        return Ok(None);
+    }
+    let handle_mode = crate::svc::capture::handle_mode(mode);
+    let (start, _) = handle::reference_for(root as u64, None, 0, handle_mode)?;
+    let body = start.body();
+    // SAFETY: the reference just taken.
+    let ty = unsafe { object::type_of(body) };
+    if core::ptr::eq(ty, &raw const object::DIRECTORY_TYPE) {
+        return Ok(Some(start));
+    }
+    if ty.parse_procedure().is_some() {
+        Err(STATUS_OBJECT_TYPE_MISMATCH)
+    } else {
+        Err(STATUS_INVALID_HANDLE)
+    }
+}
+
+/// Check whether the current thread's subject may be granted `desired` access
+/// to `body` on behalf of `mode`. For `KernelMode` without
+/// `force_access_check`, grants the generic-mapped `desired` rights directly.
+///
+/// # Safety
+/// `body` is a live object the caller holds a reference to.
+pub unsafe fn check_access(
+    body: *mut u8,
+    desired: u32,
+    mode: i8,
+    force_access_check: bool,
+) -> Result<u32, NTSTATUS> {
+    // SAFETY: per the contract.
+    let ty = unsafe { object::type_of(body) };
+    let mapping = ty.generic_mapping();
+    if mode == nk_ntabi::io::KERNEL_MODE && !force_access_check {
+        return Ok(ty.map_generic(desired));
+    }
+    if core::ptr::eq(ty, &raw const object::DEVICE_TYPE) {
+        // SAFETY: `body` is a live `DEVICE_OBJECT`.
+        let copy = unsafe { crate::io::device::copy_security(body.cast()) };
+        let sd = copy.as_ref().map_or(core::ptr::null(), Vec::as_ptr);
+        // SAFETY: `sd` is null or points to the copied self-relative SD.
+        return unsafe {
+            crate::se::access::check_current_subject(sd, mapping, desired, mode, force_access_check)
+        };
+    }
+    // SAFETY: per the contract.
+    let sd = unsafe { security::reference(body) };
+    // SAFETY: `sd` is null or a referenced stored self-relative SD.
+    let result = unsafe {
+        crate::se::access::check_current_subject(sd, mapping, desired, mode, force_access_check)
+    };
+    if !sd.is_null() {
+        // SAFETY: matching reference taken above.
+        unsafe { security::release(sd) };
+    }
+    result
+}
+
+/// `OBJ_OPENLINK` and `OBJ_FORCE_ACCESS_CHECK` (`ntdef.h`).
+const OBJ_OPENLINK: u32 = 0x100;
+const OBJ_FORCE_ACCESS_CHECK: u32 = 0x400;
+
+/// Unified namespace lookup, `ParseProcedure` dispatch, type check, and
+/// `SeAccessCheck` (`ObOpenObjectByName` / `ObpLookupObjectName`).
+///
+/// Returns the opened object (referenced) and the granted access mask.
+///
+/// # Safety
+/// `parse_context` is null or points to the parse context expected by the
+/// target type's `ParseProcedure`.
+pub unsafe fn open_by_name(
+    root: *mut core::ffi::c_void,
+    path: &[u16],
+    attributes: u32,
+    expected_type: Option<&'static object::ObjectType>,
+    desired_access: u32,
+    mode: i8,
+    parse_context: *mut core::ffi::c_void,
+) -> Result<(ObRef, u32), NTSTATUS> {
+    let open_link = attributes & OBJ_OPENLINK != 0;
+    let force_access_check = attributes & OBJ_FORCE_ACCESS_CHECK != 0;
+    let handle_mode = crate::svc::capture::handle_mode(mode);
+
+    let (found, rest) = if root.is_null() {
+        lookup_with(None, path, open_link)?
+    } else {
+        let (root_ref, _) = handle::reference_for(root as u64, None, 0, handle_mode)?;
+        // SAFETY: `root_ref` holds a reference.
+        let root_ty = unsafe { object::type_of(root_ref.body()) };
+        if core::ptr::eq(root_ty, &raw const object::DIRECTORY_TYPE) {
+            lookup_with(Some(root_ref.body()), path, open_link)?
+        } else if root_ty.parse_procedure().is_some() {
+            if path.first() == Some(&u16::from(b'\\')) {
+                return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
+            }
+            (root_ref, path.to_vec())
+        } else {
+            return Err(STATUS_INVALID_HANDLE);
+        }
+    };
+
+    // SAFETY: `found` holds a reference.
+    let found_ty = unsafe { object::type_of(found.body()) };
+    if let Some(parse) = found_ty.parse_procedure() {
+        let mut complete_buf = path.to_vec();
+        let mut remaining_buf = rest;
+        let complete_len =
+            u16::try_from(complete_buf.len() * 2).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
+        let remaining_len =
+            u16::try_from(remaining_buf.len() * 2).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
+        let mut complete_us = UNICODE_STRING {
+            Length: complete_len,
+            MaximumLength: complete_len,
+            Buffer: complete_buf.as_mut_ptr(),
+        };
+        let mut remaining_us = UNICODE_STRING {
+            Length: remaining_len,
+            MaximumLength: remaining_len,
+            Buffer: remaining_buf.as_mut_ptr(),
+        };
+        let expected_ptr = expected_type.map_or(core::ptr::null_mut(), |t| {
+            core::ptr::from_ref(t).cast_mut().cast()
+        });
+        let mut out_obj = core::ptr::null_mut();
+        // SAFETY: `found` is live, counted strings point to live local buffers,
+        // and `parse_context` is valid per caller contract.
+        let st = unsafe {
+            parse(
+                found.body().cast(),
+                expected_ptr,
+                core::ptr::null_mut(),
+                mode,
+                attributes,
+                &raw mut complete_us,
+                &raw mut remaining_us,
+                parse_context,
+                core::ptr::null_mut(),
+                &raw mut out_obj,
+            )
+        };
+        if !nt_success(st) {
+            return Err(st);
+        }
+        if out_obj.is_null() {
+            return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+        }
+        // SAFETY: `ParseProcedure` returns a referenced object in `out_obj`.
+        let parsed = unsafe { ObRef::adopt(out_obj.cast()) };
+        let granted = if desired_access != 0 || force_access_check {
+            // SAFETY: `parsed` is live.
+            unsafe { check_access(parsed.body(), desired_access, mode, force_access_check) }?
+        } else {
+            0
+        };
+        return Ok((parsed, granted));
+    }
+
+    if let Some(expected) = expected_type
+        && !core::ptr::eq(found_ty, expected)
+    {
+        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+    }
+    if !rest.is_empty() {
+        return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+    // SAFETY: `found` is live.
+    let granted = unsafe { check_access(found.body(), desired_access, mode, force_access_check) }?;
+    Ok((found, granted))
 }
 
 /// Make a directory object: called `path` (absolute, or relative to
@@ -401,6 +677,60 @@ pub fn create_directory(
 /// synchronization, initial signal state `initial_state`): called
 /// `path` (absolute, or relative to the directory object `start`), or
 /// without a name if `path` is empty. `permanent` is `OBJ_PERMANENT`.
+/// Insert an already-allocated object `body` of type `ty` into the namespace
+/// at `path` (relative to `start`), optionally opening an existing object of
+/// the same type when `open_if` (`OBJ_OPENIF`) is set. On `Ok((existing, true))`,
+/// returns a new reference to `existing`; on `Ok((body, false))`, the namespace
+/// now holds its own reference to `body`.
+///
+/// # Safety
+/// `body` is a live object of type `ty` allocated via `object::create` or
+/// `object::create_named`.
+pub unsafe fn insert_named(
+    start: Option<*mut u8>,
+    path: &[u16],
+    body: *mut u8,
+    ty: &object::ObjectType,
+    permanent: bool,
+    open_if: bool,
+) -> Result<(*mut u8, bool), NTSTATUS> {
+    let mut ns = NAMESPACE.lock();
+    let start = match start {
+        None => None,
+        Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
+    };
+    match ns.tree.insert_object(start, path, OPTIONS, Entry(body)) {
+        Ok(dir) => {
+            let parent = directory(&ns, dir);
+            // SAFETY: per the contract; the namespace takes its own reference.
+            unsafe {
+                object::set_permanent(body, permanent);
+                object::reference(body);
+                object::entered(body, parent);
+            }
+            Ok((body, false))
+        }
+        Err(Error::Collision) if open_if => {
+            let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
+            match outcome.found {
+                Found::Object(&Entry(existing)) if outcome.remainder.is_empty() => {
+                    // SAFETY: live under the namespace lock.
+                    let same = unsafe { core::ptr::eq(object::type_of(existing), ty) };
+                    if same {
+                        // SAFETY: as above.
+                        unsafe { object::reference(existing) };
+                        Ok((existing, true))
+                    } else {
+                        Err(STATUS_OBJECT_TYPE_MISMATCH)
+                    }
+                }
+                _ => Err(STATUS_OBJECT_TYPE_MISMATCH),
+            }
+        }
+        Err(error) => Err(status(error)),
+    }
+}
+
 /// If the name is taken the creation fails, unless `open_if`
 /// (`OBJ_OPENIF`) and an event has it: that event is then the result.
 /// Returns the event with a reference for the caller, and whether it
@@ -635,7 +965,7 @@ pub unsafe extern "C" fn directory_deleted(object: *mut core::ffi::c_void) {
 /// Number of entries in the namespace, the boot directories included
 /// (for leak checks, which compare).
 pub fn count() -> usize {
-    NAMESPACE.lock().tree.counts().total()
+    NAMESPACE.read().tree.counts().total()
 }
 
 // ---- tests --------------------------------------------------------------

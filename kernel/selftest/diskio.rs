@@ -805,8 +805,12 @@ fn requestor() -> Result<u32, &'static str> {
         return Err("a flush did not reach the driver as one flush request");
     }
     // User mode: its buffer, a kilobyte 0x100 bytes into its pages.
-    let user =
-        super::open_as_user(testdisk::NAME).map_err(|_| "user mode could not open the disk")?;
+    let user_req = OpenRequest {
+        share_access: 0x3,
+        requestor_mode: USER_MODE,
+        ..OpenRequest::new(testdisk::NAME)
+    };
+    let (user, _) = file::open(&user_req).map_err(|_| "user mode could not open the disk")?;
     let outcome = (|| {
         let memory = super::UserMemory::new(super::USER_OUTPUT, &[0; 2 * PAGE_SIZE])?;
         let mut there = memory.buffer();

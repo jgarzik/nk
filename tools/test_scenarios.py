@@ -15,7 +15,7 @@ SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
     "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
     "golden", "canonical", "disk", "disk_size", "disk_image", "disk_expect", "registry",
-    "paths", "usb", "usb_kbd", "serial2", "hotplug",
+    "paths", "usb", "usb_kbd", "serial2", "hotplug", "memory",
 }
 
 

@@ -21,17 +21,19 @@ count: the tag is for
 which is off, as it is on Windows unless asked for. A reference taken to
 an object that has none stops the system (`REFERENCE_BY_POINTER`).
 
-Handles are entries in one table, the System process's, which is the
-kernel's handle table as on Windows; a handle holds a reference until
-closed. An entry has two names: the kernel handle, with Windows'
-kernel-handle bits, which is a handle for kernel mode only
-(`STATUS_INVALID_HANDLE` for user mode), and the same number without
-those bits, the System process's own handle, good in that process for
-either mode. Every open returns the kernel handle, a driver's with
-`OBJ_KERNEL_HANDLE` or without (`ObOpenObjectByPointer`,
-`ZwCreateEvent`): on Windows a handle made in the System process is in
-the kernel's table whatever was asked. No other process, no other
-table. A handle's number is predictable (the lowest free slot), so it
+Each process owns a handle table pointed to by `EPROCESS.ObjectTable`
+(`ob::handle::HandleTable`); the System process's table is also the
+kernel handle table, as on Windows. A handle holds a reference until
+closed. A kernel handle (with Windows' `KERNEL_HANDLE` high bits) always
+addresses the System/kernel table and is valid for kernel mode only
+(`STATUS_INVALID_HANDLE` for user mode); a process handle (without those
+bits) addresses the current process's own table (`EPROCESS.ObjectTable`).
+In the System process, both names refer to the same table; in any other
+process, process handles are isolated from the kernel table and from
+other processes. Child processes may inherit `OBJ_INHERIT` handles from
+their parent (`ob::handle::inherit_handles`), and process teardown drains
+and closes every remaining handle in `EPROCESS.ObjectTable`
+(`ob::handle::destroy_table`). A handle's number is predictable (the lowest free slot), so it
 can be closed the instant it is in the table: it is given its reference
 and its place in the object's handle count under the table's lock,
 which a close takes to remove it. Each handle has the access it was
@@ -129,6 +131,13 @@ symbolic-link bodies have Windows' sizes: a link's holds its target and
 creation time; a directory's is zero, the entries being in NK's tree.
 
 What is done with the rest of a path is the business of the type the
-look-up ended at, after the namespace's lock is dropped: a device's
-driver parses it as a file name (see [I/O](io.md)). The types' parse steps are
-NK's own code, not `OBJECT_TYPE` procedures. No security checks.
+look-up ended at, after the namespace's lock is dropped, through the
+unified `ob::open_by_name` path and `OBJECT_TYPE_INITIALIZER` procedures:
+`DEVICE_TYPE` (`io::file::parse_device`, `io::device::security_procedure`),
+`FILE_TYPE` (`io::file::parse_file`), and `KEY_TYPE` (`cm::parse_key`).
+Handle open and close honor `OpenProcedure`, `CloseProcedure`, and
+`OkayToCloseProcedure`. Generic mappings match Windows for all kernel
+types (`Event`, `Thread`, `Device`, `Key`, `Process`, `Token`,
+`Directory`, `SymbolicLink`, `File`, `Section`). User-mode opens (and
+kernel-mode opens with `OBJ_FORCE_ACCESS_CHECK`) check access via
+`ob::check_access` (`SeAccessCheck`).

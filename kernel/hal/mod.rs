@@ -47,9 +47,9 @@ pub fn init(info: &BootInfo) {
 /// The architecture makes the address space what that needs before the
 /// call and puts it back after one that returns.
 fn firmware_call<R>(call: impl FnOnce() -> R) -> R {
-    arch::firmware_enter();
+    let saved = arch::firmware_enter();
     let result = call();
-    arch::firmware_leave();
+    arch::firmware_leave(saved);
     result
 }
 

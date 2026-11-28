@@ -6,9 +6,4 @@
 
 use super::super::{Export, NT, State};
 
-trap_list!(
-    KeIsExecutingDpc,
-    KeRestoreExtendedProcessorState,
-    KeSaveExtendedProcessorState,
-    KeStartDynamicProcessor,
-);
+trap_list!(KeIsExecutingDpc, KeStartDynamicProcessor,);

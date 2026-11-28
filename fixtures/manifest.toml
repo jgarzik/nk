@@ -16,10 +16,11 @@
 #                    github.com/jgarzik/nk-fixtures
 #   windows-written  content of NK's choosing, written by Windows itself
 #                    (the hive, saved by Windows' registry)
-# kind (absent for a driver): `abi-table`, `pdb` or `hive`. Only drivers
-#   and the hive go into a boot image, and only drivers are in the ledger.
-#   With the hive goes registry-overlay.txt, the file next to this one:
-#   keys and values the hive does not have yet.
+# kind (absent for a driver): `abi-table`, `pdb`, `hive`, or `user`. Only
+#   drivers and the hive go into a boot image, and only drivers are in the
+#   driver-import ledger (`user` images are staged onto the system volume for
+#   Phase 6 user-mode proofs). With the hive goes registry-overlay.txt, the
+#   file next to this one: keys and values the hive does not have yet.
 # boot = false: a driver that is fetched but left out of the boot image.
 # name, file: `file` is what the fixture is called in target/fixtures/,
 #   where one directory holds every architecture's files. In a boot image
@@ -936,3 +937,39 @@ url = "https://github.com/jgarzik/nk-fixtures/releases/download/v9/nkc-ps.arm64.
 sha256 = "8c26ad9fbb65cac0b31d93b7c7ed07d1520e85bb60f38f1797d5956c438fc0c4"
 status = "nk-authored"
 note = "nk-fixtures v9 nkc/nkc-ps.c: the System process and its threads, waits and alerts by handle, silos"
+
+# Phase 6: Microsoft user-mode binaries and symbols (staged onto C:\Windows\System32
+# by tools/fatdisk.py for user-mode boot proofs, never placed on the ESP).
+
+[[fixture]]
+name = "ntdll"
+arch = "x86_64"
+file = "ntdll.x64.dll"
+url = "https://msdl.microsoft.com/download/symbols/ntdll.dll/FE96C48E1f8000/ntdll.dll"
+sha256 = "820a4a9b22ba3dc4edda9204bb63ef2f1bc97ffc0cf2c1882e924dc2a72b0553"
+status = "microsoft-inbox"
+kind = "user"
+boot = false
+note = "ntdll.dll 10.0.19041.1949, user-mode native runtime library (Windows 10 22H2)"
+
+[[fixture]]
+name = "autochk"
+arch = "x86_64"
+file = "autochk.x64.exe"
+url = "https://msdl.microsoft.com/download/symbols/autochk.exe/256E9C8Cf3000/autochk.exe"
+sha256 = "04fc7d9c0c6586ad5d08a3224b2afde2dab8203257a1499948870f5d4b06b6f2"
+status = "microsoft-inbox"
+kind = "user"
+boot = false
+note = "autochk.exe 10.0.19041.1266, boot-time native FAT volume checker"
+
+[[fixture]]
+name = "ntdll-pdb"
+arch = "x86_64"
+file = "ntdll.x64.pdb"
+url = "https://msdl.microsoft.com/download/symbols/ntdll.pdb/1F42D4F4A6654217576038426C4470951/ntdll.pdb"
+sha256 = "287519745ae596a43e3b03d63ac6edea43305f53d8e38611ee2e017336edf1ff"
+status = "microsoft-inbox"
+kind = "pdb"
+boot = false
+note = "public symbols of ntdll.dll 10.0.19041.1949 (for PEB/TEB layout checks and user backtraces)"

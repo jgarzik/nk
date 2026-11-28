@@ -23,11 +23,23 @@ loader (`nkload`) standing in for Microsoft's boot manager and `winload`.
   does not cover testing.
 
 Why: if an unmodified driver cannot tell NK from Windows, Microsoft's
-inbox drivers are just more drivers, and Microsoft's frameworks (KMDF,
-USB) ask little of the kernel, because they carry the rest themselves:
-`doc/ROADMAP.md` ("Measurements") has what the corpus imports.
-Rewriting those layers would cost years and create second ABIs
-(storport, NDIS, KMDF) to get wrong.
+inbox drivers are just more drivers, and three Microsoft frameworks act as
+force multipliers at the kernel boundary: **Storport** (SATA, NVMe, SAS,
+RAID, and VirtIO storage miniports), **KMDF** (USB host/hub stacks and
+modern peripheral drivers), and **NDIS** (Ethernet, wireless, filter, and
+virtual NIC miniports). Each carries the framework ABI itself and asks
+comparatively little of `ntoskrnl.exe`: `doc/ROADMAP.md` ("Measurements")
+has what the corpus imports.
+
+**No native peripheral driver reimplementation.** NK implements the NT
+kernel and HAL primitives, not hardware-specific drivers or higher-level
+stacks that Microsoft already ships as unmodified binaries. NK does not
+accept native Rust reimplementations of TCP/IP, NDIS, Storport, AHCI,
+NVMe, USB host controllers, ACPI interpreters, NTFS, production GPU
+drivers, or Linux driver compatibility layers; narrowly scoped boot
+infrastructure (UEFI loader, early serial diagnostics) and test fixtures
+(such as `nkfs`) are the only exceptions. When a Windows driver fails on
+NK, the fix is closing the missing kernel contract.
 
 Destination: Microsoft's Windows PE at a `cmd.exe` prompt on QEMU x86-64,
 QEMU arm64 and a Dell OptiPlex.
@@ -87,10 +99,11 @@ into memory a driver can write.
 | `boot/` | `nkload`, the UEFI loader |
 | `kernel/main.rs` | entry and boot order |
 | `kernel/arch/{x86_64,aarch64}/` | everything CPU-specific: traps, thread switch, interrupt controller, clock, processor start. The only place `cfg(target_arch)` appears |
-| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `cc`, `fsrtl`, `pnp`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
+| `kernel/<part>/` | one directory per NT part: `ke`, `ex`, `mm`, `ob`, `io`, `cc`, `fsrtl`, `pnp`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `whea`, `svc` (SSDT, `Zw*` thunks, argument capture), plus `hal`, `ldr` (image loading, boot files), `kd` (console, bugcheck) |
 | `kernel/export/` | the export table, and the traps |
 | `kernel/rt.rs` | Rust's allocator on the kernel pool |
 | `kernel/test.rs`, `kernel/selftest/` | the boot-test runner and the test groups |
+| `user/nkt/` | `no_std` Rust `/subsystem:native` user-mode test binary run on both NK and reference Windows 10 |
 | `lib/` | pure, host-tested crates, each named for the kernel part whose rules it holds (`ke`, `ex`, `mm`, `ob`, `io`, `cc`, `fsrtl`, `po`, `ps`, `se`, `cm`, `rtl`, `etw`, `hal`, `whea`, `pnp`), and: `pe` and `pdb` (image and symbol-file readers), `unwind` (function tables, unwinding, exception decisions), `ntabi` (structure layouts), `acpi` (firmware tables), `bootinfo` (the loader's hand-off block), `oracle` (the script and transcript format), `disk` (the data disk's pattern, a disk's answers to its control codes and the transfers it takes), `selftest` (the test runner's bookkeeping). A crate's top comment says what it holds |
 | `tools/` | the gate; boot harness and judge; ESP image builder; fixture and corpus fetchers; ledger; oracle VM and its debugger stub; mutants; coverage of `lib/` and of the kernel's unwind tables; `peinfo` and `pdbinfo` |
 | `fixtures/`, `ledger/`, `oracle/` | fixture manifests; generated compatibility ledger; oracle scripts and Windows transcripts |
@@ -126,33 +139,31 @@ Firmware starts `nkload`, which loads the kernel and drivers and jumps to
    them IRPs; the machine powers off. The boot context becomes processor
    0's idle loop.
 
-Any step that fails prints a `FAIL` line and stops. No user-mode code
-runs.
+Any step that fails prints a `FAIL` line and stops. Native Ring 3
+user-mode binaries (`ntdll.dll` with `nkt.exe` or Microsoft's
+`autochk.exe`) run inside the user-mode test scenarios on x86-64.
 
 ## Address space
 
 | Range | Contents |
 | --- | --- |
-| low half | NK's own table on both architectures: firmware runtime regions, identity-mapped, so UEFI runtime services stay callable (`doc/BOOT.md`), and the user range. Nothing at address zero |
+| low half (`0x1_0000`..`0x7FFF_FFFF_0000`) | per-process user address space (`mm::space::AddressSpace`), backed by a VAD tree (`nk_mm::vad::VadTree`), demand-zero / copy-on-write / `PAGE_GUARD` / section views, and a read-only user mapping of `KUSER_SHARED_DATA` at `0x7FFE_0000`. Nothing at address zero |
 | `0xFFFF_8000_0000_0000` + phys | direct map of physical memory: 2 MiB blocks, not executable; ranges without RAM as device memory |
-| `0xFFFF_F780_0000_0000` | `KUSER_SHARED_DATA`, one page, Windows' address |
+| `0xFFFF_F600_0000_0000`..`0xFFFF_F680_0000_0000` | relocated UEFI runtime service mappings (`SetVirtualAddressMap`, `doc/BOOT.md`), keeping firmware completely out of the user low half |
+| `0xFFFF_F780_0000_0000` | `KUSER_SHARED_DATA`, one page, Windows' kernel address |
 | `0xFFFF_F800_0000_0000` | the kernel image: 4 KiB pages, each section's own protection |
 | `0xFFFF_F880_0000_0000` to `0xFFFF_F900_0000_0000` | dynamic mappings: driver images and the views of images, kernel stacks, MDL views |
 
-**The user range** (`kernel/mm/user.rs`) is `0x1_0000` up to Windows'
-`MmUserProbeAddress`, `0x7FFF_FFFF_0000`, on both architectures (the
-low half is 47 bits wide on x86-64 and 48 on arm64). There is one
-address space, the System process's, so the range is every thread's.
-`mm::user` maps fresh zeroed frames there and unmaps them, with page
-tables made on demand and every processor's translation dropped on
-unmap; it has no exports. It is where a user-mode requestor's buffers
-are (see [I/O](design/io.md)). A range that touches a firmware runtime
-region is refused, since those share the low half.
-
-The pages are kernel-only: writable, not executable, not marked
-user-accessible. Nothing runs in user mode, and a kernel-only page is
-one the kernel can always touch: x86-64 SMAP and arm64 PAN, neither of
-which NK enables, restrict only pages marked for user mode.
+Each non-System process owns its own low-half page-table hierarchy (`CR3`
+on x86-64, sharing high-half PML4 slots `256..512` from `SYSTEM_CR3`;
+`TTBR0_EL1` on arm64), its own handle table (`EPROCESS.ObjectTable`), and
+its own VAD tree (`mm::vm`, `mm::view`). The working-set trimmer
+(`mm::trim`) and mapped-page writer (`mm::writer`) age and demote mapped
+data-file PTEs and flush dirty `Location::Modified` frames in contiguous
+clusters back to backing files so views larger than physical RAM run
+without leaking or corrupting data. `mm::user` provides fault-protected
+user/kernel copies (`copy`, `probe_pages`) and scratch mappings for the
+System process's kernel-only I/O tests.
 
 ## How each part works
 
@@ -163,6 +174,7 @@ One document per part of the kernel, each with the decisions NK made there:
 - [Devices](design/devices.md): PCI configuration space, device memory, device interrupts, DMA.
 - [Threads and scheduling](design/threads.md): Threads, the System process and silos, waits, mutexes, DPCs, timers, work items.
 - [The executive's locks, lists and timers](design/executive.md): Push locks, sequenced and lookaside lists, resources, executive timers and the rest.
+- [System calls](design/syscalls.md): The system-service table, `Nt*`/`Zw*` split and `PreviousMode`.
 - [Objects, references and handles](design/objects.md): The object manager and the namespace.
 - [The kernel image and its exports](design/image.md): The kernel as a PE image, unwind tables, exports, ABI structures.
 - [Exceptions](design/exceptions.md): Structured exception handling and unwinding.

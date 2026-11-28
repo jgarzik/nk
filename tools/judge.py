@@ -58,6 +58,9 @@ class Log:
     def exports(self):
         return [l for l in self.lines if l.startswith("NK-EXPORT ")]
 
+    def services(self):
+        return [l for l in self.lines if l.startswith(("NK-SVC ", "NK-SVC-TOTAL "))]
+
     def lookups(self):
         """The names drivers asked `MmGetSystemRoutineAddress` for that the
         kernel does not export, as it printed them."""

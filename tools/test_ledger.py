@@ -167,5 +167,109 @@ class Missing(unittest.TestCase):
         ])
 
 
+class Services(unittest.TestCase):
+    def test_parses_ssdt_summary_lines(self):
+        lines = [
+            "NK-SVC-TOTAL 471",
+            "NK-SVC 15 NtClose implemented",
+            "NK-SVC 4 NtWaitForSingleObject partial",
+        ]
+        summary = ledger.parse_services(lines)
+        self.assertEqual(summary["total"], 471)
+        self.assertEqual(summary["implemented"], 1)
+        self.assertEqual(summary["partial"], 1)
+        self.assertEqual(summary["traps"], 0)
+        self.assertEqual(summary["missing"], 469)
+        self.assertEqual(
+            summary["registered"],
+            [
+                {"number": 4, "name": "NtWaitForSingleObject", "state": "partial"},
+                {"number": 15, "name": "NtClose", "state": "implemented"},
+            ],
+        )
+        self.assertIsNone(ledger.parse_services([]))
+
+
+class HighPriority(unittest.TestCase):
+    PRIO_LISTS = """\
+storport.sys 10.0.1 ntoskrnl.exe: IoCreateDevice ProbeForRead ZwClose
+tcpip.sys 10.0.2 ntoskrnl.exe: IoCreateDevice KeSetEvent SharedMissing
+tcpip.sys 10.0.2 netio.sys: NmrRegisterClient
+ndis.sys 10.0.3 ntoskrnl.exe: KeStallExecutionProcessor NdisOnlyMissing SharedMissing
+afd.sys 10.0.4 ntoskrnl.exe: IoCreateDevice SharedMissing ProbeForRead
+afd.sys 10.0.4 netio.sys: NmrRegisterClient
+ntfs.sys 10.0.5 ntoskrnl.exe: IoCreateDevice NtfsOnlyMissing SharedMissing
+ntfs.sys 10.0.5 ext-ms-win-fs-clfs-l1-1-0.dll: ClfsCreateLogFile
+netio.sys 10.0.6 ntoskrnl.exe: NetioDepMissing
+clfs.sys 10.0.7 ntoskrnl.exe: ClfsDepMissing
+unrelated.sys 10.0.8 ntoskrnl.exe: UnrelatedMissing
+"""
+
+    def test_absent_when_none_present(self):
+        self.assertNotIn("high_priority", ledger.corpus(EXPORTS, LISTS))
+
+    def test_union_per_binary_and_transitive_closure(self):
+        c = ledger.corpus(EXPORTS, self.PRIO_LISTS)
+        hp = c["high_priority"]
+        self.assertEqual(
+            hp["binaries"],
+            ["storport.sys", "tcpip.sys", "ndis.sys", "afd.sys", "ntfs.sys"],
+        )
+        # Direct distinct union: IoCreateDevice (impl), KeStallExecutionProcessor (impl),
+        # ProbeForRead (partial), ZwClose (traps), KeSetEvent (missing),
+        # NdisOnlyMissing (missing), NtfsOnlyMissing (missing), SharedMissing (missing) = 8.
+        self.assertEqual(
+            hp["kernel_names"],
+            {"total": 8, "implemented": 2, "partial": 1, "traps": 1, "missing": 4},
+        )
+        by_file = {b["file"]: b for b in hp["by_binary"]}
+        self.assertEqual(
+            by_file["storport.sys"]["not_implemented"],
+            {"missing": [], "traps": ["ZwClose"], "partial": ["ProbeForRead"]},
+        )
+        self.assertEqual(
+            by_file["afd.sys"]["not_implemented"],
+            {"missing": ["SharedMissing"], "traps": [], "partial": ["ProbeForRead"]},
+        )
+        self.assertEqual(
+            by_file["ntfs.sys"]["not_implemented"],
+            {"missing": ["NtfsOnlyMissing", "SharedMissing"], "traps": [], "partial": []},
+        )
+        # Shared gaps ranked by count desc, then name asc.
+        self.assertEqual(
+            hp["shared_gaps"],
+            [
+                {
+                    "name": "SharedMissing",
+                    "state": "missing",
+                    "count": 4,
+                    "binaries": ["afd.sys", "ndis.sys", "ntfs.sys", "tcpip.sys"],
+                },
+                {
+                    "name": "ProbeForRead",
+                    "state": "partial",
+                    "count": 2,
+                    "binaries": ["afd.sys", "storport.sys"],
+                },
+            ],
+        )
+        # Transitive closure pulls in netio.sys and clfs.sys (via ext-ms-win-fs-clfs-l1-1-0.dll),
+        # excluding unrelated.sys.
+        deps = hp["with_dependencies"]
+        self.assertEqual(
+            deps["binaries"],
+            ["afd.sys", "clfs.sys", "ndis.sys", "netio.sys", "ntfs.sys", "storport.sys", "tcpip.sys"],
+        )
+        self.assertEqual(deps["kernel_names"]["missing"], 6)
+
+    def test_priority_report_output(self):
+        lines = ledger.priority_report(EXPORTS, self.PRIO_LISTS)
+        self.assertTrue(any("storport.sys" in line for line in lines))
+        self.assertTrue(any("afd.sys" in line for line in lines))
+        self.assertTrue(any("WITH DEPS" in line and "7 binaries" in line for line in lines))
+        self.assertTrue(any("4x SharedMissing" in line for line in lines))
+        self.assertTrue(any("NtfsOnlyMissing" in line for line in lines))
+
+
 if __name__ == "__main__":
     unittest.main()

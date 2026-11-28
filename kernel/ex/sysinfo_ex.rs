@@ -41,44 +41,60 @@ pub unsafe extern "C" fn NtQuerySystemInformationEx(
     output_length: u32,
     return_length: *mut u32,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     if let Err(status) = rules::has_input(input.is_null(), input_length) {
         return status;
     }
-    let report = |length: u32| {
+    let report = |length: u32| -> Result<(), NTSTATUS> {
         if !return_length.is_null() {
-            // SAFETY: per the contract.
-            unsafe { return_length.write_unaligned(length) };
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            unsafe { crate::svc::capture::write(return_length, length, mode) }?;
         }
+        Ok(())
     };
-    let failed = |status: NTSTATUS, length: Option<u32>| {
-        if let Some(length) = length {
-            report(length);
+    let failed = |status: NTSTATUS, length: Option<u32>| -> NTSTATUS {
+        if let Some(length) = length
+            && let Err(err) = report(length)
+        {
+            return err;
         }
         status
     };
     match class {
         SYSTEM_LOGICAL_PROCESSOR_AND_GROUP_INFORMATION_CLASS => {
-            // SAFETY: per the contract, where the input is long enough.
-            let relationship =
-                (input_length >= 4).then(|| unsafe { input.cast::<u32>().read_unaligned() });
+            let relationship = if input_length >= 4 {
+                // SAFETY: per the contract; fault-protected for `UserMode`.
+                match unsafe { crate::svc::capture::read(input.cast::<u32>(), mode) } {
+                    Ok(v) => Some(v),
+                    Err(status) => return status,
+                }
+            } else {
+                None
+            };
             match rules::relationship(relationship, input_length, smp::online(), output_length) {
                 Answer::Status(status, length) => failed(status, length),
                 Answer::Written(entry) => {
-                    // SAFETY: per the contract: the rules found the
-                    // buffer long enough for the entry.
-                    unsafe {
+                    // SAFETY: per the contract; fault-protected for `UserMode`.
+                    let write = unsafe {
                         match entry {
-                            Relationship::NumaNode(e) => {
-                                output
-                                    .cast::<NUMA_NODE_RELATIONSHIP_ENTRY>()
-                                    .write_unaligned(e);
-                            }
-                            Relationship::Group(e) => {
-                                output.cast::<GROUP_RELATIONSHIP_ENTRY>().write_unaligned(e);
-                            }
+                            Relationship::NumaNode(e) => crate::svc::capture::write(
+                                output.cast::<NUMA_NODE_RELATIONSHIP_ENTRY>(),
+                                e,
+                                mode,
+                            ),
+                            Relationship::Group(e) => crate::svc::capture::write(
+                                output.cast::<GROUP_RELATIONSHIP_ENTRY>(),
+                                e,
+                                mode,
+                            ),
                         }
+                    };
+                    if let Err(status) = write {
+                        return status;
                     }
-                    report(entry.length());
+                    if let Err(status) = report(entry.length()) {
+                        return status;
+                    }
                     STATUS_SUCCESS
                 }
                 Answer::NotImplemented => crate::kd::bugcheck(format_args!(
@@ -90,19 +106,32 @@ pub unsafe extern "C" fn NtQuerySystemInformationEx(
         SYSTEM_INTERRUPT_STEERING_INFORMATION_CLASS => {
             let whole =
                 input_length as usize >= size_of::<SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT>();
-            // SAFETY: per the contract, where the input is long enough;
-            // a copy, since the driver may write it.
-            let question = whole.then(|| unsafe {
-                input
-                    .cast::<SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT>()
-                    .read_unaligned()
-            });
+            let question = if whole {
+                // SAFETY: per the contract; fault-protected for `UserMode`.
+                match unsafe {
+                    crate::svc::capture::read(
+                        input.cast::<SYSTEM_INTERRUPT_STEERING_INFORMATION_INPUT>(),
+                        mode,
+                    )
+                } {
+                    Ok(v) => Some(v),
+                    Err(status) => return status,
+                }
+            } else {
+                None
+            };
             match rules::interrupt_steering(question.as_ref(), input_length, output_length) {
                 Answer::Status(status, length) => failed(status, length),
                 Answer::Written(steered) => {
-                    // SAFETY: per the contract: four bytes at least.
-                    unsafe { output.cast::<u32>().write_unaligned(steered) };
-                    report(4);
+                    // SAFETY: per the contract; fault-protected for `UserMode`.
+                    let wrote =
+                        unsafe { crate::svc::capture::write(output.cast::<u32>(), steered, mode) };
+                    if let Err(status) = wrote {
+                        return status;
+                    }
+                    if let Err(status) = report(4) {
+                        return status;
+                    }
                     STATUS_SUCCESS
                 }
                 Answer::NotImplemented => crate::kd::bugcheck(format_args!(

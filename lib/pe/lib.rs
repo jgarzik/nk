@@ -147,14 +147,23 @@ impl Section {
 pub struct Headers {
     pub machine: u16,
     pub timestamp: u32,
+    pub characteristics: u16,
     pub image_base: u64,
     pub entry_rva: u32,
     pub size_of_image: u32,
     pub size_of_headers: u32,
     pub section_alignment: u32,
+    pub major_os_version: u16,
+    pub minor_os_version: u16,
+    pub major_subsystem_version: u16,
+    pub minor_subsystem_version: u16,
+    pub checksum: u32,
     pub subsystem: u16,
     /// `IMAGE_DLLCHARACTERISTICS_*`.
     pub dll_characteristics: u16,
+    pub size_of_stack_reserve: u64,
+    pub size_of_stack_commit: u64,
+    pub loader_flags: u32,
     dirs: [DataDir; 16],
 }
 
@@ -197,13 +206,22 @@ fn read_headers(file: &[u8]) -> Result<(Headers, usize, usize), PeError> {
     let headers = Headers {
         machine,
         timestamp,
+        characteristics: hdr(u16_at(file, coff + 18))?,
         image_base: hdr(u64_at(file, opt + 24))?,
         entry_rva: hdr(u32_at(file, opt + 16))?,
         size_of_image: hdr(u32_at(file, opt + 56))?,
         size_of_headers: hdr(u32_at(file, opt + 60))?,
         section_alignment: hdr(u32_at(file, opt + 32))?,
+        major_os_version: hdr(u16_at(file, opt + 40))?,
+        minor_os_version: hdr(u16_at(file, opt + 42))?,
+        major_subsystem_version: hdr(u16_at(file, opt + 48))?,
+        minor_subsystem_version: hdr(u16_at(file, opt + 50))?,
+        checksum: hdr(u32_at(file, opt + 64))?,
         subsystem: hdr(u16_at(file, opt + 68))?,
         dll_characteristics: hdr(u16_at(file, opt + 70))?,
+        size_of_stack_reserve: hdr(u64_at(file, opt + 72))?,
+        size_of_stack_commit: hdr(u64_at(file, opt + 80))?,
+        loader_flags: hdr(u32_at(file, opt + 104))?,
         dirs,
     };
     Ok((headers, opt + opt_size, nsections))

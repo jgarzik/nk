@@ -1,0 +1,14 @@
+NKT start
+NKT vm.rw: alloc=0x00000000 rw=1 query=0x00000000 state=0x1000 prot=0x4 chg=0x00000000 old=0x4 free=0x00000000
+NKT vm.guard: alloc=0x00000000 query=0x00000000 prot=0x104
+NKT section.cow: create=0x00000000 shared=1 cow=1
+NKT event.sync: create=0x00000000 w0=1 set=0x00000000/0 w1=0x00000000 rst=0x00000000/1 w2=1 close=0x00000000
+NKT handle.bad: close=0xc0000008 match=1
+NKT sync.multi: mutant=1 sem=1 wait_multi=1
+NKT tp.iocp: iocp=1 wcp=1 timer2=1
+NKT thread.apc: thread=1 apc=1
+NKT seh.veh: guard=1 av=1
+NKT ob.dir: open=0x00000000 link=1
+NKT proc.basic: status=0x00000000 peb_eq=1 pid_nz=1 len=48
+NKT heap.alloc: ok=1
+NKT done

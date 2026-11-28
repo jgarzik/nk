@@ -79,6 +79,7 @@ mod thread;
 mod timer;
 mod timer2;
 mod usb_kbd;
+mod user;
 mod volumes;
 mod wait;
 mod whea;
@@ -248,6 +249,7 @@ pub static GROUPS: &[&[&Group]] = &[
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,
+    user::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared

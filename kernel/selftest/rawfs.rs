@@ -111,16 +111,126 @@ fn mount() -> Result<(), &'static str> {
         }
         let name = alloc::format!("{}\\FILE.TXT", testdisk::NAME);
         match open(&name, 0xC010_0000) {
-            Err(STATUS_INVALID_PARAMETER) => Ok(()),
+            Err(STATUS_INVALID_PARAMETER) => {}
             Ok(other) => {
                 file::close(other);
-                Err("RAW opened a file")
+                return Err("RAW opened a file");
             }
-            Err(_) => Err("RAW did not refuse a name as invalid"),
+            Err(_) => return Err("RAW did not refuse a name as invalid"),
         }
+        // F6: RAW QueryVolumeInformation (`FileFsAttributeInformation` -> "RAW",
+        // `FileFsDeviceInformation`, `FileFsVolumeInformation`).
+        let mut attr = [0u8; 32];
+        let qv = file::query_volume_information(handle, FILE_FS_ATTRIBUTE_INFORMATION, &mut attr)
+            .map_err(|_| "RAW FileFsAttributeInformation failed")?;
+        if qv.status != STATUS_SUCCESS || qv.information != 18 || &attr[12..18] != b"R\0A\0W\0" {
+            return Err("RAW FileFsAttributeInformation did not return RAW");
+        }
+        let mut dev_info = [0u8; 8];
+        let qd = file::query_volume_information(handle, FILE_FS_DEVICE_INFORMATION, &mut dev_info)
+            .map_err(|_| "RAW FileFsDeviceInformation failed")?;
+        if qd.status != STATUS_SUCCESS || qd.information != 8 {
+            return Err("RAW FileFsDeviceInformation failed");
+        }
+        // F6: RAW share-access conflict (exclusive open while shared open is held).
+        let excl = OpenRequest {
+            desired_access: 0xC010_0000,
+            share_access: 0,
+            ..OpenRequest::new(testdisk::NAME)
+        };
+        match file::open(&excl) {
+            Err(STATUS_SHARING_VIOLATION) => {}
+            Ok((other, _)) => {
+                file::close(other);
+                return Err("RAW allowed a conflicting exclusive open");
+            }
+            Err(_) => return Err("RAW did not return STATUS_SHARING_VIOLATION on conflict"),
+        }
+        // F6: RAW volume FSCTLs (`IS_VOLUME_MOUNTED`, `LOCK_VOLUME`, `UNLOCK_VOLUME`).
+        let mounted = file::fs_control(handle, FSCTL_IS_VOLUME_MOUNTED, &[], &mut [])
+            .map_err(|_| "RAW FSCTL_IS_VOLUME_MOUNTED failed")?;
+        if mounted.status != STATUS_SUCCESS {
+            return Err("RAW FSCTL_IS_VOLUME_MOUNTED did not succeed");
+        }
+        let locked = file::fs_control(handle, FSCTL_LOCK_VOLUME, &[], &mut [])
+            .map_err(|_| "RAW FSCTL_LOCK_VOLUME failed")?;
+        if locked.status != STATUS_SUCCESS {
+            return Err("RAW FSCTL_LOCK_VOLUME did not succeed on sole open");
+        }
+        let unlocked = file::fs_control(handle, FSCTL_UNLOCK_VOLUME, &[], &mut [])
+            .map_err(|_| "RAW FSCTL_UNLOCK_VOLUME failed")?;
+        if unlocked.status != STATUS_SUCCESS {
+            return Err("RAW FSCTL_UNLOCK_VOLUME did not succeed");
+        }
+        // F6: exercise `FO_SYNCHRONOUS_IO` per-file serialization lock.
+        let fo =
+            crate::ob::handle::reference(handle, Some(&raw const crate::ob::object::FILE_TYPE))
+                .map_err(|_| "could not reference file object for lock test")?;
+        // SAFETY: `fo` holds a live `FILE_OBJECT`.
+        unsafe {
+            if file::acquire_file_lock(fo.cast(), KERNEL_MODE) != STATUS_SUCCESS {
+                return Err("acquire_file_lock failed on uncontended file");
+            }
+            file::release_file_lock(fo.cast());
+        }
+        Ok(())
     })();
     file::close(handle);
-    result
+    result?;
+    // F6: async non-`FO_SYNCHRONOUS_IO` read completing through `IopCompleteRequest` APC.
+    let async_req = OpenRequest {
+        desired_access: 0x8010_0000, // GENERIC_READ | SYNCHRONIZE
+        share_access: SHARE_READ_WRITE,
+        create_options: FILE_NON_DIRECTORY_FILE,
+        ..OpenRequest::new(testdisk::NAME)
+    };
+    let (ah, _) = file::open(&async_req).map_err(|_| "async open on RAW disk failed")?;
+    let mut ev: *mut core::ffi::c_void = core::ptr::null_mut();
+    // SAFETY: local handle pointer.
+    let ev_st = unsafe {
+        crate::ob::event::ZwCreateEvent(&raw mut ev, 0x001F_0003, core::ptr::null(), 0, 0)
+    };
+    if ev_st != STATUS_SUCCESS {
+        file::close(ah);
+        return Err("could not create event for async read test");
+    }
+    let mut async_buf = [0u8; 512];
+    let mut async_iosb = IO_STATUS_BLOCK {
+        Status: STATUS_PENDING,
+        Information: 0,
+    };
+    let buf = file::Buffer {
+        address: async_buf.as_mut_ptr().addr(),
+        len: async_buf.len(),
+    };
+    // SAFETY: `async_buf` and `async_iosb` stay alive until the event signals below.
+    let st = unsafe {
+        file::read_async(
+            ah,
+            Some(ev as u64),
+            &raw mut async_iosb,
+            buf,
+            Some(0),
+            KERNEL_MODE,
+        )
+    };
+    let waited = if st == Ok(STATUS_PENDING) {
+        // SAFETY: `ev` is a valid event handle.
+        unsafe { crate::ob::event::ZwWaitForSingleObject(ev, 0, core::ptr::null()) }
+    } else {
+        STATUS_SUCCESS
+    };
+    crate::ob::handle::close(ev as u64);
+    file::close(ah);
+    if !matches!(st, Ok(STATUS_SUCCESS | STATUS_PENDING))
+        || waited != STATUS_SUCCESS
+        || async_iosb.Status != STATUS_SUCCESS
+        || async_iosb.Information != 512
+        || nk_disk::pattern::check(&async_buf, 0, nk_disk::pattern::ORIGINAL).is_err()
+    {
+        return Err("async read via IopCompleteRequest APC did not complete with disk data");
+    }
+    Ok(())
 }
 
 fn run(r: &mut Report, _: &BootInfo) {

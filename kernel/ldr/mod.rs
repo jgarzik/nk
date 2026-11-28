@@ -632,6 +632,7 @@ fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Im
                 let prot = Prot {
                     write: flags & nk_pe::SCN_MEM_WRITE != 0,
                     exec: flags & nk_pe::SCN_MEM_EXECUTE != 0,
+                    user: false,
                     device: false,
                 };
                 map::map(base + u64::from(rva), phys + u64::from(rva), 1, prot)

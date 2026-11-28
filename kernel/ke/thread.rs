@@ -55,7 +55,7 @@ use core::sync::atomic::{
 use nk_ke::sched::{self, Leaving};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
-use nk_ntabi::ke::{DISPATCHER_HEADER, KTIMER, KWAIT_BLOCK};
+use nk_ntabi::ke::{DISPATCHER_HEADER, KEVENT, KTIMER, KWAIT_BLOCK};
 use nk_ntabi::pcr::NATIVE as PCR;
 use nk_ntabi::thread as layout;
 
@@ -107,6 +107,19 @@ pub struct Thread {
     /// once no frame can be left there (`reap_stranded`).
     stranded: [Stack; MAX_STRANDED],
     stranded_count: u8,
+    /// Backing storage for the thread's 64-byte-aligned XSAVE/FXSAVE area
+    /// (`KTHREAD.StateSaveArea` points to the aligned slice inside this array).
+    xstate_buf: [u8; arch::XSTATE_BUF_SIZE],
+    /// Active `KEXCEPTION_FRAME` pointer during a user-mode syscall (x86-64).
+    active_ef: u64,
+    /// Set by `NtContinue`/`NtRaiseException` so `syscall_dispatch` returns
+    /// via full `iretq` without overwriting `tf.Rax`.
+    force_iret: bool,
+    /// Initial-suspend count (`CREATE_SUSPENDED` / `NtResumeThread`).
+    suspend_count: AtomicU32,
+    /// Per-thread synchronization event used by `NtWaitForAlertByThreadId` /
+    /// `NtAlertThreadByThreadId` (SRW locks, condition variables, `RtlWaitOnAddress`).
+    tid_alert_event: KEVENT,
 }
 
 /// The most segments unwinds can have left with frames still on them:
@@ -317,6 +330,72 @@ pub fn current() -> *mut Thread {
     pcr::current_thread().cast()
 }
 
+/// The current thread's `KTHREAD.PreviousMode` (`0` = `KernelMode`,
+/// `1` = `UserMode`). Returns `KERNEL_MODE` during early boot before
+/// the idle thread is installed.
+pub fn previous_mode() -> i8 {
+    let me = current();
+    if me.is_null() {
+        return nk_ntabi::io::KERNEL_MODE;
+    }
+    // SAFETY: `me` is the running thread; only this thread reads or
+    // modifies its own `PreviousMode`.
+    unsafe { field::<i8>(me, layout::PREVIOUS_MODE).read() }
+}
+
+/// Set the current thread's `KTHREAD.PreviousMode`, returning its
+/// previous value.
+pub fn set_previous_mode(mode: i8) -> i8 {
+    let me = current();
+    if me.is_null() {
+        return nk_ntabi::io::KERNEL_MODE;
+    }
+    // SAFETY: `me` is the running thread; only this thread writes its
+    // own `PreviousMode`.
+    unsafe {
+        let slot = field::<i8>(me, layout::PREVIOUS_MODE);
+        let old = slot.read();
+        slot.write(mode);
+        old
+    }
+}
+
+/// RAII guard that switches `KTHREAD.PreviousMode` for the current
+/// scope and restores the prior value on drop.
+pub struct PreviousModeGuard {
+    old: i8,
+}
+
+impl PreviousModeGuard {
+    /// Switch `PreviousMode` to `KERNEL_MODE` (used by `Zw*` thunks).
+    pub fn kernel() -> Self {
+        Self {
+            old: set_previous_mode(nk_ntabi::io::KERNEL_MODE),
+        }
+    }
+
+    /// Switch `PreviousMode` to `mode`.
+    #[allow(dead_code)]
+    pub fn enter(mode: i8) -> Self {
+        Self {
+            old: set_previous_mode(mode),
+        }
+    }
+}
+
+impl Drop for PreviousModeGuard {
+    fn drop(&mut self) {
+        set_previous_mode(self.old);
+    }
+}
+
+/// [`ExGetPreviousMode`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exgetpreviousmode):
+/// the current thread's `KTHREAD.PreviousMode`.
+#[allow(non_snake_case)]
+pub extern "C" fn ExGetPreviousMode() -> i8 {
+    previous_mode()
+}
+
 /// The stack the running thread is running on: its own, or the last
 /// segment it was given (`ke::expand`).
 pub fn current_stack() -> Stack {
@@ -495,7 +574,7 @@ unsafe fn publish_stack(me: *mut Thread, stack: Stack) {
         field::<u64>(me, layout::STACK_BASE).write(stack.top);
         field::<u64>(me, layout::STACK_LIMIT).write(stack.base);
     }
-    arch::set_kernel_stack(stack.base);
+    arch::set_kernel_stack(stack.base, stack.top);
 }
 
 fn set_current(thread: *mut Thread) {
@@ -537,6 +616,17 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).entered_from).write([0; MAX_SEGMENTS]);
         (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_STRANDED]);
         (&raw mut (*thread).stranded_count).write(0);
+        let xstate_area = arch::xstate_align_area((&raw mut (*thread).xstate_buf).cast());
+        arch::xstate_init_area(xstate_area);
+        field::<*mut u8>(thread, layout::STATE_SAVE_AREA).write(xstate_area);
+        (&raw mut (*thread).active_ef).write(0);
+        (&raw mut (*thread).force_iret).write(false);
+        (&raw mut (*thread).suspend_count).write(AtomicU32::new(0));
+        super::wait::KeInitializeEvent(
+            &raw mut (*thread).tid_alert_event,
+            1, /* SynchronizationEvent */
+            0,
+        );
         // Every thread NK makes is a system thread.
         field::<u32>(thread, layout::MISC_FLAGS).write(layout::MISC_FLAG_SYSTEM_THREAD);
         super::apc::init_thread(thread);
@@ -555,10 +645,9 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         field::<u32>(thread, nk_ntabi::thread::CROSS_THREAD_FLAGS)
             .write(crate::ps::process::thread_priorities(process));
         field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
-        field::<[u64; 2]>(thread, layout::CID).write([
-            nk_ntabi::process::SYSTEM_PROCESS_ID,
-            crate::ps::process::new_thread_id(),
-        ]);
+        let tid = crate::ps::process::new_thread_id();
+        field::<[u64; 2]>(thread, layout::CID).write([nk_ntabi::process::SYSTEM_PROCESS_ID, tid]);
+        crate::ps::cid::insert_thread(tid, thread.cast());
         set_state(thread, state);
     }
     Some(thread)
@@ -620,6 +709,195 @@ pub fn create_unstarted(
     // SAFETY: a live thread nothing else has.
     unsafe { ob::object::reference(thread.cast()) };
     Ok(thread)
+}
+
+/// Assign an unstarted thread to non-System `process`, taking an object
+/// reference on `process` (released in [`deleted`]) and clearing
+/// `MISC_FLAG_SYSTEM_THREAD`.
+///
+/// # Safety
+/// `thread` came from [`create_unstarted`] and has not yet started; `process`
+/// is a live `EPROCESS`.
+#[allow(dead_code)]
+pub unsafe fn assign_process(thread: *mut Thread, process: *mut u8) {
+    // SAFETY: per the contract; exclusive access before the thread runs.
+    unsafe {
+        let old = field::<*mut u8>(thread, layout::PROCESS).read();
+        if old != process {
+            let sys = crate::ps::process::system();
+            if process != sys {
+                ob::object::reference(process);
+            }
+            if !old.is_null() && old != sys {
+                ob::object::dereference(old);
+            }
+            field::<*mut u8>(thread, layout::PROCESS).write(process);
+            field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
+            let pid = crate::ps::process::PsGetProcessId(process.cast()).addr() as u64;
+            field::<u64>(thread, layout::CID).write(pid);
+            let flags = field::<u32>(thread, layout::MISC_FLAGS);
+            if process != sys {
+                flags.write(flags.read() & !layout::MISC_FLAG_SYSTEM_THREAD);
+            } else {
+                flags.write(flags.read() | layout::MISC_FLAG_SYSTEM_THREAD);
+            }
+        }
+    }
+}
+
+/// Set `KTHREAD.Teb` for a thread (and update the CPU's user GS base if this
+/// is the running thread).
+///
+/// # Safety
+/// `thread` is either the running thread or an unstarted thread.
+#[allow(dead_code)]
+pub unsafe fn set_teb(thread: *mut Thread, teb: u64) {
+    // SAFETY: per the contract.
+    unsafe {
+        field::<u64>(thread, layout::TEB).write(teb);
+    }
+    if thread == current() {
+        arch::set_user_gs_base(teb);
+    }
+}
+
+/// Set/get the active syscall `KEXCEPTION_FRAME` pointer on the running thread.
+#[allow(dead_code)]
+pub fn swap_active_ef(ef: u64) -> u64 {
+    let me = current();
+    // SAFETY: `me` is the running thread; only this thread touches `active_ef`.
+    unsafe {
+        let old = (*me).active_ef;
+        (*me).active_ef = ef;
+        old
+    }
+}
+
+/// Read the active syscall `KEXCEPTION_FRAME` pointer on the running thread.
+#[allow(dead_code)]
+pub fn active_ef() -> u64 {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    unsafe { (*me).active_ef }
+}
+
+/// Mark that the current syscall replaced the user context (`NtContinue` /
+/// `NtRaiseException`) and must return via full `iretq` without overwriting `Rax`.
+#[allow(dead_code)]
+pub fn set_force_iret(v: bool) {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    unsafe { (*me).force_iret = v };
+}
+
+/// Read and clear the `force_iret` flag on the running thread.
+#[allow(dead_code)]
+pub fn take_force_iret() -> bool {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    unsafe {
+        let old = (*me).force_iret;
+        (*me).force_iret = false;
+        old
+    }
+}
+
+/// Mark an unstarted thread as initially suspended (`suspend_count = 1`).
+///
+/// # Safety
+/// `thread` is an unstarted thread.
+#[allow(dead_code)]
+pub unsafe fn mark_suspended(thread: *mut Thread) {
+    // SAFETY: per the contract.
+    unsafe { (*thread).suspend_count.store(1, Ordering::Release) };
+}
+
+/// Decrement `thread`'s suspend count, starting the thread if it drops from 1 to 0.
+/// Returns the previous suspend count.
+///
+/// # Safety
+/// `thread` is a live thread.
+#[allow(dead_code)]
+pub unsafe fn resume_thread(thread: *mut Thread) -> u32 {
+    // SAFETY: per the contract.
+    let prev = unsafe {
+        let cnt = &(*thread).suspend_count;
+        let mut cur = cnt.load(Ordering::Acquire);
+        loop {
+            if cur == 0 {
+                return 0;
+            }
+            match cnt.compare_exchange_weak(cur, cur - 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => break cur,
+                Err(now) => cur = now,
+            }
+        }
+    };
+    if prev == 1 {
+        // SAFETY: `thread` was suspended before starting; check state is INITIALIZED.
+        let state =
+            unsafe { AtomicU8::from_ptr(field(thread, layout::STATE)).load(Ordering::Acquire) };
+        if state == layout::state::INITIALIZED {
+            // SAFETY: unstarted thread transitioning to READY once.
+            unsafe { begin(thread) };
+        }
+    }
+    prev
+}
+
+/// `NtWaitForAlertByThreadId`: wait on the calling thread's per-thread alert
+/// latch (used by `ntdll` SRW locks, condition variables, and `RtlWaitOnAddress`).
+///
+/// # Safety
+/// `timeout` is null or satisfies `PreviousMode`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn NtWaitForAlertByThreadId(
+    _address: *const core::ffi::c_void,
+    timeout: *const i64,
+) -> nk_ntabi::status::NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let due = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(timeout, mode) } {
+            Ok(v) => Some(v),
+            Err(st) => return st,
+        }
+    };
+    let me = current();
+    // SAFETY: `me` is the running thread; `tid_alert_event` is an initialized `KEVENT`.
+    let st = unsafe {
+        super::wait::wait_as(
+            Some((&raw mut (*me).tid_alert_event).cast()),
+            due,
+            mode,
+            false,
+        )
+    };
+    if st == 0 {
+        nk_ntabi::status::STATUS_ALERTED
+    } else {
+        st as nk_ntabi::status::NTSTATUS
+    }
+}
+
+/// `NtAlertThreadByThreadId`: signal the target thread's per-thread alert latch.
+#[allow(non_snake_case)]
+pub extern "C" fn NtAlertThreadByThreadId(
+    thread_id: *mut core::ffi::c_void,
+) -> nk_ntabi::status::NTSTATUS {
+    let tid = thread_id.addr() as u64;
+    let target = match crate::ps::cid::lookup_thread(tid) {
+        Ok(t) => t,
+        Err(st) => return st,
+    };
+    let th = target.body().cast::<Thread>();
+    // SAFETY: `target` holds a live `ETHREAD` reference.
+    unsafe {
+        super::wait::KeSetEvent(&raw mut (*th).tid_alert_event, 0, 0);
+    }
+    nk_ntabi::status::STATUS_SUCCESS
 }
 
 /// Start a thread from [`create_unstarted`].
@@ -1092,15 +1370,29 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
         }
         set_state(next, layout::state::RUNNING);
         set_current(next);
-        arch::set_kernel_stack(active_stack(next).base);
+        let next_stack = active_stack(next);
+        arch::set_kernel_stack(next_stack.base, next_stack.top);
+        let old_proc = field::<*mut u8>(me, layout::APC_STATE_PROCESS).read();
+        let new_proc = field::<*mut u8>(next, layout::APC_STATE_PROCESS).read();
+        if old_proc != new_proc {
+            let dtb = crate::ps::process::directory_table_base(new_proc);
+            arch::switch_address_space(dtb);
+        }
+        let old_teb = field::<u64>(me, layout::TEB).read();
+        let new_teb = field::<u64>(next, layout::TEB).read();
+        if old_teb != new_teb {
+            arch::set_user_gs_base(new_teb);
+        }
         dispatcher.previous.store(me, Ordering::Release);
         dispatcher.switches.fetch_add(1, Ordering::Relaxed);
+        arch::xstate_save(field::<*mut u8>(me, layout::STATE_SAVE_AREA).read());
         arch::context_switch(
             field(me, layout::KERNEL_STACK),
             field::<u64>(next, layout::KERNEL_STACK).read(),
         );
+        // Running again, on whatever processor took this thread.
+        arch::xstate_restore(field::<*mut u8>(me, layout::STATE_SAVE_AREA).read());
     }
-    // Running again, on whatever processor took this thread.
     after_switch();
     super::apc::switched_in();
 }
@@ -1187,6 +1479,14 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
         drop(super::object::ObjectLock::take(body.cast()));
         crate::se::impersonate::thread_deleted(body);
         let thread = body.cast::<Thread>();
+        let tid = field::<[u64; 2]>(thread, layout::CID).read()[1];
+        crate::ps::cid::remove(tid);
+        let proc_slot = field::<*mut u8>(thread, layout::PROCESS);
+        let proc_ptr = proc_slot.read();
+        proc_slot.write(core::ptr::null_mut());
+        if !proc_ptr.is_null() && proc_ptr != crate::ps::process::system() {
+            ob::object::dereference(proc_ptr);
+        }
         if !(*thread).counted && !(*thread).idle {
             UNCOUNTED_OBJECTS.fetch_sub(1, Ordering::AcqRel);
         }
@@ -1195,6 +1495,11 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
 
 /// Where a new thread begins.
 extern "C" fn start() -> ! {
+    // SAFETY: `current()` is a live thread whose `StateSaveArea` was
+    // initialised at allocation.
+    unsafe {
+        arch::xstate_restore(field::<*mut u8>(current(), layout::STATE_SAVE_AREA).read());
+    }
     after_switch();
     super::apc::switched_in();
     arch::set_irql(irql::PASSIVE_LEVEL);

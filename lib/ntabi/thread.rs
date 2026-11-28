@@ -46,6 +46,16 @@ pub const STACK_BASE: usize = 0x38;
 /// `KernelStack`: the saved stack pointer of a thread that is not
 /// running.
 pub const KERNEL_STACK: usize = 0x58;
+/// `StateSaveArea`: pointer to the thread's 64-byte-aligned XSAVE/FXSAVE area.
+pub const STATE_SAVE_AREA: usize = 0x60;
+/// `SystemCallNumber`: active NT system call index.
+pub const SYSTEM_CALL_NUMBER: usize = 0x80;
+/// `FirstArgument`: first argument of the active system call.
+pub const FIRST_ARGUMENT: usize = 0x88;
+/// `TrapFrame`: pointer to the thread's active `KTRAP_FRAME` on its kernel stack.
+pub const TRAP_FRAME: usize = 0x90;
+/// `Teb`: user-mode address of the thread's `TEB` (null for system threads).
+pub const TEB: usize = 0xF0;
 /// `Running`: one byte, non-zero while a processor is on this thread's
 /// stack.
 pub const RUNNING: usize = 0x71;
@@ -96,6 +106,10 @@ pub const WAIT_LIST_ENTRY: usize = 0xD8;
 pub const STATE: usize = 0x184;
 /// `NextProcessor`: the processor whose ready queue the thread uses.
 pub const NEXT_PROCESSOR: usize = 0x218;
+/// `PreviousMode`: one signed byte, `0` (`KernelMode`) or `1` (`UserMode`),
+/// recording which processor mode the current system service was entered from
+/// (`ExGetPreviousMode`).
+pub const PREVIOUS_MODE: usize = 0x232;
 /// `BasePriority`: one signed byte.
 pub const BASE_PRIORITY: usize = 0x233;
 /// `Saturation`: one signed byte, 1 while the thread's base priority

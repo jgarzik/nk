@@ -36,6 +36,12 @@ const SIMPLE_FILE_SYSTEM: Guid = Guid(
     0x11D2,
     [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
 );
+const DEVICE_PATH: Guid = Guid(
+    0x09576E91,
+    0x6D3F,
+    0x11D2,
+    [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
+);
 const FILE_INFO: Guid = Guid(
     0x09576E92,
     0x6D3F,
@@ -128,7 +134,14 @@ struct BootServices {
     stall: unsafe extern "efiapi" fn(usize) -> Status,
     watchdog_and_drivers: [usize; 3],
     open_protocols: [usize; 3],
-    handle_lists: [usize; 2],
+    protocols_per_handle: usize,
+    locate_handle_buffer: unsafe extern "efiapi" fn(
+        u32,
+        *const Guid,
+        *mut c_void,
+        *mut usize,
+        *mut *mut Handle,
+    ) -> Status,
     locate_protocol:
         unsafe extern "efiapi" fn(*const Guid, *mut c_void, *mut *mut c_void) -> Status,
 }
@@ -440,6 +453,78 @@ pub fn memory_map(buf: &mut [u8]) -> Option<(usize, usize, usize)> {
 pub fn exit_boot_services(image: Handle, key: usize) -> bool {
     // SAFETY: `image` is this image's handle and `key` names a memory map.
     unsafe { (bs().exit_boot_services)(image, key) == SUCCESS }
+}
+
+/// Scan every UEFI `SimpleFileSystem` volume for `\Windows\System32\ntdll.dll`
+/// and return the partition identity from its `EFI_DEVICE_PATH_PROTOCOL` Hard
+/// Drive node, if present.
+pub fn find_system_partition() -> Option<nk_bootinfo::SystemPartition> {
+    const BY_PROTOCOL: u32 = 2;
+    let mut count = 0usize;
+    let mut handles: *mut Handle = core::ptr::null_mut();
+    // SAFETY: LocateHandleBuffer allocates an array of `count` handles via
+    // UEFI pool, which we free below.
+    let s = unsafe {
+        (bs().locate_handle_buffer)(
+            BY_PROTOCOL,
+            &SIMPLE_FILE_SYSTEM,
+            core::ptr::null_mut(),
+            &raw mut count,
+            &raw mut handles,
+        )
+    };
+    if s != SUCCESS || handles.is_null() {
+        return None;
+    }
+    let mut found = None;
+    // SAFETY: `handles` holds `count` valid UEFI handles until `free_pool`.
+    unsafe {
+        let list = core::slice::from_raw_parts(handles, count);
+        for &handle in list {
+            let mut fs: *mut c_void = core::ptr::null_mut();
+            if (bs().handle_protocol)(handle, &SIMPLE_FILE_SYSTEM, &raw mut fs) != SUCCESS {
+                continue;
+            }
+            let fs = fs.cast::<FileSystem>();
+            let mut root_proto: *mut FileProto = core::ptr::null_mut();
+            if ((*fs).open_volume)(fs, &raw mut root_proto) != SUCCESS {
+                continue;
+            }
+            let root = File(root_proto);
+            if root.open("\\Windows\\System32\\ntdll.dll").is_none() {
+                continue;
+            }
+            let mut dp: *mut c_void = core::ptr::null_mut();
+            if (bs().handle_protocol)(handle, &DEVICE_PATH, &raw mut dp) != SUCCESS || dp.is_null()
+            {
+                continue;
+            }
+            // Walk nodes up to End-of-Device-Path (0x7F/0xFF) to bound the slice.
+            let base = dp.cast::<u8>();
+            let mut total = 0usize;
+            while total + 4 <= 4096 {
+                let kind = base.add(total).read();
+                let sub = base.add(total + 1).read();
+                let len =
+                    u16::from_le_bytes([base.add(total + 2).read(), base.add(total + 3).read()])
+                        as usize;
+                if len < 4 || total + len > 4096 {
+                    break;
+                }
+                total += len;
+                if kind == 0x7F && sub == 0xFF {
+                    break;
+                }
+            }
+            let bytes = core::slice::from_raw_parts(base, total);
+            if let Some(part) = nk_bootinfo::parse_hd_device_path(bytes) {
+                found = Some(part);
+                break;
+            }
+        }
+        (bs().free_pool)(handles.cast());
+    }
+    found
 }
 
 /// An open file or directory on the boot volume.

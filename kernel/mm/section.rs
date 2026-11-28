@@ -84,6 +84,7 @@ pub struct ControlArea {
 pub struct Section {
     ca: *mut ControlArea,
     size: AtomicU64,
+    ext: Option<alloc::boxed::Box<super::view::UserSection>>,
 }
 
 /// A counted reference to a section object.
@@ -255,6 +256,7 @@ pub fn create_cache_manager_section(
         let s = section.cast::<Section>();
         (&raw mut (*s).ca).write(ca);
         (*s).size.store(size, Ordering::Relaxed);
+        (&raw mut (*s).ext).write(None);
     }
     trace(format_args!(
         "create section {file:p} size {size:#x} control area {ca:p}"
@@ -291,8 +293,79 @@ pub fn existing_section(file: *mut FILE_OBJECT) -> Option<Result<SectionRef, NTS
         let s = section.cast::<Section>();
         (&raw mut (*s).ca).write(ca);
         (*s).size.store(size, Ordering::Relaxed);
+        (&raw mut (*s).ext).write(None);
     }
     Some(Ok(SectionRef(section)))
+}
+
+/// Create a `SECTION_TYPE` object carrying a user-mode [`super::view::UserSection`]
+/// (and optional `ControlArea` pointer when backed by a data file).
+///
+/// # Safety
+/// If `ca` is non-null, the caller has already incremented `ca.section_refs`
+/// for this section object.
+pub(super) unsafe fn create_user_section(
+    size: u64,
+    ca: *mut ControlArea,
+    ext: super::view::UserSection,
+    leaf_name: Option<&[u16]>,
+) -> Result<ObRef, NTSTATUS> {
+    let body = match leaf_name {
+        Some(name) if !name.is_empty() => {
+            object::create_named(&SECTION_TYPE, size_of::<Section>(), name)
+        }
+        _ => object::create(&SECTION_TYPE, size_of::<Section>()),
+    }
+    .ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    // SAFETY: `body` is a fresh `Section`-sized object exclusively owned here.
+    unsafe {
+        let s = body.cast::<Section>();
+        (&raw mut (*s).ca).write(ca);
+        (*s).size.store(size, Ordering::Relaxed);
+        (&raw mut (*s).ext).write(Some(alloc::boxed::Box::new(ext)));
+        Ok(ObRef::adopt(body))
+    }
+}
+
+/// Access the [`super::view::UserSection`] inside a live `Section` object.
+///
+/// # Safety
+/// `body` points to a live `SECTION_TYPE` object that outlives `'a`.
+pub(super) unsafe fn user_section<'a>(body: *const u8) -> Option<&'a super::view::UserSection> {
+    // SAFETY: per the contract; `ext` is immutable for the life of the section.
+    unsafe { (*body.cast::<Section>()).ext.as_deref() }
+}
+
+/// Raw `ControlArea` of a live `Section` object (null for pagefile/image sections).
+///
+/// # Safety
+/// `body` points to a live `SECTION_TYPE` object.
+pub(super) unsafe fn section_ca(body: *const u8) -> *mut ControlArea {
+    // SAFETY: per the contract.
+    unsafe { (*body.cast::<Section>()).ca }
+}
+
+/// Current byte size of a live `Section` object.
+///
+/// # Safety
+/// `body` points to a live `SECTION_TYPE` object.
+pub(super) unsafe fn section_size(body: *const u8) -> u64 {
+    // SAFETY: per the contract.
+    unsafe { (*body.cast::<Section>()).size.load(Ordering::Acquire) }
+}
+
+/// Grow a live `Section` object's recorded byte size.
+///
+/// # Safety
+/// `body` points to a live `SECTION_TYPE` object.
+pub(super) unsafe fn grow_section_size(body: *const u8, new_size: u64) -> u64 {
+    // SAFETY: per the contract.
+    unsafe {
+        (*body.cast::<Section>())
+            .size
+            .fetch_max(new_size, Ordering::AcqRel)
+            .max(new_size)
+    }
 }
 
 /// `MmExtendSection` as the cache manager calls it
@@ -352,10 +425,14 @@ pub fn control_area(_: &Guard, sop: *mut SECTION_OBJECT_POINTERS) -> Option<&'st
 /// # Safety
 /// `body` is a section object nothing refers to any more.
 pub unsafe extern "C" fn deleted(body: *mut c_void) {
-    // SAFETY: per the contract.
-    let ca = unsafe { (*body.cast::<Section>()).ca };
+    // SAFETY: per the contract; exclusive access during object deletion.
+    let ca = unsafe {
+        let s = body.cast::<Section>();
+        core::ptr::drop_in_place(&raw mut (*s).ext);
+        (*s).ca
+    };
     if ca.is_null() {
-        return; // creation failed before a control area was named
+        return; // creation failed or pagefile/image section with no data ControlArea
     }
     {
         let g = pfn::lock();

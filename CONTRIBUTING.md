@@ -36,6 +36,13 @@ If unsure whether something qualifies, ask before writing it.
   its list under `kernel/export/list/`, with the gap in its doc comment.
 - **Be driven by a real driver.** An export is added because a binary in
   the pinned corpus or a pinned fixture imports it.
+- **Do not reimplement Windows drivers or stacks.** NK implements NT
+  kernel and HAL primitives so unmodified Microsoft and vendor drivers
+  (via Storport, KMDF, and NDIS) run directly. Native Rust reimplementations
+  of TCP/IP, NDIS, Storport, AHCI, NVMe, USB, ACPI, NTFS, production GPU
+  drivers, or Linux driver compatibility layers are out of scope (only
+  bootstrap code and test fixtures like `nkfs` are exempt). Treat a driver
+  failure as evidence of a missing kernel contract (`doc/DESIGN.md`).
 - **Stay portable.** CPU-specific code lives in `kernel/arch/`; pure
   logic in `lib/`. arm64 is paused until x86-64 reaches `cmd.exe`: it
   must compile (`make clippy-arm`, part of `make gate`), and is booted

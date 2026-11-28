@@ -14,7 +14,7 @@ pub mod entropy;
 pub mod sha512;
 
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
@@ -180,6 +180,81 @@ impl Serial {
     }
 }
 
+/// Identifies the Windows system partition (the volume containing
+/// `\Windows\System32\ntdll.dll`), discovered by `nkload` from UEFI
+/// `SimpleFileSystem` + `DevicePath` Hard Drive nodes.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemPartition {
+    /// `SIG_NONE` (0), `SIG_MBR` (1), or `SIG_GPT` (2).
+    pub sig_type: u8,
+    pub _pad: [u8; 3],
+    /// 1-based partition number from the UEFI Hard Drive device path.
+    pub number: u32,
+    /// Starting LBA of the partition.
+    pub start_lba: u64,
+    /// GPT partition GUID (when `sig_type == SIG_GPT`) or 4-byte MBR disk
+    /// signature in `sig[0..4]` (when `sig_type == SIG_MBR`).
+    pub sig: [u8; 16],
+}
+
+impl SystemPartition {
+    pub const SIG_NONE: u8 = 0;
+    pub const SIG_MBR: u8 = 1;
+    pub const SIG_GPT: u8 = 2;
+
+    pub const NONE: Self = Self {
+        sig_type: Self::SIG_NONE,
+        _pad: [0; 3],
+        number: 0,
+        start_lba: 0,
+        sig: [0; 16],
+    };
+
+    pub const fn is_present(&self) -> bool {
+        self.sig_type != Self::SIG_NONE
+    }
+}
+
+/// Walk a serialized UEFI `EFI_DEVICE_PATH_PROTOCOL` byte stream and extract
+/// the first Media Hard Drive node (`type = 4`, `subtype = 1`, `len >= 42`).
+pub fn parse_hd_device_path(path: &[u8]) -> Option<SystemPartition> {
+    let mut at = 0usize;
+    while at + 4 <= path.len() {
+        let kind = path[at];
+        let sub = path[at + 1];
+        let len = u16::from_le_bytes([path[at + 2], path[at + 3]]) as usize;
+        if len < 4 || at + len > path.len() {
+            return None;
+        }
+        // End of Hardware Device Path (Entire Device Path).
+        if kind == 0x7F && sub == 0xFF {
+            return None;
+        }
+        if kind == 4 && sub == 1 && len >= 42 {
+            let number = u32::from_le_bytes(path[at + 4..at + 8].try_into().ok()?);
+            let start_lba = u64::from_le_bytes(path[at + 8..at + 16].try_into().ok()?);
+            let mut sig = [0u8; 16];
+            sig.copy_from_slice(&path[at + 24..at + 40]);
+            let sig_type = path[at + 41];
+            if matches!(
+                sig_type,
+                SystemPartition::SIG_MBR | SystemPartition::SIG_GPT
+            ) {
+                return Some(SystemPartition {
+                    sig_type,
+                    _pad: [0; 3],
+                    number,
+                    start_lba,
+                    sig,
+                });
+            }
+        }
+        at += len;
+    }
+    None
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct BootInfo {
@@ -212,6 +287,9 @@ pub struct BootInfo {
     /// its own, which the kernel wipes once it has given the entropy
     /// out (`doc/BOOT.md`, Boot entropy).
     pub entropy: u64,
+    /// The Windows system partition (`\Windows\System32\ntdll.dll`), if
+    /// present on any UEFI filesystem at boot.
+    pub system_partition: SystemPartition,
     /// The kernel command line: `key=value` words separated by spaces,
     /// NUL padded. Empty when the boot volume has no command-line file.
     pub cmdline: [u8; CMDLINE_LEN],
@@ -241,6 +319,7 @@ impl BootInfo {
             _pad: [0; 6],
             boot_time: 0,
             entropy: 0,
+            system_partition: SystemPartition::NONE,
             cmdline: [0; CMDLINE_LEN],
             modules: [Module::EMPTY; MAX_MODULES],
         }
@@ -715,8 +794,53 @@ mod tests {
         // Both loader and kernel are built from this source, but a silent
         // layout change should still be a deliberate VERSION bump.
         assert_eq!(size_of::<Module>(), 48);
-        assert_eq!(size_of::<BootInfo>(), 120 + CMDLINE_LEN + 48 * MAX_MODULES);
+        assert_eq!(size_of::<SystemPartition>(), 32);
+        assert_eq!(
+            size_of::<BootInfo>(),
+            120 + size_of::<SystemPartition>() + CMDLINE_LEN + 48 * MAX_MODULES
+        );
         assert!(BootInfo::new().is_valid());
+    }
+
+    #[test]
+    fn hd_device_path_parses_gpt_and_mbr() {
+        // Leading PCI node (6 bytes), then Media Hard Drive GPT node (42 bytes), then End (4 bytes).
+        let mut dp = vec![1u8, 1, 6, 0, 0x00, 0x1F];
+        let mut hd = [0u8; 42];
+        hd[0] = 4; // Media
+        hd[1] = 1; // Hard Drive
+        hd[2..4].copy_from_slice(&42u16.to_le_bytes());
+        hd[4..8].copy_from_slice(&2u32.to_le_bytes()); // partition #2
+        hd[8..16].copy_from_slice(&2048u64.to_le_bytes());
+        let guid = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        hd[24..40].copy_from_slice(&guid);
+        hd[40] = 2; // GPT
+        hd[41] = SystemPartition::SIG_GPT;
+        dp.extend_from_slice(&hd);
+        dp.extend_from_slice(&[0x7F, 0xFF, 4, 0]);
+        assert_eq!(
+            parse_hd_device_path(&dp),
+            Some(SystemPartition {
+                sig_type: SystemPartition::SIG_GPT,
+                _pad: [0; 3],
+                number: 2,
+                start_lba: 2048,
+                sig: guid,
+            })
+        );
+        // MBR node.
+        hd[40] = 1;
+        hd[41] = SystemPartition::SIG_MBR;
+        hd[24..40].fill(0);
+        hd[24..28].copy_from_slice(&0x4E4B_0001u32.to_le_bytes());
+        let mut mbr = Vec::new();
+        mbr.extend_from_slice(&hd);
+        mbr.extend_from_slice(&[0x7F, 0xFF, 4, 0]);
+        let parsed = parse_hd_device_path(&mbr).expect("MBR node");
+        assert_eq!(parsed.sig_type, SystemPartition::SIG_MBR);
+        assert_eq!(&parsed.sig[..4], &0x4E4B_0001u32.to_le_bytes());
+        // No HD node -> None.
+        assert_eq!(parse_hd_device_path(&[0x7F, 0xFF, 4, 0]), None);
     }
 
     #[test]

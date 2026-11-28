@@ -1023,5 +1023,6 @@ pub fn drain_dirty_for_shutdown() -> DrainSummary {
 /// its shutdown request: drain all dirty cache maps across as many
 /// bounded batches as needed without waiting on the lazy-writer timer.
 pub fn shutdown_flush() {
+    crate::mm::writer::flush_all();
     let _ = drain_dirty_for_shutdown();
 }

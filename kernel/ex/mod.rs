@@ -20,6 +20,7 @@ pub mod sysinfo;
 pub mod sysinfo_ex;
 pub mod timer;
 pub mod timezone;
+pub mod tp;
 pub mod uuid;
 pub mod vsl;
 pub mod wnf;

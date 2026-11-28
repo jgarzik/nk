@@ -19,7 +19,7 @@ use nk_po::action::{Outcome, outcome};
 /// Partial: any other action (sleep, hibernation, a restart, none)
 /// goes to Windows' policy manager, which NK lacks, and stops the
 /// system naming the action.
-pub extern "C" fn ZwInitiatePowerAction(
+pub extern "C" fn NtInitiatePowerAction(
     action: i32,
     lightest_state: i32,
     flags: u32,
@@ -55,3 +55,5 @@ pub fn test() -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+pub use crate::svc::zw::ZwInitiatePowerAction;

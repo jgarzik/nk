@@ -8,14 +8,19 @@
 
 #![cfg_attr(not(test), no_std)]
 
+extern crate alloc;
+
 pub mod frames;
 pub mod heap;
 pub mod pfn;
 pub mod pooltab;
+pub mod probe;
 pub mod protect;
 pub mod pt;
 pub mod pte;
+pub mod reloc;
 pub mod section;
 pub mod space;
+pub mod vad;
 
 pub const PAGE_SIZE: u64 = 4096;

@@ -1,0 +1,24 @@
+# Registry content for user-mode boot proofs (ntdll, nkt.exe, autochk.exe).
+# Laid over the SYSTEM hive after storage/volumes/mount/fat overlays.
+
+key ControlSet001\Control\NLS\CodePage
+value ACP sz "1252"
+value OEMCP sz "437"
+value MACCP sz "10000"
+
+key ControlSet001\Control\Session Manager
+value BootExecute multi_sz "autocheck autochk *"
+value ProtectionMode dword 1
+
+key ControlSet001\Control\Session Manager\Environment
+value SystemRoot expand_sz "C:\Windows"
+value SystemDrive sz "C:"
+value Path expand_sz "C:\Windows\System32;C:\Windows"
+value OS sz "Windows_NT"
+value PROCESSOR_ARCHITECTURE sz "AMD64"
+
+key ControlSet001\Control\Session Manager\Memory Management
+value ClearPageFileAtShutdown dword 0
+
+key ControlSet001\Control\Session Manager\KnownDlls
+value DllDirectory expand_sz "%SystemRoot%\system32"

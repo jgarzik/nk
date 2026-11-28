@@ -23,6 +23,60 @@ const VALID: u64 = 1;
 const PROTOTYPE: u64 = 1 << 10;
 const TRANSITION: u64 = 1 << 11;
 const PFN_MASK: u64 = 0x0000_FFFF_FFFF_F000;
+const PROT_SHIFT: u32 = 5;
+const PROT_MASK: u64 = 0x1F << PROT_SHIFT;
+
+/// Software-available Copy-on-Write bit in a valid hardware PTE:
+/// bit 9 (AVL) on x86-64, bit 55 (SW) on arm64 (checked via `pt::Arch`).
+pub const X64_COW_BIT: u64 = 1 << 9;
+pub const ARM64_COW_BIT: u64 = 1 << 55;
+
+/// Decoded state of a user-mode leaf PTE when bit 0 (`VALID`) is clear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSwPte {
+    /// Uncommitted / reserved-only (0).
+    Zero,
+    /// Demand-zero committed page with 5-bit `mm_prot` (`1..=31`).
+    DemandZero { mm_prot: u8 },
+    /// Private frame held in a non-valid software PTE (e.g. `PAGE_NOACCESS` or
+    /// `PAGE_GUARD` applied to an already-resident page).
+    Transition { pfn: u64, mm_prot: u8 },
+    /// Prototype pointer referencing a section's prototype PTE.
+    Prototype { proto_va: u64 },
+}
+
+impl UserSwPte {
+    pub const fn encode(self) -> u64 {
+        match self {
+            Self::Zero => 0,
+            Self::DemandZero { mm_prot } => ((mm_prot as u64) & 0x1F) << PROT_SHIFT,
+            Self::Transition { pfn, mm_prot } => {
+                ((pfn << 12) & PFN_MASK) | TRANSITION | (((mm_prot as u64) & 0x1F) << PROT_SHIFT)
+            }
+            Self::Prototype { proto_va } => (proto_va << 16) | PROTOTYPE,
+        }
+    }
+
+    pub const fn decode(entry: u64) -> Self {
+        debug_assert!(entry & VALID == 0);
+        if entry == 0 {
+            Self::Zero
+        } else if entry & PROTOTYPE != 0 {
+            Self::Prototype {
+                proto_va: ((entry as i64) >> 16) as u64,
+            }
+        } else if entry & TRANSITION != 0 {
+            Self::Transition {
+                pfn: (entry & PFN_MASK) >> 12,
+                mm_prot: ((entry & PROT_MASK) >> PROT_SHIFT) as u8,
+            }
+        } else {
+            Self::DemandZero {
+                mm_prot: ((entry & PROT_MASK) >> PROT_SHIFT) as u8,
+            }
+        }
+    }
+}
 
 /// The 48 bits of a canonical address kept in bits 16-63.
 fn pack(address: u64) -> u64 {
@@ -188,5 +242,29 @@ mod tests {
             None,
             "a valid entry points at no prototype"
         );
+    }
+
+    #[test]
+    fn user_sw_pte_round_trips() {
+        for pte in [
+            UserSwPte::Zero,
+            UserSwPte::DemandZero { mm_prot: 4 },
+            UserSwPte::DemandZero { mm_prot: 4 | 0x10 },
+            UserSwPte::Transition {
+                pfn: 0x12_3456,
+                mm_prot: 8,
+            },
+            UserSwPte::Transition {
+                pfn: 0xAB_CDEF,
+                mm_prot: 4 | 0x10,
+            },
+            UserSwPte::Prototype {
+                proto_va: 0xFFFF_9100_0000_2008,
+            },
+        ] {
+            let raw = pte.encode();
+            assert_eq!(raw & 1, 0);
+            assert_eq!(UserSwPte::decode(raw), pte);
+        }
     }
 }

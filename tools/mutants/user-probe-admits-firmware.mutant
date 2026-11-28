@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: io.user.firmware-buffer
 file: kernel/mm/user.rs
-replace:     user && !firmware(address as u64, len as u64)
-with:     user
+replace:         && firmware(address as u64, len as u64)
+with:         && false

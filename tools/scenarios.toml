@@ -1375,3 +1375,67 @@ disk_expect = "fat-written"
 usb = "xhci"
 hotplug = true
 serial2 = true
+
+# Phase 6 user-mode proof: unmodified Microsoft ntdll.dll (10.0.19041.1949)
+# initializes and executes NK's in-tree native user-mode test binary (nkt.exe)
+# from a GPT FAT32 system partition (\SystemRoot\System32\).
+
+[x86_64-user-nkt]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/arch/x86_64/", "kernel/mm/", "kernel/ps/", "kernel/ke/", "kernel/ex/tp.rs", "kernel/io/completion.rs", "kernel/svc/", "kernel/selftest/user.rs", "user/"]
+cmdline = "test=user.nkt"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-sys-gpt"
+disk_expect = "sys-clean"
+
+# Phase 6 user-mode proof: unmodified Microsoft autochk.exe (10.0.19041.1266)
+# runs against a clean FAT32 GPT system partition and reports clean.
+
+[x86_64-autochk-clean]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/arch/x86_64/", "kernel/mm/", "kernel/ps/", "kernel/ke/", "kernel/ex/tp.rs", "kernel/io/", "kernel/ob/", "kernel/svc/", "kernel/selftest/user.rs"]
+cmdline = "test=user.autochk.clean"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-sys-gpt"
+disk_expect = "sys-clean"
+
+# Phase 6 user-mode proof: unmodified Microsoft autochk.exe repairs a
+# host-corrupted second FAT32 partition (dirty bit + orphan cluster chain)
+# and host verifies BOOTEX.LOG + fsck.fat clean.
+
+[x86_64-autochk-dirty]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/arch/x86_64/", "kernel/mm/", "kernel/ps/", "kernel/ke/", "kernel/ex/tp.rs", "kernel/io/", "kernel/ob/", "kernel/svc/", "kernel/selftest/user.rs"]
+cmdline = "test=user.autochk.dirty"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-autochk-dirty-gpt"
+disk_expect = "autochk-dirty"
+
+# Negative test: an unimplemented SSDT slot called from Ring 3 must stop the
+# system naming the service instead of returning fake success.
+
+[x86_64-neg-svc-trap]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/arch/x86_64/user.rs", "kernel/svc/", "kernel/selftest/user.rs"]
+cmdline = "test=user.svc_trap"
+expect = "bugcheck"
+match = "BUGCHECK: NtAddAtom: NK does not implement this service"
+
+# Phase 6 low-memory proof: 48 MiB RW + RO mapped data-file views backed by
+# \Device\NkFsLarge inside a memory-constrained VM prove working-set trimming,
+# mapped-page writer flushing without explicit NtFlushVirtualMemory, and
+# standby reclaim with zero data corruption and zero leaks.
+
+[x86_64-user-lowmem]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/mm/writer.rs", "kernel/mm/trim.rs", "kernel/mm/view.rs", "kernel/mm/pfn.rs", "kernel/selftest/nkfs.rs", "kernel/selftest/user.rs"]
+memory = "96M"
+cmdline = "test=user.lowmem"

@@ -122,10 +122,16 @@ pub unsafe extern "C" fn IoCreateDevice(
             (*device).Vpb = vpb.cast();
         }
     }
+    let Some(default_sd) = crate::se::default_device_sd() else {
+        // SAFETY: fresh device object; `deleted` frees its VPB if attached.
+        unsafe { ob::object::dereference(body) };
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
     // SAFETY: `device` is a fresh, zeroed, exclusively owned block of
     // `total` bytes, 16-byte aligned as the pool guarantees; `driver` and
     // `device_out` are valid per the contract.
     unsafe {
+        (*device).SecurityDescriptor = default_sd.cast();
         let extra = device
             .cast::<u8>()
             .add(size_of::<DEVICE_OBJECT>() + ext)
@@ -237,6 +243,93 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
             ));
         }
         crate::po::run_down(body.cast());
+    }
+}
+
+/// Copy `device`'s self-relative security descriptor into a fresh byte buffer
+/// under the I/O database lock, or `None` if the device has none or memory is
+/// exhausted.
+///
+/// # Safety
+/// `device` is a live device object the caller holds a pointer reference to.
+pub unsafe fn copy_security(device: *mut DEVICE_OBJECT) -> Option<alloc::vec::Vec<u8>> {
+    let _database = DATABASE.lock();
+    // SAFETY: per the contract; `SecurityDescriptor` belongs to `DATABASE`.
+    unsafe {
+        let sd = (*device).SecurityDescriptor.cast::<u8>();
+        if sd.is_null() {
+            return None;
+        }
+        let len = crate::se::RtlLengthSecurityDescriptor(sd.cast()) as usize;
+        crate::se::copied(sd, len)
+    }
+}
+
+/// `DEVICE_TYPE`'s `OB_SECURITY_METHOD` (`IopGetSetSecurityObject` subset):
+/// handles set, query, delete, and assign operations on a device's security
+/// descriptor.
+///
+/// # Safety
+/// Called by the object manager with valid pointers for the requested
+/// `SECURITY_OPERATION_CODE`.
+pub unsafe extern "C" fn security_procedure(
+    object: *mut core::ffi::c_void,
+    operation: u32,
+    security_information: *mut u32,
+    security_descriptor: *mut core::ffi::c_void,
+    captured_length: *mut u32,
+    _objects_security_descriptor: *mut *mut core::ffi::c_void,
+    _pool_type: u32,
+    _generic_mapping: *const nk_ntabi::ob::GENERIC_MAPPING,
+    _access_mode: i8,
+) -> NTSTATUS {
+    const SET_SECURITY_DESCRIPTOR: u32 = 0;
+    const QUERY_SECURITY_DESCRIPTOR: u32 = 1;
+    const DELETE_SECURITY_DESCRIPTOR: u32 = 2;
+    const ASSIGN_SECURITY_DESCRIPTOR: u32 = 3;
+
+    // SAFETY: per the contract.
+    unsafe {
+        match operation {
+            SET_SECURITY_DESCRIPTOR => {
+                if security_information.is_null() {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                crate::se::ObSetSecurityObjectByPointer(
+                    object,
+                    security_information.read_unaligned(),
+                    security_descriptor,
+                )
+            }
+            QUERY_SECURITY_DESCRIPTOR => {
+                if security_information.is_null() || captured_length.is_null() {
+                    return STATUS_INVALID_PARAMETER;
+                }
+                let copy = copy_security(object.cast::<DEVICE_OBJECT>());
+                let mut sd_ptr = copy.as_ref().map_or(core::ptr::null_mut(), |v| {
+                    v.as_ptr().cast_mut().cast::<core::ffi::c_void>()
+                });
+                crate::se::descriptor::SeQuerySecurityDescriptorInfo(
+                    security_information,
+                    security_descriptor.cast(),
+                    captured_length,
+                    &raw mut sd_ptr,
+                )
+            }
+            DELETE_SECURITY_DESCRIPTOR => STATUS_SUCCESS,
+            ASSIGN_SECURITY_DESCRIPTOR => {
+                if security_descriptor.is_null() {
+                    return STATUS_SUCCESS;
+                }
+                match replace_security(object.cast::<DEVICE_OBJECT>(), |_| {
+                    crate::se::capture(security_descriptor.cast())
+                }) {
+                    Some(()) => STATUS_SUCCESS,
+                    None => STATUS_INSUFFICIENT_RESOURCES,
+                }
+            }
+            _ => STATUS_INVALID_PARAMETER,
+        }
     }
 }
 

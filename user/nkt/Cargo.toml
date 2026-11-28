@@ -1,0 +1,18 @@
+[package]
+name = "nkt"
+description = "NK native user-mode test harness (/subsystem:native, imports ntdll.dll)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "nkt"
+path = "main.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true

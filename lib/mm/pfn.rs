@@ -423,6 +423,14 @@ impl<'a> PfnDb<'a> {
         Ok((e.pte, e.original_pte))
     }
 
+    /// Peek the oldest frame on the `Modified` list without removing it:
+    /// returns `(pfn, pte, original_pte)` for the mapped-page writer.
+    pub fn first_modified(&self) -> Option<(u64, u64, u64)> {
+        let pfn = self.first(Location::Modified)?;
+        let e = self.get(pfn);
+        Some((pfn, e.pte, e.original_pte))
+    }
+
     /// The oldest standby frame, off its list, as [`Self::release`]
     /// gives it: the frame to reuse when the allocator has none free.
     pub fn reclaim(&mut self) -> Option<(u64, u64, u64)> {
@@ -658,5 +666,24 @@ mod tests {
         d.get_mut(1).flags &= !flag::MODIFIED;
         d.get_mut(1).ref_count = 1;
         assert!(d.check().is_err());
+    }
+
+    #[test]
+    fn first_modified_peeks_oldest_dirty_frame() {
+        let mut e = [Pfn::FREE; 6];
+        let mut d = db(&mut e);
+        assert_eq!(d.first_modified(), None);
+        d.allocate(2, 0x2000, 0x402, false);
+        d.allocate(4, 0x4000, 0x404, false);
+        d.get_mut(2).flags |= flag::MODIFIED;
+        d.get_mut(4).flags |= flag::MODIFIED;
+        d.unshare(2, false, false).unwrap();
+        d.unshare(4, false, false).unwrap();
+        assert_eq!(d.first_modified(), Some((2, 0x2000, 0x402)));
+        d.reference(2).unwrap();
+        assert_eq!(d.first_modified(), Some((4, 0x4000, 0x404)));
+        d.get_mut(2).flags &= !flag::MODIFIED;
+        assert_eq!(d.dereference(2, false, false), Ok(Some(Location::Standby)));
+        d.check().unwrap();
     }
 }

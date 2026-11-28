@@ -23,6 +23,17 @@ pub fn console_init(info: &BootInfo) {
     TRACE_MM.store(traced("mm"), Ordering::Relaxed);
     TRACE_MOUNT.store(traced("mount"), Ordering::Relaxed);
     TRACE_CC.store(traced("cc"), Ordering::Relaxed);
+    TRACE_SVC.store(traced("svc"), Ordering::Relaxed);
+}
+
+/// The command line asked (`trace=svc`) for a line in the log for every
+/// Ring 3 NT system call dispatched through the SSDT.
+static TRACE_SVC: AtomicBool = AtomicBool::new(false);
+
+/// Whether Ring 3 system calls are logged.
+#[allow(dead_code)]
+pub fn trace_svc() -> bool {
+    TRACE_SVC.load(Ordering::Relaxed)
 }
 
 /// The command line asked (`trace=mount`) for a line in the log for

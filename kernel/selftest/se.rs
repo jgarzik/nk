@@ -372,18 +372,33 @@ fn device() -> Result<(), &'static str> {
             RtlAddAccessAllowedAce(acl.as_mut_ptr(), 2, GENERIC_ALL, (*table).SeLocalSystemSid);
             RtlSetDaclSecurityDescriptor(sd_ptr, 1, acl.as_mut_ptr().cast(), 0);
             (&raw mut (*sd_ptr).Owner).write((*table).SeAliasAdminsSid.cast_mut().cast());
-            if !(&raw const (*dev).SecurityDescriptor).read().is_null() {
-                return Err("a new device already has a descriptor");
+            // A new device carries Windows' default security descriptor
+            // (Owner SYSTEM, Group SYSTEM, DACL for SYSTEM/Admins/World).
+            let initial = (&raw const (*dev).SecurityDescriptor).read();
+            if initial.is_null() || RtlValidSecurityDescriptor(initial) == 0 {
+                return Err("a new device does not carry a valid default descriptor");
+            }
+            let initial_copy = core::slice::from_raw_parts(
+                initial.cast::<u8>(),
+                RtlLengthSecurityDescriptor(initial) as usize,
+            );
+            let initial_parts = nk_se::parse_relative(initial_copy)
+                .ok_or("a new device's default descriptor is damaged")?;
+            if initial_parts.owner.map(<[u8]>::len) != Some(12)
+                || initial_parts.group.map(<[u8]>::len) != Some(12)
+                || initial_parts.dacl.is_none()
+            {
+                return Err("a new device's default descriptor is missing owner, group, or DACL");
             }
             if ZwSetSecurityObject(handle, DACL, sd_ptr.cast()) != 0 {
                 return Err("setting a device's access list failed");
             }
             let first = (&raw const (*dev).SecurityDescriptor).read();
-            if first.is_null() || RtlLengthSecurityDescriptor(first) != 20 + 64 {
-                return Err("the device's descriptor is not the list alone");
+            if first.is_null() || RtlLengthSecurityDescriptor(first) != 20 + 12 + 12 + 64 {
+                return Err("the device's descriptor did not keep owner/group with the new DACL");
             }
             let held = blocks();
-            // Then the owner: the list stays, the old block goes.
+            // Then the owner: the list and group stay, the old block goes.
             if ZwSetSecurityObject(handle, OWNER, sd_ptr.cast()) != 0 {
                 return Err("setting a device's owner failed");
             }
@@ -395,7 +410,8 @@ fn device() -> Result<(), &'static str> {
             let parts = nk_se::parse_relative(copy).ok_or("the device's descriptor is damaged")?;
             if parts.dacl != Some(&acl[..])
                 || parts.owner.map(<[u8]>::len) != Some(16)
-                || copy.len() != 100
+                || parts.group.map(<[u8]>::len) != Some(12)
+                || copy.len() != 112
             {
                 return Err("the device's descriptor lost a part");
             }

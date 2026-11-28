@@ -28,7 +28,7 @@ pub use helper::{
 };
 pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
-use crate::ke::{Rank, SpinLock};
+use crate::ex::pushlock::PushLock;
 use crate::ob::object::ObRef;
 use crate::ob::{handle, object};
 use alloc::string::String;
@@ -43,7 +43,7 @@ use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
 
-static HIVE: SpinLock<Hive> = SpinLock::new(Rank::Registry, Hive::new());
+static HIVE: PushLock<Hive> = PushLock::new(Hive::new());
 
 /// `REG_CREATED_NEW_KEY`, `REG_OPENED_EXISTING_KEY`.
 const CREATED: u32 = 1;
@@ -249,7 +249,7 @@ pub fn init() -> Result<(), &'static str> {
 /// The pool memory the registry holds, as `(blocks, bytes)`: it keeps
 /// what drivers write to it, which a leak check must not count as lost.
 pub fn storage() -> (usize, usize) {
-    HIVE.lock().storage()
+    HIVE.read().storage()
 }
 
 fn status(error: Error) -> NTSTATUS {
@@ -298,46 +298,6 @@ fn key_of(handle: *mut c_void) -> Result<Held, NTSTATUS> {
     Ok(Held { body, key })
 }
 
-/// The key the name in `attributes` starts at, and the path from
-/// there. An absolute name, or one relative to a directory, is looked
-/// up in the object namespace, where it must lead to a key: the
-/// registry's root, with the rest of the path left over. A name
-/// relative to an open key starts at that key.
-///
-/// Reads the driver's memory and resolves its handle, so it is called
-/// before the registry's lock is taken; the key it starts at is held
-/// until the caller lets go of it, after that lock is released.
-///
-/// # Safety
-/// `attributes` points to an `OBJECT_ATTRIBUTES` whose name is null or
-/// a counted string.
-unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>), NTSTATUS> {
-    if attributes.is_null() {
-        return Err(STATUS_INVALID_PARAMETER);
-    }
-    // SAFETY: per the contract; the structure is the driver's, read
-    // field by field.
-    let (root, path) = unsafe {
-        (
-            (&raw const (*attributes).RootDirectory).read_unaligned(),
-            crate::rtl::copy_unicode((&raw const (*attributes).ObjectName).read_unaligned()),
-        )
-    };
-    if root.is_null() {
-        return absolute(&path);
-    }
-    let root = handle::reference(root as u64, None)?;
-    let (body, path) = if root.is(&object::DIRECTORY_TYPE) {
-        crate::ob::lookup(Some(root.body()), &path)?
-    } else if path.first() == Some(&u16::from(b'\\')) {
-        // Relative to an open object: not from the top.
-        return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
-    } else {
-        (root, path)
-    };
-    Ok((key_object(body)?, path))
-}
-
 /// The key the object `body` is, held by the caller's reference. What
 /// leads elsewhere in the namespace names no key.
 fn key_object(body: ObRef) -> Result<Held, NTSTATUS> {
@@ -359,23 +319,92 @@ fn absolute(path: &[u16]) -> Result<(Held, Vec<u16>), NTSTATUS> {
     Ok((key_object(body)?, rest))
 }
 
-/// A handle to `key`, granted `access`. The caller has counted the key
-/// as opened (`Hive::opened`) under the lock it found the key under;
-/// the count is given back if no handle can be made.
-fn open(key: KeyId, access: u32) -> Result<*mut c_void, NTSTATUS> {
+/// Parse context passed through `ob::open_by_name` to [`parse_key`].
+struct KeyParseContext<'a> {
+    create: bool,
+    class: &'a [u8],
+    is_new: bool,
+    asked: Option<&'a mut Vec<u16>>,
+}
+
+/// `KEY_TYPE`'s `OB_PARSE_METHOD` (`CmpParseKey`): resolves or creates a key
+/// relative to `parse_object` (`\Registry` or an open key handle) and returns
+/// a newly allocated referenced `KEY_TYPE` object in `*object`.
+///
+/// # Safety
+/// Called by `ob::open_by_name` with a live `KEY_TYPE` object in
+/// `parse_object`, a valid `UNICODE_STRING` in `remaining_name`, a
+/// `KeyParseContext` in `context`, and a writable `*mut *mut c_void` in
+/// `object`.
+pub unsafe extern "C" fn parse_key(
+    parse_object: *mut c_void,
+    object_type: *mut c_void,
+    _access_state: *mut c_void,
+    _access_mode: i8,
+    _attributes: u32,
+    _complete_name: *mut UNICODE_STRING,
+    remaining_name: *mut UNICODE_STRING,
+    context: *mut c_void,
+    _security_qos: *mut c_void,
+    object: *mut *mut c_void,
+) -> NTSTATUS {
+    if !core::ptr::eq(
+        object_type.cast::<object::ObjectType>(),
+        &raw const object::KEY_TYPE,
+    ) || context.is_null()
+    {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    // SAFETY: per the contract; `parse_object` is a live `KEY_TYPE` object
+    // whose body is its `KeyId` index.
+    let (start_key, remaining, ctx) = unsafe {
+        let start_key = KeyId::from_index(parse_object.cast::<usize>().read());
+        let remaining = if remaining_name.is_null() || (*remaining_name).Length == 0 {
+            &[][..]
+        } else {
+            core::slice::from_raw_parts(
+                (*remaining_name).Buffer,
+                usize::from((*remaining_name).Length) / 2,
+            )
+        };
+        (
+            start_key,
+            remaining,
+            &mut *context.cast::<KeyParseContext<'_>>(),
+        )
+    };
+    if let Some(asked) = ctx.asked.as_mut() {
+        asked.clear();
+        asked.extend_from_slice(remaining);
+    }
+    let key = if ctx.create {
+        match create_below_id(start_key, remaining, ctx.class) {
+            Ok((key, is_new)) => {
+                ctx.is_new = is_new;
+                key
+            }
+            Err(st) => return st,
+        }
+    } else {
+        let mut hive = HIVE.lock();
+        let key = match hive.open(start_key, remaining) {
+            Ok(key) => key,
+            Err(err) => return status(err),
+        };
+        hive.opened(key);
+        key
+    };
     let Some(body) = object::create(&object::KEY_TYPE, size_of::<usize>()) else {
         HIVE.lock().closed(key);
-        return Err(STATUS_INSUFFICIENT_RESOURCES);
+        return STATUS_INSUFFICIENT_RESOURCES;
     };
-    // SAFETY: a fresh object of that size; the handle takes its own
-    // reference and the creating one is given up, which without a
-    // handle ends the object and gives the key's count back.
+    // SAFETY: fresh `KEY_TYPE` object; ownership of its initial reference is
+    // handed to the caller via `object`.
     unsafe {
         body.cast::<usize>().write(key.index());
-        let handle = handle::open(body, access);
-        object::dereference(body);
-        handle.map(|handle| handle as *mut c_void)
+        object.write_unaligned(body.cast());
     }
+    STATUS_SUCCESS
 }
 
 /// The object manager's call when the last reference to a key object
@@ -566,8 +595,8 @@ pub fn copy_tree(from: &str, to: &str) -> Result<(), NTSTATUS> {
 }
 
 /// Delete the key at `path` (from the registry's root) and everything
-/// below it. A key that is not there is not an error. For the kernel's
-/// own use.
+/// below it. A key that is not there is not an error. Watches on the parent
+/// key are notified (`CHANGE_NAME`). For the kernel's own use.
 pub fn delete_tree(path: &str) -> Result<(), NTSTATUS> {
     for child in subkeys(path) {
         delete_tree(&alloc::format!("{path}\\{child}"))?;
@@ -578,23 +607,41 @@ pub fn delete_tree(path: &str) -> Result<(), NTSTATUS> {
     let Ok(key) = hive.root().and_then(|root| hive.open(root, &wide)) else {
         return Ok(());
     };
-    hive.parent(key)
-        .and_then(|parent| {
-            hive.delete(key)?;
-            hive.set_last_write(parent, now)
-        })
-        .map_err(status)
+    let deleted = hive.parent(key).and_then(|parent| {
+        hive.delete(key)?;
+        hive.set_last_write(parent, now)?;
+        Ok(parent)
+    });
+    let met = deleted
+        .ok()
+        .map(|parent| notify::changed(&hive, parent, CHANGE_NAME));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    deleted.map(|_| ()).map_err(status)
 }
 
 /// Delete the value `name` of the key at `path` (from the registry's
-/// root). Neither a missing key nor a missing value is an error. For
-/// the kernel's own use.
+/// root). Neither a missing key nor a missing value is an error. Watches on
+/// the key are notified (`CHANGE_LAST_SET`). For the kernel's own use.
 pub fn delete_value(path: &str, name: &str) {
     let path = wide(path);
     let name = wide(name);
+    let now = now();
     let mut hive = HIVE.lock();
-    if let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) {
-        let _ = hive.delete_value(key, &name);
+    let met = hive
+        .root()
+        .and_then(|root| hive.open(root, &path))
+        .ok()
+        .and_then(|key| {
+            hive.delete_value(key, &name).ok()?;
+            let _ = hive.set_last_write(key, now);
+            Some(notify::changed(&hive, key, CHANGE_LAST_SET))
+        });
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
     }
 }
 
@@ -602,7 +649,7 @@ pub fn delete_value(path: &str, name: &str) {
 /// delete an open key that has no subkeys. It is gone by name at once;
 /// handles still open to it, this one included, are good only for
 /// closing.
-pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
     // Held to the end of the call: longer than the registry's lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
@@ -630,6 +677,20 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
     }
 }
 
+/// `NtOpenKeyEx`: extended `NtOpenKey` accepting `open_options`.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenKeyEx(
+    key_handle: *mut *mut c_void,
+    desired_access: u32,
+    attributes: *const OBJECT_ATTRIBUTES,
+    _open_options: u32,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { NtOpenKey(key_handle, desired_access, attributes) }
+}
+
 /// [`ZwOpenKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey).
 /// There are no access checks: the handle is granted the access asked
 /// for.
@@ -637,28 +698,56 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
 /// # Safety
 /// `key_handle` is writable; `attributes` points to an
 /// `OBJECT_ATTRIBUTES`.
-pub unsafe extern "C" fn ZwOpenKey(
+pub unsafe extern "C" fn NtOpenKey(
     key_handle: *mut *mut c_void,
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     let mut asked = Vec::new();
-    // SAFETY: per the contract.
-    let found = unsafe { named(attributes) }.and_then(|(start, path)| {
-        if crate::kd::trace_registry() {
-            asked.clone_from(&path);
-        }
-        // `start` outlives the lock: a parameter goes after the locals.
-        let mut hive = HIVE.lock();
-        let key = hive.open(start.key(), &path).map_err(status)?;
-        hive.opened(key);
-        Ok(key)
-    });
-    let status = match found.and_then(|key| open(key, desired_access)) {
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let oa = match unsafe { crate::svc::capture::capture_object_attributes(attributes, mode) } {
+        Ok(Some(oa)) => oa,
+        Ok(None) => return STATUS_INVALID_PARAMETER,
+        Err(status) => return status,
+    };
+    let path = oa.name.unwrap_or_default();
+    let mut ctx = KeyParseContext {
+        create: false,
+        class: &[],
+        is_new: false,
+        asked: crate::kd::trace_registry().then_some(&mut asked),
+    };
+    // SAFETY: `ctx` is a valid `KeyParseContext` for the duration of the call.
+    let found = unsafe {
+        crate::ob::open_by_name(
+            oa.root,
+            &path,
+            oa.attributes,
+            Some(&object::KEY_TYPE),
+            desired_access,
+            mode,
+            (&raw mut ctx).cast(),
+        )
+    };
+    let kernel_handle = !crate::svc::capture::is_user(mode);
+    let attrs = nk_ob::handles::Attributes {
+        inherit: oa.attributes & 0x2 != 0,
+        protect_from_close: false,
+    };
+    let status = match found.and_then(|(body, granted)| {
+        // SAFETY: `body` is a live referenced `KEY_TYPE` object.
+        unsafe { handle::open_with(body.body(), granted, attrs, kernel_handle) }
+    }) {
         Ok(handle) => {
-            // SAFETY: per the contract.
-            unsafe { key_handle.write_unaligned(handle) };
-            STATUS_SUCCESS
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            match unsafe { crate::svc::capture::write(key_handle, handle as *mut c_void, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(status) => {
+                    let _ = handle::close_for(handle, crate::svc::capture::handle_mode(mode));
+                    status
+                }
+            }
         }
         Err(status) => status,
     };
@@ -677,28 +766,30 @@ pub unsafe extern "C" fn ZwOpenKey(
 ///
 /// # Safety
 /// `class` is null or points to a counted string.
-unsafe fn class_of(class: *const UNICODE_STRING) -> Option<Vec<u8>> {
+unsafe fn class_of(class: *const UNICODE_STRING, mode: i8) -> Result<Vec<u8>, NTSTATUS> {
     if class.is_null() {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
-    // SAFETY: per the contract; the structure is the driver's, read
-    // field by field.
-    unsafe {
-        let buffer = (&raw const (*class).Buffer).read_unaligned();
-        let length = (&raw const (*class).Length).read_unaligned();
-        crate::se::copied(buffer.cast(), usize::from(length))
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let units = unsafe { crate::svc::capture::capture_unicode_string(class, mode) }?;
+    let mut bytes = Vec::new();
+    if bytes.try_reserve_exact(units.len() * 2).is_err() {
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
     }
+    for u in units {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    Ok(bytes)
 }
 
 /// Open the key `path` below `start`, making it, with `class`, if it
 /// is not there: the key, counted as open (`Hive::opened`), and
 /// whether it is new. Whoever watches the key it was made under is
 /// told.
-fn create_below(start: &Held, path: &[u16], class: &[u8]) -> Result<(KeyId, bool), NTSTATUS> {
+fn create_below_id(start: KeyId, path: &[u16], class: &[u8]) -> Result<(KeyId, bool), NTSTATUS> {
     let now = now();
-    // `start` is the caller's to let go of, after the lock.
     let mut hive = HIVE.lock();
-    let (key, new) = hive.create(start.key(), path).map_err(status)?;
+    let (key, new) = hive.create(start, path).map_err(status)?;
     if new {
         let classed = hive.set_class(key, class);
         if let Err(error) = classed.and_then(|()| stamp_new(&mut hive, key, now)) {
@@ -766,7 +857,7 @@ fn delete_value_of(key: KeyId, name: &[u16]) -> NTSTATUS {
 /// `key_handle` is writable; `attributes` points to an
 /// `OBJECT_ATTRIBUTES`; `class` is null or a counted string;
 /// `disposition` is null or writable.
-pub unsafe extern "C" fn ZwCreateKey(
+pub unsafe extern "C" fn NtCreateKey(
     key_handle: *mut *mut c_void,
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
@@ -775,22 +866,65 @@ pub unsafe extern "C" fn ZwCreateKey(
     _create_options: u32,
     disposition: *mut u32,
 ) -> NTSTATUS {
-    // SAFETY: per the contract. The class is the driver's memory: the
-    // registry is given a copy, made before its lock is taken.
-    let Some(class) = (unsafe { class_of(class) }) else {
-        return STATUS_INSUFFICIENT_RESOURCES;
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let class = match unsafe { class_of(class, mode) } {
+        Ok(c) => c,
+        Err(status) => return status,
     };
-    // SAFETY: per the contract.
-    let made =
-        unsafe { named(attributes) }.and_then(|(start, path)| create_below(&start, &path, &class));
-    match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
-        Ok((handle, new)) => {
-            // SAFETY: per the contract.
-            unsafe {
-                key_handle.write_unaligned(handle);
-                if !disposition.is_null() {
-                    disposition.write_unaligned(if new { CREATED } else { OPENED });
-                }
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let oa = match unsafe { crate::svc::capture::capture_object_attributes(attributes, mode) } {
+        Ok(Some(oa)) => oa,
+        Ok(None) => return STATUS_INVALID_PARAMETER,
+        Err(status) => return status,
+    };
+    let path = oa.name.unwrap_or_default();
+    let mut ctx = KeyParseContext {
+        create: true,
+        class: &class,
+        is_new: false,
+        asked: None,
+    };
+    // SAFETY: `ctx` is a valid `KeyParseContext` for the duration of the call.
+    let found = unsafe {
+        crate::ob::open_by_name(
+            oa.root,
+            &path,
+            oa.attributes,
+            Some(&object::KEY_TYPE),
+            desired_access,
+            mode,
+            (&raw mut ctx).cast(),
+        )
+    };
+    let kernel_handle = !crate::svc::capture::is_user(mode);
+    let attrs = nk_ob::handles::Attributes {
+        inherit: oa.attributes & 0x2 != 0,
+        protect_from_close: false,
+    };
+    let new = ctx.is_new;
+    match found.and_then(|(body, granted)| {
+        // SAFETY: `body` is a live referenced `KEY_TYPE` object.
+        unsafe { handle::open_with(body.body(), granted, attrs, kernel_handle) }
+    }) {
+        Ok(handle) => {
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            let write = unsafe {
+                crate::svc::capture::write(key_handle, handle as *mut c_void, mode).and_then(|()| {
+                    if !disposition.is_null() {
+                        crate::svc::capture::write(
+                            disposition,
+                            if new { CREATED } else { OPENED },
+                            mode,
+                        )
+                    } else {
+                        Ok(())
+                    }
+                })
+            };
+            if let Err(status) = write {
+                let _ = handle::close_for(handle, crate::svc::capture::handle_mode(mode));
+                return status;
             }
             STATUS_SUCCESS
         }
@@ -803,7 +937,7 @@ pub unsafe extern "C" fn ZwCreateKey(
 /// # Safety
 /// `value_name` is null or a counted string; `data` is readable for
 /// `data_size` bytes.
-pub unsafe extern "C" fn ZwSetValueKey(
+pub unsafe extern "C" fn NtSetValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
     _title_index: u32,
@@ -811,19 +945,22 @@ pub unsafe extern "C" fn ZwSetValueKey(
     data: *const u8,
     data_size: u32,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     // Held to the end of the call: longer than the registry's lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
         Err(status) => return status,
     };
     let key = held.key();
-    // SAFETY: per the contract. Name and data are the driver's memory:
-    // the registry is given copies.
-    let (name, data) = unsafe {
-        let Some(data) = crate::se::copied(data, data_size as usize) else {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        };
-        (crate::rtl::copy_unicode(value_name), data)
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(value_name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let data = match unsafe { crate::svc::capture::capture_bytes(data, data_size as usize, mode) } {
+        Ok(d) => d,
+        Err(status) => return status,
     };
     set_value(key, &name, kind, &data)
 }
@@ -835,19 +972,22 @@ pub unsafe extern "C" fn ZwSetValueKey(
 ///
 /// # Safety
 /// `value_name` is null or a counted string.
-pub unsafe extern "C" fn ZwDeleteValueKey(
+pub unsafe extern "C" fn NtDeleteValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     // Held to the end of the call: longer than the registry's lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
         Err(status) => return status,
     };
     let key = held.key();
-    // SAFETY: per the contract. The name is the driver's memory: the
-    // registry is given a copy.
-    let name = unsafe { crate::rtl::copy_unicode(value_name) };
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(value_name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
     delete_value_of(key, &name)
 }
 
@@ -872,6 +1012,7 @@ unsafe fn inform(
     result_length: *mut u32,
     mut format: impl FnMut(&mut [u8]) -> Result<(Fit, usize), NTSTATUS>,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     let mut out = Vec::new();
     let (fit, needed) = loop {
         let (fit, needed) = match format(&mut out) {
@@ -886,16 +1027,23 @@ unsafe fn inform(
         if out.try_reserve_exact(room).is_err() {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        // SAFETY: per the contract; `room` is at most `length`.
-        out.extend((0..room).map(|i| unsafe { information.add(i).read() }));
+        out.resize(room, 0);
+        // SAFETY: per the contract; fault-protected for `UserMode`.
+        let copied = unsafe { crate::svc::capture::copy_from_caller(&mut out, information, mode) };
+        if let Err(status) = copied {
+            return status;
+        }
     };
-    // SAFETY: per the contract; `out` is no longer than `length`.
-    unsafe {
-        result_length.write_unaligned(needed as u32);
-        if fit != Fit::Nothing {
-            for (i, &byte) in out.iter().enumerate() {
-                information.add(i).write(byte);
-            }
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let wrote_len = unsafe { crate::svc::capture::write(result_length, needed as u32, mode) };
+    if let Err(status) = wrote_len {
+        return status;
+    }
+    if fit != Fit::Nothing {
+        // SAFETY: per the contract; `out` is no longer than `length`.
+        let wrote_buf = unsafe { crate::svc::capture::copy_to_caller(information, &out, mode) };
+        if let Err(status) = wrote_buf {
+            return status;
         }
     }
     match fit {
@@ -942,7 +1090,7 @@ fn value_information(
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
 /// `result_length` writable for four.
-pub unsafe extern "C" fn ZwEnumerateKey(
+pub unsafe extern "C" fn NtEnumerateKey(
     key_handle: *mut c_void,
     index: u32,
     class: u32,
@@ -995,7 +1143,7 @@ pub unsafe extern "C" fn ZwEnumerateKey(
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
 /// `result_length` writable for four.
-pub unsafe extern "C" fn ZwQueryKey(
+pub unsafe extern "C" fn NtQueryKey(
     key_handle: *mut c_void,
     class: u32,
     information: *mut u8,
@@ -1039,7 +1187,7 @@ pub unsafe extern "C" fn ZwQueryKey(
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
 /// `result_length` writable for four.
-pub unsafe extern "C" fn ZwEnumerateValueKey(
+pub unsafe extern "C" fn NtEnumerateValueKey(
     key_handle: *mut c_void,
     index: u32,
     class: u32,
@@ -1079,7 +1227,7 @@ pub unsafe extern "C" fn ZwEnumerateValueKey(
 /// `value_name` is null or a counted string; `information` is readable
 /// and writable for `length` bytes and `result_length` writable for
 /// four.
-pub unsafe extern "C" fn ZwQueryValueKey(
+pub unsafe extern "C" fn NtQueryValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
     class: u32,
@@ -1096,8 +1244,12 @@ pub unsafe extern "C" fn ZwQueryValueKey(
         Err(status) => return status,
     };
     let key = held.key();
-    // SAFETY: per the contract.
-    let name = unsafe { crate::rtl::copy_unicode(value_name) };
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(value_name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
     let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
         let (stored_name, kind, data) = hive.value(key, &name).map_err(status)?;
@@ -1171,3 +1323,8 @@ pub fn overlay_test() -> Result<(), &'static str> {
         Err(_) => Err("an overlay's control set is not the current one"),
     }
 }
+
+pub use crate::svc::zw::{
+    ZwCreateKey, ZwDeleteKey, ZwDeleteValueKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey,
+    ZwQueryKey, ZwQueryValueKey, ZwSetValueKey,
+};

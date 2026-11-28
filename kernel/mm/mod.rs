@@ -17,8 +17,13 @@ pub mod map;
 pub mod pfn;
 pub mod pool;
 pub mod section;
+pub mod space;
 pub mod stack;
+pub mod trim;
 pub mod user;
+pub mod view;
+pub mod vm;
+pub mod writer;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, FirmwareUse, MemRegion, regions};

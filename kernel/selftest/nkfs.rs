@@ -739,3 +739,272 @@ impl Drop for Volume {
         }
     }
 }
+
+// ---- Synthetic large-file device (\Device\NkFsLarge) for low-memory proofs ----
+
+/// Device path for the 80 MiB synthetic tag-verified backing file used by `user.lowmem`.
+#[allow(dead_code)]
+pub const LARGE_DEVICE: &str = "\\Device\\NkFsLarge";
+/// Logical size of `\Device\NkFsLarge` (80 MiB = 20,480 pages), backed by only
+/// 80 KiB of per-page tags so a 96 MiB QEMU VM can map views strictly larger than RAM.
+#[allow(dead_code)]
+pub const LARGE_PAGES: usize = 20 * 1024;
+#[allow(dead_code)]
+pub const LARGE_BYTES: usize = LARGE_PAGES * crate::mm::PAGE_SIZE;
+
+#[allow(dead_code)]
+struct LargeState {
+    fcb: Fcb,
+    tags: alloc::vec::Vec<AtomicU32>,
+    paging_reads: AtomicU64,
+    paging_writes: AtomicU64,
+    pages_written: AtomicU64,
+    corruptions: AtomicU64,
+}
+
+#[allow(dead_code)]
+static LARGE_STATE: AtomicPtr<LargeState> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Deterministic 64-bit word expected at `word_idx` (`0..512`) of `page_idx` when
+/// its tag is `tag`.
+#[allow(dead_code)]
+#[inline]
+pub const fn large_word(page_idx: usize, word_idx: usize, tag: u32) -> u64 {
+    ((tag as u64) << 32) | ((page_idx as u64) << 12) | (word_idx as u64)
+}
+
+/// Dispatch routine for `\Device\NkFsLarge`.
+///
+/// # Safety
+/// Called by the I/O manager with a live IRP.
+#[allow(dead_code)]
+unsafe extern "C" fn large_dispatch(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS {
+    // SAFETY: live IRP dispatched to this driver.
+    unsafe {
+        let location = (*irp).CurrentStackLocation;
+        let file = (*location).FileObject;
+        let state = LARGE_STATE.load(Ordering::Acquire);
+        let (status, information) = if state.is_null() {
+            (STATUS_DEVICE_NOT_READY, 0)
+        } else {
+            match (*location).MajorFunction {
+                IRP_MJ_CREATE => {
+                    let fcb = &raw mut (*state).fcb;
+                    (*file).FsContext = fcb.cast();
+                    (*file).SectionObjectPointer = (&raw mut (*fcb).sop).cast();
+                    (STATUS_SUCCESS, FILE_OPENED)
+                }
+                IRP_MJ_QUERY_INFORMATION => {
+                    let len = (*location).Parameters[0] as usize;
+                    let class = (*location).Parameters[1] as u32;
+                    let sys = (*irp).SystemBuffer.cast::<u8>();
+                    if class == 5 && !sys.is_null() && len >= 24 {
+                        // `FILE_STANDARD_INFORMATION`: AllocationSize, EndOfFile, Links=1, ...
+                        core::ptr::write_bytes(sys, 0, 24);
+                        sys.cast::<i64>().write_unaligned(LARGE_BYTES as i64);
+                        sys.add(8).cast::<i64>().write_unaligned(LARGE_BYTES as i64);
+                        sys.add(16).cast::<u32>().write_unaligned(1);
+                        (STATUS_SUCCESS, 24)
+                    } else {
+                        (STATUS_INVALID_INFO_CLASS, 0)
+                    }
+                }
+                IRP_MJ_READ | IRP_MJ_WRITE => {
+                    let major = (*location).MajorFunction;
+                    let length = (*location).Parameters[0] as usize;
+                    let offset = (*location).Parameters[2] as usize;
+                    let flags = (*irp).Flags;
+                    if (flags & IRP_NOCACHE) == 0
+                        || offset >= LARGE_BYTES
+                        || !offset.is_multiple_of(crate::mm::PAGE_SIZE)
+                    {
+                        (STATUS_INVALID_DEVICE_REQUEST, 0)
+                    } else {
+                        let count = length.min(LARGE_BYTES - offset);
+                        let system = mdl::MmMapLockedPagesSpecifyCache(
+                            (*irp).MdlAddress,
+                            KERNEL_MODE,
+                            1,
+                            core::ptr::null_mut(),
+                            0,
+                            16,
+                        );
+                        if system.is_null() {
+                            (STATUS_INSUFFICIENT_RESOURCES, 0)
+                        } else {
+                            let st = &*state;
+                            let npages = count / crate::mm::PAGE_SIZE;
+                            let first_page = offset / crate::mm::PAGE_SIZE;
+                            if major == IRP_MJ_READ {
+                                st.paging_reads.fetch_add(1, Ordering::Relaxed);
+                                for p in 0..npages {
+                                    let page_idx = first_page + p;
+                                    let tag = st.tags[page_idx].load(Ordering::Acquire);
+                                    let words = system
+                                        .cast::<u8>()
+                                        .add(p * crate::mm::PAGE_SIZE)
+                                        .cast::<u64>();
+                                    for w in 0..512 {
+                                        words.add(w).write(large_word(page_idx, w, tag));
+                                    }
+                                }
+                            } else {
+                                st.paging_writes.fetch_add(1, Ordering::Relaxed);
+                                st.pages_written.fetch_add(npages as u64, Ordering::Relaxed);
+                                for p in 0..npages {
+                                    let page_idx = first_page + p;
+                                    let words = system
+                                        .cast::<u8>()
+                                        .add(p * crate::mm::PAGE_SIZE)
+                                        .cast::<u64>();
+                                    let w0 = words.read();
+                                    let tag = (w0 >> 32) as u32;
+                                    let mut ok = true;
+                                    for w in 0..512 {
+                                        if words.add(w).read() != large_word(page_idx, w, tag) {
+                                            ok = false;
+                                            break;
+                                        }
+                                    }
+                                    if ok {
+                                        st.tags[page_idx].store(tag, Ordering::Release);
+                                    } else {
+                                        st.corruptions.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                            (STATUS_SUCCESS, count)
+                        }
+                    }
+                }
+                _ => (STATUS_SUCCESS, 0),
+            }
+        };
+        (*irp).IoStatus.Status = status;
+        (*irp).IoStatus.Information = information;
+        irp::IofCompleteRequest(irp, 0);
+        status
+    }
+}
+
+/// Owned `\Device\NkFsLarge` synthetic 80 MiB volume for `user.lowmem`.
+#[allow(dead_code)]
+pub struct LargeVolume {
+    driver: *mut DRIVER_OBJECT,
+    device: *mut DEVICE_OBJECT,
+    state: *mut LargeState,
+}
+
+#[allow(dead_code)]
+impl LargeVolume {
+    /// Mount `\Device\NkFsLarge` (64 MiB logical file, 64 KiB tag store).
+    pub fn mount() -> Result<Self, &'static str> {
+        let drv_size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+        let driver = pool::alloc_zeroed(drv_size, TAG).cast::<DRIVER_OBJECT>();
+        if driver.is_null() {
+            return Err("no memory for nkfs large driver");
+        }
+        // SAFETY: fresh zeroed driver object + extension.
+        unsafe {
+            (*driver).DriverExtension = driver.add(1).cast();
+            (*(*driver).DriverExtension).DriverObject = driver;
+            (*driver).MajorFunction.fill(Some(large_dispatch));
+        }
+        let mut tags = alloc::vec::Vec::with_capacity(LARGE_PAGES);
+        for _ in 0..LARGE_PAGES {
+            tags.push(AtomicU32::new(0));
+        }
+        // SAFETY: `Fcb` is all-zero valid before resource init.
+        let fcb: Fcb = unsafe { core::mem::zeroed() };
+        let mut state = alloc::boxed::Box::new(LargeState {
+            fcb,
+            tags,
+            paging_reads: AtomicU64::new(0),
+            paging_writes: AtomicU64::new(0),
+            pages_written: AtomicU64::new(0),
+            corruptions: AtomicU64::new(0),
+        });
+        // SAFETY: initializing FCB resources in-place inside pinned Box allocation.
+        unsafe {
+            let header = &raw mut state.fcb.header.Common;
+            (*header).NodeByteSize = size_of::<Fcb>() as i16;
+            (*header).AllocationSize = LARGE_BYTES as i64;
+            (*header).FileSize = LARGE_BYTES as i64;
+            (*header).ValidDataLength = LARGE_BYTES as i64;
+            crate::ex::resource::ExInitializeResourceLite(&raw mut state.fcb.resource);
+            crate::ex::resource::ExInitializeResourceLite(&raw mut state.fcb.paging_io_resource);
+            (*header).Resource = &raw mut state.fcb.resource;
+            (*header).PagingIoResource = &raw mut state.fcb.paging_io_resource;
+        }
+        let state_ptr = alloc::boxed::Box::into_raw(state);
+        LARGE_STATE.store(state_ptr, Ordering::Release);
+
+        let name: alloc::vec::Vec<u16> = LARGE_DEVICE.encode_utf16().collect();
+        let mut name_us = UNICODE_STRING {
+            Length: (name.len() * 2) as u16,
+            MaximumLength: (name.len() * 2) as u16,
+            Buffer: name.as_ptr().cast_mut(),
+        };
+        let mut dev: *mut DEVICE_OBJECT = core::ptr::null_mut();
+        // SAFETY: valid driver object and counted name.
+        let st =
+            unsafe { device::IoCreateDevice(driver, 0, &raw mut name_us, 8, 0, 0, &raw mut dev) };
+        if st != STATUS_SUCCESS || dev.is_null() {
+            LARGE_STATE.store(core::ptr::null_mut(), Ordering::Release);
+            // SAFETY: reclaiming `state_ptr` on failure.
+            unsafe {
+                crate::ex::resource::ExDeleteResourceLite(&raw mut (*state_ptr).fcb.resource);
+                crate::ex::resource::ExDeleteResourceLite(
+                    &raw mut (*state_ptr).fcb.paging_io_resource,
+                );
+                drop(alloc::boxed::Box::from_raw(state_ptr));
+            }
+            let _ = pool::free(driver.cast());
+            return Err("IoCreateDevice(\\Device\\NkFsLarge) failed");
+        }
+        // SAFETY: device created above.
+        unsafe { (*dev).Flags &= !DO_DEVICE_INITIALIZING };
+        Ok(Self {
+            driver,
+            device: dev,
+            state: state_ptr,
+        })
+    }
+
+    /// Section object pointers for `\Device\NkFsLarge`.
+    pub fn sop(&self) -> *mut SECTION_OBJECT_POINTERS {
+        // SAFETY: `self.state` is live until `Drop`.
+        unsafe { &raw mut (*self.state).fcb.sop }
+    }
+
+    /// Return `(paging_reads, paging_writes, pages_written, corruptions)`.
+    pub fn stats(&self) -> (u64, u64, u64, u64) {
+        // SAFETY: `self.state` is live until `Drop`.
+        unsafe {
+            let st = &*self.state;
+            (
+                st.paging_reads.load(Ordering::Acquire),
+                st.paging_writes.load(Ordering::Acquire),
+                st.pages_written.load(Ordering::Acquire),
+                st.corruptions.load(Ordering::Acquire),
+            )
+        }
+    }
+}
+
+impl Drop for LargeVolume {
+    fn drop(&mut self) {
+        LARGE_STATE.store(core::ptr::null_mut(), Ordering::Release);
+        // SAFETY: device created by `mount`.
+        unsafe { device::IoDeleteDevice(self.device) };
+        // SAFETY: `self.state` belongs exclusively to this `LargeVolume`.
+        unsafe {
+            crate::ex::resource::ExDeleteResourceLite(&raw mut (*self.state).fcb.resource);
+            crate::ex::resource::ExDeleteResourceLite(
+                &raw mut (*self.state).fcb.paging_io_resource,
+            );
+            drop(alloc::boxed::Box::from_raw(self.state));
+        }
+        let _ = pool::free(self.driver.cast());
+    }
+}

@@ -17,40 +17,15 @@ const OBJ_PERMANENT: u32 = 0x10;
 const OBJ_EXCLUSIVE: u32 = 0x20;
 const OBJ_OPENIF: u32 = 0x80;
 const OBJ_OPENLINK: u32 = 0x100;
-const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 
 /// Whether the object `body` is of the type `ty`.
 ///
 /// # Safety
 /// The caller holds a reference to `body`.
+#[allow(dead_code)]
 pub(super) unsafe fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
     // SAFETY: per the contract.
     core::ptr::eq(unsafe { object::type_of(body) }, ty)
-}
-
-/// Resolve an `OBJECT_ATTRIBUTES.RootDirectory` handle for a relative
-/// namespace path. A handle to a non-directory object fails with
-/// `STATUS_OBJECT_TYPE_MISMATCH` if that type parses names itself
-/// (device, file, key), or `STATUS_INVALID_HANDLE` otherwise.
-pub(super) fn resolve_root(root: *mut c_void, name_empty: bool) -> Result<Option<ObRef>, NTSTATUS> {
-    if root.is_null() || name_empty {
-        return Ok(None);
-    }
-    let start = handle::reference(root as u64, None)?;
-    let body = start.body();
-    // SAFETY: the reference just taken.
-    if !unsafe { is(body, &object::DIRECTORY_TYPE) } {
-        let parses = [&object::DEVICE_TYPE, &object::FILE_TYPE, &object::KEY_TYPE]
-            .into_iter()
-            // SAFETY: the same reference.
-            .any(|ty| unsafe { is(body, ty) });
-        return Err(if parses {
-            STATUS_OBJECT_TYPE_MISMATCH
-        } else {
-            STATUS_INVALID_HANDLE
-        });
-    }
-    Ok(Some(start))
 }
 
 /// [`ZwCreateDirectoryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatedirectoryobject):
@@ -77,38 +52,37 @@ pub(super) fn resolve_root(root: *mut c_void, name_empty: bool) -> Result<Option
 /// `directory_handle` is writable; `object_attributes` is null or
 /// points to an `OBJECT_ATTRIBUTES` whose name is null or a counted
 /// string.
-pub unsafe extern "C" fn ZwCreateDirectoryObject(
+pub unsafe extern "C" fn NtCreateDirectoryObject(
     directory_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
-    let (mut root, mut name, mut attributes) = (core::ptr::null_mut(), alloc::vec::Vec::new(), 0);
-    if !object_attributes.is_null() {
-        // SAFETY: per the contract; the driver's memory, read field by
-        // field through its pointer.
-        let length = unsafe {
-            root = (&raw const (*object_attributes).RootDirectory).read_unaligned();
-            name = crate::rtl::copy_unicode(
-                (&raw const (*object_attributes).ObjectName).read_unaligned(),
-            );
-            attributes = (&raw const (*object_attributes).Attributes).read_unaligned();
-            (&raw const (*object_attributes).Length).read_unaligned()
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let oa =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
         };
-        if length as usize != size_of::<OBJECT_ATTRIBUTES>()
-            || attributes & !OBJ_VALID_ATTRIBUTES != 0
-            || attributes & OBJ_OPENLINK != 0
-        {
-            return STATUS_INVALID_PARAMETER;
+    let (root, name, attributes) = match oa {
+        Some(oa) => {
+            if oa.attributes & OBJ_OPENLINK != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if oa.attributes & OBJ_EXCLUSIVE != 0 {
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            (oa.root, oa.name.unwrap_or_default(), oa.attributes)
         }
-        if attributes & OBJ_EXCLUSIVE != 0 {
-            return STATUS_NOT_IMPLEMENTED;
-        }
-    }
-    let start = match resolve_root(root, name.is_empty()) {
+        None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
+    };
+    let start = match super::resolve_namespace_root(root, name.is_empty(), mode) {
         Ok(start) => start,
         Err(status) => {
-            // SAFETY: per the contract.
-            unsafe { directory_handle.write_unaligned(core::ptr::null_mut()) };
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            let _ = unsafe {
+                crate::svc::capture::write(directory_handle, core::ptr::null_mut(), mode)
+            };
             return status;
         }
     };
@@ -125,7 +99,7 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
         let (body, existed) = match made {
             Ok(made) => made,
             Err(status) => {
-                directory_handle.write_unaligned(core::ptr::null_mut());
+                let _ = crate::svc::capture::write(directory_handle, core::ptr::null_mut(), mode);
                 return status;
             }
         };
@@ -146,7 +120,12 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
         object::dereference(body);
         match opened {
             Ok(opened) => {
-                directory_handle.write_unaligned(opened as *mut c_void);
+                if let Err(status) =
+                    crate::svc::capture::write(directory_handle, opened as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(opened, crate::svc::capture::handle_mode(mode));
+                    return status;
+                }
                 if existed {
                     STATUS_OBJECT_NAME_EXISTS
                 } else {
@@ -154,7 +133,7 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
                 }
             }
             Err(status) => {
-                directory_handle.write_unaligned(core::ptr::null_mut());
+                let _ = crate::svc::capture::write(directory_handle, core::ptr::null_mut(), mode);
                 status
             }
         }
@@ -171,7 +150,7 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
 /// object of another type has its name from the kernel code that made
 /// it, which takes it away again; making one temporary by handle stops
 /// the system by name: the ledger's "partial".
-pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
     let held = match handle::reference(handle as u64, None) {
         Ok(held) => held,
         Err(status) => return status,
@@ -195,6 +174,623 @@ pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
         }
     }
     STATUS_SUCCESS
+}
+
+/// [`NtOpenDirectoryObject`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntopendirectoryobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenDirectoryObject(
+    directory_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let name = oa.name.unwrap_or_default();
+    if name.is_empty() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    // SAFETY: `parse_context` is null for directory opens.
+    let (found, granted) = match unsafe {
+        super::open_by_name(
+            oa.root,
+            &name,
+            oa.attributes,
+            Some(&object::DIRECTORY_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
+        Ok(res) => res,
+        Err(st) => return st,
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `found` keeps the directory alive while opening the handle.
+    let h = match unsafe {
+        handle::open_with(
+            found.body(),
+            granted,
+            Attributes {
+                inherit: (oa.attributes & OBJ_INHERIT) != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(directory_handle, h as *mut c_void, mode) }
+    {
+        let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtOpenSymbolicLinkObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopensymboliclinkobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenSymbolicLinkObject(
+    link_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let name = oa.name.unwrap_or_default();
+    if name.is_empty() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    // Opening a symbolic link itself always stops at the final link (`OBJ_OPENLINK`).
+    // SAFETY: `parse_context` is null for symbolic link opens.
+    let (found, granted) = match unsafe {
+        super::open_by_name(
+            oa.root,
+            &name,
+            oa.attributes | OBJ_OPENLINK,
+            Some(&object::SYMBOLIC_LINK_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
+        Ok(res) => res,
+        Err(st) => return st,
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `found` keeps the symbolic link alive while opening the handle.
+    let h = match unsafe {
+        handle::open_with(
+            found.body(),
+            granted,
+            Attributes {
+                inherit: (oa.attributes & OBJ_INHERIT) != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(link_handle, h as *mut c_void, mode) } {
+        let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtQuerySymbolicLinkObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerysymboliclinkobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQuerySymbolicLinkObject(
+    link_handle: *mut c_void,
+    link_target: *mut UNICODE_STRING,
+    returned_length: *mut u32,
+) -> NTSTATUS {
+    const SYMBOLIC_LINK_QUERY: u32 = 0x1;
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        link_handle as u64,
+        Some(&raw const object::SYMBOLIC_LINK_TYPE),
+        SYMBOLIC_LINK_QUERY,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    let mut out_us = match unsafe { crate::svc::capture::read(link_target, mode) } {
+        Ok(u) => u,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` is a live `OBJECT_SYMBOLIC_LINK`.
+    let target = unsafe {
+        let sl = held.body().cast::<nk_ntabi::ob::OBJECT_SYMBOLIC_LINK>();
+        crate::rtl::copy_unicode(&raw const (*sl).LinkTarget)
+    };
+    let bytes_len = target.len() * 2;
+    let needed = (bytes_len + 2) as u32;
+    if !returned_length.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(returned_length, needed, mode) } {
+            return st;
+        }
+    }
+    if usize::from(out_us.MaximumLength) < bytes_len {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if bytes_len > 0 {
+        // SAFETY: `target` is valid UTF-16 code units.
+        let src = unsafe { core::slice::from_raw_parts(target.as_ptr().cast::<u8>(), bytes_len) };
+        // SAFETY: `copy_to_caller` probes user pointers.
+        let cp =
+            unsafe { crate::svc::capture::copy_to_caller(out_us.Buffer.cast::<u8>(), src, mode) };
+        if let Err(st) = cp {
+            return st;
+        }
+    }
+    if usize::from(out_us.MaximumLength) >= bytes_len + 2 {
+        // SAFETY: room for trailing NUL.
+        let _ = unsafe {
+            crate::svc::capture::copy_to_caller(
+                out_us.Buffer.cast::<u8>().add(bytes_len),
+                &[0u8; 2],
+                mode,
+            )
+        };
+    }
+    out_us.Length = bytes_len as u16;
+    // SAFETY: per the contract.
+    match unsafe { crate::svc::capture::write(link_target, out_us, mode) } {
+        Ok(()) => STATUS_SUCCESS,
+        Err(st) => st,
+    }
+}
+
+/// `OBJECT_DIRECTORY_INFORMATION` (`ntifs.h`, 32 bytes on 64-bit Windows).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ObjectDirectoryInformation {
+    name: nk_ntabi::io::UNICODE_STRING,
+    type_name: nk_ntabi::io::UNICODE_STRING,
+}
+
+/// [`NtQueryDirectoryObject`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntquerydirectoryobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQueryDirectoryObject(
+    directory_handle: *mut c_void,
+    buffer: *mut u8,
+    length: u32,
+    return_single_entry: u8,
+    restart_scan: u8,
+    context: *mut u32,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    const DIRECTORY_QUERY: u32 = 0x0001;
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        directory_handle as u64,
+        Some(&raw const object::DIRECTORY_TYPE),
+        DIRECTORY_QUERY,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let start_idx = if restart_scan != 0 {
+        0usize
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(context, mode) } {
+            Ok(c) => c as usize,
+            Err(st) => return st,
+        }
+    };
+    let entries = match super::list_directory(held.body()) {
+        Ok(e) => e,
+        Err(st) => return st,
+    };
+    if start_idx >= entries.len() {
+        if !return_length.is_null() {
+            // SAFETY: per the contract.
+            let _ = unsafe { crate::svc::capture::write(return_length, 0u32, mode) };
+        }
+        return STATUS_NO_MORE_ENTRIES;
+    }
+
+    let rec_size = size_of::<ObjectDirectoryInformation>();
+    let avail = length as usize;
+    let mut chosen = 0usize;
+    let mut str_bytes = 0usize;
+    for entry in entries.iter().skip(start_idx) {
+        let entry_str = (entry.name.len() + 1) * 2 + (entry.type_name.len() + 1) * 2;
+        let next_total = (chosen + 2) * rec_size + str_bytes + entry_str;
+        if next_total > avail {
+            break;
+        }
+        chosen += 1;
+        str_bytes += entry_str;
+        if return_single_entry != 0 {
+            break;
+        }
+    }
+    if chosen == 0 {
+        let entry = &entries[start_idx];
+        let needed =
+            (2 * rec_size + (entry.name.len() + 1) * 2 + (entry.type_name.len() + 1) * 2) as u32;
+        if !return_length.is_null() {
+            // SAFETY: per the contract.
+            let _ = unsafe { crate::svc::capture::write(return_length, needed, mode) };
+        }
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    let total = (chosen + 1) * rec_size + str_bytes;
+    let mut out = alloc::vec![0u8; total];
+    let mut str_off = (chosen + 1) * rec_size;
+    let base_va = buffer.addr();
+    for (i, entry) in entries.iter().skip(start_idx).take(chosen).enumerate() {
+        let name = &entry.name;
+        let ty = &entry.type_name;
+        let name_bytes = name.len() * 2;
+        let ty_bytes = ty.len() * 2;
+        let name_va = base_va + str_off;
+        for (j, &u) in name.iter().enumerate() {
+            out[str_off + j * 2..str_off + j * 2 + 2].copy_from_slice(&u.to_le_bytes());
+        }
+        str_off += name_bytes + 2;
+        let ty_va = base_va + str_off;
+        for (j, &u) in ty.iter().enumerate() {
+            out[str_off + j * 2..str_off + j * 2 + 2].copy_from_slice(&u.to_le_bytes());
+        }
+        str_off += ty_bytes + 2;
+        let rec = ObjectDirectoryInformation {
+            name: nk_ntabi::io::UNICODE_STRING {
+                Length: name_bytes as u16,
+                MaximumLength: (name_bytes + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(name_va),
+            },
+            type_name: nk_ntabi::io::UNICODE_STRING {
+                Length: ty_bytes as u16,
+                MaximumLength: (ty_bytes + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(ty_va),
+            },
+        };
+        // SAFETY: `ObjectDirectoryInformation` is plain `#[repr(C)]` data.
+        let rec_bytes =
+            unsafe { core::slice::from_raw_parts((&raw const rec).cast::<u8>(), rec_size) };
+        out[i * rec_size..(i + 1) * rec_size].copy_from_slice(rec_bytes);
+    }
+    // Note: slot `chosen` is already zeroed as the null terminator entry.
+    // SAFETY: per the contract; `copy_to_caller` probes user pointers.
+    if let Err(st) = unsafe { crate::svc::capture::copy_to_caller(buffer, &out, mode) } {
+        return st;
+    }
+    let next_ctx = (start_idx + chosen) as u32;
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(context, next_ctx, mode) } {
+        return st;
+    }
+    if !return_length.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(return_length, total as u32, mode) } {
+            return st;
+        }
+    }
+    if start_idx + chosen < entries.len() {
+        STATUS_MORE_ENTRIES
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// [`NtCreateSymbolicLinkObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesymboliclinkobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtCreateSymbolicLinkObject(
+    link_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    link_target: *const nk_ntabi::io::UNICODE_STRING,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    // SAFETY: per the contract.
+    let target = match unsafe { crate::svc::capture::capture_unicode_string(link_target, mode) } {
+        Ok(t) => t,
+        Err(st) => return st,
+    };
+    let name = oa.name.unwrap_or_default();
+    if name.is_empty() || target.is_empty() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    let start = match super::resolve_namespace_root(oa.root, false, mode) {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    let body = match super::create_link(
+        start.as_ref().map(ObRef::body),
+        &name,
+        &target,
+        oa.attributes & OBJ_PERMANENT != 0,
+    ) {
+        Ok(b) => b,
+        Err(st) => return st,
+    };
+    drop(start);
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `body` carries the caller reference from `create_link`.
+    unsafe {
+        let opened = handle::open_with(
+            body,
+            desired_access,
+            Attributes {
+                inherit: oa.attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        );
+        object::dereference(body);
+        match opened {
+            Ok(h) => {
+                if let Err(st) = crate::svc::capture::write(link_handle, h as *mut c_void, mode) {
+                    let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+                    return st;
+                }
+                STATUS_SUCCESS
+            }
+            Err(st) => st,
+        }
+    }
+}
+
+/// [`NtDuplicateObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwduplicateobject).
+///
+/// # Safety
+/// `target_handle` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtDuplicateObject(
+    source_process_handle: *mut c_void,
+    source_handle: *mut c_void,
+    target_process_handle: *mut c_void,
+    target_handle: *mut *mut c_void,
+    desired_access: u32,
+    handle_attributes: u32,
+    options: u32,
+) -> NTSTATUS {
+    const PROCESS_DUP_HANDLE: u32 = 0x0040;
+    const DUPLICATE_CLOSE_SOURCE: u32 = 0x1;
+    const DUPLICATE_SAME_ACCESS: u32 = 0x2;
+    const DUPLICATE_SAME_ATTRIBUTES: u32 = 0x4;
+    let mode = crate::svc::capture::mode();
+    let hmode = crate::svc::capture::handle_mode(mode);
+
+    let (src_proc, _) = match handle::reference_for(
+        source_process_handle as u64,
+        Some(&raw const object::PROCESS_TYPE),
+        PROCESS_DUP_HANDLE,
+        hmode,
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `src_proc` is a live `EPROCESS`.
+    let (obj, info) = match unsafe {
+        handle::reference_in(src_proc.body(), source_handle as u64, None, 0, hmode)
+    } {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+
+    let close_source = (options & DUPLICATE_CLOSE_SOURCE) != 0;
+    if target_process_handle.is_null() {
+        if close_source {
+            let _ = handle::close_for(source_handle as u64, hmode);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    let (dst_proc, _) = match handle::reference_for(
+        target_process_handle as u64,
+        Some(&raw const object::PROCESS_TYPE),
+        PROCESS_DUP_HANDLE,
+        hmode,
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let access = if (options & DUPLICATE_SAME_ACCESS) != 0 {
+        info.granted
+    } else {
+        desired_access
+    };
+    let attrs = if (options & DUPLICATE_SAME_ATTRIBUTES) != 0 {
+        info.attributes
+    } else {
+        Attributes {
+            inherit: (handle_attributes & OBJ_INHERIT) != 0,
+            protect_from_close: false,
+        }
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (handle_attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `dst_proc` and `obj` are live references.
+    let new_h =
+        match unsafe { handle::open_in(dst_proc.body(), obj.body(), access, attrs, kernel_handle) }
+        {
+            Ok(h) => h,
+            Err(st) => return st,
+        };
+    if close_source {
+        let _ = handle::close_for(source_handle as u64, hmode);
+    }
+    if !target_handle.is_null() {
+        // SAFETY: per the contract.
+        let wr = unsafe { crate::svc::capture::write(target_handle, new_h as *mut c_void, mode) };
+        if let Err(st) = wr {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtQueryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryobject).
+///
+/// # Safety
+/// Output buffer and `return_length` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQueryObject(
+    object_handle: *mut c_void,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    const OBJECT_BASIC_INFORMATION: u32 = 0;
+    const OBJECT_NAME_INFORMATION: u32 = 1;
+    const OBJECT_TYPE_INFORMATION: u32 = 2;
+    let mode = crate::svc::capture::mode();
+    let (held, info) = match handle::reference_for(
+        object_handle as u64,
+        None,
+        0,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    match class {
+        OBJECT_BASIC_INFORMATION => {
+            // `PUBLIC_OBJECT_BASIC_INFORMATION`: 56 bytes.
+            let mut buf = [0u8; 56];
+            buf[4..8].copy_from_slice(&info.granted.to_le_bytes());
+            buf[8..12].copy_from_slice(&1u32.to_le_bytes()); // HandleCount
+            buf[12..16].copy_from_slice(&1u32.to_le_bytes()); // PointerCount
+            if !return_length.is_null() {
+                // SAFETY: per the contract.
+                if let Err(st) = unsafe { crate::svc::capture::write(return_length, 56u32, mode) } {
+                    return st;
+                }
+            }
+            if length < 56 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(information, &buf, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        OBJECT_NAME_INFORMATION => {
+            // Return empty `UNICODE_STRING` when unnamed (16 bytes).
+            let needed = size_of::<UNICODE_STRING>() as u32 + 2;
+            if !return_length.is_null() {
+                // SAFETY: per the contract.
+                if let Err(st) = unsafe { crate::svc::capture::write(return_length, needed, mode) }
+                {
+                    return st;
+                }
+            }
+            if length < needed {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            let buf_va = information.addr() + size_of::<UNICODE_STRING>();
+            let us = UNICODE_STRING {
+                Length: 0,
+                MaximumLength: 2,
+                Buffer: core::ptr::with_exposed_provenance_mut(buf_va),
+            };
+            let mut out = alloc::vec![0u8; needed as usize];
+            // SAFETY: `UNICODE_STRING` is plain data.
+            out[..size_of::<UNICODE_STRING>()].copy_from_slice(unsafe {
+                core::slice::from_raw_parts(
+                    (&raw const us).cast::<u8>(),
+                    size_of::<UNICODE_STRING>(),
+                )
+            });
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(information, &out, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        OBJECT_TYPE_INFORMATION => {
+            // `PUBLIC_OBJECT_TYPE_INFORMATION`: 104 bytes header (`UNICODE_STRING` + 22 u32s) + UTF-16 name + NUL.
+            // SAFETY: `held` is a live object.
+            let name = unsafe { object::type_of(held.body()).name() };
+            let name_bytes = name.len() * 2;
+            let hdr_size = 104usize;
+            let total = hdr_size + name_bytes + 2;
+            if !return_length.is_null() {
+                // SAFETY: per the contract.
+                let wr = unsafe { crate::svc::capture::write(return_length, total as u32, mode) };
+                if let Err(st) = wr {
+                    return st;
+                }
+            }
+            if (length as usize) < total {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            let mut out = alloc::vec![0u8; total];
+            let us = UNICODE_STRING {
+                Length: name_bytes as u16,
+                MaximumLength: (name_bytes + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(information.addr() + hdr_size),
+            };
+            // SAFETY: `UNICODE_STRING` is plain data.
+            out[..size_of::<UNICODE_STRING>()].copy_from_slice(unsafe {
+                core::slice::from_raw_parts(
+                    (&raw const us).cast::<u8>(),
+                    size_of::<UNICODE_STRING>(),
+                )
+            });
+            for (i, &unit) in name.iter().enumerate() {
+                out[hdr_size + i * 2..hdr_size + i * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+            }
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(information, &out, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        _ => STATUS_INVALID_INFO_CLASS,
+    }
 }
 
 // ---- tests --------------------------------------------------------------
@@ -417,3 +1013,5 @@ pub fn directory_test() -> Result<u32, &'static str> {
     }
     Ok(17)
 }
+
+pub use crate::svc::zw::{ZwCreateDirectoryObject, ZwMakeTemporaryObject};

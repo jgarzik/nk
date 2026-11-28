@@ -21,6 +21,14 @@ struct Private {
     /// completion ([`ROOM_KNOWN`]).
     room: usize,
     flags: usize,
+    /// Special kernel APC used by `IofCompleteRequest` to run
+    /// `IopCompleteRequest` in `irp->Thread`'s context at `APC_LEVEL`.
+    apc: nk_ntabi::ke::KAPC,
+    /// File object held by an asynchronous IRP until completion runs.
+    held_file: *mut FILE_OBJECT,
+    /// Optional caller event object held by an asynchronous IRP until
+    /// completion runs.
+    held_event: *mut u8,
 }
 
 /// `Private.flags`: `room` has been set.
@@ -28,6 +36,11 @@ const ROOM_KNOWN: usize = 1;
 /// `Private.flags`: the requestor keeps the IRP when it completes, and
 /// frees it itself.
 const REQUESTOR_KEEPS: usize = 2;
+/// `Private.flags`: `UserIosb` is a user-mode pointer and must be written
+/// via fault-protected `mm::user::copy`.
+const USER_IOSB_IS_USER: usize = 4;
+/// `Private.flags`: also signal `OriginalFileObject->Event` on completion.
+const SIGNAL_FILE_EVENT: usize = 8;
 
 /// Make `packet_size` bytes at `irp` an IRP with `locations` stack
 /// locations, positioned one past the first of them, so that the
@@ -119,6 +132,38 @@ pub unsafe fn requestor_keeps(irp: *mut IRP) {
             kd::bugcheck(format_args!("IRP {irp:p} is not one NK allocated"));
         };
         (*private).flags |= REQUESTOR_KEEPS;
+    }
+}
+
+/// Configure asynchronous completion ownership on an NK-allocated IRP:
+/// `IopCompleteRequest` will signal `OriginalFileObject->Event` (when
+/// `signal_file_event` is set), write `UserIosb` via fault-protected user
+/// copy when `user_iosb` is set, drop the owned `held_event` and `held_file`
+/// references after signalling, and free `irp`.
+///
+/// # Safety
+/// `irp` came from [`alloc`] and has not been sent; ownership of one
+/// reference on each non-null `held_file` / `held_event` passes to `irp`.
+pub unsafe fn set_async_completion(
+    irp: *mut IRP,
+    held_file: *mut FILE_OBJECT,
+    held_event: *mut u8,
+    signal_file_event: bool,
+    user_iosb: bool,
+) {
+    // SAFETY: per the contract: the block is there.
+    unsafe {
+        let Some(private) = private(irp) else {
+            kd::bugcheck(format_args!("IRP {irp:p} is not one NK allocated"));
+        };
+        (*private).held_file = held_file;
+        (*private).held_event = held_event;
+        if signal_file_event {
+            (*private).flags |= SIGNAL_FILE_EVENT;
+        }
+        if user_iosb {
+            (*private).flags |= USER_IOSB_IS_USER;
+        }
     }
 }
 
@@ -351,7 +396,7 @@ pub unsafe extern "C" fn IoSetCompletionRoutineEx(
 ///
 /// # Safety
 /// `irp` must be a live IRP that the caller owns and has not completed.
-pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) {
+pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, priority_boost: i8) {
     // SAFETY: per the contract; each check below turns a broken contract
     // into a named bugcheck instead of memory corruption.
     unsafe {
@@ -419,41 +464,126 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
             (*irp).CurrentLocation += 1;
             (*irp).CurrentStackLocation = (*irp).CurrentStackLocation.add(1);
         }
-        finish(irp);
+        finish(irp, priority_boost);
     }
 }
 
-/// Final completion: hand the results to the requestor, tell it by its
-/// event if it left one, and free the IRP, as Windows' I/O manager frees
-/// a request that completes all the way up. NK's own requestor
-/// (`io::file`) keeps its IRPs instead ([`requestor_keeps`]) and frees
-/// them when it has seen the completion. Windows does this part in the
-/// requesting thread, by an APC; NK does it wherever the request was
-/// completed, which is at `DISPATCH_LEVEL` or below.
+/// Special kernel APC routine (`IopCompleteRequest`): finishes `irp` in the
+/// requesting thread's context at `APC_LEVEL`.
 ///
-/// The requestor's status block gets the request's final status, which
-/// is the fault if the results could not be copied to a user-mode
-/// requestor. The IRP keeps the status its driver completed it with:
-/// the requestor holds the driver to that one.
+/// # Safety
+/// Called by `ke::apc` with `system_argument1` holding the completing `*mut IRP`.
+unsafe extern "C" fn iop_complete_request(
+    _apc: *mut nk_ntabi::ke::KAPC,
+    _normal_routine: *mut Option<nk_ntabi::ke::PKNORMAL_ROUTINE>,
+    _normal_context: *mut *mut core::ffi::c_void,
+    system_argument1: *mut *mut core::ffi::c_void,
+    _system_argument2: *mut *mut core::ffi::c_void,
+) {
+    // SAFETY: `finish` queued this APC with the live IRP pointer in arg1.
+    unsafe {
+        let irp = (*system_argument1).cast::<IRP>();
+        complete_request(irp);
+    }
+}
+
+/// Rundown routine for an `IopCompleteRequest` APC whose target thread exited
+/// before delivery: releases buffers, MDLs, held references, and frees `irp`.
+///
+/// # Safety
+/// Called by `ke::apc::rundown` with `apc` inside a live `Private` block.
+unsafe extern "C" fn iop_complete_rundown(apc: *mut nk_ntabi::ke::KAPC) {
+    // SAFETY: `finish` stored the IRP pointer in `NormalContext`.
+    unsafe {
+        let irp = (*apc).NormalContext.cast::<IRP>();
+        complete_request(irp);
+    }
+}
+
+/// Final completion: associated and synchronous paging requests finish inline,
+/// as do threadless or non-pended `IRP_DEFER_IO_COMPLETION` requests. Every
+/// other NK-allocated IRP with an owning thread queues `IopCompleteRequest`
+/// as a special kernel APC to `irp->Thread` so `UserBuffer` / `UserIosb`
+/// copy-out runs in the requesting thread's address space at `APC_LEVEL`.
 ///
 /// # Safety
 /// `irp` must be a live IRP whose stack has fully unwound.
-unsafe fn finish(irp: *mut IRP) {
+unsafe fn finish(irp: *mut IRP, priority_boost: i8) {
     // SAFETY: per the contract.
     unsafe {
         if complete_associated(irp) || complete_paging(irp) {
             return;
         }
+        let thread = (*irp).Thread.cast::<ke::thread::Thread>();
+        let flags = (*irp).Flags;
+        let deferred_inline = flags & IRP_DEFER_IO_COMPLETION != 0 && (*irp).PendingReturned == 0;
+        let same_thread_blocked = !thread.is_null()
+            && (*irp).PendingReturned == 0
+            && thread == ke::thread::current()
+            && (ke::irql::current() >= nk_ntabi::pcr::APC_LEVEL
+                || ke::apc::special_apcs_blocked(thread));
+        if !thread.is_null()
+            && !deferred_inline
+            && !same_thread_blocked
+            && let Some(priv_block) = private(irp)
+        {
+            let apc = &raw mut (*priv_block).apc;
+            ke::apc::KeInitializeApc(
+                apc,
+                thread.cast(),
+                u32::from((*irp).ApcEnvironment as u8),
+                Some(iop_complete_request),
+                Some(iop_complete_rundown),
+                None,
+                KERNEL_MODE,
+                irp.cast(),
+            );
+            if ke::apc::KeInsertQueueApc(
+                apc,
+                irp.cast(),
+                core::ptr::null_mut(),
+                i32::from(priority_boost),
+            ) != 0
+            {
+                return;
+            }
+        }
+        complete_request(irp);
+    }
+}
+
+/// Stage 2 final completion (`IopCompleteRequest` body): copies buffered
+/// output back to `UserBuffer`, frees system buffer and MDLs, writes
+/// `UserIosb`, signals `UserEvent` (and `FileObject->Event` for async I/O),
+/// drops async held references, and frees `irp` unless `REQUESTOR_KEEPS`.
+///
+/// # Safety
+/// `irp` must be a live IRP whose stack has fully unwound.
+unsafe fn complete_request(irp: *mut IRP) {
+    // SAFETY: per the contract.
+    unsafe {
         let mut result = (*irp).IoStatus;
         let status = result.Status;
         let flags = (*irp).Flags;
         // Read before the requestor is told: it may free the IRP then.
-        let (room, keeps) = match private(irp) {
+        let (room, keeps, user_iosb, signal_file_event, held_file, held_event) = match private(irp)
+        {
             Some(private) => (
                 ((*private).flags & ROOM_KNOWN != 0).then_some((*private).room),
                 (*private).flags & REQUESTOR_KEEPS != 0,
+                (*private).flags & USER_IOSB_IS_USER != 0,
+                (*private).flags & SIGNAL_FILE_EVENT != 0,
+                (*private).held_file,
+                (*private).held_event,
             ),
-            None => (None, false),
+            None => (
+                None,
+                false,
+                false,
+                false,
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+            ),
         };
         if flags & IRP_BUFFERED_IO != 0 {
             let buffer = (*irp).SystemBuffer.cast::<u8>();
@@ -500,16 +630,39 @@ unsafe fn finish(irp: *mut IRP) {
         }
         super::mdl::release_chain(irp);
         if !(*irp).UserIosb.is_null() {
-            (*irp).UserIosb.write(result);
+            if user_iosb {
+                let _ = crate::mm::user::copy(
+                    (*irp).UserIosb.cast::<u8>(),
+                    (&raw const result).cast::<u8>(),
+                    size_of::<IO_STATUS_BLOCK>(),
+                );
+            } else {
+                (*irp).UserIosb.write(result);
+            }
         }
         let event = (*irp).UserEvent;
+        let orig_file = (*irp).OriginalFileObject;
+        let file_event = if signal_file_event && !orig_file.is_null() {
+            &raw mut (*orig_file).Event
+        } else {
+            core::ptr::null_mut()
+        };
         if !keeps {
             free(irp);
+        }
+        if !file_event.is_null() && file_event != event {
+            ke::wait::KeSetEvent(file_event, 0, 0);
         }
         if !event.is_null() {
             // Last: from here a requestor that keeps its IRP may free
             // it, and one that does not may let go of the event.
             ke::wait::KeSetEvent(event, 0, 0);
+        }
+        if !held_event.is_null() {
+            crate::ob::object::dereference(held_event);
+        }
+        if !held_file.is_null() {
+            crate::ob::object::dereference(held_file.cast());
         }
     }
 }
@@ -595,6 +748,7 @@ pub unsafe extern "C" fn IoMakeAssociatedIrp(master: *mut IRP, stack_size: i8) -
         (*irp).Flags = IRP_ASSOCIATED_IRP;
         (*irp).SystemBuffer = master.cast();
         (*irp).Thread = (*master).Thread;
+        (*irp).ApcEnvironment = (*master).ApcEnvironment;
         (*irp).RequestorMode = (*master).RequestorMode;
     }
     irp
@@ -669,7 +823,7 @@ pub unsafe extern "C" fn IoInitializeIrp(irp: *mut IRP, packet_size: u16, stack_
             irp.cast::<u8>()
                 .add(usize::from(packet_size))
                 .cast::<Private>()
-                .write(Private { room: 0, flags: 0 });
+                .write_bytes(0, 1);
         }
     }
 }

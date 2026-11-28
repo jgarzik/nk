@@ -35,6 +35,7 @@ pub fn map_physical(pa: u64, bytes: usize, protection: Protection) -> Option<*mu
     let prot = Prot {
         write: protection.write,
         exec: protection.exec,
+        user: false,
         device: protection.uncached || !super::is_ram(first, (pages * PAGE_SIZE) as u64),
     };
     let va = map::alloc_va(pages)?;

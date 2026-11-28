@@ -63,6 +63,60 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
     unsafe { body.cast::<Token>().drop_in_place() };
 }
 
+/// [`SeFilterToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sefiltertoken):
+/// create a restricted copy of `existing_token` (disabling requested SIDs when
+/// `sids_to_disable` is provided) and return a referenced pointer in `*new_token`.
+///
+/// # Safety
+/// `existing_token` is a live referenced token object; `new_token` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn SeFilterToken(
+    existing_token: *mut c_void,
+    _flags: u32,
+    sids_to_disable: *const c_void,
+    _privileges_to_delete: *const c_void,
+    _restricted_sids: *const c_void,
+    new_token: *mut *mut c_void,
+) -> NTSTATUS {
+    if existing_token.is_null() || new_token.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; `existing_token` is a live `Token` object.
+    let mut copy = unsafe { of(existing_token.cast()).clone() };
+    if !sids_to_disable.is_null() {
+        // `TOKEN_GROUPS`: `GroupCount: u32`, `_pad: u32`, `Groups: [SID_AND_ATTRIBUTES; GroupCount]`
+        // where each `SID_AND_ATTRIBUTES` is `(Sid: *const u8, Attributes: u32, _pad: u32)` (16 bytes).
+        // SAFETY: `sids_to_disable` is a kernel `TOKEN_GROUPS` supplied by the caller.
+        unsafe {
+            let count = sids_to_disable.cast::<u32>().read_unaligned() as usize;
+            let base = sids_to_disable.cast::<u8>().add(8);
+            for i in 0..count {
+                let sid_ptr = base.add(i * 16).cast::<*const u8>().read_unaligned();
+                if sid_ptr.is_null() {
+                    continue;
+                }
+                let sid_len = super::RtlLengthSid(sid_ptr.cast()) as usize;
+                if sid_len == 0 || sid_len > nk_se::SID_MAX_SIZE {
+                    continue;
+                }
+                let disable_bytes = core::slice::from_raw_parts(sid_ptr, sid_len);
+                for g in &mut copy.groups {
+                    if g.sid.as_slice() == disable_bytes {
+                        g.attributes &= !SE_GROUP_ENABLED;
+                        g.attributes |= SE_GROUP_USE_FOR_DENY_ONLY;
+                    }
+                }
+            }
+        }
+    }
+    let Some(body) = create(copy) else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
+    // SAFETY: per the contract; `create` returns one caller reference.
+    unsafe { new_token.write(body.cast()) };
+    STATUS_SUCCESS
+}
+
 /// The token in a token object.
 ///
 /// # Safety

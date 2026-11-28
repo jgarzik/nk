@@ -222,7 +222,7 @@ const INTERNAL_SLEEP_STUDY_ROUTINES: u32 = 0x3F;
 /// `input` points to `input_length` readable bytes and `output` to
 /// `output_length` writable bytes; a device object an internal request
 /// names is null or live.
-pub unsafe extern "C" fn ZwPowerInformation(
+pub unsafe extern "C" fn NtPowerInformation(
     level: i32,
     input: *mut c_void,
     input_length: u32,
@@ -270,8 +270,12 @@ pub unsafe extern "C" fn ZwPowerInformation(
             if input_length < 8 {
                 return STATUS_INVALID_PARAMETER;
             }
-            // SAFETY: the caller's buffer, of at least eight bytes.
-            let request = unsafe { input.cast::<u32>().read_unaligned() };
+            let mode = crate::svc::capture::mode();
+            // SAFETY: the caller's buffer, of at least eight bytes; fault-protected for `UserMode`.
+            let request = match unsafe { crate::svc::capture::read(input.cast::<u32>(), mode) } {
+                Ok(r) => r,
+                Err(st) => return st,
+            };
             match request {
                 INTERNAL_DRIPS_SET_DEVICE_FLAGS | INTERNAL_DRIPS_CLEAR_DEVICE_FLAGS => {
                     if input_length < INTERNAL_DRIPS_INPUT {
@@ -293,7 +297,13 @@ pub unsafe extern "C" fn ZwPowerInformation(
                         }
                     }
                 }
-                INTERNAL_SLEEP_STUDY_ROUTINES => STATUS_NOT_SUPPORTED,
+                INTERNAL_SLEEP_STUDY_ROUTINES
+                | 0x1F // PowerInternalBootStatGet
+                | 0x20 // PowerInternalBootStatSet
+                | 0x22 // PowerInternalBootStatCheckIntegrity
+                | 0x23 // PowerInternalBootStatRestoreDefaults
+                | 0x26 // PowerInternalBootStatUnlock
+                => STATUS_NOT_SUPPORTED,
                 request => crate::kd::bugcheck(format_args!(
                     "ZwPowerInformation: NK does not implement internal request {request:#x}"
                 )),
@@ -435,3 +445,5 @@ pub unsafe fn test_drips(
         )
     }
 }
+
+pub use crate::svc::zw::ZwPowerInformation;

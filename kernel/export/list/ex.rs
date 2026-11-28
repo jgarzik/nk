@@ -104,19 +104,12 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::work::IoSizeofWorkItem),
     export!(Implemented, ex::work::IoUninitializeWorkItem),
     export!(Implemented, ex::sysinfo::DbgkWerCaptureLiveKernelDump),
+    export!(Implemented, crate::ke::thread::ExGetPreviousMode),
     export!(Partial, ex::sysinfo::NtQuerySystemInformation),
     export!(Implemented, ex::sysinfo::PsGetVersion),
-    export_entry!(
-        Partial,
-        "ZwQuerySystemInformation",
-        ex::sysinfo::NtQuerySystemInformation
-    ),
+    export!(Partial, crate::svc::zw::ZwQuerySystemInformation),
     export!(Partial, ex::sysinfo_ex::NtQuerySystemInformationEx),
-    export_entry!(
-        Partial,
-        "ZwQuerySystemInformationEx",
-        ex::sysinfo_ex::NtQuerySystemInformationEx
-    ),
+    export!(Partial, crate::svc::zw::ZwQuerySystemInformationEx),
     export!(Implemented, ex::license::ZwQueryLicenseValue),
     export!(Partial, ex::firmware::ZwSetSystemInformation),
     export!(Implemented, ex::shim::KseQueryDeviceFlags),

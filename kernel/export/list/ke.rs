@@ -35,6 +35,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::time::KeQueryPerformanceCounter),
     export!(Implemented, ke::time::KeQueryTimeIncrement),
     export!(Implemented, ke::time::RtlGetEnabledExtendedFeatures),
+    export!(Implemented, ke::time::KeSaveExtendedProcessorState),
+    export!(Implemented, ke::time::KeRestoreExtendedProcessorState),
     export!(Implemented, ke::bugcheck::KeRegisterBugCheckReasonCallback),
     export!(Implemented, ke::kspin::KeReleaseInStackQueuedSpinLock),
     export!(Implemented, ke::kspin::KeReleaseSpinLock),

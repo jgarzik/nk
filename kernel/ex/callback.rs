@@ -168,27 +168,22 @@ pub unsafe extern "C" fn ExCreateCallback(
     // An object of that name, if there is one.
     let mut status = STATUS_UNSUCCESSFUL;
     if let Some(path) = &path {
-        let start = (!root.is_null()).then_some(root.cast::<u8>());
-        match ob::lookup(start, path) {
-            Ok((body, rest)) => {
-                // SAFETY: `lookup` returned the object referenced.
-                let is_callback = unsafe {
-                    core::ptr::eq(
-                        object::type_of(body.body()),
-                        &raw const object::CALLBACK_TYPE,
-                    )
-                };
-                if rest.is_empty() && is_callback {
-                    // SAFETY: per the contract; the reference is the
-                    // driver's.
-                    unsafe { callback_object.write_unaligned(body.into_raw().cast()) };
-                    return STATUS_SUCCESS;
-                }
-                status = if rest.is_empty() {
-                    STATUS_OBJECT_TYPE_MISMATCH
-                } else {
-                    STATUS_OBJECT_PATH_NOT_FOUND
-                };
+        // SAFETY: no parse context is needed for opening a callback object.
+        match unsafe {
+            ob::open_by_name(
+                root,
+                path,
+                attributes,
+                Some(&object::CALLBACK_TYPE),
+                0,
+                nk_ntabi::io::KERNEL_MODE,
+                core::ptr::null_mut(),
+            )
+        } {
+            Ok((body, _)) => {
+                // SAFETY: per the contract; the reference is the driver's.
+                unsafe { callback_object.write_unaligned(body.into_raw().cast()) };
+                return STATUS_SUCCESS;
             }
             Err(why) => status = why,
         }

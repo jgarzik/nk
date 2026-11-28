@@ -9,7 +9,6 @@
 
 #![allow(non_snake_case)]
 
-use super::directory::resolve_root;
 use super::handle::{self, OBJ_KERNEL_HANDLE};
 use super::object::{self, ObRef, ObjectType};
 use crate::ke::wait;
@@ -17,7 +16,7 @@ use core::ffi::c_void;
 use nk_ntabi::io::KERNEL_MODE;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
-use nk_ob::handles::{Attributes, Mode};
+use nk_ob::handles::Attributes;
 
 /// `SYNCHRONIZE`: the right to wait on an object.
 const SYNCHRONIZE: u32 = 0x0010_0000;
@@ -28,8 +27,6 @@ const OBJ_PERMANENT: u32 = 0x10;
 const OBJ_EXCLUSIVE: u32 = 0x20;
 const OBJ_OPENIF: u32 = 0x80;
 const OBJ_OPENLINK: u32 = 0x100;
-/// `OBJ_VALID_ATTRIBUTES` (`wdm.h`): every attribute there is.
-const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 
 /// [`ZwCreateEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwcreateevent):
 /// a new event (`event_type` 0 for a notification event, 1 for a
@@ -51,7 +48,7 @@ const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 /// # Safety
 /// `event_handle` points to room for a handle; `object_attributes` is
 /// null or points to an `OBJECT_ATTRIBUTES`.
-pub unsafe extern "C" fn ZwCreateEvent(
+pub unsafe extern "C" fn NtCreateEvent(
     event_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -61,32 +58,26 @@ pub unsafe extern "C" fn ZwCreateEvent(
     if event_type > 1 {
         return STATUS_INVALID_PARAMETER;
     }
-    let (mut root, mut name, mut attributes) = (core::ptr::null_mut(), alloc::vec::Vec::new(), 0);
-    if !object_attributes.is_null() {
-        // SAFETY: per the contract; the driver's memory, read field by
-        // field through its pointer.
-        let (length, object_name, given) = unsafe {
-            root = (&raw const (*object_attributes).RootDirectory).read_unaligned();
-            (
-                (&raw const (*object_attributes).Length).read_unaligned(),
-                (&raw const (*object_attributes).ObjectName).read_unaligned(),
-                (&raw const (*object_attributes).Attributes).read_unaligned(),
-            )
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let oa =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
         };
-        if length as usize != size_of::<OBJECT_ATTRIBUTES>()
-            || given & !OBJ_VALID_ATTRIBUTES != 0
-            || given & OBJ_OPENLINK != 0
-        {
-            return STATUS_INVALID_PARAMETER;
+    let (root, name, attributes) = match oa {
+        Some(oa) => {
+            if oa.attributes & OBJ_OPENLINK != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if oa.attributes & OBJ_EXCLUSIVE != 0 {
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            (oa.root, oa.name.unwrap_or_default(), oa.attributes)
         }
-        if given & OBJ_EXCLUSIVE != 0 {
-            return STATUS_NOT_IMPLEMENTED;
-        }
-        // SAFETY: per the contract.
-        name = unsafe { crate::rtl::copy_unicode(object_name) };
-        attributes = given;
-    }
-    let start = match resolve_root(root, name.is_empty()) {
+        None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
+    };
+    let start = match super::resolve_namespace_root(root, name.is_empty(), mode) {
         Ok(start) => start,
         Err(status) => return status,
     };
@@ -103,6 +94,7 @@ pub unsafe extern "C" fn ZwCreateEvent(
         Ok(made) => made,
         Err(status) => return status,
     };
+    let kernel_handle = !crate::svc::capture::is_user(mode);
     // SAFETY: the reference `create_event` returned is given up once
     // the handle, if there is one, holds the event.
     unsafe {
@@ -113,7 +105,7 @@ pub unsafe extern "C" fn ZwCreateEvent(
                 inherit: attributes & OBJ_INHERIT != 0,
                 protect_from_close: false,
             },
-            true,
+            kernel_handle,
         );
         if opened.is_err() && !existed && !name.is_empty() {
             // No handle was ever open: undo the namespace entry.
@@ -122,7 +114,12 @@ pub unsafe extern "C" fn ZwCreateEvent(
         object::dereference(body);
         match opened {
             Ok(opened) => {
-                event_handle.write_unaligned(opened as *mut c_void);
+                if let Err(status) =
+                    crate::svc::capture::write(event_handle, opened as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(opened, crate::svc::capture::handle_mode(mode));
+                    return status;
+                }
                 if existed {
                     STATUS_OBJECT_NAME_EXISTS
                 } else {
@@ -146,68 +143,67 @@ pub unsafe extern "C" fn ZwCreateEvent(
 /// # Safety
 /// `event_handle` points to room for a handle; `object_attributes`
 /// points to an `OBJECT_ATTRIBUTES` whose name is a counted string.
-pub unsafe extern "C" fn ZwOpenEvent(
+pub unsafe extern "C" fn NtOpenEvent(
     event_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
-    if object_attributes.is_null() {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
+        })
+    else {
         return STATUS_INVALID_PARAMETER;
-    }
-    // SAFETY: per the contract; the driver's memory, read field by field
-    // through its pointer.
-    let (length, root, name, given) = unsafe {
-        (
-            (&raw const (*object_attributes).Length).read_unaligned(),
-            (&raw const (*object_attributes).RootDirectory).read_unaligned(),
-            (&raw const (*object_attributes).ObjectName).read_unaligned(),
-            (&raw const (*object_attributes).Attributes).read_unaligned(),
-        )
     };
-    if length as usize != size_of::<OBJECT_ATTRIBUTES>()
-        || given & !OBJ_VALID_ATTRIBUTES != 0
-        || given & OBJ_OPENLINK != 0
-    {
+    if oa.attributes & OBJ_OPENLINK != 0 {
         return STATUS_INVALID_PARAMETER;
     }
-    if name.is_null() {
+    let Some(wide) = oa.name else {
         return STATUS_OBJECT_NAME_INVALID;
-    }
-    // SAFETY: per the contract.
-    let wide = unsafe { crate::rtl::copy_unicode(name) };
-    let start = match resolve_root(root, wide.is_empty()) {
-        Ok(start) => start,
-        Err(status) => return status,
     };
-    let found = super::lookup(start.as_ref().map(ObRef::body), &wide);
-    drop(start);
-    let (held, rest) = match found {
+    let root = oa.root;
+    let given = oa.attributes;
+    // SAFETY: no parse context is needed for opening an event object.
+    let (held, granted) = match unsafe {
+        super::open_by_name(
+            root,
+            &wide,
+            given,
+            Some(&object::EVENT_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
         Ok(found) => found,
         Err(status) => return status,
     };
     let body = held.body();
+    let kernel_handle = !crate::svc::capture::is_user(mode);
     // SAFETY: the look-up's reference, given up once the handle, if
     // there is one, holds the event.
     unsafe {
-        if !rest.is_empty() {
-            return STATUS_OBJECT_NAME_NOT_FOUND;
-        }
-        if !core::ptr::eq(object::type_of(body), &raw const object::EVENT_TYPE) {
-            return STATUS_OBJECT_TYPE_MISMATCH;
-        }
         let opened = handle::open_with(
             body,
-            desired_access,
+            granted,
             Attributes {
                 inherit: given & OBJ_INHERIT != 0,
                 protect_from_close: false,
             },
-            true,
+            kernel_handle,
         );
         drop(held);
         match opened {
             Ok(opened) => {
-                event_handle.write_unaligned(opened as *mut c_void);
+                if let Err(status) =
+                    crate::svc::capture::write(event_handle, opened as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(opened, crate::svc::capture::handle_mode(mode));
+                    return status;
+                }
                 STATUS_SUCCESS
             }
             Err(status) => status,
@@ -222,6 +218,9 @@ fn waitable(ty: &ObjectType) -> bool {
         &raw const object::EVENT_TYPE,
         &raw const object::THREAD_TYPE,
         &raw const object::PROCESS_TYPE,
+        &raw const object::TIMER_TYPE,
+        &raw const object::MUTANT_TYPE,
+        &raw const object::SEMAPHORE_TYPE,
     ]
     .iter()
     .any(|&known| core::ptr::eq(ty, known))
@@ -240,19 +239,33 @@ fn waitable(ty: &ObjectType) -> bool {
 ///
 /// # Safety
 /// `timeout` is null or points to a due time.
-pub unsafe extern "C" fn ZwWaitForSingleObject(
+pub unsafe extern "C" fn NtWaitForSingleObject(
     handle: *mut c_void,
     alertable: u8,
     timeout: *const i64,
 ) -> NTSTATUS {
-    let held = match handle::reference_for(handle as u64, None, SYNCHRONIZE, Mode::Kernel) {
+    let mode = crate::svc::capture::mode();
+    let timeout_val = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract; fault-protected for `UserMode`.
+        match unsafe { crate::svc::capture::read(timeout, mode) } {
+            Ok(v) => Some(v),
+            Err(status) => return status,
+        }
+    };
+    let held = match handle::reference_for(
+        handle as u64,
+        None,
+        SYNCHRONIZE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
         Ok((held, _)) => held,
         Err(status) => return status,
     };
     let body = held.body();
     // SAFETY: the object is referenced until the wait is over; its
-    // type says its body is a dispatcher object; per the contract for
-    // the timeout.
+    // type says its body is a dispatcher object.
     unsafe {
         let ty = object::type_of(body);
         if !waitable(ty) {
@@ -264,9 +277,606 @@ pub unsafe extern "C" fn ZwWaitForSingleObject(
                  implemented"
             ));
         }
-        let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
-        wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0) as NTSTATUS
+        wait::wait_as(Some(body.cast()), timeout_val, mode, alertable != 0) as NTSTATUS
     }
+}
+
+const EVENT_MODIFY_STATE: u32 = 0x2;
+
+/// [`NtSetEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetevent).
+///
+/// # Safety
+/// `previous_state` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtSetEvent(
+    event_handle: *mut c_void,
+    previous_state: *mut i32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        event_handle as u64,
+        Some(&raw const object::EVENT_TYPE),
+        EVENT_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` keeps the `KEVENT` alive.
+    let prev = unsafe { wait::KeSetEvent(held.body().cast(), 0, 0) };
+    if !previous_state.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(previous_state, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtResetEvent`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntresetevent).
+///
+/// # Safety
+/// `previous_state` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtResetEvent(
+    event_handle: *mut c_void,
+    previous_state: *mut i32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        event_handle as u64,
+        Some(&raw const object::EVENT_TYPE),
+        EVENT_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` keeps the `KEVENT` alive.
+    let prev = unsafe { wait::KeResetEvent(held.body().cast()) };
+    if !previous_state.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(previous_state, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// `NtSetEventBoostPriority`: set event with priority boost (NK does not apply boosts).
+pub extern "C" fn NtSetEventBoostPriority(event_handle: *mut c_void) -> NTSTATUS {
+    // SAFETY: `previous_state` is null.
+    unsafe { NtSetEvent(event_handle, core::ptr::null_mut()) }
+}
+
+/// `NtClearEvent`: reset an event without returning its previous state.
+pub extern "C" fn NtClearEvent(event_handle: *mut c_void) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        event_handle as u64,
+        Some(&raw const object::EVENT_TYPE),
+        EVENT_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` keeps the `KEVENT` alive.
+    unsafe { wait::KeClearEvent(held.body().cast()) };
+    STATUS_SUCCESS
+}
+
+/// [`NtWaitForMultipleObjects`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntwaitformultipleobjects).
+///
+/// # Safety
+/// `handles` and `timeout` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtWaitForMultipleObjects(
+    count: u32,
+    handles: *const *mut c_void,
+    wait_type: u32,
+    alertable: u8,
+    timeout: *const i64,
+) -> NTSTATUS {
+    const MAX_WAIT: usize = 64;
+    let n = count as usize;
+    if n == 0 || n > MAX_WAIT || wait_type > 1 || handles.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mode = crate::svc::capture::mode();
+    let timeout_val = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(timeout, mode) } {
+            Ok(v) => Some(v),
+            Err(st) => return st,
+        }
+    };
+    let mut raw_handles = alloc::vec![core::ptr::null_mut::<c_void>(); n];
+    // SAFETY: per the contract; `copy_from_caller` probes user pointers.
+    let cp = unsafe {
+        crate::svc::capture::copy_from_caller(
+            core::slice::from_raw_parts_mut(
+                raw_handles.as_mut_ptr().cast::<u8>(),
+                n * size_of::<*mut c_void>(),
+            ),
+            handles.cast::<u8>(),
+            mode,
+        )
+    };
+    if let Err(st) = cp {
+        return st;
+    }
+    let hmode = crate::svc::capture::handle_mode(mode);
+    let mut refs: alloc::vec::Vec<ObRef> = alloc::vec::Vec::with_capacity(n);
+    let mut ptrs: alloc::vec::Vec<*mut c_void> = alloc::vec::Vec::with_capacity(n);
+    for &h in &raw_handles {
+        let (held, _) = match handle::reference_for(h as u64, None, SYNCHRONIZE, hmode) {
+            Ok(found) => found,
+            Err(st) => return st,
+        };
+        // SAFETY: `held` is a live object.
+        let ty = unsafe { object::type_of(held.body()) };
+        if !waitable(ty) {
+            return STATUS_INVALID_HANDLE;
+        }
+        let p = held.body().cast::<c_void>();
+        if wait_type == 0 && ptrs.contains(&p) {
+            return STATUS_INVALID_PARAMETER_2;
+        }
+        ptrs.push(p);
+        refs.push(held);
+    }
+    // SAFETY: `KWAIT_BLOCK` is all-zero valid.
+    let mut blocks: [nk_ntabi::ke::KWAIT_BLOCK; MAX_WAIT] = unsafe { core::mem::zeroed() };
+    let due_ptr = timeout_val
+        .as_ref()
+        .map_or(core::ptr::null(), core::ptr::from_ref);
+    // SAFETY: `refs` keeps all dispatcher objects alive for the duration of the wait;
+    // `blocks` has `MAX_WAIT >= n` entries.
+    let status = unsafe {
+        wait::KeWaitForMultipleObjects(
+            count,
+            ptrs.as_ptr(),
+            wait_type,
+            0,
+            mode,
+            alertable,
+            due_ptr,
+            blocks.as_mut_ptr(),
+        )
+    };
+    drop(refs);
+    status
+}
+
+/// [`NtCreateMutant`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntcreatemutant).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtCreateMutant(
+    mutant_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    initial_owner: u8,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let oa =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        };
+    let (root, name, attributes) = match oa {
+        Some(oa) => {
+            if oa.attributes & OBJ_OPENLINK != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if oa.attributes & OBJ_EXCLUSIVE != 0 {
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            (oa.root, oa.name.unwrap_or_default(), oa.attributes)
+        }
+        None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
+    };
+    let start = match super::resolve_namespace_root(root, name.is_empty(), mode) {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    let leaf_name = super::leaf(&name);
+    let body = if name.is_empty() {
+        object::create(&object::MUTANT_TYPE, size_of::<nk_ntabi::ke::KMUTANT>())
+    } else {
+        object::create_named(
+            &object::MUTANT_TYPE,
+            size_of::<nk_ntabi::ke::KMUTANT>(),
+            leaf_name,
+        )
+    };
+    let Some(body) = body else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
+    // SAFETY: fresh zeroed `KMUTANT` storage.
+    unsafe { crate::ke::mutex::init_mutant(body.cast(), initial_owner != 0) };
+    let (final_body, existed) = if name.is_empty() {
+        (body, false)
+    } else {
+        // SAFETY: `body` is a fresh named `MUTANT_TYPE` object.
+        match unsafe {
+            super::insert_named(
+                start.as_ref().map(ObRef::body),
+                &name,
+                body,
+                &object::MUTANT_TYPE,
+                attributes & OBJ_PERMANENT != 0,
+                attributes & OBJ_OPENIF != 0,
+            )
+        } {
+            Ok((b, ex)) => {
+                if ex {
+                    // Existing object returned; release initial ownership if we took it on `body`.
+                    if initial_owner != 0 {
+                        // SAFETY: `body` was initialized above.
+                        let _ = unsafe { crate::ke::mutex::try_release_mutant(body.cast()) };
+                    }
+                    // SAFETY: `body` was not inserted.
+                    unsafe { object::dereference(body) };
+                }
+                (b, ex)
+            }
+            Err(st) => {
+                if initial_owner != 0 {
+                    // SAFETY: `body` was initialized above.
+                    let _ = unsafe { crate::ke::mutex::try_release_mutant(body.cast()) };
+                }
+                // SAFETY: `body` was not inserted.
+                unsafe { object::dereference(body) };
+                return st;
+            }
+        }
+    };
+    drop(start);
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `final_body` carries one caller reference.
+    unsafe {
+        let opened = handle::open_with(
+            final_body,
+            desired_access,
+            Attributes {
+                inherit: attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        );
+        if opened.is_err() && !existed && !name.is_empty() {
+            super::make_temporary(final_body);
+        }
+        object::dereference(final_body);
+        match opened {
+            Ok(h) => {
+                if let Err(st) = crate::svc::capture::write(mutant_handle, h as *mut c_void, mode) {
+                    let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+                    return st;
+                }
+                if existed {
+                    STATUS_OBJECT_NAME_EXISTS
+                } else {
+                    STATUS_SUCCESS
+                }
+            }
+            Err(st) => st,
+        }
+    }
+}
+
+/// `NtOpenMutant`: open an existing named `MUTANT_TYPE` object.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenMutant(
+    mutant_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let Some(wide) = oa.name else {
+        return STATUS_OBJECT_NAME_INVALID;
+    };
+    // SAFETY: `parse_context` is null for mutant opens.
+    let (held, granted) = match unsafe {
+        super::open_by_name(
+            oa.root,
+            &wide,
+            oa.attributes,
+            Some(&object::MUTANT_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `held` keeps the mutant alive while opening the handle.
+    let h = match unsafe {
+        handle::open_with(
+            held.body(),
+            granted,
+            Attributes {
+                inherit: oa.attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(mutant_handle, h as *mut c_void, mode) } {
+        let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// `NtReleaseMutant`: release a `MUTANT_TYPE` object owned by the calling thread.
+///
+/// # Safety
+/// `previous_count` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtReleaseMutant(
+    mutant_handle: *mut c_void,
+    previous_count: *mut i32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        mutant_handle as u64,
+        Some(&raw const object::MUTANT_TYPE),
+        0,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` is a live `KMUTANT`.
+    let prev = match unsafe { crate::ke::mutex::try_release_mutant(held.body().cast()) } {
+        Ok(p) => p,
+        Err(st) => return st,
+    };
+    if !previous_count.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(previous_count, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// `NtCreateSemaphore`: create a `SEMAPHORE_TYPE` (`KSEMAPHORE`) object.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtCreateSemaphore(
+    semaphore_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    initial_count: i32,
+    maximum_count: i32,
+) -> NTSTATUS {
+    if maximum_count <= 0 || initial_count < 0 || initial_count > maximum_count {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let oa =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        };
+    let (root, name, attributes) = match oa {
+        Some(oa) => {
+            if oa.attributes & OBJ_OPENLINK != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if oa.attributes & OBJ_EXCLUSIVE != 0 {
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            (oa.root, oa.name.unwrap_or_default(), oa.attributes)
+        }
+        None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
+    };
+    let start = match super::resolve_namespace_root(root, name.is_empty(), mode) {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    let leaf_name = super::leaf(&name);
+    let body = if name.is_empty() {
+        object::create(
+            &object::SEMAPHORE_TYPE,
+            size_of::<nk_ntabi::ke::KSEMAPHORE>(),
+        )
+    } else {
+        object::create_named(
+            &object::SEMAPHORE_TYPE,
+            size_of::<nk_ntabi::ke::KSEMAPHORE>(),
+            leaf_name,
+        )
+    };
+    let Some(body) = body else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
+    // SAFETY: fresh zeroed `KSEMAPHORE` storage.
+    unsafe { wait::KeInitializeSemaphore(body.cast(), initial_count, maximum_count) };
+    let (final_body, existed) = if name.is_empty() {
+        (body, false)
+    } else {
+        // SAFETY: `body` is a fresh named `SEMAPHORE_TYPE` object.
+        match unsafe {
+            super::insert_named(
+                start.as_ref().map(ObRef::body),
+                &name,
+                body,
+                &object::SEMAPHORE_TYPE,
+                attributes & OBJ_PERMANENT != 0,
+                attributes & OBJ_OPENIF != 0,
+            )
+        } {
+            Ok((b, ex)) => {
+                if ex {
+                    // SAFETY: `body` was not inserted.
+                    unsafe { object::dereference(body) };
+                }
+                (b, ex)
+            }
+            Err(st) => {
+                // SAFETY: `body` was not inserted.
+                unsafe { object::dereference(body) };
+                return st;
+            }
+        }
+    };
+    drop(start);
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `final_body` carries one caller reference.
+    unsafe {
+        let opened = handle::open_with(
+            final_body,
+            desired_access,
+            Attributes {
+                inherit: attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        );
+        if opened.is_err() && !existed && !name.is_empty() {
+            super::make_temporary(final_body);
+        }
+        object::dereference(final_body);
+        match opened {
+            Ok(h) => {
+                if let Err(st) =
+                    crate::svc::capture::write(semaphore_handle, h as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+                    return st;
+                }
+                if existed {
+                    STATUS_OBJECT_NAME_EXISTS
+                } else {
+                    STATUS_SUCCESS
+                }
+            }
+            Err(st) => st,
+        }
+    }
+}
+
+/// `NtOpenSemaphore`: open an existing named `SEMAPHORE_TYPE` object.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenSemaphore(
+    semaphore_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let Some(wide) = oa.name else {
+        return STATUS_OBJECT_NAME_INVALID;
+    };
+    // SAFETY: `parse_context` is null for semaphore opens.
+    let (held, granted) = match unsafe {
+        super::open_by_name(
+            oa.root,
+            &wide,
+            oa.attributes,
+            Some(&object::SEMAPHORE_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `held` keeps the semaphore alive while opening the handle.
+    let h = match unsafe {
+        handle::open_with(
+            held.body(),
+            granted,
+            Attributes {
+                inherit: oa.attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(semaphore_handle, h as *mut c_void, mode) }
+    {
+        let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// `NtReleaseSemaphore`: increment a `SEMAPHORE_TYPE` object's count.
+///
+/// # Safety
+/// `previous_count` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtReleaseSemaphore(
+    semaphore_handle: *mut c_void,
+    release_count: i32,
+    previous_count: *mut i32,
+) -> NTSTATUS {
+    const SEMAPHORE_MODIFY_STATE: u32 = 0x0002;
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        semaphore_handle as u64,
+        Some(&raw const object::SEMAPHORE_TYPE),
+        SEMAPHORE_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` is a live `KSEMAPHORE`.
+    let prev = match unsafe { wait::try_release_semaphore(held.body().cast(), release_count) } {
+        Ok(p) => p,
+        Err(st) => return st,
+    };
+    if !previous_count.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(previous_count, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
 }
 
 // ---- tests --------------------------------------------------------------
@@ -480,3 +1090,5 @@ pub fn self_test() -> Result<u32, &'static str> {
     }
     Ok(16)
 }
+
+pub use crate::svc::zw::{ZwCreateEvent, ZwOpenEvent, ZwWaitForSingleObject};

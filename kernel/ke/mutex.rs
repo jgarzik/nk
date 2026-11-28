@@ -57,18 +57,43 @@ pub unsafe fn init_thread(thread: *mut thread::Thread) {
     }
 }
 
-/// Stop the system if `thread`, which has ended, still holds a mutex:
-/// what Windows does for a mutex made by `KeInitializeMutex`.
+/// Abandon any user-mode (`ApcDisable == 0`) mutants still held by `thread`
+/// on exit, and bugcheck if any kernel mutex (`ApcDisable != 0`, from
+/// `KeInitializeMutex`) is still held — matching Windows' `KeRundownThread`.
 ///
 /// # Safety
 /// `thread` is a thread that has ended and not yet been freed.
 pub unsafe fn check_none_held(thread: *mut thread::Thread) {
     let head = mutant_list(thread);
     // SAFETY: per the contract.
-    if unsafe { (*head).Flink } != head {
-        crate::kd::bugcheck(format_args!(
-            "0x0000004E THREAD_TERMINATE_HELD_MUTEX: a thread ended holding a mutex"
-        ));
+    unsafe {
+        loop {
+            let entry = (*head).Flink;
+            if entry == head {
+                break;
+            }
+            let mutant = entry
+                .cast::<u8>()
+                .sub(core::mem::offset_of!(KMUTANT, MutantListEntry))
+                .cast::<KMUTANT>();
+            if (&raw const (*mutant).ApcDisable).read() != 0 {
+                crate::kd::bugcheck(format_args!(
+                    "0x0000004E THREAD_TERMINATE_HELD_MUTEX: a thread ended holding a mutex"
+                ));
+            }
+            let header = mutant.cast::<DISPATCHER_HEADER>();
+            let woken = {
+                let _lock = ObjectLock::take(header);
+                let LIST_ENTRY { Flink, Blink } = (&raw const (*mutant).MutantListEntry).read();
+                (&raw mut (*Blink).Flink).write(Flink);
+                (&raw mut (*Flink).Blink).write(Blink);
+                (&raw mut (*mutant).OwnerThread).write(core::ptr::null_mut());
+                (&raw mut (*mutant).MutantFlags).write(1);
+                object::signal(header).store(1, Ordering::Relaxed);
+                object::satisfy(header)
+            };
+            woken.ready();
+        }
     }
 }
 
@@ -170,6 +195,64 @@ pub unsafe extern "C" fn KeReleaseMutex(mutex: *mut KMUTANT, _wait: u8) -> i32 {
         // back with the mutex's lock dropped.
         super::apc::kernel_disable_raised(released);
         previous
+    }
+}
+
+/// Initialize a user-mode `KMUTANT` (`KeInitializeMutant`: `ApcDisable = 0`),
+/// optionally acquiring it immediately for the current thread if `initial_owner`
+/// is true.
+///
+/// # Safety
+/// `mutant` points to writable storage for a `KMUTANT`.
+pub unsafe fn init_mutant(mutant: *mut KMUTANT, initial_owner: bool) {
+    // SAFETY: per the contract.
+    unsafe {
+        mutant.cast::<u8>().write_bytes(0, size_of::<KMUTANT>());
+        let header = &raw mut (*mutant).Header;
+        (&raw mut (*header).Type).write(MUTANT_OBJECT);
+        (&raw mut (*header).SignalState).write(1);
+        object::init_wait_list(header);
+        (&raw mut (*mutant).ApcDisable).write(0);
+        if initial_owner {
+            let _lock = ObjectLock::take(header);
+            taken(mutant, thread::current());
+        }
+    }
+}
+
+/// Release a `KMUTANT` for the calling thread without bugchecking on ownership
+/// mismatch (returns `Err(STATUS_MUTANT_NOT_OWNED)` for `NtReleaseMutant`).
+///
+/// # Safety
+/// `mutant` is a live, initialized `KMUTANT`.
+pub unsafe fn try_release_mutant(mutant: *mut KMUTANT) -> Result<i32, nk_ntabi::status::NTSTATUS> {
+    let me = thread::current();
+    // SAFETY: per the contract.
+    unsafe {
+        let header = mutant.cast::<DISPATCHER_HEADER>();
+        let mut released = 0;
+        let (previous, woken) = {
+            let _lock = ObjectLock::take(header);
+            if owner(mutant) != me {
+                return Err(nk_ntabi::status::STATUS_MUTANT_NOT_OWNED);
+            }
+            let previous = object::signal(header).fetch_add(1, Ordering::Relaxed);
+            if previous != 0 {
+                (previous, object::Woken::none())
+            } else {
+                (&raw mut (*mutant).OwnerThread).write(core::ptr::null_mut());
+                let LIST_ENTRY { Flink, Blink } = (&raw const (*mutant).MutantListEntry).read();
+                (&raw mut (*Blink).Flink).write(Flink);
+                (&raw mut (*Flink).Blink).write(Blink);
+                released = i16::from((&raw const (*mutant).ApcDisable).read());
+                (previous, object::satisfy(header))
+            }
+        };
+        woken.ready();
+        if released != 0 {
+            super::apc::kernel_disable_raised(released);
+        }
+        Ok(previous)
     }
 }
 

@@ -163,6 +163,7 @@ pub const IRP_MJ_QUERY_INFORMATION: u8 = 0x05;
 pub const IRP_MJ_SET_INFORMATION: u8 = 0x06;
 pub const IRP_MJ_FLUSH_BUFFERS: u8 = 0x09;
 pub const IRP_MJ_QUERY_VOLUME_INFORMATION: u8 = 0x0A;
+pub const IRP_MJ_DIRECTORY_CONTROL: u8 = 0x0C;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_INTERNAL_DEVICE_CONTROL: u8 = 0x0F;
@@ -172,6 +173,12 @@ pub const IRP_MJ_CREATE_MAILSLOT: u8 = 0x13;
 pub const IRP_MJ_POWER: u8 = 0x16;
 pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
 pub const IRP_MJ_PNP: u8 = 0x1B;
+/// Minor function for `IRP_MJ_DIRECTORY_CONTROL` directory queries.
+pub const IRP_MN_QUERY_DIRECTORY: u8 = 0x01;
+/// Stack location flags for `IRP_MN_QUERY_DIRECTORY`.
+pub const SL_RESTART_SCAN: u8 = 0x01;
+pub const SL_RETURN_SINGLE_ENTRY: u8 = 0x02;
+pub const SL_INDEX_SPECIFIED: u8 = 0x04;
 /// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
 /// its registration, the older way and the newer.
 pub const IRP_MN_REGINFO: u8 = 0x08;
@@ -514,10 +521,25 @@ pub struct DEVOBJ_EXTENSION {
 
 /// `FILE_OBJECT.Flags`
 pub const FO_SYNCHRONOUS_IO: u32 = 0x0000_0002;
+pub const FO_ALERTABLE_IO: u32 = 0x0000_0004;
 /// The last handle has been closed and the cleanup request completed.
 pub const FO_CLEANUP_COMPLETE: u32 = 0x0000_4000;
 /// A handle has been made for the file object.
 pub const FO_HANDLE_CREATED: u32 = 0x0004_0000;
+
+/// `FS_INFORMATION_CLASS` (`wdm.h` / `ntifs.h`).
+pub const FILE_FS_VOLUME_INFORMATION: u32 = 1;
+pub const FILE_FS_SIZE_INFORMATION: u32 = 3;
+pub const FILE_FS_DEVICE_INFORMATION: u32 = 4;
+pub const FILE_FS_ATTRIBUTE_INFORMATION: u32 = 5;
+pub const FILE_FS_FULL_SIZE_INFORMATION: u32 = 7;
+
+/// Volume file-system control codes (`winioctl.h` / `ntifs.h`).
+pub const FSCTL_LOCK_VOLUME: u32 = 0x0009_0018;
+pub const FSCTL_UNLOCK_VOLUME: u32 = 0x0009_001C;
+pub const FSCTL_DISMOUNT_VOLUME: u32 = 0x0009_0020;
+pub const FSCTL_IS_VOLUME_MOUNTED: u32 = 0x0009_0028;
+pub const FSCTL_ALLOW_EXTENDED_DASD_IO: u32 = 0x0009_0083;
 
 /// Create options (`NtCreateFile`'s `CreateOptions`): requests on the
 /// file are synchronous, alertable or not.

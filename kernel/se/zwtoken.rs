@@ -9,27 +9,68 @@ use super::token;
 use crate::ob::handle::{self, ObOpenObjectByPointer};
 use crate::ob::object::{self, ObRef};
 use core::ffi::c_void;
-use nk_ntabi::io::KERNEL_MODE;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
-use nk_ntabi::se::SECURITY_QUALITY_OF_SERVICE;
 use nk_ntabi::status::*;
-use nk_ob::handles::Mode;
 use nk_se::information::{class_known, token_information_buffer};
 use nk_se::token::TokenType;
 
 /// The object a handle names, if it is of type `ty`, with what the
-/// handle was granted.
+/// handle was granted. Also resolves Windows 10 token pseudo-handles
+/// (`-4` = current process token, `-5` = current thread token, `-6` = effective token).
 fn referenced(
     handle: *mut c_void,
     ty: &'static object::ObjectType,
 ) -> Result<(ObRef, u32), NTSTATUS> {
-    handle::reference_for(
-        handle as u64,
-        Some(core::ptr::from_ref(ty)),
-        0,
-        Mode::Kernel,
-    )
-    .map(|(body, information)| (body, information.granted))
+    if core::ptr::eq(ty, &raw const object::TOKEN_TYPE) {
+        let raw = handle as isize;
+        match raw {
+            -4 => {
+                // SAFETY: `PsGetCurrentProcess` returns the live calling `EPROCESS`.
+                let tok = unsafe {
+                    crate::ps::process::PsReferencePrimaryToken(
+                        crate::ps::process::PsGetCurrentProcess(),
+                    )
+                };
+                if tok.is_null() {
+                    return Err(STATUS_NO_TOKEN);
+                }
+                // SAFETY: `PsReferencePrimaryToken` returned a new reference.
+                return Ok((unsafe { ObRef::adopt(tok.cast()) }, 0x000F_01FF));
+            }
+            -5 => {
+                // SAFETY: `ke::thread::current` is the live calling thread.
+                let imp = unsafe { super::impersonate::reference(crate::ke::thread::current()) };
+                let Some(imp) = imp else {
+                    return Err(STATUS_NO_TOKEN);
+                };
+                // SAFETY: `impersonate::reference` returned a new reference.
+                return Ok((unsafe { ObRef::adopt(imp.token) }, 0x000F_01FF));
+            }
+            -6 => {
+                // SAFETY: `ke::thread::current` is the live calling thread.
+                let imp = unsafe { super::impersonate::reference(crate::ke::thread::current()) };
+                if let Some(imp) = imp {
+                    // SAFETY: `impersonate::reference` returned a new reference.
+                    return Ok((unsafe { ObRef::adopt(imp.token) }, 0x000F_01FF));
+                }
+                // SAFETY: `PsGetCurrentProcess` returns the live calling `EPROCESS`.
+                let tok = unsafe {
+                    crate::ps::process::PsReferencePrimaryToken(
+                        crate::ps::process::PsGetCurrentProcess(),
+                    )
+                };
+                if tok.is_null() {
+                    return Err(STATUS_NO_TOKEN);
+                }
+                // SAFETY: `PsReferencePrimaryToken` returned a new reference.
+                return Ok((unsafe { ObRef::adopt(tok.cast()) }, 0x000F_01FF));
+            }
+            _ => {}
+        }
+    }
+    let hmode = crate::svc::capture::handle_mode(crate::svc::capture::mode());
+    handle::reference_for(handle as u64, Some(core::ptr::from_ref(ty)), 0, hmode)
+        .map(|(body, information)| (body, information.granted))
 }
 
 /// A handle to `token` with `access` and the attributes given, written
@@ -44,18 +85,30 @@ pub(super) unsafe fn open(
     attributes: u32,
     opened: *mut *mut c_void,
 ) -> NTSTATUS {
-    // SAFETY: per the contract.
-    unsafe {
+    let mode = crate::svc::capture::mode();
+    let mut handle = core::ptr::null_mut();
+    // SAFETY: per the contract; write handle into a kernel local first, then
+    // write back fault-safely when `UserMode`.
+    let status = unsafe {
         ObOpenObjectByPointer(
             token.cast(),
             attributes,
             core::ptr::null_mut(),
             access,
             &raw const object::TOKEN_TYPE,
-            KERNEL_MODE,
-            opened,
+            mode,
+            &raw mut handle,
         )
+    };
+    if status != STATUS_SUCCESS {
+        return status;
     }
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    if let Err(err) = unsafe { crate::svc::capture::write(opened, handle, mode) } {
+        let _ = handle::close_for(handle as u64, crate::svc::capture::handle_mode(mode));
+        return err;
+    }
+    STATUS_SUCCESS
 }
 
 /// [`ZwOpenProcessTokenEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwopenprocesstokenex):
@@ -63,7 +116,7 @@ pub(super) unsafe fn open(
 ///
 /// # Safety
 /// `token_handle` is writable for a handle.
-pub unsafe extern "C" fn ZwOpenProcessTokenEx(
+pub unsafe extern "C" fn NtOpenProcessTokenEx(
     process_handle: *mut c_void,
     desired_access: u32,
     handle_attributes: u32,
@@ -100,7 +153,7 @@ pub unsafe extern "C" fn ZwOpenProcessTokenEx(
 /// `object_attributes` is null or points to object attributes, whose
 /// quality of service is null or points to one; `new_handle` is
 /// writable for a handle.
-pub unsafe extern "C" fn ZwDuplicateToken(
+pub unsafe extern "C" fn NtDuplicateToken(
     existing_handle: *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -113,21 +166,14 @@ pub unsafe extern "C" fn ZwDuplicateToken(
         2 => TokenType::Impersonation,
         _ => return STATUS_INVALID_PARAMETER,
     };
-    // SAFETY: per the contract. The attributes are the driver's
-    // memory, read field by field.
-    let (attributes, requested) = unsafe {
-        if object_attributes.is_null() {
-            (0, None)
-        } else {
-            let qos = (&raw const (*object_attributes).SecurityQualityOfService)
-                .read_unaligned()
-                .cast::<SECURITY_QUALITY_OF_SERVICE>();
-            (
-                (&raw const (*object_attributes).Attributes).read_unaligned(),
-                (!qos.is_null()).then(|| (&raw const (*qos).ImpersonationLevel).read_unaligned()),
-            )
-        }
-    };
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let (attributes, requested) =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(Some(oa)) => (oa.attributes, oa.qos.map(|q| q.ImpersonationLevel)),
+            Ok(None) => (0, None),
+            Err(status) => return status,
+        };
     let (source, granted) = match referenced(existing_handle, &object::TOKEN_TYPE) {
         Ok(found) => found,
         Err(status) => return status,
@@ -165,13 +211,14 @@ pub unsafe extern "C" fn ZwDuplicateToken(
 /// # Safety
 /// `buffer` is writable for `length` bytes; `return_length` is
 /// writable.
-pub unsafe extern "C" fn ZwQueryInformationToken(
+pub unsafe extern "C" fn NtQueryInformationToken(
     token_handle: *mut c_void,
     class: u32,
     buffer: *mut u8,
     length: u32,
     return_length: *mut u32,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     if !class_known(class) {
         return STATUS_INVALID_INFO_CLASS;
     }
@@ -185,14 +232,111 @@ pub unsafe extern "C" fn ZwQueryInformationToken(
         match token_information_buffer(token::of(source.body()), class, buffer as u64) {
             Err(_) => STATUS_INVALID_INFO_CLASS,
             Ok(answer) => {
-                return_length.write_unaligned(answer.len() as u32);
+                if let Err(status) =
+                    crate::svc::capture::write(return_length, answer.len() as u32, mode)
+                {
+                    return status;
+                }
                 if answer.len() > length as usize {
                     STATUS_BUFFER_TOO_SMALL
                 } else {
-                    buffer.copy_from_nonoverlapping(answer.as_ptr(), answer.len());
-                    STATUS_SUCCESS
+                    match crate::svc::capture::copy_to_caller(buffer, &answer, mode) {
+                        Ok(()) => STATUS_SUCCESS,
+                        Err(status) => status,
+                    }
                 }
             }
         }
     }
 }
+
+/// `NtQuerySecurityAttributesToken`: NK does not attach security attributes
+/// to tokens; returns `STATUS_NOT_FOUND` (matching Windows when the named
+/// attribute is absent, as expected by `ntdll!LdrpInitializeProcess`).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQuerySecurityAttributesToken(
+    token_handle: *mut c_void,
+    _attributes: *const c_void,
+    _number_of_attributes: u32,
+    _buffer: *mut c_void,
+    _length: u32,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    if let Err(st) = referenced(token_handle, &object::TOKEN_TYPE) {
+        return st;
+    }
+    if !return_length.is_null() {
+        // SAFETY: per the contract; `capture::write` probes user pointers.
+        if let Err(st) = unsafe { crate::svc::capture::write(return_length, 0u32, mode) } {
+            return st;
+        }
+    }
+    STATUS_NOT_FOUND
+}
+
+/// `NtOpenProcessToken`: open the primary token of `process_handle`.
+///
+/// # Safety
+/// `token_handle` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenProcessToken(
+    process_handle: *mut c_void,
+    desired_access: u32,
+    token_handle: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { NtOpenProcessTokenEx(process_handle, desired_access, 0, token_handle) }
+}
+
+/// `NtOpenThreadToken`: open the impersonation token of `thread_handle`.
+///
+/// # Safety
+/// `token_handle` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenThreadToken(
+    thread_handle: *mut c_void,
+    desired_access: u32,
+    open_as_self: u8,
+    token_handle: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        super::impersonate::NtOpenThreadTokenEx(
+            thread_handle,
+            desired_access,
+            open_as_self,
+            0,
+            token_handle,
+        )
+    }
+}
+
+/// `NtAdjustPrivilegesToken`: enable or disable privileges on `token_handle`.
+/// NK's SYSTEM token holds all privileges enabled.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtAdjustPrivilegesToken(
+    token_handle: *mut c_void,
+    _disable_all_privileges: u8,
+    _new_state: *const c_void,
+    _buffer_length: u32,
+    _previous_state: *mut c_void,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    if let Err(st) = referenced(token_handle, &object::TOKEN_TYPE) {
+        return st;
+    }
+    if !return_length.is_null() {
+        // SAFETY: per the contract.
+        let wr = unsafe { crate::svc::capture::write(return_length, 0u32, mode) };
+        if let Err(st) = wr {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+pub use crate::svc::zw::{ZwDuplicateToken, ZwOpenProcessTokenEx, ZwQueryInformationToken};

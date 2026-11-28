@@ -37,7 +37,7 @@ static PROVIDERS: SpinLock<Providers> = SpinLock::new(Rank::FirmwareTables, Prov
 /// # Safety
 /// `information` is null or readable for `length` bytes; for the
 /// class above it names a routine and a live driver object.
-pub unsafe extern "C" fn ZwSetSystemInformation(
+pub unsafe extern "C" fn NtSetSystemInformation(
     class: u32,
     information: *mut c_void,
     length: u32,
@@ -112,3 +112,49 @@ pub fn test_provider(signature: u32) -> Option<(usize, usize)> {
         .find(signature)
         .map(|provider| (provider.handler, provider.driver))
 }
+
+/// Query a registered firmware table provider (`SystemFirmwareTableInformation`,
+/// class `0x4C`), as `ExpGetSystemFirmwareTableInformation`.
+///
+/// # Safety
+/// `buffer` is readable and writable for `length` bytes.
+pub unsafe fn query_table(buffer: *mut u8, length: u32) -> (NTSTATUS, Option<u32>) {
+    use nk_ntabi::sysinfo::SYSTEM_FIRMWARE_TABLE_INFORMATION_HEADER as HEADER;
+    if buffer.is_null() || (length as usize) < HEADER {
+        return (STATUS_INFO_LENGTH_MISMATCH, None);
+    }
+    // SAFETY: per the contract; `length >= HEADER` (16 bytes).
+    let signature = unsafe {
+        let payload = length - HEADER as u32;
+        buffer.add(0xC).cast::<u32>().write_unaligned(payload);
+        buffer.cast::<u32>().read_unaligned()
+    };
+    let found = {
+        let providers = PROVIDERS.lock();
+        providers.find(signature).map(|provider| {
+            // Pin the provider's driver object while we invoke its callback
+            // outside the lock.
+            // SAFETY: registered providers hold a live driver object reference.
+            unsafe { object::reference(provider.driver as *mut u8) };
+            (provider.handler, provider.driver)
+        })
+    };
+    let Some((handler, driver)) = found else {
+        return (STATUS_NOT_IMPLEMENTED, None);
+    };
+    // SAFETY: `handler` is a registered `PFNFTH` (`NTSTATUS (*)(PSYSTEM_FIRMWARE_TABLE_INFORMATION)`).
+    let status = unsafe {
+        crate::ke::seh::call(
+            handler,
+            [buffer.addr(), 0, 0, 0],
+            &crate::ke::seh::Guard::Nothing,
+        ) as u32 as NTSTATUS
+    };
+    // SAFETY: releases the reference taken above.
+    unsafe { object::dereference(driver as *mut u8) };
+    // SAFETY: `buffer` is still valid for `HEADER` bytes.
+    let written = unsafe { buffer.add(0xC).cast::<u32>().read_unaligned() };
+    (status, Some(written.saturating_add(HEADER as u32)))
+}
+
+pub use crate::svc::zw::ZwSetSystemInformation;

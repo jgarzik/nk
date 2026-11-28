@@ -36,15 +36,17 @@ use crate::arch;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicI16, AtomicU8, AtomicU32, Ordering, fence};
 use nk_ke::apc::{self as rules, Disables, Place, Signal, Step};
-use nk_ntabi::io::KERNEL_MODE;
+use nk_ntabi::io::{KERNEL_MODE, USER_MODE};
 use nk_ntabi::ke::{
     APC_OBJECT, KAPC, KAPC_STATE, KERNEL_APC_IN_PROGRESS, LIST_ENTRY, PKKERNEL_ROUTINE,
     PKNORMAL_ROUTINE, PKRUNDOWN_ROUTINE, SPECIAL_APC_IN_PROGRESS, apc_environment,
 };
 use nk_ntabi::pcr::APC_LEVEL;
+use nk_ntabi::status::*;
 use nk_ntabi::thread::{
-    APC_STATE, APC_STATE_INDEX, KERNEL_APC_DISABLE, MISC_FLAG_APC_QUEUEABLE, MISC_FLAGS,
-    SAVED_APC_STATE, SPECIAL_APC_DISABLE, STATE, WAIT_IRQL, state,
+    ALERTED, APC_STATE, APC_STATE_INDEX, KERNEL_APC_DISABLE, MISC_FLAG_ALERTABLE,
+    MISC_FLAG_APC_QUEUEABLE, MISC_FLAGS, SAVED_APC_STATE, SPECIAL_APC_DISABLE, STATE, WAIT_IRQL,
+    WAIT_MODE, state,
 };
 
 /// Take the APC interrupt. Once, at boot; a processor started later
@@ -82,6 +84,89 @@ fn kernel_queue(thread: *mut thread::Thread) -> *mut LIST_ENTRY {
     queue(apc_state(thread, 0), KERNEL_MODE)
 }
 
+/// The current state's queue of user-mode APCs.
+fn user_queue(thread: *mut thread::Thread) -> *mut LIST_ENTRY {
+    queue(apc_state(thread, 0), USER_MODE)
+}
+
+/// # Safety
+/// `thread` is a live thread.
+unsafe fn user_pending_slot<'a>(thread: *mut thread::Thread) -> &'a AtomicU8 {
+    // SAFETY: per the contract: a byte of the thread's block.
+    unsafe { AtomicU8::from_ptr(&raw mut (*apc_state(thread, 0)).UserApcPendingAll) }
+}
+
+/// Whether the running thread has a user-mode APC marked pending for delivery
+/// on return to Ring 3.
+#[allow(dead_code)]
+pub fn user_pending(thread: *mut thread::Thread) -> bool {
+    // SAFETY: `thread` is the running thread.
+    unsafe { user_pending_slot(thread) }.load(Ordering::Acquire) != 0
+}
+
+/// Whether `thread`'s user-mode APC queue is empty.
+pub fn user_queue_empty(thread: *mut thread::Thread) -> bool {
+    // SAFETY: `thread` is the running thread.
+    unsafe { empty(user_queue(thread)) }
+}
+
+/// Mark user-mode APC delivery pending on `thread`.
+pub fn set_user_pending(thread: *mut thread::Thread) {
+    // SAFETY: `thread` is live.
+    unsafe { user_pending_slot(thread) }.fetch_or(1, Ordering::Release);
+}
+
+/// Pop one pending user-mode APC from the running thread, invoke its
+/// `KernelRoutine` at `APC_LEVEL`, and return `(NormalRoutine, NormalContext,
+/// SystemArgument1, SystemArgument2)` if a user routine should be dispatched.
+#[allow(dead_code)]
+pub fn pop_user_apc() -> Option<(u64, u64, u64, u64)> {
+    let me = thread::current();
+    // SAFETY: `me` is the running thread at `PASSIVE_LEVEL`.
+    unsafe {
+        loop {
+            let head = user_queue(me);
+            let lock = thread::apc_lock(me).lock();
+            if empty(head) {
+                user_pending_slot(me).store(0, Ordering::Release);
+                return None;
+            }
+            let entry = (*head).Flink;
+            let apc = apc_of(entry);
+            let kernel = (*apc).KernelRoutine;
+            let mut normal = (*apc).NormalRoutine;
+            let mut context = (*apc).NormalContext;
+            let mut arg1 = (*apc).SystemArgument1;
+            let mut arg2 = (*apc).SystemArgument2;
+            unlink(entry);
+            (*apc).Inserted = 0;
+            if empty(head) {
+                user_pending_slot(me).store(0, Ordering::Release);
+            }
+            drop(lock);
+            let old_irql = irql::raise(APC_LEVEL);
+            if let Some(kernel) = kernel {
+                kernel(
+                    apc,
+                    &raw mut normal,
+                    &raw mut context,
+                    &raw mut arg1,
+                    &raw mut arg2,
+                );
+            }
+            irql::lower(old_irql);
+            if let Some(normal) = normal {
+                return Some((
+                    normal as *const () as usize as u64,
+                    context.addr() as u64,
+                    arg1.addr() as u64,
+                    arg2.addr() as u64,
+                ));
+            }
+        }
+    }
+}
+
 /// # Safety
 /// `thread` is a live thread.
 unsafe fn pending<'a>(thread: *mut thread::Thread) -> &'a AtomicU8 {
@@ -111,6 +196,16 @@ pub unsafe fn kernel_disable<'a>(thread: *mut thread::Thread) -> &'a AtomicI16 {
 unsafe fn special_disable<'a>(thread: *mut thread::Thread) -> &'a AtomicI16 {
     // SAFETY: as in `kernel_disable`.
     unsafe { AtomicI16::from_ptr(thread::object_field(thread, SPECIAL_APC_DISABLE)) }
+}
+
+/// Whether special kernel APCs are currently blocked on `thread`
+/// (`SpecialApcDisable != 0`).
+///
+/// # Safety
+/// `thread` is a live thread.
+pub unsafe fn special_apcs_blocked(thread: *mut thread::Thread) -> bool {
+    // SAFETY: per the contract.
+    unsafe { special_disable(thread).load(Ordering::Acquire) != 0 }
 }
 
 /// # Safety
@@ -318,43 +413,53 @@ pub unsafe extern "C" fn KeInsertQueueApc(
             (*apc).SystemArgument2 = argument2;
             insert(apc);
             let current = thread::object_field::<u8>(target, APC_STATE_INDEX).read();
-            if (*apc).ApcStateIndex != current || (*apc).ApcMode != KERNEL_MODE {
-                // Saved for when the thread detaches, or a user APC.
+            if (*apc).ApcStateIndex != current {
+                // Saved for when the thread detaches.
                 return 1;
             }
-            let special = (*apc).NormalRoutine.is_none();
-            if target == thread::current() {
-                let d = disables(target);
-                let signal = rules::signal(d, special, Place::Current);
-                if signal != Signal::Nothing {
-                    pending(target).store(1, Ordering::Relaxed);
-                }
-                (signal, false)
-            } else {
-                pending(target).store(1, Ordering::Release);
-                // The queue edit and `pending` before the looks at the
-                // target's wait, state and disable counts: the target
-                // begins its wait before `interrupts_wait`, writes
-                // `STATE = RUNNING` before `switched_in`, and raises its
-                // disable count before checking the queue, each with a
-                // full barrier in between, so one of the two sees the
-                // other. Whether it waits is its wait register's to say,
-                // not its state, which changes only as it gives up its
-                // processor.
+            if (*apc).ApcMode != KERNEL_MODE {
+                // User-mode APC: wake the target if it is currently in an
+                // alertable `UserMode` wait, marking `UserApcPendingAll`.
                 fence(Ordering::SeqCst);
-                let d = disables(target);
-                let place = Place::Waiting(byte(target, WAIT_IRQL));
-                let claimed = if rules::signal(d, special, place) == Signal::Unwait {
-                    thread::wait_register(target).claim(super::wait::STATUS_KERNEL_APC)
-                } else {
-                    None
-                };
-                match claimed {
-                    Some(found) => (Signal::Unwait, found == nk_ke::Claimed::Asleep),
-                    None if byte(target, STATE) == state::RUNNING => {
-                        (rules::signal(d, special, Place::Running), false)
+                let flags = misc_flags(target).load(Ordering::Acquire);
+                let wait_mode = byte(target, WAIT_MODE) as i8;
+                if (flags & MISC_FLAG_ALERTABLE) != 0 && wait_mode == USER_MODE {
+                    user_pending_slot(target).fetch_or(1, Ordering::Release);
+                    if let Some(found) = thread::wait_register(target).claim(STATUS_USER_APC as u32)
+                    {
+                        (Signal::Unwait, found == nk_ke::Claimed::Asleep)
+                    } else {
+                        (Signal::Nothing, false)
                     }
-                    None => (Signal::Pending, false),
+                } else {
+                    (Signal::Nothing, false)
+                }
+            } else {
+                let special = (*apc).NormalRoutine.is_none();
+                if target == thread::current() {
+                    let d = disables(target);
+                    let signal = rules::signal(d, special, Place::Current);
+                    if signal != Signal::Nothing {
+                        pending(target).store(1, Ordering::Relaxed);
+                    }
+                    (signal, false)
+                } else {
+                    pending(target).store(1, Ordering::Release);
+                    fence(Ordering::SeqCst);
+                    let d = disables(target);
+                    let place = Place::Waiting(byte(target, WAIT_IRQL));
+                    let claimed = if rules::signal(d, special, place) == Signal::Unwait {
+                        thread::wait_register(target).claim(super::wait::STATUS_KERNEL_APC)
+                    } else {
+                        None
+                    };
+                    match claimed {
+                        Some(found) => (Signal::Unwait, found == nk_ke::Claimed::Asleep),
+                        None if byte(target, STATE) == state::RUNNING => {
+                            (rules::signal(d, special, Place::Running), false)
+                        }
+                        None => (Signal::Pending, false),
+                    }
                 }
             }
         };
@@ -614,6 +719,126 @@ pub fn rundown() {
             ));
         }
     }
+}
+
+/// Pool kernel routine for `NtQueueApcThread`: frees the pool-allocated `KAPC`.
+///
+/// # Safety
+/// `apc` was allocated by `NtQueueApcThread` from the kernel pool.
+unsafe extern "C" fn free_queued_user_apc(
+    apc: *mut KAPC,
+    _normal: *mut Option<PKNORMAL_ROUTINE>,
+    _context: *mut *mut c_void,
+    _arg1: *mut *mut c_void,
+    _arg2: *mut *mut c_void,
+) {
+    // SAFETY: per the contract.
+    unsafe { crate::mm::pool::ExFreePool(apc.cast()) };
+}
+
+/// Pool rundown routine for `NtQueueApcThread`.
+///
+/// # Safety
+/// `apc` was allocated by `NtQueueApcThread` from the kernel pool.
+unsafe extern "C" fn free_queued_user_apc_rundown(apc: *mut KAPC) {
+    // SAFETY: per the contract.
+    unsafe { crate::mm::pool::ExFreePool(apc.cast()) };
+}
+
+/// `NtTestAlert`: check whether the calling thread is alerted in its
+/// `PreviousMode`, clearing the alert flag, and mark user APC delivery pending
+/// if the caller is in `UserMode` and has queued user APCs.
+pub extern "C" fn NtTestAlert() -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let me = thread::current();
+    // SAFETY: `me` is the running thread; lock its header for `Alerted`.
+    let was_alerted = unsafe {
+        let _lock = super::object::ObjectLock::take(me.cast());
+        let a_mode = AtomicU8::from_ptr(thread::object_field(me, ALERTED + (mode as usize & 1)));
+        let a_kern = AtomicU8::from_ptr(thread::object_field(me, ALERTED));
+        a_mode.swap(0, Ordering::AcqRel) != 0
+            || (mode != KERNEL_MODE && a_kern.swap(0, Ordering::AcqRel) != 0)
+    };
+    if mode == USER_MODE && !user_queue_empty(me) {
+        set_user_pending(me);
+    }
+    if was_alerted {
+        STATUS_ALERTED
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// `NtQueueApcThread`: queue a user-mode APC to the thread named by `thread_handle`.
+pub extern "C" fn NtQueueApcThread(
+    thread_handle: *mut c_void,
+    apc_routine: *mut c_void,
+    apc_arg1: *mut c_void,
+    apc_arg2: *mut c_void,
+    apc_arg3: *mut c_void,
+) -> NTSTATUS {
+    NtQueueApcThreadEx(
+        thread_handle,
+        core::ptr::null_mut(),
+        apc_routine,
+        apc_arg1,
+        apc_arg2,
+        apc_arg3,
+    )
+}
+
+/// `NtQueueApcThreadEx`: queue a user-mode APC (special user APCs with
+/// `reserve_handle == 1` are also supported as normal user APCs).
+pub extern "C" fn NtQueueApcThreadEx(
+    thread_handle: *mut c_void,
+    _reserve_handle: *mut c_void,
+    apc_routine: *mut c_void,
+    apc_arg1: *mut c_void,
+    apc_arg2: *mut c_void,
+    apc_arg3: *mut c_void,
+) -> NTSTATUS {
+    use crate::ob::{handle, object};
+    const THREAD_SET_CONTEXT: u32 = 0x0010;
+    if apc_routine.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mode = crate::svc::capture::handle_mode(crate::svc::capture::mode());
+    let (target, _) = match handle::reference_for(
+        thread_handle as u64,
+        Some(&raw const object::THREAD_TYPE),
+        THREAD_SET_CONTEXT,
+        mode,
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let apc = crate::mm::pool::alloc_zeroed(size_of::<KAPC>(), u32::from_le_bytes(*b"ApcU"))
+        .cast::<KAPC>();
+    if apc.is_null() {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // SAFETY: `apc` is fresh pool storage; `target` holds a live `ETHREAD` reference;
+    // `apc_routine` is a user-mode address invoked only in Ring 3 via `KiUserApcDispatcher`.
+    let inserted = unsafe {
+        let normal: PKNORMAL_ROUTINE = core::mem::transmute(apc_routine);
+        KeInitializeApc(
+            apc,
+            target.body().cast(),
+            u32::from(apc_environment::ORIGINAL),
+            Some(free_queued_user_apc),
+            Some(free_queued_user_apc_rundown),
+            Some(normal),
+            USER_MODE,
+            apc_arg1,
+        );
+        KeInsertQueueApc(apc, apc_arg2, apc_arg3, 0)
+    };
+    if inserted == 0 {
+        // SAFETY: `apc` was never queued.
+        unsafe { crate::mm::pool::ExFreePool(apc.cast()) };
+        return STATUS_UNSUCCESSFUL;
+    }
+    STATUS_SUCCESS
 }
 
 // ---- tests --------------------------------------------------------------
