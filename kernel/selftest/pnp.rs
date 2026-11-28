@@ -1139,6 +1139,10 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
                 REMOVALS.load(Ordering::Acquire),
             )
         };
+        let wait_seen = |target: (u32, u32)| {
+            pnp::notify::wait_idle();
+            seen() == target
+        };
         let linked = || {
             crate::ob::lookup(None, &wide_link)
                 .is_ok_and(|(body, rest)| body.body() == pdo.cast() && rest.is_empty())
@@ -1146,20 +1150,20 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
         let checks = (|| {
             // Disabling answers success whatever came of it, as Windows'
             // routine does; nothing is told.
-            if switch(false) != STATUS_SUCCESS || seen() != (0, 0) {
+            if switch(false) != STATUS_SUCCESS || !wait_seen((0, 0)) {
                 return Err("disabling an interface that is not enabled did not answer success");
             }
-            if switch(true) != STATUS_SUCCESS || seen() != (1, 0) || !linked() {
+            if switch(true) != STATUS_SUCCESS || !wait_seen((1, 0)) || !linked() {
                 return Err("enabling did not make the link and tell the callback");
             }
             if registry::dword(&format!("{key}\\#\\Control"), "Linked") != Some(1) {
                 return Err("the registry does not say the interface is linked");
             }
-            if switch(true) != STATUS_OBJECT_NAME_EXISTS || seen() != (1, 0) {
+            if switch(true) != STATUS_OBJECT_NAME_EXISTS || !wait_seen((1, 0)) {
                 return Err("enabling twice did not say the interface is enabled");
             }
             // A second registration that asks for what exists is told
-            // at once.
+            // at once (synchronously before registration returns).
             let mut second = core::ptr::null_mut();
             // SAFETY: as above.
             let registered = unsafe {
@@ -1180,11 +1184,11 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             if unsafe { IoUnregisterPlugPlayNotificationEx(second) } != STATUS_SUCCESS {
                 return Err("the second registration could not be taken back");
             }
-            if switch(false) != STATUS_SUCCESS || seen() != (2, 1) || linked() {
+            if switch(false) != STATUS_SUCCESS || !wait_seen((2, 1)) || linked() {
                 return Err("disabling did not remove the link and tell the callback once");
             }
             // The device's start being undone disables what is enabled.
-            if switch(true) != STATUS_SUCCESS || seen() != (3, 1) {
+            if switch(true) != STATUS_SUCCESS || !wait_seen((3, 1)) {
                 return Err("the interface could not be enabled again");
             }
             Ok(())
@@ -1196,7 +1200,7 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             return Err("the registration could not be taken back");
         }
         // Taken back, the callback hears nothing more.
-        if switch(false) != STATUS_SUCCESS || seen() != (3, 1) {
+        if switch(false) != STATUS_SUCCESS || !wait_seen((3, 1)) {
             return Err("a callback was called after its registration was taken back");
         }
         if switch(true) != STATUS_SUCCESS {

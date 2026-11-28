@@ -283,6 +283,26 @@ pub extern "C" fn KeFlushQueuedDpcs() {
     flush();
 }
 
+/// [`KeSetTargetProcessorDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettargetprocessordpc):
+/// have the DPC run on processor `number` in group 0.
+///
+/// # Safety
+/// `dpc` points to a `KDPC` set up by `KeInitializeDpc`.
+pub unsafe extern "C" fn KeSetTargetProcessorDpc(dpc: *mut KDPC, number: i8) {
+    if number < 0 {
+        return;
+    }
+    let proc_number = PROCESSOR_NUMBER {
+        Group: 0,
+        Number: number as u8,
+        Reserved: 0,
+    };
+    // SAFETY: per the contract; `proc_number` is a valid local struct.
+    unsafe {
+        let _ = KeSetTargetProcessorDpcEx(dpc, &raw const proc_number);
+    }
+}
+
 /// [`KeSetTargetProcessorDpcEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettargetprocessordpcex):
 /// have the DPC run on the processor `number` names, whichever
 /// processor queues it. `STATUS_INVALID_PARAMETER` if it names none.

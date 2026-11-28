@@ -11,10 +11,12 @@
 //! device on request.
 //!
 //! A callback is called at `PASSIVE_LEVEL` with no lock held: for an
-//! interface, on the thread that changed the interface's state
-//! (Windows queues the event for a worker of its own); for a custom
-//! event, on a worker thread. While it runs, the registration counts as
-//! in use, and taking it back waits for that to end.
+//! interface arrival or removal, on an executive worker thread (as Windows
+//! dispatches PnP interface notifications asynchronously, while
+//! `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES` still notifies
+//! synchronously before `IoRegisterPlugPlayNotification` returns); for a
+//! custom event, on a worker thread. While it runs, the registration counts
+//! as in use, and taking it back waits for that to end.
 
 #![allow(non_snake_case)]
 
@@ -22,8 +24,10 @@ use crate::ke::seh::{self, Guard};
 use crate::ke::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::ob::object;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use nk_ntabi::io::{DRIVER_OBJECT, UNICODE_STRING};
 use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
@@ -136,8 +140,42 @@ fn tell(handles: &[usize], class: &[u8; 16], link: &str, arrived: bool) {
     let _ = pool::free(block);
 }
 
-/// The interface `link` of `class` was enabled or disabled: tell every
-/// registration for the class.
+/// Number of interface-change work items queued or executing.
+static PENDING_INTERFACE: AtomicUsize = AtomicUsize::new(0);
+
+/// Work item payload for asynchronous interface arrival/removal delivery.
+struct InterfaceWork {
+    item: nk_ntabi::ex::WORK_QUEUE_ITEM,
+    handles: Vec<usize>,
+    class: [u8; 16],
+    link: String,
+    arrived: bool,
+}
+
+/// Worker routine delivering an interface arrival/removal notification.
+///
+/// # Safety
+/// `parameter` is a boxed [`InterfaceWork`] created by [`interface_changed`].
+unsafe extern "C" fn deliver_interface(parameter: *mut c_void) {
+    // SAFETY: created with `Box::into_raw` in `interface_changed`.
+    let work = unsafe { alloc::boxed::Box::from_raw(parameter.cast::<InterfaceWork>()) };
+    tell(&work.handles, &work.class, &work.link, work.arrived);
+    drop(work);
+    PENDING_INTERFACE.fetch_sub(1, Ordering::Release);
+}
+
+/// Wait until all queued interface-change notifications have been delivered.
+/// Called at `PASSIVE_LEVEL` with no PnP lock held.
+pub fn wait_idle() {
+    while PENDING_INTERFACE.load(Ordering::Acquire) != 0 {
+        crate::ke::thread::yield_now();
+    }
+}
+
+/// The interface `link` of `class` was enabled or disabled: queue delivery to
+/// every registration for the class on an executive worker thread, avoiding
+/// lock inversions when callers hold device or PnP locks while toggling
+/// interfaces.
 pub fn interface_changed(class: &[u8; 16], link: &str, arrived: bool) {
     let handles: Vec<usize> = REGISTRATIONS
         .lock()
@@ -147,7 +185,24 @@ pub fn interface_changed(class: &[u8; 16], link: &str, arrived: bool) {
         })
         .map(|r| core::ptr::from_ref::<Registration>(r) as usize)
         .collect();
-    tell(&handles, class, link, arrived);
+    if handles.is_empty() {
+        return;
+    }
+    let work = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(InterfaceWork {
+        // SAFETY: `WORK_QUEUE_ITEM` is a plain C struct initialized immediately below.
+        item: unsafe { core::mem::zeroed() },
+        handles,
+        class: *class,
+        link: String::from(link),
+        arrived,
+    }));
+    PENDING_INTERFACE.fetch_add(1, Ordering::AcqRel);
+    // SAFETY: `work` stays allocated until `deliver_interface` frees it.
+    unsafe {
+        (*work).item.WorkerRoutine = Some(deliver_interface);
+        (*work).item.Parameter = work.cast();
+        crate::ex::work::ExQueueWorkItem(&raw mut (*work).item, nk_ntabi::ex::DELAYED_WORK_QUEUE);
+    }
 }
 
 /// [`IoRegisterPlugPlayNotification`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioregisterplugplaynotification):

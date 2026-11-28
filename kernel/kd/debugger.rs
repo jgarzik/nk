@@ -113,3 +113,20 @@ pub extern "C" fn KdDeregisterPowerHandler(handle: *mut c_void) -> NTSTATUS {
 pub extern "C" fn KdPowerTransitionEx(_state: u32, _reinitialize: u8) -> NTSTATUS {
     STATUS_SUCCESS
 }
+
+/// [`DbgBreakPoint`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgbreakpoint):
+/// execute a breakpoint trap instruction. With no debugger attached this
+/// raises `STATUS_BREAKPOINT` through SEH (stopping the system if unhandled),
+/// or resumes past the instruction when `debug=on` is set.
+pub extern "C" fn DbgBreakPoint() {
+    crate::arch::driver_breakpoint();
+}
+
+/// [`KdRefreshDebuggerNotPresent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kdrefreshdebuggernotpresent):
+/// refresh and return `KdDebuggerNotPresent`. NK speaks no Windows kernel
+/// debugger protocol, so this always returns true (`1`).
+pub extern "C" fn KdRefreshDebuggerNotPresent() -> u8 {
+    super::variables::KdDebuggerNotPresent
+        .0
+        .load(core::sync::atomic::Ordering::Relaxed)
+}

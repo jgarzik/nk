@@ -151,6 +151,18 @@ pub unsafe extern "C" fn IoGetRequestorProcessId(irp: *mut IRP) -> u32 {
     }
 }
 
+/// [`IoGetInitiatorProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetinitiatorprocess):
+/// the process that initiated creating `file_object`, if different from
+/// the current process. NK attaches no separate initiator-process context
+/// to file objects, so this returns null (as Windows does when none was
+/// recorded).
+///
+/// # Safety
+/// `file_object` is null or a live `FILE_OBJECT`.
+pub unsafe extern "C" fn IoGetInitiatorProcess(_file_object: *mut FILE_OBJECT) -> *mut c_void {
+    core::ptr::null_mut()
+}
+
 /// [`IoIs32bitProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iois32bitprocess):
 /// whether the request comes from a 32-bit process, whose structures
 /// a driver must then read as 32-bit ones. Windows answers by the

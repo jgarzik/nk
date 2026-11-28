@@ -1,0 +1,27 @@
+# Microsoft Kernel-Mode Driver Framework (KMDF) runtime registry keys,
+# captured from Windows 10 22H2 build 10.0.19045.2006.
+#
+# Wdf01000.sys is a boot-start driver in WdfLoadGroup; wdfldr.sys and
+# sleepstudyhelper.sys are export drivers (no Services keys on Windows).
+
+key ControlSet001\Services\Wdf01000
+value DisplayName sz "@%SystemRoot%\\system32\\drivers\\Wdf01000.sys,-1000"
+value ErrorControl dword 1
+value Group sz WdfLoadGroup
+value ImagePath expand_sz system32\drivers\Wdf01000.sys
+value Start dword 0
+value Type dword 1
+
+key ControlSet001\Services\Wdf01000\Parameters
+value BuildNumber dword 0
+value MajorVersion dword 1
+value MinorVersion dword 31
+
+key ControlSet001\Control\Wdf\Kmdf\1
+value Version sz 1.11
+
+key ControlSet001\Control\Wdf\Kmdf\KmdfLibrary\Versions\1
+value Service sz Wdf01000
+
+key ControlSet001\Control\Wdf\Kmdf\Ucx\Versions\1\1
+value Service sz ucx01000

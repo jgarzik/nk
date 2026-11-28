@@ -1240,6 +1240,33 @@ fn set_affinity(affinity: u64, ideal: Option<u32>, old: u8) {
     arch::set_irql(old);
 }
 
+/// [`KeSetSystemAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemaffinitythread):
+/// restrict the calling thread to the processors in group 0 named by `affinity`.
+#[allow(non_snake_case)]
+pub extern "C" fn KeSetSystemAffinityThread(affinity: usize) {
+    let mut group_affinity = GROUP_AFFINITY {
+        Mask: affinity,
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    // SAFETY: local `GROUP_AFFINITY`, null `previous`.
+    unsafe { KeSetSystemGroupAffinityThread(&raw mut group_affinity, core::ptr::null_mut()) };
+}
+
+/// [`KeRevertToUserAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereverttouseraffinitythread):
+/// restore the calling thread's user affinity after `KeSetSystemAffinityThread`.
+#[allow(non_snake_case)]
+pub extern "C" fn KeRevertToUserAffinityThread() {
+    let mut zero = GROUP_AFFINITY {
+        Mask: 0,
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    // SAFETY: local zeroed `GROUP_AFFINITY` tells `KeRevertToUserGroupAffinityThread`
+    // to revert to the thread's original user affinity.
+    unsafe { KeRevertToUserGroupAffinityThread(&raw mut zero) };
+}
+
 /// [`KeSetSystemGroupAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemgroupaffinitythread):
 /// have the calling thread run on the processors of `affinity` only,
 /// and say what system affinity it had before: none, a mask of zero,

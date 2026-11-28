@@ -1317,3 +1317,15 @@ registry = ["storage", "nvme", "volumes", "mount", "fat"]
 disk = "nvme"
 disk_image = "fat32-gpt"
 disk_expect = "fat-written"
+
+# Microsoft's inbox KMDF runtime (wdfldr.sys, wdf01000.sys, sleepstudyhelper.sys)
+# running Microsoft's WDK Echo (AutoSync) sample driver on ROOT\ECHO\0000:
+# verifies standard PnP root enumeration, device interface creation, and two
+# distinct write/read echo round-trips.
+
+[x86_64-kmdf-echo]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=echo.load"
+registry = ["kmdf", "echo"]

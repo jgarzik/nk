@@ -22,6 +22,7 @@ mod diskio;
 mod dma;
 mod dpc;
 mod driver_api;
+mod echo;
 mod em;
 mod etw;
 mod ex;
@@ -237,6 +238,7 @@ pub static GROUPS: &[&[&Group]] = &[
     neg::GROUPS,
     storage::GROUPS,
     nvme::GROUPS,
+    echo::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,

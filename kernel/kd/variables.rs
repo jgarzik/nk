@@ -10,9 +10,13 @@ use nk_bootinfo::{BootInfo, Serial};
 /// A variable drivers import and read: `T` is an atomic, so that the
 /// kernel can set it once the machine is known.
 #[repr(transparent)]
-pub struct Variable<T>(T);
+pub struct Variable<T>(pub(crate) T);
 
 impl<T> Variable<T> {
+    pub const fn new(value: T) -> Self {
+        Self(value)
+    }
+
     /// The address drivers import.
     pub const fn address(&'static self) -> *const () {
         (&raw const self.0).cast()

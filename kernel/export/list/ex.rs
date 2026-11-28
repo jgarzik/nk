@@ -4,6 +4,7 @@ use super::super::{Export, NT, State};
 use crate::ex;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Partial, ex::wnf::ExQueryWnfStateData),
     export!(Partial, ex::wnf::ExSubscribeWnfStateChange),
     export!(Partial, ex::wnf::ExUnsubscribeWnfStateChange),
     export!(Partial, ex::wnf::ZwQueryWnfStateData),

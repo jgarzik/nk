@@ -6,6 +6,7 @@ use crate::rtl;
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlIsStateSeparationEnabled),
+    export!(Implemented, crate::ke::unwind::RtlCaptureStackBackTrace),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, rtl::persist::RtlGetPersistedStateLocation),
     export!(Implemented, rtl::RtlDeriveCapabilitySidsFromName),

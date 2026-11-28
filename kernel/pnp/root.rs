@@ -101,6 +101,79 @@ pub fn relations_of(devices: &[usize]) -> usize {
     block as usize
 }
 
+/// Discover pre-installed root-enumerated devices under
+/// `ControlSet001\Enum\ROOT\<Device>\<Instance>` (such as `ROOT\ECHO\0000`),
+/// skipping `LEGACY_*` keys, dynamically reported devices (`DeviceReported=1`),
+/// and instances already present in the device tree.
+fn discover_registry_devices() {
+    let root_enum = "Machine\\System\\CurrentControlSet\\Enum\\ROOT";
+    let root_pdo = root() as usize;
+    if root_pdo == 0 {
+        return;
+    }
+    for device_key in crate::cm::subkeys(root_enum) {
+        if device_key
+            .get(..7)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY_"))
+        {
+            continue;
+        }
+        let device_path = format!("{root_enum}\\{device_key}");
+        for inst_key in crate::cm::subkeys(&device_path) {
+            let instance = format!("ROOT\\{device_key}\\{inst_key}");
+            if node::by_instance(&instance).is_some() {
+                continue;
+            }
+            let key = registry::enum_key(&instance);
+            if registry::dword(&key, "DeviceReported") == Some(1) {
+                continue;
+            }
+            // Only enumerate entries explicitly configured as root PnP devices
+            // (with HardwareID and/or Service, and not marked DeviceReported).
+            let has_hw = crate::cm::read(&key, "HardwareID").is_ok();
+            let has_svc = registry::string(&key, "Service").is_some();
+            if !has_hw && !has_svc {
+                continue;
+            }
+            let Some(pdo) = new_device() else {
+                continue;
+            };
+            let mut found = Node::new(pdo as usize, root_pdo, 1);
+            found.instance = instance;
+            found.device_id = format!("ROOT\\{device_key}");
+            // SAFETY: fresh PDO owned by PnpManager.
+            if unsafe { adopt(pdo, found) }.is_none() {
+                // SAFETY: never adopted.
+                unsafe { device::IoDeleteDevice(pdo) };
+            }
+        }
+    }
+}
+
+/// Read a `REG_MULTI_SZ` value from the device's `Enum` key as UTF-16 units
+/// ending with a double NUL.
+fn enum_multi_sz(instance: &str, value_name: &str) -> Option<Vec<u16>> {
+    let (_, data) = crate::cm::read(&registry::enum_key(instance), value_name).ok()?;
+    let mut units: Vec<u16> = data
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| u16::from_le_bytes(*b))
+        .collect();
+    if units.is_empty() {
+        return None;
+    }
+    while units.last() == Some(&0) {
+        units.pop();
+    }
+    if units.is_empty() {
+        return None;
+    }
+    units.push(0);
+    units.push(0);
+    Some(units)
+}
+
 /// The manager's dispatch routine for Plug and Play requests.
 ///
 /// # Safety
@@ -116,7 +189,10 @@ unsafe extern "C" fn dispatch_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP)
         match (*location).MinorFunction {
             IRP_MN_QUERY_DEVICE_RELATIONS => match parameters[0] as u32 {
                 BUS_RELATIONS if is_root => {
-                    let children = found.map(|node| node.children).unwrap_or_default();
+                    discover_registry_devices();
+                    let children = node::get(device as usize)
+                        .map(|node| node.children)
+                        .unwrap_or_default();
                     match relations_of(&children) {
                         0 => complete(request, STATUS_INSUFFICIENT_RESOURCES, 0),
                         list => complete(request, STATUS_SUCCESS, list),
@@ -139,12 +215,31 @@ unsafe extern "C" fn dispatch_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP)
                 let answer: Vec<u16> = match parameters[0] as u32 {
                     BUS_QUERY_DEVICE_ID => device_id.encode_utf16().chain([0]).collect(),
                     BUS_QUERY_INSTANCE_ID => instance_id.encode_utf16().chain([0]).collect(),
+                    BUS_QUERY_HARDWARE_IDS => enum_multi_sz(&found.instance, "HardwareID")
+                        .unwrap_or_else(|| device_id.encode_utf16().chain([0, 0]).collect()),
+                    BUS_QUERY_COMPATIBLE_IDS => {
+                        let Some(ids) = enum_multi_sz(&found.instance, "CompatibleIDs") else {
+                            return complete_unchanged(request);
+                        };
+                        ids
+                    }
                     _ => return complete_unchanged(request),
                 };
                 match pool_string(&answer) {
                     0 => complete(request, STATUS_INSUFFICIENT_RESOURCES, 0),
                     text => complete(request, STATUS_SUCCESS, text),
                 }
+            }
+            IRP_MN_QUERY_CAPABILITIES => {
+                if !is_root && found.as_ref().is_some_and(|node| !node.reported) {
+                    let caps = parameters[0] as *mut DEVICE_CAPABILITIES;
+                    if !caps.is_null() {
+                        let flags = &raw mut (*caps).Flags;
+                        flags.write(flags.read() | DEVICE_CAPABILITY_UNIQUE_ID);
+                    }
+                }
+                let information = (*request).IoStatus.Information;
+                complete(request, STATUS_SUCCESS, information)
             }
             // What a device that is simply there succeeds.
             IRP_MN_START_DEVICE
@@ -154,8 +249,7 @@ unsafe extern "C" fn dispatch_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP)
             | IRP_MN_QUERY_REMOVE_DEVICE
             | IRP_MN_CANCEL_REMOVE_DEVICE
             | IRP_MN_REMOVE_DEVICE
-            | IRP_MN_SURPRISE_REMOVAL
-            | IRP_MN_QUERY_CAPABILITIES => {
+            | IRP_MN_SURPRISE_REMOVAL => {
                 let information = (*request).IoStatus.Information;
                 complete(request, STATUS_SUCCESS, information)
             }

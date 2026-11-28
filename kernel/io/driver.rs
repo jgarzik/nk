@@ -298,14 +298,25 @@ unsafe fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
 /// module's records before it is used (doc/UNSAFE.md, rule 1).
 pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
-    // A driver that is part of the kernel is not unloaded.
+    // A driver that is part of the kernel is not unloaded, nor one that
+    // another loaded image still imports from.
     let listed = |drivers: &[Record]| {
         drivers
             .iter()
             .position(|r| r.object == object && r.image.is_some())
     };
-    if listed(&DRIVERS.lock()).is_none() {
-        return Err("not a loaded driver");
+    {
+        let drivers = DRIVERS.lock();
+        let Some(index) = listed(&drivers) else {
+            return Err("not a loaded driver");
+        };
+        if drivers[index]
+            .image
+            .as_ref()
+            .is_some_and(ldr::has_importers)
+        {
+            return Err("driver still has active importers");
+        }
     }
     // SAFETY: `object` is a live driver object (it has a record), and its
     // unload routine, if set, was set by the driver itself.
@@ -340,6 +351,80 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
 
 /// Pool tag of driver-object extensions, as Windows spells it.
 const TAG_EXTENSION: u32 = u32::from_le_bytes(*b"Driv");
+
+/// `DRIVER_REGKEY_TYPE` values for [`IoOpenDriverRegistryKey`].
+const DRIVER_REGKEY_PARAMETERS: u32 = 0;
+const DRIVER_REGKEY_PERSISTENT_STATE: u32 = 1;
+const DRIVER_REGKEY_SHARED_PERSISTENT_STATE: u32 = 2;
+
+/// [`IoOpenDriverRegistryKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioopendriverregistrykey):
+/// open (creating if absent) the driver-specific registry key (`Parameters` or
+/// persistent state) beneath the service key of `driver_object`.
+///
+/// # Safety
+/// `driver_object` is a live driver object; `driver_reg_key` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn IoOpenDriverRegistryKey(
+    driver_object: *mut DRIVER_OBJECT,
+    reg_key_type: u32,
+    desired_access: u32,
+    flags: u32,
+    driver_reg_key: *mut *mut c_void,
+) -> NTSTATUS {
+    irql::expect_passive("IoOpenDriverRegistryKey");
+    if driver_object.is_null() || driver_reg_key.is_null() || flags != 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: checked non-null; per the contract.
+    unsafe { driver_reg_key.write_unaligned(core::ptr::null_mut()) };
+    let suffix = match reg_key_type {
+        DRIVER_REGKEY_PARAMETERS => "\\Parameters",
+        DRIVER_REGKEY_PERSISTENT_STATE => "\\Parameters\\PersistentState",
+        DRIVER_REGKEY_SHARED_PERSISTENT_STATE => "\\Parameters\\SharedPersistentState",
+        _ => return STATUS_INVALID_PARAMETER,
+    };
+    let base_path = {
+        let drivers = DRIVERS.lock();
+        drivers
+            .iter()
+            .find(|r| r.object == driver_object)
+            .map(|r| r._registry_path.clone())
+    };
+    let Some(mut path) = base_path.filter(|p| p.len() > 1) else {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    };
+    // Drop trailing NUL before appending suffix.
+    if path.last() == Some(&0) {
+        path.pop();
+    }
+    path.extend(suffix.encode_utf16());
+    let name = UNICODE_STRING {
+        Length: (path.len() * 2) as u16,
+        MaximumLength: (path.len() * 2) as u16,
+        Buffer: path.as_mut_ptr(),
+    };
+    const ATTRIBUTES: u32 = 0x40 | 0x200; // OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE
+    let attributes = nk_ntabi::ob::OBJECT_ATTRIBUTES {
+        Length: size_of::<nk_ntabi::ob::OBJECT_ATTRIBUTES>() as u32,
+        RootDirectory: core::ptr::null_mut(),
+        ObjectName: &raw const name,
+        Attributes: ATTRIBUTES,
+        SecurityDescriptor: core::ptr::null_mut(),
+        SecurityQualityOfService: core::ptr::null_mut(),
+    };
+    // SAFETY: `attributes` and `name` live through the call; `driver_reg_key` is writable.
+    unsafe {
+        crate::cm::ZwCreateKey(
+            driver_reg_key,
+            desired_access,
+            &raw const attributes,
+            0,
+            core::ptr::null(),
+            0,
+            core::ptr::null_mut(),
+        )
+    }
+}
 
 /// [`IoAllocateDriverObjectExtension`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioallocatedriverobjectextension):
 /// give a driver object `size` zeroed bytes that the driver finds again

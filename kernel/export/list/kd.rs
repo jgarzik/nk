@@ -4,11 +4,13 @@ use super::super::{Export, NT, State};
 use crate::kd::{debugger, variables};
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Implemented, debugger::DbgBreakPoint),
     export!(Implemented, debugger::KdAcquireDebuggerLock),
     export!(Implemented, debugger::KdDeregisterPowerHandler),
     export!(Implemented, debugger::KdDisableDebugger),
     export!(Implemented, debugger::KdEnableDebugger),
     export!(Implemented, debugger::KdPowerTransitionEx),
+    export!(Implemented, debugger::KdRefreshDebuggerNotPresent),
     export!(Implemented, debugger::KdRegisterPowerHandler),
     export!(Implemented, debugger::KdReleaseDebuggerLock),
     export_variable!(Implemented, "InitSafeBootMode", variables::InitSafeBootMode),

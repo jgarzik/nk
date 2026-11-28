@@ -10,7 +10,7 @@
 use crate::cm;
 use core::ffi::c_void;
 use nk_ex::wnf;
-use nk_ntabi::status::{NTSTATUS, STATUS_OBJECT_NAME_NOT_FOUND};
+use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND};
 
 /// Where the SYSTEM hive lists the well-known and permanent state
 /// names, each a value named by the name's digits.
@@ -81,4 +81,25 @@ pub extern "C" fn ExUnsubscribeWnfStateChange(subscription: *mut c_void) {
             "ExUnsubscribeWnfStateChange: {subscription:p} is no subscription: NK makes none"
         ));
     }
+}
+
+/// `ExQueryWnfStateData` (undocumented): read the data of a subscribed WNF
+/// state. NK creates no WNF subscriptions (`ExSubscribeWnfStateChange`
+/// returns `STATUS_OBJECT_NAME_NOT_FOUND`), so a null subscription is
+/// `STATUS_INVALID_PARAMETER` and any non-null handle stops the system.
+///
+/// # Safety
+/// `subscription` is null or an opaque subscription handle.
+pub unsafe extern "C" fn ExQueryWnfStateData(
+    subscription: *mut c_void,
+    _change_stamp: *mut u32,
+    _output_buffer: *mut c_void,
+    _output_buffer_size: *mut u32,
+) -> NTSTATUS {
+    if subscription.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    crate::kd::bugcheck(format_args!(
+        "ExQueryWnfStateData: {subscription:p} is no subscription: NK makes none"
+    ));
 }

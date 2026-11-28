@@ -287,6 +287,7 @@ pub fn settle() {
             }
         }
     });
+    super::notify::wait_idle();
 }
 
 /// Take the device `pdo` one step further, if a step can be taken.

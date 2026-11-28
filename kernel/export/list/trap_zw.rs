@@ -27,7 +27,6 @@ trap_list!(
     ZwQueryVolumeInformationFile,
     ZwReadFile,
     ZwSetInformationFile,
-    ZwUnloadDriver,
     ZwUpdateWnfStateData,
     ZwWriteFile,
 );

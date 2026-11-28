@@ -347,7 +347,10 @@ fn export_address(
                     Symbol::Ordinal(ordinal) => export::resolve_ordinal(KERNEL_NAME, ordinal),
                 };
             }
-            let next = MODULES.lock().with_stem(stem).filter(|m| m.library)?;
+            let next = MODULES
+                .lock()
+                .with_stem(stem)
+                .filter(|m| m.library || m.exports.size != 0)?;
             hold(next.base, held).ok()?;
             export_address(&next, symbol, held, hops + 1)
         }
@@ -372,7 +375,7 @@ fn hold(base: u64, held: &mut Vec<u64>) -> Result<(), LoadError> {
 fn library(name: &[u8], depth: usize, held: &mut Vec<u64>) -> Result<Module, LoadError> {
     let found = MODULES.lock().named(name);
     let module = match found {
-        Some(module) if module.library => module,
+        Some(module) if module.library || module.exports.size != 0 => module,
         Some(_) => {
             return Err(LoadError::NotALibrary {
                 module: lossy(name),
@@ -675,6 +678,14 @@ fn release(image: &Image) {
     for &library in &image.libraries {
         drop_importer(library);
     }
+}
+
+/// Whether any other loaded image currently imports from `image`.
+pub fn has_importers(image: &Image) -> bool {
+    MODULES
+        .lock()
+        .containing(image.base)
+        .is_some_and(|module| module.base == image.base && module.references > 0)
 }
 
 /// Unmap an image and free its memory. No code in it may run again.

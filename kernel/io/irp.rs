@@ -185,6 +185,110 @@ pub unsafe extern "C" fn invalid_device_request(
     STATUS_INVALID_DEVICE_REQUEST
 }
 
+/// Context for a completion routine installed by [`IoSetCompletionRoutineEx`].
+struct CompletionEx {
+    device: *mut DEVICE_OBJECT,
+    routine: IO_COMPLETION_ROUTINE,
+    context: *mut core::ffi::c_void,
+    control: u8,
+}
+
+const TAG_COMPLETION_EX: u32 = u32::from_le_bytes(*b"IoCp");
+
+/// Trampoline invoked on every IRP completion for [`IoSetCompletionRoutineEx`]:
+/// frees the wrapper before calling the driver's routine (if the requested
+/// condition holds) and releases the device reference after it returns so the
+/// driver image cannot unload while its completion routine executes.
+///
+/// # Safety
+/// Called by `IofCompleteRequest` with `context` from `IoSetCompletionRoutineEx`.
+unsafe extern "C" fn completion_ex_trampoline(
+    device: *mut DEVICE_OBJECT,
+    irp: *mut IRP,
+    context: *mut core::ffi::c_void,
+) -> NTSTATUS {
+    let raw = context.cast::<CompletionEx>();
+    // SAFETY: allocated by `IoSetCompletionRoutineEx`; consumed once here.
+    let saved = unsafe { raw.read() };
+    let _ = pool::free(raw.cast());
+    // SAFETY: `irp` is live during completion; `saved.device` was referenced
+    // by `IoSetCompletionRoutineEx`.
+    let status = unsafe {
+        let wanted =
+            completion_routine_wanted(saved.control, (*irp).IoStatus.Status, (*irp).Cancel != 0);
+        if wanted {
+            seh::call(
+                saved.routine as usize,
+                [device.addr(), irp.addr(), saved.context.addr(), 0],
+                &Guard::Nothing,
+            ) as u32 as NTSTATUS
+        } else {
+            if (*irp).PendingReturned != 0 && (*irp).CurrentLocation <= (*irp).StackCount {
+                (*(*irp).CurrentStackLocation).Control |= SL_PENDING_RETURNED;
+            }
+            STATUS_SUCCESS
+        }
+    };
+    // SAFETY: releases the reference taken in `IoSetCompletionRoutineEx`.
+    unsafe { crate::ob::object::dereference(saved.device.cast()) };
+    status
+}
+
+/// [`IoSetCompletionRoutineEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcompletionroutineex):
+/// install a completion routine on the next stack location of `irp`, holding a
+/// reference on `device` until the routine returns.
+///
+/// # Safety
+/// `device` is a live `DEVICE_OBJECT`; `irp` is a live `IRP` with a next stack
+/// location available.
+pub unsafe extern "C" fn IoSetCompletionRoutineEx(
+    device: *mut DEVICE_OBJECT,
+    irp: *mut IRP,
+    completion_routine: Option<IO_COMPLETION_ROUTINE>,
+    context: *mut core::ffi::c_void,
+    invoke_on_success: u8,
+    invoke_on_error: u8,
+    invoke_on_cancel: u8,
+) -> NTSTATUS {
+    let Some(routine) = completion_routine else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    if device.is_null() || irp.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mut control = 0u8;
+    if invoke_on_success != 0 {
+        control |= SL_INVOKE_ON_SUCCESS;
+    }
+    if invoke_on_error != 0 {
+        control |= SL_INVOKE_ON_ERROR;
+    }
+    if invoke_on_cancel != 0 {
+        control |= SL_INVOKE_ON_CANCEL;
+    }
+    let block = pool::alloc(size_of::<CompletionEx>(), TAG_COMPLETION_EX).cast::<CompletionEx>();
+    if block.is_null() {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // SAFETY: per the contract; `block` is freshly allocated and `device` is live.
+    unsafe {
+        crate::ob::object::reference(device.cast());
+        block.write(CompletionEx {
+            device,
+            routine,
+            context,
+            control,
+        });
+        let next = next_location(irp);
+        (*next).CompletionRoutine = Some(completion_ex_trampoline);
+        (*next).Context = block.cast();
+        // Always invoke the trampoline so the wrapper and device reference
+        // are released even when the caller's condition does not match.
+        (*next).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
+    }
+    STATUS_SUCCESS
+}
+
 /// `IofCompleteRequest` (`IoCompleteRequest`): the driver is done with
 /// the IRP. Runs completion routines of the drivers above it, then
 /// finishes the request and frees the IRP.

@@ -161,9 +161,11 @@ parent's instance path); any other is not found unless a driver set
 it. A
 device interface is registered under Windows' link name and
 `DeviceClasses` record; enabling it makes the symbolic link to the
-physical device object (which therefore needs a name) and calls the
-callbacks registered for the class's arrivals, on the caller's thread
-where Windows queues them for a worker; enabled before its device has
+physical device object (which therefore needs a name) and queues the
+callbacks registered for the class's arrivals onto an executive worker
+thread (matching Windows, while `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES`
+delivers existing interfaces synchronously before registration returns);
+enabled before its device has
 started, an interface waits for the start. Disabling one answers
 success whatever came of it, as Windows' routine does: `partmgr.sys`
 disables an interface it never enabled on each disk it starts. A
