@@ -28,13 +28,23 @@ class FatDisk(unittest.TestCase):
         return path
 
     def test_each_layout_passes_as_made(self):
-        for layout in fatdisk.LAYOUTS:
+        for layout in ("fat32-mbr", "fat32-gpt"):
             with self.subTest(layout=layout):
                 path = self.image(layout)
                 self.assertEqual(fatdisk.verify(path, "fat-unchanged"), [])
                 table = subprocess.run(["sfdisk", "-d", str(path)], capture_output=True,
                                        text=True, check=True).stdout
                 self.assertIn(f"start=        {fatdisk.START}, size=      {fatdisk.LENGTH}", table)
+
+    def test_sys_and_dirty_autochk_layouts(self):
+        sys_img = self.image("fat32-sys-gpt")
+        self.assertEqual(fatdisk.verify(sys_img, "sys-clean"), [])
+
+        dirty_img = self.image("fat32-autochk-dirty-gpt")
+        # Partition 1 is clean, partition 2 is deliberately corrupted until repaired.
+        self.assertEqual(fatdisk.verify(dirty_img, "sys-clean"), [])
+        errs = fatdisk.verify(dirty_img, "autochk-dirty")
+        self.assertTrue(errs and "part2" in errs[0], errs)
 
     def test_the_volume_is_fat32(self):
         path = self.image("fat32-mbr")

@@ -187,7 +187,8 @@ def extra_devices(arch, usb=None, usb_kbd=False, serial2=False):
     return args
 
 
-def qemu_command(arch, smp, interactive, disk=None, usb=None, usb_kbd=False, serial2=False):
+def qemu_command(arch, smp, interactive, disk=None, usb=None, usb_kbd=False, serial2=False,
+                 memory=None):
     """The command line. Paths are relative to the scenario directory, where
     QEMU is started, so the QMP socket path stays short."""
     code, _ = FIRMWARE[arch]
@@ -199,7 +200,7 @@ def qemu_command(arch, smp, interactive, disk=None, usb=None, usb_kbd=False, ser
         # arm64 expects of the `virt` machine.
         cmd = ["qemu-system-aarch64", "-machine", "virt,gic-version=3", "-cpu", "neoverse-n1"]
     cmd += [
-        "-m", MEM, "-smp", str(smp),
+        "-m", memory or MEM, "-smp", str(smp),
         "-drive", f"if=pflash,format=raw,readonly=on,file={code}",
         "-drive", "if=pflash,format=raw,file=vars.fd",
         "-drive", "if=none,id=esp,format=raw,snapshot=on,file=esp.img",
@@ -458,7 +459,7 @@ def handle_qmp_marker(session, line, errors, actions):
 
 
 def boot(arch, smp, directory, interactive, disk=None, usb=None, usb_kbd=False,
-         serial2=False, hotplug=False):
+         serial2=False, hotplug=False, memory=None):
     """Run QEMU in `directory` (which holds esp.img, vars.fd and, for a
     scenario with a disk, data.img). Returns
     (timed_out, marks, host_errors)."""
@@ -470,7 +471,7 @@ def boot(arch, smp, directory, interactive, disk=None, usb=None, usb_kbd=False,
     qmp_thread = None
     qmp_actions = []
     cmd = qemu_command(arch, smp, interactive, disk=disk, usb=usb,
-                       usb_kbd=usb_kbd, serial2=serial2)
+                       usb_kbd=usb_kbd, serial2=serial2, memory=memory)
     try:
         if interactive:
             proc = subprocess.Popen(cmd, cwd=directory)
@@ -619,9 +620,11 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         usb_kbd = bool(sc.get("usb_kbd", False))
         serial2 = bool(sc.get("serial2", False))
         hotplug = bool(sc.get("hotplug", False))
+        memory = sc.get("memory")
         timed_out, marks, host_errors = boot(
             arch, smp_of(sc), directory, interactive, disk=disk,
             usb=usb, usb_kbd=usb_kbd, serial2=serial2, hotplug=hotplug,
+            memory=memory,
         )
         if interactive:
             passed = True
@@ -642,6 +645,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             timed_out, marks, host_errors = boot(
                 arch, smp_of(sc), directory, interactive, disk=disk,
                 usb=usb, usb_kbd=usb_kbd, serial2=serial2, hotplug=hotplug,
+                memory=memory,
             )
             text = (directory / "serial.log").read_text(errors="replace")
         log = judge.Log(text)

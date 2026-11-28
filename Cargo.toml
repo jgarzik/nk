@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["lib/pe", "lib/pdb", "lib/unwind", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/hal", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "lib/ob", "lib/ex", "lib/etw", "lib/ps", "lib/whea", "lib/pnp", "lib/po", "lib/disk", "lib/fsrtl", "lib/io", "lib/nls", "lib/apiset", "tools/peinfo", "tools/pdbinfo", "boot", "kernel", "lib/cc"]
+members = ["lib/pe", "lib/pdb", "lib/unwind", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/hal", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "lib/ob", "lib/ex", "lib/etw", "lib/ps", "lib/whea", "lib/pnp", "lib/po", "lib/disk", "lib/fsrtl", "lib/io", "lib/nls", "lib/apiset", "tools/peinfo", "tools/pdbinfo", "boot", "kernel", "user/nkt", "lib/cc"]
 # Bare `cargo test` / `cargo clippy` cover the host-testable crates. The
 # loader and kernel only build for the UEFI targets: use the Makefile.
 default-members = ["lib/pe", "lib/pdb", "lib/unwind", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/hal", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "lib/ob", "lib/ex", "lib/etw", "lib/ps", "lib/whea", "lib/pnp", "lib/po", "lib/disk", "lib/fsrtl", "lib/io", "lib/nls", "lib/apiset", "tools/peinfo", "tools/pdbinfo", "boot", "kernel", "lib/cc"]
