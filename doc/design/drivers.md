@@ -29,12 +29,13 @@ One image is loaded or unloaded at a time, under a mutex
 (`doc/LOCKING.md`): loading calls a library's `DllInitialize`, which may
 wait, and loads a library from inside the load of its importer.
 
-**Paging a driver.** `MmPageEntireDriver` and `MmResetDriverPaging`,
-which a driver calls to let its whole image be paged out while it is
-idle and to take that back, change nothing: NK never pages kernel
-memory out, so an image is resident from load to unload, which is
-within what both promise. The first still answers the base of the image
-an address is in, or null.
+**Paging a driver.** `MmPageEntireDriver`, `MmResetDriverPaging`,
+`MmLockPagableDataSection`, `MmLockPagableSectionByHandle` and
+`MmUnlockPagableImageSection` change no page residency: NK never pages
+kernel memory out, so an image is resident from load to unload, which is
+within what every one of those routines promises. `MmPageEntireDriver` and
+`MmLockPagableDataSection` still answer with the base of the image an
+address lies in, or null.
 
 **An image's messages.** A driver reads text from a message table in
 an image's resources with

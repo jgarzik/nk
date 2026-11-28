@@ -825,6 +825,40 @@ pub unsafe extern "C" fn MmPageEntireDriver(address_within_section: *mut c_void)
 /// Callable with any pointer value; it is not used.
 pub unsafe extern "C" fn MmResetDriverPaging(_address_within_section: *mut c_void) {}
 
+/// [`MmLockPagableDataSection`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmlockpagabledatasection):
+/// lock the image section holding `address_within_section` into memory and
+/// return an opaque handle to it. NK keeps every kernel and driver image
+/// resident for its entire lifetime, so returning the containing image's
+/// base address (or null if the address belongs to no loaded image) fulfills
+/// the contract honestly.
+///
+/// # Safety
+/// Callable with any pointer value; it is only compared against loaded
+/// image ranges.
+pub unsafe extern "C" fn MmLockPagableDataSection(
+    address_within_section: *mut c_void,
+) -> *mut c_void {
+    module_containing(address_within_section as u64)
+        .map_or(core::ptr::null_mut(), |module| module.base as *mut c_void)
+}
+
+/// [`MmLockPagableSectionByHandle`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmlockpagablesectionbyhandle):
+/// increment the lock count on a section previously locked with
+/// [`MmLockPagableDataSection`]. NK never pages kernel images out, so every
+/// section is already resident.
+///
+/// # Safety
+/// `image_section_handle` came from `MmLockPagableDataSection`.
+pub unsafe extern "C" fn MmLockPagableSectionByHandle(_image_section_handle: *mut c_void) {}
+
+/// [`MmUnlockPagableImageSection`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunlockpagableimagesection):
+/// release a lock obtained from [`MmLockPagableDataSection`] or
+/// [`MmLockPagableSectionByHandle`]. NK keeps kernel images resident.
+///
+/// # Safety
+/// `image_section_handle` came from `MmLockPagableDataSection`.
+pub unsafe extern "C" fn MmUnlockPagableImageSection(_image_section_handle: *mut c_void) {}
+
 // ---- tests --------------------------------------------------------------
 
 /// A place among a library's importers, held by a test as a second

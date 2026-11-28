@@ -374,6 +374,69 @@ unsafe fn connect_first_line(
     }
 }
 
+/// [`IoConnectInterrupt`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioconnectinterrupt):
+/// legacy WDM interrupt connection for a fully specified translated vector.
+///
+/// # Safety
+/// `interrupt_object` is writable; `service_routine`, `service_context` and
+/// optional `spin_lock` remain valid until [`IoDisconnectInterrupt`].
+#[allow(clippy::too_many_arguments, reason = "Windows WDM ABI")]
+pub unsafe extern "C" fn IoConnectInterrupt(
+    interrupt_object: *mut *mut KINTERRUPT,
+    service_routine: Option<KSERVICE_ROUTINE>,
+    service_context: *mut c_void,
+    spin_lock: *mut KSPIN_LOCK,
+    vector: u32,
+    irql: KIRQL,
+    synchronize_irql: KIRQL,
+    interrupt_mode: u32,
+    share_vector: u8,
+    processor_enable_mask: usize,
+    floating_save: u8,
+) -> NTSTATUS {
+    irql::expect_passive("IoConnectInterrupt");
+    let Some(trigger) = Trigger::from_mode(interrupt_mode) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    if interrupt_object.is_null() || processor_enable_mask == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract.
+    match unsafe {
+        connect_line(
+            core::ptr::null_mut(),
+            vector,
+            irql,
+            synchronize_irql,
+            Some(trigger),
+            share_vector != 0,
+            service_routine,
+            service_context,
+            spin_lock,
+            floating_save,
+        )
+    } {
+        Ok(interrupt) => {
+            // SAFETY: checked non-null; per the contract.
+            unsafe { interrupt_object.write(interrupt) };
+            STATUS_SUCCESS
+        }
+        Err(status) => status,
+    }
+}
+
+/// [`IoDisconnectInterrupt`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iodisconnectinterrupt):
+/// disconnect an interrupt object created by [`IoConnectInterrupt`].
+///
+/// # Safety
+/// `interrupt_object` came from `IoConnectInterrupt` and has not yet been
+/// disconnected.
+pub unsafe extern "C" fn IoDisconnectInterrupt(interrupt_object: *mut KINTERRUPT) {
+    irql::expect_passive("IoDisconnectInterrupt");
+    // SAFETY: per the contract.
+    unsafe { kinterrupt::disconnect(interrupt_object) };
+}
+
 /// `IoConnectInterruptEx`: connect service routines to a device's
 /// interrupts. At `PASSIVE_LEVEL`.
 ///

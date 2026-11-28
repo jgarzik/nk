@@ -17,7 +17,9 @@
 use super::platform;
 use crate::cm;
 use alloc::vec::Vec;
+use core::ffi::c_void;
 use nk_hal::description::{self, Range};
+use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND};
 
 const SYSTEM: &str = "Machine\\Hardware\\Description\\System";
 const REG_SZ: u32 = 1;
@@ -89,6 +91,34 @@ pub fn publish() -> Result<(), &'static str> {
         "PCI",
         &description::empty_bus(description::INTERFACE_PCI_BUS),
     )
+}
+
+/// [`IoQueryDeviceDescription`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioquerydevicedescription):
+/// search `\Registry\Machine\Hardware\Description\System` for legacy
+/// firmware-described buses, controllers and peripherals. On ACPI/UEFI
+/// machines NK publishes only the `ACPI BIOS` and empty `PCI` adapters and
+/// no legacy ISA/ARC controller nodes, so any controller/peripheral query
+/// finds no matching entry (`STATUS_OBJECT_NAME_NOT_FOUND`), as on UEFI
+/// Windows.
+///
+/// # Safety
+/// Pointers are null or valid per Microsoft's `IoQueryDeviceDescription` contract.
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub unsafe extern "C" fn IoQueryDeviceDescription(
+    _bus_type: *const u32,
+    _bus_number: *const u32,
+    _controller_type: *const u32,
+    _controller_number: *const u32,
+    _peripheral_type: *const u32,
+    _peripheral_number: *const u32,
+    callout_routine: *const c_void,
+    _context: *mut c_void,
+) -> NTSTATUS {
+    crate::ke::irql::expect_passive("IoQueryDeviceDescription");
+    if callout_routine.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    STATUS_OBJECT_NAME_NOT_FOUND
 }
 
 /// For the self-tests: the keys are there and say what the machine is.

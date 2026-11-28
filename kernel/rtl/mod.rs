@@ -151,6 +151,13 @@ pub extern "C" fn RtlNtStatusToDosError(status: NTSTATUS) -> u32 {
     RtlNtStatusToDosErrorNoTeb(status)
 }
 
+/// [`RtlIsStateSeparationEnabled`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlisstateseparationenabled):
+/// whether OS state separation is enabled. False on NK (and standard
+/// Windows 10 desktop installations).
+pub extern "C" fn RtlIsStateSeparationEnabled() -> u8 {
+    0
+}
+
 /// The room `RtlDeriveCapabilitySidsFromName` clears in its callers'
 /// buffers: a SID of nine and of ten sub-authorities.
 const GROUP_SID_ROOM: usize = 0x2C;

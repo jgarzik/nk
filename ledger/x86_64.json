@@ -5,10 +5,10 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 1176,
-  "implemented": 761,
-  "partial": 89,
-  "traps": 121,
-  "missing": 65,
+  "implemented": 767,
+  "partial": 90,
+  "traps": 119,
+  "missing": 60,
   "library": 140
  },
  "looked_up_absent": {
@@ -2592,12 +2592,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmUnlockPagableImageSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -6209,7 +6209,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -11720,12 +11720,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmUnlockPagableImageSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -13996,17 +13996,17 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableSectionByHandle",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "MmUnlockPagableImageSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15108,7 +15108,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmUnlockPagableImageSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15148,7 +15148,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16041,7 +16041,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlIsStateSeparationEnabled",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16126,7 +16126,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18504,7 +18504,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableDataSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18514,7 +18514,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmUnlockPagableImageSection",
-     "state": "traps"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18524,7 +18524,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoDisconnectInterrupt",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18639,7 +18639,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmLockPagableSectionByHandle",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18734,12 +18734,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoConnectInterrupt",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "IoQueryDeviceDescription",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18774,7 +18774,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlIsStateSeparationEnabled",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -21857,10 +21857,10 @@
   "binaries": 60,
   "kernel_names": {
    "total": 1740,
-   "implemented": 760,
-   "partial": 89,
-   "traps": 119,
-   "missing": 772
+   "implemented": 766,
+   "partial": 90,
+   "traps": 117,
+   "missing": 767
   },
   "by_binary": [
    {
@@ -21868,9 +21868,9 @@
     "version": "10.0.19041.1741",
     "kernel": {
      "total": 260,
-     "implemented": 218,
+     "implemented": 220,
      "partial": 28,
-     "traps": 14,
+     "traps": 12,
      "missing": 0
     },
     "by_ordinal": 1,
@@ -21885,10 +21885,10 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 186,
+     "implemented": 189,
      "partial": 9,
-     "traps": 9,
-     "missing": 47
+     "traps": 7,
+     "missing": 46
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -21931,10 +21931,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 240,
-     "implemented": 142,
+     "implemented": 143,
      "partial": 10,
      "traps": 18,
-     "missing": 70
+     "missing": 69
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22049,9 +22049,9 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 185,
+     "implemented": 187,
      "partial": 24,
-     "traps": 13,
+     "traps": 11,
      "missing": 103
     },
     "by_ordinal": 0,
@@ -22127,10 +22127,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 76,
-     "partial": 2,
+     "implemented": 78,
+     "partial": 3,
      "traps": 0,
-     "missing": 13
+     "missing": 10
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22204,9 +22204,9 @@
     "version": "10.0.19041.1586",
     "kernel": {
      "total": 120,
-     "implemented": 100,
+     "implemented": 102,
      "partial": 2,
-     "traps": 18,
+     "traps": 16,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -22286,10 +22286,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 260,
+     "implemented": 264,
      "partial": 21,
-     "traps": 11,
-     "missing": 67
+     "traps": 9,
+     "missing": 65
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22302,10 +22302,10 @@
     "version": "10.0.19041.1682",
     "kernel": {
      "total": 235,
-     "implemented": 175,
+     "implemented": 176,
      "partial": 11,
      "traps": 8,
-     "missing": 41
+     "missing": 40
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22332,10 +22332,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 316,
+     "implemented": 318,
      "partial": 45,
-     "traps": 30,
-     "missing": 234
+     "traps": 29,
+     "missing": 233
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22436,10 +22436,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 68,
-     "implemented": 59,
-     "partial": 2,
-     "traps": 2,
-     "missing": 5
+     "implemented": 65,
+     "partial": 3,
+     "traps": 0,
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22496,9 +22496,9 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 269,
-     "implemented": 246,
+     "implemented": 247,
      "partial": 20,
-     "traps": 3,
+     "traps": 2,
      "missing": 0
     },
     "by_ordinal": 0,
@@ -22509,9 +22509,9 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 236,
+     "implemented": 238,
      "partial": 15,
-     "traps": 11,
+     "traps": 9,
      "missing": 67
     },
     "by_ordinal": 0,
@@ -22575,10 +22575,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 86,
+     "implemented": 88,
      "partial": 9,
-     "traps": 8,
-     "missing": 12
+     "traps": 7,
+     "missing": 11
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22594,9 +22594,9 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 121,
-     "implemented": 88,
+     "implemented": 90,
      "partial": 11,
-     "traps": 8,
+     "traps": 6,
      "missing": 14
     },
     "by_ordinal": 0,
@@ -22654,10 +22654,10 @@
     "version": "1.31.19041.1566",
     "kernel": {
      "total": 217,
-     "implemented": 180,
+     "implemented": 183,
      "partial": 18,
-     "traps": 4,
-     "missing": 15
+     "traps": 2,
+     "missing": 14
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22717,10 +22717,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 451,
-     "implemented": 211,
+     "implemented": 212,
      "partial": 18,
      "traps": 34,
-     "missing": 188
+     "missing": 187
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22738,9 +22738,9 @@
     "kernel": {
      "total": 439,
      "implemented": 210,
-     "partial": 15,
+     "partial": 16,
      "traps": 32,
-     "missing": 182
+     "missing": 181
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22785,7 +22785,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 978,
+   "exported_by_nk": 983,
    "nk_names_it_lacks": [
     "ExAllocateTimerInternal2",
     "KeRemoveQueueApc",

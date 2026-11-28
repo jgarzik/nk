@@ -126,6 +126,51 @@ fn version() -> Result<(), &'static str> {
             );
         }
     }
+    if crate::rtl::RtlIsStateSeparationEnabled() != 0 {
+        return Err("RtlIsStateSeparationEnabled must be false on NK");
+    }
+    // SAFETY: null pointers are allowed for optional query filters.
+    let bad_desc = unsafe {
+        crate::hal::description::IoQueryDeviceDescription(
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null_mut(),
+        )
+    };
+    if bad_desc != nk_ntabi::status::STATUS_INVALID_PARAMETER {
+        return Err("IoQueryDeviceDescription accepted null callout");
+    }
+    // SAFETY: non-null dummy callout pointer is never invoked when no legacy
+    // description matches.
+    let missing_desc = unsafe {
+        crate::hal::description::IoQueryDeviceDescription(
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::dangling(),
+            core::ptr::null_mut(),
+        )
+    };
+    if missing_desc != nk_ntabi::status::STATUS_OBJECT_NAME_NOT_FOUND {
+        return Err("IoQueryDeviceDescription did not return STATUS_OBJECT_NAME_NOT_FOUND");
+    }
+    // SAFETY: null is compared against loaded image ranges and yields null;
+    // lock-by-handle and unlock accept the returned handle.
+    unsafe {
+        if !crate::ldr::MmLockPagableDataSection(core::ptr::null_mut()).is_null() {
+            return Err("MmLockPagableDataSection returned non-null for null address");
+        }
+        crate::ldr::MmLockPagableSectionByHandle(core::ptr::null_mut());
+        crate::ldr::MmUnlockPagableImageSection(core::ptr::null_mut());
+    }
     Ok(())
 }
 

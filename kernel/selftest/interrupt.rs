@@ -823,9 +823,51 @@ fn refused_levels(source: &InterruptTestSource) -> Result<(), &'static str> {
     for interrupt in results.into_iter().flatten() {
         disconnect(CONNECT_FULLY_SPECIFIED, interrupt.cast());
     }
+    // Legacy WDM IoConnectInterrupt / IoDisconnectInterrupt round-trip on the
+    // same translated line, plus rejection of zero processor mask.
+    let mut legacy: *mut KINTERRUPT = core::ptr::null_mut();
+    // SAFETY: local pointers and valid translated vector.
+    let bad_mask = unsafe {
+        device::IoConnectInterrupt(
+            &raw mut legacy,
+            Some(serve),
+            served.context(),
+            null,
+            translated.vector,
+            translated.level,
+            translated.level,
+            Trigger::Level.mode(),
+            1,
+            0,
+            0,
+        )
+    };
+    // SAFETY: local pointers and valid translated vector.
+    let ok_legacy = unsafe {
+        device::IoConnectInterrupt(
+            &raw mut legacy,
+            Some(serve),
+            served.context(),
+            null,
+            translated.vector,
+            translated.level,
+            translated.level,
+            Trigger::Level.mode(),
+            1,
+            translated.affinity as usize,
+            0,
+        )
+    };
+    if ok_legacy == STATUS_SUCCESS && !legacy.is_null() {
+        // SAFETY: just connected by IoConnectInterrupt.
+        unsafe { device::IoDisconnectInterrupt(legacy) };
+    }
     routing::release(translated.vector);
     if results != [Err(STATUS_INVALID_PARAMETER); 2] {
         return Err("a connection at the wrong IRQL was made");
+    }
+    if bad_mask != STATUS_INVALID_PARAMETER || ok_legacy != STATUS_SUCCESS || legacy.is_null() {
+        return Err("legacy IoConnectInterrupt / IoDisconnectInterrupt failed");
     }
     Ok(())
 }
