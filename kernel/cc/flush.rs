@@ -232,7 +232,6 @@ pub fn flush_scm(scm: &Scm, range: Option<(u64, u32)>, budget: Option<u64>) -> I
     };
     let page = PAGE_SIZE as u64;
     let mut left = budget.unwrap_or(u64::MAX);
-    let mut waited_inflight = false;
     loop {
         // Pinned runs.
         let mut from = start;
@@ -328,7 +327,6 @@ pub fn flush_scm(scm: &Scm, range: Option<(u64, u32)>, budget: Option<u64>) -> I
         if budget.is_none()
             && let Some(fatal) = wait_overlapping_inflight(scm, start, end)
         {
-            waited_inflight = true;
             if nt_error(fatal) && !nt_error(result.Status) {
                 result.Status = fatal;
             }
@@ -336,7 +334,7 @@ pub fn flush_scm(scm: &Scm, range: Option<(u64, u32)>, budget: Option<u64>) -> I
         }
         break;
     }
-    if range.is_some() || (budget.is_none() && waited_inflight) {
+    if range.is_some() || budget.is_none() {
         let rest = flush::flush_section(scm.sop, range, Some(CC_FLUSH));
         note(&mut result, &rest);
     }
