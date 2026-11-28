@@ -52,6 +52,7 @@ mod open;
 mod oracle;
 mod pci;
 mod pend;
+mod phase5;
 mod pnp;
 mod po;
 mod pofx;
@@ -243,6 +244,7 @@ pub static GROUPS: &[&[&Group]] = &[
     echo::GROUPS,
     serial::GROUPS,
     usb_kbd::GROUPS,
+    phase5::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,

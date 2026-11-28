@@ -26,14 +26,22 @@ from a processor fault, are dispatched and unwound as on Windows.
 
 On x86-64, Microsoft's `acpi.sys` and `pci.sys` enumerate QEMU's q35
 machine through NK's Plug and Play and power managers;
-`storport.sys`, `storahci.sys` and `disk.sys` read and write its AHCI
-disk with device interrupts and DMA; `partmgr.sys`, `volmgr.sys` and
-`mountmgr.sys` find the volume on it and name it `C:`; Microsoft's
-`fastfat.sys` mounts that FAT32 volume through NK's cache manager,
-memory sections, paging I/O, `FsRtl` and kernel APCs, reading and
-writing files verified afterwards by host tools; and `pcw.sys`,
-`cng.sys` and `ksecdd.sys` start as boot drivers with boot entropy
-gathered by `nkload`.
+`storport.sys`, `storahci.sys`, `stornvme.sys` and `disk.sys` read and
+write AHCI and PCIe NVMe disks with device interrupts and DMA;
+`partmgr.sys`, `volmgr.sys` and `mountmgr.sys` find the volume on them
+and name it `C:`; Microsoft's `fastfat.sys` mounts that FAT32 volume
+through NK's cache manager, memory sections, paging I/O, `FsRtl` and
+kernel APCs, reading and writing files verified afterwards by host
+tools; `pcw.sys`, `cng.sys` and `ksecdd.sys` start as boot drivers with
+boot entropy gathered by `nkload`; Microsoft's KMDF runtime
+(`wdfldr.sys`, `wdf01000.sys`, `sleepstudyhelper.sys`) runs the WDK
+`echo.x64.sys` sample on `ROOT\ECHO\0000`, `msisadrv.sys`, `serial.sys`
+and `serenum.sys` drive COM2 bidirectionally while COM1 stays NK's log
+port, and Microsoft's nine-driver USB 3.0 xHCI and HID keyboard stack
+(`usbxhci.sys`, `ucx01000.sys`, `usbhub3.sys`, `usbd.sys`, `hidusb.sys`,
+`hidclass.sys`, `hidparse.sys`, `kbdhid.sys`, `kbdclass.sys`) handles
+live QMP hotplug, keystroke delivery, surprise removal with in-flight
+I/O, and reattach.
 
 Absent: user mode, physical hardware, file systems beyond FAT and RAW
 ([doc/design/absent.md](doc/design/absent.md)).

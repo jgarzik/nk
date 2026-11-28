@@ -30,12 +30,19 @@ One image is loaded or unloaded at a time, under a mutex
 wait, and loads a library from inside the load of its importer.
 
 **Paging a driver.** `MmPageEntireDriver`, `MmResetDriverPaging`,
-`MmLockPagableDataSection`, `MmLockPagableSectionByHandle` and
-`MmUnlockPagableImageSection` change no page residency: NK never pages
-kernel memory out, so an image is resident from load to unload, which is
-within what every one of those routines promises. `MmPageEntireDriver` and
+`MmLockPagableCodeSection`, `MmLockPagableDataSection`,
+`MmLockPagableSectionByHandle` and `MmUnlockPagableImageSection` change
+no page residency: NK never pages kernel memory out, so an image is
+resident from load to unload, which is within what every one of those
+routines promises. `MmPageEntireDriver`, `MmLockPagableCodeSection` and
 `MmLockPagableDataSection` still answer with the base of the image an
 address lies in, or null.
+
+**Driver and library duality.** A kernel image loaded as a library via
+another image's imports (such as `wdfldr.sys`, `ucx01000.sys`,
+`usbd.sys`, or `hidclass.sys`) can also be started as a service driver
+without reloading the binary; `io::driver::load` reuses the resident
+image and keeps its export table live while any importer holds it.
 
 **An image's messages.** A driver reads text from a message table in
 an image's resources with

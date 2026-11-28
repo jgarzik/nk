@@ -1357,3 +1357,21 @@ cmdline = "test=usb.boot"
 registry = ["storage", "crypto", "kmdf", "usb"]
 usb = "xhci"
 hotplug = true
+
+# Integrated Phase 5 QEMU q35 boot: NVMe GPT FAT32 read + writeback verified
+# offline by fatdisk.py, COM2 serial (msisadrv + serial + serenum) with host
+# socket peer, and xHCI USB 3.0 + HID keyboard hotplug (attach, seq1, unplug
+# with in-flight read, reattach, seq2) in one boot.
+
+[x86_64-phase5-q35]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=phase5.nvme"
+registry = ["storage", "nvme", "volumes", "mount", "fat", "crypto", "kmdf", "serial", "usb"]
+disk = "nvme"
+disk_image = "fat32-gpt"
+disk_expect = "fat-written"
+usb = "xhci"
+hotplug = true
+serial2 = true

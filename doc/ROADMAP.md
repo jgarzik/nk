@@ -73,34 +73,38 @@ each. What NK has of each part is in `doc/design/`.
 
 In order. Phase 4 (memory sections, cache manager, FsRtl, kernel APCs,
 `cng.sys`/`ksecdd.sys` with boot entropy, and `fastfat.sys` mounting,
-reading and writing `C:`) is proven. From here, 5 (more hardware) and
-the foundation, 6, 7, 8 (toward user mode) depend only on their own
-predecessors, so work can alternate; 9 and 10 need both. The foundation
-changes what was built on a single process and a boot-time scale
-(one address space, one handle table, spin locks around every table)
-before user mode builds on it. QEMU proves a phase first; the
-OptiPlex follows.
+reading and writing `C:`) and Phase 5 (KMDF runtime and WDK `echo.x64.sys`,
+`stornvme.sys` on PCIe NVMe with GPT FAT32 writeback, `msisadrv.sys` +
+`serial.sys` + `serenum.sys` on COM2, and Microsoft's USB 3.0 xHCI + HID
+keyboard stack with live QMP hotplug, surprise removal and reattach) are
+proven on QEMU x86-64. Physical boot on the Dell OptiPlex is deferred to
+Phase 10+ once the rescue-disk user-mode stack is ready. From here, the
+foundation and Phases 6–10 build user mode up to the Windows rescue disk.
+The foundation changes what was built on a single process and a boot-time
+scale (one address space, one handle table, spin locks around every
+table) before user mode builds on it.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond what NK has | KMDF echo sample; first boot on the OptiPlex: its disk through `stornvme`, `usbxhci` + hub + HID keyboard; `serial.sys` |
 | | Foundation for user mode | what processes need of the kernel's own structure: the caller's previous mode and the capture of its arguments, one way to create and open objects by name (each type's parse routine), locks taken at `PASSIVE_LEVEL` for the tables a system call reaches, I/O completion in the requesting thread, a handle table per process, firmware's runtime regions out of the user half | every earlier scenario still passes; NK's own tests of each piece |
 | 6 | User mode | user address spaces, image sections, the memory manager's page writers and trimming (designed in `doc/design/memory.md`), `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
 | 7 | Session manager | ALPC, writable registry, known DLLs, sessions, process creation as `smss.exe` drives it | `smss.exe` runs from a real hive up to starting the Windows subsystem |
 | 8 | Win32 base | what `csrss.exe`, its server DLLs, `kernelbase.dll` and `kernel32.dll` ask: the first Win32 processes | `cmd.exe /c ver` with its output redirected to a file |
 | 9 | Window system and console | session space, user-mode callbacks, the second system-call table, display through `dxgkrnl.sys` and `BasicDisplay.sys`, `condrv.sys` and `conhost.exe` | `win32k` loads; an interactive `cmd.exe` in its console window |
-| 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services); release images without the boot self-tests | the Destination above |
+| 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services); release images without the boot self-tests; physical hardware bring-up on the Dell OptiPlex | the Destination above |
 
 After the rescue disk, unordered: `ntfs.sys`; networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
 logon.
 
-## Next step: phase 5
+## Next step: foundation for user mode
 
-Phase 5 brings up Microsoft's driver frameworks and input hardware
-(KMDF, USB and HID, `stornvme.sys` and `serial.sys`), proving the KMDF
-echo sample under QEMU and the first physical boot on the Dell OptiPlex.
-Its detailed plan will be written here when phase 5 starts.
+The foundation prepares the single-process boot-time kernel for user mode
+(previous mode and argument capture, unified object parse routines,
+passive-level table locks, requesting-thread I/O completion, per-process
+handle tables, and keeping firmware runtime regions out of the user half),
+followed by Phase 6 (user mode, `ntdll.dll`, and `autochk.exe`). Its
+detailed plan will be written here when it starts.
 
 What NK lacks is listed in `doc/design/absent.md`.
 

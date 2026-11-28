@@ -84,19 +84,17 @@ loader reports those sources as Windows' loader reports an absent or
 failed one: `doc/BOOT.md`, Boot entropy),
 the extended processor state limited to the legacy x87 and SSE state
 (the shared data page's `XState.EnabledFeatures`, which
-`RtlGetEnabledExtendedFeatures` reads), no
-notification states (`kernel/ex/wnf.rs`: a WNF state name is unknown,
-`STATUS_OBJECT_NAME_NOT_FOUND`, as Windows answers for a name that has
-no instance and that its registry does not list; a name NK's registry
-does list stops the system, since Windows would have a state for it),
-no paging
+`RtlGetEnabledExtendedFeatures` reads), quiescent WNF notification
+states (`kernel/ex/wnf.rs`: well-known or permanent states listed under
+`ControlSet001\Control\Notifications` exist as empty quiescent states
+that drivers such as `sleepstudyhelper.sys` can query and subscribe to,
+while any unlisted state returns `STATUS_OBJECT_NAME_NOT_FOUND` as on
+Windows), no paging
 file, and a hypervisor only as far as the processor's CPUID names one
 (`HviIsAnyHypervisorPresent`, `HviGetHypervisorFeatures`: arm64 says
 none). A routine with many sub-functions
 answers those a binary reaches and stops the system naming any other
-(`kernel/po/mod.rs`, `ZwPowerInformation`). There is no sleep study:
-the request for its helper's table of routines fails, where Windows
-always has the helper, and `pci.sys` then reports nothing to it.
+(`kernel/po/mod.rs`, `ZwPowerInformation`).
 
 | Territory | Imported by | Why |
 | --- | --- | --- |
