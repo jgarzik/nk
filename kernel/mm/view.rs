@@ -364,6 +364,61 @@ pub fn create_pagefile_section(
     create_pagefile_section_named(max_size, protect, committed, None)
 }
 
+/// Create a committed pagefile-backed `SECTION_TYPE` object pre-populated with
+/// `bytes` (zero-padded to a page boundary). Used for shared read-only NLS and
+/// API-set sections mapped into every user process.
+#[allow(dead_code)]
+pub fn create_pagefile_section_from_bytes(
+    bytes: &[u8],
+    protect: u32,
+) -> Result<object::ObRef, NTSTATUS> {
+    if bytes.is_empty() {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    if win32_to_mm(protect).is_none() {
+        return Err(STATUS_INVALID_PAGE_PROTECTION);
+    }
+    let size = (bytes.len() as u64).next_multiple_of(PAGE_SIZE as u64);
+    let npages = (size / PAGE_SIZE as u64) as usize;
+    let mut frames = vec![0u64; npages];
+    for (idx, slot) in frames.iter_mut().enumerate() {
+        let Some(pa) = alloc_frames(1) else {
+            for &pa in &frames[..idx] {
+                if pa != 0 {
+                    free_frames(pa, 1);
+                }
+            }
+            return Err(STATUS_NO_MEMORY);
+        };
+        let off = idx * PAGE_SIZE;
+        let len = bytes.len().saturating_sub(off).min(PAGE_SIZE);
+        // SAFETY: `pa` is a freshly allocated physical frame accessible via the direct map.
+        unsafe {
+            let dst = phys_to_virt(pa);
+            core::ptr::write_bytes(dst, 0, PAGE_SIZE);
+            if len > 0 {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr().add(off), dst, len);
+            }
+        }
+        *slot = pa;
+    }
+    let backing = Arc::new(PagefileBacking {
+        frames: PushLock::new(frames),
+        max_size: AtomicU64::new(size),
+        protect,
+        alloc_attrs: SEC_COMMIT,
+    });
+    // SAFETY: `ca` is null (pagefile section).
+    unsafe {
+        section::create_user_section(
+            size,
+            core::ptr::null_mut(),
+            UserSection::Pagefile(backing),
+            None,
+        )
+    }
+}
+
 fn create_pagefile_section_named(
     max_size: u64,
     protect: u32,

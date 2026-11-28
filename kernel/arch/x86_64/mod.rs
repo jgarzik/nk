@@ -45,6 +45,7 @@ pub use cpu::{
     set_kernel_stack, set_user_gs_base,
 };
 pub use smp::{finish as smp_finish, prepare as smp_prepare};
+pub use user::enter_user_mode;
 /// The hardware's own name for the processor running this code: its
 /// local APIC id, asked of the processor itself.
 pub fn hardware_processor() -> u64 {

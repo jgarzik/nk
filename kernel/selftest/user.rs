@@ -203,7 +203,7 @@ nk_user_stub_cli_end:
             let _ = arg;
             // SAFETY: thread belongs to `proc`, which has `CODE_VA` mapped `USER_RX`
             // and `DATA_VA` mapped `USER_RW`.
-            unsafe { arch::user::enter_user_mode(CODE_VA, STACK_RSP, DATA_VA) }
+            unsafe { arch::user::enter_user_mode(CODE_VA, STACK_RSP, DATA_VA, 0) }
         }
 
         let t = thread::create_unstarted(

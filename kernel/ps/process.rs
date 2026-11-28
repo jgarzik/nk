@@ -77,6 +77,9 @@ pub struct Process {
     /// Per-process user address space (`None` for the System process, which
     /// owns `arch::kernel_address_space()`).
     space: Option<AddressSpace>,
+    /// Per-process user-mode metadata (`None` for the System process and
+    /// minimal kernel-test processes).
+    user: Option<alloc::boxed::Box<super::user::UserProcessState>>,
 }
 
 /// Physical address of `process`'s root page table (`KPROCESS.DirectoryTableBase`).
@@ -103,6 +106,31 @@ pub unsafe fn address_space<'a>(process: *const u8) -> Option<&'a AddressSpace> 
     unsafe { (*process.cast::<Process>()).space.as_ref() }
 }
 
+/// The user process's [`super::user::UserProcessState`], if initialized.
+///
+/// # Safety
+/// `process` is a live `EPROCESS` that outlives `'a`.
+#[allow(dead_code)]
+pub unsafe fn user_state<'a>(process: *const u8) -> Option<&'a super::user::UserProcessState> {
+    // SAFETY: per the contract.
+    unsafe { (*process.cast::<Process>()).user.as_deref() }
+}
+
+/// Attach `state` to a newly created user process.
+///
+/// # Safety
+/// `process` is a live `EPROCESS` with exclusive ownership during creation.
+#[allow(dead_code)]
+pub unsafe fn set_user_state(
+    process: *mut u8,
+    state: alloc::boxed::Box<super::user::UserProcessState>,
+) {
+    // SAFETY: per the contract.
+    unsafe {
+        (*process.cast::<Process>()).user = Some(state);
+    }
+}
+
 /// Allocate a new unique process or thread id (multiples of 4, starting at 8).
 pub fn new_id() -> u64 {
     NEXT_ID.fetch_add(4, Ordering::Relaxed)
@@ -122,6 +150,7 @@ pub fn init(time: u64) -> Result<(), &'static str> {
             .cast::<u64>()
             .write(arch::kernel_address_space());
         (&raw mut (*process.cast::<Process>()).space).write(None);
+        (&raw mut (*process.cast::<Process>()).user).write(None);
         // An `EX_FAST_REF`. Its count bits stay zero: NK hands out no
         // references in advance, every one is taken from the object.
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
@@ -183,6 +212,7 @@ pub unsafe fn create_minimal(
         // SAFETY: newly created process with no resources attached yet.
         unsafe {
             (&raw mut (*process.cast::<Process>()).space).write(None);
+            (&raw mut (*process.cast::<Process>()).user).write(None);
             object::dereference(process);
         }
         return Err(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES);
@@ -191,6 +221,7 @@ pub unsafe fn create_minimal(
         // SAFETY: newly created process; tear down table before dereferencing.
         unsafe {
             (&raw mut (*process.cast::<Process>()).space).write(None);
+            (&raw mut (*process.cast::<Process>()).user).write(None);
             crate::ob::handle::destroy_table(process, table);
             object::dereference(process);
         }
@@ -211,6 +242,7 @@ pub unsafe fn create_minimal(
             .cast::<u64>()
             .write(dtb);
         (&raw mut (*process.cast::<Process>()).space).write(Some(space));
+        (&raw mut (*process.cast::<Process>()).user).write(None);
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
         process
             .add(layout::OBJECT_TABLE)
@@ -285,6 +317,13 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
         if !token.is_null() {
             object::dereference(token);
         }
+        let sec_slot = process.add(layout::SECTION_OBJECT).cast::<*mut u8>();
+        let sec = sec_slot.read();
+        sec_slot.write(core::ptr::null_mut());
+        if !sec.is_null() {
+            object::dereference(sec);
+        }
+        core::ptr::drop_in_place(&raw mut (*process.cast::<Process>()).user);
         core::ptr::drop_in_place(&raw mut (*process.cast::<Process>()).space);
     }
 }

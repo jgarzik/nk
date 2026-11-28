@@ -9,6 +9,8 @@ pub mod cid;
 pub mod notify;
 pub mod process;
 pub mod silo;
+pub mod sysdll;
+pub mod user;
 
 use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::thread;
@@ -54,7 +56,7 @@ fn system_thread(start: usize) {
 pub extern "C" fn NtTerminateThread(thread_handle: *mut c_void, exit_status: NTSTATUS) -> NTSTATUS {
     let raw = thread_handle.addr();
     if raw == 0 || raw == (-2isize) as usize {
-        let _ = exit_status;
+        user::notify_thread_exit(exit_status);
         thread::exit();
     }
     STATUS_NOT_IMPLEMENTED

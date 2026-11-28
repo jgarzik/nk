@@ -213,7 +213,7 @@ nk_syscall_entry:
     .seh_endproc
 
     .globl nk_enter_user_mode
-// rcx = user RIP, rdx = user RSP, r8 = initial user RCX (arg0).
+// rcx = user RIP, rdx = user RSP, r8 = initial user RCX (arg0), r9 = initial user RDX (arg1).
 // Never returns: transitions to Ring 3 via `swapgs; iretq` with zeroed GPRs
 // and default user RFLAGS (`0x202`, IF=1).
 nk_enter_user_mode:
@@ -231,9 +231,9 @@ nk_enter_user_mode:
     push {user_cs}                      // CS
     push rcx                            // RIP
     mov rcx, r8                         // initial user RCX (arg0)
+    mov rdx, r9                         // initial user RDX (arg1)
     xor eax, eax
     xor ebx, ebx
-    xor edx, edx
     xor esi, esi
     xor edi, edi
     xor ebp, ebp
@@ -259,7 +259,7 @@ nk_enter_user_mode:
 
 unsafe extern "C" {
     fn nk_syscall_entry();
-    fn nk_enter_user_mode(rip: u64, rsp: u64, arg0: u64) -> !;
+    fn nk_enter_user_mode(rip: u64, rsp: u64, arg0: u64, arg1: u64) -> !;
 }
 
 /// Entry address programmed into `IA32_LSTAR`.
@@ -267,15 +267,16 @@ pub fn syscall_entry_addr() -> u64 {
     nk_syscall_entry as *const () as usize as u64
 }
 
-/// Transition the current thread into Ring 3 at `(rip, rsp)` with `arg0` in `rcx`.
+/// Transition the current thread into Ring 3 at `(rip, rsp)` with `arg0` in `rcx`
+/// and `arg1` in `rdx`.
 ///
 /// # Safety
 /// The current thread must belong to a user address space with valid user
 /// mappings at `rip` (executable) and `rsp` (writable stack), at `PASSIVE_LEVEL`
 /// with no locks held.
-pub unsafe fn enter_user_mode(rip: u64, rsp: u64, arg0: u64) -> ! {
+pub unsafe fn enter_user_mode(rip: u64, rsp: u64, arg0: u64, arg1: u64) -> ! {
     // SAFETY: per the contract.
-    unsafe { nk_enter_user_mode(rip, rsp, arg0) }
+    unsafe { nk_enter_user_mode(rip, rsp, arg0, arg1) }
 }
 
 /// C-ABI system-call dispatcher invoked from `nk_syscall_entry`.

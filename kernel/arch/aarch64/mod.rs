@@ -443,6 +443,17 @@ pub fn xstate_self_test() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Transition to user mode (not yet implemented on arm64).
+///
+/// # Safety
+/// Never returns on arm64.
+#[allow(dead_code)]
+pub unsafe fn enter_user_mode(_rip: u64, _rsp: u64, _arg0: u64, _arg1: u64) -> ! {
+    crate::kd::bugcheck(format_args!(
+        "arm64 user-mode transition is not implemented"
+    ))
+}
+
 /// Make memory hold what the data cache holds of a range, and drop
 /// the cached lines, for a device that reads or writes the range
 /// behind the processor's back.

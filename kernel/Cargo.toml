@@ -16,6 +16,7 @@ bench = false
 
 [dependencies]
 nk-acpi = { path = "../lib/acpi" }
+nk-apiset = { path = "../lib/apiset" }
 nk-bootinfo = { path = "../lib/bootinfo" }
 nk-cc = { path = "../lib/cc" }
 nk-disk = { path = "../lib/disk" }
@@ -25,6 +26,7 @@ nk-fsrtl = { path = "../lib/fsrtl" }
 nk-hal = { path = "../lib/hal" }
 nk-ke = { path = "../lib/ke" }
 nk-mm = { path = "../lib/mm" }
+nk-nls = { path = "../lib/nls" }
 nk-ntabi = { path = "../lib/ntabi" }
 nk-pnp = { path = "../lib/pnp" }
 nk-ob = { path = "../lib/ob" }
