@@ -160,6 +160,7 @@ pub fn init(time: u64) -> Result<(), &'static str> {
             .copy_from_nonoverlapping(b"System".as_ptr(), 6);
     }
     PsInitialSystemProcess.0.store(process, Ordering::Release);
+    super::cid::insert_process(layout::SYSTEM_PROCESS_ID, process);
     super::silo::init();
     Ok(())
 }
@@ -249,6 +250,7 @@ pub unsafe fn create_minimal(
     // SAFETY: `process` has its initial reference; `ObRef::adopt` cleans it up
     // on error via `deleted`.
     let held = unsafe { object::ObRef::adopt(process) };
+    super::cid::insert_process(pid, held.body());
     if inherit {
         // SAFETY: both `parent` and `process` are live with valid tables.
         unsafe { crate::ob::handle::inherit_handles(parent, held.body()) }?;
@@ -256,8 +258,9 @@ pub unsafe fn create_minimal(
     Ok(held)
 }
 
-/// `PROCESS_TYPE`'s delete procedure: tears down the process's handle table
-/// (if still present) and drops its primary token reference.
+/// `PROCESS_TYPE`'s delete procedure: unregisters the PID, tears down the
+/// process's handle table (if still present), drops its primary token
+/// reference, and destroys its user address space.
 ///
 /// # Safety
 /// `body` is a `Process` object with no remaining references.
@@ -265,6 +268,8 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
     let process = body.cast::<u8>();
     // SAFETY: per the contract; exclusive access during object deletion.
     unsafe {
+        let pid = process.add(layout::UNIQUE_PROCESS_ID).cast::<u64>().read();
+        super::cid::remove(pid);
         let table_slot = process
             .add(layout::OBJECT_TABLE)
             .cast::<*mut crate::ob::handle::HandleTable>();
@@ -666,6 +671,54 @@ pub fn new_thread_id() -> u64 {
     new_id()
 }
 
+/// [`PsGetCurrentThreadTeb`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetcurrentthreadteb):
+/// the user-mode `TEB` pointer of the calling thread (`KTHREAD.Teb`), or null
+/// for a system thread.
+pub extern "C" fn PsGetCurrentThreadTeb() -> *mut c_void {
+    let me = thread::current();
+    // SAFETY: `me` is the running thread.
+    unsafe { thread::object_field::<*mut c_void>(me, thread_layout::TEB).read() }
+}
+
+/// [`PsGetProcessCreateTimeQuadPart`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetprocesscreatetimequadpart):
+/// creation time of `process` (`EPROCESS.CreateTime`).
+///
+/// # Safety
+/// `process` is a live `EPROCESS`.
+pub unsafe extern "C" fn PsGetProcessCreateTimeQuadPart(process: *mut c_void) -> i64 {
+    // SAFETY: per the contract.
+    unsafe {
+        process
+            .cast::<u8>()
+            .add(layout::CREATE_TIME)
+            .cast::<i64>()
+            .read()
+    }
+}
+
+/// [`PsIsThreadTerminating`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psisthreadterminating):
+/// whether `thread` is terminated or terminating.
+///
+/// # Safety
+/// `thread` is a live `ETHREAD`.
+pub unsafe extern "C" fn PsIsThreadTerminating(thread: *mut c_void) -> u8 {
+    // SAFETY: per the contract.
+    unsafe {
+        let state = thread.cast::<u8>().add(thread_layout::STATE).read();
+        let flags = thread
+            .cast::<u8>()
+            .add(thread_layout::CROSS_THREAD_FLAGS)
+            .cast::<u32>()
+            .read();
+        u8::from(state == thread_layout::state::TERMINATED || (flags & 1) != 0)
+    }
+}
+
+/// `PsIsProtectedProcess`: NK does not run PPL/Protected Processes.
+pub extern "C" fn PsIsProtectedProcess(_process: *mut c_void) -> u8 {
+    0
+}
+
 // ---- tests --------------------------------------------------------------
 
 /// The System process as a binary reading it would find it, and the
@@ -812,6 +865,81 @@ pub fn self_test() -> Result<(), &'static str> {
             return Err("F4: NtCurrentProcess in P2 did not return P2");
         }
         drop(cur_p2);
+        // CID table + PsLookupProcessByProcessId + ZwOpenProcess + ZwOpenThread.
+        {
+            use nk_ntabi::ob::OBJECT_ATTRIBUTES;
+            use nk_ntabi::user::{CLIENT_ID, PROCESS_QUERY_INFORMATION, THREAD_QUERY_INFORMATION};
+            // SAFETY: `p2` is live.
+            let p2_pid = unsafe { PsGetProcessId(p2.body().cast()) };
+            let mut looked: *mut c_void = core::ptr::null_mut();
+            // SAFETY: `looked` is a local pointer slot.
+            let st = unsafe { super::cid::PsLookupProcessByProcessId(p2_pid, &raw mut looked) };
+            if st != STATUS_SUCCESS || looked != p2.body().cast() {
+                return Err("PsLookupProcessByProcessId did not find P2");
+            }
+            // SAFETY: reference taken by `PsLookupProcessByProcessId`.
+            unsafe { object::dereference(looked.cast()) };
+            let oa = OBJECT_ATTRIBUTES {
+                Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+                RootDirectory: core::ptr::null_mut(),
+                ObjectName: core::ptr::null_mut(),
+                Attributes: 0,
+                SecurityDescriptor: core::ptr::null_mut(),
+                SecurityQualityOfService: core::ptr::null_mut(),
+            };
+            let cid_p2 = CLIENT_ID {
+                UniqueProcess: p2_pid,
+                UniqueThread: core::ptr::null_mut(),
+            };
+            let mut h_p2: *mut c_void = core::ptr::null_mut();
+            // SAFETY: local pointers in kernel mode.
+            let st = unsafe {
+                super::ZwOpenProcess(
+                    &raw mut h_p2,
+                    PROCESS_QUERY_INFORMATION,
+                    &raw const oa,
+                    &raw const cid_p2,
+                )
+            };
+            if st != STATUS_SUCCESS || h_p2.is_null() {
+                return Err("ZwOpenProcess failed for live P2");
+            }
+            let _ = handle::close(h_p2 as u64);
+            let cid_me = CLIENT_ID {
+                UniqueProcess: PsGetCurrentProcessId(),
+                UniqueThread: PsGetCurrentThreadId(),
+            };
+            let mut h_th: *mut c_void = core::ptr::null_mut();
+            // SAFETY: local pointers in kernel mode.
+            let st = unsafe {
+                super::ZwOpenThread(
+                    &raw mut h_th,
+                    THREAD_QUERY_INFORMATION,
+                    &raw const oa,
+                    &raw const cid_me,
+                )
+            };
+            if st != STATUS_SUCCESS || h_th.is_null() {
+                return Err("ZwOpenThread failed for current thread");
+            }
+            let _ = handle::close(h_th as u64);
+            let cid_bad = CLIENT_ID {
+                UniqueProcess: core::ptr::with_exposed_provenance_mut(0xDEAD_0000),
+                UniqueThread: core::ptr::null_mut(),
+            };
+            // SAFETY: local pointers in kernel mode.
+            if unsafe {
+                super::ZwOpenProcess(
+                    &raw mut h_p2,
+                    PROCESS_QUERY_INFORMATION,
+                    &raw const oa,
+                    &raw const cid_bad,
+                )
+            } != nk_ntabi::status::STATUS_INVALID_CID
+            {
+                return Err("ZwOpenProcess did not return STATUS_INVALID_CID for unknown PID");
+            }
+        }
         drop(p2);
         drop(p1);
         drop(ev2);

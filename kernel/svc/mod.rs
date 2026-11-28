@@ -563,6 +563,18 @@ register_services! {
     safe Implemented, NtClose => crate::ps::NtClose, ZwClose(
         handle: *mut c_void,
     );
+    unsafe Implemented, NtOpenProcess => crate::ps::NtOpenProcess, ZwOpenProcess(
+        process_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        client_id: *const nk_ntabi::user::CLIENT_ID,
+    );
+    unsafe Implemented, NtOpenThread => crate::ps::NtOpenThread, ZwOpenThread(
+        thread_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        client_id: *const nk_ntabi::user::CLIENT_ID,
+    );
     safe Partial, NtTerminateThread => crate::ps::NtTerminateThread, ZwTerminateThread(
         thread_handle: *mut c_void,
         exit_status: NTSTATUS,

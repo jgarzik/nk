@@ -78,7 +78,8 @@ already held has a lower rank; two locks of one rank never nest.
 | 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
 | 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
-| 32 | `ps::notify::TABLE` | the process-creation notify routines drivers have registered, and their kinds | DISPATCH |
+| 32 | `ps::notify::TABLES` | the process, thread, and image-load notify routines drivers have registered, and their kinds | DISPATCH |
+| 33 | `ps::cid::CID_TABLE` | the global PID/TID-to-`EPROCESS`/`ETHREAD` lookup table (`PspCidTable`) | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 36 | `mm::map::LIVE` | which ranges of the dynamic kernel region are handed out; taken with no lock of the address space held | DISPATCH |
 | 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing; the devices registered with the runtime power framework, their components' counts and conditions, and which are owed callbacks from a worker | DISPATCH |

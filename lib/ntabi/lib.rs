@@ -42,6 +42,7 @@ pub mod silo;
 pub mod status;
 pub mod sysinfo;
 pub mod thread;
+pub mod user;
 pub mod whea;
 
 #[cfg(test)]

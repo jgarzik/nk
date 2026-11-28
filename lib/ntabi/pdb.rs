@@ -42,19 +42,235 @@ fn ntdll_types() -> Option<Types> {
 
 #[test]
 fn ntdll_pdb_exposes_user_structures() {
+    use crate::user::{
+        ACTIVATION_CONTEXT_STACK, CLIENT_ID, CURDIR, NT_TIB, PEB, RTL_DRIVE_LETTER_CURDIR,
+        RTL_USER_PROCESS_PARAMETERS, TEB,
+    };
+    use core::mem::{offset_of, size_of};
     let Some(types) = ntdll_types() else { return };
-    for name in [
-        "_PEB",
-        "_TEB",
-        "_NT_TIB",
-        "_RTL_USER_PROCESS_PARAMETERS",
-        "_PEB_LDR_DATA",
-        "_LDR_DATA_TABLE_ENTRY",
-    ] {
+    for name in ["_PEB_LDR_DATA", "_LDR_DATA_TABLE_ENTRY"] {
         let layout = types
             .layout(name)
             .unwrap_or_else(|e| panic!("ntdll.pdb missing {name}: {e:?}"));
         assert!(layout.size > 0, "{name} has zero size");
+    }
+    let tib = types.layout("_NT_TIB").expect("_NT_TIB");
+    assert_eq!(size_of::<NT_TIB>(), tib.size as usize);
+    assert_eq!(
+        offset_of!(NT_TIB, ExceptionList),
+        offset(&tib, "_NT_TIB", "ExceptionList")
+    );
+    assert_eq!(
+        offset_of!(NT_TIB, StackBase),
+        offset(&tib, "_NT_TIB", "StackBase")
+    );
+    assert_eq!(
+        offset_of!(NT_TIB, StackLimit),
+        offset(&tib, "_NT_TIB", "StackLimit")
+    );
+    assert_eq!(offset_of!(NT_TIB, SelfPtr), offset(&tib, "_NT_TIB", "Self"));
+
+    let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
+    assert_eq!(size_of::<CLIENT_ID>(), cid.size as usize);
+    assert_eq!(
+        offset_of!(CLIENT_ID, UniqueProcess),
+        offset(&cid, "_CLIENT_ID", "UniqueProcess")
+    );
+    assert_eq!(
+        offset_of!(CLIENT_ID, UniqueThread),
+        offset(&cid, "_CLIENT_ID", "UniqueThread")
+    );
+
+    let cur = types.layout("_CURDIR").expect("_CURDIR");
+    assert_eq!(size_of::<CURDIR>(), cur.size as usize);
+    assert_eq!(
+        offset_of!(CURDIR, DosPath),
+        offset(&cur, "_CURDIR", "DosPath")
+    );
+    assert_eq!(
+        offset_of!(CURDIR, Handle),
+        offset(&cur, "_CURDIR", "Handle")
+    );
+
+    let drv = types
+        .layout("_RTL_DRIVE_LETTER_CURDIR")
+        .expect("_RTL_DRIVE_LETTER_CURDIR");
+    assert_eq!(size_of::<RTL_DRIVE_LETTER_CURDIR>(), drv.size as usize);
+    assert_eq!(
+        offset_of!(RTL_DRIVE_LETTER_CURDIR, DosPath),
+        offset(&drv, "_RTL_DRIVE_LETTER_CURDIR", "DosPath")
+    );
+
+    let act = types
+        .layout("_ACTIVATION_CONTEXT_STACK")
+        .expect("_ACTIVATION_CONTEXT_STACK");
+    assert_eq!(size_of::<ACTIVATION_CONTEXT_STACK>(), act.size as usize);
+    assert_eq!(
+        offset_of!(ACTIVATION_CONTEXT_STACK, ActiveFrame),
+        offset(&act, "_ACTIVATION_CONTEXT_STACK", "ActiveFrame")
+    );
+    assert_eq!(
+        offset_of!(ACTIVATION_CONTEXT_STACK, StackId),
+        offset(&act, "_ACTIVATION_CONTEXT_STACK", "StackId")
+    );
+
+    let pp = types
+        .layout("_RTL_USER_PROCESS_PARAMETERS")
+        .expect("_RTL_USER_PROCESS_PARAMETERS");
+    assert_eq!(size_of::<RTL_USER_PROCESS_PARAMETERS>(), pp.size as usize);
+    for (actual, field_name) in [
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, MaximumLength),
+            "MaximumLength",
+        ),
+        (offset_of!(RTL_USER_PROCESS_PARAMETERS, Length), "Length"),
+        (offset_of!(RTL_USER_PROCESS_PARAMETERS, Flags), "Flags"),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, ConsoleHandle),
+            "ConsoleHandle",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, StandardInput),
+            "StandardInput",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, StandardOutput),
+            "StandardOutput",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, StandardError),
+            "StandardError",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, CurrentDirectory),
+            "CurrentDirectory",
+        ),
+        (offset_of!(RTL_USER_PROCESS_PARAMETERS, DllPath), "DllPath"),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, ImagePathName),
+            "ImagePathName",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, CommandLine),
+            "CommandLine",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, Environment),
+            "Environment",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, WindowTitle),
+            "WindowTitle",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, CurrentDirectores),
+            "CurrentDirectores",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, EnvironmentSize),
+            "EnvironmentSize",
+        ),
+        (
+            offset_of!(RTL_USER_PROCESS_PARAMETERS, DefaultThreadpoolThreadMaximum),
+            "DefaultThreadpoolThreadMaximum",
+        ),
+    ] {
+        assert_eq!(
+            actual,
+            offset(&pp, "_RTL_USER_PROCESS_PARAMETERS", field_name),
+            "{field_name}"
+        );
+    }
+
+    let peb = types.layout("_PEB").expect("_PEB");
+    assert_eq!(size_of::<PEB>(), peb.size as usize);
+    for (actual, field_name) in [
+        (
+            offset_of!(PEB, InheritedAddressSpace),
+            "InheritedAddressSpace",
+        ),
+        (offset_of!(PEB, BeingDebugged), "BeingDebugged"),
+        (offset_of!(PEB, Mutant), "Mutant"),
+        (offset_of!(PEB, ImageBaseAddress), "ImageBaseAddress"),
+        (offset_of!(PEB, Ldr), "Ldr"),
+        (offset_of!(PEB, ProcessParameters), "ProcessParameters"),
+        (offset_of!(PEB, ProcessHeap), "ProcessHeap"),
+        (offset_of!(PEB, FastPebLock), "FastPebLock"),
+        (offset_of!(PEB, CrossProcessFlags), "CrossProcessFlags"),
+        (offset_of!(PEB, KernelCallbackTable), "KernelCallbackTable"),
+        (offset_of!(PEB, ApiSetMap), "ApiSetMap"),
+        (offset_of!(PEB, TlsBitmap), "TlsBitmap"),
+        (offset_of!(PEB, AnsiCodePageData), "AnsiCodePageData"),
+        (offset_of!(PEB, OemCodePageData), "OemCodePageData"),
+        (
+            offset_of!(PEB, UnicodeCaseTableData),
+            "UnicodeCaseTableData",
+        ),
+        (offset_of!(PEB, NumberOfProcessors), "NumberOfProcessors"),
+        (offset_of!(PEB, NtGlobalFlag), "NtGlobalFlag"),
+        (
+            offset_of!(PEB, CriticalSectionTimeout),
+            "CriticalSectionTimeout",
+        ),
+        (offset_of!(PEB, HeapSegmentReserve), "HeapSegmentReserve"),
+        (offset_of!(PEB, ProcessHeaps), "ProcessHeaps"),
+        (offset_of!(PEB, LoaderLock), "LoaderLock"),
+        (offset_of!(PEB, OSMajorVersion), "OSMajorVersion"),
+        (offset_of!(PEB, OSMinorVersion), "OSMinorVersion"),
+        (offset_of!(PEB, OSBuildNumber), "OSBuildNumber"),
+        (offset_of!(PEB, OSPlatformId), "OSPlatformId"),
+        (offset_of!(PEB, ImageSubsystem), "ImageSubsystem"),
+        (
+            offset_of!(PEB, ActiveProcessAffinityMask),
+            "ActiveProcessAffinityMask",
+        ),
+        (offset_of!(PEB, SessionId), "SessionId"),
+        (offset_of!(PEB, MinimumStackCommit), "MinimumStackCommit"),
+    ] {
+        assert_eq!(
+            actual,
+            offset(&peb, "_PEB", field_name),
+            "_PEB.{field_name}"
+        );
+    }
+
+    let teb = types.layout("_TEB").expect("_TEB");
+    assert_eq!(size_of::<TEB>(), teb.size as usize);
+    for (actual, field_name) in [
+        (offset_of!(TEB, NtTib), "NtTib"),
+        (offset_of!(TEB, ClientId), "ClientId"),
+        (
+            offset_of!(TEB, ProcessEnvironmentBlock),
+            "ProcessEnvironmentBlock",
+        ),
+        (offset_of!(TEB, LastErrorValue), "LastErrorValue"),
+        (offset_of!(TEB, CurrentLocale), "CurrentLocale"),
+        (offset_of!(TEB, ActivationStack), "_ActivationStack"),
+        (
+            offset_of!(TEB, ActivationContextStackPointer),
+            "ActivationContextStackPointer",
+        ),
+        (offset_of!(TEB, RealClientId), "RealClientId"),
+        (offset_of!(TEB, LastStatusValue), "LastStatusValue"),
+        (offset_of!(TEB, StaticUnicodeString), "StaticUnicodeString"),
+        (offset_of!(TEB, StaticUnicodeBuffer), "StaticUnicodeBuffer"),
+        (offset_of!(TEB, DeallocationStack), "DeallocationStack"),
+        (offset_of!(TEB, TlsSlots), "TlsSlots"),
+        (offset_of!(TEB, TlsLinks), "TlsLinks"),
+        (offset_of!(TEB, HardErrorMode), "HardErrorMode"),
+        (offset_of!(TEB, IdealProcessorValue), "IdealProcessorValue"),
+        (
+            offset_of!(TEB, GuaranteedStackBytes),
+            "GuaranteedStackBytes",
+        ),
+        (offset_of!(TEB, CrossTebFlags), "CrossTebFlags"),
+        (offset_of!(TEB, SameTebFlags), "SameTebFlags"),
+    ] {
+        assert_eq!(
+            actual,
+            offset(&teb, "_TEB", field_name),
+            "_TEB.{field_name}"
+        );
     }
 }
 

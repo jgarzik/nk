@@ -933,6 +933,28 @@ pub unsafe fn reference(body: *mut u8) -> i64 {
     unsafe { pointer_count(body) }.fetch_add(1, Ordering::AcqRel) + 1
 }
 
+/// Atomically take a reference if `PointerCount > 0`, returning `true` on
+/// success and `false` if the object is already being deleted.
+///
+/// # Safety
+/// `body` must point to an allocated object whose storage cannot be freed
+/// while this call runs (e.g. caller holds the table lock that `delete`
+/// acquires to unlink `body` before freeing it).
+pub unsafe fn try_reference(body: *mut u8) -> bool {
+    // SAFETY: per the contract.
+    let count = unsafe { pointer_count(body) };
+    let mut cur = count.load(Ordering::Acquire);
+    loop {
+        if cur <= 0 {
+            return false;
+        }
+        match count.compare_exchange_weak(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(now) => cur = now,
+        }
+    }
+}
+
 /// Delete an object: its type's procedure releases what it owns, then
 /// its memory goes.
 ///

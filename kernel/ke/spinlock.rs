@@ -54,9 +54,11 @@ pub enum Rank {
     /// The routines registered with the kernel debugger for power
     /// transitions (`kd::debugger`).
     KdPower = 31,
-    /// The process-creation notify routines drivers registered
+    /// The process/thread/image notify routines drivers registered
     /// (`ps::notify`).
     ProcessNotify = 32,
+    /// The global process/thread client-ID table (`ps::cid::CID_TABLE`).
+    CidTable = 33,
     /// The watches on registry keys (`cm::notify`).
     RegistryWatches = 34,
     /// The ranges of the dynamic kernel region that are handed out

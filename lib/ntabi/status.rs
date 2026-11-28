@@ -153,6 +153,14 @@ pub const fn nt_error(status: NTSTATUS) -> bool {
 
 /// Another open's access or share mode stands in the way.
 pub const STATUS_SHARING_VIOLATION: NTSTATUS = 0xC000_0043_u32 as NTSTATUS;
+/// Invalid client ID (PID/TID not found or mismatched).
+pub const STATUS_INVALID_CID: NTSTATUS = err(0xC000_000B);
+/// Attempt to operate on a process that is terminating.
+pub const STATUS_PROCESS_IS_TERMINATING: NTSTATUS = err(0xC000_010A);
+/// Attempt to operate on a thread that is terminating.
+pub const STATUS_THREAD_IS_TERMINATING: NTSTATUS = err(0xC000_004B);
+/// A user-mode APC was delivered while waiting alertably.
+pub const STATUS_USER_APC: NTSTATUS = 0x0000_00C0;
 
 #[cfg(test)]
 mod tests {

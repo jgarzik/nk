@@ -5,6 +5,7 @@
 
 #![allow(non_snake_case)]
 
+pub mod cid;
 pub mod notify;
 pub mod process;
 pub mod silo;
@@ -12,9 +13,13 @@ pub mod silo;
 use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::thread;
 use crate::ob::{handle, object};
+use crate::svc::capture;
 use alloc::boxed::Box;
 use core::ffi::c_void;
+use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
+use nk_ntabi::user::CLIENT_ID;
+use nk_ob::handles::Attributes;
 
 /// `KSTART_ROUTINE`.
 pub type StartRoutine = unsafe extern "C" fn(*mut c_void);
@@ -136,6 +141,158 @@ pub unsafe fn create_system_thread(
 /// end the calling thread.
 pub extern "C" fn PsTerminateSystemThread(_exit_status: NTSTATUS) -> NTSTATUS {
     thread::exit()
+}
+
+/// [`NtOpenProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwopenprocess):
+/// open a handle to an existing process identified by `client_id`.
+///
+/// # Safety
+/// Pointer arguments must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenProcess(
+    process_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    client_id: *const CLIENT_ID,
+) -> NTSTATUS {
+    const OBJ_INHERIT: u32 = 0x2;
+    const OBJ_KERNEL_HANDLE: u32 = 0x200;
+    let mode = capture::mode();
+    // SAFETY: per the contract; `capture_object_attributes` probes user pointers.
+    let Some(oa) = (match unsafe { capture::capture_object_attributes(object_attributes, mode) } {
+        Ok(oa) => oa,
+        Err(st) => return st,
+    }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let has_name = oa.name.as_ref().is_some_and(|n| !n.is_empty());
+    if has_name && !client_id.is_null() {
+        return STATUS_INVALID_PARAMETER_MIX;
+    }
+    if has_name || client_id.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; `capture::read` probes user pointers.
+    let cid = match unsafe { capture::read(client_id, mode) } {
+        Ok(c) => c,
+        Err(st) => return st,
+    };
+    let pid = cid.UniqueProcess.addr() as u64;
+    let tid = cid.UniqueThread.addr() as u64;
+    let target = if tid != 0 {
+        let th = match cid::lookup_thread(tid) {
+            Ok(t) => t,
+            Err(st) => return st,
+        };
+        // SAFETY: `th` holds a reference to a live `ETHREAD`.
+        let th_pid = unsafe { process::PsGetThreadProcessId(th.body().cast()).addr() as u64 };
+        if pid != 0 && th_pid != pid {
+            return STATUS_INVALID_CID;
+        }
+        // SAFETY: `th` holds a reference to a live `ETHREAD`, whose process stays
+        // live at least as long as the thread.
+        unsafe {
+            let p = process::PsGetThreadProcess(th.body().cast()).cast::<u8>();
+            object::reference(p);
+            object::ObRef::adopt(p)
+        }
+    } else {
+        match cid::lookup_process(pid) {
+            Ok(p) => p,
+            Err(st) => return st,
+        }
+    };
+    let kernel_handle = !capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `target` holds a reference for the duration of `open_with`.
+    let h = match unsafe {
+        handle::open_with(
+            target.body(),
+            desired_access,
+            Attributes {
+                inherit: (oa.attributes & OBJ_INHERIT) != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract; `capture::write` probes user pointers.
+    if let Err(st) = unsafe { capture::write(process_handle, h as *mut c_void, mode) } {
+        let _ = handle::close_for(h, capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtOpenThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwopenthread):
+/// open a handle to an existing thread identified by `client_id`.
+///
+/// # Safety
+/// Pointer arguments must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenThread(
+    thread_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    client_id: *const CLIENT_ID,
+) -> NTSTATUS {
+    const OBJ_INHERIT: u32 = 0x2;
+    const OBJ_KERNEL_HANDLE: u32 = 0x200;
+    let mode = capture::mode();
+    // SAFETY: per the contract; `capture_object_attributes` probes user pointers.
+    let Some(oa) = (match unsafe { capture::capture_object_attributes(object_attributes, mode) } {
+        Ok(oa) => oa,
+        Err(st) => return st,
+    }) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let has_name = oa.name.as_ref().is_some_and(|n| !n.is_empty());
+    if has_name && !client_id.is_null() {
+        return STATUS_INVALID_PARAMETER_MIX;
+    }
+    if has_name || client_id.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; `capture::read` probes user pointers.
+    let cid = match unsafe { capture::read(client_id, mode) } {
+        Ok(c) => c,
+        Err(st) => return st,
+    };
+    let pid = cid.UniqueProcess.addr() as u64;
+    let tid = cid.UniqueThread.addr() as u64;
+    let target = match cid::lookup_thread(tid) {
+        Ok(t) => t,
+        Err(st) => return st,
+    };
+    if pid != 0 {
+        // SAFETY: `target` holds a reference to a live `ETHREAD`.
+        let th_pid = unsafe { process::PsGetThreadProcessId(target.body().cast()).addr() as u64 };
+        if th_pid != pid {
+            return STATUS_INVALID_CID;
+        }
+    }
+    let kernel_handle = !capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `target` holds a reference for the duration of `open_with`.
+    let h = match unsafe {
+        handle::open_with(
+            target.body(),
+            desired_access,
+            Attributes {
+                inherit: (oa.attributes & OBJ_INHERIT) != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract; `capture::write` probes user pointers.
+    if let Err(st) = unsafe { capture::write(thread_handle, h as *mut c_void, mode) } {
+        let _ = handle::close_for(h, capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
 }
 
 /// [`ZwClose`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwclose).
@@ -497,4 +654,6 @@ pub extern "C" fn PsGetHostSilo() -> *mut c_void {
     core::ptr::null_mut()
 }
 
-pub use crate::svc::zw::{ZwAlertThread, ZwClose, ZwSetInformationThread};
+pub use crate::svc::zw::{
+    ZwAlertThread, ZwClose, ZwOpenProcess, ZwOpenThread, ZwSetInformationThread,
+};

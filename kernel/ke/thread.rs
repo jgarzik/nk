@@ -627,10 +627,9 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         field::<u32>(thread, nk_ntabi::thread::CROSS_THREAD_FLAGS)
             .write(crate::ps::process::thread_priorities(process));
         field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
-        field::<[u64; 2]>(thread, layout::CID).write([
-            nk_ntabi::process::SYSTEM_PROCESS_ID,
-            crate::ps::process::new_thread_id(),
-        ]);
+        let tid = crate::ps::process::new_thread_id();
+        field::<[u64; 2]>(thread, layout::CID).write([nk_ntabi::process::SYSTEM_PROCESS_ID, tid]);
+        crate::ps::cid::insert_thread(tid, thread.cast());
         set_state(thread, state);
     }
     Some(thread)
@@ -1323,6 +1322,8 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
         drop(super::object::ObjectLock::take(body.cast()));
         crate::se::impersonate::thread_deleted(body);
         let thread = body.cast::<Thread>();
+        let tid = field::<[u64; 2]>(thread, layout::CID).read()[1];
+        crate::ps::cid::remove(tid);
         let proc_slot = field::<*mut u8>(thread, layout::PROCESS);
         let proc_ptr = proc_slot.read();
         proc_slot.write(core::ptr::null_mut());
