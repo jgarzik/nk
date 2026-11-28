@@ -159,7 +159,17 @@ pub fn in_range(address: usize, len: usize) -> bool {
     let user = address
         .checked_add(len)
         .is_some_and(|end| end as u64 <= USER_PROBE_ADDRESS);
-    user && !firmware(address as u64, len as u64)
+    if !user {
+        return false;
+    }
+    // Only the System process maps firmware runtime regions in the low half;
+    // user processes have isolated low-half address spaces.
+    if crate::arch::current_address_space() == crate::arch::kernel_address_space()
+        && firmware(address as u64, len as u64)
+    {
+        return false;
+    }
+    true
 }
 
 /// Read and write back one byte of every page of the `len` bytes at

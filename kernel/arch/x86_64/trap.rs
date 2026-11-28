@@ -174,12 +174,21 @@ nk_trap_common:
     mov dword ptr [rsp + 104], 0x1F80
     ldmxcsr dword ptr [rsp + 104]
     .seh_endprologue
+    test byte ptr [rbp + {cs_off}], 3
+    jz 2f
+    swapgs
+2:
     mov rcx, rsp
     and rsp, -16
     sub rsp, 32
     cld
     call {handler}
     mov rsp, rbp
+    cli
+    test byte ptr [rbp + {cs_off}], 3
+    jz 3f
+    swapgs
+3:
     ldmxcsr dword ptr [rsp + 96]
     movups xmm0, xmmword ptr [rsp]
     movups xmm1, xmmword ptr [rsp + 16]
@@ -267,6 +276,7 @@ nk_fp_clobber:
     .seh_endproc
 "#,
     handler = sym trap_handler,
+    cs_off = const core::mem::offset_of!(Frame, cs),
 );
 
 /// Bytes from one vector's entry stub to the next.
@@ -423,21 +433,46 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     /// What the overflow trap, which only x86-64 has, is delivered as.
     const STATUS_INTEGER_OVERFLOW: u32 = 0xC000_0095;
     let vector = (frame.stub - stubs()) / STUB_SIZE;
-    if vector == BREAKPOINT {
-        // `int3` is a trap: rip already points past it.
-        if crate::kd::breakpoint(frame.rip - 1) {
-            BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
-            if FP_CLOBBER.load(Ordering::Relaxed) {
-                let mut mxcsr = 0;
-                // SAFETY: the routine writes one `u32` and volatile registers.
-                unsafe { nk_fp_clobber(&raw mut mxcsr) };
-                HANDLER_MXCSR.store(mxcsr, Ordering::Relaxed);
+    let from_user = (frame.cs & 3) == 3;
+    if vector == DOUBLE_FAULT && !from_user {
+        // Ensure GS_BASE points at kernel PCR even if `#DF` hit in a swapgs edge.
+        let (_, hi): (u32, u32);
+        // SAFETY: reading `IA32_GS_BASE` (`0xC000_0101`) has no side effects.
+        unsafe {
+            core::arch::asm!(
+                "rdmsr",
+                in("ecx") 0xC000_0101u32,
+                out("eax") _,
+                out("edx") hi,
+                options(nomem, nostack),
+            );
+            if (hi & 0x8000_0000) == 0 {
+                core::arch::asm!("swapgs", options(nomem, nostack));
             }
-            return;
         }
-        // An exception at the instruction itself, as Windows reports it.
-        frame.rip -= 1;
-        return deliver(frame, STATUS_BREAKPOINT, &[0]);
+    }
+    if vector == BREAKPOINT {
+        if from_user {
+            frame.rip -= 1;
+            if super::user::handle_user_exception(frame, STATUS_BREAKPOINT, &[0]) {
+                return;
+            }
+        } else {
+            // `int3` is a trap: rip already points past it.
+            if crate::kd::breakpoint(frame.rip - 1) {
+                BREAKPOINTS.fetch_add(1, Ordering::Relaxed);
+                if FP_CLOBBER.load(Ordering::Relaxed) {
+                    let mut mxcsr = 0;
+                    // SAFETY: the routine writes one `u32` and volatile registers.
+                    unsafe { nk_fp_clobber(&raw mut mxcsr) };
+                    HANDLER_MXCSR.store(mxcsr, Ordering::Relaxed);
+                }
+                return;
+            }
+            // An exception at the instruction itself, as Windows reports it.
+            frame.rip -= 1;
+            return deliver(frame, STATUS_BREAKPOINT, &[0]);
+        }
     }
     if vector == NMI && crate::kd::stopping() {
         // Another processor is stopping the system and said so.
@@ -496,21 +531,62 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         }
     }
     if memory {
-        // The kernel's own access to memory that may not be there: the
-        // routine returns an error instead.
-        if let Some(resume) = seh::fixup(frame.rip) {
-            (frame.rip, frame.rax, frame.rdx) = (resume, address, access);
-            return;
-        }
-        if let Some(status) = in_page {
-            return deliver(
+        if from_user {
+            if let Some(status) = in_page {
+                if super::user::handle_user_exception(
+                    frame,
+                    STATUS_IN_PAGE_ERROR,
+                    &[access, address, u64::from(status as u32)],
+                ) {
+                    return;
+                }
+            } else if vector == GENERAL_PROTECTION {
+                let code = super::user::gp_exception_code(frame.rip);
+                let params: &[u64] = if code == STATUS_ACCESS_VIOLATION {
+                    &[ACCESS_READ, u64::MAX]
+                } else {
+                    &[]
+                };
+                if super::user::handle_user_exception(frame, code, params) {
+                    return;
+                }
+            } else if super::user::handle_user_exception(
                 frame,
-                STATUS_IN_PAGE_ERROR,
-                &[access, address, u64::from(status as u32)],
-            );
+                STATUS_ACCESS_VIOLATION,
+                &[access, address],
+            ) {
+                return;
+            }
+        } else {
+            // The kernel's own access to memory that may not be there: the
+            // routine returns an error instead.
+            if let Some(resume) = seh::fixup(frame.rip) {
+                (frame.rip, frame.rax, frame.rdx) = (resume, address, access);
+                return;
+            }
+            if let Some(status) = in_page {
+                return deliver(
+                    frame,
+                    STATUS_IN_PAGE_ERROR,
+                    &[access, address, u64::from(status as u32)],
+                );
+            }
+            if stop.is_none() {
+                return deliver(frame, STATUS_ACCESS_VIOLATION, &[access, address]);
+            }
         }
-        if stop.is_none() {
-            return deliver(frame, STATUS_ACCESS_VIOLATION, &[access, address]);
+    }
+    if from_user {
+        let user_code = match vector {
+            DIVIDE_ERROR => Some(STATUS_INTEGER_DIVIDE_BY_ZERO),
+            OVERFLOW => Some(STATUS_INTEGER_OVERFLOW),
+            INVALID_OPCODE => Some(STATUS_ILLEGAL_INSTRUCTION),
+            _ => None,
+        };
+        if let Some(code) = user_code
+            && super::user::handle_user_exception(frame, code, &[])
+        {
+            return;
         }
     }
     let what = match vector {

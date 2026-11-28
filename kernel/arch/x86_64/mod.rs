@@ -14,6 +14,7 @@ mod smp;
 mod switch;
 mod trap;
 pub mod unwind;
+pub mod user;
 mod variadic;
 pub mod xstate;
 
@@ -41,7 +42,7 @@ pub use apic::{
 
 pub use cpu::{
     current_thread, irql, pcr, percpu, percpu_of, prepare as cpu_prepare, set_irql,
-    set_kernel_stack,
+    set_kernel_stack, set_user_gs_base,
 };
 pub use smp::{finish as smp_finish, prepare as smp_prepare};
 /// The hardware's own name for the processor running this code: its

@@ -564,7 +564,7 @@ unsafe fn publish_stack(me: *mut Thread, stack: Stack) {
         field::<u64>(me, layout::STACK_BASE).write(stack.top);
         field::<u64>(me, layout::STACK_LIMIT).write(stack.base);
     }
-    arch::set_kernel_stack(stack.base);
+    arch::set_kernel_stack(stack.base, stack.top);
 }
 
 fn set_current(thread: *mut Thread) {
@@ -692,6 +692,56 @@ pub fn create_unstarted(
     // SAFETY: a live thread nothing else has.
     unsafe { ob::object::reference(thread.cast()) };
     Ok(thread)
+}
+
+/// Assign an unstarted thread to non-System `process`, taking an object
+/// reference on `process` (released in [`deleted`]) and clearing
+/// `MISC_FLAG_SYSTEM_THREAD`.
+///
+/// # Safety
+/// `thread` came from [`create_unstarted`] and has not yet started; `process`
+/// is a live `EPROCESS`.
+#[allow(dead_code)]
+pub unsafe fn assign_process(thread: *mut Thread, process: *mut u8) {
+    // SAFETY: per the contract; exclusive access before the thread runs.
+    unsafe {
+        let old = field::<*mut u8>(thread, layout::PROCESS).read();
+        if old != process {
+            let sys = crate::ps::process::system();
+            if process != sys {
+                ob::object::reference(process);
+            }
+            if !old.is_null() && old != sys {
+                ob::object::dereference(old);
+            }
+            field::<*mut u8>(thread, layout::PROCESS).write(process);
+            field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
+            let pid = crate::ps::process::PsGetProcessId(process.cast()).addr() as u64;
+            field::<u64>(thread, layout::CID).write(pid);
+            let flags = field::<u32>(thread, layout::MISC_FLAGS);
+            if process != sys {
+                flags.write(flags.read() & !layout::MISC_FLAG_SYSTEM_THREAD);
+            } else {
+                flags.write(flags.read() | layout::MISC_FLAG_SYSTEM_THREAD);
+            }
+        }
+    }
+}
+
+/// Set `KTHREAD.Teb` for a thread (and update the CPU's user GS base if this
+/// is the running thread).
+///
+/// # Safety
+/// `thread` is either the running thread or an unstarted thread.
+#[allow(dead_code)]
+pub unsafe fn set_teb(thread: *mut Thread, teb: u64) {
+    // SAFETY: per the contract.
+    unsafe {
+        field::<u64>(thread, layout::TEB).write(teb);
+    }
+    if thread == current() {
+        arch::set_user_gs_base(teb);
+    }
 }
 
 /// Start a thread from [`create_unstarted`].
@@ -1164,12 +1214,18 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
         }
         set_state(next, layout::state::RUNNING);
         set_current(next);
-        arch::set_kernel_stack(active_stack(next).base);
+        let next_stack = active_stack(next);
+        arch::set_kernel_stack(next_stack.base, next_stack.top);
         let old_proc = field::<*mut u8>(me, layout::APC_STATE_PROCESS).read();
         let new_proc = field::<*mut u8>(next, layout::APC_STATE_PROCESS).read();
         if old_proc != new_proc {
             let dtb = crate::ps::process::directory_table_base(new_proc);
             arch::switch_address_space(dtb);
+        }
+        let old_teb = field::<u64>(me, layout::TEB).read();
+        let new_teb = field::<u64>(next, layout::TEB).read();
+        if old_teb != new_teb {
+            arch::set_user_gs_base(new_teb);
         }
         dispatcher.previous.store(me, Ordering::Release);
         dispatcher.switches.fetch_add(1, Ordering::Relaxed);
@@ -1267,6 +1323,12 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
         drop(super::object::ObjectLock::take(body.cast()));
         crate::se::impersonate::thread_deleted(body);
         let thread = body.cast::<Thread>();
+        let proc_slot = field::<*mut u8>(thread, layout::PROCESS);
+        let proc_ptr = proc_slot.read();
+        proc_slot.write(core::ptr::null_mut());
+        if !proc_ptr.is_null() && proc_ptr != crate::ps::process::system() {
+            ob::object::dereference(proc_ptr);
+        }
         if !(*thread).counted && !(*thread).idle {
             UNCOUNTED_OBJECTS.fetch_sub(1, Ordering::AcqRel);
         }

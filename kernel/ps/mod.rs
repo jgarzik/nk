@@ -43,6 +43,18 @@ fn system_thread(start: usize) {
     // A routine that returns has ended its thread.
 }
 
+/// [`NtTerminateThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwterminatethread):
+/// terminate the calling thread (`thread_handle` null or `-2`). Terminating
+/// another thread by handle is added alongside user thread rundown.
+pub extern "C" fn NtTerminateThread(thread_handle: *mut c_void, exit_status: NTSTATUS) -> NTSTATUS {
+    let raw = thread_handle.addr();
+    if raw == 0 || raw == (-2isize) as usize {
+        let _ = exit_status;
+        thread::exit();
+    }
+    STATUS_NOT_IMPLEMENTED
+}
+
 /// [`PsCreateSystemThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pscreatesystemthread).
 /// The handle is a kernel handle whatever the object attributes say:
 /// there is no other kind, and it is granted the access asked for.

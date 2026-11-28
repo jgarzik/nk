@@ -79,7 +79,7 @@ unsafe extern "C" fn nk_entry(info: *const BootInfo) -> ! {
     let Some(stack) = mm::stack::alloc() else {
         test::abort("mm.stack", format_args!("cannot allocate the boot stack"));
     };
-    arch::set_kernel_stack(stack.base);
+    arch::set_kernel_stack(stack.base, stack.top);
     ke::smp::set_stack(0, stack);
     arch::switch_stack(stack.top, on_kernel_stack, info)
 }

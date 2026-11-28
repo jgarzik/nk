@@ -119,6 +119,7 @@ pub const STATUS_HANDLE_NOT_CLOSABLE: NTSTATUS = err(0xC000_0235);
 pub const STATUS_DRIVER_UNABLE_TO_LOAD: NTSTATUS = err(0xC000_026C);
 pub const STATUS_TOO_LATE: NTSTATUS = err(0xC000_0189);
 pub const STATUS_UNRECOGNIZED_VOLUME: NTSTATUS = err(0xC000_014F);
+pub const STATUS_PRIVILEGED_INSTRUCTION: NTSTATUS = err(0xC000_0096);
 
 /// `NT_SUCCESS`: success and informational codes are non-negative.
 pub const fn nt_success(status: NTSTATUS) -> bool {

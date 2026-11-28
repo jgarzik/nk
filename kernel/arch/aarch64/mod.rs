@@ -140,7 +140,10 @@ pub fn smp_finish() {}
 
 /// Record the kernel stack this processor now runs on. Nothing to do
 /// here: exception entry recognises an overflow from the stack pointer.
-pub fn set_kernel_stack(_base: u64) {}
+pub fn set_kernel_stack(_base: u64, _top: u64) {}
+
+/// Set the user-mode thread-local base (`TPIDR_EL0` / x86 `KERNEL_GS_BASE`).
+pub fn set_user_gs_base(_base: u64) {}
 
 /// Take over the boot CPU, processor 0: exception vectors, PCR. Prints
 /// nothing and takes no lock: it runs before either works.

@@ -219,6 +219,7 @@ macro_rules! register_services {
         /// Generated `Zw*` thunks: each sets `KTHREAD.PreviousMode` to
         /// `KernelMode`, delegates to the `Nt*` implementation, and restores
         /// the caller's `PreviousMode`.
+        #[allow(dead_code)]
         pub mod zw {
             use super::*;
             $(
@@ -447,6 +448,10 @@ register_services! {
     );
     safe Implemented, NtClose => crate::ps::NtClose, ZwClose(
         handle: *mut c_void,
+    );
+    safe Partial, NtTerminateThread => crate::ps::NtTerminateThread, ZwTerminateThread(
+        thread_handle: *mut c_void,
+        exit_status: NTSTATUS,
     );
     unsafe Partial, NtSetInformationThread => crate::ps::NtSetInformationThread, ZwSetInformationThread(
         thread_handle: *mut c_void,

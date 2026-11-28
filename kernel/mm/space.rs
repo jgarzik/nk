@@ -61,15 +61,26 @@ pub struct AddressSpace {
 }
 
 impl AddressSpace {
-    /// Allocate a fresh user address space with an empty low half and shared
-    /// kernel half.
+    /// Allocate a fresh user address space with an empty low half, the shared
+    /// kernel half, and a read-only user mapping of `KUSER_SHARED_DATA` at
+    /// `0x7FFE_0000`.
     pub fn new() -> Option<Self> {
         let root = alloc_frames(1)?;
         arch::copy_kernel_half(root);
-        Some(Self {
+        let space = Self {
             root,
             lock: PushLock::new(()),
-        })
+        };
+        let kusd_frame = crate::ke::time::shared_data_frame();
+        if kusd_frame != 0
+            && space
+                .map_page(nk_ntabi::ke::USER_SHARED_DATA, kusd_frame, Prot::USER_RO)
+                .is_err()
+        {
+            // Drop frees intermediate tables and `root` cleanly.
+            return None;
+        }
+        Some(space)
     }
 
     /// Physical address of this address space's root page table.
