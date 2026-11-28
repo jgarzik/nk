@@ -299,6 +299,14 @@ fn arm(q: &mut Queue, delay: i64) {
     };
 }
 
+/// Cancel the scan timer and mark scanning idle, under the lock, so no
+/// stale `IDLE_DELAY`/`FIRST_DELAY` timer fires after the cache is clean.
+fn disarm(q: &mut Queue) {
+    q.scan_active = false;
+    // SAFETY: the static timer, initialised at start.
+    unsafe { crate::ke::timer::KeCancelTimer(STATICS.timer.get().cast()) };
+}
+
 /// `CcScheduleLazyWriteScan`: a scan in 3 s, unless one is active.
 pub fn schedule_scan() {
     let mut d = DIRTY.lock();
@@ -557,7 +565,7 @@ fn lazy_write_scan() {
     } else if more || !chosen.is_empty() {
         arm(q, IDLE_DELAY);
     } else {
-        q.scan_active = false;
+        disarm(q);
     }
     drop(d);
 }
@@ -735,7 +743,7 @@ fn advance_shutdown_drain(drain_gen: u32) {
             (true, None)
         } else if q.running == 0 && !q.scan_pending && q.head.is_null() {
             q.drain_active = false;
-            q.scan_active = false;
+            disarm(q);
             q.drain_summary.remaining_dirty_pages = remaining_dirty;
             let summary = q.drain_summary;
             let waiters = core::mem::replace(&mut q.drain_waiters, core::ptr::null_mut());
@@ -984,6 +992,10 @@ pub fn drain_dirty_for_shutdown() -> DrainSummary {
             q.everything = true;
             q.scan_active = true;
             q.scan_pending = true;
+            // Cancel any pending periodic timer; shutdown batches run
+            // immediately until completion.
+            // SAFETY: the static timer, initialised at start.
+            unsafe { crate::ke::timer::KeCancelTimer(STATICS.timer.get().cast()) };
         }
         // SAFETY: the fresh waiter, the list's until signalled.
         unsafe { (*w).next = q.drain_waiters };
