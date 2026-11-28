@@ -1,17 +1,25 @@
 //! x86-64 Ring 3 transition: `SYSCALL`/`SYSRETQ` entry and exit, initial
 //! Ring 3 entry (`iretq`), and user-mode exception interception.
 
+#![allow(non_snake_case)]
+
 use super::cpu::{GS_KERNEL_RSP0, GS_USER_RSP, USER_CODE64, USER_DATA};
-use super::trap::Frame;
+use super::trap::{self, Frame};
 use crate::ke::thread;
-use crate::svc::{self, MAX_SYSCALL_ARGS};
+use crate::svc::{self, MAX_SYSCALL_ARGS, capture};
 use core::arch::global_asm;
+use core::ffi::c_void;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use nk_ntabi::io::{KERNEL_MODE, USER_MODE};
-use nk_ntabi::seh::x64::{KEXCEPTION_FRAME, KTRAP_FRAME};
+use nk_ntabi::seh::EXCEPTION_RECORD;
+use nk_ntabi::seh::x64::{
+    CONTEXT, CONTEXT_CONTROL, CONTEXT_FLOATING_POINT, CONTEXT_FULL, CONTEXT_INTEGER,
+    CONTEXT_SEGMENTS, KEXCEPTION_FRAME, KTRAP_FRAME,
+};
 use nk_ntabi::status::{
-    NTSTATUS, STATUS_ACCESS_VIOLATION, STATUS_INVALID_SYSTEM_SERVICE, STATUS_PRIVILEGED_INSTRUCTION,
+    NTSTATUS, STATUS_ACCESS_VIOLATION, STATUS_INVALID_PARAMETER, STATUS_INVALID_SYSTEM_SERVICE,
+    STATUS_PRIVILEGED_INSTRUCTION, STATUS_SUCCESS,
 };
 use nk_ntabi::thread as thread_layout;
 
@@ -279,21 +287,355 @@ pub unsafe fn enter_user_mode(rip: u64, rsp: u64, arg0: u64, arg1: u64) -> ! {
     unsafe { nk_enter_user_mode(rip, rsp, arg0, arg1) }
 }
 
+/// Offset from `rsp` to `EXCEPTION_RECORD` (in `KiUserExceptionDispatcher`)
+/// and `KCONTINUE_ARGUMENT` (in `KiUserApcDispatcher`) on Windows 10 19041 x64.
+const USER_FRAME_EXTRA_OFFSET: u64 = 0x4F0;
+
+/// Windows 10 `KCONTINUE_ARGUMENT` passed to `NtContinueEx` by `KiUserApcDispatcher`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct KContinueArgument {
+    continue_type: u32,
+    continue_flags: u32,
+    reserved: [u64; 2],
+}
+
+const KCONTINUE_APC: u32 = 1;
+const KCONTINUE_FLAG_TEST_ALERT: u32 = 0x1;
+
+/// Build a Windows x64 `CONTEXT` from the active syscall trap + exception frames.
+fn context_from_trap(tf: &KTRAP_FRAME, ef: &KEXCEPTION_FRAME) -> CONTEXT {
+    // SAFETY: `CONTEXT` is all-zero valid.
+    let mut c: CONTEXT = unsafe { core::mem::zeroed() };
+    c.ContextFlags = CONTEXT_FULL | CONTEXT_SEGMENTS;
+    c.MxCsr = tf.MxCsr;
+    c.FltSave.MxCsr = tf.MxCsr;
+    c.FltSave.ControlWord = 0x027F;
+    c.FltSave.MxCsr_Mask = 0xFFFF;
+    c.SegCs = USER_CODE64;
+    c.SegDs = USER_DATA;
+    c.SegEs = USER_DATA;
+    c.SegFs = 0;
+    c.SegGs = USER_DATA;
+    c.SegSs = USER_DATA;
+    c.EFlags = tf.EFlags;
+    c.Rax = tf.Rax;
+    c.Rcx = tf.Rcx;
+    c.Rdx = tf.Rdx;
+    c.Rbx = tf.Rbx;
+    c.Rsp = tf.Rsp;
+    c.Rbp = tf.Rbp;
+    c.Rsi = tf.Rsi;
+    c.Rdi = tf.Rdi;
+    c.R8 = tf.R8;
+    c.R9 = tf.R9;
+    c.R10 = tf.R10;
+    c.R11 = tf.R11;
+    c.R12 = ef.R12;
+    c.R13 = ef.R13;
+    c.R14 = ef.R14;
+    c.R15 = ef.R15;
+    c.Rip = tf.Rip;
+    c.FltSave.XmmRegisters[0] = tf.Xmm0;
+    c.FltSave.XmmRegisters[1] = tf.Xmm1;
+    c.FltSave.XmmRegisters[2] = tf.Xmm2;
+    c.FltSave.XmmRegisters[3] = tf.Xmm3;
+    c.FltSave.XmmRegisters[4] = tf.Xmm4;
+    c.FltSave.XmmRegisters[5] = tf.Xmm5;
+    c.FltSave.XmmRegisters[6] = ef.Xmm6;
+    c.FltSave.XmmRegisters[7] = ef.Xmm7;
+    c.FltSave.XmmRegisters[8] = ef.Xmm8;
+    c.FltSave.XmmRegisters[9] = ef.Xmm9;
+    c.FltSave.XmmRegisters[10] = ef.Xmm10;
+    c.FltSave.XmmRegisters[11] = ef.Xmm11;
+    c.FltSave.XmmRegisters[12] = ef.Xmm12;
+    c.FltSave.XmmRegisters[13] = ef.Xmm13;
+    c.FltSave.XmmRegisters[14] = ef.Xmm14;
+    c.FltSave.XmmRegisters[15] = ef.Xmm15;
+    c
+}
+
+/// Apply a user-supplied `CONTEXT` to the active syscall trap + exception frames.
+fn apply_context_to_trap(c: &CONTEXT, tf: &mut KTRAP_FRAME, ef: &mut KEXCEPTION_FRAME) {
+    let flags = c.ContextFlags;
+    if (flags & (CONTEXT_CONTROL & 0xFF)) != 0 {
+        tf.Rip = c.Rip;
+        tf.Rsp = c.Rsp;
+        tf.SegCs = USER_CODE64;
+        tf.SegSs = USER_DATA;
+        tf.EFlags = (c.EFlags & 0x0003_CFFF) | 0x202;
+    }
+    if (flags & (CONTEXT_INTEGER & 0xFF)) != 0 {
+        tf.Rax = c.Rax;
+        tf.Rcx = c.Rcx;
+        tf.Rdx = c.Rdx;
+        tf.Rbx = c.Rbx;
+        tf.Rbp = c.Rbp;
+        tf.Rsi = c.Rsi;
+        tf.Rdi = c.Rdi;
+        tf.R8 = c.R8;
+        tf.R9 = c.R9;
+        tf.R10 = c.R10;
+        tf.R11 = c.R11;
+        ef.Rbp = c.Rbp;
+        ef.Rbx = c.Rbx;
+        ef.Rdi = c.Rdi;
+        ef.Rsi = c.Rsi;
+        ef.R12 = c.R12;
+        ef.R13 = c.R13;
+        ef.R14 = c.R14;
+        ef.R15 = c.R15;
+    }
+    if (flags & (CONTEXT_FLOATING_POINT & 0xFF)) != 0 {
+        tf.MxCsr = c.MxCsr & 0xFFFF;
+        tf.Xmm0 = c.FltSave.XmmRegisters[0];
+        tf.Xmm1 = c.FltSave.XmmRegisters[1];
+        tf.Xmm2 = c.FltSave.XmmRegisters[2];
+        tf.Xmm3 = c.FltSave.XmmRegisters[3];
+        tf.Xmm4 = c.FltSave.XmmRegisters[4];
+        tf.Xmm5 = c.FltSave.XmmRegisters[5];
+        ef.Xmm6 = c.FltSave.XmmRegisters[6];
+        ef.Xmm7 = c.FltSave.XmmRegisters[7];
+        ef.Xmm8 = c.FltSave.XmmRegisters[8];
+        ef.Xmm9 = c.FltSave.XmmRegisters[9];
+        ef.Xmm10 = c.FltSave.XmmRegisters[10];
+        ef.Xmm11 = c.FltSave.XmmRegisters[11];
+        ef.Xmm12 = c.FltSave.XmmRegisters[12];
+        ef.Xmm13 = c.FltSave.XmmRegisters[13];
+        ef.Xmm14 = c.FltSave.XmmRegisters[14];
+        ef.Xmm15 = c.FltSave.XmmRegisters[15];
+    }
+}
+
+/// Look up the current user process's `MappedSysDll`, if it is a user process.
+fn current_sysdll() -> Option<crate::ps::sysdll::MappedSysDll> {
+    let proc_ptr = crate::ps::process::PsGetCurrentProcess().cast::<u8>();
+    if proc_ptr.is_null() || proc_ptr == crate::ps::process::system() {
+        return None;
+    }
+    // SAFETY: `proc_ptr` is the current running process.
+    unsafe { crate::ps::process::user_state(proc_ptr) }.map(|s| s.sysdll)
+}
+
+/// Set up a `KiUserApcDispatcher` frame on the user stack if a user APC is pending.
+/// Returns `true` if `tf` was redirected to `KiUserApcDispatcher`.
+fn deliver_user_apc(tf: &mut KTRAP_FRAME, ef: &mut KEXCEPTION_FRAME) -> bool {
+    let Some(sysdll) = current_sysdll() else {
+        return false;
+    };
+    let Some((normal, ctx_arg, arg1, arg2)) = crate::ke::apc::pop_user_apc() else {
+        return false;
+    };
+    let mut ctx = context_from_trap(tf, ef);
+    ctx.PHome[0] = ctx_arg;
+    ctx.PHome[1] = arg1;
+    ctx.PHome[2] = arg2;
+    ctx.PHome[3] = normal;
+
+    let frame_bytes = (USER_FRAME_EXTRA_OFFSET + size_of::<KContinueArgument>() as u64 + 15) & !15;
+    let new_rsp = tf.Rsp.saturating_sub(frame_bytes) & !15;
+    let cont_arg = KContinueArgument {
+        continue_type: KCONTINUE_APC,
+        continue_flags: KCONTINUE_FLAG_TEST_ALERT,
+        reserved: [0; 2],
+    };
+    // SAFETY: `mm::user::copy` fault-protects writes to user memory.
+    let ok = unsafe {
+        crate::mm::user::in_range(new_rsp as usize, frame_bytes as usize)
+            && crate::mm::user::copy(
+                core::ptr::with_exposed_provenance_mut(new_rsp as usize),
+                (&raw const ctx).cast::<u8>(),
+                size_of::<CONTEXT>(),
+            )
+            .is_ok()
+            && crate::mm::user::copy(
+                core::ptr::with_exposed_provenance_mut(
+                    (new_rsp + USER_FRAME_EXTRA_OFFSET) as usize,
+                ),
+                (&raw const cont_arg).cast::<u8>(),
+                size_of::<KContinueArgument>(),
+            )
+            .is_ok()
+    };
+    if !ok {
+        crate::ps::user::terminate_current_process(STATUS_ACCESS_VIOLATION);
+    }
+    tf.Rsp = new_rsp;
+    tf.Rip = sysdll.ki_user_apc_dispatcher;
+    tf.SegCs = USER_CODE64;
+    tf.SegSs = USER_DATA;
+    tf.EFlags = (tf.EFlags & !0x500) | 0x202;
+    true
+}
+
+/// [`NtContinue`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwcontinue):
+/// restore the calling thread's user-mode `CONTEXT` and optionally test for alerts/user APCs.
+///
+/// # Safety
+/// `context_record` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtContinue(context_record: *const CONTEXT, test_alert: u8) -> NTSTATUS {
+    let arg = core::ptr::with_exposed_provenance(usize::from(test_alert != 0));
+    // SAFETY: per the contract.
+    unsafe { NtContinueEx(context_record, arg) }
+}
+
+/// `NtContinueEx`: Windows 10 extended `NtContinue` accepting either a boolean
+/// (`0`/`1`) or a pointer to `KCONTINUE_ARGUMENT` as `continue_argument`.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtContinueEx(
+    context_record: *const CONTEXT,
+    continue_argument: *const c_void,
+) -> NTSTATUS {
+    let mode = capture::mode();
+    if context_record.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; `capture::read` probes user pointers.
+    let ctx = match unsafe { capture::read(context_record, mode) } {
+        Ok(c) => c,
+        Err(st) => return st,
+    };
+    let test_alert = match continue_argument.addr() {
+        0 => false,
+        1 => true,
+        _ => {
+            // SAFETY: non-boolean `continue_argument` points to `KCONTINUE_ARGUMENT`.
+            match unsafe { capture::read(continue_argument.cast::<KContinueArgument>(), mode) } {
+                Ok(arg) => {
+                    (arg.continue_flags & KCONTINUE_FLAG_TEST_ALERT) != 0
+                        || arg.continue_type == KCONTINUE_APC
+                }
+                Err(st) => return st,
+            }
+        }
+    };
+    let me = thread::current();
+    // SAFETY: active syscall trap and exception frames live on the current thread's kernel stack.
+    let (tf_ptr, ef_ptr) = unsafe {
+        (
+            thread::object_field::<u64>(me, thread_layout::TRAP_FRAME).read(),
+            thread::active_ef(),
+        )
+    };
+    if tf_ptr == 0 || ef_ptr == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: `tf_ptr` and `ef_ptr` are valid mutable frames belonging to this syscall.
+    unsafe {
+        let tf = &mut *core::ptr::with_exposed_provenance_mut::<KTRAP_FRAME>(tf_ptr as usize);
+        let ef = &mut *core::ptr::with_exposed_provenance_mut::<KEXCEPTION_FRAME>(ef_ptr as usize);
+        apply_context_to_trap(&ctx, tf, ef);
+    }
+    if test_alert {
+        let _ = crate::ke::apc::NtTestAlert();
+    }
+    thread::set_force_iret(true);
+    STATUS_SUCCESS
+}
+
+/// `NtRaiseException`: raise a user-mode exception (`first_chance != 0` dispatches
+/// to `KiUserExceptionDispatcher`; `first_chance == 0` terminates the process).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtRaiseException(
+    exception_record: *const EXCEPTION_RECORD,
+    context_record: *const CONTEXT,
+    first_chance: u8,
+) -> NTSTATUS {
+    let mode = capture::mode();
+    if exception_record.is_null() || context_record.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract; `capture::read` probes user pointers.
+    let exc = match unsafe { capture::read(exception_record, mode) } {
+        Ok(e) => e,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract; `capture::read` probes user pointers.
+    let ctx = match unsafe { capture::read(context_record, mode) } {
+        Ok(c) => c,
+        Err(st) => return st,
+    };
+    if first_chance == 0 {
+        let pid = crate::ps::process::PsGetCurrentProcessId().addr();
+        kprintln!(
+            "user: unhandled exception {:#010x} at {:#x} in pid {pid}",
+            exc.ExceptionCode,
+            exc.ExceptionAddress.addr()
+        );
+        crate::ps::user::terminate_current_process(exc.ExceptionCode as NTSTATUS);
+    }
+    let Some(sysdll) = current_sysdll() else {
+        crate::ps::user::terminate_current_process(exc.ExceptionCode as NTSTATUS);
+    };
+    let me = thread::current();
+    // SAFETY: active syscall trap and exception frames live on the current thread's kernel stack.
+    let (tf_ptr, ef_ptr) = unsafe {
+        (
+            thread::object_field::<u64>(me, thread_layout::TRAP_FRAME).read(),
+            thread::active_ef(),
+        )
+    };
+    if tf_ptr == 0 || ef_ptr == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let frame_bytes = (USER_FRAME_EXTRA_OFFSET + size_of::<EXCEPTION_RECORD>() as u64 + 15) & !15;
+    let new_rsp = ctx.Rsp.saturating_sub(frame_bytes) & !15;
+    // SAFETY: `mm::user::copy` fault-protects writes to user memory.
+    let ok = unsafe {
+        crate::mm::user::in_range(new_rsp as usize, frame_bytes as usize)
+            && crate::mm::user::copy(
+                core::ptr::with_exposed_provenance_mut(new_rsp as usize),
+                (&raw const ctx).cast::<u8>(),
+                size_of::<CONTEXT>(),
+            )
+            .is_ok()
+            && crate::mm::user::copy(
+                core::ptr::with_exposed_provenance_mut(
+                    (new_rsp + USER_FRAME_EXTRA_OFFSET) as usize,
+                ),
+                (&raw const exc).cast::<u8>(),
+                size_of::<EXCEPTION_RECORD>(),
+            )
+            .is_ok()
+    };
+    if !ok {
+        crate::ps::user::terminate_current_process(exc.ExceptionCode as NTSTATUS);
+    }
+    // SAFETY: `tf_ptr` and `ef_ptr` are valid mutable frames belonging to this syscall.
+    unsafe {
+        let tf = &mut *core::ptr::with_exposed_provenance_mut::<KTRAP_FRAME>(tf_ptr as usize);
+        let ef = &mut *core::ptr::with_exposed_provenance_mut::<KEXCEPTION_FRAME>(ef_ptr as usize);
+        apply_context_to_trap(&ctx, tf, ef);
+        tf.Rip = sysdll.ki_user_exception_dispatcher;
+        tf.Rsp = new_rsp;
+        tf.SegCs = USER_CODE64;
+        tf.SegSs = USER_DATA;
+        tf.EFlags = (tf.EFlags & !0x500) | 0x202;
+    }
+    thread::set_force_iret(true);
+    STATUS_SUCCESS
+}
+
 /// C-ABI system-call dispatcher invoked from `nk_syscall_entry`.
 /// Returns `0` for fast `sysretq`, or `1` to return via full `iretq`.
-extern "C" fn syscall_dispatch(tf: &mut KTRAP_FRAME, _ef: &mut KEXCEPTION_FRAME) -> u8 {
+extern "C" fn syscall_dispatch(tf: &mut KTRAP_FRAME, ef: &mut KEXCEPTION_FRAME) -> u8 {
     let nr = tf.Rax as u32;
     let me = thread::current();
     // SAFETY: `me` is the running thread; save and update its syscall metadata
-    // and trap frame pointer around service dispatch.
-    let (old_tf, old_mode) = unsafe {
+    // and trap/exception frame pointers around service dispatch.
+    let (old_tf, old_ef, old_mode) = unsafe {
         let tf_slot = thread::object_field::<u64>(me, thread_layout::TRAP_FRAME);
         let old_tf = tf_slot.read();
         tf_slot.write(core::ptr::from_mut(tf).addr() as u64);
+        let old_ef = thread::swap_active_ef(core::ptr::from_mut(ef).addr() as u64);
         thread::object_field::<u32>(me, thread_layout::SYSTEM_CALL_NUMBER).write(nr);
         thread::object_field::<u64>(me, thread_layout::FIRST_ARGUMENT).write(tf.Rcx);
         let old_mode = thread::set_previous_mode(USER_MODE);
-        (old_tf, old_mode)
+        (old_tf, old_ef, old_mode)
     };
 
     let status: NTSTATUS = match svc::meta(nr) {
@@ -348,17 +690,25 @@ extern "C" fn syscall_dispatch(tf: &mut KTRAP_FRAME, _ef: &mut KEXCEPTION_FRAME)
         }
     };
 
-    tf.Rax = u64::from(status as u32);
-    // SAFETY: `me` is still the running thread; restore prior mode and trap frame.
+    let mut force_iret = thread::take_force_iret();
+    if !force_iret {
+        tf.Rax = u64::from(status as u32);
+    }
+    if crate::ke::apc::user_pending(me) && deliver_user_apc(tf, ef) {
+        force_iret = true;
+    }
+
+    // SAFETY: `me` is still the running thread; restore prior mode and frame pointers.
     unsafe {
         thread::set_previous_mode(if old_mode == USER_MODE {
             KERNEL_MODE
         } else {
             old_mode
         });
+        thread::swap_active_ef(old_ef);
         thread::object_field::<u64>(me, thread_layout::TRAP_FRAME).write(old_tf);
     }
-    0
+    u8::from(force_iret)
 }
 
 /// Classify a Ring 3 `#GP` as `STATUS_PRIVILEGED_INSTRUCTION` if the faulting
@@ -434,8 +784,9 @@ pub fn observed_exception() -> (u32, u64, u64, u64) {
     )
 }
 
-/// Handle a Ring 3 exception before Stage 3C wires `KiUserExceptionDispatcher`.
-/// Returns `true` if handled (or terminates the faulting user thread directly).
+/// Dispatch a Ring 3 hardware exception to `ntdll!KiUserExceptionDispatcher`
+/// (or report to the `user.stub` observer when armed).
+/// Returns `true` if `frame` was redirected to Ring 3 exception dispatch.
 pub fn handle_user_exception(frame: &mut Frame, code: u32, parameters: &[u64]) -> bool {
     if OBSERVER_ARMED.load(Ordering::Acquire) {
         OBSERVER_CODE.store(code, Ordering::Relaxed);
@@ -443,9 +794,55 @@ pub fn handle_user_exception(frame: &mut Frame, code: u32, parameters: &[u64]) -
         OBSERVER_INFO0.store(parameters.first().copied().unwrap_or(0), Ordering::Relaxed);
         OBSERVER_INFO1.store(parameters.get(1).copied().unwrap_or(0), Ordering::Relaxed);
         OBSERVER_ARMED.store(false, Ordering::Release);
-        // Re-enable interrupts before terminating the faulting user thread.
         super::enable_interrupts();
         thread::exit();
     }
-    false
+    let Some(sysdll) = current_sysdll() else {
+        return false;
+    };
+    let ctx = trap::context_of(frame);
+    let mut exc = EXCEPTION_RECORD {
+        ExceptionCode: code,
+        ExceptionFlags: 0,
+        ExceptionRecord: core::ptr::null_mut(),
+        ExceptionAddress: core::ptr::with_exposed_provenance_mut(frame.rip as usize),
+        NumberParameters: parameters.len().min(15) as u32,
+        ExceptionInformation: [0; 15],
+    };
+    for (dst, &src) in exc.ExceptionInformation.iter_mut().zip(parameters.iter()) {
+        *dst = src;
+    }
+    // Re-enable interrupts so user stack demand/guard-page faults can resolve cleanly.
+    super::enable_interrupts();
+    let frame_bytes = (USER_FRAME_EXTRA_OFFSET + size_of::<EXCEPTION_RECORD>() as u64 + 15) & !15;
+    let new_rsp = frame.rsp.saturating_sub(frame_bytes) & !15;
+    // SAFETY: `mm::user::copy` fault-protects writes to user memory.
+    let ok = unsafe {
+        crate::mm::user::in_range(new_rsp as usize, frame_bytes as usize)
+            && crate::mm::user::copy(
+                core::ptr::with_exposed_provenance_mut(new_rsp as usize),
+                (&raw const ctx).cast::<u8>(),
+                size_of::<CONTEXT>(),
+            )
+            .is_ok()
+            && crate::mm::user::copy(
+                core::ptr::with_exposed_provenance_mut(
+                    (new_rsp + USER_FRAME_EXTRA_OFFSET) as usize,
+                ),
+                (&raw const exc).cast::<u8>(),
+                size_of::<EXCEPTION_RECORD>(),
+            )
+            .is_ok()
+    };
+    if !ok {
+        kprintln!(
+            "user: exception {code:#010x} at {:#x} could not push user stack frame",
+            frame.rip
+        );
+        crate::ps::user::terminate_current_process(code as NTSTATUS);
+    }
+    frame.rip = sysdll.ki_user_exception_dispatcher;
+    frame.rsp = new_rsp;
+    frame.rflags = (frame.rflags & !0x500) | 0x202;
+    true
 }

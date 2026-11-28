@@ -219,7 +219,7 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
         }
     };
     let (status, reported) = match class {
-        SYSTEM_BASIC_INFORMATION_CLASS => fixed(
+        SYSTEM_BASIC_INFORMATION_CLASS | 62 => fixed(
             Fixed::Exactly(size_of::<SYSTEM_BASIC_INFORMATION>() as u32),
             // SAFETY: per the contract, and the length is the structure's.
             &|| unsafe { basic(buffer.cast()) },
@@ -315,6 +315,77 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
             Some(answer) => answer,
             None => return STATUS_INSUFFICIENT_RESOURCES,
         },
+        // `SystemProcessorInformation` (1) & `SystemEmulationProcessorInformation` (63): 12 bytes (AMD64 = 9).
+        1 | 63 => fixed(Fixed::Exactly(12), &|| {
+            // SAFETY: per the contract; length is 12 bytes.
+            unsafe {
+                buffer.cast::<u16>().write_unaligned(9); // PROCESSOR_ARCHITECTURE_AMD64
+                buffer.add(2).cast::<u16>().write_unaligned(6); // ProcessorLevel
+                buffer.add(4).cast::<u16>().write_unaligned(0); // ProcessorRevision
+                buffer
+                    .add(6)
+                    .cast::<u16>()
+                    .write_unaligned(smp::online_count() as u16);
+                buffer.add(8).cast::<u32>().write_unaligned(0);
+            }
+        }),
+        // `SystemNumaProcessorMap` (55): `HighestNodeNumber = 0`, 1 node with `smp::online()`.
+        55 => {
+            if length < 8 {
+                (STATUS_INFO_LENGTH_MISMATCH, 16)
+            } else {
+                // SAFETY: `buffer` is writable for `length` bytes.
+                unsafe {
+                    buffer.write_bytes(0, length as usize);
+                    if length >= 16 {
+                        buffer.add(8).cast::<u64>().write_unaligned(smp::online());
+                    }
+                }
+                (STATUS_SUCCESS, length.min(16))
+            }
+        }
+        // `SystemHypervisorSharedPageInformation` (197): no hypervisor shared page.
+        197 => (STATUS_NOT_IMPLEMENTED, 0),
+        // `SystemFeatureConfiguration*` (210, 211): feature staging not present.
+        210 | 211 => (STATUS_NOT_IMPLEMENTED, 0),
+        // `SystemTimeOfDayInformation` (3): up to 48 bytes.
+        3 => {
+            let max = 48u32;
+            let n = length.min(max) as usize;
+            let now = time::system_time();
+            let boot = now.saturating_sub(time::interrupt_time());
+            let mut raw = [0u8; 48];
+            raw[0..8].copy_from_slice(&boot.to_le_bytes());
+            raw[8..16].copy_from_slice(&now.to_le_bytes());
+            // SAFETY: `buffer` is writable for `length >= n` bytes.
+            unsafe { core::ptr::copy_nonoverlapping(raw.as_ptr(), buffer, n) };
+            (STATUS_SUCCESS, n as u32)
+        }
+        // `SystemRangeStartInformation` (50): 8-byte canonical system start.
+        50 => fixed(Fixed::Exactly(8), &|| {
+            // SAFETY: per the contract; length is 8 bytes.
+            unsafe {
+                buffer.cast::<u64>().write_unaligned(nk_bootinfo::HHDM_BASE);
+            }
+        }),
+        // `SystemFlushInformation` (192): 32 bytes (`ProcessorCacheFlushSize = 64`).
+        192 => fixed(Fixed::Exactly(32), &|| {
+            // SAFETY: per the contract; length is 32 bytes.
+            unsafe {
+                buffer.write_bytes(0, 32);
+                buffer.add(4).cast::<u32>().write_unaligned(64);
+            }
+        }),
+        // `SystemKernelVaShadowInformation` (196) & `SystemSpeculationControlInformation` (201): 4 bytes zero.
+        196 | 201 => fixed(Fixed::Exactly(4), &|| {
+            // SAFETY: per the contract; length is 4 bytes.
+            unsafe { buffer.write_bytes(0, 4) };
+        }),
+        // `SystemProcessorFeaturesInformation` (154): 32 bytes zero.
+        154 => fixed(Fixed::Exactly(32), &|| {
+            // SAFETY: per the contract; length is 32 bytes.
+            unsafe { buffer.write_bytes(0, 32) };
+        }),
         c if c >= MAX_SYSTEM_INFO_CLASS => return STATUS_INVALID_INFO_CLASS,
         other => kd::bugcheck(format_args!(
             "NtQuerySystemInformation: NK does not implement information class {other}"

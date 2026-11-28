@@ -454,6 +454,43 @@ pub unsafe fn enter_user_mode(_rip: u64, _rsp: u64, _arg0: u64, _arg1: u64) -> !
     ))
 }
 
+/// `NtContinue` stub on arm64.
+///
+/// # Safety
+/// Not supported on arm64.
+#[allow(non_snake_case, dead_code)]
+pub unsafe extern "C" fn NtContinue(
+    _context: *const nk_ntabi::seh::x64::CONTEXT,
+    _test_alert: u8,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
+}
+
+/// `NtContinueEx` stub on arm64.
+///
+/// # Safety
+/// Not supported on arm64.
+#[allow(non_snake_case, dead_code)]
+pub unsafe extern "C" fn NtContinueEx(
+    _context: *const nk_ntabi::seh::x64::CONTEXT,
+    _continue_arg: *const core::ffi::c_void,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
+}
+
+/// `NtRaiseException` stub on arm64.
+///
+/// # Safety
+/// Not supported on arm64.
+#[allow(non_snake_case, dead_code)]
+pub unsafe extern "C" fn NtRaiseException(
+    _exc: *const nk_ntabi::seh::EXCEPTION_RECORD,
+    _context: *const nk_ntabi::seh::x64::CONTEXT,
+    _first_chance: u8,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
+}
+
 /// Make memory hold what the data cache holds of a range, and drop
 /// the cached lines, for a device that reads or writes the range
 /// behind the processor's back.

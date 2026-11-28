@@ -176,6 +176,414 @@ pub extern "C" fn NtMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
     STATUS_SUCCESS
 }
 
+/// [`NtOpenDirectoryObject`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntopendirectoryobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenDirectoryObject(
+    directory_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let name = oa.name.unwrap_or_default();
+    if name.is_empty() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    // SAFETY: `parse_context` is null for directory opens.
+    let (found, granted) = match unsafe {
+        super::open_by_name(
+            oa.root,
+            &name,
+            oa.attributes,
+            Some(&object::DIRECTORY_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
+        Ok(res) => res,
+        Err(st) => return st,
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `found` keeps the directory alive while opening the handle.
+    let h = match unsafe {
+        handle::open_with(
+            found.body(),
+            granted,
+            Attributes {
+                inherit: (oa.attributes & OBJ_INHERIT) != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(directory_handle, h as *mut c_void, mode) }
+    {
+        let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtOpenSymbolicLinkObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopensymboliclinkobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenSymbolicLinkObject(
+    link_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let name = oa.name.unwrap_or_default();
+    if name.is_empty() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    // Opening a symbolic link itself always stops at the final link (`OBJ_OPENLINK`).
+    // SAFETY: `parse_context` is null for symbolic link opens.
+    let (found, granted) = match unsafe {
+        super::open_by_name(
+            oa.root,
+            &name,
+            oa.attributes | OBJ_OPENLINK,
+            Some(&object::SYMBOLIC_LINK_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
+        Ok(res) => res,
+        Err(st) => return st,
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `found` keeps the symbolic link alive while opening the handle.
+    let h = match unsafe {
+        handle::open_with(
+            found.body(),
+            granted,
+            Attributes {
+                inherit: (oa.attributes & OBJ_INHERIT) != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        )
+    } {
+        Ok(h) => h,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(link_handle, h as *mut c_void, mode) } {
+        let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+        return st;
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtQuerySymbolicLinkObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwquerysymboliclinkobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQuerySymbolicLinkObject(
+    link_handle: *mut c_void,
+    link_target: *mut UNICODE_STRING,
+    returned_length: *mut u32,
+) -> NTSTATUS {
+    const SYMBOLIC_LINK_QUERY: u32 = 0x1;
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        link_handle as u64,
+        Some(&raw const object::SYMBOLIC_LINK_TYPE),
+        SYMBOLIC_LINK_QUERY,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: per the contract.
+    let mut out_us = match unsafe { crate::svc::capture::read(link_target, mode) } {
+        Ok(u) => u,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` is a live `OBJECT_SYMBOLIC_LINK`.
+    let target = unsafe {
+        let sl = held.body().cast::<nk_ntabi::ob::OBJECT_SYMBOLIC_LINK>();
+        crate::rtl::copy_unicode(&raw const (*sl).LinkTarget)
+    };
+    let bytes_len = target.len() * 2;
+    let needed = (bytes_len + 2) as u32;
+    if !returned_length.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(returned_length, needed, mode) } {
+            return st;
+        }
+    }
+    if usize::from(out_us.MaximumLength) < bytes_len {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if bytes_len > 0 {
+        // SAFETY: `target` is valid UTF-16 code units.
+        let src = unsafe { core::slice::from_raw_parts(target.as_ptr().cast::<u8>(), bytes_len) };
+        // SAFETY: `copy_to_caller` probes user pointers.
+        let cp =
+            unsafe { crate::svc::capture::copy_to_caller(out_us.Buffer.cast::<u8>(), src, mode) };
+        if let Err(st) = cp {
+            return st;
+        }
+    }
+    if usize::from(out_us.MaximumLength) >= bytes_len + 2 {
+        // SAFETY: room for trailing NUL.
+        let _ = unsafe {
+            crate::svc::capture::copy_to_caller(
+                out_us.Buffer.cast::<u8>().add(bytes_len),
+                &[0u8; 2],
+                mode,
+            )
+        };
+    }
+    out_us.Length = bytes_len as u16;
+    // SAFETY: per the contract.
+    match unsafe { crate::svc::capture::write(link_target, out_us, mode) } {
+        Ok(()) => STATUS_SUCCESS,
+        Err(st) => st,
+    }
+}
+
+/// [`NtDuplicateObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwduplicateobject).
+///
+/// # Safety
+/// `target_handle` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtDuplicateObject(
+    source_process_handle: *mut c_void,
+    source_handle: *mut c_void,
+    target_process_handle: *mut c_void,
+    target_handle: *mut *mut c_void,
+    desired_access: u32,
+    handle_attributes: u32,
+    options: u32,
+) -> NTSTATUS {
+    const PROCESS_DUP_HANDLE: u32 = 0x0040;
+    const DUPLICATE_CLOSE_SOURCE: u32 = 0x1;
+    const DUPLICATE_SAME_ACCESS: u32 = 0x2;
+    const DUPLICATE_SAME_ATTRIBUTES: u32 = 0x4;
+    let mode = crate::svc::capture::mode();
+    let hmode = crate::svc::capture::handle_mode(mode);
+
+    let (src_proc, _) = match handle::reference_for(
+        source_process_handle as u64,
+        Some(&raw const object::PROCESS_TYPE),
+        PROCESS_DUP_HANDLE,
+        hmode,
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `src_proc` is a live `EPROCESS`.
+    let (obj, info) = match unsafe {
+        handle::reference_in(src_proc.body(), source_handle as u64, None, 0, hmode)
+    } {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+
+    let close_source = (options & DUPLICATE_CLOSE_SOURCE) != 0;
+    if target_process_handle.is_null() {
+        if close_source {
+            let _ = handle::close_for(source_handle as u64, hmode);
+        }
+        return STATUS_SUCCESS;
+    }
+
+    let (dst_proc, _) = match handle::reference_for(
+        target_process_handle as u64,
+        Some(&raw const object::PROCESS_TYPE),
+        PROCESS_DUP_HANDLE,
+        hmode,
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let access = if (options & DUPLICATE_SAME_ACCESS) != 0 {
+        info.granted
+    } else {
+        desired_access
+    };
+    let attrs = if (options & DUPLICATE_SAME_ATTRIBUTES) != 0 {
+        info.attributes
+    } else {
+        Attributes {
+            inherit: (handle_attributes & OBJ_INHERIT) != 0,
+            protect_from_close: false,
+        }
+    };
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (handle_attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `dst_proc` and `obj` are live references.
+    let new_h =
+        match unsafe { handle::open_in(dst_proc.body(), obj.body(), access, attrs, kernel_handle) }
+        {
+            Ok(h) => h,
+            Err(st) => return st,
+        };
+    if close_source {
+        let _ = handle::close_for(source_handle as u64, hmode);
+    }
+    if !target_handle.is_null() {
+        // SAFETY: per the contract.
+        let wr = unsafe { crate::svc::capture::write(target_handle, new_h as *mut c_void, mode) };
+        if let Err(st) = wr {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtQueryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryobject).
+///
+/// # Safety
+/// Output buffer and `return_length` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQueryObject(
+    object_handle: *mut c_void,
+    class: u32,
+    information: *mut u8,
+    length: u32,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    const OBJECT_BASIC_INFORMATION: u32 = 0;
+    const OBJECT_NAME_INFORMATION: u32 = 1;
+    const OBJECT_TYPE_INFORMATION: u32 = 2;
+    let mode = crate::svc::capture::mode();
+    let (held, info) = match handle::reference_for(
+        object_handle as u64,
+        None,
+        0,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    match class {
+        OBJECT_BASIC_INFORMATION => {
+            // `PUBLIC_OBJECT_BASIC_INFORMATION`: 56 bytes.
+            let mut buf = [0u8; 56];
+            buf[4..8].copy_from_slice(&info.granted.to_le_bytes());
+            buf[8..12].copy_from_slice(&1u32.to_le_bytes()); // HandleCount
+            buf[12..16].copy_from_slice(&1u32.to_le_bytes()); // PointerCount
+            if !return_length.is_null() {
+                // SAFETY: per the contract.
+                if let Err(st) = unsafe { crate::svc::capture::write(return_length, 56u32, mode) } {
+                    return st;
+                }
+            }
+            if length < 56 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(information, &buf, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        OBJECT_NAME_INFORMATION => {
+            // Return empty `UNICODE_STRING` when unnamed (16 bytes).
+            let needed = size_of::<UNICODE_STRING>() as u32 + 2;
+            if !return_length.is_null() {
+                // SAFETY: per the contract.
+                if let Err(st) = unsafe { crate::svc::capture::write(return_length, needed, mode) }
+                {
+                    return st;
+                }
+            }
+            if length < needed {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            let buf_va = information.addr() + size_of::<UNICODE_STRING>();
+            let us = UNICODE_STRING {
+                Length: 0,
+                MaximumLength: 2,
+                Buffer: core::ptr::with_exposed_provenance_mut(buf_va),
+            };
+            let mut out = alloc::vec![0u8; needed as usize];
+            // SAFETY: `UNICODE_STRING` is plain data.
+            out[..size_of::<UNICODE_STRING>()].copy_from_slice(unsafe {
+                core::slice::from_raw_parts(
+                    (&raw const us).cast::<u8>(),
+                    size_of::<UNICODE_STRING>(),
+                )
+            });
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(information, &out, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        OBJECT_TYPE_INFORMATION => {
+            // `PUBLIC_OBJECT_TYPE_INFORMATION`: 104 bytes header (`UNICODE_STRING` + 22 u32s) + UTF-16 name + NUL.
+            // SAFETY: `held` is a live object.
+            let name = unsafe { object::type_of(held.body()).name() };
+            let name_bytes = name.len() * 2;
+            let hdr_size = 104usize;
+            let total = hdr_size + name_bytes + 2;
+            if !return_length.is_null() {
+                // SAFETY: per the contract.
+                let wr = unsafe { crate::svc::capture::write(return_length, total as u32, mode) };
+                if let Err(st) = wr {
+                    return st;
+                }
+            }
+            if (length as usize) < total {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            let mut out = alloc::vec![0u8; total];
+            let us = UNICODE_STRING {
+                Length: name_bytes as u16,
+                MaximumLength: (name_bytes + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(information.addr() + hdr_size),
+            };
+            // SAFETY: `UNICODE_STRING` is plain data.
+            out[..size_of::<UNICODE_STRING>()].copy_from_slice(unsafe {
+                core::slice::from_raw_parts(
+                    (&raw const us).cast::<u8>(),
+                    size_of::<UNICODE_STRING>(),
+                )
+            });
+            for (i, &unit) in name.iter().enumerate() {
+                out[hdr_size + i * 2..hdr_size + i * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+            }
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(information, &out, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        _ => STATUS_INVALID_INFO_CLASS,
+    }
+}
+
 // ---- tests --------------------------------------------------------------
 
 use nk_ntabi::io::UNICODE_STRING;

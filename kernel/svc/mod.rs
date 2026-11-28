@@ -232,6 +232,7 @@ macro_rules! register_services {
             $(
                 /// # Safety
                 /// Caller guarantees `args` satisfies the NT service contract.
+                #[allow(unused_variables)]
                 pub(super) unsafe fn $nt(args: &[usize; MAX_SYSCALL_ARGS]) -> NTSTATUS {
                     const { check_arity(nr::$nt, count_args!($($arg : $ty),*)) };
                     call_from_args!(@step $safety, $impl_path, args, 0usize, () $(, $arg : $ty)*)
@@ -303,6 +304,12 @@ register_services! {
         key_handle: *mut *mut c_void,
         desired_access: u32,
         attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtOpenKeyEx => crate::cm::NtOpenKeyEx, ZwOpenKeyEx(
+        key_handle: *mut *mut c_void,
+        desired_access: u32,
+        attributes: *const OBJECT_ATTRIBUTES,
+        open_options: u32,
     );
     unsafe Implemented, NtQueryKey => crate::cm::NtQueryKey, ZwQueryKey(
         key_handle: *mut c_void,
@@ -392,6 +399,32 @@ register_services! {
         io_status_block: *mut IO_STATUS_BLOCK,
         share_access: u32,
         open_options: u32,
+    );
+    unsafe Partial, NtQueryAttributesFile => crate::io::zwfile::NtQueryAttributesFile, ZwQueryAttributesFile(
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        file_information: *mut u8,
+    );
+    unsafe Partial, NtReadFile => crate::io::zwfile::NtReadFile, ZwReadFile(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *const c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        buffer: *mut u8,
+        length: u32,
+        byte_offset: *const i64,
+        key: *const u32,
+    );
+    unsafe Partial, NtWriteFile => crate::io::zwfile::NtWriteFile, ZwWriteFile(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *const c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        buffer: *const u8,
+        length: u32,
+        byte_offset: *const i64,
+        key: *const u32,
     );
     unsafe Partial, NtLoadDriver => crate::io::service::NtLoadDriver, ZwLoadDriver(
         driver_service_name: *const UNICODE_STRING,
@@ -527,6 +560,17 @@ register_services! {
         desired_access: u32,
         object_attributes: *const OBJECT_ATTRIBUTES,
     );
+    unsafe Implemented, NtSetEvent => crate::ob::event::NtSetEvent, ZwSetEvent(
+        event_handle: *mut c_void,
+        previous_state: *mut i32,
+    );
+    unsafe Implemented, NtResetEvent => crate::ob::event::NtResetEvent, ZwResetEvent(
+        event_handle: *mut c_void,
+        previous_state: *mut i32,
+    );
+    safe Implemented, NtClearEvent => crate::ob::event::NtClearEvent, ZwClearEvent(
+        event_handle: *mut c_void,
+    );
     unsafe Partial, NtWaitForSingleObject => crate::ob::event::NtWaitForSingleObject, ZwWaitForSingleObject(
         handle: *mut c_void,
         alertable: u8,
@@ -536,6 +580,37 @@ register_services! {
         directory_handle: *mut *mut c_void,
         desired_access: u32,
         object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtOpenDirectoryObject => crate::ob::directory::NtOpenDirectoryObject, ZwOpenDirectoryObject(
+        directory_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtOpenSymbolicLinkObject => crate::ob::directory::NtOpenSymbolicLinkObject, ZwOpenSymbolicLinkObject(
+        link_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtQuerySymbolicLinkObject => crate::ob::directory::NtQuerySymbolicLinkObject, ZwQuerySymbolicLinkObject(
+        link_handle: *mut c_void,
+        link_target: *mut UNICODE_STRING,
+        returned_length: *mut u32,
+    );
+    unsafe Partial, NtDuplicateObject => crate::ob::directory::NtDuplicateObject, ZwDuplicateObject(
+        source_process_handle: *mut c_void,
+        source_handle: *mut c_void,
+        target_process_handle: *mut c_void,
+        target_handle: *mut *mut c_void,
+        desired_access: u32,
+        handle_attributes: u32,
+        options: u32,
+    );
+    unsafe Partial, NtQueryObject => crate::ob::directory::NtQueryObject, ZwQueryObject(
+        object_handle: *mut c_void,
+        class: u32,
+        information: *mut u8,
+        length: u32,
+        return_length: *mut u32,
     );
     safe Partial, NtMakeTemporaryObject => crate::ob::directory::NtMakeTemporaryObject, ZwMakeTemporaryObject(
         handle: *mut c_void,
@@ -556,12 +631,40 @@ register_services! {
         output_length: u32,
     );
 
-    // Process & thread (`kernel/ps`)
+    // Process, thread, APC, exception & delay (`kernel/ps`, `kernel/ke`, `kernel/arch`)
     safe Implemented, NtAlertThread => crate::ps::NtAlertThread, ZwAlertThread(
         thread_handle: *mut c_void,
     );
     safe Implemented, NtClose => crate::ps::NtClose, ZwClose(
         handle: *mut c_void,
+    );
+    unsafe Implemented, NtContinue => crate::arch::NtContinue, ZwContinue(
+        context_record: *const nk_ntabi::seh::x64::CONTEXT,
+        test_alert: u8,
+    );
+    unsafe Implemented, NtContinueEx => crate::arch::NtContinueEx, ZwContinueEx(
+        context_record: *const nk_ntabi::seh::x64::CONTEXT,
+        continue_argument: *const c_void,
+    );
+    unsafe Partial, NtCreateThreadEx => crate::ps::info::NtCreateThreadEx, ZwCreateThreadEx(
+        thread_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        process_handle: *mut c_void,
+        start_routine: *mut c_void,
+        argument: *mut c_void,
+        create_flags: u32,
+        zero_bits: usize,
+        stack_size: usize,
+        maximum_stack_size: usize,
+        attribute_list: *mut c_void,
+    );
+    unsafe Implemented, NtDelayExecution => crate::ke::wait::NtDelayExecution, ZwDelayExecution(
+        alertable: u8,
+        delay_interval: *const i64,
+    );
+    unsafe Implemented, NtDisplayString => crate::ps::info::NtDisplayString, ZwDisplayString(
+        string: *const UNICODE_STRING,
     );
     unsafe Implemented, NtOpenProcess => crate::ps::NtOpenProcess, ZwOpenProcess(
         process_handle: *mut *mut c_void,
@@ -575,9 +678,49 @@ register_services! {
         object_attributes: *const OBJECT_ATTRIBUTES,
         client_id: *const nk_ntabi::user::CLIENT_ID,
     );
-    safe Partial, NtTerminateThread => crate::ps::NtTerminateThread, ZwTerminateThread(
+    unsafe Partial, NtQueryInformationProcess => crate::ps::info::NtQueryInformationProcess, ZwQueryInformationProcess(
+        process_handle: *mut c_void,
+        class: u32,
+        information: *mut u8,
+        length: u32,
+        return_length: *mut u32,
+    );
+    unsafe Partial, NtQueryInformationThread => crate::ps::info::NtQueryInformationThread, ZwQueryInformationThread(
         thread_handle: *mut c_void,
-        exit_status: NTSTATUS,
+        class: u32,
+        information: *mut u8,
+        length: u32,
+        return_length: *mut u32,
+    );
+    safe Implemented, NtQueueApcThread => crate::ke::apc::NtQueueApcThread, ZwQueueApcThread(
+        thread_handle: *mut c_void,
+        apc_routine: *mut c_void,
+        apc_arg1: *mut c_void,
+        apc_arg2: *mut c_void,
+        apc_arg3: *mut c_void,
+    );
+    safe Partial, NtQueueApcThreadEx => crate::ke::apc::NtQueueApcThreadEx, ZwQueueApcThreadEx(
+        thread_handle: *mut c_void,
+        reserve_handle: *mut c_void,
+        apc_routine: *mut c_void,
+        apc_arg1: *mut c_void,
+        apc_arg2: *mut c_void,
+        apc_arg3: *mut c_void,
+    );
+    unsafe Implemented, NtRaiseException => crate::arch::NtRaiseException, ZwRaiseException(
+        exception_record: *const nk_ntabi::seh::EXCEPTION_RECORD,
+        context_record: *const nk_ntabi::seh::x64::CONTEXT,
+        first_chance: u8,
+    );
+    unsafe Implemented, NtResumeThread => crate::ps::info::NtResumeThread, ZwResumeThread(
+        thread_handle: *mut c_void,
+        previous_suspend_count: *mut u32,
+    );
+    unsafe Partial, NtSetInformationProcess => crate::ps::info::NtSetInformationProcess, ZwSetInformationProcess(
+        process_handle: *mut c_void,
+        class: u32,
+        information: *const c_void,
+        length: u32,
     );
     unsafe Partial, NtSetInformationThread => crate::ps::NtSetInformationThread, ZwSetInformationThread(
         thread_handle: *mut c_void,
@@ -585,8 +728,64 @@ register_services! {
         information: *const c_void,
         length: u32,
     );
+    unsafe Partial, NtSuspendThread => crate::ps::info::NtSuspendThread, ZwSuspendThread(
+        thread_handle: *mut c_void,
+        previous_suspend_count: *mut u32,
+    );
+    safe Partial, NtTerminateProcess => crate::ps::info::NtTerminateProcess, ZwTerminateProcess(
+        process_handle: *mut c_void,
+        exit_status: NTSTATUS,
+    );
+    safe Partial, NtTerminateThread => crate::ps::NtTerminateThread, ZwTerminateThread(
+        thread_handle: *mut c_void,
+        exit_status: NTSTATUS,
+    );
+    safe Implemented, NtTestAlert => crate::ke::apc::NtTestAlert, ZwTestAlert();
+    safe Implemented, NtYieldExecution => crate::ke::wait::NtYieldExecution, ZwYieldExecution();
+    unsafe Implemented, NtQueryPerformanceCounter => crate::ke::time::NtQueryPerformanceCounter, ZwQueryPerformanceCounter(
+        counter: *mut i64,
+        frequency: *mut i64,
+    );
+    unsafe Implemented, NtQuerySystemTime => crate::ke::time::NtQuerySystemTime, ZwQuerySystemTime(
+        current_time: *mut i64,
+    );
+    unsafe Implemented, NtQueryDefaultLocale => crate::ps::info::NtQueryDefaultLocale, ZwQueryDefaultLocale(
+        user_profile: u8,
+        default_locale_id: *mut u32,
+    );
+    unsafe Implemented, NtQueryDefaultUILanguage => crate::ps::info::NtQueryDefaultUILanguage, ZwQueryDefaultUILanguage(
+        language_id: *mut u16,
+    );
+    unsafe Implemented, NtQueryInstallUILanguage => crate::ps::info::NtQueryInstallUILanguage, ZwQueryInstallUILanguage(
+        language_id: *mut u16,
+    );
+    safe Implemented, NtFlushInstructionCache => crate::ps::info::NtFlushInstructionCache, ZwFlushInstructionCache(
+        process_handle: *mut c_void,
+        base_address: *const c_void,
+        length: usize,
+    );
+    unsafe Partial, NtTraceControl => crate::ps::info::NtTraceControl, ZwTraceControl(
+        operation: u32,
+        in_buf: *const c_void,
+        in_len: u32,
+        out_buf: *mut c_void,
+        out_len: u32,
+        return_length: *mut u32,
+    );
+    safe Partial, NtApphelpCacheControl => crate::ps::info::NtApphelpCacheControl, ZwApphelpCacheControl(
+        command: u32,
+        data: *mut c_void,
+    );
 
     // Security (`kernel/se`)
+    unsafe Partial, NtQuerySecurityAttributesToken => crate::se::zwtoken::NtQuerySecurityAttributesToken, ZwQuerySecurityAttributesToken(
+        token_handle: *mut c_void,
+        attributes: *const c_void,
+        number_of_attributes: u32,
+        buffer: *mut c_void,
+        length: u32,
+        return_length: *mut u32,
+    );
     unsafe Implemented, NtDuplicateToken => crate::se::zwtoken::NtDuplicateToken, ZwDuplicateToken(
         existing_handle: *mut c_void,
         desired_access: u32,

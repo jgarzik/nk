@@ -613,11 +613,73 @@ pub unsafe fn create_thread(
 
     // SAFETY: `th` has one caller reference from `create_unstarted`; wrap in `ObRef`.
     let th_ref = unsafe { ObRef::adopt(th.cast()) };
-    if !suspended {
+    if suspended {
+        // SAFETY: `th` is unstarted.
+        unsafe { thread::mark_suspended(th) };
+    } else {
         // SAFETY: `th` is fully initialized and unstarted.
         unsafe { thread::begin(th) };
     }
     Ok(th_ref)
+}
+
+/// Mark `proc_ptr` terminated with `exit_status`, signal its `EPROCESS`
+/// dispatcher header, and dispatch process-exit notifications once.
+///
+/// # Safety
+/// `proc_ptr` is a live non-System `EPROCESS`.
+pub unsafe fn mark_process_terminated(proc_ptr: *mut u8, exit_status: NTSTATUS) {
+    if proc_ptr.is_null() || proc_ptr == super::process::system() {
+        return;
+    }
+    // SAFETY: per the contract.
+    let Some(state) = (unsafe { super::process::user_state(proc_ptr) }) else {
+        return;
+    };
+    // SAFETY: `proc_ptr` is live.
+    unsafe {
+        let st_ptr = proc_ptr.add(proc_layout::EXIT_STATUS).cast::<AtomicU32>();
+        let _ = (*st_ptr).compare_exchange(
+            STATUS_PENDING as u32,
+            exit_status as u32,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+    if state.terminated.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // SAFETY: `proc_ptr` is live.
+    unsafe {
+        let pid = proc_ptr
+            .add(proc_layout::UNIQUE_PROCESS_ID)
+            .cast::<u64>()
+            .read();
+        let parent_pid = proc_ptr
+            .add(proc_layout::INHERITED_FROM_UNIQUE_PROCESS_ID)
+            .cast::<u64>()
+            .read();
+        super::notify::dispatch_process(proc_ptr.cast(), parent_pid, pid, None);
+        let header = proc_ptr.cast::<nk_ntabi::ke::DISPATCHER_HEADER>();
+        let woken = {
+            let _lock = crate::ke::object::ObjectLock::take(header);
+            crate::ke::object::signal(header).store(1, Ordering::Release);
+            crate::ke::object::satisfy(header)
+        };
+        woken.ready();
+    }
+}
+
+/// Terminate the calling user thread's owning process with `exit_status` and
+/// exit the current thread immediately.
+pub fn terminate_current_process(exit_status: NTSTATUS) -> ! {
+    let me = thread::current();
+    // SAFETY: `me` is the running thread.
+    let proc_ptr = unsafe { super::process::PsGetThreadProcess(me.cast()).cast::<u8>() };
+    // SAFETY: `proc_ptr` is kept alive by `me`.
+    unsafe { mark_process_terminated(proc_ptr, exit_status) };
+    notify_thread_exit(exit_status);
+    thread::exit()
 }
 
 /// Called when a user-mode thread is terminating: decrements its owning
@@ -650,28 +712,7 @@ pub fn notify_thread_exit(exit_status: NTSTATUS) {
     if prev == 1 {
         // Last thread of the process exited: record exit status if still pending and signal process.
         // SAFETY: `proc_ptr` is live.
-        unsafe {
-            let st_ptr = proc_ptr.add(proc_layout::EXIT_STATUS).cast::<AtomicU32>();
-            let _ = (*st_ptr).compare_exchange(
-                STATUS_PENDING as u32,
-                exit_status as u32,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
-            state.terminated.store(true, Ordering::Release);
-            let parent_pid = proc_ptr
-                .add(proc_layout::INHERITED_FROM_UNIQUE_PROCESS_ID)
-                .cast::<u64>()
-                .read();
-            super::notify::dispatch_process(proc_ptr.cast(), parent_pid, pid, None);
-            let header = proc_ptr.cast::<nk_ntabi::ke::DISPATCHER_HEADER>();
-            let woken = {
-                let _lock = crate::ke::object::ObjectLock::take(header);
-                crate::ke::object::signal(header).store(1, Ordering::Release);
-                crate::ke::object::satisfy(header)
-            };
-            woken.ready();
-        }
+        unsafe { mark_process_terminated(proc_ptr, exit_status) };
     }
 }
 

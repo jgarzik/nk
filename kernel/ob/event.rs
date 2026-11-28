@@ -278,6 +278,83 @@ pub unsafe extern "C" fn NtWaitForSingleObject(
     }
 }
 
+const EVENT_MODIFY_STATE: u32 = 0x2;
+
+/// [`NtSetEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwsetevent).
+///
+/// # Safety
+/// `previous_state` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtSetEvent(
+    event_handle: *mut c_void,
+    previous_state: *mut i32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        event_handle as u64,
+        Some(&raw const object::EVENT_TYPE),
+        EVENT_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` keeps the `KEVENT` alive.
+    let prev = unsafe { wait::KeSetEvent(held.body().cast(), 0, 0) };
+    if !previous_state.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(previous_state, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// [`NtResetEvent`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntresetevent).
+///
+/// # Safety
+/// `previous_state` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtResetEvent(
+    event_handle: *mut c_void,
+    previous_state: *mut i32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        event_handle as u64,
+        Some(&raw const object::EVENT_TYPE),
+        EVENT_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` keeps the `KEVENT` alive.
+    let prev = unsafe { wait::KeResetEvent(held.body().cast()) };
+    if !previous_state.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(previous_state, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// `NtClearEvent`: reset an event without returning its previous state.
+pub extern "C" fn NtClearEvent(event_handle: *mut c_void) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        event_handle as u64,
+        Some(&raw const object::EVENT_TYPE),
+        EVENT_MODIFY_STATE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    // SAFETY: `held` keeps the `KEVENT` alive.
+    unsafe { wait::KeClearEvent(held.body().cast()) };
+    STATUS_SUCCESS
+}
+
 // ---- tests --------------------------------------------------------------
 
 /// Events made and waited on through handles, as a driver does it, and

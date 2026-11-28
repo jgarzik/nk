@@ -104,6 +104,62 @@ pub extern "C" fn RtlUpcaseUnicodeChar(character: u16) -> u16 {
     nk_rtl::upcase_char(character)
 }
 
+/// BMP 1-to-1 lowercase conversion (`RtlDowncaseUnicodeChar`).
+pub extern "C" fn RtlDowncaseUnicodeChar(character: u16) -> u16 {
+    let Some(ch) = char::from_u32(u32::from(character)) else {
+        return character;
+    };
+    let mut it = ch.to_lowercase();
+    let Some(first) = it.next() else {
+        return character;
+    };
+    if it.next().is_some() {
+        return character;
+    }
+    u16::try_from(u32::from(first)).unwrap_or(character)
+}
+
+/// [`RtlDowncaseUnicodeString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtldowncaseunicodestring):
+/// the source in lower case, in the destination's buffer or in one allocated
+/// for it. The two may be one string.
+///
+/// # Safety
+/// `source` points to a counted string; `destination` is writable and,
+/// unless a buffer is to be allocated, its buffer has `MaximumLength` bytes.
+pub unsafe extern "C" fn RtlDowncaseUnicodeString(
+    destination: *mut UNICODE_STRING,
+    source: *const UNICODE_STRING,
+    allocate: u8,
+) -> NTSTATUS {
+    // SAFETY: per the contract. Each unit is read before the unit of
+    // the same place is written, so the strings may share a buffer.
+    unsafe {
+        let from = Wide::of(source);
+        let length = (from.len() * 2) as u16;
+        let to = if allocate != 0 {
+            let to = buffer(usize::from(length)).cast::<u16>();
+            if to.is_null() {
+                return STATUS_NO_MEMORY;
+            }
+            (&raw mut (*destination).MaximumLength).write_unaligned(length);
+            (&raw mut (*destination).Buffer).write_unaligned(to);
+            to
+        } else {
+            let maximum = (&raw const (*destination).MaximumLength).read_unaligned();
+            if nk_rtl::upcase::upcase_string_length(length, maximum).is_none() {
+                return STATUS_BUFFER_OVERFLOW;
+            }
+            (&raw const (*destination).Buffer).read_unaligned()
+        };
+        for at in 0..from.len() {
+            to.add(at)
+                .write_unaligned(RtlDowncaseUnicodeChar(from.unit(at)));
+        }
+        (&raw mut (*destination).Length).write_unaligned(length);
+    }
+    STATUS_SUCCESS
+}
+
 /// [`RtlUpcaseUnicodeString`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlupcaseunicodestring):
 /// the source in upper case, in the destination's buffer or in one
 /// allocated for it (which has room for the text and no terminator).

@@ -361,7 +361,7 @@ const PF_USER: u64 = 4;
 /// The interrupted code as a `CONTEXT`. XMM6-XMM15 are read from the
 /// processor: nothing between the interrupted code and here has touched
 /// them (`doc/ABI.md`).
-fn context_of(frame: &Frame) -> Context {
+pub(super) fn context_of(frame: &Frame) -> Context {
     let mut c = seh::empty_context();
     c.ContextFlags = CONTEXT_FULL | CONTEXT_SEGMENTS;
     c.MxCsr = frame.mxcsr as u32;

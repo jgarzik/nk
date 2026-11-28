@@ -207,4 +207,31 @@ pub unsafe extern "C" fn NtQueryInformationToken(
     }
 }
 
+/// `NtQuerySecurityAttributesToken`: NK does not attach security attributes
+/// to tokens; returns `STATUS_NOT_FOUND` (matching Windows when the named
+/// attribute is absent, as expected by `ntdll!LdrpInitializeProcess`).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQuerySecurityAttributesToken(
+    token_handle: *mut c_void,
+    _attributes: *const c_void,
+    _number_of_attributes: u32,
+    _buffer: *mut c_void,
+    _length: u32,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    if let Err(st) = referenced(token_handle, &object::TOKEN_TYPE) {
+        return st;
+    }
+    if !return_length.is_null() {
+        // SAFETY: per the contract; `capture::write` probes user pointers.
+        if let Err(st) = unsafe { crate::svc::capture::write(return_length, 0u32, mode) } {
+            return st;
+        }
+    }
+    STATUS_NOT_FOUND
+}
+
 pub use crate::svc::zw::{ZwDuplicateToken, ZwOpenProcessTokenEx, ZwQueryInformationToken};

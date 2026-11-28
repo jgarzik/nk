@@ -677,6 +677,20 @@ pub extern "C" fn NtDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
     }
 }
 
+/// `NtOpenKeyEx`: extended `NtOpenKey` accepting `open_options`.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenKeyEx(
+    key_handle: *mut *mut c_void,
+    desired_access: u32,
+    attributes: *const OBJECT_ATTRIBUTES,
+    _open_options: u32,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { NtOpenKey(key_handle, desired_access, attributes) }
+}
+
 /// [`ZwOpenKey`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwopenkey).
 /// There are no access checks: the handle is granted the access asked
 /// for.

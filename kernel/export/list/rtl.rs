@@ -60,6 +60,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::string::RtlUnicodeStringToAnsiString),
     export!(Implemented, rtl::string::RtlUnicodeToMultiByteN),
     export!(Implemented, rtl::string::RtlUpcaseUnicodeChar),
+    export!(Implemented, rtl::string::RtlDowncaseUnicodeChar),
+    export!(Implemented, rtl::string::RtlDowncaseUnicodeString),
     export!(Implemented, rtl::string::RtlUpcaseUnicodeString),
     export_entry!(
         Implemented,

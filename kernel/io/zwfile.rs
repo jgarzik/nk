@@ -167,4 +167,214 @@ pub unsafe extern "C" fn NtOpenFile(
     }
 }
 
+/// [`NtReadFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwreadfile):
+/// read up to `length` bytes from `file_handle` at `byte_offset` (or the
+/// file's current byte offset if null).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn NtReadFile(
+    file_handle: *mut c_void,
+    event: *mut c_void,
+    _apc_routine: *const c_void,
+    _apc_context: *mut c_void,
+    io_status_block: *mut IO_STATUS_BLOCK,
+    buffer: *mut u8,
+    length: u32,
+    byte_offset: *const i64,
+    _key: *const u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let len = length as usize;
+    let off = if byte_offset.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(byte_offset, mode) } {
+            Ok(v) if v < 0 => None,
+            Ok(v) => Some(v),
+            Err(st) => return st,
+        }
+    };
+    let mut kbuf = alloc::vec![0u8; len];
+    let h = file_handle as u64;
+    let res = match off {
+        Some(pos) => file::read_at(h, pos, &mut kbuf),
+        None => file::read(h, &mut kbuf),
+    };
+    match res {
+        Ok(r) => {
+            let n = r.information.min(len);
+            if n > 0 {
+                // SAFETY: per the contract; `copy_to_caller` probes user pointers.
+                let cp = unsafe { crate::svc::capture::copy_to_caller(buffer, &kbuf[..n], mode) };
+                if let Err(st) = cp {
+                    return st;
+                }
+            }
+            let iosb = IO_STATUS_BLOCK {
+                Status: r.status,
+                Information: r.information,
+            };
+            // SAFETY: per the contract.
+            if let Err(st) = unsafe { crate::svc::capture::write(io_status_block, iosb, mode) } {
+                return st;
+            }
+            if !event.is_null() {
+                // SAFETY: caller supplied an event handle to signal on completion.
+                let _ = unsafe { crate::ob::event::NtSetEvent(event, core::ptr::null_mut()) };
+            }
+            r.status
+        }
+        Err(e) => match e {
+            file::IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            file::IoError::Handle(s) | file::IoError::Refused(s) => s,
+            file::IoError::NotCompleted { dispatch_status: s }
+            | file::IoError::StatusMismatch {
+                dispatch_status: s, ..
+            } => s,
+        },
+    }
+}
+
+/// `NtQueryAttributesFile`: query `FILE_BASIC_INFORMATION` (40 bytes) for the
+/// file named by `object_attributes`.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQueryAttributesFile(
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    file_information: *mut u8,
+) -> NTSTATUS {
+    const FILE_READ_ATTRIBUTES: u32 = 0x0080;
+    const FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x20;
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let name = oa.name.unwrap_or_default();
+    let req = OpenRequest {
+        name: "",
+        root: (!oa.root.is_null()).then_some(oa.root as u64),
+        desired_access: FILE_READ_ATTRIBUTES,
+        share_access: 0x7,
+        create_options: FILE_SYNCHRONOUS_IO_NONALERT,
+        disposition: FILE_OPEN,
+        kind: Kind::File,
+        requestor_mode: mode,
+    };
+    let extra = Extra {
+        file_attributes: 0,
+        allocation_size: 0,
+        location_flags: if oa.attributes & OBJ_CASE_INSENSITIVE == 0 {
+            SL_CASE_SENSITIVE
+        } else {
+            0
+        },
+        inherit: false,
+        process_handle: false,
+    };
+    let (h, _) = match file::open_as(&req, &name, &extra) {
+        Ok(res) => res,
+        Err(st) => return st,
+    };
+    let mut basic = [0u8; 40];
+    let q = file::query_information(h, 4, &mut basic);
+    file::close(h);
+    match q {
+        Ok(r) if nt_success(r.status) => {
+            // SAFETY: per the contract.
+            match unsafe { crate::svc::capture::copy_to_caller(file_information, &basic, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(st) => st,
+            }
+        }
+        Ok(r) => r.status,
+        Err(e) => match e {
+            file::IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            file::IoError::Handle(s) | file::IoError::Refused(s) => s,
+            file::IoError::NotCompleted { dispatch_status: s }
+            | file::IoError::StatusMismatch {
+                dispatch_status: s, ..
+            } => s,
+        },
+    }
+}
+
+/// [`NtWriteFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwwritefile):
+/// write `length` bytes from `buffer` to `file_handle` at `byte_offset` (or
+/// the file's current byte offset if null).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn NtWriteFile(
+    file_handle: *mut c_void,
+    event: *mut c_void,
+    _apc_routine: *const c_void,
+    _apc_context: *mut c_void,
+    io_status_block: *mut IO_STATUS_BLOCK,
+    buffer: *const u8,
+    length: u32,
+    byte_offset: *const i64,
+    _key: *const u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let len = length as usize;
+    let mut kbuf = alloc::vec![0u8; len];
+    if len > 0 {
+        // SAFETY: per the contract; `copy_from_caller` probes user pointers.
+        if let Err(st) = unsafe { crate::svc::capture::copy_from_caller(&mut kbuf, buffer, mode) } {
+            return st;
+        }
+    }
+    let off = if byte_offset.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(byte_offset, mode) } {
+            Ok(v) if v < 0 => None,
+            Ok(v) => Some(v),
+            Err(st) => return st,
+        }
+    };
+    let h = file_handle as u64;
+    let res = match off {
+        Some(pos) => file::write_at(h, pos, &kbuf),
+        None => file::write(h, &kbuf),
+    };
+    match res {
+        Ok(r) => {
+            let iosb = IO_STATUS_BLOCK {
+                Status: r.status,
+                Information: r.information,
+            };
+            // SAFETY: per the contract.
+            if let Err(st) = unsafe { crate::svc::capture::write(io_status_block, iosb, mode) } {
+                return st;
+            }
+            if !event.is_null() {
+                // SAFETY: caller supplied an event handle to signal on completion.
+                let _ = unsafe { crate::ob::event::NtSetEvent(event, core::ptr::null_mut()) };
+            }
+            r.status
+        }
+        Err(e) => match e {
+            file::IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            file::IoError::Handle(s) | file::IoError::Refused(s) => s,
+            file::IoError::NotCompleted { dispatch_status: s }
+            | file::IoError::StatusMismatch {
+                dispatch_status: s, ..
+            } => s,
+        },
+    }
+}
+
 pub use crate::svc::zw::{ZwCreateFile, ZwOpenFile};

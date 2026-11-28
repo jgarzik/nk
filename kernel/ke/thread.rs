@@ -110,6 +110,13 @@ pub struct Thread {
     /// Backing storage for the thread's 64-byte-aligned XSAVE/FXSAVE area
     /// (`KTHREAD.StateSaveArea` points to the aligned slice inside this array).
     xstate_buf: [u8; arch::XSTATE_BUF_SIZE],
+    /// Active `KEXCEPTION_FRAME` pointer during a user-mode syscall (x86-64).
+    active_ef: u64,
+    /// Set by `NtContinue`/`NtRaiseException` so `syscall_dispatch` returns
+    /// via full `iretq` without overwriting `tf.Rax`.
+    force_iret: bool,
+    /// Initial-suspend count (`CREATE_SUSPENDED` / `NtResumeThread`).
+    suspend_count: AtomicU32,
 }
 
 /// The most segments unwinds can have left with frames still on them:
@@ -609,6 +616,9 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         let xstate_area = arch::xstate_align_area((&raw mut (*thread).xstate_buf).cast());
         arch::xstate_init_area(xstate_area);
         field::<*mut u8>(thread, layout::STATE_SAVE_AREA).write(xstate_area);
+        (&raw mut (*thread).active_ef).write(0);
+        (&raw mut (*thread).force_iret).write(false);
+        (&raw mut (*thread).suspend_count).write(AtomicU32::new(0));
         // Every thread NK makes is a system thread.
         field::<u32>(thread, layout::MISC_FLAGS).write(layout::MISC_FLAG_SYSTEM_THREAD);
         super::apc::init_thread(thread);
@@ -741,6 +751,90 @@ pub unsafe fn set_teb(thread: *mut Thread, teb: u64) {
     if thread == current() {
         arch::set_user_gs_base(teb);
     }
+}
+
+/// Set/get the active syscall `KEXCEPTION_FRAME` pointer on the running thread.
+#[allow(dead_code)]
+pub fn swap_active_ef(ef: u64) -> u64 {
+    let me = current();
+    // SAFETY: `me` is the running thread; only this thread touches `active_ef`.
+    unsafe {
+        let old = (*me).active_ef;
+        (*me).active_ef = ef;
+        old
+    }
+}
+
+/// Read the active syscall `KEXCEPTION_FRAME` pointer on the running thread.
+#[allow(dead_code)]
+pub fn active_ef() -> u64 {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    unsafe { (*me).active_ef }
+}
+
+/// Mark that the current syscall replaced the user context (`NtContinue` /
+/// `NtRaiseException`) and must return via full `iretq` without overwriting `Rax`.
+#[allow(dead_code)]
+pub fn set_force_iret(v: bool) {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    unsafe { (*me).force_iret = v };
+}
+
+/// Read and clear the `force_iret` flag on the running thread.
+#[allow(dead_code)]
+pub fn take_force_iret() -> bool {
+    let me = current();
+    // SAFETY: `me` is the running thread.
+    unsafe {
+        let old = (*me).force_iret;
+        (*me).force_iret = false;
+        old
+    }
+}
+
+/// Mark an unstarted thread as initially suspended (`suspend_count = 1`).
+///
+/// # Safety
+/// `thread` is an unstarted thread.
+#[allow(dead_code)]
+pub unsafe fn mark_suspended(thread: *mut Thread) {
+    // SAFETY: per the contract.
+    unsafe { (*thread).suspend_count.store(1, Ordering::Release) };
+}
+
+/// Decrement `thread`'s suspend count, starting the thread if it drops from 1 to 0.
+/// Returns the previous suspend count.
+///
+/// # Safety
+/// `thread` is a live thread.
+#[allow(dead_code)]
+pub unsafe fn resume_thread(thread: *mut Thread) -> u32 {
+    // SAFETY: per the contract.
+    let prev = unsafe {
+        let cnt = &(*thread).suspend_count;
+        let mut cur = cnt.load(Ordering::Acquire);
+        loop {
+            if cur == 0 {
+                return 0;
+            }
+            match cnt.compare_exchange_weak(cur, cur - 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => break cur,
+                Err(now) => cur = now,
+            }
+        }
+    };
+    if prev == 1 {
+        // SAFETY: `thread` was suspended before starting; check state is INITIALIZED.
+        let state =
+            unsafe { AtomicU8::from_ptr(field(thread, layout::STATE)).load(Ordering::Acquire) };
+        if state == layout::state::INITIALIZED {
+            // SAFETY: unstarted thread transitioning to READY once.
+            unsafe { begin(thread) };
+        }
+    }
+    prev
 }
 
 /// Start a thread from [`create_unstarted`].

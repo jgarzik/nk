@@ -308,6 +308,47 @@ pub unsafe extern "C" fn KeQueryInterruptTimePrecise(qpc_time_stamp: *mut u64) -
     counter_to_time(count, frequency())
 }
 
+/// [`NtQueryPerformanceCounter`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-kequeryperformancecounter):
+/// return the monotonic performance counter and optionally its frequency.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn NtQueryPerformanceCounter(
+    counter: *mut i64,
+    frequency_out: *mut i64,
+) -> nk_ntabi::status::NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let count = arch::counter().wrapping_sub(EPOCH.load(Ordering::Relaxed)) as i64;
+    // SAFETY: per the contract; `capture::write` probes user pointers.
+    if let Err(st) = unsafe { crate::svc::capture::write(counter, count, mode) } {
+        return st;
+    }
+    if !frequency_out.is_null() {
+        let freq = frequency() as i64;
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(frequency_out, freq, mode) } {
+            return st;
+        }
+    }
+    nk_ntabi::status::STATUS_SUCCESS
+}
+
+/// `NtQuerySystemTime`: return current UTC system time (100ns since 1601-01-01).
+///
+/// # Safety
+/// `current_time` must satisfy `PreviousMode`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn NtQuerySystemTime(current_time: *mut i64) -> nk_ntabi::status::NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let now = system_time() as i64;
+    // SAFETY: per the contract; `capture::write` probes user pointers.
+    match unsafe { crate::svc::capture::write(current_time, now, mode) } {
+        Ok(()) => nk_ntabi::status::STATUS_SUCCESS,
+        Err(st) => st,
+    }
+}
+
 /// [`KeQueryUnbiasedInterruptTimePrecise`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryunbiasedinterrupttimeprecise):
 /// [`KeQueryInterruptTimePrecise`], which on a system that never sleeps
 /// is the same.

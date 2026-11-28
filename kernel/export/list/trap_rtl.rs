@@ -11,7 +11,6 @@ trap_list!(
     RtlAddProcessTrustLabelAce,
     RtlCompareUnicodeStrings,
     RtlCreateSystemVolumeInformationFolder,
-    RtlDowncaseUnicodeString,
     RtlEqualString,
     RtlMapSecurityErrorToNtStatus,
     RtlSetSaclSecurityDescriptor,

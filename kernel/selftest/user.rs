@@ -10,13 +10,24 @@ pub static GROUP: Group = Group {
     manual: false,
 };
 
-pub static GROUPS: &[&Group] = &[&GROUP];
+pub static NKT: Group = Group {
+    names: &["user.nkt"],
+    run: run_nkt,
+    manual: true,
+};
+
+pub static GROUPS: &[&Group] = &[&GROUP, &NKT];
 
 #[cfg(not(target_arch = "x86_64"))]
 fn run(r: &mut Report, _info: &BootInfo) {
     r.skip("user.stub", format_args!("x86-64 only"));
     r.skip("user.vm", format_args!("x86-64 only"));
     r.skip("user.section", format_args!("x86-64 only"));
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn run_nkt(r: &mut Report, _info: &BootInfo) {
+    r.skip("user.nkt", format_args!("x86-64 only"));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1102,4 +1113,52 @@ fn run(r: &mut Report, _info: &BootInfo) {
         ),
         Err(why) => r.fail("user.section", format_args!("{why}")),
     }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn run_nkt(r: &mut Report, info: &BootInfo) {
+    use crate::ke::wait;
+    use nk_ntabi::process as proc_layout;
+    use nk_ntabi::status::NTSTATUS;
+
+    let (proc_ref, _th_ref) = match crate::ps::user::start_first(
+        info,
+        "\\SystemRoot\\System32\\nkt.exe",
+        "\\SystemRoot\\System32\\nkt.exe",
+    ) {
+        Ok(pair) => pair,
+        Err(st) => {
+            r.fail("user.nkt", format_args!("start_first failed: {st:#010x}"));
+            return;
+        }
+    };
+    // Wait up to 30 seconds for `nkt.exe` to complete.
+    // SAFETY: `proc_ref` holds a live `EPROCESS` dispatcher object.
+    let wait_st = unsafe { wait::wait(Some(proc_ref.body().cast()), Some(-300_000_000)) };
+    if wait_st != 0 {
+        r.fail(
+            "user.nkt",
+            format_args!("timed out waiting for nkt.exe (wait={wait_st:#x})"),
+        );
+        return;
+    }
+    // SAFETY: `proc_ref` is live and terminated.
+    let exit_status = unsafe {
+        proc_ref
+            .body()
+            .add(proc_layout::EXIT_STATUS)
+            .cast::<NTSTATUS>()
+            .read()
+    };
+    if exit_status != 0 {
+        r.fail(
+            "user.nkt",
+            format_args!("nkt.exe exited with status {exit_status:#010x}"),
+        );
+        return;
+    }
+    r.ok_with(
+        "user.nkt",
+        format_args!("ntdll.dll + nkt.exe ran to NtTerminateProcess(0)"),
+    );
 }

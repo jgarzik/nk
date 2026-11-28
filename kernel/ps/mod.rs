@@ -6,6 +6,7 @@
 #![allow(non_snake_case)]
 
 pub mod cid;
+pub mod info;
 pub mod notify;
 pub mod process;
 pub mod silo;
@@ -442,6 +443,10 @@ pub unsafe extern "C" fn NtSetInformationThread(
                 unsafe { crate::se::impersonate::set_thread_impersonation_token(thread, token) }
             })
         }
+        nk_ntabi::user::THREAD_HIDE_FROM_DEBUGGER_CLASS
+        | nk_ntabi::user::THREAD_IDEAL_PROCESSOR_CLASS
+        | nk_ntabi::user::THREAD_IDEAL_PROCESSOR_EX_CLASS
+        | nk_ntabi::user::THREAD_NAME_INFORMATION_CLASS => STATUS_SUCCESS,
         class if !info::can_be_set(class) => STATUS_INVALID_INFO_CLASS,
         _ => STATUS_NOT_IMPLEMENTED,
     }
