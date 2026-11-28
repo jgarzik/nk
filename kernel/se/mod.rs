@@ -744,6 +744,95 @@ impl Copies {
     }
 }
 
+/// [`NtQuerySecurityObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwquerysecurityobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQuerySecurityObject(
+    handle: *mut c_void,
+    security_information: u32,
+    security_descriptor: *mut u8,
+    length: u32,
+    length_needed: *mut u32,
+) -> NTSTATUS {
+    use crate::ob::{handle as ob_handle, object as ob_object, security as ob_sec};
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match ob_handle::reference_for(
+        handle as u64,
+        None,
+        0,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let encode_filtered = |c: &Copies| -> Vec<u8> {
+        let p = Parts::default().replaced(&c.parts(), security_information);
+        let mut out = alloc::vec![0u8; p.relative_length()];
+        let _ = p.write_relative(&mut out);
+        out
+    };
+    // SAFETY: `held` keeps `body` alive.
+    let filtered: Vec<u8> = unsafe {
+        let body = held.body();
+        let ty = ob_object::type_of(body);
+        if core::ptr::eq(ty, &raw const ob_object::DEVICE_TYPE) {
+            if let Some(copy) = crate::io::device::copy_security(body.cast()) {
+                Copies::of(copy.as_ptr().cast())
+                    .map(|c| encode_filtered(&c))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        } else {
+            let sd_ptr = ob_sec::reference(body);
+            if !sd_ptr.is_null() {
+                let bytes = Copies::of(sd_ptr.cast())
+                    .map(|c| encode_filtered(&c))
+                    .unwrap_or_default();
+                ob_sec::release(sd_ptr);
+                bytes
+            } else {
+                Vec::new()
+            }
+        }
+    };
+    let filtered: Vec<u8> = if !filtered.is_empty() {
+        filtered
+    } else if let Some(def) = default_device_sd() {
+        // SAFETY: `def` is a fresh pool self-relative SD from `default_device_sd()`.
+        unsafe {
+            let b = Copies::of(def.cast())
+                .map(|c| encode_filtered(&c))
+                .unwrap_or_default();
+            let _ = pool::free(def);
+            b
+        }
+    } else {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    };
+    let needed = filtered.len() as u32;
+    if !length_needed.is_null() {
+        // SAFETY: per the contract.
+        let wr = unsafe { crate::svc::capture::write(length_needed, needed, mode) };
+        if let Err(st) = wr {
+            return st;
+        }
+    }
+    if length < needed {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if !filtered.is_empty() {
+        // SAFETY: per the contract; `copy_to_caller` probes user pointers.
+        let cp =
+            unsafe { crate::svc::capture::copy_to_caller(security_descriptor, &filtered, mode) };
+        if let Err(st) = cp {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
 /// `ZwSetSecurityObject` (`ntifs.h`): replace the parts of an object's
 /// security descriptor that `information` names with those of
 /// `descriptor` ([`ObSetSecurityObjectByPointer`] on the object the

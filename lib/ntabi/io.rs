@@ -163,6 +163,7 @@ pub const IRP_MJ_QUERY_INFORMATION: u8 = 0x05;
 pub const IRP_MJ_SET_INFORMATION: u8 = 0x06;
 pub const IRP_MJ_FLUSH_BUFFERS: u8 = 0x09;
 pub const IRP_MJ_QUERY_VOLUME_INFORMATION: u8 = 0x0A;
+pub const IRP_MJ_DIRECTORY_CONTROL: u8 = 0x0C;
 pub const IRP_MJ_FILE_SYSTEM_CONTROL: u8 = 0x0D;
 pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 pub const IRP_MJ_INTERNAL_DEVICE_CONTROL: u8 = 0x0F;
@@ -172,6 +173,12 @@ pub const IRP_MJ_CREATE_MAILSLOT: u8 = 0x13;
 pub const IRP_MJ_POWER: u8 = 0x16;
 pub const IRP_MJ_SYSTEM_CONTROL: u8 = 0x17;
 pub const IRP_MJ_PNP: u8 = 0x1B;
+/// Minor function for `IRP_MJ_DIRECTORY_CONTROL` directory queries.
+pub const IRP_MN_QUERY_DIRECTORY: u8 = 0x01;
+/// Stack location flags for `IRP_MN_QUERY_DIRECTORY`.
+pub const SL_RESTART_SCAN: u8 = 0x01;
+pub const SL_RETURN_SINGLE_ENTRY: u8 = 0x02;
+pub const SL_INDEX_SPECIFIED: u8 = 0x04;
 /// Minor functions of `IRP_MJ_SYSTEM_CONTROL`: WMI asks a driver for
 /// its registration, the older way and the newer.
 pub const IRP_MN_REGINFO: u8 = 0x08;

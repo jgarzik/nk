@@ -133,6 +133,8 @@ fn is_dispatcher_object(ty: &object::ObjectType) -> bool {
         &raw const object::THREAD_TYPE,
         &raw const object::PROCESS_TYPE,
         &raw const object::TIMER_TYPE,
+        &raw const object::MUTANT_TYPE,
+        &raw const object::SEMAPHORE_TYPE,
     ]
     .iter()
     .any(|&known| core::ptr::eq(ty, known))

@@ -373,6 +373,215 @@ pub unsafe extern "C" fn NtQuerySymbolicLinkObject(
     }
 }
 
+/// `OBJECT_DIRECTORY_INFORMATION` (`ntifs.h`, 32 bytes on 64-bit Windows).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ObjectDirectoryInformation {
+    name: nk_ntabi::io::UNICODE_STRING,
+    type_name: nk_ntabi::io::UNICODE_STRING,
+}
+
+/// [`NtQueryDirectoryObject`](https://learn.microsoft.com/en-us/windows/win32/devnotes/ntquerydirectoryobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQueryDirectoryObject(
+    directory_handle: *mut c_void,
+    buffer: *mut u8,
+    length: u32,
+    return_single_entry: u8,
+    restart_scan: u8,
+    context: *mut u32,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    const DIRECTORY_QUERY: u32 = 0x0001;
+    let mode = crate::svc::capture::mode();
+    let (held, _) = match handle::reference_for(
+        directory_handle as u64,
+        Some(&raw const object::DIRECTORY_TYPE),
+        DIRECTORY_QUERY,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        Ok(found) => found,
+        Err(st) => return st,
+    };
+    let start_idx = if restart_scan != 0 {
+        0usize
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(context, mode) } {
+            Ok(c) => c as usize,
+            Err(st) => return st,
+        }
+    };
+    let entries = match super::list_directory(held.body()) {
+        Ok(e) => e,
+        Err(st) => return st,
+    };
+    if start_idx >= entries.len() {
+        if !return_length.is_null() {
+            // SAFETY: per the contract.
+            let _ = unsafe { crate::svc::capture::write(return_length, 0u32, mode) };
+        }
+        return STATUS_NO_MORE_ENTRIES;
+    }
+
+    let rec_size = size_of::<ObjectDirectoryInformation>();
+    let avail = length as usize;
+    let mut chosen = 0usize;
+    let mut str_bytes = 0usize;
+    for entry in entries.iter().skip(start_idx) {
+        let entry_str = (entry.name.len() + 1) * 2 + (entry.type_name.len() + 1) * 2;
+        let next_total = (chosen + 2) * rec_size + str_bytes + entry_str;
+        if next_total > avail {
+            break;
+        }
+        chosen += 1;
+        str_bytes += entry_str;
+        if return_single_entry != 0 {
+            break;
+        }
+    }
+    if chosen == 0 {
+        let entry = &entries[start_idx];
+        let needed =
+            (2 * rec_size + (entry.name.len() + 1) * 2 + (entry.type_name.len() + 1) * 2) as u32;
+        if !return_length.is_null() {
+            // SAFETY: per the contract.
+            let _ = unsafe { crate::svc::capture::write(return_length, needed, mode) };
+        }
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    let total = (chosen + 1) * rec_size + str_bytes;
+    let mut out = alloc::vec![0u8; total];
+    let mut str_off = (chosen + 1) * rec_size;
+    let base_va = buffer.addr();
+    for (i, entry) in entries.iter().skip(start_idx).take(chosen).enumerate() {
+        let name = &entry.name;
+        let ty = &entry.type_name;
+        let name_bytes = name.len() * 2;
+        let ty_bytes = ty.len() * 2;
+        let name_va = base_va + str_off;
+        for (j, &u) in name.iter().enumerate() {
+            out[str_off + j * 2..str_off + j * 2 + 2].copy_from_slice(&u.to_le_bytes());
+        }
+        str_off += name_bytes + 2;
+        let ty_va = base_va + str_off;
+        for (j, &u) in ty.iter().enumerate() {
+            out[str_off + j * 2..str_off + j * 2 + 2].copy_from_slice(&u.to_le_bytes());
+        }
+        str_off += ty_bytes + 2;
+        let rec = ObjectDirectoryInformation {
+            name: nk_ntabi::io::UNICODE_STRING {
+                Length: name_bytes as u16,
+                MaximumLength: (name_bytes + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(name_va),
+            },
+            type_name: nk_ntabi::io::UNICODE_STRING {
+                Length: ty_bytes as u16,
+                MaximumLength: (ty_bytes + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(ty_va),
+            },
+        };
+        // SAFETY: `ObjectDirectoryInformation` is plain `#[repr(C)]` data.
+        let rec_bytes =
+            unsafe { core::slice::from_raw_parts((&raw const rec).cast::<u8>(), rec_size) };
+        out[i * rec_size..(i + 1) * rec_size].copy_from_slice(rec_bytes);
+    }
+    // Note: slot `chosen` is already zeroed as the null terminator entry.
+    // SAFETY: per the contract; `copy_to_caller` probes user pointers.
+    if let Err(st) = unsafe { crate::svc::capture::copy_to_caller(buffer, &out, mode) } {
+        return st;
+    }
+    let next_ctx = (start_idx + chosen) as u32;
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(context, next_ctx, mode) } {
+        return st;
+    }
+    if !return_length.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(return_length, total as u32, mode) } {
+            return st;
+        }
+    }
+    if start_idx + chosen < entries.len() {
+        STATUS_MORE_ENTRIES
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// [`NtCreateSymbolicLinkObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatesymboliclinkobject).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtCreateSymbolicLinkObject(
+    link_handle: *mut *mut c_void,
+    desired_access: u32,
+    object_attributes: *const OBJECT_ATTRIBUTES,
+    link_target: *const nk_ntabi::io::UNICODE_STRING,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(st) => return st,
+        })
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    // SAFETY: per the contract.
+    let target = match unsafe { crate::svc::capture::capture_unicode_string(link_target, mode) } {
+        Ok(t) => t,
+        Err(st) => return st,
+    };
+    let name = oa.name.unwrap_or_default();
+    if name.is_empty() || target.is_empty() {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+    let start = match super::resolve_namespace_root(oa.root, false, mode) {
+        Ok(s) => s,
+        Err(st) => return st,
+    };
+    let body = match super::create_link(
+        start.as_ref().map(ObRef::body),
+        &name,
+        &target,
+        oa.attributes & OBJ_PERMANENT != 0,
+    ) {
+        Ok(b) => b,
+        Err(st) => return st,
+    };
+    drop(start);
+    let kernel_handle =
+        !crate::svc::capture::is_user(mode) || (oa.attributes & OBJ_KERNEL_HANDLE) != 0;
+    // SAFETY: `body` carries the caller reference from `create_link`.
+    unsafe {
+        let opened = handle::open_with(
+            body,
+            desired_access,
+            Attributes {
+                inherit: oa.attributes & OBJ_INHERIT != 0,
+                protect_from_close: false,
+            },
+            kernel_handle,
+        );
+        object::dereference(body);
+        match opened {
+            Ok(h) => {
+                if let Err(st) = crate::svc::capture::write(link_handle, h as *mut c_void, mode) {
+                    let _ = handle::close_for(h, crate::svc::capture::handle_mode(mode));
+                    return st;
+                }
+                STATUS_SUCCESS
+            }
+            Err(st) => st,
+        }
+    }
+}
+
 /// [`NtDuplicateObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwduplicateobject).
 ///
 /// # Safety

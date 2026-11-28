@@ -298,6 +298,8 @@ static IO_COMPLETION_NAME: [u16; 12] = wide(b"IoCompletion");
 static WAIT_COMPLETION_PACKET_NAME: [u16; 20] = wide(b"WaitCompletionPacket");
 static TIMER_NAME: [u16; 7] = wide(b"IRTimer");
 static WORKER_FACTORY_NAME: [u16; 15] = wide(b"TpWorkerFactory");
+static MUTANT_NAME: [u16; 6] = wide(b"Mutant");
+static SEMAPHORE_NAME: [u16; 9] = wide(b"Semaphore");
 static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
 static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
@@ -576,8 +578,29 @@ pub static WORKER_FACTORY_TYPE: ObjectType = ObjectType::new(
     GenericAll: 0x000F_00FF,
 });
 
+/// Mutants (`KMUTANT`): `ExpMutantMapping` generic rights.
+pub static MUTANT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 19, &MUTANT_NAME, None)
+    .closing(super::event_handle_closed)
+    .rights(GENERIC_MAPPING {
+        GenericRead: 0x0002_0001,
+        GenericWrite: 0x0002_0000,
+        GenericExecute: 0x0012_0001,
+        GenericAll: 0x001F_0001,
+    });
+
+/// Semaphores (`KSEMAPHORE`): `ExpSemaphoreMapping` generic rights.
+pub static SEMAPHORE_TYPE: ObjectType =
+    ObjectType::new(FIRST_TYPE_INDEX + 20, &SEMAPHORE_NAME, None)
+        .closing(super::event_handle_closed)
+        .rights(GENERIC_MAPPING {
+            GenericRead: 0x0002_0001,
+            GenericWrite: 0x0002_0002,
+            GenericExecute: 0x0012_0000,
+            GenericAll: 0x001F_0003,
+        });
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 19] = [
+static TYPES: [&ObjectType; 21] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -597,6 +620,8 @@ static TYPES: [&ObjectType; 19] = [
     &WAIT_COMPLETION_PACKET_TYPE,
     &TIMER_TYPE,
     &WORKER_FACTORY_TYPE,
+    &MUTANT_TYPE,
+    &SEMAPHORE_TYPE,
 ];
 
 /// How many types drivers may make: Windows' table of types holds 256

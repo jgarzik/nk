@@ -240,6 +240,83 @@ fn new_link(name: &[u16], target: &[u16]) -> Option<*mut u8> {
     Some(body)
 }
 
+/// Make the symbolic link `path` (absolute, or relative to `start`), leading to
+/// `target`. Returns the referenced `SYMBOLIC_LINK_TYPE` body on success.
+pub fn create_link(
+    start: Option<*mut u8>,
+    path: &[u16],
+    target: &[u16],
+    permanent: bool,
+) -> Result<*mut u8, NTSTATUS> {
+    let Some(link) = new_link(leaf(path), target) else {
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
+    };
+    let inserted = {
+        let mut ns = NAMESPACE.lock();
+        let start_dir = match start {
+            Some(dir_body) => match dir_of(&ns, dir_body) {
+                Some(id) => Some(id),
+                None => return Err(STATUS_INVALID_HANDLE),
+            },
+            None => None,
+        };
+        let inserted = ns
+            .tree
+            .insert_link(start_dir, path, OPTIONS, target, Entry(link));
+        if let Ok(dir) = inserted {
+            // SAFETY: a named object made above; take an extra reference for the caller.
+            unsafe {
+                object::set_permanent(link, permanent);
+                object::entered(link, directory(&ns, dir));
+                object::reference(link);
+            }
+        }
+        inserted
+    };
+    match inserted {
+        Ok(_) => Ok(link),
+        Err(error) => {
+            // SAFETY: the link never got its name: this is its only reference.
+            unsafe { object::dereference(link) };
+            Err(status(error))
+        }
+    }
+}
+
+/// One entry returned by [`list_directory`] for `NtQueryDirectoryObject`.
+pub struct DirectoryEntry {
+    pub name: Vec<u16>,
+    pub type_name: Vec<u16>,
+}
+
+/// Snapshot `(entry_name_utf16, type_name_utf16)` for every entry currently in
+/// the namespace directory object `dir_body` (used by `NtQueryDirectoryObject`).
+pub fn list_directory(dir_body: *mut u8) -> Result<Vec<DirectoryEntry>, NTSTATUS> {
+    let ns = NAMESPACE.read();
+    let Some(dir_id) = dir_of(&ns, dir_body) else {
+        return Err(STATUS_INVALID_HANDLE);
+    };
+    let Some(iter) = ns.tree.entries(dir_id) else {
+        return Err(STATUS_INVALID_HANDLE);
+    };
+    let mut out = Vec::new();
+    for (name, found) in iter {
+        let type_name: Vec<u16> = match found {
+            Found::Directory(_) => object::DIRECTORY_TYPE.name().to_vec(),
+            Found::SymbolicLink(_, _) => object::SYMBOLIC_LINK_TYPE.name().to_vec(),
+            Found::Object(Entry(ptr)) => {
+                // SAFETY: namespace lock keeps the named object alive.
+                unsafe { object::type_of(*ptr).name().to_vec() }
+            }
+        };
+        out.push(DirectoryEntry {
+            name: name.to_vec(),
+            type_name,
+        });
+    }
+    Ok(out)
+}
+
 /// Make the symbolic link `path`, which leads to `target`. The target
 /// is not looked at until the link is followed.
 pub fn insert_link(path: &[u16], target: &[u16]) -> NTSTATUS {

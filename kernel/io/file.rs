@@ -1486,6 +1486,77 @@ pub unsafe fn read_async(
     }
 }
 
+/// Query directory entries (`IRP_MJ_DIRECTORY_CONTROL` / `IRP_MN_QUERY_DIRECTORY`).
+/// `file_name` is an optional UTF-16 wildcard pattern (e.g. `*` or `*.LOG`);
+/// `flags` is a bitmask of `SL_RESTART_SCAN`, `SL_RETURN_SINGLE_ENTRY`, `SL_INDEX_SPECIFIED`.
+pub fn query_directory(
+    handle: u64,
+    class: u32,
+    file_name: Option<&[u16]>,
+    flags: u8,
+    file_index: u32,
+    output: &mut [u8],
+) -> Result<IoResult, IoError> {
+    let mut name_buf: Vec<u16> = file_name.map(|s| s.to_vec()).unwrap_or_default();
+    let mut name_us = UNICODE_STRING {
+        Length: (name_buf.len() * 2) as u16,
+        MaximumLength: (name_buf.len() * 2) as u16,
+        Buffer: name_buf.as_mut_ptr(),
+    };
+    let name_ptr = if file_name.is_some() {
+        (&raw mut name_us).addr() as u64
+    } else {
+        0
+    };
+    let len = output.len();
+    let out_buf = Buffer::of(output);
+    // SAFETY: `name_us`, `name_buf`, and `output` remain live until `.wait()` returns.
+    unsafe {
+        send(
+            handle,
+            IRP_MJ_DIRECTORY_CONTROL,
+            |_| {
+                [
+                    u64::from(len as u32),
+                    name_ptr,
+                    u64::from(class),
+                    u64::from(file_index),
+                ]
+            },
+            KERNEL_MODE,
+            Needs::All(FILE_READ_DATA),
+            |_, irp, _| {
+                let next = irp::next_location(irp);
+                (*next).MinorFunction = IRP_MN_QUERY_DIRECTORY;
+                (*next).Flags |= flags;
+                let dev_flags = (*(*next).DeviceObject).Flags;
+                if dev_flags & DO_BUFFERED_IO != 0 {
+                    system_buffer(irp, Buffer::NONE, len)?;
+                    if len != 0 {
+                        (*irp).Flags |= IRP_INPUT_OPERATION;
+                        (*irp).UserBuffer = out_buf.ptr().cast();
+                        irp::set_requestor_room(irp, len);
+                    }
+                } else if dev_flags & DO_DIRECT_IO != 0 {
+                    if len != 0 {
+                        let described =
+                            mdl::IoAllocateMdl(out_buf.ptr().cast(), len as u32, 0, 0, irp);
+                        if described.is_null() {
+                            return Err(IoError::NoMemory);
+                        }
+                        mdl::probe_and_lock(described, KERNEL_MODE, IO_WRITE_ACCESS)
+                            .map_err(IoError::Refused)?;
+                    }
+                } else {
+                    (*irp).UserBuffer = out_buf.ptr().cast();
+                }
+                Ok(())
+            },
+        )
+    }?
+    .wait()
+}
+
 /// Query information `class` of the file into `output`
 /// (`IRP_MJ_QUERY_INFORMATION`, what `NtQueryInformationFile` sends for
 /// the kernel): the driver writes a system buffer, copied back on

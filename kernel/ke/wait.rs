@@ -620,6 +620,37 @@ pub unsafe extern "C" fn KeReleaseSemaphore(
     }
 }
 
+/// Release `semaphore` by `adjustment` without bugchecking on limit overflow
+/// (returns `Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED)` for `NtReleaseSemaphore`).
+///
+/// # Safety
+/// `semaphore` is a live, initialized `KSEMAPHORE`.
+pub unsafe fn try_release_semaphore(
+    semaphore: *mut KSEMAPHORE,
+    adjustment: i32,
+) -> Result<i32, nk_ntabi::status::NTSTATUS> {
+    if adjustment <= 0 {
+        return Err(nk_ntabi::status::STATUS_INVALID_PARAMETER);
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        let header = &raw mut (*semaphore).Header;
+        let (previous, woken) = {
+            let _lock = ObjectLock::take(header);
+            let state = object::signal(header);
+            let previous = state.load(Ordering::Relaxed);
+            let limit = (&raw const (*semaphore).Limit).read();
+            let Some(count) = nk_ke::wait::semaphore_release(previous, adjustment, limit) else {
+                return Err(nk_ntabi::status::STATUS_SEMAPHORE_LIMIT_EXCEEDED);
+            };
+            state.store(count, Ordering::Relaxed);
+            (previous, object::satisfy(header))
+        };
+        woken.ready();
+        Ok(previous)
+    }
+}
+
 /// [`KeReadStateSemaphore`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereadstatesemaphore).
 ///
 /// # Safety

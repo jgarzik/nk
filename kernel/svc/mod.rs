@@ -433,6 +433,87 @@ register_services! {
         length: u32,
         fs_information_class: u32,
     );
+    unsafe Implemented, NtDeviceIoControlFile => crate::io::zwfile::NtDeviceIoControlFile, ZwDeviceIoControlFile(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *const c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        io_control_code: u32,
+        input_buffer: *const u8,
+        input_buffer_length: u32,
+        output_buffer: *mut u8,
+        output_buffer_length: u32,
+    );
+    unsafe Implemented, NtFsControlFile => crate::io::zwfile::NtFsControlFile, ZwFsControlFile(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *const c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        fs_control_code: u32,
+        input_buffer: *const u8,
+        input_buffer_length: u32,
+        output_buffer: *mut u8,
+        output_buffer_length: u32,
+    );
+    unsafe Implemented, NtQueryInformationFile => crate::io::zwfile::NtQueryInformationFile, ZwQueryInformationFile(
+        file_handle: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        file_information: *mut u8,
+        length: u32,
+        file_information_class: u32,
+    );
+    unsafe Implemented, NtSetInformationFile => crate::io::zwfile::NtSetInformationFile, ZwSetInformationFile(
+        file_handle: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        file_information: *const u8,
+        length: u32,
+        file_information_class: u32,
+    );
+    unsafe Implemented, NtQueryDirectoryFile => crate::io::zwfile::NtQueryDirectoryFile, ZwQueryDirectoryFile(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *const c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        file_information: *mut u8,
+        length: u32,
+        file_information_class: u32,
+        return_single_entry: u8,
+        file_name: *const UNICODE_STRING,
+        restart_scan: u8,
+    );
+    unsafe Implemented, NtQueryDirectoryFileEx => crate::io::zwfile::NtQueryDirectoryFileEx, ZwQueryDirectoryFileEx(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *const c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        file_information: *mut u8,
+        length: u32,
+        file_information_class: u32,
+        query_flags: u32,
+        file_name: *const UNICODE_STRING,
+    );
+    unsafe Implemented, NtFlushBuffersFile => crate::io::zwfile::NtFlushBuffersFile, ZwFlushBuffersFile(
+        file_handle: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+    );
+    unsafe Partial, NtFlushBuffersFileEx => crate::io::zwfile::NtFlushBuffersFileEx, ZwFlushBuffersFileEx(
+        file_handle: *mut c_void,
+        flags: u32,
+        parameters: *const c_void,
+        parameters_size: u32,
+        io_status_block: *mut IO_STATUS_BLOCK,
+    );
+    unsafe Implemented, NtQueryFullAttributesFile => crate::io::zwfile::NtQueryFullAttributesFile, ZwQueryFullAttributesFile(
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        file_information: *mut u8,
+    );
+    unsafe Implemented, NtDeleteFile => crate::io::zwfile::NtDeleteFile, ZwDeleteFile(
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
     unsafe Implemented, NtCreateIoCompletion => crate::io::completion::NtCreateIoCompletion, ZwCreateIoCompletion(
         io_completion_handle: *mut *mut c_void,
         desired_access: u32,
@@ -712,6 +793,45 @@ register_services! {
         alertable: u8,
         timeout: *const i64,
     );
+    unsafe Implemented, NtWaitForMultipleObjects => crate::ob::event::NtWaitForMultipleObjects, ZwWaitForMultipleObjects(
+        count: u32,
+        handles: *const *mut c_void,
+        wait_type: u32,
+        alertable: u8,
+        timeout: *const i64,
+    );
+    unsafe Implemented, NtCreateMutant => crate::ob::event::NtCreateMutant, ZwCreateMutant(
+        mutant_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        initial_owner: u8,
+    );
+    unsafe Implemented, NtOpenMutant => crate::ob::event::NtOpenMutant, ZwOpenMutant(
+        mutant_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtReleaseMutant => crate::ob::event::NtReleaseMutant, ZwReleaseMutant(
+        mutant_handle: *mut c_void,
+        previous_count: *mut i32,
+    );
+    unsafe Implemented, NtCreateSemaphore => crate::ob::event::NtCreateSemaphore, ZwCreateSemaphore(
+        semaphore_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        initial_count: i32,
+        maximum_count: i32,
+    );
+    unsafe Implemented, NtOpenSemaphore => crate::ob::event::NtOpenSemaphore, ZwOpenSemaphore(
+        semaphore_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtReleaseSemaphore => crate::ob::event::NtReleaseSemaphore, ZwReleaseSemaphore(
+        semaphore_handle: *mut c_void,
+        release_count: i32,
+        previous_count: *mut i32,
+    );
     unsafe Partial, NtCreateDirectoryObject => crate::ob::directory::NtCreateDirectoryObject, ZwCreateDirectoryObject(
         directory_handle: *mut *mut c_void,
         desired_access: u32,
@@ -721,6 +841,21 @@ register_services! {
         directory_handle: *mut *mut c_void,
         desired_access: u32,
         object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtQueryDirectoryObject => crate::ob::directory::NtQueryDirectoryObject, ZwQueryDirectoryObject(
+        directory_handle: *mut c_void,
+        buffer: *mut u8,
+        length: u32,
+        return_single_entry: u8,
+        restart_scan: u8,
+        context: *mut u32,
+        return_length: *mut u32,
+    );
+    unsafe Implemented, NtCreateSymbolicLinkObject => crate::ob::directory::NtCreateSymbolicLinkObject, ZwCreateSymbolicLinkObject(
+        link_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        link_target: *const UNICODE_STRING,
     );
     unsafe Implemented, NtOpenSymbolicLinkObject => crate::ob::directory::NtOpenSymbolicLinkObject, ZwOpenSymbolicLinkObject(
         link_handle: *mut *mut c_void,
@@ -986,6 +1121,13 @@ register_services! {
         buffer: *mut u8,
         length: u32,
         return_length: *mut u32,
+    );
+    unsafe Implemented, NtQuerySecurityObject => crate::se::NtQuerySecurityObject, ZwQuerySecurityObject(
+        handle: *mut c_void,
+        security_information: u32,
+        security_descriptor: *mut u8,
+        length: u32,
+        length_needed: *mut u32,
     );
     unsafe Implemented, NtSetSecurityObject => crate::se::NtSetSecurityObject, ZwSetSecurityObject(
         handle: *mut c_void,
