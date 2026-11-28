@@ -59,6 +59,19 @@ impl Location {
     }
 }
 
+/// What became of a frame whose mapping was removed ([`PfnDb::unshare`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unshared {
+    /// Other mappings still point at the frame; it stays active.
+    StillMapped,
+    /// The last mapping left, while a reference (I/O or lock) still holds
+    /// the frame in transition.
+    Transition,
+    /// The last mapping and last reference left; the frame is now on this
+    /// list.
+    Listed(Location),
+}
+
 /// `Pfn.flags`.
 pub mod flag {
     /// The frame's contents differ from the file's.
@@ -305,23 +318,25 @@ impl<'a> PfnDb<'a> {
     }
 
     /// One valid mapping fewer. The last one drops the mapping's
-    /// reference ([`Self::dereference`]); returns the list the frame went
-    /// onto, if it did.
-    pub fn unshare(
-        &mut self,
-        pfn: u64,
-        no_write: bool,
-        front: bool,
-    ) -> Result<Option<Location>, Illegal> {
+    /// reference ([`Self::dereference`]) and moves the frame out of
+    /// `Active`, into `Transition` if a lock or I/O still holds a
+    /// reference, or onto standby / modified otherwise.
+    pub fn unshare(&mut self, pfn: u64, no_write: bool, front: bool) -> Result<Unshared, Illegal> {
         let e = self.get_mut(pfn);
         if e.share_count == 0 {
             return Err(Illegal("a frame no valid entry maps is unshared"));
         }
         e.share_count -= 1;
         if e.share_count != 0 {
-            return Ok(None);
+            return Ok(Unshared::StillMapped);
         }
-        self.dereference(pfn, no_write, front)
+        match self.dereference(pfn, no_write, front)? {
+            Some(location) => Ok(Unshared::Listed(location)),
+            None => {
+                self.get_mut(pfn).location = Location::Transition as u8;
+                Ok(Unshared::Transition)
+            }
+        }
     }
 
     /// Hold a section's frame for I/O or a lock: it leaves any list.
@@ -499,14 +514,41 @@ mod tests {
         assert_eq!(d.get(3).location(), Location::Active);
         assert_eq!((d.get(3).share_count, d.get(3).ref_count), (1, 1));
         assert_eq!(d.share(3), Ok(false));
-        assert_eq!(d.unshare(3, false, false), Ok(None));
-        assert_eq!(d.unshare(3, false, false), Ok(Some(Location::Standby)));
+        assert_eq!(d.unshare(3, false, false), Ok(Unshared::StillMapped));
+        assert_eq!(
+            d.unshare(3, false, false),
+            Ok(Unshared::Listed(Location::Standby))
+        );
         assert_eq!(d.count(Location::Standby), 1);
         d.check().unwrap();
         // A soft fault takes it back.
         assert_eq!(d.share(3), Ok(true));
         assert_eq!(d.count(Location::Standby), 0);
         assert_eq!(d.get(3).location(), Location::Active);
+        d.check().unwrap();
+    }
+
+    #[test]
+    fn an_unmapped_locked_page_enters_transition_until_unlocked() {
+        let mut e = [Pfn::FREE; 8];
+        let mut d = db(&mut e);
+        d.allocate(2, 0x1000, 0x400, false);
+        // Simulate an MDL lock while mapped, then view eviction.
+        d.reference(2).unwrap();
+        assert_eq!((d.get(2).share_count, d.get(2).ref_count), (1, 2));
+        assert_eq!(d.unshare(2, false, false), Ok(Unshared::Transition));
+        assert_eq!(d.get(2).location(), Location::Transition);
+        assert_eq!((d.get(2).share_count, d.get(2).ref_count), (0, 1));
+        assert_eq!(d.count(Location::Standby), 0);
+        d.check().unwrap();
+        // Re-mapping while still locked brings it back to Active.
+        assert_eq!(d.share(2), Ok(false));
+        assert_eq!(d.get(2).location(), Location::Active);
+        assert_eq!((d.get(2).share_count, d.get(2).ref_count), (1, 2));
+        // Evicting again returns to Transition; unlocking lists it on Standby.
+        assert_eq!(d.unshare(2, false, false), Ok(Unshared::Transition));
+        assert_eq!(d.dereference(2, false, false), Ok(Some(Location::Standby)));
+        assert_eq!(d.count(Location::Standby), 1);
         d.check().unwrap();
     }
 
@@ -518,10 +560,13 @@ mod tests {
         d.allocate(2, 0x1008, 0x400, false);
         d.get_mut(1).flags |= flag::MODIFIED;
         d.get_mut(2).flags |= flag::MODIFIED;
-        assert_eq!(d.unshare(1, false, false), Ok(Some(Location::Modified)));
+        assert_eq!(
+            d.unshare(1, false, false),
+            Ok(Unshared::Listed(Location::Modified))
+        );
         assert_eq!(
             d.unshare(2, true, false),
-            Ok(Some(Location::ModifiedNoWrite))
+            Ok(Unshared::Listed(Location::ModifiedNoWrite))
         );
         d.check().unwrap();
         // Written: clean, and standby.

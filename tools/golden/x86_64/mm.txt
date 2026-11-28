@@ -25,5 +25,6 @@ mm.section-fault ok
 mm.section-flush ok
 mm.section-truncate ok
 mm.section-purge ok
+mm.section-mdl-evict-purge ok
 mm.routine-address ok
 mm.driver-paging ok

@@ -236,8 +236,10 @@ pub fn unmap_cache_view(s: &SectionRef, slot: CacheSlot, front_of_list: bool) {
             dirty += 1;
         }
         match db.unshare(frame, no_write, front_of_list) {
-            Ok(Some(_)) => ss.protos[i].store(Proto::Transition(frame).encode(), Ordering::Relaxed),
-            Ok(None) => {}
+            Ok(nk_mm::pfn::Unshared::Transition | nk_mm::pfn::Unshared::Listed(_)) => {
+                ss.protos[i].store(Proto::Transition(frame).encode(), Ordering::Relaxed);
+            }
+            Ok(nk_mm::pfn::Unshared::StillMapped) => {}
             Err(e) => crate::kd::bugcheck(format_args!("mm: unmapping a view: {}", e.0)),
         }
     }

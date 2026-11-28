@@ -23,6 +23,7 @@ static SECTION: Group = Group {
         "mm.section-flush",
         "mm.section-truncate",
         "mm.section-purge",
+        "mm.section-mdl-evict-purge",
     ],
     run: section_tests,
     manual: false,
@@ -418,6 +419,31 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
     let refused = flush::purge_section(sop, None, true);
     cache::unmap_cache_view(&s, slot2, false);
     let purged = flush::purge_section(sop, None, true);
+    // A page locked (as by a cache MDL) across view eviction must move its
+    // prototype PTE to Transition when the last mapping leaves, so a purge
+    // after unlock does not dereference the cleared view_va.
+    let mdl_evict_purge = (|| -> Result<(), &'static str> {
+        cache::map_cache_view(&s, slot, 0, VIEW as u32)
+            .map_err(|_| "could not remap view for mdl-evict-purge")?;
+        let frame = cache::lock_page(slot.0 as u64).map_err(|_| "could not lock page")?;
+        cache::unmap_cache_view(&s, slot, false);
+        if flush::purge_section(sop, Some((0, PAGE_SIZE as u32)), false) {
+            let _ = cache::unlock_page(frame);
+            return Err("purge succeeded while page was still locked");
+        }
+        if !cache::unlock_page(frame) {
+            return Err("unlock_page did not recognize section frame");
+        }
+        if !flush::purge_section(sop, Some((0, PAGE_SIZE as u32)), false) {
+            return Err("purge failed after unlocking evicted page");
+        }
+        // Discard any remaining pages the clustered fault brought in so
+        // the control area can be reaped when `s` drops below.
+        if !flush::purge_section(sop, None, true) {
+            return Err("full purge after mdl-evict-purge failed");
+        }
+        Ok(())
+    })();
     drop(s);
     let leftover = !data_section(sop).is_null();
     drop(volume);
@@ -436,5 +462,6 @@ fn run(verdicts: &mut Vec<(&'static str, Result<(), &'static str>)>) -> Result<(
             Ok(())
         },
     ));
+    verdicts.push(("mm.section-mdl-evict-purge", mdl_evict_purge));
     Ok(())
 }
