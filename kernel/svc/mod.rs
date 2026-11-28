@@ -560,5 +560,38 @@ pub fn self_test() -> Result<(), &'static str> {
         return Err("out-of-range service index did not return STATUS_INVALID_SYSTEM_SERVICE");
     }
     capture::self_test()?;
+    // F3: unified `ob::open_by_name` + `ob::check_access` on device default SD.
+    {
+        let path: alloc::vec::Vec<u16> = "\\Device\\Null".encode_utf16().collect();
+        let (dev, _) = crate::ob::lookup(None, &path)
+            .map_err(|_| "F3: \\Device\\Null was not found in the namespace")?;
+        // SAFETY: `dev` holds a reference to `\Device\Null`.
+        let allowed = unsafe { crate::ob::check_access(dev.body(), 0x8000_0000, USER_MODE, false) };
+        if allowed != Ok(nk_ntabi::io::FILE_GENERIC_MAPPING.GenericRead) {
+            return Err(
+                "F3: SYSTEM user-mode check on default device SD did not grant GENERIC_READ",
+            );
+        }
+        // Impersonate anonymous token: not in SYSTEM/Admins/World, so denied.
+        let current = (-2isize) as *mut c_void;
+        if crate::se::impersonate::ZwImpersonateAnonymousToken(current) != 0 {
+            return Err("F3: ZwImpersonateAnonymousToken failed");
+        }
+        // SAFETY: `dev` holds a reference to `\Device\Null`.
+        let denied = unsafe { crate::ob::check_access(dev.body(), 0x8000_0000, USER_MODE, false) };
+        let null_tok: *mut c_void = core::ptr::null_mut();
+        // SAFETY: clearing impersonation token on current thread.
+        let _ = unsafe {
+            crate::ps::ZwSetInformationThread(
+                current,
+                5, // ThreadImpersonationToken
+                (&raw const null_tok).cast(),
+                size_of::<*mut c_void>() as u32,
+            )
+        };
+        if denied != Err(nk_ntabi::status::STATUS_ACCESS_DENIED) {
+            return Err("F3: anonymous user-mode check on default device SD was not denied");
+        }
+    }
     Ok(())
 }

@@ -20,7 +20,7 @@
 //! The kernel's own types are statics. A driver may make more
 //! (`ObCreateObjectType`); those are listed after them, by index.
 
-#![allow(non_snake_case, non_upper_case_globals)]
+#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 
 use crate::ke::irql;
 use crate::mm::pool;
@@ -122,6 +122,40 @@ impl ObjectType {
         self
     }
 
+    /// The same type, whose `open` is called whenever a handle to one
+    /// of its objects is opened.
+    #[allow(dead_code)]
+    const fn opening(mut self, open: OB_OPEN_METHOD) -> Self {
+        self.0.TypeInfo.OpenProcedure = open as *mut c_void;
+        self
+    }
+
+    /// The same type, whose `parse` parses names below objects of this type.
+    const fn parsing(mut self, parse: OB_PARSE_METHOD) -> Self {
+        self.0.TypeInfo.ParseProcedure = parse as *mut c_void;
+        self
+    }
+
+    /// The same type, whose `security` queries/sets security descriptors.
+    const fn security(mut self, security: OB_SECURITY_METHOD) -> Self {
+        self.0.TypeInfo.SecurityProcedure = security as *mut c_void;
+        self
+    }
+
+    /// The same type, whose `query_name` formats names of objects of this type.
+    #[allow(dead_code)]
+    const fn query_name(mut self, query_name: OB_QUERYNAME_METHOD) -> Self {
+        self.0.TypeInfo.QueryNameProcedure = query_name as *mut c_void;
+        self
+    }
+
+    /// The same type, whose `okay_to_close` vetoes handle close.
+    #[allow(dead_code)]
+    const fn okay_to_close(mut self, okay: OB_OKAYTOCLOSE_METHOD) -> Self {
+        self.0.TypeInfo.OkayToCloseProcedure = okay as *mut c_void;
+        self
+    }
+
     /// The same type, for which the generic rights mean what `mapping`
     /// says. A type without one has no meaning for them: a handle asked
     /// for generic rights alone is granted nothing.
@@ -136,9 +170,66 @@ impl ObjectType {
         &raw const self.0.TypeInfo.GenericMapping
     }
 
+    /// What the type does when a handle to one of its objects opens.
+    pub fn open_procedure(&self) -> Option<OB_OPEN_METHOD> {
+        let p = self.0.TypeInfo.OpenProcedure;
+        if p.is_null() {
+            None
+        } else {
+            // SAFETY: populated only from `OB_OPEN_METHOD` or Windows `OBJECT_TYPE_INITIALIZER`.
+            Some(unsafe { core::mem::transmute::<*mut c_void, OB_OPEN_METHOD>(p) })
+        }
+    }
+
     /// What the type does when a handle to one of its objects closes.
     pub fn close_procedure(&self) -> Option<OB_CLOSE_METHOD> {
         self.0.TypeInfo.CloseProcedure
+    }
+
+    /// What the type does to parse a name below an object of this type.
+    pub fn parse_procedure(&self) -> Option<OB_PARSE_METHOD> {
+        let p = self.0.TypeInfo.ParseProcedure;
+        if p.is_null() {
+            None
+        } else {
+            // SAFETY: populated only from `OB_PARSE_METHOD` or Windows `OBJECT_TYPE_INITIALIZER`.
+            Some(unsafe { core::mem::transmute::<*mut c_void, OB_PARSE_METHOD>(p) })
+        }
+    }
+
+    /// What the type does for security descriptor operations.
+    #[allow(dead_code)]
+    pub fn security_procedure(&self) -> Option<OB_SECURITY_METHOD> {
+        let p = self.0.TypeInfo.SecurityProcedure;
+        if p.is_null() {
+            None
+        } else {
+            // SAFETY: populated only from `OB_SECURITY_METHOD` or Windows `OBJECT_TYPE_INITIALIZER`.
+            Some(unsafe { core::mem::transmute::<*mut c_void, OB_SECURITY_METHOD>(p) })
+        }
+    }
+
+    /// What the type does when queried for an object's name.
+    #[allow(dead_code)]
+    pub fn query_name_procedure(&self) -> Option<OB_QUERYNAME_METHOD> {
+        let p = self.0.TypeInfo.QueryNameProcedure;
+        if p.is_null() {
+            None
+        } else {
+            // SAFETY: populated only from `OB_QUERYNAME_METHOD` or Windows `OBJECT_TYPE_INITIALIZER`.
+            Some(unsafe { core::mem::transmute::<*mut c_void, OB_QUERYNAME_METHOD>(p) })
+        }
+    }
+
+    /// What the type does to decide whether a handle may be closed.
+    pub fn okay_to_close_procedure(&self) -> Option<OB_OKAYTOCLOSE_METHOD> {
+        let p = self.0.TypeInfo.OkayToCloseProcedure;
+        if p.is_null() {
+            None
+        } else {
+            // SAFETY: populated only from `OB_OKAYTOCLOSE_METHOD` or Windows `OBJECT_TYPE_INITIALIZER`.
+            Some(unsafe { core::mem::transmute::<*mut c_void, OB_OKAYTOCLOSE_METHOD>(p) })
+        }
     }
 
     /// `access` with its generic rights replaced by the rights they
@@ -212,39 +303,118 @@ pub static EVENT_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX, &EVENT_NAM
         GenericExecute: 0x0012_0000,
         GenericAll: 0x001F_0003,
     });
-/// Threads (`ETHREAD`).
+/// `OB_OPEN_METHOD` (`ntifs.h`).
+pub type OB_OPEN_METHOD = unsafe extern "C" fn(
+    open_reason: u32,
+    access_mode: i8,
+    process: *mut c_void,
+    object: *mut c_void,
+    granted_access: *mut u32,
+    handle_count: u32,
+) -> NTSTATUS;
+
+/// `OB_PARSE_METHOD` (`ntifs.h`).
+pub type OB_PARSE_METHOD = unsafe extern "C" fn(
+    parse_object: *mut c_void,
+    object_type: *mut c_void,
+    access_state: *mut c_void,
+    access_mode: i8,
+    attributes: u32,
+    complete_name: *mut UNICODE_STRING,
+    remaining_name: *mut UNICODE_STRING,
+    context: *mut c_void,
+    security_qos: *mut c_void,
+    object: *mut *mut c_void,
+) -> NTSTATUS;
+
+/// `OB_SECURITY_METHOD` (`ntifs.h`).
+pub type OB_SECURITY_METHOD = unsafe extern "C" fn(
+    object: *mut c_void,
+    operation: u32,
+    security_information: *mut u32,
+    security_descriptor: *mut c_void,
+    captured_length: *mut u32,
+    objects_security_descriptor: *mut *mut c_void,
+    pool_type: u32,
+    generic_mapping: *const GENERIC_MAPPING,
+    access_mode: i8,
+) -> NTSTATUS;
+
+/// `OB_QUERYNAME_METHOD` (`ntifs.h`).
+pub type OB_QUERYNAME_METHOD = unsafe extern "C" fn(
+    object: *mut c_void,
+    has_object_name: u8,
+    object_name_info: *mut c_void,
+    length: u32,
+    return_length: *mut u32,
+    access_mode: i8,
+) -> NTSTATUS;
+
+/// `OB_OKAYTOCLOSE_METHOD` (`ntifs.h`).
+pub type OB_OKAYTOCLOSE_METHOD = unsafe extern "C" fn(
+    process: *mut c_void,
+    object: *mut c_void,
+    handle: *mut c_void,
+    previous_mode: i8,
+) -> u8;
+
+/// Threads (`ETHREAD`). Generic rights from `PspThreadMapping`.
 pub static THREAD_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 1,
     &THREAD_NAME,
     Some(crate::ke::thread::deleted),
-);
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0048,
+    GenericWrite: 0x0002_0437,
+    GenericExecute: 0x0012_1800,
+    GenericAll: 0x001F_FFFF,
+});
 /// Devices (`DEVICE_OBJECT`).
 pub static DEVICE_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 2,
     &DEVICE_NAME,
     Some(crate::io::device::deleted),
-);
+)
+.parsing(crate::io::file::parse_device)
+.security(crate::io::device::security_procedure)
+.rights(nk_ntabi::io::FILE_GENERIC_MAPPING);
 /// Registry keys: an open key's object names the key (`cm`).
 pub static KEY_TYPE: ObjectType =
-    ObjectType::new(FIRST_TYPE_INDEX + 3, &KEY_NAME, Some(crate::cm::closed)).rights(
-        // `KEY_READ`, `KEY_WRITE`, `KEY_EXECUTE`, `KEY_ALL_ACCESS`.
-        GENERIC_MAPPING {
-            GenericRead: 0x0002_0019,
-            GenericWrite: 0x0002_0006,
-            GenericExecute: 0x0002_0019,
-            GenericAll: 0x000F_003F,
-        },
-    );
+    ObjectType::new(FIRST_TYPE_INDEX + 3, &KEY_NAME, Some(crate::cm::closed))
+        .parsing(crate::cm::parse_key)
+        .rights(
+            // `KEY_READ`, `KEY_WRITE`, `KEY_EXECUTE`, `KEY_ALL_ACCESS`.
+            GENERIC_MAPPING {
+                GenericRead: 0x0002_0019,
+                GenericWrite: 0x0002_0006,
+                GenericExecute: 0x0002_0019,
+                GenericAll: 0x000F_003F,
+            },
+        );
 
-/// Processes (`EPROCESS`).
-pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None);
+/// Processes (`EPROCESS`). Generic rights from `PspProcessMapping`.
+pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None)
+    .rights(GENERIC_MAPPING {
+        GenericRead: 0x0002_0410,
+        GenericWrite: 0x0002_0BEA,
+        GenericExecute: 0x0012_1001,
+        GenericAll: 0x001F_FFFF,
+    });
 
-/// Access tokens: the body is NK's own (`se::token`).
+/// Access tokens: the body is NK's own (`se::token`). Generic rights from
+/// `SepTokenMapping`.
 pub static TOKEN_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 5,
     &TOKEN_NAME,
     Some(crate::se::token::deleted),
-);
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_001A,
+    GenericWrite: 0x0002_01E0,
+    GenericExecute: 0x0002_0005,
+    GenericAll: 0x000F_01FF,
+});
 
 /// Directories of the namespace (`OBJECT_DIRECTORY`): what is in one
 /// is the namespace's to know (`ob`), which hears of a handle closing
@@ -263,9 +433,15 @@ pub static DIRECTORY_TYPE: ObjectType = ObjectType::new(
     GenericExecute: 0x0002_0003,
     GenericAll: 0x000F_000F,
 });
-/// Symbolic links (`OBJECT_SYMBOLIC_LINK`).
+/// Symbolic links (`OBJECT_SYMBOLIC_LINK`). Generic rights from
+/// `ObpSymbolicLinkMapping`.
 pub static SYMBOLIC_LINK_TYPE: ObjectType =
-    ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None);
+    ObjectType::new(FIRST_TYPE_INDEX + 7, &SYMBOLIC_LINK_NAME, None).rights(GENERIC_MAPPING {
+        GenericRead: 0x0002_0001,
+        GenericWrite: 0x0002_0000,
+        GenericExecute: 0x0002_0001,
+        GenericAll: 0x000F_0001,
+    });
 /// Drivers (`DRIVER_OBJECT`).
 pub static DRIVER_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 8,
@@ -282,6 +458,7 @@ pub static FILE_TYPE: ObjectType = ObjectType::new(
     Some(crate::io::file::deleted),
 )
 .closing(crate::io::file::handle_closed)
+.parsing(crate::io::file::parse_file)
 .rights(nk_ntabi::io::FILE_GENERIC_MAPPING);
 
 /// [`IoGetFileObjectGenericMapping`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetfileobjectgenericmapping):
@@ -319,12 +496,18 @@ pub static CALLBACK_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 13, &C
 
 /// Sections (`mm::section`): a file's data as the memory manager maps
 /// it. The last reference going drops the control area's count of
-/// sections.
+/// sections. Generic rights from `MiSectionMapping`.
 pub static SECTION_TYPE: ObjectType = ObjectType::new(
     FIRST_TYPE_INDEX + 14,
     &SECTION_NAME,
     Some(crate::mm::section::deleted),
-);
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0005,
+    GenericWrite: 0x0002_0002,
+    GenericExecute: 0x0002_0008,
+    GenericAll: 0x000F_001F,
+});
 
 /// Every type, by index from `FIRST_TYPE_INDEX`.
 static TYPES: [&ObjectType; 15] = [
@@ -490,6 +673,10 @@ pub static IoFileObjectType: TypeVariable = TypeVariable(&raw const FILE_TYPE);
 /// with no jobs, every such handle names something else and is refused
 /// as the wrong type.
 pub static PsJobType: TypeVariable = TypeVariable(&raw const JOB_TYPE);
+
+/// `MmSectionObjectType`: what a driver passes to `ObReferenceObjectByHandle`
+/// to insist on a section object.
+pub static MmSectionObjectType: TypeVariable = TypeVariable(&raw const SECTION_TYPE);
 
 impl TypeVariable {
     /// The address drivers import.

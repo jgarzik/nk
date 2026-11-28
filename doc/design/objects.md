@@ -129,6 +129,13 @@ symbolic-link bodies have Windows' sizes: a link's holds its target and
 creation time; a directory's is zero, the entries being in NK's tree.
 
 What is done with the rest of a path is the business of the type the
-look-up ended at, after the namespace's lock is dropped: a device's
-driver parses it as a file name (see [I/O](io.md)). The types' parse steps are
-NK's own code, not `OBJECT_TYPE` procedures. No security checks.
+look-up ended at, after the namespace's lock is dropped, through the
+unified `ob::open_by_name` path and `OBJECT_TYPE_INITIALIZER` procedures:
+`DEVICE_TYPE` (`io::file::parse_device`, `io::device::security_procedure`),
+`FILE_TYPE` (`io::file::parse_file`), and `KEY_TYPE` (`cm::parse_key`).
+Handle open and close honor `OpenProcedure`, `CloseProcedure`, and
+`OkayToCloseProcedure`. Generic mappings match Windows for all kernel
+types (`Event`, `Thread`, `Device`, `Key`, `Process`, `Token`,
+`Directory`, `SymbolicLink`, `File`, `Section`). User-mode opens (and
+kernel-mode opens with `OBJ_FORCE_ACCESS_CHECK`) check access via
+`ob::check_access` (`SeAccessCheck`).

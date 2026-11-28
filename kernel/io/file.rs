@@ -333,55 +333,135 @@ struct Target {
     related: Option<ObRef>,
 }
 
-/// Find what `name` leads to, from the namespace's root or from what
-/// the handle `root` names: a directory, where the look-up starts, or
-/// an open file, whose device parses the whole name. The look-up ends
-/// at a device; whatever else it ends at is no file.
+/// Parse context passed through `ob::open_by_name` to `parse_device` and
+/// `parse_file`.
+struct FileParseContext {
+    target: Option<Target>,
+    related: Option<ObRef>,
+}
+
+/// `DEVICE_TYPE`'s `OB_PARSE_METHOD` (`IopParseDevice` entry): records the
+/// target device, remaining path, and optional related file object in the
+/// parse context and returns a referenced pointer to the device.
 ///
-/// The root handle is the requestor's, referenced on behalf of `mode`
-/// with no access asked of it, as Windows' `ObpLookupObjectName` does:
-/// a kernel handle is no root for user mode.
-fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
-    let found = match root {
-        None => ob::lookup(None, name),
-        Some(root) => {
-            let (root, _) = handle::reference_for(root, None, 0, mode)?;
-            if root.is(&object::FILE_TYPE) {
-                // Relative to an open file: the name as given is the
-                // driver's to read, and is not absolute.
-                if name.first() == Some(&u16::from(b'\\')) {
-                    return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
-                }
-                // SAFETY: an open file holds a reference on its device,
-                // so the device's memory is there to be referenced.
-                let device =
-                    unsafe { ObRef::new((*root.cast::<FILE_OBJECT>()).DeviceObject.cast()) };
-                return Ok(Target {
-                    device,
-                    remainder: name.to_vec(),
-                    related: Some(root),
-                });
-            }
-            if root.is(&object::DIRECTORY_TYPE) {
-                ob::lookup(Some(root.body()), name)
-            } else if root.is(&object::KEY_TYPE) {
-                // A key parses a name into a key, never a file.
-                Err(STATUS_OBJECT_TYPE_MISMATCH)
-            } else {
-                // Nothing parses a name below such an object.
-                Err(STATUS_INVALID_HANDLE)
-            }
-        }
-    };
-    let (device, remainder) = found?;
-    if !device.is(&object::DEVICE_TYPE) {
-        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+/// # Safety
+/// Called by `ob::open_by_name` with a live `DEVICE_OBJECT` in `parse_object`,
+/// a valid `UNICODE_STRING` in `remaining_name`, a `FileParseContext` in
+/// `context`, and a writable `*mut *mut c_void` in `object`.
+pub unsafe extern "C" fn parse_device(
+    parse_object: *mut c_void,
+    object_type: *mut c_void,
+    _access_state: *mut c_void,
+    _access_mode: i8,
+    _attributes: u32,
+    _complete_name: *mut UNICODE_STRING,
+    remaining_name: *mut UNICODE_STRING,
+    context: *mut c_void,
+    _security_qos: *mut c_void,
+    object: *mut *mut c_void,
+) -> NTSTATUS {
+    if !core::ptr::eq(
+        object_type.cast::<object::ObjectType>(),
+        &raw const object::FILE_TYPE,
+    ) || context.is_null()
+    {
+        return STATUS_OBJECT_TYPE_MISMATCH;
     }
-    Ok(Target {
-        device,
-        remainder,
+    // SAFETY: per the contract.
+    unsafe {
+        let remainder = if remaining_name.is_null() || (*remaining_name).Length == 0 {
+            Vec::new()
+        } else {
+            core::slice::from_raw_parts(
+                (*remaining_name).Buffer,
+                usize::from((*remaining_name).Length) / 2,
+            )
+            .to_vec()
+        };
+        let device = ObRef::new(parse_object.cast());
+        let out_ref = ObRef::new(parse_object.cast());
+        let ctx = &mut *context.cast::<FileParseContext>();
+        ctx.target = Some(Target {
+            device,
+            remainder,
+            related: ctx.related.take(),
+        });
+        object.write_unaligned(out_ref.into_raw().cast());
+    }
+    STATUS_SUCCESS
+}
+
+/// `FILE_TYPE`'s `OB_PARSE_METHOD` (`IopParseFile` entry): records the related
+/// open `FILE_OBJECT` and delegates parsing to its underlying `DEVICE_OBJECT`.
+///
+/// # Safety
+/// Called by `ob::open_by_name` with a live `FILE_OBJECT` in `parse_object`,
+/// a valid `UNICODE_STRING` in `remaining_name`, a `FileParseContext` in
+/// `context`, and a writable `*mut *mut c_void` in `object`.
+pub unsafe extern "C" fn parse_file(
+    parse_object: *mut c_void,
+    object_type: *mut c_void,
+    access_state: *mut c_void,
+    access_mode: i8,
+    attributes: u32,
+    complete_name: *mut UNICODE_STRING,
+    remaining_name: *mut UNICODE_STRING,
+    context: *mut c_void,
+    security_qos: *mut c_void,
+    object: *mut *mut c_void,
+) -> NTSTATUS {
+    if !core::ptr::eq(
+        object_type.cast::<object::ObjectType>(),
+        &raw const object::FILE_TYPE,
+    ) || context.is_null()
+    {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    // SAFETY: per the contract; an open file holds a reference on its device.
+    unsafe {
+        let ctx = &mut *context.cast::<FileParseContext>();
+        ctx.related = Some(ObRef::new(parse_object.cast()));
+        let dev = (*parse_object.cast::<FILE_OBJECT>()).DeviceObject;
+        parse_device(
+            dev.cast(),
+            object_type,
+            access_state,
+            access_mode,
+            attributes,
+            complete_name,
+            remaining_name,
+            context,
+            security_qos,
+            object,
+        )
+    }
+}
+
+/// Find what `name` leads to, through the unified `ob::open_by_name` path and
+/// `DEVICE_TYPE`/`FILE_TYPE` parse procedures.
+fn resolve(root: Option<u64>, name: &[u16], mode: Mode) -> Result<Target, NTSTATUS> {
+    let root_ptr = root.map_or(core::ptr::null_mut(), |h| h as *mut c_void);
+    let access_mode = match mode {
+        Mode::Kernel => KERNEL_MODE,
+        Mode::User => USER_MODE,
+    };
+    let mut ctx = FileParseContext {
+        target: None,
         related: None,
-    })
+    };
+    // SAFETY: `ctx` is a valid `FileParseContext` for the duration of the call.
+    let _ = unsafe {
+        ob::open_by_name(
+            root_ptr,
+            name,
+            0,
+            Some(&object::FILE_TYPE),
+            0,
+            access_mode,
+            (&raw mut ctx).cast(),
+        )
+    }?;
+    ctx.target.ok_or(STATUS_OBJECT_TYPE_MISMATCH)
 }
 
 /// Give a new file object its name: a counted string in a pool block
@@ -517,8 +597,30 @@ pub fn open_as(
     // one mounted on it, unless the open is a direct device open
     // (`io::mount`).
     let itself = target.remainder.is_empty() && target.related.is_none();
+    const FILE_DEVICE_SECURE_OPEN: u32 = 0x100;
     // SAFETY: the device is counted.
-    let has_vpb = unsafe { !(*device).Vpb.is_null() };
+    let (has_vpb, secure_open) = unsafe {
+        (
+            !(*device).Vpb.is_null(),
+            (*device).Characteristics & FILE_DEVICE_SECURE_OPEN != 0,
+        )
+    };
+    let force_check = extra.location_flags & SL_FORCE_ACCESS_CHECK != 0;
+    if itself || secure_open {
+        // SAFETY: `device` is a live counted device object.
+        if let Err(status) = unsafe {
+            ob::check_access(
+                device.cast(),
+                request.desired_access,
+                request.requestor_mode,
+                force_check,
+            )
+        } {
+            // SAFETY: the count taken above.
+            unsafe { device::dereference(device) };
+            return Err(status);
+        }
+    }
     let vpb = if has_vpb && !super::mount::direct_open(itself, desired) {
         // SAFETY: as above; at `PASSIVE_LEVEL`, as an open is.
         match unsafe { super::mount::mounted(device, itself) } {

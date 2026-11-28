@@ -838,6 +838,38 @@ pub unsafe extern "C" fn ObSetSecurityObjectByPointer(
     }
 }
 
+/// Build Windows' default self-relative device security descriptor in a pool
+/// block (`IopCreateDefaultDeviceSecurityDescriptor`): Owner `SYSTEM`, Group
+/// `SYSTEM`, DACL granting `SYSTEM` and `Administrators` `GENERIC_ALL` and
+/// `Everyone` `GENERIC_READ | GENERIC_EXECUTE`. Returns `None` without memory.
+pub fn default_device_sd() -> Option<*mut u8> {
+    let map = nk_ntabi::io::FILE_GENERIC_MAPPING;
+    let all = map.GenericAll;
+    let read_exec = map.GenericRead | map.GenericExecute;
+    let mut acl = [0u8; 72];
+    let mut sd = core::mem::MaybeUninit::<SECURITY_DESCRIPTOR>::zeroed();
+    // SAFETY: local buffers and immutable `SeExports` well-known SIDs.
+    unsafe {
+        let table = SeExports.table();
+        let sd_ptr = sd.as_mut_ptr();
+        if RtlCreateSecurityDescriptor(sd_ptr, 1) != STATUS_SUCCESS {
+            return None;
+        }
+        if sid::RtlCreateAcl(acl.as_mut_ptr().cast(), acl.len() as u32, 2) != STATUS_SUCCESS {
+            return None;
+        }
+        let _ = RtlAddAccessAllowedAce(acl.as_mut_ptr(), 2, all, (*table).SeLocalSystemSid);
+        let _ = RtlAddAccessAllowedAce(acl.as_mut_ptr(), 2, all, (*table).SeAliasAdminsSid);
+        let _ = RtlAddAccessAllowedAce(acl.as_mut_ptr(), 2, read_exec, (*table).SeWorldSid);
+        let _ =
+            RtlSetOwnerSecurityDescriptor(sd_ptr, (*table).SeLocalSystemSid.cast_mut().cast(), 0);
+        let _ =
+            RtlSetGroupSecurityDescriptor(sd_ptr, (*table).SeLocalSystemSid.cast_mut().cast(), 0);
+        let _ = RtlSetDaclSecurityDescriptor(sd_ptr, 1, acl.as_mut_ptr().cast(), 0);
+        capture(sd_ptr.cast())
+    }
+}
+
 /// A self-relative copy of a descriptor, in a pool block the caller
 /// frees. `None` without memory.
 ///

@@ -9,7 +9,6 @@
 
 #![allow(non_snake_case)]
 
-use super::directory::resolve_root;
 use super::handle::{self, OBJ_KERNEL_HANDLE};
 use super::object::{self, ObRef, ObjectType};
 use crate::ke::wait;
@@ -78,7 +77,7 @@ pub unsafe extern "C" fn NtCreateEvent(
         }
         None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
     };
-    let start = match resolve_root(root, name.is_empty()) {
+    let start = match super::resolve_namespace_root(root, name.is_empty(), mode) {
         Ok(start) => start,
         Err(status) => return status,
     };
@@ -167,13 +166,18 @@ pub unsafe extern "C" fn NtOpenEvent(
     };
     let root = oa.root;
     let given = oa.attributes;
-    let start = match resolve_root(root, wide.is_empty()) {
-        Ok(start) => start,
-        Err(status) => return status,
-    };
-    let found = super::lookup(start.as_ref().map(ObRef::body), &wide);
-    drop(start);
-    let (held, rest) = match found {
+    // SAFETY: no parse context is needed for opening an event object.
+    let (held, granted) = match unsafe {
+        super::open_by_name(
+            root,
+            &wide,
+            given,
+            Some(&object::EVENT_TYPE),
+            desired_access,
+            mode,
+            core::ptr::null_mut(),
+        )
+    } {
         Ok(found) => found,
         Err(status) => return status,
     };
@@ -182,15 +186,9 @@ pub unsafe extern "C" fn NtOpenEvent(
     // SAFETY: the look-up's reference, given up once the handle, if
     // there is one, holds the event.
     unsafe {
-        if !rest.is_empty() {
-            return STATUS_OBJECT_NAME_NOT_FOUND;
-        }
-        if !core::ptr::eq(object::type_of(body), &raw const object::EVENT_TYPE) {
-            return STATUS_OBJECT_TYPE_MISMATCH;
-        }
         let opened = handle::open_with(
             body,
-            desired_access,
+            granted,
             Attributes {
                 inherit: given & OBJ_INHERIT != 0,
                 protect_from_close: false,

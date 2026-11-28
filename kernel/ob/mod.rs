@@ -298,12 +298,23 @@ pub fn remove_link(path: &[u16]) -> NTSTATUS {
 /// The path is absolute, or relative to the directory object `start`
 /// (the `RootDirectory` of `OBJECT_ATTRIBUTES`).
 pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(ObRef, Vec<u16>), NTSTATUS> {
+    lookup_with(start, path, false)
+}
+
+/// As [`lookup`], stopping at a trailing symbolic link when `open_link` is
+/// set (`OBJ_OPENLINK`).
+pub fn lookup_with(
+    start: Option<*mut u8>,
+    path: &[u16],
+    open_link: bool,
+) -> Result<(ObRef, Vec<u16>), NTSTATUS> {
+    let options = if open_link { THE_LINK } else { OPTIONS };
     let ns = NAMESPACE.lock();
     let start = match start {
         None => None,
         Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
     };
-    let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
+    let outcome = ns.tree.lookup(start, path, options).map_err(status)?;
     let body = match outcome.found {
         Found::Object(object) | Found::SymbolicLink(_, object) => object.0,
         Found::Directory(dir) => directory(&ns, dir),
@@ -313,6 +324,186 @@ pub fn lookup(start: Option<*mut u8>, path: &[u16]) -> Result<(ObRef, Vec<u16>),
     // name is alive. A directory's name holds a reference to it, and
     // the directory a look-up starts at is the caller's to hold.
     Ok((unsafe { ObRef::new(body) }, outcome.remainder))
+}
+
+/// Resolve an `OBJECT_ATTRIBUTES.RootDirectory` handle for creating a named
+/// namespace object (directory, event, symbolic link, section). A handle to a
+/// non-directory object fails with `STATUS_OBJECT_TYPE_MISMATCH` if that type
+/// has a `ParseProcedure` (device, file, key), or `STATUS_INVALID_HANDLE`
+/// otherwise.
+pub fn resolve_namespace_root(
+    root: *mut core::ffi::c_void,
+    name_empty: bool,
+    mode: i8,
+) -> Result<Option<ObRef>, NTSTATUS> {
+    if root.is_null() || name_empty {
+        return Ok(None);
+    }
+    let handle_mode = crate::svc::capture::handle_mode(mode);
+    let (start, _) = handle::reference_for(root as u64, None, 0, handle_mode)?;
+    let body = start.body();
+    // SAFETY: the reference just taken.
+    let ty = unsafe { object::type_of(body) };
+    if core::ptr::eq(ty, &raw const object::DIRECTORY_TYPE) {
+        return Ok(Some(start));
+    }
+    if ty.parse_procedure().is_some() {
+        Err(STATUS_OBJECT_TYPE_MISMATCH)
+    } else {
+        Err(STATUS_INVALID_HANDLE)
+    }
+}
+
+/// Check whether the current thread's subject may be granted `desired` access
+/// to `body` on behalf of `mode`. For `KernelMode` without
+/// `force_access_check`, grants the generic-mapped `desired` rights directly.
+///
+/// # Safety
+/// `body` is a live object the caller holds a reference to.
+pub unsafe fn check_access(
+    body: *mut u8,
+    desired: u32,
+    mode: i8,
+    force_access_check: bool,
+) -> Result<u32, NTSTATUS> {
+    // SAFETY: per the contract.
+    let ty = unsafe { object::type_of(body) };
+    let mapping = ty.generic_mapping();
+    if mode == nk_ntabi::io::KERNEL_MODE && !force_access_check {
+        return Ok(ty.map_generic(desired));
+    }
+    if core::ptr::eq(ty, &raw const object::DEVICE_TYPE) {
+        // SAFETY: `body` is a live `DEVICE_OBJECT`.
+        let copy = unsafe { crate::io::device::copy_security(body.cast()) };
+        let sd = copy.as_ref().map_or(core::ptr::null(), Vec::as_ptr);
+        // SAFETY: `sd` is null or points to the copied self-relative SD.
+        return unsafe {
+            crate::se::access::check_current_subject(sd, mapping, desired, mode, force_access_check)
+        };
+    }
+    // SAFETY: per the contract.
+    let sd = unsafe { security::reference(body) };
+    // SAFETY: `sd` is null or a referenced stored self-relative SD.
+    let result = unsafe {
+        crate::se::access::check_current_subject(sd, mapping, desired, mode, force_access_check)
+    };
+    if !sd.is_null() {
+        // SAFETY: matching reference taken above.
+        unsafe { security::release(sd) };
+    }
+    result
+}
+
+/// `OBJ_OPENLINK` and `OBJ_FORCE_ACCESS_CHECK` (`ntdef.h`).
+const OBJ_OPENLINK: u32 = 0x100;
+const OBJ_FORCE_ACCESS_CHECK: u32 = 0x400;
+
+/// Unified namespace lookup, `ParseProcedure` dispatch, type check, and
+/// `SeAccessCheck` (`ObOpenObjectByName` / `ObpLookupObjectName`).
+///
+/// Returns the opened object (referenced) and the granted access mask.
+///
+/// # Safety
+/// `parse_context` is null or points to the parse context expected by the
+/// target type's `ParseProcedure`.
+pub unsafe fn open_by_name(
+    root: *mut core::ffi::c_void,
+    path: &[u16],
+    attributes: u32,
+    expected_type: Option<&'static object::ObjectType>,
+    desired_access: u32,
+    mode: i8,
+    parse_context: *mut core::ffi::c_void,
+) -> Result<(ObRef, u32), NTSTATUS> {
+    let open_link = attributes & OBJ_OPENLINK != 0;
+    let force_access_check = attributes & OBJ_FORCE_ACCESS_CHECK != 0;
+    let handle_mode = crate::svc::capture::handle_mode(mode);
+
+    let (found, rest) = if root.is_null() {
+        lookup_with(None, path, open_link)?
+    } else {
+        let (root_ref, _) = handle::reference_for(root as u64, None, 0, handle_mode)?;
+        // SAFETY: `root_ref` holds a reference.
+        let root_ty = unsafe { object::type_of(root_ref.body()) };
+        if core::ptr::eq(root_ty, &raw const object::DIRECTORY_TYPE) {
+            lookup_with(Some(root_ref.body()), path, open_link)?
+        } else if root_ty.parse_procedure().is_some() {
+            if path.first() == Some(&u16::from(b'\\')) {
+                return Err(STATUS_OBJECT_PATH_SYNTAX_BAD);
+            }
+            (root_ref, path.to_vec())
+        } else {
+            return Err(STATUS_INVALID_HANDLE);
+        }
+    };
+
+    // SAFETY: `found` holds a reference.
+    let found_ty = unsafe { object::type_of(found.body()) };
+    if let Some(parse) = found_ty.parse_procedure() {
+        let mut complete_buf = path.to_vec();
+        let mut remaining_buf = rest;
+        let complete_len =
+            u16::try_from(complete_buf.len() * 2).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
+        let remaining_len =
+            u16::try_from(remaining_buf.len() * 2).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
+        let mut complete_us = UNICODE_STRING {
+            Length: complete_len,
+            MaximumLength: complete_len,
+            Buffer: complete_buf.as_mut_ptr(),
+        };
+        let mut remaining_us = UNICODE_STRING {
+            Length: remaining_len,
+            MaximumLength: remaining_len,
+            Buffer: remaining_buf.as_mut_ptr(),
+        };
+        let expected_ptr = expected_type.map_or(core::ptr::null_mut(), |t| {
+            core::ptr::from_ref(t).cast_mut().cast()
+        });
+        let mut out_obj = core::ptr::null_mut();
+        // SAFETY: `found` is live, counted strings point to live local buffers,
+        // and `parse_context` is valid per caller contract.
+        let st = unsafe {
+            parse(
+                found.body().cast(),
+                expected_ptr,
+                core::ptr::null_mut(),
+                mode,
+                attributes,
+                &raw mut complete_us,
+                &raw mut remaining_us,
+                parse_context,
+                core::ptr::null_mut(),
+                &raw mut out_obj,
+            )
+        };
+        if !nt_success(st) {
+            return Err(st);
+        }
+        if out_obj.is_null() {
+            return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+        }
+        // SAFETY: `ParseProcedure` returns a referenced object in `out_obj`.
+        let parsed = unsafe { ObRef::adopt(out_obj.cast()) };
+        let granted = if desired_access != 0 || force_access_check {
+            // SAFETY: `parsed` is live.
+            unsafe { check_access(parsed.body(), desired_access, mode, force_access_check) }?
+        } else {
+            0
+        };
+        return Ok((parsed, granted));
+    }
+
+    if let Some(expected) = expected_type
+        && !core::ptr::eq(found_ty, expected)
+    {
+        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+    }
+    if !rest.is_empty() {
+        return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+    }
+    // SAFETY: `found` is live.
+    let granted = unsafe { check_access(found.body(), desired_access, mode, force_access_check) }?;
+    Ok((found, granted))
 }
 
 /// Make a directory object: called `path` (absolute, or relative to

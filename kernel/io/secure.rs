@@ -67,13 +67,37 @@ pub unsafe extern "C" fn IoCreateDeviceSecure(
     let Ok(text) = alloc::string::String::from_utf16(&wide) else {
         return STATUS_INVALID_PARAMETER;
     };
-    let descriptor = match sddl::parse(&text) {
+    let mut descriptor = match sddl::parse(&text) {
         Ok(descriptor) => descriptor,
         Err(SddlError::Invalid) => return STATUS_INVALID_PARAMETER,
         Err(SddlError::Unsupported(part)) => crate::kd::bugcheck(format_args!(
             "IoCreateDeviceSecure: NK does not understand `{part}` in the SDDL string {text}"
         )),
     };
+    // Map generic rights in the SDDL DACL against `FILE_GENERIC_MAPPING`, as
+    // Windows' `IopDevObjApplyPostCreationSettings` does via
+    // `SeSetSecurityDescriptorInfo`.
+    if let Some(parts) = nk_se::parse_relative(&descriptor)
+        && let Some(dacl) = parts.dacl
+    {
+        let map = FILE_GENERIC_MAPPING;
+        let mapping = nk_se::access::GenericMapping {
+            read: map.GenericRead,
+            write: map.GenericWrite,
+            execute: map.GenericExecute,
+            all: map.GenericAll,
+        };
+        if let Some(mapped_dacl) = nk_se::acl::applied(dacl, &mapping) {
+            let updated = nk_se::Parts {
+                dacl: Some(&mapped_dacl),
+                ..parts
+            };
+            let mut rebuilt = alloc::vec![0u8; updated.relative_length()];
+            if updated.write_relative(&mut rebuilt).is_ok() {
+                descriptor = rebuilt;
+            }
+        }
+    }
     let mut device = core::ptr::null_mut();
     // SAFETY: per the contract.
     let status = unsafe {

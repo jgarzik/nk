@@ -36,6 +36,11 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         "IoFileObjectType",
         ob::object::IoFileObjectType
     ),
+    export_variable!(
+        Implemented,
+        "MmSectionObjectType",
+        ob::object::MmSectionObjectType
+    ),
     export!(Implemented, ob::object::ObReferenceObjectByPointer),
     export!(Partial, ob::event::ZwWaitForSingleObject),
     export!(Partial, ob::directory::ZwCreateDirectoryObject),

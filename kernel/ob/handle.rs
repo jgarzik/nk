@@ -103,7 +103,32 @@ pub unsafe fn open_with(
     kernel: bool,
 ) -> Result<u64, NTSTATUS> {
     // SAFETY: per the contract.
-    let granted = unsafe { object::type_of(body) }.map_generic(access);
+    let ty = unsafe { object::type_of(body) };
+    let mut granted = ty.map_generic(access);
+    if let Some(open_proc) = ty.open_procedure() {
+        let mode = if kernel {
+            nk_ntabi::io::KERNEL_MODE
+        } else {
+            nk_ntabi::io::USER_MODE
+        };
+        // SAFETY: per the contract; `body` is referenced by the caller and the
+        // type's open procedure runs before the handle is inserted.
+        let count = unsafe { object::handle_count(body).load(Ordering::Acquire) } as u32;
+        // SAFETY: per `OB_OPEN_METHOD` contract.
+        let status = unsafe {
+            open_proc(
+                0,
+                mode,
+                crate::ps::process::system().cast(),
+                body.cast(),
+                &raw mut granted,
+                count,
+            )
+        };
+        if !nt_success(status) {
+            return Err(status);
+        }
+    }
     let mut table = TABLE.lock();
     let index = table
         .insert(Entry(body), granted, attributes)
@@ -217,6 +242,38 @@ pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
     let Some(index) = handle_index(handle, mode == Mode::Kernel) else {
         return STATUS_INVALID_HANDLE;
     };
+    let veto_check = {
+        let table = TABLE.lock();
+        if let Some(open) = table.get(index) {
+            let body = open.object.0;
+            // SAFETY: the table holds a reference while locked.
+            unsafe {
+                object::type_of(body)
+                    .okay_to_close_procedure()
+                    .map(|proc| (ObRef::new(body), proc))
+            }
+        } else {
+            None
+        }
+    };
+    if let Some((held, okay_to_close)) = veto_check {
+        let prev = match mode {
+            Mode::Kernel => nk_ntabi::io::KERNEL_MODE,
+            Mode::User => nk_ntabi::io::USER_MODE,
+        };
+        // SAFETY: `held` keeps the object alive across `OkayToCloseProcedure`.
+        let allowed = unsafe {
+            okay_to_close(
+                crate::ps::process::system().cast(),
+                held.body().cast(),
+                handle as *mut c_void,
+                prev,
+            )
+        };
+        if allowed == 0 {
+            return STATUS_HANDLE_NOT_CLOSABLE;
+        }
+    }
     let closed = TABLE.lock().close(index);
     let body = match closed {
         Ok(Entry(body)) => body,

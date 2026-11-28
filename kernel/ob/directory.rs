@@ -22,34 +22,10 @@ const OBJ_OPENLINK: u32 = 0x100;
 ///
 /// # Safety
 /// The caller holds a reference to `body`.
+#[allow(dead_code)]
 pub(super) unsafe fn is(body: *mut u8, ty: &'static object::ObjectType) -> bool {
     // SAFETY: per the contract.
     core::ptr::eq(unsafe { object::type_of(body) }, ty)
-}
-
-/// Resolve an `OBJECT_ATTRIBUTES.RootDirectory` handle for a relative
-/// namespace path. A handle to a non-directory object fails with
-/// `STATUS_OBJECT_TYPE_MISMATCH` if that type parses names itself
-/// (device, file, key), or `STATUS_INVALID_HANDLE` otherwise.
-pub(super) fn resolve_root(root: *mut c_void, name_empty: bool) -> Result<Option<ObRef>, NTSTATUS> {
-    if root.is_null() || name_empty {
-        return Ok(None);
-    }
-    let start = handle::reference(root as u64, None)?;
-    let body = start.body();
-    // SAFETY: the reference just taken.
-    if !unsafe { is(body, &object::DIRECTORY_TYPE) } {
-        let parses = [&object::DEVICE_TYPE, &object::FILE_TYPE, &object::KEY_TYPE]
-            .into_iter()
-            // SAFETY: the same reference.
-            .any(|ty| unsafe { is(body, ty) });
-        return Err(if parses {
-            STATUS_OBJECT_TYPE_MISMATCH
-        } else {
-            STATUS_INVALID_HANDLE
-        });
-    }
-    Ok(Some(start))
 }
 
 /// [`ZwCreateDirectoryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatedirectoryobject):
@@ -100,7 +76,7 @@ pub unsafe extern "C" fn NtCreateDirectoryObject(
         }
         None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
     };
-    let start = match resolve_root(root, name.is_empty()) {
+    let start = match super::resolve_namespace_root(root, name.is_empty(), mode) {
         Ok(start) => start,
         Err(status) => {
             // SAFETY: per the contract; fault-protected for `UserMode`.

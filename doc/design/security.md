@@ -21,16 +21,19 @@ with eight or twelve sub-authorities, and refused with Windows'
 statuses (`nk_se::sid`); a parent's SID is a pool block the caller
 frees.
 
-NK itself enforces none: every open it makes is a kernel-mode open,
-which Windows does not check either, and no user-mode code runs. A
+Kernel-mode opens bypass security checks unless `OBJ_FORCE_ACCESS_CHECK`
+is set, as on Windows; user-mode opens check access against the object's
+security descriptor through `ob::check_access` -> `SeAccessCheck`. A
 driver that guards its own objects asks
 [`SeAccessCheck`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-seaccesscheck)
 and gets Windows' answer (below). Descriptors are
 built, converted, captured and stored faithfully. `ZwSetSecurityObject`
 and `ObSetSecurityObjectByPointer` (by handle and by pointer) replace
 the named parts of a device's descriptor; for other objects they answer
-`STATUS_NOT_SUPPORTED`. A new device has no descriptor until one
-is set, where Windows gives a default. `SeCaptureSecurityDescriptor`,
+`STATUS_NOT_SUPPORTED`. Every new device gets Windows' default security
+descriptor (`se::default_device_sd`: Owner/Group `SYSTEM`, DACL granting
+`SYSTEM` and `Administrators` `GENERIC_ALL` and `World`
+`GENERIC_READ | GENERIC_EXECUTE`). `SeCaptureSecurityDescriptor`,
 forced, returns a self-relative pool copy, the caller's to free.
 
 A driver that keeps descriptors for its own objects (a file system)

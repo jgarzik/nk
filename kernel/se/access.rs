@@ -174,6 +174,60 @@ pub unsafe extern "C" fn SeAccessCheck(
     }
 }
 
+/// Check whether the current thread's subject may be granted `desired` access
+/// to an object whose self-relative security descriptor is `sd` (or null if
+/// the object has no descriptor attached).
+///
+/// For `KernelMode` without `force_access_check`, bypasses the descriptor and
+/// grants the generic-mapped `desired` rights directly, as Windows does.
+///
+/// # Safety
+/// `sd` is null or points to a valid self-relative security descriptor;
+/// `mapping` points to a valid `GENERIC_MAPPING`.
+pub unsafe fn check_current_subject(
+    sd: *const u8,
+    mapping: *const GENERIC_MAPPING,
+    desired: u32,
+    mode: i8,
+    force_access_check: bool,
+) -> Result<u32, NTSTATUS> {
+    // SAFETY: per the contract.
+    let map = unsafe { mapping_of(mapping) };
+    let mapped = nk_se::access::map_generic(desired, &map);
+    if mode == KERNEL_MODE && !force_access_check {
+        return Ok(mapped);
+    }
+    if sd.is_null() || mapped == 0 {
+        return Ok(mapped);
+    }
+    let mut subject = core::mem::MaybeUninit::<SECURITY_SUBJECT_CONTEXT>::zeroed();
+    let mut granted = 0u32;
+    let mut status = STATUS_ACCESS_DENIED;
+    // SAFETY: local subject context and output slots; `sd` and `mapping` valid
+    // per caller contract.
+    unsafe {
+        token::SeCaptureSubjectContext(subject.as_mut_ptr());
+        let allowed = SeAccessCheck(
+            sd.cast_mut().cast(),
+            subject.as_mut_ptr(),
+            0,
+            mapped,
+            0,
+            core::ptr::null_mut(),
+            mapping,
+            nk_ntabi::io::USER_MODE,
+            &raw mut granted,
+            &raw mut status,
+        );
+        token::SeReleaseSubjectContext(subject.as_mut_ptr());
+        if allowed != 0 {
+            Ok(granted)
+        } else {
+            Err(status)
+        }
+    }
+}
+
 /// A driver's `LUID` as one number.
 fn luid_of(luid: LUID) -> Luid {
     u64::from(luid.LowPart) | u64::from(luid.HighPart as u32) << 32
