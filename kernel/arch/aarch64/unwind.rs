@@ -79,6 +79,30 @@ pub fn sp(regs: &Regs) -> u64 {
     regs.sp
 }
 
+/// Fill a Windows `CONTEXT` record with the captured register state.
+///
+/// # Safety
+/// `context` is writable for an arm64 `CONTEXT` structure.
+pub unsafe fn fill_context(regs: &Regs, context: *mut core::ffi::c_void) {
+    let context = context.cast::<nk_ntabi::seh::arm64::CONTEXT>();
+    // SAFETY: per the contract.
+    unsafe {
+        core::ptr::write_bytes(
+            context.cast::<u8>(),
+            0,
+            size_of::<nk_ntabi::seh::arm64::CONTEXT>(),
+        );
+        (*context).ContextFlags = nk_ntabi::seh::arm64::CONTEXT_FULL;
+        (*context).Pc = regs.pc;
+        (*context).Sp = regs.sp;
+        for (i, &val) in regs.x[..10].iter().enumerate() {
+            (*context).X[19 + i] = val;
+        }
+        (*context).Fp = regs.x[10];
+        (*context).Lr = regs.x[11];
+    }
+}
+
 /// One frame undone.
 pub struct Step {
     /// The registers of the frame beneath.

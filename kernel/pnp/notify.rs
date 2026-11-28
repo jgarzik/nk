@@ -172,6 +172,63 @@ pub fn wait_idle() {
     }
 }
 
+/// Notify every `EVENT_CATEGORY_TARGET_DEVICE_CHANGE` registration targeting
+/// `pdo` that the device has been removed (`GUID_TARGET_DEVICE_REMOVE_COMPLETE`).
+/// Delivered on an executive worker thread so callers holding the PnP engine
+/// mutex do not deadlock with callbacks that unregister or close handles.
+pub fn device_removed(pdo: usize) {
+    let handles: Vec<(usize, usize)> = REGISTRATIONS
+        .lock()
+        .iter()
+        .filter(|r| r.category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE && r.target == pdo && !r.gone)
+        .map(|r| (core::ptr::from_ref::<Registration>(r) as usize, r.file))
+        .collect();
+    if handles.is_empty() {
+        return;
+    }
+    struct RemovalWork {
+        item: nk_ntabi::ex::WORK_QUEUE_ITEM,
+        handles: Vec<(usize, usize)>,
+    }
+    /// # Safety
+    /// `parameter` is a boxed `RemovalWork` queued by `device_removed`.
+    unsafe extern "C" fn deliver_removal(parameter: *mut c_void) {
+        // SAFETY: created with `Box::into_raw` below.
+        let work = unsafe { alloc::boxed::Box::from_raw(parameter.cast::<RemovalWork>()) };
+        let block = pool::alloc_zeroed(size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>(), super::TAG);
+        if !block.is_null() {
+            let notif = block.cast::<TARGET_DEVICE_REMOVAL_NOTIFICATION>();
+            for (handle, file) in &work.handles {
+                // SAFETY: freshly allocated notification block.
+                unsafe {
+                    notif.write(TARGET_DEVICE_REMOVAL_NOTIFICATION {
+                        Version: 1,
+                        Size: size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>() as u16,
+                        Event: GUID_TARGET_DEVICE_REMOVE_COMPLETE,
+                        FileObject: *file as *mut _,
+                    });
+                }
+                call(*handle, notif.cast());
+            }
+            let _ = pool::free(block);
+        }
+        drop(work);
+        PENDING_INTERFACE.fetch_sub(1, Ordering::Release);
+    }
+    let work = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RemovalWork {
+        // SAFETY: plain C struct initialised immediately below.
+        item: unsafe { core::mem::zeroed() },
+        handles,
+    }));
+    PENDING_INTERFACE.fetch_add(1, Ordering::AcqRel);
+    // SAFETY: `work` stays allocated until `deliver_removal` frees it.
+    unsafe {
+        (*work).item.WorkerRoutine = Some(deliver_removal);
+        (*work).item.Parameter = work.cast();
+        crate::ex::work::ExQueueWorkItem(&raw mut (*work).item, nk_ntabi::ex::DELAYED_WORK_QUEUE);
+    }
+}
+
 /// The interface `link` of `class` was enabled or disabled: queue delivery to
 /// every registration for the class on an executive worker thread, avoiding
 /// lock inversions when callers hold device or PnP locks while toggling

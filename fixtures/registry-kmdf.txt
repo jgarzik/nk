@@ -25,3 +25,7 @@ value Service sz Wdf01000
 
 key ControlSet001\Control\Wdf\Kmdf\Ucx\Versions\1\1
 value Service sz ucx01000
+
+# Well-known WNF state subscribed by sleepstudyhelper.sys (WNF_PO_*).
+key ControlSet001\Control\Notifications
+value 41C6013DA3BC0875 binary hex:0100000000000000

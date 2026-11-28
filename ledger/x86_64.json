@@ -5,10 +5,10 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 1176,
-  "implemented": 782,
-  "partial": 92,
+  "implemented": 809,
+  "partial": 94,
   "traps": 118,
-  "missing": 44,
+  "missing": 15,
   "library": 140
  },
  "looked_up_absent": {
@@ -14898,7 +14898,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "wcsncpy_s",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -14923,7 +14923,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoEnumerateDeviceObjectList",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15033,7 +15033,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KeQueryDpcWatchdogInformation",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15118,12 +15118,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "VslCreateSecureSection",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "VslDeleteSecureSection",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15238,12 +15238,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PcwCloseInstance",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "PcwCreateInstance",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15258,12 +15258,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlCaptureContext",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeCapturePersistentThreadState",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15288,7 +15288,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "NtBuildNumber",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15383,7 +15383,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwQueryWnfStateNameInformation",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15418,7 +15418,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PcwUnregister",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15612,7 +15612,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoCsqRemoveIrp",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15926,7 +15926,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoSetSystemWakeDevice",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -15981,7 +15981,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "SeTokenIsAdmin",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16056,7 +16056,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlIsNtDdiVersionAvailable",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16291,12 +16291,12 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlCaptureContext",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
      "name": "KeCapturePersistentThreadState",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16321,7 +16321,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "NtBuildNumber",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16381,7 +16381,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "wcscat_s",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16461,7 +16461,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "ZwQueryWnfStateNameInformation",
-     "state": "missing"
+     "state": "partial"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16820,7 +16820,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetLowerDeviceObject",
-     "state": "missing"
+     "state": "implemented"
     }
    ]
   },
@@ -17068,7 +17068,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "MmBadPointer",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17083,7 +17083,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoGetRequestorSessionId",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17113,7 +17113,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "SeQuerySessionIdToken",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17123,7 +17123,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PsGetProcessImageFileName",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17168,7 +17168,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlGetActiveConsoleId",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17218,7 +17218,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "KseQueryDeviceFlags",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17248,7 +17248,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoIncrementKeepAliveCount",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17263,7 +17263,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "IoDecrementKeepAliveCount",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -17881,7 +17881,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "DbgBreakPointWithStatus",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18235,7 +18235,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlVerifyVersionInfo",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -18350,7 +18350,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "VerSetConditionMask",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -21956,10 +21956,10 @@
   "binaries": 60,
   "kernel_names": {
    "total": 1740,
-   "implemented": 781,
-   "partial": 92,
+   "implemented": 808,
+   "partial": 94,
    "traps": 116,
-   "missing": 751
+   "missing": 722
   },
   "by_binary": [
    {
@@ -21984,10 +21984,10 @@
     "version": "10.0.19041.1766",
     "kernel": {
      "total": 251,
-     "implemented": 191,
+     "implemented": 192,
      "partial": 10,
      "traps": 7,
-     "missing": 43
+     "missing": 42
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22085,10 +22085,10 @@
     "version": "10.0.19041.1110",
     "kernel": {
      "total": 85,
-     "implemented": 56,
+     "implemented": 57,
      "partial": 3,
      "traps": 3,
-     "missing": 23
+     "missing": 22
     },
     "by_ordinal": 2,
     "other_modules": {}
@@ -22113,10 +22113,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 486,
-     "implemented": 307,
+     "implemented": 313,
      "partial": 25,
      "traps": 28,
-     "missing": 126
+     "missing": 120
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -22148,10 +22148,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 325,
-     "implemented": 187,
+     "implemented": 190,
      "partial": 25,
      "traps": 10,
-     "missing": 103
+     "missing": 100
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22161,10 +22161,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 78,
-     "implemented": 63,
+     "implemented": 64,
      "partial": 4,
      "traps": 2,
-     "missing": 9
+     "missing": 8
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22178,10 +22178,10 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 107,
-     "implemented": 87,
+     "implemented": 95,
      "partial": 12,
      "traps": 0,
-     "missing": 8
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22226,10 +22226,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 91,
-     "implemented": 80,
+     "implemented": 82,
      "partial": 3,
      "traps": 0,
-     "missing": 8
+     "missing": 6
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22257,10 +22257,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 60,
+     "implemented": 62,
      "partial": 4,
      "traps": 0,
-     "missing": 2
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22273,10 +22273,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 66,
-     "implemented": 63,
+     "implemented": 64,
      "partial": 2,
      "traps": 0,
-     "missing": 1
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22385,10 +22385,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 270,
+     "implemented": 273,
      "partial": 23,
      "traps": 8,
-     "missing": 58
+     "missing": 55
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22401,10 +22401,10 @@
     "version": "10.0.19041.1682",
     "kernel": {
      "total": 235,
-     "implemented": 178,
+     "implemented": 180,
      "partial": 11,
      "traps": 8,
-     "missing": 38
+     "missing": 36
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22431,10 +22431,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 320,
+     "implemented": 324,
      "partial": 46,
      "traps": 29,
-     "missing": 230
+     "missing": 226
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22608,10 +22608,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 329,
-     "implemented": 240,
+     "implemented": 246,
      "partial": 15,
      "traps": 9,
-     "missing": 65
+     "missing": 59
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22644,10 +22644,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 54,
-     "implemented": 50,
+     "implemented": 51,
      "partial": 3,
      "traps": 0,
-     "missing": 1
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22661,10 +22661,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 29,
-     "implemented": 27,
+     "implemented": 28,
      "partial": 1,
      "traps": 0,
-     "missing": 1
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22674,10 +22674,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 91,
-     "partial": 9,
+     "implemented": 97,
+     "partial": 11,
      "traps": 7,
-     "missing": 8
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22693,10 +22693,10 @@
     "version": "10.0.19041.1806",
     "kernel": {
      "total": 121,
-     "implemented": 92,
-     "partial": 11,
+     "implemented": 102,
+     "partial": 13,
      "traps": 6,
-     "missing": 12
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22738,10 +22738,10 @@
     "version": "10.0.19041.868",
     "kernel": {
      "total": 89,
-     "implemented": 73,
-     "partial": 1,
+     "implemented": 76,
+     "partial": 2,
      "traps": 6,
-     "missing": 9
+     "missing": 5
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22816,10 +22816,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 451,
-     "implemented": 214,
+     "implemented": 217,
      "partial": 19,
      "traps": 33,
-     "missing": 185
+     "missing": 182
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22836,10 +22836,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 439,
-     "implemented": 212,
-     "partial": 16,
+     "implemented": 216,
+     "partial": 17,
      "traps": 32,
-     "missing": 179
+     "missing": 174
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22884,7 +22884,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 999,
+   "exported_by_nk": 1028,
    "nk_names_it_lacks": [
     "ExAllocateTimerInternal2",
     "KeRemoveQueueApc",

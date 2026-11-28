@@ -318,6 +318,11 @@ pub extern "C" fn PoSetSystemWake(request: *mut IRP) {
     with_wait_wake(request, |mark| *mark = true);
 }
 
+/// [`PoSetSystemWakeDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-posetsystemwakedevice):
+/// record that `device` contributed to waking the system. NK remains in S0
+/// continuously, so no wake source tracking is needed.
+pub extern "C" fn PoSetSystemWakeDevice(_device: *mut DEVICE_OBJECT) {}
+
 /// [`PoGetSystemWake`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pogetsystemwake):
 /// whether a wait-wake request has been marked as one that woke the
 /// system. `FALSE` for any other request.

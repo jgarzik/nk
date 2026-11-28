@@ -5,7 +5,12 @@ use crate::rtl;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
+    export!(Implemented, rtl::RtlGetActiveConsoleId),
+    export!(Implemented, rtl::RtlIsNtDdiVersionAvailable),
     export!(Implemented, rtl::RtlIsStateSeparationEnabled),
+    export!(Implemented, rtl::RtlVerifyVersionInfo),
+    export!(Implemented, rtl::VerSetConditionMask),
+    export!(Implemented, crate::ke::unwind::RtlCaptureContext),
     export!(Implemented, crate::ke::unwind::RtlCaptureStackBackTrace),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, rtl::persist::RtlGetPersistedStateLocation),
@@ -140,6 +145,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::crt::rand),
     export!(Implemented, rtl::crt::strchr),
     export!(Implemented, rtl::crt::strncpy_s),
+    export!(Implemented, rtl::crt::wcscat_s),
+    export!(Implemented, rtl::crt::wcsncpy_s),
     export!(Implemented, rtl::crt::strnlen),
     export!(Implemented, rtl::crt::strstr),
     export!(Implemented, rtl::crt::strtok_s),

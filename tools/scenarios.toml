@@ -1342,3 +1342,18 @@ paths = ["kernel/", "lib/", "boot/", "fixtures/"]
 cmdline = "test=serial.load"
 registry = ["storage", "kmdf", "serial"]
 serial2 = true
+
+# Microsoft's inbox USB 3.0 (usbxhci.sys, ucx01000.sys, usbhub3.sys, usbd.sys)
+# and HID keyboard (hidusb.sys, hidclass.sys, hidparse.sys, kbdhid.sys,
+# kbdclass.sys) stack on QEMU qemu-xhci with host-driven QMP hotplug:
+# empty boot -> device_add usb-kbd -> seq1 keys -> device_del with in-flight
+# read -> reattach -> distinct seq2 keys.
+
+[x86_64-usb-kbd-hotplug]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=usb.boot"
+registry = ["storage", "crypto", "kmdf", "usb"]
+usb = "xhci"
+hotplug = true

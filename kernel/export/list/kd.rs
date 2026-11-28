@@ -5,6 +5,7 @@ use crate::kd::{debugger, variables};
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, debugger::DbgBreakPoint),
+    export!(Implemented, debugger::DbgBreakPointWithStatus),
     export!(Implemented, debugger::KdAcquireDebuggerLock),
     export!(Implemented, debugger::KdDeregisterPowerHandler),
     export!(Implemented, debugger::KdDisableDebugger),
@@ -31,4 +32,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         "Mm64BitPhysicalAddress",
         variables::Mm64BitPhysicalAddress
     ),
+    export_variable!(Implemented, "NtBuildNumber", variables::NtBuildNumber),
 ];

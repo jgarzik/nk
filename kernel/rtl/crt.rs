@@ -241,6 +241,100 @@ pub unsafe extern "C" fn strtok_s(
     }
 }
 
+/// [`wcsncpy_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strncpy-s-strncpy-s-l-wcsncpy-s-wcsncpy-s-l-mbsncpy-s-mbsncpy-s-l):
+/// bounded wide-string copy with NUL termination; supports `_TRUNCATE` (`usize::MAX`).
+///
+/// # Safety
+/// `destination` is null or writable for `size` `u16` units; `source` is null or
+/// readable up to its NUL or `count` units.
+pub unsafe extern "C" fn wcsncpy_s(
+    destination: *mut u16,
+    size: usize,
+    source: *const u16,
+    count: usize,
+) -> i32 {
+    const EINVAL: i32 = 22;
+    const ERANGE: i32 = 34;
+    const STRUNCATE: i32 = 80;
+    if destination.is_null() || size == 0 {
+        return EINVAL;
+    }
+    if source.is_null() {
+        // SAFETY: checked non-null and size > 0.
+        unsafe { destination.write(0) };
+        return if count == 0 { 0 } else { EINVAL };
+    }
+    let truncate = count == usize::MAX;
+    let limit = if truncate { size - 1 } else { count };
+    let mut i = 0usize;
+    // SAFETY: bounded by `size` and `source` NUL terminator.
+    unsafe {
+        while i < limit && i < size - 1 {
+            let c = source.add(i).read();
+            if c == 0 {
+                destination.add(i).write(0);
+                return 0;
+            }
+            destination.add(i).write(c);
+            i += 1;
+        }
+        if truncate {
+            destination.add(i).write(0);
+            let ended = source.add(i).read() == 0;
+            return if ended { 0 } else { STRUNCATE };
+        }
+        if i == limit {
+            destination.add(i).write(0);
+            return 0;
+        }
+        destination.write(0);
+    }
+    ERANGE
+}
+
+/// [`wcscat_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strcat-s-wcscat-s-mbscat-s):
+/// bounded wide-string concatenation with NUL termination.
+///
+/// # Safety
+/// `destination` is writable for `size` `u16` units and NUL-terminated; `source`
+/// is NUL-terminated.
+pub unsafe extern "C" fn wcscat_s(destination: *mut u16, size: usize, source: *const u16) -> i32 {
+    const EINVAL: i32 = 22;
+    const ERANGE: i32 = 34;
+    if destination.is_null() || size == 0 {
+        return EINVAL;
+    }
+    if source.is_null() {
+        // SAFETY: checked non-null and size > 0.
+        unsafe { destination.write(0) };
+        return EINVAL;
+    }
+    // SAFETY: scans within `size` and `source` NUL terminator.
+    unsafe {
+        let mut dst_len = 0usize;
+        while dst_len < size && destination.add(dst_len).read() != 0 {
+            dst_len += 1;
+        }
+        if dst_len == size {
+            destination.write(0);
+            return EINVAL;
+        }
+        let mut i = 0usize;
+        loop {
+            let c = source.add(i).read();
+            if dst_len + i >= size {
+                destination.write(0);
+                return ERANGE;
+            }
+            destination.add(dst_len + i).write(c);
+            if c == 0 {
+                return 0;
+            }
+            i += 1;
+        }
+    }
+}
+
 /// [`wcscmp`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strcmp-wcscmp-mbscmp):
 /// compare two wide strings.
 ///

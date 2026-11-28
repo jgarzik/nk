@@ -163,6 +163,50 @@ pub unsafe extern "C" fn IoGetInitiatorProcess(_file_object: *mut FILE_OBJECT) -
     core::ptr::null_mut()
 }
 
+/// [`IoGetRequestorSessionId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetrequestorsessionid):
+/// session id of the process that originated `irp`. On Windows, when
+/// `IoGetRequestorProcess(irp)` is null this writes `u32::MAX` (`-1`) and
+/// returns `STATUS_UNSUCCESSFUL`; when the process has no session
+/// (`EPROCESS.Session == NULL`, as for the System process on Windows and NK)
+/// `MmGetSessionIdEx` writes `u32::MAX` (`-1`) and returns `STATUS_SUCCESS`.
+///
+/// # Safety
+/// `irp` is a live IRP; `session_id` is writable.
+pub unsafe extern "C" fn IoGetRequestorSessionId(irp: *mut IRP, session_id: *mut u32) -> NTSTATUS {
+    if irp.is_null() || session_id.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract.
+    let process = unsafe { irp::IoGetRequestorProcess(irp) };
+    // SAFETY: checked non-null; per the contract.
+    unsafe { session_id.write_unaligned(u32::MAX) };
+    if process.is_null() {
+        STATUS_UNSUCCESSFUL
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// [`IoIncrementKeepAliveCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-ioincrementkeepalivecount):
+/// keep a packaged/app process awake while I/O is in flight. NK runs no
+/// packaged processes, so this succeeds without modifying process state
+/// (as on Windows for system and desktop processes).
+pub extern "C" fn IoIncrementKeepAliveCount(
+    _file_object: *mut FILE_OBJECT,
+    _process: *mut c_void,
+) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// [`IoDecrementKeepAliveCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iodecrementkeepalivecount):
+/// counterpart of [`IoIncrementKeepAliveCount`].
+pub extern "C" fn IoDecrementKeepAliveCount(
+    _file_object: *mut FILE_OBJECT,
+    _process: *mut c_void,
+) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
 /// [`IoIs32bitProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iois32bitprocess):
 /// whether the request comes from a 32-bit process, whose structures
 /// a driver must then read as 32-bit ones. Windows answers by the

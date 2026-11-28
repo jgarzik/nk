@@ -36,6 +36,9 @@ pub enum State {
     Stacked,
     /// Started.
     Started,
+    /// Surprise-removed (`IRP_MN_SURPRISE_REMOVAL` delivered); awaiting
+    /// closure of open file handles in its subtree before `IRP_MN_REMOVE_DEVICE`.
+    SurpriseRemoved,
     /// Not started, and not to be tried again: `problem` says why.
     Failed,
 }

@@ -21,6 +21,10 @@ pub const ALIGN: usize = 16;
 const HEADER: usize = 16;
 const GUARD: usize = 8;
 const GUARD_BYTE: u8 = 0xC5;
+/// Small allocations stay within a single 4 KiB page, matching Windows'
+/// executive pool (which drivers such as KMDF rely on: a small block's
+/// payload is never page-aligned, nor is `payload + 16`).
+const PAGE_SIZE: usize = 4096;
 /// Top bit of the `req` header field: the block is allocated.
 const USED: u32 = 1 << 31;
 
@@ -130,6 +134,7 @@ impl<'a> Arena<'a> {
             return None;
         }
         let need = (HEADER + size + GUARD).next_multiple_of(ALIGN);
+        let stay_in_page = need <= PAGE_SIZE;
         let mut off = 0;
         while off + HEADER <= self.mem.len() {
             let b = self.get(off);
@@ -138,39 +143,64 @@ impl<'a> Arena<'a> {
             }
             let total = b.units as usize * ALIGN;
             if b.req & USED == 0 && total >= need {
-                // Split unless the remainder could not hold a block.
-                let take = if total - need >= HEADER + GUARD {
-                    need
+                let skip = if stay_in_page {
+                    let page_rem = PAGE_SIZE - (off & (PAGE_SIZE - 1));
+                    if need <= page_rem { 0 } else { page_rem }
                 } else {
-                    total
+                    0
                 };
-                if take < total {
-                    let rest = Block {
-                        units: ((total - take) / ALIGN) as u32,
-                        prev_units: (take / ALIGN) as u32,
-                        tag: 0,
-                        req: 0,
-                    };
-                    self.put(off + take, &rest);
-                    if off + total < self.mem.len() {
-                        let mut next = self.get(off + total);
-                        next.prev_units = rest.units;
-                        self.put(off + total, &next);
+                if total >= skip + need {
+                    let mut prev_units = b.prev_units;
+                    if skip > 0 {
+                        let prefix = Block {
+                            units: (skip / ALIGN) as u32,
+                            prev_units,
+                            tag: 0,
+                            req: 0,
+                        };
+                        self.put(off, &prefix);
+                        prev_units = prefix.units;
+                        off += skip;
                     }
+                    let rem = total - skip;
+                    // Split unless the remainder could not hold a block.
+                    let take = if rem - need >= HEADER + GUARD {
+                        need
+                    } else {
+                        rem
+                    };
+                    if take < rem {
+                        let rest = Block {
+                            units: ((rem - take) / ALIGN) as u32,
+                            prev_units: (take / ALIGN) as u32,
+                            tag: 0,
+                            req: 0,
+                        };
+                        self.put(off + take, &rest);
+                        if off + rem < self.mem.len() {
+                            let mut next = self.get(off + rem);
+                            next.prev_units = rest.units;
+                            self.put(off + rem, &next);
+                        }
+                    } else if skip > 0 && off + rem < self.mem.len() {
+                        let mut next = self.get(off + rem);
+                        next.prev_units = (take / ALIGN) as u32;
+                        self.put(off + rem, &next);
+                    }
+                    self.put(
+                        off,
+                        &Block {
+                            units: (take / ALIGN) as u32,
+                            prev_units,
+                            tag,
+                            req: size as u32 | USED,
+                        },
+                    );
+                    self.mem[off + HEADER + size..off + take].fill(GUARD_BYTE);
+                    self.usage.blocks += 1;
+                    self.usage.bytes += size;
+                    return Some(off + HEADER);
                 }
-                self.put(
-                    off,
-                    &Block {
-                        units: (take / ALIGN) as u32,
-                        prev_units: b.prev_units,
-                        tag,
-                        req: size as u32 | USED,
-                    },
-                );
-                self.mem[off + HEADER + size..off + take].fill(GUARD_BYTE);
-                self.usage.blocks += 1;
-                self.usage.bytes += size;
-                return Some(off + HEADER);
             }
             off += total;
         }
@@ -571,5 +601,47 @@ mod tests {
         }
         assert_eq!(a.usage(), Usage::default());
         assert!(a.alloc(16 * 1024 - HEADER - GUARD, 0).is_some());
+    }
+
+    /// Windows small-pool invariant: allocations smaller than a page never
+    /// cross a 4 KiB page boundary and never land at a page-aligned offset or
+    /// 16 bytes before a page boundary (which KMDF `FxPoolFree` relies on).
+    #[test]
+    fn small_allocations_stay_within_one_page() {
+        const PAGE: usize = 4096;
+        let mut mem = vec![0u8; 4 * PAGE];
+        let mut a = Arena::new(&mut mem);
+        let mut live = Vec::new();
+        // Fill near the end of page 0 so the next small allocation would cross
+        // the 0x1000 page boundary (or land at 0xFF0 where ptr + 0x10 == 0x1000).
+        for size in [
+            4000usize, 32, 48, 64, 16, 24, 100, 3900, 128, 4031, 16, 16, 16,
+        ] {
+            let p = a.alloc(size, TAG).expect("allocation fits in 4-page arena");
+            assert_ne!(
+                p & (PAGE - 1),
+                0,
+                "small block {p:#x} must not be page-aligned"
+            );
+            assert!(
+                (p & (PAGE - 1)) + size <= PAGE,
+                "small block {p:#x}..{:#x} crossed a 4 KiB page boundary",
+                p + size
+            );
+            if size >= 16 {
+                assert_ne!(
+                    (p + 16) & (PAGE - 1),
+                    0,
+                    "small block {p:#x} + 0x10 must not be page-aligned (KMDF FxPoolFree)"
+                );
+            }
+            live.push(p);
+        }
+        assert_eq!(a.walk(|_, _| {}), Ok(()));
+        for p in live {
+            assert!(a.free(p).is_ok());
+        }
+        assert_eq!(a.usage(), Usage::default());
+        assert_eq!(a.walk(|_, _| {}), Ok(()));
     }
 }

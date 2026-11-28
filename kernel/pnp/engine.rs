@@ -29,7 +29,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use nk_ntabi::io::*;
 use nk_ntabi::ke::{KEVENT, KMUTANT};
 use nk_ntabi::pnp::*;
@@ -65,6 +65,19 @@ static ENGINE: Engine = Engine {
 /// Set once every boot-start driver has had its turn: from then on a
 /// device's driver is loaded when the device needs it.
 static BOOT_DRIVERS_LOADED: AtomicBool = AtomicBool::new(false);
+
+/// Number of device nodes in `State::SurpriseRemoved` waiting for open handles
+/// to close before `IRP_MN_REMOVE_DEVICE` can be delivered.
+static SURPRISE_PENDING: AtomicUsize = AtomicUsize::new(0);
+
+/// Called by `io::device::dereference` when a device's `ReferenceCount` drops
+/// to zero: if any surprise-removed device is awaiting final removal, wake the
+/// PnP engine thread to complete it. Callable at `<= DISPATCH_LEVEL`.
+pub fn device_unreferenced() {
+    if SURPRISE_PENDING.load(Ordering::Acquire) != 0 {
+        request(Action::Look);
+    }
+}
 
 /// What a driver asked for, to be done by a worker thread.
 enum Action {
@@ -309,6 +322,7 @@ fn advance(pdo: usize) -> bool {
             enumerate(pdo);
             true
         }
+        State::SurpriseRemoved => finish_remove_subtree(pdo),
         State::Started | State::Failed => false,
     }
 }
@@ -1182,25 +1196,62 @@ fn enumerate(pdo: usize) {
     }
 }
 
-/// Take the device `pdo` and everything below it out of the tree,
-/// children first: its drivers are told it is removed (after being
-/// told it is gone without warning, if `surprise`), what it was given
-/// is taken back, and the tree's reference to it is dropped.
-pub fn remove(pdo: usize, surprise: bool) {
+/// Phase 1 of surprise removal: recursively disable interfaces and deliver
+/// `IRP_MN_SURPRISE_REMOVAL` bottom-up (children before parents), moving each
+/// node to `State::SurpriseRemoved`. Already surprise-removed nodes are left
+/// untouched so a repeat bus enumeration never delivers `IRP_MN_SURPRISE_REMOVAL`
+/// twice.
+fn surprise_remove_subtree(pdo: usize) {
     let Some(found) = node::get(pdo) else {
         return;
     };
     for child in &found.children {
-        remove(*child, surprise);
+        surprise_remove_subtree(*child);
+    }
+    if found.state == State::SurpriseRemoved {
+        return;
     }
     let device = pdo as *mut DEVICE_OBJECT;
+    super::interface::device_stopped(pdo, true);
+    super::depend::forget(pdo);
+    if found.state == State::Started {
+        // SAFETY: the tree's device; the engine's mutex is held, at
+        // `PASSIVE_LEVEL`.
+        unsafe { query::pnp(device, IRP_MN_SURPRISE_REMOVAL, [0; 4]) };
+    }
+    node::with(pdo, |node| node.state = State::SurpriseRemoved);
+    SURPRISE_PENDING.fetch_add(1, Ordering::AcqRel);
+}
+
+/// Phase 2 of removal: recursively deliver `IRP_MN_REMOVE_DEVICE` bottom-up
+/// for any node whose children have all been removed and whose device stack
+/// has no open references (`ReferenceCount == 0`). Returns `true` if `pdo`
+/// (or any descendant) was finally removed.
+fn finish_remove_subtree(pdo: usize) -> bool {
+    let Some(found) = node::get(pdo) else {
+        return false;
+    };
+    let mut progress = false;
+    for child in &found.children {
+        progress |= finish_remove_subtree(*child);
+    }
+    let Some(found) = node::get(pdo) else {
+        return progress;
+    };
+    if !found.children.is_empty() {
+        return progress;
+    }
+    let device = pdo as *mut DEVICE_OBJECT;
+    // SAFETY: the tree holds a pointer reference to `device`.
+    if found.state == State::SurpriseRemoved && unsafe { device::stack_has_references(device) } {
+        return progress;
+    }
     // SAFETY: the tree's device; the engine's mutex is held, at
     // `PASSIVE_LEVEL`. The reference dropped last is the tree's.
     unsafe {
-        super::interface::device_stopped(pdo, true);
-        super::depend::forget(pdo);
-        if found.state == State::Started && surprise {
-            query::pnp(device, IRP_MN_SURPRISE_REMOVAL, [0; 4]);
+        if found.state != State::SurpriseRemoved {
+            super::interface::device_stopped(pdo, true);
+            super::depend::forget(pdo);
         }
         // Whatever is on the stack hears of it, be that only the bus
         // driver, which deletes a device its bus no longer has. A
@@ -1208,6 +1259,7 @@ pub fn remove(pdo: usize, surprise: bool) {
         if !found.reported {
             query::pnp(device, IRP_MN_REMOVE_DEVICE, [0; 4]);
         }
+        super::notify::device_removed(pdo);
         // What its drivers left with the power framework goes, as
         // Windows' `IopRemoveDevice` sees to.
         crate::po::fx::abandon_device(device);
@@ -1218,9 +1270,25 @@ pub fn remove(pdo: usize, surprise: bool) {
         registry::clear_allocation(&found.instance);
         (&raw mut (*(*device).DeviceObjectExtension).DeviceNode).write(core::ptr::null_mut());
         node::remove(pdo);
+        if found.state == State::SurpriseRemoved {
+            SURPRISE_PENDING.fetch_sub(1, Ordering::AcqRel);
+        }
         kprintln!("pnp: {}: removed", found.instance);
         object::dereference(device.cast());
     }
+    true
+}
+
+/// Take the device `pdo` and everything below it out of the tree,
+/// children first: for `surprise` removal, deliver `IRP_MN_SURPRISE_REMOVAL`
+/// bottom-up across the subtree first and defer `IRP_MN_REMOVE_DEVICE` for
+/// any node whose stack still has open file handles until the last handle
+/// closes (matching Windows PnP).
+pub fn remove(pdo: usize, surprise: bool) {
+    if surprise {
+        surprise_remove_subtree(pdo);
+    }
+    finish_remove_subtree(pdo);
 }
 
 /// [`remove`], for a caller that does not hold the engine's mutex.

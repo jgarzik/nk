@@ -1,0 +1,217 @@
+# Registry content for Microsoft's inbox USB 3.0 (xHCI + UCX + Hub3) and
+# HID keyboard (HidUsb + HidClass + HidParse + kbdhid + kbdclass) stack,
+# captured from Windows 10 22H2 build 10.0.19045.2006.
+#
+# Use alongside registry-storage.txt, registry-crypto.txt (ksecdd for
+# usbhub3's BCrypt imports), and registry-kmdf.txt (Wdf01000 + Control\Wdf).
+
+key ControlSet001\Services\Ucx01000
+value BootFlags dword 16
+value DisplayName sz "USB Host Support Library"
+value ErrorControl dword 1
+value Group sz "Boot Bus Extender"
+value ImagePath expand_sz system32\drivers\ucx01000.sys
+value Start dword 3
+value Type dword 1
+key ControlSet001\Services\Ucx01000\Parameters
+value WppRecorder_TraceGuid sz {6fb6e467-9ed4-4b73-8c22-70b97e22c7d9}
+key ControlSet001\Services\Ucx01000\Parameters\Wdf
+value WdfMajorVersion dword 1
+value WdfMinorVersion dword 15
+
+key ControlSet001\Services\USBXHCI
+value BootFlags dword 16
+value DependOnService multi_sz Ucx01000
+value DisplayName sz "@usbxhci.inf,%PCI\\CC_0C0330.DeviceDesc%;USB xHCI Compliant Host Controller"
+value ErrorControl dword 1
+value ImagePath expand_sz \SystemRoot\System32\drivers\USBXHCI.SYS
+value Owners multi_sz usbxhci.inf
+value Start dword 3
+value Type dword 1
+key ControlSet001\Services\USBXHCI\Parameters
+value DmaRemappingCompatible dword 2
+value WppRecorder_TraceGuid sz {9f7711dd-29ad-c1ee-1b1b-b52a0118a54c}
+key ControlSet001\Services\USBXHCI\Parameters\Wdf
+value WdfMajorVersion dword 1
+value WdfMinorVersion dword 23
+
+key ControlSet001\Services\USBHUB3
+value BootFlags dword 16
+value DisplayName sz "@usbhub3.inf,%UsbHub3.SVCDESC%;SuperSpeed Hub"
+value ErrorControl dword 1
+value Group sz Base
+value ImagePath expand_sz \SystemRoot\System32\drivers\UsbHub3.sys
+value Owners multi_sz usbhub3.inf
+value Start dword 3
+value Tag dword 21
+value Type dword 1
+key ControlSet001\Services\USBHUB3\Parameters
+value LogPages dword 3
+value WppRecorder_TraceGuid sz {6e6cc2c5-8110-490e-9905-9f2ed700e455}
+key ControlSet001\Services\USBHUB3\Parameters\Wdf
+value LogPages dword 3
+value WdfMajorVersion dword 1
+value WdfMinorVersion dword 15
+
+key ControlSet001\Services\HidUsb
+value DisplayName sz "@input.inf,%HID.SvcDesc%;Microsoft HID Class Driver"
+value ErrorControl dword 0
+value Group sz "extended base"
+value ImagePath expand_sz \SystemRoot\System32\drivers\hidusb.sys
+value Owners multi_sz input.inf
+value Start dword 3
+value Tag dword 37
+value Type dword 1
+
+key ControlSet001\Services\kbdhid
+value DisplayName sz "@keyboard.inf,%KBDHID.SvcDesc%;Keyboard HID Driver"
+value ErrorControl dword 0
+value ImagePath expand_sz \SystemRoot\System32\drivers\kbdhid.sys
+value Owners multi_sz keyboard.inf hidirkbd.inf
+value Start dword 3
+value Type dword 1
+key ControlSet001\Services\kbdhid\Parameters
+value WorkNicely dword 0
+value WppRecorder_TraceGuid sz {b41b0a56-4483-48ef-a772-0b007cbea8c6}
+
+key ControlSet001\Services\kbdclass
+value DisplayName sz "@keyboard.inf,%kbdclass.SvcDesc%;Keyboard Class Driver"
+value ErrorControl dword 1
+value ImagePath expand_sz \SystemRoot\System32\drivers\kbdclass.sys
+value Owners multi_sz whyperkbd.inf termkbd.inf keyboard.inf hidirkbd.inf
+value Start dword 3
+value Type dword 1
+key ControlSet001\Services\kbdclass\Parameters
+value ConnectMultiplePorts dword 0
+value KeyboardDataQueueSize dword 100
+value KeyboardDeviceBaseName sz KeyboardClass
+value MaximumPortsServiced dword 3
+value SendOutputToAllPorts dword 1
+value WppRecorder_TraceGuid sz {09281f1f-f66e-485a-99a2-91638f782c49}
+
+# Setup Classes: USB, HIDClass, Keyboard (with UpperFilters = kbdclass)
+
+key ControlSet001\Control\Class\{36fc9e60-c465-11cf-8056-444553540000}
+value Class sz USB
+value ClassDesc sz "@%SystemRoot%\\System32\\SysClass.Dll,-3025"
+value LowerLogoVersion sz 5.2
+value NoInstallClass sz 1
+
+key ControlSet001\Control\Class\{745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+value Class sz HIDClass
+value ClassDesc sz "@%SystemRoot%\\System32\\hid.dll,-101"
+value NoInstallClass sz 1
+
+key ControlSet001\Control\Class\{4d36e96b-e325-11ce-bfc1-08002be10318}
+value Class sz Keyboard
+value ClassDesc sz "@%SystemRoot%\\System32\\SysClass.Dll,-3002"
+value NoInstallClass sz 1
+value UpperFilters multi_sz kbdclass
+
+# DriverDatabase: usbxhci.inf (PCI\CC_0C0330)
+
+key DriverDatabase\DeviceIds\PCI\CC_0C0330
+value usbxhci.inf binary hex:01800000
+key DriverDatabase\DriverInfFiles\usbxhci.inf
+value "" multi_sz usbxhci.inf_amd64_29c908efbcabb358
+value Active sz usbxhci.inf_amd64_29c908efbcabb358
+value Configurations multi_sz Generic.Install.NT Generic_NoDebug.Install.NT
+key DriverDatabase\DriverPackages\usbxhci.inf_amd64_29c908efbcabb358
+value "" sz usbxhci.inf
+value Provider sz Microsoft
+value SignerScore dword 218103811
+value StatusFlags dword 274
+value Version binary hex:ffff090000000000609efc3665c4cf1180564445535400000080f82fdd81d8010e07614a00000a000000000000000000
+key DriverDatabase\DriverPackages\usbxhci.inf_amd64_29c908efbcabb358\Descriptors\PCI\CC_0C0330
+value Configuration sz Generic.Install.NT
+value Description sz %pci\cc_0c0330.devicedesc%
+value Manufacturer sz %generic.mfg%
+key DriverDatabase\DriverPackages\usbxhci.inf_amd64_29c908efbcabb358\Configurations\Generic.Install.NT
+value ConfigFlags dword 0
+value ConfigScope dword 263
+value Service sz USBXHCI
+key DriverDatabase\DriverPackages\usbxhci.inf_amd64_29c908efbcabb358\Configurations\Generic.Install.NT\Device
+key "DriverDatabase\\DriverPackages\\usbxhci.inf_amd64_29c908efbcabb358\\Configurations\\Generic.Install.NT\\Device\\Interrupt Management"
+key "DriverDatabase\\DriverPackages\\usbxhci.inf_amd64_29c908efbcabb358\\Configurations\\Generic.Install.NT\\Device\\Interrupt Management\\MessageSignaledInterruptProperties"
+value MSISupported dword 1
+
+# DriverDatabase: usbhub3.inf (USB\ROOT_HUB30)
+
+key DriverDatabase\DeviceIds\USB\ROOT_HUB30
+value usbhub3.inf binary hex:01800000
+key DriverDatabase\DriverInfFiles\usbhub3.inf
+value "" multi_sz usbhub3.inf_amd64_6a68abcc31aaa333
+value Active sz usbhub3.inf_amd64_6a68abcc31aaa333
+value Configurations multi_sz Generic.Install.NT
+key DriverDatabase\DriverPackages\usbhub3.inf_amd64_6a68abcc31aaa333
+value "" sz usbhub3.inf
+value Provider sz Microsoft
+value SignerScore dword 218103811
+value StatusFlags dword 22
+value Version binary hex:ffff090000000000609efc3665c4cf1180564445535400000080b2254499d701b204614a00000a000000000000000000
+key DriverDatabase\DriverPackages\usbhub3.inf_amd64_6a68abcc31aaa333\Descriptors\USB\ROOT_HUB30
+value Configuration sz Generic.Install.NT
+value Description sz %usbhub3.roothubdevicedesc%
+value Manufacturer sz %generic.mfg%
+key DriverDatabase\DriverPackages\usbhub3.inf_amd64_6a68abcc31aaa333\Configurations\Generic.Install.NT
+value ConfigFlags dword 0
+value ConfigScope dword 5
+value Service sz USBHUB3
+
+# DriverDatabase: input.inf (USB\Class_03&SubClass_01 and USB\Class_03 -> HidUsb)
+
+key DriverDatabase\DeviceIds\USB\Class_03&SubClass_01
+value input.inf binary hex:02ff0100
+key DriverDatabase\DeviceIds\USB\Class_03
+value input.inf binary hex:02ff0200
+key DriverDatabase\DriverInfFiles\input.inf
+value "" multi_sz input.inf_amd64_adeb6424513f60a2
+value Active sz input.inf_amd64_adeb6424513f60a2
+value Configurations multi_sz HID_Inst.NT HID_SelSus_Inst.NT HID_Raw_Inst.NT
+key DriverDatabase\DriverPackages\input.inf_amd64_adeb6424513f60a2
+value "" sz input.inf
+value Provider sz Microsoft
+value SignerScore dword 218103811
+value StatusFlags dword 18
+value Version binary hex:ffff090000000000a0175a74d374d011b6fe00a0c90f57da00808ca3c594c6016403614a00000a000000000000000000
+key DriverDatabase\DriverPackages\input.inf_amd64_adeb6424513f60a2\Descriptors\USB\Class_03&SubClass_01
+value Configuration sz HID_Inst.NT
+value Description sz %hid.devicedesc%
+value Manufacturer sz %stdmfg%
+key DriverDatabase\DriverPackages\input.inf_amd64_adeb6424513f60a2\Descriptors\USB\Class_03
+value Configuration sz HID_Inst.NT
+value Description sz %hid.devicedesc%
+value Manufacturer sz %stdmfg%
+key DriverDatabase\DriverPackages\input.inf_amd64_adeb6424513f60a2\Configurations\HID_Inst.NT
+value ConfigFlags dword 0
+value ConfigScope dword 7
+value Service sz HidUsb
+key DriverDatabase\DriverPackages\input.inf_amd64_adeb6424513f60a2\Configurations\HID_Inst.NT\Device
+value AllowIdleIrpInD3 dword 1
+value DeviceResetNotificationEnabled dword 1
+value EnhancedPowerManagementEnabled dword 1
+value LegacyTouchScaling dword 0
+value WriteReportExSupported dword 1
+
+# DriverDatabase: keyboard.inf (HID_DEVICE_SYSTEM_KEYBOARD -> kbdhid)
+
+key DriverDatabase\DeviceIds\HID_DEVICE_SYSTEM_KEYBOARD
+value keyboard.inf binary hex:02ff0000
+key DriverDatabase\DriverInfFiles\keyboard.inf
+value "" multi_sz keyboard.inf_amd64_5938c699b80ebb8f
+value Active sz keyboard.inf_amd64_5938c699b80ebb8f
+value Configurations multi_sz HID_Keyboard_Inst.NT
+key DriverDatabase\DriverPackages\keyboard.inf_amd64_5938c699b80ebb8f
+value "" sz keyboard.inf
+value Provider sz Microsoft
+value SignerScore dword 218103811
+value StatusFlags dword 18
+value Version binary hex:ffff0900000000006be9364d25e3ce11bfc108002be1031800808ca3c594c6010100614a00000a000000000000000000
+key DriverDatabase\DriverPackages\keyboard.inf_amd64_5938c699b80ebb8f\Descriptors\HID_DEVICE_SYSTEM_KEYBOARD
+value Configuration sz HID_Keyboard_Inst.NT
+value Description sz %hid.keyboarddevice%
+value Manufacturer sz %std-keyboards%
+key DriverDatabase\DriverPackages\keyboard.inf_amd64_5938c699b80ebb8f\Configurations\HID_Keyboard_Inst.NT
+value ConfigFlags dword 0
+value ConfigScope dword 7
+value Service sz kbdhid

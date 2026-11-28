@@ -122,6 +122,12 @@ pub extern "C" fn DbgBreakPoint() {
     crate::arch::driver_breakpoint();
 }
 
+/// [`DbgBreakPointWithStatus`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-dbgbreakpointwithstatus):
+/// execute a breakpoint trap carrying a status code.
+pub extern "C" fn DbgBreakPointWithStatus(_status: u32) {
+    crate::arch::driver_breakpoint();
+}
+
 /// [`KdRefreshDebuggerNotPresent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kdrefreshdebuggernotpresent):
 /// refresh and return `KdDebuggerNotPresent`. NK speaks no Windows kernel
 /// debugger protocol, so this always returns true (`1`).

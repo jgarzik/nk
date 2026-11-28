@@ -181,8 +181,11 @@ pub unsafe extern "C" fn IoGetDeviceProperty(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe {
-        crate::io::device::check(device, "IoGetDeviceProperty");
         result_length.write_unaligned(0);
+        if device.is_null() {
+            return STATUS_INVALID_DEVICE_REQUEST;
+        }
+        crate::io::device::check(device, "IoGetDeviceProperty");
         let found = match node_of(device) {
             Ok(found) => found,
             Err(status) => return status,
@@ -229,8 +232,11 @@ pub unsafe extern "C" fn IoOpenDeviceRegistryKey(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe {
-        crate::io::device::check(device, "IoOpenDeviceRegistryKey");
         handle.write_unaligned(core::ptr::null_mut());
+        if device.is_null() {
+            return STATUS_INVALID_DEVICE_REQUEST;
+        }
+        crate::io::device::check(device, "IoOpenDeviceRegistryKey");
     }
     let found = match node_of(device) {
         Ok(found) => found,
@@ -389,6 +395,9 @@ pub unsafe extern "C" fn IoSetDevicePropertyData(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe {
+        if device.is_null() {
+            return STATUS_INVALID_DEVICE_REQUEST;
+        }
         crate::io::device::check(device, "IoSetDevicePropertyData");
         let found = match node_of(device) {
             Ok(found) => found,
@@ -444,7 +453,6 @@ pub unsafe extern "C" fn IoGetDevicePropertyData(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe {
-        crate::io::device::check(device, "IoGetDevicePropertyData");
         let report = |length: u32, found: u32| {
             if !required_size.is_null() {
                 required_size.write_unaligned(length);
@@ -453,6 +461,11 @@ pub unsafe extern "C" fn IoGetDevicePropertyData(
                 kind.write_unaligned(found);
             }
         };
+        if device.is_null() {
+            report(0, 0);
+            return STATUS_INVALID_DEVICE_REQUEST;
+        }
+        crate::io::device::check(device, "IoGetDevicePropertyData");
         report(0, DEVPROP_TYPE_EMPTY);
         let found = match node_of(device) {
             Ok(found) => found,

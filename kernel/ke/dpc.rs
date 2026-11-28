@@ -283,6 +283,31 @@ pub extern "C" fn KeFlushQueuedDpcs() {
     flush();
 }
 
+/// [`KeQueryDpcWatchdogInformation`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerydpcwatchdoginformation):
+/// report this processor's DPC watchdog limits and remaining ticks.
+///
+/// # Safety
+/// `info` is writable for 5 `u32` words (`KDPC_WATCHDOG_INFORMATION`).
+pub unsafe extern "C" fn KeQueryDpcWatchdogInformation(info: *mut [u32; 5]) -> NTSTATUS {
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let limit =
+        (TIME_LIMIT.load(Ordering::Relaxed) / TIME_INCREMENT).min(u64::from(u32::MAX)) as u32;
+    let running = arch::percpu().dpcs().running_since.load(Ordering::Relaxed);
+    let elapsed = if running != 0 {
+        (time::interrupt_time().saturating_sub(running) / TIME_INCREMENT).min(u64::from(limit))
+            as u32
+    } else {
+        0
+    };
+    let remaining = limit.saturating_sub(elapsed);
+    // DpcTimeLimit, DpcTimeCount, DpcWatchdogLimit, DpcWatchdogCount, Reserved
+    // SAFETY: checked non-null; per the contract.
+    unsafe { info.write_unaligned([limit, remaining, limit, remaining, 0]) };
+    STATUS_SUCCESS
+}
+
 /// [`KeSetTargetProcessorDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettargetprocessordpc):
 /// have the DPC run on processor `number` in group 0.
 ///

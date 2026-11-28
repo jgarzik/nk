@@ -411,6 +411,25 @@ fn synchronous_call() -> Result<u32, &'static str> {
                 if status != STATUS_SUCCESS || !came_back(request, &buffer) {
                     return Err("an IRP sent synchronously did not come back to its sender");
                 }
+                // Match Windows `IopfCompleteRequest`: after completion (and
+                // `STATUS_MORE_PROCESSING_REQUIRED`), the completing stack
+                // location preserves `MajorFunction` while clearing
+                // `MinorFunction`, `Flags`, `Parameters[0..3]`, `FileObject`,
+                // and `CompletionRoutine`.
+                let completed_loc = irp::next_location(request);
+                if (*completed_loc).MajorFunction != IRP_MJ_DEVICE_CONTROL
+                    || (*completed_loc).MinorFunction != 0
+                    || (*completed_loc).Flags != 0
+                    || (*completed_loc).Parameters[0] != 0
+                    || (*completed_loc).Parameters[1] != 0
+                    || (*completed_loc).Parameters[2] != 0
+                    || !(*completed_loc).FileObject.is_null()
+                    || (*completed_loc).CompletionRoutine.is_some()
+                {
+                    return Err(
+                        "IofCompleteRequest did not preserve MajorFunction / clear other fields",
+                    );
+                }
                 sent += 1;
                 // Used again: as new, but for the status given.
                 (*request).Cancel = 1;

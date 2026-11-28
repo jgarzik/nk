@@ -33,6 +33,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ps::silo::PsGetJobSilo),
     export!(Implemented, ps::silo::PsGetPermanentSiloContext),
     export!(Implemented, ps::process::PsGetProcessId),
+    export!(Implemented, ps::process::PsGetProcessImageFileName),
     export!(Implemented, ps::process::PsGetProcessSessionId),
     export!(Implemented, ps::silo::PsGetSiloMonitorContextSlot),
     export!(Implemented, ps::process::PsGetThreadProcessId),

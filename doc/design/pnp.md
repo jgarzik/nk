@@ -143,8 +143,13 @@ down (problem 43). A failed start has the stack told the device is
 removed, so that its drivers detach and delete what they attached, and
 what it was given is taken back (problem 10). Then the device is asked
 for its children; new ones get a node and `DO_BUS_ENUMERATED_DEVICE`,
-those no longer reported are told they are gone (surprise removal, then
-removal) with everything below them. That, the removal after a failed
+those no longer reported are told they are gone in two phases, matching
+Windows: `IRP_MN_SURPRISE_REMOVAL` is sent bottom-up across the
+disappeared subtree (disabling its interfaces and moving each node to
+`State::SurpriseRemoved`), and `IRP_MN_REMOVE_DEVICE` is deferred for
+any node whose device stack still holds open references
+(`ReferenceCount > 0`) until the last handle closes and the engine
+thread completes teardown. That, the removal after a failed
 start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
 
@@ -177,9 +182,11 @@ volume's new names) is copied and told, from a worker, to every
 registration for that device, each with its own file in the
 structure, and then the reporter's routine is called; the call answers
 `STATUS_PENDING`. One of the predefined removal events is refused as
-Windows refuses it. Notification registrations for hardware profile
-changes, and the removal events of a device, are never called: NK
-produces neither.
+Windows refuses it. When a device is finally removed, NK queues a
+`GUID_TARGET_DEVICE_REMOVE_COMPLETE` notification on an executive worker
+thread for every `EventCategoryTargetDeviceChange` registration targeting
+that physical device object. Notification registrations for hardware
+profile changes are never called: NK has one hardware profile.
 `IoInvalidateDeviceState` has a started device asked for its state
 again by the worker. Dependencies between devices
 (`IoReserveDependency`, `IoResolveDependency`, `IoSetDependency`;

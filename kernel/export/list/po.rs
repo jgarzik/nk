@@ -33,6 +33,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, po::request::PoRequestPowerIrp),
     export!(Implemented, po::request::PoSetPowerState),
     export!(Implemented, po::request::PoSetSystemWake),
+    export!(Implemented, po::request::PoSetSystemWakeDevice),
     export!(Implemented, po::setting::PoRegisterCoalescingCallback),
     export!(Partial, po::setting::PoRegisterPowerSettingCallback),
     export!(Implemented, po::setting::PoUnregisterCoalescingCallback),

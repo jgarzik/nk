@@ -31,8 +31,14 @@ that of the device it was attached to. Attaching goes to the top of the
 stack the target is in and looks at that device only: it is refused
 while the top is still initialising, is going away, or has a stack as
 deep as the pinned kernel allows (`MAXIMUM_ATTACH_STACK_SIZE`).
-`IoGetAttachedDeviceReference` and `IoGetDeviceAttachmentBaseRef` hand
-out the top and the bottom with a pointer reference.
+`IoGetAttachedDeviceReference`, `IoGetDeviceAttachmentBaseRef`,
+`IoGetLowerDeviceObject` and `IoEnumerateDeviceObjectList` hand out
+stack or driver devices with pointer references. When `IofCompleteRequest`
+unwinds a stack location, it clears `MinorFunction`, `Flags`, `Control`
+(keeping `SL_ERROR_RETURNED`), `Parameters[0..3]`, `FileObject`,
+`CompletionRoutine` and `Context`, while preserving `MajorFunction` as
+Windows' `IopfCompleteRequest` does (which drivers such as `kbdclass.sys`
+rely on when reusing an IRP after `STATUS_MORE_PROCESSING_REQUIRED`).
 
 A request for a device is a request for its stack: an open sends the
 create to the top of the stack the named device is in, in an IRP with a

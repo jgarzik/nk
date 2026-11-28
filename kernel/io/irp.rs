@@ -324,7 +324,21 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
             let status = (*irp).IoStatus.Status;
             let wanted = completion_routine_wanted(control, status, (*irp).Cancel != 0);
             let (routine, context) = ((*location).CompletionRoutine, (*location).Context);
-            core::ptr::write_bytes(location, 0, 1);
+            // Match Windows `IopfCompleteRequest`: clear MinorFunction, Flags,
+            // Control (except SL_ERROR_RETURNED = 0x02), Parameters[0..3],
+            // FileObject, CompletionRoutine, and Context, while preserving
+            // MajorFunction (drivers such as `kbdclass.sys` reuse the
+            // completing stack location's MajorFunction after returning
+            // STATUS_MORE_PROCESSING_REQUIRED).
+            (*location).MinorFunction = 0;
+            (*location).Flags = 0;
+            (*location).Control = control & 0x02;
+            (*location).Parameters[0] = 0;
+            (*location).Parameters[1] = 0;
+            (*location).Parameters[2] = 0;
+            (*location).FileObject = core::ptr::null_mut();
+            (*location).CompletionRoutine = None;
+            (*location).Context = core::ptr::null_mut();
             if let (true, Some(routine)) = (wanted, routine) {
                 // The routine is told the device of the location above.
                 let device = if (*irp).CurrentLocation == top {

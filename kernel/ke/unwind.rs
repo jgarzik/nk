@@ -246,3 +246,37 @@ pub unsafe extern "C" fn RtlCaptureStackBackTrace(
     }
     captured as u16
 }
+
+/// [`RtlCaptureContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlcapturecontext):
+/// capture the caller's register context into `context` (for telemetry and
+/// crash diagnostics).
+///
+/// # Safety
+/// `context` is writable for a `CONTEXT` structure.
+#[allow(non_snake_case)]
+#[inline(never)]
+pub unsafe extern "C" fn RtlCaptureContext(context: *mut core::ffi::c_void) {
+    if context.is_null() {
+        return;
+    }
+    let regs = unwind::capture();
+    // SAFETY: checked non-null; per the contract.
+    unsafe { unwind::fill_context(&regs, context) };
+}
+
+/// `KeCapturePersistentThreadState` (undocumented): crash-dump triage helper
+/// that serialises a minidump header for live kernel dump telemetry. NK writes
+/// no crash dumps, so this returns 0 bytes captured.
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub extern "C" fn KeCapturePersistentThreadState(
+    _context: *mut core::ffi::c_void,
+    _thread: *mut core::ffi::c_void,
+    _bugcheck_code: u32,
+    _param1: usize,
+    _param2: usize,
+    _param3: usize,
+    _param4: usize,
+    _virtual_address: *mut core::ffi::c_void,
+) -> u32 {
+    0
+}

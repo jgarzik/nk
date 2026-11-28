@@ -23,8 +23,11 @@ use nk_ntabi::status::*;
 /// 2 to start. Windows reads it once (`ExpPcwEnableState`).
 static STATE: AtomicU8 = AtomicU8::new(0);
 
-/// The routines of `pcw.sys`'s table, by place.
+/// The routines of `pcw.sys`'s table, by place (`PCW_EXTENSION_DISPATCH`).
 const REGISTER: usize = 0;
+const UNREGISTER: usize = 1;
+const CREATE_INSTANCE: usize = 2;
+const CLOSE_INSTANCE: usize = 3;
 const ADD_INSTANCE: usize = 4;
 
 /// `ExpPcwHostCallback`: what the kernel does as `pcw.sys` registers
@@ -96,6 +99,80 @@ pub unsafe extern "C" fn PcwRegister(
     // SAFETY: per the contract.
     unsafe { registration.write_unaligned(core::ptr::null_mut()) };
     disabled_status()
+}
+
+/// [`PcwUnregister`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pcwunregister):
+/// unregister a counter set registered with `PcwRegister`.
+///
+/// # Safety
+/// `registration` came from `PcwRegister` (or is null).
+pub unsafe extern "C" fn PcwUnregister(registration: *mut c_void) {
+    if registration.is_null() {
+        return;
+    }
+    // SAFETY: per the contract.
+    let _ = unsafe { forward(UNREGISTER, [registration.addr(), 0, 0, 0]) };
+}
+
+/// [`PcwCloseInstance`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pcwcloseinstance):
+/// close a counter-set instance created with `PcwCreateInstance`.
+///
+/// # Safety
+/// `instance` came from `PcwCreateInstance` (or is null).
+pub unsafe extern "C" fn PcwCloseInstance(instance: *mut c_void) {
+    if instance.is_null() {
+        return;
+    }
+    // SAFETY: per the contract.
+    let _ = unsafe { forward(CLOSE_INSTANCE, [instance.addr(), 0, 0, 0]) };
+}
+
+/// [`PcwCreateInstance`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pcwcreateinstance):
+/// create a counter-set instance via `pcw.sys`; without it, writes null and
+/// returns the disabled status.
+///
+/// # Safety
+/// `instance` is writable; the remaining pointers match the Windows contract.
+pub unsafe extern "C" fn PcwCreateInstance(
+    instance: *mut *mut c_void,
+    registration: *mut c_void,
+    name: *const c_void,
+    count: u32,
+    data: *const c_void,
+) -> NTSTATUS {
+    let Some(table) = extension::table(&PCW) else {
+        if !instance.is_null() {
+            // SAFETY: checked non-null; per the contract.
+            unsafe { instance.write_unaligned(core::ptr::null_mut()) };
+        }
+        return disabled_status();
+    };
+    let mut call = AddInstance {
+        // SAFETY: the registered table holds the host's five routines.
+        routine: unsafe { table.add(CREATE_INSTANCE).read_unaligned() } as usize,
+        args: [
+            instance.addr(),
+            registration.addr(),
+            name.addr(),
+            count as usize,
+            data.addr(),
+        ],
+        status: STATUS_SUCCESS,
+    };
+    let guard = Guard::Undo {
+        undo: release_on_unwind,
+        context: core::ptr::null_mut(),
+    };
+    // SAFETY: `add_instance` invokes a 5-argument PCW host routine.
+    unsafe {
+        seh::call(
+            add_instance as *const () as usize,
+            [(&raw mut call).addr(), 0, 0, 0],
+            &guard,
+        )
+    };
+    extension::release(&PCW);
+    call.status
 }
 
 /// `pcw.sys`'s `PcwAddInstance`, called with its five arguments.

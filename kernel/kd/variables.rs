@@ -51,6 +51,10 @@ pub static InitSafeBootMode: Variable<AtomicU32> = Variable(AtomicU32::new(0));
 /// bits. They may on both architectures NK runs on.
 pub static Mm64BitPhysicalAddress: Variable<AtomicU8> = Variable(AtomicU8::new(1));
 
+/// `NtBuildNumber`: free-build Windows 10 22H2 build 19045 (`0xF000_4A65`),
+/// matching `RtlGetVersion`.
+pub static NtBuildNumber: Variable<AtomicU32> = Variable(AtomicU32::new(0xF000_0000 | 19045));
+
 /// Record what the loader said of the console.
 pub fn init(info: &BootInfo) {
     if info.serial.kind == Serial::PORT_16550 {

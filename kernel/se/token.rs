@@ -26,7 +26,10 @@ use nk_ntabi::se::{
 };
 use nk_ntabi::status::*;
 use nk_se::information::{Information, QueryError, token_information};
-use nk_se::token::{SE_CHANGE_NOTIFY_PRIVILEGE, Token, TokenType};
+use nk_se::token::{
+    ADMINISTRATORS, SE_CHANGE_NOTIFY_PRIVILEGE, SE_GROUP_ENABLED, SE_GROUP_USE_FOR_DENY_ONLY,
+    Token, TokenType,
+};
 
 /// The next locally unique identifier. Windows keeps the values below
 /// 1000 for well-known ones (`SYSTEM_LUID` is 999).
@@ -372,6 +375,44 @@ pub unsafe extern "C" fn SeQueryInformationToken(
             )),
         }
     }
+}
+
+/// [`SeQuerySessionIdToken`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-sequerysessionidtoken):
+/// return the session identifier associated with `token`.
+///
+/// # Safety
+/// `token` is a live token object; `session_id` is writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn SeQuerySessionIdToken(
+    token: *mut c_void,
+    session_id: *mut u32,
+) -> NTSTATUS {
+    if token.is_null() || session_id.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: checked non-null; per the contract.
+    unsafe { session_id.write_unaligned(of(token.cast()).session_id) };
+    STATUS_SUCCESS
+}
+
+/// [`SeTokenIsAdmin`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-setokenisadmin):
+/// whether `token` carries an enabled `BUILTIN\Administrators` group SID.
+///
+/// # Safety
+/// `token` is a live token object.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn SeTokenIsAdmin(token: *mut c_void) -> u8 {
+    if token.is_null() {
+        return 0;
+    }
+    // SAFETY: per the contract.
+    let tok = unsafe { of(token.cast()) };
+    let is_admin = tok.groups.iter().any(|g| {
+        g.sid.as_slice() == ADMINISTRATORS
+            && (g.attributes & SE_GROUP_ENABLED) != 0
+            && (g.attributes & SE_GROUP_USE_FOR_DENY_ONLY) == 0
+    });
+    u8::from(is_admin)
 }
 
 // ---- tests --------------------------------------------------------------

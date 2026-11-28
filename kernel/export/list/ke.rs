@@ -124,6 +124,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ke::thread::KeSetSystemGroupAffinityThread),
     export!(Implemented, ke::thread::KeRevertToUserGroupAffinityThread),
     export!(Implemented, ke::dpc::KeFlushQueuedDpcs),
+    export!(Implemented, ke::dpc::KeQueryDpcWatchdogInformation),
+    export!(Partial, ke::unwind::KeCapturePersistentThreadState),
     export!(Implemented, ke::timer::KeSetCoalescableTimer),
     export!(Implemented, ke::wait::KeClearEvent),
     export!(Implemented, ke::bugcheck::KeBugCheck),

@@ -47,6 +47,33 @@ pub extern "C" fn VslExchangeEntropy(_entropy: *mut [u8; 64]) -> nk_ntabi::statu
     nk_ntabi::status::STATUS_DEVICE_NOT_CONNECTED
 }
 
+/// `VslCreateSecureSection` (undocumented): create a VTL1-protected memory
+/// section. With virtual secure mode disabled, writes null and fails with
+/// `STATUS_DEVICE_NOT_CONNECTED`.
+///
+/// # Safety
+/// `section_handle` is null or writable.
+pub unsafe extern "C" fn VslCreateSecureSection(
+    section_handle: *mut *mut core::ffi::c_void,
+    _size: u64,
+    _attributes: u32,
+    _flags: u32,
+) -> nk_ntabi::status::NTSTATUS {
+    if !section_handle.is_null() {
+        // SAFETY: checked non-null; per the contract.
+        unsafe { section_handle.write_unaligned(core::ptr::null_mut()) };
+    }
+    nk_ntabi::status::STATUS_DEVICE_NOT_CONNECTED
+}
+
+/// `VslDeleteSecureSection` (undocumented): delete a VTL1 secure section.
+/// With virtual secure mode disabled, returns `STATUS_DEVICE_NOT_CONNECTED`.
+pub extern "C" fn VslDeleteSecureSection(
+    _section_handle: *mut core::ffi::c_void,
+) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_DEVICE_NOT_CONNECTED
+}
+
 /// `SkIsSecureKernel` (undocumented): whether the caller runs in the
 /// secure kernel. In the normal kernel Windows' routine answers
 /// `STATUS_NOT_IMPLEMENTED`, so a driver built for both knows it is

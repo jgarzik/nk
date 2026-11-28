@@ -22,7 +22,9 @@ pub mod splay;
 pub mod string;
 
 use nk_ntabi::io::{RTL_OSVERSIONINFOEXW, UNICODE_STRING};
-use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
+use nk_ntabi::status::{
+    NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_REVISION_MISMATCH, STATUS_SUCCESS,
+};
 
 /// Copy a driver's counted string out of its memory.
 ///
@@ -156,6 +158,146 @@ pub extern "C" fn RtlNtStatusToDosError(status: NTSTATUS) -> u32 {
 /// Windows 10 desktop installations).
 pub extern "C" fn RtlIsStateSeparationEnabled() -> u8 {
     0
+}
+
+/// [`RtlGetActiveConsoleId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlgetactiveconsoleid):
+/// session id of the active console session. NK has only session 0.
+pub extern "C" fn RtlGetActiveConsoleId() -> u32 {
+    0
+}
+
+/// [`RtlIsNtDdiVersionAvailable`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlisntddiversionavailable):
+/// whether the OS supports at least the given `NTDDI_*` version.
+/// Windows 10 2004–22H2 (build 19041–19045) is `NTDDI_WIN10_VB` (`0x0A00_0008`).
+pub extern "C" fn RtlIsNtDdiVersionAvailable(version: u32) -> u8 {
+    const NTDDI_WIN10_VB: u32 = 0x0A00_0008;
+    u8::from(version <= NTDDI_WIN10_VB)
+}
+
+/// [`VerSetConditionMask`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-versetconditionmask):
+/// record comparison operator `condition` (1..=7) for each version field bit
+/// set in `type_mask`.
+pub extern "C" fn VerSetConditionMask(
+    mut condition_mask: u64,
+    type_mask: u32,
+    condition: u8,
+) -> u64 {
+    let op = u64::from(condition & 0x7);
+    if type_mask == 0 {
+        return condition_mask;
+    }
+    for bit in 0..8u32 {
+        if type_mask & (1 << bit) != 0 {
+            let shift = bit * 3;
+            condition_mask = (condition_mask & !(0x7u64 << shift)) | (op << shift);
+        }
+    }
+    condition_mask
+}
+
+/// Compare `actual` against `asked` under Windows' `VER_*` condition code.
+fn version_matches(actual: u32, asked: u32, condition: u8) -> bool {
+    match condition {
+        1 => actual == asked, // VER_EQUAL
+        2 => actual > asked,  // VER_GREATER
+        3 => actual >= asked, // VER_GREATER_EQUAL
+        4 => actual < asked,  // VER_LESS
+        5 => actual <= asked, // VER_LESS_EQUAL
+        _ => false,
+    }
+}
+
+/// [`RtlVerifyVersionInfo`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlverifyversioninfo):
+/// compare `version_info` against NK's reported Windows 10.0.19045 Workstation
+/// version using the operators encoded in `condition_mask`.
+///
+/// # Safety
+/// `version_info` points to a readable `RTL_OSVERSIONINFOEXW`.
+pub unsafe extern "C" fn RtlVerifyVersionInfo(
+    version_info: *const RTL_OSVERSIONINFOEXW,
+    type_mask: u32,
+    condition_mask: u64,
+) -> NTSTATUS {
+    if version_info.is_null() || type_mask == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: checked non-null; per the contract.
+    let info = unsafe { version_info.read_unaligned() };
+    let cond = |bit: u32| ((condition_mask >> (bit * 3)) & 0x7) as u8;
+    // Hierarchical comparison for major/minor/build/SP per Microsoft docs:
+    // if major/minor/SP are compared with >= or <=, a strictly greater/lesser
+    // higher component satisfies lower components automatically.
+    const VER_MINORVERSION: u32 = 0x01;
+    const VER_MAJORVERSION: u32 = 0x02;
+    const VER_BUILDNUMBER: u32 = 0x04;
+    const VER_PLATFORMID: u32 = 0x08;
+    const VER_SERVICEPACKMINOR: u32 = 0x10;
+    const VER_SERVICEPACKMAJOR: u32 = 0x20;
+    const VER_SUITENAME: u32 = 0x40;
+    const VER_PRODUCT_TYPE: u32 = 0x80;
+
+    // NK reports Windows 10.0.19045, Platform 2 (NT), SP 0.0, ProductType 1 (Workstation).
+    let actual_major = 10u32;
+    let actual_minor = 0u32;
+    let actual_build = 19045u32;
+    let actual_platform = 2u32;
+    let actual_sp_major = 0u32;
+    let actual_sp_minor = 0u32;
+    let actual_suite = 0u32;
+    let actual_product = 1u32;
+
+    if type_mask & VER_PLATFORMID != 0
+        && !version_matches(actual_platform, info.dwPlatformId, cond(3))
+    {
+        return STATUS_REVISION_MISMATCH;
+    }
+    if type_mask & VER_PRODUCT_TYPE != 0
+        && !version_matches(actual_product, u32::from(info.wProductType), cond(7))
+    {
+        return STATUS_REVISION_MISMATCH;
+    }
+    if type_mask & VER_SUITENAME != 0 {
+        let asked = u32::from(info.wSuiteMask);
+        let ok = match cond(6) {
+            6 => (actual_suite & asked) == asked, // VER_AND
+            7 => (actual_suite & asked) != 0,     // VER_OR
+            other => version_matches(actual_suite, asked, other),
+        };
+        if !ok {
+            return STATUS_REVISION_MISMATCH;
+        }
+    }
+    // Version tuple comparison (major, minor, sp_major, sp_minor, build).
+    let mut decided = false;
+    for (mask, bit, actual, asked) in [
+        (VER_MAJORVERSION, 1, actual_major, info.dwMajorVersion),
+        (VER_MINORVERSION, 0, actual_minor, info.dwMinorVersion),
+        (
+            VER_SERVICEPACKMAJOR,
+            5,
+            actual_sp_major,
+            u32::from(info.wServicePackMajor),
+        ),
+        (
+            VER_SERVICEPACKMINOR,
+            4,
+            actual_sp_minor,
+            u32::from(info.wServicePackMinor),
+        ),
+        (VER_BUILDNUMBER, 2, actual_build, info.dwBuildNumber),
+    ] {
+        if type_mask & mask == 0 || decided {
+            continue;
+        }
+        let op = cond(bit);
+        if !version_matches(actual, asked, op) {
+            return STATUS_REVISION_MISMATCH;
+        }
+        if actual != asked && matches!(op, 2..=5) {
+            decided = true;
+        }
+    }
+    STATUS_SUCCESS
 }
 
 /// The room `RtlDeriveCapabilitySidsFromName` clears in its callers'

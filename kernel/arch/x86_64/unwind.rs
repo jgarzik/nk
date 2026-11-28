@@ -101,6 +101,32 @@ pub fn sp(regs: &Regs) -> u64 {
     regs.gpr[RSP]
 }
 
+/// Fill a Windows `CONTEXT` record with the captured register state.
+///
+/// # Safety
+/// `context` is writable for an x86-64 `CONTEXT` structure.
+pub unsafe fn fill_context(regs: &Regs, context: *mut core::ffi::c_void) {
+    let context = context.cast::<nk_ntabi::seh::x64::CONTEXT>();
+    // SAFETY: per the contract.
+    unsafe {
+        core::ptr::write_bytes(
+            context.cast::<u8>(),
+            0,
+            size_of::<nk_ntabi::seh::x64::CONTEXT>(),
+        );
+        (*context).Rip = regs.rip;
+        (*context).Rsp = regs.gpr[RSP];
+        (*context).Rbx = regs.gpr[3];
+        (*context).Rbp = regs.gpr[5];
+        (*context).Rsi = regs.gpr[6];
+        (*context).Rdi = regs.gpr[7];
+        (*context).R12 = regs.gpr[12];
+        (*context).R13 = regs.gpr[13];
+        (*context).R14 = regs.gpr[14];
+        (*context).R15 = regs.gpr[15];
+    }
+}
+
 /// One frame undone.
 pub struct Step {
     /// The registers of the frame beneath.

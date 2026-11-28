@@ -77,6 +77,7 @@ mod testdisk;
 mod thread;
 mod timer;
 mod timer2;
+mod usb_kbd;
 mod volumes;
 mod wait;
 mod whea;
@@ -241,6 +242,7 @@ pub static GROUPS: &[&[&Group]] = &[
     nvme::GROUPS,
     echo::GROUPS,
     serial::GROUPS,
+    usb_kbd::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,
