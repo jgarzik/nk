@@ -16,9 +16,10 @@ Usage: ledger.py [--check | --missing <binary>... | --priority]
   --missing   print, by area, the kernel names the named corpus binaries
               import that the last x86-64 boot did not export as implemented,
               and the other modules they import from
-  --priority  print the per-binary status and combined unimplemented kernel
-              imports of the high-priority Microsoft subsystems
-              (storport.sys, tcpip.sys, ndis.sys, ntfs.sys)
+  --priority  print the per-binary status, shared cross-subsystem gaps, and
+              combined unimplemented kernel imports of the high-priority
+              Microsoft subsystems (storport.sys, tcpip.sys, ndis.sys,
+              afd.sys, ntfs.sys)
 """
 
 import json
@@ -137,7 +138,7 @@ CORPUS = ROOT / "ledger" / "corpus.x86_64.txt"
 KERNEL = ROOT / "ledger" / "ntoskrnl.x86_64.txt"
 # High-priority Microsoft driver subsystems whose remaining kernel import gaps
 # NK tracks prominently in the ledger and roadmap.
-HIGH_PRIORITY_SUBSYSTEMS = ("storport.sys", "tcpip.sys", "ndis.sys", "ntfs.sys")
+HIGH_PRIORITY_SUBSYSTEMS = ("storport.sys", "tcpip.sys", "ndis.sys", "afd.sys", "ntfs.sys")
 # Kernel API sets whose host driver is in the corpus, for transitive closure.
 CORPUS_APISET_HOSTS = {"ext-ms-win-fs-clfs-l1-1-0.dll": "clfs.sys"}
 
@@ -208,7 +209,8 @@ def missing(exports, lists, wanted):
 def high_priority(exports, lists, targets=HIGH_PRIORITY_SUBSYSTEMS):
     """Direct and transitive in-corpus kernel import status for the
     high-priority Microsoft subsystems (`storport.sys`, `tcpip.sys`,
-    `ndis.sys`, `ntfs.sys`)."""
+    `ndis.sys`, `afd.sys`, `ntfs.sys`), including shared cross-subsystem
+    gaps ranked by how many priority subsystems need each symbol."""
     parsed = {}
     for line in lists.splitlines():
         if line.startswith("#"):
@@ -253,6 +255,20 @@ def high_priority(exports, lists, targets=HIGH_PRIORITY_SUBSYSTEMS):
             "not_implemented": not_impl,
         })
 
+    # Non-implemented kernel imports shared by >= 2 high-priority subsystems,
+    # ranked by how many priority subsystems need them (then symbol name).
+    gap_users = {}
+    for file in present:
+        for name, st in parsed[file]["kernel"].items():
+            if st != "implemented":
+                gap_users.setdefault(name, (st, []))[1].append(file)
+    shared_gaps = [
+        {"name": name, "state": st, "count": len(files), "binaries": sorted(files)}
+        for name, (st, files) in gap_users.items()
+        if len(files) >= 2
+    ]
+    shared_gaps.sort(key=lambda g: (-g["count"], g["name"]))
+
     # Transitive closure over corpus-present dependency drivers (including
     # kernel API sets whose host driver is in the corpus).
     closure = set(present)
@@ -270,12 +286,15 @@ def high_priority(exports, lists, targets=HIGH_PRIORITY_SUBSYSTEMS):
 
     return {
         "note": "high-priority Microsoft driver subsystems (storport.sys, tcpip.sys, "
-                "ndis.sys, ntfs.sys): direct kernel import gaps and transitive "
-                "in-corpus closure",
+                "ndis.sys, afd.sys, ntfs.sys): static kernel import gaps, shared "
+                "cross-subsystem gaps, and transitive in-corpus closure (static "
+                "import coverage is not functional completion; private ABI layouts, "
+                "dynamic lookups, and runtime semantics are not captured)",
         "binaries": present,
         "kernel_names": {"total": len(direct_union),
                          **{s: sum(1 for v in direct_union.values() if v == s) for s in STATES}},
         "by_binary": by_binary,
+        "shared_gaps": shared_gaps,
         "with_dependencies": {
             "binaries": sorted(closure),
             "kernel_names": {
@@ -419,6 +438,14 @@ def priority_report(exports, lists, targets=HIGH_PRIORITY_SUBSYSTEMS):
         f"partial={dk['partial']:2d} traps={dk['traps']:2d} missing={dk['missing']:3d} "
         f"({len(dep['binaries'])} binaries)"
     )
+    shared = prio.get("shared_gaps", [])
+    if shared:
+        lines.append("")
+        lines.append(f"Shared cross-subsystem gaps ({len(shared)} names needed by >= 2 priority drivers):")
+        for g in shared[:25]:
+            lines.append(
+                f"  {g['count']}x {g['name']} ({g['state']}): {', '.join(g['binaries'])}"
+            )
     lines.append("")
     lines.extend(missing_report(exports, lists, prio["binaries"]))
     return lines

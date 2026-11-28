@@ -3347,5 +3347,775 @@
     }
    ]
   }
- ]
+ ],
+ "services": {
+  "note": "NT system service dispatch table (SSDT) entries registered in kernel/svc/mod.rs",
+  "total": 471,
+  "implemented": 95,
+  "partial": 57,
+  "traps": 0,
+  "missing": 319,
+  "registered": [
+   {
+    "number": 1,
+    "name": "NtWorkerFactoryWorkerReady",
+    "state": "partial"
+   },
+   {
+    "number": 4,
+    "name": "NtWaitForSingleObject",
+    "state": "partial"
+   },
+   {
+    "number": 6,
+    "name": "NtReadFile",
+    "state": "partial"
+   },
+   {
+    "number": 7,
+    "name": "NtDeviceIoControlFile",
+    "state": "implemented"
+   },
+   {
+    "number": 8,
+    "name": "NtWriteFile",
+    "state": "partial"
+   },
+   {
+    "number": 9,
+    "name": "NtRemoveIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 10,
+    "name": "NtReleaseSemaphore",
+    "state": "implemented"
+   },
+   {
+    "number": 13,
+    "name": "NtSetInformationThread",
+    "state": "partial"
+   },
+   {
+    "number": 14,
+    "name": "NtSetEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 15,
+    "name": "NtClose",
+    "state": "implemented"
+   },
+   {
+    "number": 16,
+    "name": "NtQueryObject",
+    "state": "partial"
+   },
+   {
+    "number": 17,
+    "name": "NtQueryInformationFile",
+    "state": "implemented"
+   },
+   {
+    "number": 18,
+    "name": "NtOpenKey",
+    "state": "implemented"
+   },
+   {
+    "number": 19,
+    "name": "NtEnumerateValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 21,
+    "name": "NtQueryDefaultLocale",
+    "state": "implemented"
+   },
+   {
+    "number": 22,
+    "name": "NtQueryKey",
+    "state": "implemented"
+   },
+   {
+    "number": 23,
+    "name": "NtQueryValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 24,
+    "name": "NtAllocateVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 25,
+    "name": "NtQueryInformationProcess",
+    "state": "partial"
+   },
+   {
+    "number": 28,
+    "name": "NtSetInformationProcess",
+    "state": "partial"
+   },
+   {
+    "number": 29,
+    "name": "NtCreateKey",
+    "state": "implemented"
+   },
+   {
+    "number": 30,
+    "name": "NtFreeVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 32,
+    "name": "NtReleaseMutant",
+    "state": "implemented"
+   },
+   {
+    "number": 33,
+    "name": "NtQueryInformationToken",
+    "state": "implemented"
+   },
+   {
+    "number": 35,
+    "name": "NtQueryVirtualMemory",
+    "state": "partial"
+   },
+   {
+    "number": 36,
+    "name": "NtOpenThreadToken",
+    "state": "implemented"
+   },
+   {
+    "number": 37,
+    "name": "NtQueryInformationThread",
+    "state": "partial"
+   },
+   {
+    "number": 38,
+    "name": "NtOpenProcess",
+    "state": "implemented"
+   },
+   {
+    "number": 39,
+    "name": "NtSetInformationFile",
+    "state": "implemented"
+   },
+   {
+    "number": 40,
+    "name": "NtMapViewOfSection",
+    "state": "partial"
+   },
+   {
+    "number": 42,
+    "name": "NtUnmapViewOfSection",
+    "state": "implemented"
+   },
+   {
+    "number": 44,
+    "name": "NtTerminateProcess",
+    "state": "partial"
+   },
+   {
+    "number": 45,
+    "name": "NtSetEventBoostPriority",
+    "state": "implemented"
+   },
+   {
+    "number": 47,
+    "name": "NtOpenThreadTokenEx",
+    "state": "implemented"
+   },
+   {
+    "number": 48,
+    "name": "NtOpenProcessTokenEx",
+    "state": "implemented"
+   },
+   {
+    "number": 49,
+    "name": "NtQueryPerformanceCounter",
+    "state": "implemented"
+   },
+   {
+    "number": 50,
+    "name": "NtEnumerateKey",
+    "state": "implemented"
+   },
+   {
+    "number": 51,
+    "name": "NtOpenFile",
+    "state": "partial"
+   },
+   {
+    "number": 52,
+    "name": "NtDelayExecution",
+    "state": "implemented"
+   },
+   {
+    "number": 53,
+    "name": "NtQueryDirectoryFile",
+    "state": "implemented"
+   },
+   {
+    "number": 54,
+    "name": "NtQuerySystemInformation",
+    "state": "partial"
+   },
+   {
+    "number": 55,
+    "name": "NtOpenSection",
+    "state": "implemented"
+   },
+   {
+    "number": 57,
+    "name": "NtFsControlFile",
+    "state": "implemented"
+   },
+   {
+    "number": 58,
+    "name": "NtWriteVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 60,
+    "name": "NtDuplicateObject",
+    "state": "partial"
+   },
+   {
+    "number": 61,
+    "name": "NtQueryAttributesFile",
+    "state": "partial"
+   },
+   {
+    "number": 62,
+    "name": "NtClearEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 63,
+    "name": "NtReadVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 64,
+    "name": "NtOpenEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 65,
+    "name": "NtAdjustPrivilegesToken",
+    "state": "partial"
+   },
+   {
+    "number": 66,
+    "name": "NtDuplicateToken",
+    "state": "implemented"
+   },
+   {
+    "number": 67,
+    "name": "NtContinue",
+    "state": "implemented"
+   },
+   {
+    "number": 68,
+    "name": "NtQueryDefaultUILanguage",
+    "state": "implemented"
+   },
+   {
+    "number": 69,
+    "name": "NtQueueApcThread",
+    "state": "implemented"
+   },
+   {
+    "number": 70,
+    "name": "NtYieldExecution",
+    "state": "implemented"
+   },
+   {
+    "number": 72,
+    "name": "NtCreateEvent",
+    "state": "partial"
+   },
+   {
+    "number": 73,
+    "name": "NtQueryVolumeInformationFile",
+    "state": "implemented"
+   },
+   {
+    "number": 74,
+    "name": "NtCreateSection",
+    "state": "partial"
+   },
+   {
+    "number": 75,
+    "name": "NtFlushBuffersFile",
+    "state": "implemented"
+   },
+   {
+    "number": 76,
+    "name": "NtApphelpCacheControl",
+    "state": "partial"
+   },
+   {
+    "number": 80,
+    "name": "NtProtectVirtualMemory",
+    "state": "implemented"
+   },
+   {
+    "number": 81,
+    "name": "NtQuerySection",
+    "state": "implemented"
+   },
+   {
+    "number": 82,
+    "name": "NtResumeThread",
+    "state": "implemented"
+   },
+   {
+    "number": 83,
+    "name": "NtTerminateThread",
+    "state": "partial"
+   },
+   {
+    "number": 85,
+    "name": "NtCreateFile",
+    "state": "partial"
+   },
+   {
+    "number": 88,
+    "name": "NtOpenDirectoryObject",
+    "state": "implemented"
+   },
+   {
+    "number": 90,
+    "name": "NtQuerySystemTime",
+    "state": "implemented"
+   },
+   {
+    "number": 91,
+    "name": "NtWaitForMultipleObjects",
+    "state": "implemented"
+   },
+   {
+    "number": 93,
+    "name": "NtCancelIoFile",
+    "state": "partial"
+   },
+   {
+    "number": 94,
+    "name": "NtTraceEvent",
+    "state": "partial"
+   },
+   {
+    "number": 95,
+    "name": "NtPowerInformation",
+    "state": "partial"
+   },
+   {
+    "number": 96,
+    "name": "NtSetValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 111,
+    "name": "NtAlertThread",
+    "state": "implemented"
+   },
+   {
+    "number": 112,
+    "name": "NtAlertThreadByThreadId",
+    "state": "implemented"
+   },
+   {
+    "number": 113,
+    "name": "NtAllocateLocallyUniqueId",
+    "state": "implemented"
+   },
+   {
+    "number": 118,
+    "name": "NtAllocateVirtualMemoryEx",
+    "state": "partial"
+   },
+   {
+    "number": 144,
+    "name": "NtAssociateWaitCompletionPacket",
+    "state": "implemented"
+   },
+   {
+    "number": 148,
+    "name": "NtCancelTimer2",
+    "state": "implemented"
+   },
+   {
+    "number": 149,
+    "name": "NtCancelWaitCompletionPacket",
+    "state": "implemented"
+   },
+   {
+    "number": 161,
+    "name": "NtContinueEx",
+    "state": "implemented"
+   },
+   {
+    "number": 166,
+    "name": "NtCreateDirectoryObject",
+    "state": "partial"
+   },
+   {
+    "number": 172,
+    "name": "NtCreateIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 179,
+    "name": "NtCreateMutant",
+    "state": "implemented"
+   },
+   {
+    "number": 191,
+    "name": "NtCreateSemaphore",
+    "state": "implemented"
+   },
+   {
+    "number": 192,
+    "name": "NtCreateSymbolicLinkObject",
+    "state": "implemented"
+   },
+   {
+    "number": 193,
+    "name": "NtCreateThreadEx",
+    "state": "partial"
+   },
+   {
+    "number": 195,
+    "name": "NtCreateTimer2",
+    "state": "implemented"
+   },
+   {
+    "number": 201,
+    "name": "NtCreateWaitCompletionPacket",
+    "state": "implemented"
+   },
+   {
+    "number": 204,
+    "name": "NtCreateWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 210,
+    "name": "NtDeleteFile",
+    "state": "implemented"
+   },
+   {
+    "number": 211,
+    "name": "NtDeleteKey",
+    "state": "implemented"
+   },
+   {
+    "number": 214,
+    "name": "NtDeleteValueKey",
+    "state": "implemented"
+   },
+   {
+    "number": 219,
+    "name": "NtDisplayString",
+    "state": "implemented"
+   },
+   {
+    "number": 220,
+    "name": "NtDrawText",
+    "state": "implemented"
+   },
+   {
+    "number": 226,
+    "name": "NtExtendSection",
+    "state": "implemented"
+   },
+   {
+    "number": 230,
+    "name": "NtFlushBuffersFileEx",
+    "state": "partial"
+   },
+   {
+    "number": 232,
+    "name": "NtFlushInstructionCache",
+    "state": "implemented"
+   },
+   {
+    "number": 235,
+    "name": "NtFlushVirtualMemory",
+    "state": "partial"
+   },
+   {
+    "number": 246,
+    "name": "NtGetMUIRegistryInfo",
+    "state": "partial"
+   },
+   {
+    "number": 249,
+    "name": "NtGetNlsSectionPtr",
+    "state": "partial"
+   },
+   {
+    "number": 252,
+    "name": "NtImpersonateAnonymousToken",
+    "state": "implemented"
+   },
+   {
+    "number": 255,
+    "name": "NtInitializeNlsFiles",
+    "state": "partial"
+   },
+   {
+    "number": 257,
+    "name": "NtInitiatePowerAction",
+    "state": "partial"
+   },
+   {
+    "number": 259,
+    "name": "NtIsUILanguageComitted",
+    "state": "implemented"
+   },
+   {
+    "number": 261,
+    "name": "NtLoadDriver",
+    "state": "partial"
+   },
+   {
+    "number": 271,
+    "name": "NtMakeTemporaryObject",
+    "state": "partial"
+   },
+   {
+    "number": 281,
+    "name": "NtNotifyChangeKey",
+    "state": "partial"
+   },
+   {
+    "number": 286,
+    "name": "NtOpenIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 288,
+    "name": "NtOpenKeyEx",
+    "state": "implemented"
+   },
+   {
+    "number": 292,
+    "name": "NtOpenMutant",
+    "state": "implemented"
+   },
+   {
+    "number": 296,
+    "name": "NtOpenProcessToken",
+    "state": "implemented"
+   },
+   {
+    "number": 299,
+    "name": "NtOpenSemaphore",
+    "state": "implemented"
+   },
+   {
+    "number": 301,
+    "name": "NtOpenSymbolicLinkObject",
+    "state": "implemented"
+   },
+   {
+    "number": 302,
+    "name": "NtOpenThread",
+    "state": "implemented"
+   },
+   {
+    "number": 322,
+    "name": "NtQueryDirectoryFileEx",
+    "state": "implemented"
+   },
+   {
+    "number": 323,
+    "name": "NtQueryDirectoryObject",
+    "state": "implemented"
+   },
+   {
+    "number": 326,
+    "name": "NtQueryFullAttributesFile",
+    "state": "implemented"
+   },
+   {
+    "number": 335,
+    "name": "NtQueryInformationWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 336,
+    "name": "NtQueryInstallUILanguage",
+    "state": "implemented"
+   },
+   {
+    "number": 338,
+    "name": "NtQueryIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 339,
+    "name": "NtQueryLicenseValue",
+    "state": "implemented"
+   },
+   {
+    "number": 346,
+    "name": "NtQuerySecurityAttributesToken",
+    "state": "partial"
+   },
+   {
+    "number": 347,
+    "name": "NtQuerySecurityObject",
+    "state": "implemented"
+   },
+   {
+    "number": 350,
+    "name": "NtQuerySymbolicLinkObject",
+    "state": "implemented"
+   },
+   {
+    "number": 353,
+    "name": "NtQuerySystemInformationEx",
+    "state": "partial"
+   },
+   {
+    "number": 355,
+    "name": "NtQueryWnfStateData",
+    "state": "partial"
+   },
+   {
+    "number": 356,
+    "name": "NtQueryWnfStateNameInformation",
+    "state": "partial"
+   },
+   {
+    "number": 357,
+    "name": "NtQueueApcThreadEx",
+    "state": "partial"
+   },
+   {
+    "number": 358,
+    "name": "NtRaiseException",
+    "state": "implemented"
+   },
+   {
+    "number": 359,
+    "name": "NtRaiseHardError",
+    "state": "partial"
+   },
+   {
+    "number": 367,
+    "name": "NtReleaseWorkerFactoryWorker",
+    "state": "partial"
+   },
+   {
+    "number": 368,
+    "name": "NtRemoveIoCompletionEx",
+    "state": "implemented"
+   },
+   {
+    "number": 376,
+    "name": "NtResetEvent",
+    "state": "implemented"
+   },
+   {
+    "number": 390,
+    "name": "NtSerializeBoot",
+    "state": "implemented"
+   },
+   {
+    "number": 414,
+    "name": "NtSetInformationVirtualMemory",
+    "state": "partial"
+   },
+   {
+    "number": 415,
+    "name": "NtSetInformationWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 417,
+    "name": "NtSetIoCompletion",
+    "state": "implemented"
+   },
+   {
+    "number": 418,
+    "name": "NtSetIoCompletionEx",
+    "state": "partial"
+   },
+   {
+    "number": 423,
+    "name": "NtSetSecurityObject",
+    "state": "implemented"
+   },
+   {
+    "number": 426,
+    "name": "NtSetSystemInformation",
+    "state": "partial"
+   },
+   {
+    "number": 429,
+    "name": "NtSetThreadExecutionState",
+    "state": "implemented"
+   },
+   {
+    "number": 430,
+    "name": "NtSetTimer2",
+    "state": "implemented"
+   },
+   {
+    "number": 436,
+    "name": "NtShutdownSystem",
+    "state": "partial"
+   },
+   {
+    "number": 437,
+    "name": "NtShutdownWorkerFactory",
+    "state": "partial"
+   },
+   {
+    "number": 444,
+    "name": "NtSuspendThread",
+    "state": "partial"
+   },
+   {
+    "number": 448,
+    "name": "NtTestAlert",
+    "state": "implemented"
+   },
+   {
+    "number": 451,
+    "name": "NtTraceControl",
+    "state": "partial"
+   },
+   {
+    "number": 454,
+    "name": "NtUnloadDriver",
+    "state": "partial"
+   },
+   {
+    "number": 460,
+    "name": "NtUnmapViewOfSectionEx",
+    "state": "implemented"
+   },
+   {
+    "number": 462,
+    "name": "NtUpdateWnfStateData",
+    "state": "partial"
+   },
+   {
+    "number": 464,
+    "name": "NtWaitForAlertByThreadId",
+    "state": "implemented"
+   },
+   {
+    "number": 467,
+    "name": "NtWaitForWorkViaWorkerFactory",
+    "state": "partial"
+   }
+  ]
+ }
 }

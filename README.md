@@ -43,7 +43,21 @@ port, and Microsoft's nine-driver USB 3.0 xHCI and HID keyboard stack
 live QMP hotplug, keystroke delivery, surprise removal with in-flight
 I/O, and reattach.
 
-Absent: user mode, physical hardware, file systems beyond FAT and RAW
+On x86-64, NK runs unmodified Ring 3 native user-mode binaries on
+unmodified Microsoft `ntdll.dll` (10.0.19041.1949) via `SYSCALL`/`SYSRETQ`,
+per-process address spaces, VAD trees, copy-on-write and `SEC_IMAGE`
+relocation, mapped-page writeback and working-set trimming, per-process
+handle tables, user-mode APC and VEH/SEH exception dispatch, I/O completion
+ports, and threadpool primitives: `nkt.exe` matches a live Windows 10
+19045.2006 oracle transcript byte-for-byte, `user.lowmem` streams 72 MiB
+RW+RO mapped views through a 96 MiB VM with automatic trimming and
+mapped-page writeback, and unmodified Microsoft `autochk.exe`
+(10.0.19041.1266) verifies a clean FAT32 volume and scans, repairs, and
+logs (`BOOTEX.LOG`) a host-corrupted FAT32 volume verified clean by
+`fsck.fat`.
+
+Absent: Win32 subsystem (`smss.exe`, `csrss.exe`, `win32k`), ALPC,
+writable registry, physical hardware, file systems beyond FAT and RAW
 ([doc/design/absent.md](doc/design/absent.md)).
 
 ## What it intends to do

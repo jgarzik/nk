@@ -299,9 +299,13 @@ on contention (bugchecking `IRQL_NOT_LESS_OR_EQUAL` if entered above
   System/kernel table; `read()` for handle look-ups and counts, `lock()`
   for insert/close/teardown; two handle tables are never locked together).
 - `mm::space::AddressSpace` — each non-System process's user-half page
-  tables (`read()` for translations, `lock()` for mapping/unmapping; the
-  immutable root physical address is read lock-free on context switch and
-  attach).
+  tables and `VadTree` (`read()` for translations and VM queries, `lock()`
+  for mapping, unmapping, protection edits, and `mm::trim` working-set
+  demotion; the immutable root physical address is read lock-free on
+  context switch and attach).
+- `mm::view::PagefileBacking::frames` and `mm::view::ImageBacking::proto_frames`
+  — per-section backing frame tables (`lock()` for on-demand page allocation
+  and section teardown; never held across `AddressSpace::lock`).
 
 Because `DIRECTORY_TYPE`, `KEY_TYPE`, and `PROCESS_TYPE` delete
 procedures take these passive locks, `ob::object::ObjectType::deletes_at_passive`

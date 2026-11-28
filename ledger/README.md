@@ -55,13 +55,19 @@ those corpus binaries import that NK does not implement.
 
 ### High-priority subsystems
 
-`corpus.high_priority` tracks NK's four high-priority Microsoft driver
-subsystems — `storport.sys`, `tcpip.sys`, `ndis.sys`, and `ntfs.sys` —
-recording their deduplicated direct kernel import counts, per-binary
-non-implemented lists (`missing`, `traps`, `partial`), and the transitive
-in-corpus closure (`with_dependencies`, including `netio.sys`, `fwpkclnt.sys`,
-and `clfs.sys` via `ext-ms-win-fs-clfs-l1-1-0.dll`). Run
-`tools/ledger.py --priority` for a console breakdown of their remaining gaps.
+`corpus.high_priority` tracks NK's five high-priority Microsoft driver
+subsystems — `storport.sys`, `tcpip.sys`, `ndis.sys`, `afd.sys`, and
+`ntfs.sys` — recording their deduplicated direct kernel import counts,
+per-binary non-implemented lists (`missing`, `traps`, `partial`),
+`shared_gaps` (kernel exports needed by two or more priority subsystems,
+ranked by fan-out), and the transitive in-corpus closure
+(`with_dependencies`, including `netio.sys`, `fwpkclnt.sys`, `tdi.sys`,
+and `clfs.sys` via `ext-ms-win-fs-clfs-l1-1-0.dll`). Static import
+coverage is not functional completion: private ABI layouts, dynamically
+resolved symbols (`MmGetSystemRoutineAddress`), initialization ordering,
+and runtime semantics are not reflected in import percentages. Run
+`tools/ledger.py --priority` for a console breakdown of their remaining
+gaps.
 
 The binaries are pinned in `fixtures/corpus.toml` and never committed.
 `corpus.x86_64.txt` holds what each one imports, written by

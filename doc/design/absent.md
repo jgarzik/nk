@@ -12,14 +12,13 @@ a volume, and its answers to information queries and to file-system
 control requests other than mounting stop the system by name.
 
 No kernel stack segment larger than a thread's stack, and none at
-`DISPATCH_LEVEL` (see [Threads](threads.md), stack expansion). No
-user-mode APC is delivered (one can be queued; an alertable wait
-does not end for it), no sleep states, device power-down ([Power](power.md)), processes
-other than System, user-mode code, ALPC ports, I/O completion ports,
-priority boosts or registry write-back; the clock ticks at a fixed
-rate; NK enforces no security descriptor on its own opens. Microsoft
-publishes no arm64 binaries NK may use, so its own drivers run on x86-64
-alone. NK has run on no physical machine. NK applies no errata:
+`DISPATCH_LEVEL` (see [Threads](threads.md), stack expansion). No sleep
+states, device power-down ([Power](power.md)), ALPC ports, Win32
+subsystem (`smss.exe`/`csrss.exe`/`win32k`), priority boosts, paging file,
+or registry write-back; the clock ticks at a fixed rate; NK enforces no
+security descriptor on its own opens. Microsoft publishes no arm64
+binaries NK may use, so its own drivers and user-mode binaries run on
+x86-64 alone. NK has run on no physical machine. NK applies no errata:
 it has no errata database (Windows' comes from `errata.inf`, which NK
 does not read), and every rule a driver asks the errata manager about
 is reported as defined and not applying, where Windows evaluates the
@@ -100,7 +99,6 @@ answers those a binary reaches and stops the system naming any other
 | Territory | Imported by | Why |
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
-| I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
 | What Microsoft's inbox drivers import and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | ACPI, PCI, storage, volume, FAT, crypto, KMDF, serial and USB/HID drivers | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
 
 The `*-neg-trap` scenarios call one through the address its name
