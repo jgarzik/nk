@@ -71,17 +71,20 @@ pub unsafe extern "C" fn IoRegisterFileSystem(device: *mut DEVICE_OBJECT) {
             (*(*device).DriverObject).Flags |= DRVO_BASE_FILESYSTEM_DRIVER;
         }
         let low = (*device).Flags & DO_LOW_PRIORITY_FILESYSTEM != 0;
+        (*device).Flags &= !DO_DEVICE_INITIALIZING;
         {
             let mut database = DATABASE.lock();
             if let Some(queue) = queue {
                 let list = &mut database.queues[index(queue)];
                 let at = if low { list.len().saturating_sub(1) } else { 0 };
+                // Count the control device before publishing it on the
+                // queue so concurrent mount walks or unregistrations
+                // always see a referenced device (rank 12 -> rank 25).
+                device::reference(device);
                 list.insert(at, device.addr());
             }
             database.changes = database.changes.wrapping_add(1);
         }
-        (*device).Flags &= !DO_DEVICE_INITIALIZING;
-        device::reference(device);
     }
     trace(format_args!("registered {device:p}"));
 }
@@ -189,27 +192,48 @@ unsafe fn mount_locked(real: *mut DEVICE_OBJECT, allow_raw: bool) -> NTSTATUS {
         let raw_block = flags & VPB_RAW_MOUNT != 0;
         let mut status = STATUS_UNSUCCESSFUL;
         let mut at = 0;
+        enum Pick {
+            Stop,
+            Skip,
+            Ask(*mut DEVICE_OBJECT, usize, u32),
+        }
         loop {
-            let (cdo, len, changes) = {
+            let pick = {
                 let database = DATABASE.lock();
                 let list = &database.queues[queue];
-                let Some(&cdo) = list.get(at) else { break };
-                (cdo, list.len(), database.changes)
+                match list.get(at) {
+                    None => Pick::Stop,
+                    Some(&addr) => {
+                        let len = list.len();
+                        match rules::offer(at, len, allow_raw, raw_block) {
+                            Offer::Stop => Pick::Stop,
+                            Offer::Skip => Pick::Skip,
+                            Offer::Ask => {
+                                let cdo =
+                                    core::ptr::with_exposed_provenance_mut::<DEVICE_OBJECT>(addr);
+                                // Take the device reference while `DATABASE`
+                                // still holds the registration entry, so an
+                                // unregister + delete on another CPU cannot
+                                // free `cdo` before we count it (rank 12 -> 25).
+                                if device::reference_unless_deleted(cdo) {
+                                    Pick::Ask(cdo, len, database.changes)
+                                } else {
+                                    Pick::Skip
+                                }
+                            }
+                        }
+                    }
+                }
             };
-            let last = at + 1 == len;
-            match rules::offer(at, len, allow_raw, raw_block) {
-                Offer::Stop => break,
-                Offer::Skip => {
+            let (cdo, len, changes) = match pick {
+                Pick::Stop => break,
+                Pick::Skip => {
                     at += 1;
                     continue;
                 }
-                Offer::Ask => {}
-            }
-            let cdo = core::ptr::with_exposed_provenance_mut::<DEVICE_OBJECT>(cdo);
-            if !device::reference_unless_deleted(cdo) {
-                at += 1;
-                continue;
-            }
+                Pick::Ask(cdo, len, changes) => (cdo, len, changes),
+            };
+            let last = at + 1 == len;
             let (answer, information) = ask(cdo, target, vpb, allow_raw);
             device::dereference(cdo);
             status = answer;

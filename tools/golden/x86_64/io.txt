@@ -74,3 +74,4 @@ io.mount.again ok
 io.mount.associated ok
 io.mount.expand-raise ok
 io.mount.close ok
+io.mount.unregister-race ok

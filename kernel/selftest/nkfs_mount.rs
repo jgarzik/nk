@@ -24,7 +24,7 @@ use crate::mm::pool;
 use crate::ob::object;
 use crate::test::{Group, Report};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::*;
 use nk_ntabi::status::*;
@@ -39,6 +39,7 @@ pub static GROUP: Group = Group {
         "io.mount.associated",
         "io.mount.expand-raise",
         "io.mount.close",
+        "io.mount.unregister-race",
     ],
     run,
     manual: false,
@@ -467,8 +468,120 @@ fn run(r: &mut Report, _: &BootInfo) {
         device::IoDeleteDevice(refuser);
         device::IoDeleteDevice(taker);
         device::IoDeleteDevice(disk);
-        let _ = pool::free(fs_driver.cast());
-        let _ = pool::free(disk_driver.cast());
     }
     VOLUME.store(core::ptr::null_mut(), Ordering::Release);
+    r.check("io.mount.unregister-race", || {
+        unregister_race_test(disk_driver)
+    });
+    let _ = pool::free(fs_driver.cast());
+    let _ = pool::free(disk_driver.cast());
+}
+
+const RACE_MAGIC: u64 = 0x4E4B_4653_5241_4345;
+static RACE_STOP: AtomicBool = AtomicBool::new(false);
+static RACE_BAD: AtomicBool = AtomicBool::new(false);
+static RACE_MOUNTS: AtomicU32 = AtomicU32::new(0);
+static RACE_ASKED: AtomicU32 = AtomicU32::new(0);
+
+/// # Safety
+/// Called by the I/O manager for a temporary control device during
+/// `unregister_race_test`.
+unsafe extern "C" fn race_fs_dispatch(cdo: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
+    // SAFETY: `cdo` is live while this mount request runs; its extension
+    // holds `RACE_MAGIC` for the life of the device.
+    unsafe {
+        let ext = (*cdo).DeviceExtension.cast::<u64>();
+        if ext.is_null() || ext.read() != RACE_MAGIC {
+            RACE_BAD.store(true, Ordering::Release);
+        }
+        RACE_ASKED.fetch_add(1, Ordering::Relaxed);
+        complete(request, STATUS_UNRECOGNIZED_VOLUME, 0)
+    }
+}
+
+/// Race `IoUnregisterFileSystem` + `IoDeleteDevice` on temporary control
+/// devices against concurrent `mount_volume` walks on another CPU.
+fn unregister_race_test(disk_driver: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
+    fn mounter(arg: usize) {
+        let disk = arg as *mut DEVICE_OBJECT;
+        while !RACE_STOP.load(Ordering::Acquire) {
+            // SAFETY: `disk` is live until this thread exits.
+            let _ = unsafe { fs::mount_volume(disk, false) };
+            RACE_MOUNTS.fetch_add(1, Ordering::Relaxed);
+            ke::thread::yield_now();
+        }
+    }
+
+    let Some(race_driver) = driver(race_fs_dispatch) else {
+        return Err("no memory for the unregister-race driver");
+    };
+    let Some(disk) = create_device(disk_driver, None, FILE_DEVICE_DISK) else {
+        let _ = pool::free(race_driver.cast());
+        return Err("no memory for the unregister-race disk");
+    };
+    RACE_STOP.store(false, Ordering::Release);
+    RACE_BAD.store(false, Ordering::Release);
+    RACE_MOUNTS.store(0, Ordering::Relaxed);
+    RACE_ASKED.store(0, Ordering::Relaxed);
+
+    let before = ke::thread::count();
+    let worker = ke::thread::create_referenced(
+        mounter,
+        disk.addr(),
+        ke::thread::NORMAL_PRIORITY,
+        ke::thread::ANYWHERE,
+    )?;
+
+    let mut failed = None;
+    for _ in 0..64 {
+        let mut cdo = core::ptr::null_mut();
+        // SAFETY: live driver object and output local.
+        let status = unsafe {
+            device::IoCreateDevice(
+                race_driver,
+                size_of::<u64>() as u32,
+                core::ptr::null(),
+                FILE_DEVICE_DISK_FILE_SYSTEM,
+                0,
+                0,
+                &raw mut cdo,
+            )
+        };
+        if !nt_success(status) || cdo.is_null() {
+            failed = Some("could not create temporary control device");
+            break;
+        }
+        // SAFETY: fresh device with 8-byte extension.
+        unsafe {
+            (*cdo).DeviceExtension.cast::<u64>().write(RACE_MAGIC);
+            fs::IoRegisterFileSystem(cdo);
+        }
+        ke::thread::yield_now();
+        // SAFETY: registered above, deleted once unregistered.
+        unsafe {
+            fs::IoUnregisterFileSystem(cdo);
+            device::IoDeleteDevice(cdo);
+        }
+    }
+
+    RACE_STOP.store(true, Ordering::Release);
+    // SAFETY: referenced thread object.
+    unsafe {
+        ke::wait::wait(Some(worker.cast()), None);
+        object::dereference(worker.cast());
+        device::IoDeleteDevice(disk);
+        let _ = pool::free(race_driver.cast());
+    }
+    ke::thread::settle(before);
+
+    if let Some(why) = failed {
+        return Err(why);
+    }
+    if RACE_BAD.load(Ordering::Acquire) {
+        return Err("mount request observed a corrupted or freed control device");
+    }
+    if RACE_MOUNTS.load(Ordering::Relaxed) == 0 {
+        return Err("mounter thread did not run any mount walks");
+    }
+    Ok(())
 }
