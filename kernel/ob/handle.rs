@@ -46,7 +46,7 @@ const OBJ_INHERIT: u32 = 0x2;
 /// `OBJ_KERNEL_HANDLE`: the opener wants the kernel handle.
 pub const OBJ_KERNEL_HANDLE: u32 = 0x200;
 
-/// An object in the table.
+/// An object in a handle table.
 struct Entry(*mut u8);
 
 // SAFETY: the table holds a reference to each object it lists, and the
@@ -54,19 +54,181 @@ struct Entry(*mut u8);
 // there.
 unsafe impl Send for Entry {}
 
-static TABLE: SpinLock<Handles<Entry>> = SpinLock::new(Rank::Handles, Handles::new());
+/// One process's handle table (`EPROCESS.ObjectTable`).
+pub struct HandleTable(SpinLock<Handles<Entry>>);
 
-/// The pool memory the table itself occupies, as `(blocks, bytes)`. It
+impl HandleTable {
+    /// An empty handle table.
+    pub const fn new() -> Self {
+        Self(SpinLock::new(Rank::Handles, Handles::new()))
+    }
+
+    /// Number of open handles in this table.
+    pub fn count(&self) -> usize {
+        self.0.lock().count()
+    }
+
+    /// Pool bytes occupied by the table's slot array.
+    pub fn storage(&self) -> usize {
+        self.0.lock().storage()
+    }
+}
+
+/// The System process's handle table, which is also the kernel handle table.
+static TABLE: HandleTable = HandleTable::new();
+
+/// Pointer to the kernel / System process handle table (stored in the System
+/// process's `EPROCESS.ObjectTable`).
+pub fn kernel_table() -> *mut HandleTable {
+    (&raw const TABLE).cast_mut()
+}
+
+/// Pool tag for per-process handle tables.
+const TAG_HANDLE_TABLE: u32 = u32::from_le_bytes(*b"ObHt");
+
+/// Allocate an empty per-process handle table in the pool.
+pub fn create_table() -> Option<*mut HandleTable> {
+    let raw = pool::alloc(size_of::<HandleTable>(), TAG_HANDLE_TABLE).cast::<HandleTable>();
+    if raw.is_null() {
+        return None;
+    }
+    // SAFETY: `raw` is a freshly allocated, aligned block of `HandleTable` size.
+    unsafe { raw.write(HandleTable::new()) };
+    Some(raw)
+}
+
+/// Close every handle in `table` (calling each object type's `CloseProcedure`
+/// and dropping each handle's reference), then free `table`.
+///
+/// # Safety
+/// `process` is the owning `EPROCESS`; `table` was returned by [`create_table`]
+/// and is no longer reachable from any live thread.
+pub unsafe fn destroy_table(process: *mut u8, table: *mut HandleTable) {
+    if table.is_null() || core::ptr::eq(table, &raw const TABLE) {
+        return;
+    }
+    // SAFETY: per the contract; exclusive ownership at process teardown.
+    let entries = unsafe {
+        let entries = (*table).0.lock().drain_all();
+        core::ptr::drop_in_place(table);
+        let _ = pool::free(table.cast());
+        entries
+    };
+    for Entry(body) in entries {
+        // SAFETY: each entry held a reference and a handle count.
+        unsafe {
+            let handles = object::handle_count(body).fetch_sub(1, Ordering::AcqRel) as usize;
+            if let Some(closed) = object::type_of(body).close_procedure() {
+                closed(process.cast(), body.cast(), 1, handles);
+            }
+            object::dereference(body);
+        }
+    }
+}
+
+/// Duplicate every `OBJ_INHERIT` handle from `parent`'s handle table into
+/// `child`'s handle table.
+///
+/// # Safety
+/// Both `parent` and `child` are live `EPROCESS` objects with valid
+/// `ObjectTable` pointers.
+pub unsafe fn inherit_handles(parent: *mut u8, child: *mut u8) -> Result<(), NTSTATUS> {
+    // SAFETY: per the contract.
+    let Some(src) = (unsafe { process_table(parent) }) else {
+        return Ok(());
+    };
+    // SAFETY: per the contract.
+    let Some(dst) = (unsafe { process_table(child) }) else {
+        return Err(STATUS_INVALID_HANDLE);
+    };
+    if core::ptr::eq(src, dst) {
+        return Ok(());
+    }
+    // Snapshot inheritable handles under `src`'s lock with fresh references so
+    // we never hold two Rank::Handles locks simultaneously.
+    let mut inherited = alloc::vec::Vec::new();
+    {
+        let src_guard = src.0.lock();
+        for (_, h) in src_guard.iter() {
+            if h.attributes.inherit {
+                let target = h.object.0;
+                // SAFETY: `src` holds a reference while locked.
+                let held = unsafe { ObRef::new(target) };
+                if inherited.try_reserve(1).is_err() {
+                    return Err(STATUS_INSUFFICIENT_RESOURCES);
+                }
+                inherited.push((held, h.granted, h.attributes));
+            }
+        }
+    }
+    for (held, granted, attrs) in inherited {
+        let target = held.body();
+        // SAFETY: `held` keeps `target` alive while opening into `child`.
+        let _ = unsafe { open_in(child, target, granted, attrs, false) }?;
+    }
+    Ok(())
+}
+
+/// The current thread's attached process (`EPROCESS`).
+fn current_process() -> *mut u8 {
+    let p = crate::ps::process::PsGetCurrentProcess().cast::<u8>();
+    if p.is_null() {
+        crate::ps::process::system()
+    } else {
+        p
+    }
+}
+
+/// The handle table belonging to `process` (`EPROCESS.ObjectTable`), or
+/// `&TABLE` for the System process.
+///
+/// # Safety
+/// `process` is null or a live `EPROCESS`.
+unsafe fn process_table<'a>(process: *mut u8) -> Option<&'a HandleTable> {
+    if process.is_null() || process == crate::ps::process::system() {
+        return Some(&TABLE);
+    }
+    // SAFETY: per the contract; `ObjectTable` is a pointer-aligned field.
+    let ptr = unsafe {
+        process
+            .add(nk_ntabi::process::OBJECT_TABLE)
+            .cast::<*mut HandleTable>()
+            .read()
+    };
+    if ptr.is_null() {
+        None
+    } else {
+        // SAFETY: `process` is live and owns its handle table until teardown.
+        Some(unsafe { &*ptr })
+    }
+}
+
+/// Select the handle table for `handle` in `process`: kernel handles always
+/// address `&TABLE` (the System/kernel table); non-kernel handles address
+/// `process`'s table.
+///
+/// # Safety
+/// `process` is null or a live `EPROCESS`.
+unsafe fn table_for<'a>(process: *mut u8, handle: u64) -> Option<&'a HandleTable> {
+    if handle & nk_ntabi::ob::KERNEL_HANDLE == nk_ntabi::ob::KERNEL_HANDLE {
+        Some(&TABLE)
+    } else {
+        // SAFETY: per the contract.
+        unsafe { process_table(process) }
+    }
+}
+
+/// The pool memory the kernel handle table itself occupies, as `(blocks, bytes)`. It
 /// grows with the most handles ever open at once and is kept, so a leak
 /// check must not count it as lost.
 pub fn storage() -> (usize, usize) {
-    let bytes = TABLE.lock().storage();
+    let bytes = TABLE.storage();
     (usize::from(bytes != 0), bytes)
 }
 
-/// Handles that are open.
+/// Handles that are open in the kernel/System handle table.
 pub fn count() -> usize {
-    TABLE.lock().count()
+    TABLE.count()
 }
 
 fn status(error: HandleError) -> NTSTATUS {
@@ -90,9 +252,9 @@ pub unsafe fn open(body: *mut u8, access: u32) -> Result<u64, NTSTATUS> {
     unsafe { open_with(body, access, Attributes::default(), true) }
 }
 
-/// As [`open`], with the handle's attributes; `kernel` says which of
-/// the entry's two names comes back, the kernel handle or the System
-/// process's own.
+/// As [`open`], with the handle's attributes; `kernel` says whether to open
+/// in the kernel handle table (returning a kernel handle) or in the current
+/// process's handle table (returning a process handle).
 ///
 /// # Safety
 /// As [`open`].
@@ -103,8 +265,30 @@ pub unsafe fn open_with(
     kernel: bool,
 ) -> Result<u64, NTSTATUS> {
     // SAFETY: per the contract.
+    unsafe { open_in(current_process(), body, access, attributes, kernel) }
+}
+
+/// Open a handle to `body` in `process`'s table (or the kernel table when
+/// `kernel` is true).
+///
+/// # Safety
+/// `process` is null or a live `EPROCESS`; `body` is a live object the caller
+/// holds a reference to.
+pub unsafe fn open_in(
+    process: *mut u8,
+    body: *mut u8,
+    access: u32,
+    attributes: Attributes,
+    kernel: bool,
+) -> Result<u64, NTSTATUS> {
+    // SAFETY: per the contract.
     let ty = unsafe { object::type_of(body) };
     let mut granted = ty.map_generic(access);
+    let owner = if kernel || process.is_null() {
+        crate::ps::process::system()
+    } else {
+        process
+    };
     if let Some(open_proc) = ty.open_procedure() {
         let mode = if kernel {
             nk_ntabi::io::KERNEL_MODE
@@ -115,21 +299,19 @@ pub unsafe fn open_with(
         // type's open procedure runs before the handle is inserted.
         let count = unsafe { object::handle_count(body).load(Ordering::Acquire) } as u32;
         // SAFETY: per `OB_OPEN_METHOD` contract.
-        let status = unsafe {
-            open_proc(
-                0,
-                mode,
-                crate::ps::process::system().cast(),
-                body.cast(),
-                &raw mut granted,
-                count,
-            )
-        };
+        let status =
+            unsafe { open_proc(0, mode, owner.cast(), body.cast(), &raw mut granted, count) };
         if !nt_success(status) {
             return Err(status);
         }
     }
-    let mut table = TABLE.lock();
+    let handle_table = if kernel {
+        &TABLE
+    } else {
+        // SAFETY: per the contract.
+        unsafe { process_table(process) }.ok_or(STATUS_INVALID_HANDLE)?
+    };
+    let mut table = handle_table.0.lock();
     let index = table
         .insert(Entry(body), granted, attributes)
         .map_err(status)?;
@@ -174,13 +356,33 @@ pub fn reference_for(
     desired: u32,
     mode: Mode,
 ) -> Result<(ObRef, Information), NTSTATUS> {
+    // SAFETY: current process is live for the duration of the call.
+    unsafe { reference_in(current_process(), handle, ty, desired, mode) }
+}
+
+/// As [`reference_for`], resolving non-kernel handles against `process`'s
+/// handle table.
+///
+/// # Safety
+/// `process` is null or a live `EPROCESS`.
+pub unsafe fn reference_in(
+    process: *mut u8,
+    handle: u64,
+    ty: Option<*const ObjectType>,
+    desired: u32,
+    mode: Mode,
+) -> Result<(ObRef, Information), NTSTATUS> {
     let current = match handle {
         CURRENT_THREAD => Some((
             crate::ke::thread::current().cast::<u8>(),
             &raw const object::THREAD_TYPE,
         )),
         CURRENT_PROCESS => Some((
-            crate::ps::process::system(),
+            if process.is_null() {
+                crate::ps::process::system()
+            } else {
+                process
+            },
             &raw const object::PROCESS_TYPE,
         )),
         _ => None,
@@ -190,7 +392,7 @@ pub fn reference_for(
             return Err(STATUS_OBJECT_TYPE_MISMATCH);
         }
         // SAFETY: the running thread holds a reference on itself, and
-        // the System process lives for ever.
+        // `process` is live per the contract.
         let body = unsafe { ObRef::new(body) };
         let information = Information {
             granted: ALL_ACCESS,
@@ -199,7 +401,9 @@ pub fn reference_for(
         return Ok((body, information));
     }
     let index = handle_index(handle, mode == Mode::Kernel).ok_or(STATUS_INVALID_HANDLE)?;
-    let table = TABLE.lock();
+    // SAFETY: per the contract.
+    let handle_table = unsafe { table_for(process, handle) }.ok_or(STATUS_INVALID_HANDLE)?;
+    let table = handle_table.0.lock();
     let Entry(body) = table.reference(index, desired, mode).map_err(status)?;
     // SAFETY: the table holds a reference, and its lock is held, so the
     // object cannot go away before the new reference is taken.
@@ -239,11 +443,32 @@ pub fn close(handle: u64) -> NTSTATUS {
 /// [`INVALID_KERNEL_HANDLE`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x93--invalid-kernel-handle),
 /// whose parameters are the handle, then zeros.
 pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
+    // SAFETY: current process is live for the duration of the call.
+    unsafe { close_in(current_process(), handle, mode) }
+}
+
+/// Close `handle` in `process`'s table (or the kernel table for a kernel
+/// handle) on behalf of `mode`.
+///
+/// # Safety
+/// `process` is null or a live `EPROCESS`.
+pub unsafe fn close_in(process: *mut u8, handle: u64, mode: Mode) -> NTSTATUS {
     let Some(index) = handle_index(handle, mode == Mode::Kernel) else {
         return STATUS_INVALID_HANDLE;
     };
+    // SAFETY: per the contract.
+    let Some(handle_table) = (unsafe { table_for(process, handle) }) else {
+        return STATUS_INVALID_HANDLE;
+    };
+    let owner = if handle & nk_ntabi::ob::KERNEL_HANDLE == nk_ntabi::ob::KERNEL_HANDLE
+        || process.is_null()
+    {
+        crate::ps::process::system()
+    } else {
+        process
+    };
     let veto_check = {
-        let table = TABLE.lock();
+        let table = handle_table.0.lock();
         if let Some(open) = table.get(index) {
             let body = open.object.0;
             // SAFETY: the table holds a reference while locked.
@@ -264,7 +489,7 @@ pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
         // SAFETY: `held` keeps the object alive across `OkayToCloseProcedure`.
         let allowed = unsafe {
             okay_to_close(
-                crate::ps::process::system().cast(),
+                owner.cast(),
                 held.body().cast(),
                 handle as *mut c_void,
                 prev,
@@ -274,7 +499,7 @@ pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
             return STATUS_HANDLE_NOT_CLOSABLE;
         }
     }
-    let closed = TABLE.lock().close(index);
+    let closed = handle_table.0.lock().close(index);
     let body = match closed {
         Ok(Entry(body)) => body,
         Err(HandleError::Protected) if mode == Mode::Kernel => crate::kd::bugcheck(format_args!(
@@ -285,17 +510,11 @@ pub fn close_for(handle: u64, mode: Mode) -> NTSTATUS {
     };
     // SAFETY: the entry held a reference, which this gives up, outside
     // the table's lock: the type's procedure may call a driver, and
-    // freeing takes the pool's lock. Every handle is the System
-    // process's, so its count of handles is the system's.
+    // freeing takes the pool's lock.
     unsafe {
         let handles = object::handle_count(body).fetch_sub(1, Ordering::AcqRel) as usize;
         if let Some(closed) = object::type_of(body).close_procedure() {
-            closed(
-                crate::ps::process::system().cast(),
-                body.cast(),
-                handles,
-                handles,
-            );
+            closed(owner.cast(), body.cast(), handles, handles);
         }
         object::dereference(body);
     }
@@ -406,7 +625,9 @@ pub unsafe extern "C" fn ObOpenObjectByPointer(
             handle.write_unaligned(core::ptr::null_mut());
             return STATUS_OBJECT_TYPE_MISMATCH;
         }
-        match open_with(object.cast(), desired_access, attributes, true) {
+        let kernel = handle_attributes & OBJ_KERNEL_HANDLE != 0
+            || current_process() == crate::ps::process::system();
+        match open_with(object.cast(), desired_access, attributes, kernel) {
             Ok(opened) => {
                 handle.write_unaligned(opened as *mut c_void);
                 STATUS_SUCCESS

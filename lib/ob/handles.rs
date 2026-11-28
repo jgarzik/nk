@@ -133,6 +133,33 @@ impl<T> Handles<T> {
         self.slots.iter().flatten().count()
     }
 
+    /// Iterate over every open `(index, Handle)` in slot order.
+    pub fn iter(&self) -> impl Iterator<Item = (usize, Handle<'_, T>)> {
+        self.slots.iter().enumerate().filter_map(|(i, slot)| {
+            let slot = slot.as_ref()?;
+            Some((
+                i,
+                Handle {
+                    object: &slot.object,
+                    granted: slot.granted,
+                    attributes: slot.attributes,
+                },
+            ))
+        })
+    }
+
+    /// Take every open entry out of the table, ignoring `protect_from_close`,
+    /// for process handle-table teardown.
+    pub fn drain_all(&mut self) -> Vec<T> {
+        let mut out = Vec::new();
+        for slot in &mut self.slots {
+            if let Some(open) = slot.take() {
+                out.push(open.object);
+            }
+        }
+        out
+    }
+
     /// The memory the table itself occupies, in bytes. It grows with the
     /// most handles ever open at once and is kept.
     pub fn storage(&self) -> usize {
@@ -280,5 +307,22 @@ mod tests {
             handles.insert(n, 0, PLAIN).unwrap();
         }
         assert_eq!(handles.storage(), storage);
+    }
+
+    #[test]
+    fn iter_and_drain_all_cover_every_open_slot() {
+        let mut handles = Handles::new();
+        let a = handles.insert('a', READ, INHERIT).unwrap();
+        let b = handles.insert('b', WRITE, PROTECTED).unwrap();
+        let c = handles.insert('c', READ | WRITE, PLAIN).unwrap();
+        assert_eq!(handles.close(c), Ok('c'));
+        let listed: Vec<(usize, char, bool)> = handles
+            .iter()
+            .map(|(i, h)| (i, *h.object, h.attributes.inherit))
+            .collect();
+        assert_eq!(listed, alloc::vec![(a, 'a', true), (b, 'b', false)]);
+        let drained = handles.drain_all();
+        assert_eq!(drained, alloc::vec!['a', 'b']);
+        assert_eq!(handles.count(), 0);
     }
 }

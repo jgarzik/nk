@@ -128,7 +128,8 @@ pub extern "C" fn PsTerminateSystemThread(_exit_status: NTSTATUS) -> NTSTATUS {
 
 /// [`ZwClose`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwclose).
 pub extern "C" fn NtClose(handle: *mut c_void) -> NTSTATUS {
-    handle::close(handle as u64)
+    let mode = crate::svc::capture::handle_mode(crate::svc::capture::mode());
+    handle::close_for(handle as u64, mode)
 }
 
 /// `THREAD_ALERT`: the right to alert a thread.
@@ -139,17 +140,18 @@ const THREAD_ALERT: u32 = 0x4;
 /// of a caller of the `Zw` routine (`ke::wait::alert`). The handle
 /// must name a thread.
 pub extern "C" fn NtAlertThread(thread_handle: *mut c_void) -> NTSTATUS {
+    let prev = crate::svc::capture::mode();
     let found = handle::reference_for(
         thread_handle as u64,
         Some(&raw const object::THREAD_TYPE),
         THREAD_ALERT,
-        nk_ob::handles::Mode::Kernel,
+        crate::svc::capture::handle_mode(prev),
     );
     match found {
         Ok((thread, _)) => {
             // SAFETY: a thread, referenced by the look-up until the
             // alert is made.
-            unsafe { crate::ke::wait::alert(thread.cast(), nk_ntabi::io::KERNEL_MODE) };
+            unsafe { crate::ke::wait::alert(thread.cast(), prev) };
             STATUS_SUCCESS
         }
         Err(status) => status,
@@ -170,11 +172,12 @@ fn with_thread(
     access: u32,
     set: impl FnOnce(*mut thread::Thread) -> NTSTATUS,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::handle_mode(crate::svc::capture::mode());
     let found = handle::reference_for(
         thread_handle as u64,
         Some(&raw const object::THREAD_TYPE),
         access,
-        nk_ob::handles::Mode::Kernel,
+        mode,
     );
     match found {
         Ok((body, _)) => set(body.cast()),

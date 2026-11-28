@@ -535,12 +535,28 @@ fn process_matches_the_kernel() {
     assert_eq!(field("Pcb"), 0);
     assert_eq!(offset(&kprocess, "_KPROCESS", "Header"), 0);
     assert_eq!(
+        DIRECTORY_TABLE_BASE,
+        offset(&kprocess, "_KPROCESS", "DirectoryTableBase")
+    );
+    assert_eq!(
         BASE_PRIORITY,
         offset(&kprocess, "_KPROCESS", "BasePriority")
     );
     assert_eq!(UNIQUE_PROCESS_ID, field("UniqueProcessId"));
+    assert_eq!(ACTIVE_PROCESS_LINKS, field("ActiveProcessLinks"));
     assert_eq!(CREATE_TIME, field("CreateTime"));
     assert_eq!(IMAGE_FILE_NAME, field("ImageFileName"));
+    assert_eq!(SECTION_OBJECT, field("SectionObject"));
+    assert_eq!(SECTION_BASE_ADDRESS, field("SectionBaseAddress"));
+    assert_eq!(
+        INHERITED_FROM_UNIQUE_PROCESS_ID,
+        field("InheritedFromUniqueProcessId")
+    );
+    assert_eq!(PEB, field("Peb"));
+    assert_eq!(OBJECT_TABLE, field("ObjectTable"));
+    assert_eq!(ACTIVE_THREADS, field("ActiveThreads"));
+    assert_eq!(EXIT_STATUS, field("ExitStatus"));
+    assert_eq!(VAD_ROOT, field("VadRoot"));
     assert_eq!(SESSION, field("Session"));
     assert_eq!(JOB, field("Job"));
     assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));

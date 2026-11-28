@@ -394,13 +394,17 @@ pub static KEY_TYPE: ObjectType =
         );
 
 /// Processes (`EPROCESS`). Generic rights from `PspProcessMapping`.
-pub static PROCESS_TYPE: ObjectType = ObjectType::new(FIRST_TYPE_INDEX + 4, &PROCESS_NAME, None)
-    .rights(GENERIC_MAPPING {
-        GenericRead: 0x0002_0410,
-        GenericWrite: 0x0002_0BEA,
-        GenericExecute: 0x0012_1001,
-        GenericAll: 0x001F_FFFF,
-    });
+pub static PROCESS_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 4,
+    &PROCESS_NAME,
+    Some(crate::ps::process::deleted),
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0410,
+    GenericWrite: 0x0002_0BEA,
+    GenericExecute: 0x0012_1001,
+    GenericAll: 0x001F_FFFF,
+});
 
 /// Access tokens: the body is NK's own (`se::token`). Generic rights from
 /// `SepTokenMapping`.

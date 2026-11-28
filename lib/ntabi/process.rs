@@ -14,17 +14,38 @@ pub const EPROCESS_SIZE: usize = 0xA40;
 /// `KPROCESS.Header.Type` of a process: `ProcessObject`.
 pub const PROCESS_OBJECT: u8 = 3;
 
+/// `KPROCESS.DirectoryTableBase`: physical address of the process's top-level
+/// page table (CR3 on x86-64, TTBR0 on arm64).
+pub const DIRECTORY_TABLE_BASE: usize = 0x28;
 /// `KPROCESS.BasePriority`: one signed byte, the priority a thread of
 /// the process has unless it is set apart. The System process's is 8.
 pub const BASE_PRIORITY: usize = 0x280;
 /// `UniqueProcessId`: the process id, pointer-sized.
 pub const UNIQUE_PROCESS_ID: usize = 0x440;
+/// `ActiveProcessLinks`: doubly-linked list of live processes.
+pub const ACTIVE_PROCESS_LINKS: usize = 0x448;
 /// `CreateTime`: when the process was made, as system time.
 pub const CREATE_TIME: usize = 0x468;
 /// `Token`: the process's primary token, as an `EX_FAST_REF`: a pointer
 /// to the token object whose low four bits ([`FAST_REF_COUNT_MASK`])
 /// count references handed out in advance.
 pub const TOKEN: usize = 0x4B8;
+/// `SectionObject`: pointer to the process's primary image section object.
+pub const SECTION_OBJECT: usize = 0x518;
+/// `SectionBaseAddress`: user-mode base address of the primary image.
+pub const SECTION_BASE_ADDRESS: usize = 0x520;
+/// `InheritedFromUniqueProcessId`: parent process id, pointer-sized.
+pub const INHERITED_FROM_UNIQUE_PROCESS_ID: usize = 0x540;
+/// `Peb`: user-mode `PEB` pointer (null for the System process).
+pub const PEB: usize = 0x550;
+/// `ObjectTable`: pointer to the process's handle table (`HANDLE_TABLE`).
+pub const OBJECT_TABLE: usize = 0x570;
+/// `ActiveThreads`: number of non-terminated threads in the process.
+pub const ACTIVE_THREADS: usize = 0x5F0;
+/// `ExitStatus`: process exit status (`STATUS_PENDING` while alive).
+pub const EXIT_STATUS: usize = 0x7D4;
+/// `VadRoot`: root of the process's VAD tree.
+pub const VAD_ROOT: usize = 0x7D8;
 /// `DiskCounters`: the process's `PROCESS_DISK_COUNTERS` (bytes read
 /// and written, read, write and flush operations), or null.
 pub const DISK_COUNTERS: usize = 0x8B8;

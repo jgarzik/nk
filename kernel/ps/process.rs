@@ -66,8 +66,21 @@ pub unsafe fn thread_priorities(process: *const u8) -> u32 {
     }
 }
 
+/// NK's process object: Windows' `EPROCESS` at offset 0 so any `PEPROCESS`
+/// pointer drivers hold is directly a `*mut Process`, followed by NK's own
+/// process state.
+#[repr(C, align(16))]
+pub struct Process {
+    object: [u8; layout::EPROCESS_SIZE],
+}
+
+/// Allocate a new unique process or thread id (multiples of 4, starting at 8).
+pub fn new_id() -> u64 {
+    NEXT_ID.fetch_add(4, Ordering::Relaxed)
+}
+
 pub fn init(time: u64) -> Result<(), &'static str> {
-    let process = object::create(&object::PROCESS_TYPE, layout::EPROCESS_SIZE)
+    let process = object::create(&object::PROCESS_TYPE, size_of::<Process>())
         .ok_or("no memory for the System process")?;
     let token = crate::se::token::create(nk_se::token::Token::system())
         .ok_or("no memory for the System process's token")?;
@@ -78,6 +91,10 @@ pub fn init(time: u64) -> Result<(), &'static str> {
         // An `EX_FAST_REF`. Its count bits stay zero: NK hands out no
         // references in advance, every one is taken from the object.
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
+        process
+            .add(layout::OBJECT_TABLE)
+            .cast::<*mut crate::ob::handle::HandleTable>()
+            .write(crate::ob::handle::kernel_table());
         process.write(layout::PROCESS_OBJECT);
         // A process is something a thread can wait on: for its end,
         // which never comes.
@@ -90,6 +107,10 @@ pub fn init(time: u64) -> Result<(), &'static str> {
         process
             .add(layout::BASE_PRIORITY)
             .write(thread::NORMAL_PRIORITY);
+        process
+            .add(layout::EXIT_STATUS)
+            .cast::<NTSTATUS>()
+            .write(nk_ntabi::status::STATUS_PENDING);
         // The priorities its threads start with: Windows' normal I/O
         // priority and normal page priority.
         process
@@ -107,6 +128,107 @@ pub fn init(time: u64) -> Result<(), &'static str> {
     PsInitialSystemProcess.0.store(process, Ordering::Release);
     super::silo::init();
     Ok(())
+}
+
+/// Create a minimal non-System process object with its own per-process handle
+/// table (`EPROCESS.ObjectTable`), unique PID, copied primary token reference
+/// from `parent`, and optional `OBJ_INHERIT` handle duplication.
+///
+/// # Safety
+/// `parent` is a live `EPROCESS` (typically [`system()`] or the current
+/// process).
+pub unsafe fn create_minimal(
+    name: &[u8],
+    parent: *mut u8,
+    inherit: bool,
+) -> Result<object::ObRef, NTSTATUS> {
+    let process = object::create(&object::PROCESS_TYPE, size_of::<Process>())
+        .ok_or(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES)?;
+    let Some(table) = crate::ob::handle::create_table() else {
+        // SAFETY: newly created process with no resources attached yet.
+        unsafe { object::dereference(process) };
+        return Err(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES);
+    };
+    // SAFETY: `parent` is live per the contract.
+    let token = unsafe { PsReferencePrimaryToken(parent.cast()).cast::<u8>() };
+    // SAFETY: `parent` is live per the contract.
+    let parent_pid = unsafe { PsGetProcessId(parent.cast()).addr() as u64 };
+    let pid = new_id();
+    let now = crate::ke::time::system_time();
+    // SAFETY: `process` is a fresh zeroed `Process` block owned exclusively
+    // until returned.
+    unsafe {
+        process.add(layout::TOKEN).cast::<*mut u8>().write(token);
+        process
+            .add(layout::OBJECT_TABLE)
+            .cast::<*mut crate::ob::handle::HandleTable>()
+            .write(table);
+        process.write(layout::PROCESS_OBJECT);
+        crate::ke::object::init_wait_list(process.cast());
+        process
+            .add(layout::UNIQUE_PROCESS_ID)
+            .cast::<u64>()
+            .write(pid);
+        process
+            .add(layout::INHERITED_FROM_UNIQUE_PROCESS_ID)
+            .cast::<u64>()
+            .write(parent_pid);
+        process.add(layout::CREATE_TIME).cast::<u64>().write(now);
+        process
+            .add(layout::BASE_PRIORITY)
+            .write(thread::NORMAL_PRIORITY);
+        process
+            .add(layout::EXIT_STATUS)
+            .cast::<NTSTATUS>()
+            .write(nk_ntabi::status::STATUS_PENDING);
+        process
+            .add(layout::FLAGS2)
+            .cast::<u32>()
+            .write(MEMORY_PRIORITY_NORMAL << layout::DEFAULT_PAGE_PRIORITY_SHIFT);
+        process
+            .add(layout::FLAGS)
+            .cast::<u32>()
+            .write(IO_PRIORITY_NORMAL << layout::DEFAULT_IO_PRIORITY_SHIFT);
+        let len = name.len().min(layout::IMAGE_FILE_NAME_LEN - 1);
+        process
+            .add(layout::IMAGE_FILE_NAME)
+            .copy_from_nonoverlapping(name.as_ptr(), len);
+    }
+    // SAFETY: `process` has its initial reference; `ObRef::adopt` cleans it up
+    // on error via `deleted`.
+    let held = unsafe { object::ObRef::adopt(process) };
+    if inherit {
+        // SAFETY: both `parent` and `process` are live with valid tables.
+        unsafe { crate::ob::handle::inherit_handles(parent, held.body()) }?;
+    }
+    Ok(held)
+}
+
+/// `PROCESS_TYPE`'s delete procedure: tears down the process's handle table
+/// (if still present) and drops its primary token reference.
+///
+/// # Safety
+/// `body` is a `Process` object with no remaining references.
+pub unsafe extern "C" fn deleted(body: *mut c_void) {
+    let process = body.cast::<u8>();
+    // SAFETY: per the contract; exclusive access during object deletion.
+    unsafe {
+        let table_slot = process
+            .add(layout::OBJECT_TABLE)
+            .cast::<*mut crate::ob::handle::HandleTable>();
+        let table = table_slot.read();
+        table_slot.write(core::ptr::null_mut());
+        if !table.is_null() {
+            crate::ob::handle::destroy_table(process, table);
+        }
+        let token_slot = process.add(layout::TOKEN).cast::<usize>();
+        let field = token_slot.read();
+        token_slot.write(0);
+        let token = (field & !layout::FAST_REF_COUNT_MASK) as *mut u8;
+        if !token.is_null() {
+            object::dereference(token);
+        }
+    }
 }
 
 /// The System process object.
@@ -253,9 +375,16 @@ pub extern "C" fn PsGetCurrentThreadId() -> *mut c_void {
 }
 
 /// `PsGetProcessImageFileName` (undocumented): short ASCII image name of a
-/// process. NK runs only the System process, whose name is `"System"`.
-pub extern "C" fn PsGetProcessImageFileName(_process: *mut c_void) -> *const u8 {
-    c"System".as_ptr().cast()
+/// process (`EPROCESS.ImageFileName`).
+///
+/// # Safety
+/// `process` is null or a live `EPROCESS`.
+pub unsafe extern "C" fn PsGetProcessImageFileName(process: *mut c_void) -> *const u8 {
+    if process.is_null() {
+        return c"System".as_ptr().cast();
+    }
+    // SAFETY: per the contract; `ImageFileName` is 15 bytes inside `EPROCESS`.
+    unsafe { process.cast::<u8>().add(layout::IMAGE_FILE_NAME) }
 }
 
 /// [`PsGetProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetprocessid).
@@ -385,7 +514,7 @@ pub unsafe extern "C" fn PsDereferencePrimaryToken(token: *mut c_void) {
 
 /// An id for a new thread.
 pub fn new_thread_id() -> u64 {
-    NEXT_ID.fetch_add(4, Ordering::Relaxed)
+    new_id()
 }
 
 // ---- tests --------------------------------------------------------------
@@ -442,6 +571,105 @@ pub fn self_test() -> Result<(), &'static str> {
     }
     if handle::reference(current, Some(&raw const object::THREAD_TYPE)).is_ok() {
         return Err("NtCurrentProcess was accepted as a thread");
+    }
+    // F4: per-process handle table isolation, OBJ_INHERIT duplication, and
+    // clean process teardown with zero pool leak.
+    {
+        use crate::mm::pool;
+        use nk_ob::handles::{Attributes, Mode};
+
+        let blocks = || pool::usage().blocks - handle::storage().0;
+        let before = blocks();
+        let ev1 = object::create(&object::EVENT_TYPE, size_of::<nk_ntabi::ke::KEVENT>())
+            .ok_or("F4: no memory for event 1")?;
+        let ev2 = object::create(&object::EVENT_TYPE, size_of::<nk_ntabi::ke::KEVENT>())
+            .ok_or("F4: no memory for event 2")?;
+        // SAFETY: newly created events held by `ObRef::adopt`.
+        let (ev1, ev2) = unsafe { (object::ObRef::adopt(ev1), object::ObRef::adopt(ev2)) };
+        // SAFETY: `system()` is live.
+        let p1 = unsafe { create_minimal(b"test1.exe", process, false) }
+            .map_err(|_| "F4: could not create process 1")?;
+        // Open one inheritable handle and one non-inheritable handle in P1.
+        // SAFETY: `p1`, `ev1`, and `ev2` are live.
+        let h_inh = unsafe {
+            handle::open_in(
+                p1.body(),
+                ev1.body(),
+                0x3,
+                Attributes {
+                    inherit: true,
+                    protect_from_close: false,
+                },
+                false,
+            )
+        }
+        .map_err(|_| "F4: could not open inheritable handle in P1")?;
+        // SAFETY: `p1` and `ev2` are live.
+        let h_priv =
+            unsafe { handle::open_in(p1.body(), ev2.body(), 0x3, Attributes::default(), false) }
+                .map_err(|_| "F4: could not open private handle in P1")?;
+        // P1's handle must resolve in P1 and must NOT resolve in a fresh empty P3.
+        // SAFETY: `p1` is live.
+        let (found_p1, _) = unsafe {
+            handle::reference_in(
+                p1.body(),
+                h_inh,
+                Some(&raw const object::EVENT_TYPE),
+                0x1,
+                Mode::User,
+            )
+        }
+        .map_err(|_| "F4: handle in P1 did not resolve in P1")?;
+        if found_p1.body() != ev1.body() {
+            return Err("F4: handle in P1 resolved to wrong object");
+        }
+        drop(found_p1);
+        // SAFETY: `p1` is live.
+        let p2 = unsafe { create_minimal(b"test2.exe", p1.body(), true) }
+            .map_err(|_| "F4: could not create child process P2")?;
+        // P2 must inherit ev1 (first slot -> same handle value `h_inh`) and NOT ev2 (`h_priv`).
+        // SAFETY: `p2` is live.
+        let (found_p2, _) = unsafe {
+            handle::reference_in(
+                p2.body(),
+                h_inh,
+                Some(&raw const object::EVENT_TYPE),
+                0x1,
+                Mode::User,
+            )
+        }
+        .map_err(|_| "F4: P2 did not inherit OBJ_INHERIT handle")?;
+        if found_p2.body() != ev1.body() {
+            return Err("F4: P2 inherited handle points to wrong object");
+        }
+        drop(found_p2);
+        // SAFETY: `p2` is live.
+        if unsafe { handle::reference_in(p2.body(), h_priv, None, 0, Mode::User) }.is_ok() {
+            return Err("F4: P2 inherited a non-inheritable handle");
+        }
+        // `NtCurrentProcess()` in P2 returns P2, not System.
+        // SAFETY: `p2` is live.
+        let (cur_p2, _) = unsafe {
+            handle::reference_in(
+                p2.body(),
+                current,
+                Some(&raw const object::PROCESS_TYPE),
+                0,
+                Mode::User,
+            )
+        }
+        .map_err(|_| "F4: NtCurrentProcess failed in P2")?;
+        if cur_p2.body() != p2.body() {
+            return Err("F4: NtCurrentProcess in P2 did not return P2");
+        }
+        drop(cur_p2);
+        drop(p2);
+        drop(p1);
+        drop(ev2);
+        drop(ev1);
+        if blocks() != before {
+            return Err("F4: destroying processes with open handles leaked pool blocks");
+        }
     }
     Ok(())
 }
