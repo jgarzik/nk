@@ -176,22 +176,69 @@ static LOW_ROOT: AtomicU64 = AtomicU64::new(0);
 pub fn low_half_init() -> Result<(), &'static str> {
     use crate::mm::map::Tables;
     use nk_bootinfo::FirmwareUse;
-    use nk_mm::pt::{Prot, TableMem};
+    use nk_mm::pt::{self, Prot, TableMem};
 
     let root = Tables.alloc_table().ok_or("no memory for the low half")?;
-    LOW_ROOT.store(root, Ordering::Relaxed);
+    LOW_ROOT.store(root, Ordering::Release);
+    let arch_pt = pt_arch();
     for (region, used_as) in crate::mm::firmware_regions() {
         let prot = match used_as {
             FirmwareUse::RuntimeCode => Prot::RWX,
             _ if region.is_ram() => Prot::RW,
             _ => Prot::DEVICE,
         };
-        crate::mm::map::map(region.phys, region.phys, region.pages as usize, prot)
-            .map_err(|_| "cannot map firmware's runtime regions")?;
+        pt::map_range(
+            &mut Tables,
+            &arch_pt,
+            root,
+            region.phys,
+            region.phys,
+            region.pages * 4096,
+            0,
+            prot,
+        )
+        .map_err(|_| "cannot map firmware's runtime regions")?;
     }
+    mapping_sync();
     adopt_low_half();
     Ok(())
 }
+
+/// Physical address of the System process's low-half (`TTBR0_EL1`) root table.
+pub fn kernel_address_space() -> u64 {
+    LOW_ROOT.load(Ordering::Acquire)
+}
+
+/// Physical address of the active low-half (`TTBR0_EL1`) root page table.
+pub fn current_address_space() -> u64 {
+    let ttbr: u64;
+    // SAFETY: reading TTBR0_EL1 has no side effects.
+    unsafe { core::arch::asm!("mrs {}, ttbr0_el1", out(reg) ttbr, options(nomem, nostack)) };
+    ttbr & 0x0000_FFFF_FFFF_F000
+}
+
+/// Switch this CPU's low half (`TTBR0_EL1`) to the root page table at `root`.
+pub fn switch_address_space(root: u64) {
+    if current_address_space() != root {
+        // SAFETY: `root` is a valid L0 table in NK's format; the kernel runs
+        // in TTBR1 so switching TTBR0 and invalidating local TLBs is safe.
+        unsafe {
+            core::arch::asm!(
+                "msr ttbr0_el1, {root}",
+                "isb",
+                "tlbi vmalle1",
+                "dsb nsh",
+                "isb",
+                root = in(reg) root,
+                options(nostack),
+            );
+        }
+    }
+}
+
+/// Nothing to copy on arm64: `TTBR1_EL1` holds the kernel half independently
+/// of each process's `TTBR0_EL1`.
+pub fn copy_kernel_half(_dst_root: u64) {}
 
 /// Make NK's low half this processor's. The caller runs in the upper
 /// half with interrupts masked, so nothing uses the lower one while the
@@ -222,19 +269,31 @@ pub fn adopt_low_half() {
 /// each half of the address space has its own.
 pub fn pt_root_of(va: u64) -> u64 {
     if va >> 63 == 0 {
-        LOW_ROOT.load(Ordering::Relaxed)
+        current_address_space()
     } else {
         pt_root()
     }
 }
 
-/// Before a call into firmware's runtime code: nothing to do. The low
-/// half of every processor holds the runtime regions at their physical
-/// addresses.
-pub fn firmware_enter() {}
+/// Before a call into firmware's runtime code: switch `TTBR0_EL1` to
+/// `LOW_ROOT` (where firmware's runtime regions are identity-mapped) and
+/// return the caller's previous root.
+pub fn firmware_enter() -> u64 {
+    let saved = current_address_space();
+    let system = kernel_address_space();
+    if system != 0 && saved != system {
+        switch_address_space(system);
+    }
+    saved
+}
 
-/// After a firmware call that returned: nothing to undo.
-pub fn firmware_leave() {}
+/// After a firmware call that returned: restore the low-half root saved by
+/// [`firmware_enter`].
+pub fn firmware_leave(saved: u64) {
+    if saved != 0 && current_address_space() != saved {
+        switch_address_space(saved);
+    }
+}
 
 /// Page-table entry encoding for this CPU.
 pub fn pt_arch() -> nk_mm::pt::Aarch64 {

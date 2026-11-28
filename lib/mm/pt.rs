@@ -10,11 +10,14 @@
 
 use crate::PAGE_SIZE;
 
-/// What a mapping allows. Kernel-only mappings; there is no user mode yet.
+/// What a mapping allows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Prot {
     pub write: bool,
     pub exec: bool,
+    /// Accessible from user mode (ring 3 on x86-64, EL0 on arm64).
+    /// User mappings are never global and on arm64 are always PXN.
+    pub user: bool,
     /// Device registers rather than RAM, or RAM to be reached past the
     /// caches: uncached on x86-64, device memory attributes on arm64.
     pub device: bool,
@@ -24,34 +27,80 @@ impl Prot {
     pub const RO: Self = Self {
         write: false,
         exec: false,
+        user: false,
         device: false,
     };
     pub const RW: Self = Self {
         write: true,
         exec: false,
+        user: false,
         device: false,
     };
     pub const RX: Self = Self {
         write: false,
         exec: true,
+        user: false,
         device: false,
     };
     pub const RWX: Self = Self {
         write: true,
         exec: true,
+        user: false,
+        device: false,
+    };
+    pub const USER_RO: Self = Self {
+        write: false,
+        exec: false,
+        user: true,
+        device: false,
+    };
+    pub const USER_RW: Self = Self {
+        write: true,
+        exec: false,
+        user: true,
+        device: false,
+    };
+    pub const USER_RX: Self = Self {
+        write: false,
+        exec: true,
+        user: true,
+        device: false,
+    };
+    pub const USER_RWX: Self = Self {
+        write: true,
+        exec: true,
+        user: true,
         device: false,
     };
     pub const DEVICE: Self = Self {
         write: true,
         exec: false,
+        user: false,
         device: true,
     };
 }
 
 /// Page-table entry encoding for one architecture.
 pub trait Arch {
-    /// Entry pointing at a next-level table at physical address `pa`.
+    /// Entry pointing at a next-level table at physical address `pa` (kernel-only).
     fn table(&self, pa: u64) -> u64;
+    /// Entry pointing at a next-level table at physical address `pa`, allowing
+    /// user-mode walks beneath it when `user` is true.
+    fn table_for(&self, pa: u64, user: bool) -> u64 {
+        let _ = user;
+        self.table(pa)
+    }
+    /// Bit(s) OR'd onto an existing intermediate table entry when a user
+    /// mapping is placed beneath it.
+    fn user_table_bit(&self) -> u64 {
+        0
+    }
+    /// Bit(s) cleared on a leaf entry when mapped in the low half so a
+    /// non-user low-half mapping is never treated as global across address
+    /// space switches.
+    fn global_bit(&self) -> u64 {
+        0
+    }
     /// Entry mapping `pa` at `level` (0 = 4 KiB, 1 = 2 MiB, 2 = 1 GiB).
     fn leaf(&self, pa: u64, level: u8, prot: Prot) -> u64;
     fn present(&self, entry: u64) -> bool;
@@ -59,6 +108,8 @@ pub trait Arch {
     fn is_leaf(&self, entry: u64, level: u8) -> bool;
     /// True if a leaf entry lets the kernel write what it maps.
     fn writable(&self, entry: u64) -> bool;
+    /// True if a leaf entry is accessible from user mode.
+    fn user(&self, entry: u64) -> bool;
     /// True if what a valid 4 KiB leaf entry maps may have been written
     /// through it since the entry was made or last [`cleaned`](Self::clean).
     fn dirty(&self, entry: u64) -> bool;
@@ -77,9 +128,22 @@ impl Arch for X86_64 {
         pa | 0b11 // present, writable; leaf entries carry the real protection
     }
 
+    fn table_for(&self, pa: u64, user: bool) -> u64 {
+        pa | if user { 0b111 } else { 0b11 }
+    }
+
+    fn user_table_bit(&self) -> u64 {
+        1 << 2
+    }
+
+    fn global_bit(&self) -> u64 {
+        1 << 8
+    }
+
     fn leaf(&self, pa: u64, level: u8, prot: Prot) -> u64 {
         const PRESENT: u64 = 1;
         const WRITE: u64 = 1 << 1;
+        const USER: u64 = 1 << 2;
         const HUGE: u64 = 1 << 7;
         const GLOBAL: u64 = 1 << 8;
         const NX: u64 = 1 << 63;
@@ -87,7 +151,12 @@ impl Arch for X86_64 {
         // page attribute table, which is "uncacheable" as the processor
         // starts and as NK leaves it.
         const UNCACHED: u64 = 1 << 3 | 1 << 4;
-        let mut e = pa | PRESENT | GLOBAL;
+        let mut e = pa | PRESENT;
+        if prot.user {
+            e |= USER;
+        } else {
+            e |= GLOBAL;
+        }
         if prot.device {
             e |= UNCACHED;
         }
@@ -113,6 +182,10 @@ impl Arch for X86_64 {
 
     fn writable(&self, entry: u64) -> bool {
         entry & (1 << 1) != 0
+    }
+
+    fn user(&self, entry: u64) -> bool {
+        entry & (1 << 2) != 0
     }
 
     /// The processor sets the dirty bit (6) on the first write.
@@ -172,9 +245,11 @@ impl Arch for Aarch64 {
     fn leaf(&self, pa: u64, level: u8, prot: Prot) -> u64 {
         const VALID: u64 = 1;
         const PAGE: u64 = 1 << 1; // at level 0; clear means "block" above it
+        const AP_USER: u64 = 1 << 6;
         const AP_RO: u64 = 1 << 7;
         const SH_INNER: u64 = 3 << 8;
         const AF: u64 = 1 << 10;
+        const NG: u64 = 1 << 11;
         const PXN: u64 = 1 << 53;
         const UXN: u64 = 1 << 54;
         let index = if prot.device {
@@ -182,7 +257,7 @@ impl Arch for Aarch64 {
         } else {
             self.mair_normal
         };
-        let mut e = pa | VALID | AF | UXN | (u64::from(index) << 2);
+        let mut e = pa | VALID | AF | (u64::from(index) << 2);
         if level == 0 {
             e |= PAGE;
         }
@@ -192,8 +267,16 @@ impl Arch for Aarch64 {
         if !prot.write {
             e |= AP_RO;
         }
-        if !prot.exec {
-            e |= PXN;
+        if prot.user {
+            e |= AP_USER | NG | PXN;
+            if !prot.exec {
+                e |= UXN;
+            }
+        } else {
+            e |= UXN;
+            if !prot.exec {
+                e |= PXN;
+            }
         }
         e
     }
@@ -209,6 +292,11 @@ impl Arch for Aarch64 {
     fn writable(&self, entry: u64) -> bool {
         // AP[2]: read-only.
         entry & (1 << 7) == 0
+    }
+
+    fn user(&self, entry: u64) -> bool {
+        // AP[1]: EL0 access permitted.
+        entry & (1 << 6) != 0
     }
 
     /// NK does not turn on the processor's dirty-state management, so
@@ -266,21 +354,34 @@ pub fn map(
     }
     let mut table = root;
     for l in (level + 1..=3).rev() {
-        let e = mem.read(table, index(va, l));
+        let idx = index(va, l);
+        let e = mem.read(table, idx);
         table = if !arch.present(e) {
             let next = mem.alloc_table().ok_or(MapError::NoMemory)?;
-            mem.write(table, index(va, l), arch.table(next));
+            mem.write(table, idx, arch.table_for(next, prot.user));
             next
         } else if arch.is_leaf(e, l) {
             return Err(MapError::AlreadyMapped);
         } else {
+            if prot.user {
+                let upgraded = e | arch.user_table_bit();
+                if upgraded != e {
+                    mem.write(table, idx, upgraded);
+                }
+            }
             arch.addr(e)
         };
     }
-    if arch.present(mem.read(table, index(va, level))) {
+    let idx = index(va, level);
+    if arch.present(mem.read(table, idx)) {
         return Err(MapError::AlreadyMapped);
     }
-    mem.write(table, index(va, level), arch.leaf(pa, level, prot));
+    let mut leaf = arch.leaf(pa, level, prot);
+    // Never mark a low-half mapping global: CR3 switches must invalidate it.
+    if va >> 63 == 0 {
+        leaf &= !arch.global_bit();
+    }
+    mem.write(table, idx, leaf);
     Ok(())
 }
 
@@ -349,16 +450,35 @@ pub fn leaf_table(
     root: u64,
     va: u64,
 ) -> Result<u64, MapError> {
+    leaf_table_for(mem, arch, root, va, false)
+}
+
+/// As [`leaf_table`], allowing user-mode walks through intermediate
+/// tables when `user` is true.
+pub fn leaf_table_for(
+    mem: &mut impl TableMem,
+    arch: &impl Arch,
+    root: u64,
+    va: u64,
+    user: bool,
+) -> Result<u64, MapError> {
     let mut table = root;
     for l in (1..=3u8).rev() {
-        let e = mem.read(table, index(va, l));
+        let idx = index(va, l);
+        let e = mem.read(table, idx);
         table = if !arch.present(e) {
             let next = mem.alloc_table().ok_or(MapError::NoMemory)?;
-            mem.write(table, index(va, l), arch.table(next));
+            mem.write(table, idx, arch.table_for(next, user));
             next
         } else if arch.is_leaf(e, l) {
             return Err(MapError::AlreadyMapped);
         } else {
+            if user {
+                let upgraded = e | arch.user_table_bit();
+                if upgraded != e {
+                    mem.write(table, idx, upgraded);
+                }
+            }
             arch.addr(e)
         };
     }
@@ -630,5 +750,41 @@ mod tests {
         );
         assert!(a.is_leaf(a.leaf(0x20_0000, 1, Prot::RW), 1) && !a.is_leaf(a.table(0x7000), 1));
         assert_eq!(a.addr(a.leaf(0x1_2345_6000, 0, Prot::RX)), 0x1_2345_6000);
+    }
+
+    #[test]
+    fn user_entry_bits_and_intermediate_upgrade() {
+        // x86-64: USER bit set, GLOBAL bit clear, NX follows !exec.
+        let x = X86_64;
+        assert_eq!(x.leaf(0x5000, 0, Prot::USER_RW), 0x5000 | 0x007 | 1 << 63);
+        assert_eq!(x.leaf(0x5000, 0, Prot::USER_RX), 0x5000 | 0x005);
+        assert_eq!(x.leaf(0x5000, 0, Prot::USER_RO), 0x5000 | 0x005 | 1 << 63);
+        assert!(x.user(x.leaf(0x5000, 0, Prot::USER_RW)));
+        assert!(!x.user(x.leaf(0x5000, 0, Prot::RW)));
+        assert_eq!(x.table_for(0x7000, true), 0x7007);
+        assert_eq!(x.table_for(0x7000, false), 0x7003);
+
+        // Low-half non-user mapping has GLOBAL cleared; high-half keeps GLOBAL.
+        let mut m = Mem::default();
+        let root = m.root();
+        map(&mut m, &X86_64, root, 0x1_0000, 0x2_0000, 0, Prot::RW).unwrap();
+        let low_leaf = leaf_table(&mut m, &X86_64, root, 0x1_0000).unwrap();
+        let low_e = m.read(low_leaf, index(0x1_0000, 0));
+        assert_eq!(low_e & (1 << 8), 0, "low-half mapping must not be global");
+        // Mapping a user page under the same intermediate tables upgrades them with USER.
+        map(&mut m, &X86_64, root, 0x1_1000, 0x2_1000, 0, Prot::USER_RW).unwrap();
+        assert_ne!(m.read(root, 0) & (1 << 2), 0, "PML4E upgraded to USER");
+
+        // arm64: AP_USER, NG, PXN always set on user pages; UXN follows !exec.
+        let a = ARM;
+        let urw = a.leaf(0x5000, 0, Prot::USER_RW);
+        let urx = a.leaf(0x5000, 0, Prot::USER_RX);
+        assert!(a.user(urw) && a.writable(urw));
+        assert!(a.user(urx) && !a.writable(urx));
+        assert_ne!(urw & (1 << 11), 0, "NG set on user page");
+        assert_ne!(urw & (1 << 53), 0, "PXN set on user RW");
+        assert_ne!(urw & (1 << 54), 0, "UXN set on user RW");
+        assert_ne!(urx & (1 << 53), 0, "PXN set on user RX");
+        assert_eq!(urx & (1 << 54), 0, "UXN clear on user RX");
     }
 }

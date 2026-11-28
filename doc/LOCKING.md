@@ -295,6 +295,10 @@ on contention (bugchecking `IRQL_NOT_LESS_OR_EQUAL` if entered above
 - `ob::handle::HandleTable` — each process's handle table (including the
   System/kernel table; `read()` for handle look-ups and counts, `lock()`
   for insert/close/teardown; two handle tables are never locked together).
+- `mm::space::AddressSpace` — each non-System process's user-half page
+  tables (`read()` for translations, `lock()` for mapping/unmapping; the
+  immutable root physical address is read lock-free on context switch and
+  attach).
 
 Because `DIRECTORY_TYPE`, `KEY_TYPE`, and `PROCESS_TYPE` delete
 procedures take these passive locks, `ob::object::ObjectType::deletes_at_passive`

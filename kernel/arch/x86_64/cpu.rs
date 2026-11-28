@@ -166,14 +166,15 @@ pub fn init(number: u32) {
 
         // Drivers use SSE, and the trap entry saves it: make sure it is
         // on. CR0: no emulation, monitor the coprocessor, no lazy
-        // switching. CR4: FXSAVE and SSE exceptions enabled.
+        // switching. CR4: PGE (global kernel pages survive CR3 switches),
+        // FXSAVE, and SSE exceptions enabled.
         core::arch::asm!(
             "mov {t}, cr0",
             "and {t}, {cr0_clear}",
             "or {t}, 2",
             "mov cr0, {t}",
             "mov {t}, cr4",
-            "or {t}, 0x600",
+            "or {t}, 0x680",
             "mov cr4, {t}",
             t = out(reg) _,
             cr0_clear = const !0xCu64,

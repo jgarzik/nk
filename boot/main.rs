@@ -78,6 +78,7 @@ fn page_prot(pe: &Pe<'_>, rva: u32) -> Option<Prot> {
     Some(Prot {
         write: flags & nk_pe::SCN_MEM_WRITE != 0,
         exec: flags & nk_pe::SCN_MEM_EXECUTE != 0,
+        user: false,
         device: false,
     })
 }

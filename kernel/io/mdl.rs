@@ -581,6 +581,7 @@ pub unsafe extern "C" fn MmProtectMdlSystemAddress(mdl: *mut MDL, new_protect: u
         let prot = protection.access.then_some(Prot {
             write: protection.write,
             exec: protection.exec,
+            user: false,
             device: protection.uncached,
         });
         let va = (*mdl).MappedSystemVa as u64 & !(PAGE_SIZE as u64 - 1);

@@ -1159,6 +1159,12 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
         set_state(next, layout::state::RUNNING);
         set_current(next);
         arch::set_kernel_stack(active_stack(next).base);
+        let old_proc = field::<*mut u8>(me, layout::APC_STATE_PROCESS).read();
+        let new_proc = field::<*mut u8>(next, layout::APC_STATE_PROCESS).read();
+        if old_proc != new_proc {
+            let dtb = crate::ps::process::directory_table_base(new_proc);
+            arch::switch_address_space(dtb);
+        }
         dispatcher.previous.store(me, Ordering::Release);
         dispatcher.switches.fetch_add(1, Ordering::Relaxed);
         arch::context_switch(

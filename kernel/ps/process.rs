@@ -8,11 +8,13 @@
 
 #![allow(non_snake_case, non_upper_case_globals)]
 
+use crate::arch;
 use crate::ke::thread;
+use crate::mm::space::AddressSpace;
 use crate::ob::object;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
-use nk_ntabi::ke::{KAPC_STATE, KAPC_STATE_NOT_ATTACHED};
+use nk_ntabi::ke::{KAPC_STATE, KAPC_STATE_NOT_ATTACHED, LIST_ENTRY};
 use nk_ntabi::process as layout;
 use nk_ntabi::status::{NTSTATUS, STATUS_SUCCESS};
 use nk_ntabi::thread as thread_layout;
@@ -72,6 +74,33 @@ pub unsafe fn thread_priorities(process: *const u8) -> u32 {
 #[repr(C, align(16))]
 pub struct Process {
     object: [u8; layout::EPROCESS_SIZE],
+    /// Per-process user address space (`None` for the System process, which
+    /// owns `arch::kernel_address_space()`).
+    space: Option<AddressSpace>,
+}
+
+/// Physical address of `process`'s root page table (`KPROCESS.DirectoryTableBase`).
+///
+/// # Safety
+/// `process` is a live `EPROCESS`.
+pub unsafe fn directory_table_base(process: *const u8) -> u64 {
+    // SAFETY: per the contract; immutable once initialised.
+    unsafe {
+        process
+            .add(layout::DIRECTORY_TABLE_BASE)
+            .cast::<u64>()
+            .read()
+    }
+}
+
+/// The non-System process's user [`AddressSpace`], or `None` for the System
+/// process.
+///
+/// # Safety
+/// `process` is a live `EPROCESS` that outlives `'a`.
+pub unsafe fn address_space<'a>(process: *const u8) -> Option<&'a AddressSpace> {
+    // SAFETY: per the contract; `EPROCESS` is at offset 0 of `Process`.
+    unsafe { (*process.cast::<Process>()).space.as_ref() }
 }
 
 /// Allocate a new unique process or thread id (multiples of 4, starting at 8).
@@ -88,6 +117,11 @@ pub fn init(time: u64) -> Result<(), &'static str> {
     // SAFETY: a fresh, zeroed object of a process's size, which the pool
     // aligns to 16 bytes; nothing else has it yet.
     unsafe {
+        process
+            .add(layout::DIRECTORY_TABLE_BASE)
+            .cast::<u64>()
+            .write(arch::kernel_address_space());
+        (&raw mut (*process.cast::<Process>()).space).write(None);
         // An `EX_FAST_REF`. Its count bits stay zero: NK hands out no
         // references in advance, every one is taken from the object.
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
@@ -146,9 +180,22 @@ pub unsafe fn create_minimal(
         .ok_or(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES)?;
     let Some(table) = crate::ob::handle::create_table() else {
         // SAFETY: newly created process with no resources attached yet.
-        unsafe { object::dereference(process) };
+        unsafe {
+            (&raw mut (*process.cast::<Process>()).space).write(None);
+            object::dereference(process);
+        }
         return Err(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES);
     };
+    let Some(space) = AddressSpace::new() else {
+        // SAFETY: newly created process; tear down table before dereferencing.
+        unsafe {
+            (&raw mut (*process.cast::<Process>()).space).write(None);
+            crate::ob::handle::destroy_table(process, table);
+            object::dereference(process);
+        }
+        return Err(nk_ntabi::status::STATUS_INSUFFICIENT_RESOURCES);
+    };
+    let dtb = space.root();
     // SAFETY: `parent` is live per the contract.
     let token = unsafe { PsReferencePrimaryToken(parent.cast()).cast::<u8>() };
     // SAFETY: `parent` is live per the contract.
@@ -158,6 +205,11 @@ pub unsafe fn create_minimal(
     // SAFETY: `process` is a fresh zeroed `Process` block owned exclusively
     // until returned.
     unsafe {
+        process
+            .add(layout::DIRECTORY_TABLE_BASE)
+            .cast::<u64>()
+            .write(dtb);
+        (&raw mut (*process.cast::<Process>()).space).write(Some(space));
         process.add(layout::TOKEN).cast::<*mut u8>().write(token);
         process
             .add(layout::OBJECT_TABLE)
@@ -228,6 +280,7 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
         if !token.is_null() {
             object::dereference(token);
         }
+        core::ptr::drop_in_place(&raw mut (*process.cast::<Process>()).space);
     }
 }
 
@@ -263,56 +316,152 @@ pub extern "C" fn IoGetCurrentProcess() -> *mut c_void {
     PsGetCurrentProcess()
 }
 
+/// Move the contents (including doubly-linked APC queues) of `KAPC_STATE`
+/// `src` into `dst`, leaving `src` empty.
+///
+/// # Safety
+/// Both pointers are valid writable `KAPC_STATE`s and the thread's APC lock
+/// is held.
+unsafe fn move_apc_state(src: *mut KAPC_STATE, dst: *mut KAPC_STATE) {
+    // SAFETY: per the contract.
+    unsafe {
+        for mode in 0..2 {
+            let src_head = (&raw mut (*src).ApcListHead).cast::<LIST_ENTRY>().add(mode);
+            let dst_head = (&raw mut (*dst).ApcListHead).cast::<LIST_ENTRY>().add(mode);
+            let LIST_ENTRY { Flink, Blink } = src_head.read_unaligned();
+            if Flink == src_head {
+                dst_head.write_unaligned(LIST_ENTRY {
+                    Flink: dst_head,
+                    Blink: dst_head,
+                });
+            } else {
+                dst_head.write_unaligned(LIST_ENTRY { Flink, Blink });
+                (*Flink).Blink = dst_head;
+                (*Blink).Flink = dst_head;
+            }
+            src_head.write_unaligned(LIST_ENTRY {
+                Flink: src_head,
+                Blink: src_head,
+            });
+        }
+        (&raw mut (*dst).Process).write_unaligned((&raw const (*src).Process).read_unaligned());
+        (&raw mut (*dst).InProgressFlags).write((*src).InProgressFlags);
+        (&raw mut (*dst).KernelApcPending).write((*src).KernelApcPending);
+        (&raw mut (*dst).UserApcPendingAll).write((*src).UserApcPendingAll);
+        (&raw mut (*src).Process).write_unaligned(core::ptr::null_mut());
+        (&raw mut (*src).InProgressFlags).write(0);
+        (&raw mut (*src).KernelApcPending).write(0);
+        (&raw mut (*src).UserApcPendingAll).write(0);
+    }
+}
+
 /// [`KeStackAttachProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-kestackattachprocess):
-/// put the calling thread in `process`'s address space. A thread
-/// already there is left as it is, and the caller's `apc_state` gets
-/// Windows' mark for that, 1 where the process would be, and nothing
-/// else. Every thread is in the one process there is, so that is all
-/// an attach can be; naming anything else names no process, and the
-/// system stops. From a DPC routine it stops as on Windows
+/// put the calling thread in `process`'s address space, supporting nested
+/// attaches. A thread already in `process` is left as it is and `apc_state`
+/// receives [`KAPC_STATE_NOT_ATTACHED`] in `Process` with nothing else
+/// written. From a DPC routine it stops as on Windows
 /// ([`INVALID_PROCESS_ATTACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x5--invalid-process-attach-attempt)).
 ///
 /// # Safety
-/// `process` is a process object; `apc_state` points to room for a
+/// `process` is a live process object; `apc_state` points to room for a
 /// `KAPC_STATE`.
 pub unsafe extern "C" fn KeStackAttachProcess(process: *mut c_void, apc_state: *mut KAPC_STATE) {
     let current = PsGetCurrentProcess();
-    if crate::ke::dpc::running() {
+    if crate::ke::dpc::running() || process.is_null() {
         crate::kd::bugcheck(format_args!(
-            "0x00000005 INVALID_PROCESS_ATTACH_ATTEMPT: a DPC routine attached to a process \
-             (parameters {process:p}, {current:p}, 0, 1)"
+            "0x00000005 INVALID_PROCESS_ATTACH_ATTEMPT: invalid attach (parameters {process:p}, \
+             {current:p}, 0, {})",
+            u8::from(crate::ke::dpc::running())
         ));
     }
-    if process != current {
-        crate::kd::bugcheck(format_args!(
-            "KeStackAttachProcess: {process:p} is not the System process, and there is no other"
-        ));
+    if process == current {
+        // SAFETY: per the contract; the driver's memory, written through
+        // its pointer.
+        unsafe {
+            (&raw mut (*apc_state).Process)
+                .write_unaligned(core::ptr::without_provenance_mut(KAPC_STATE_NOT_ATTACHED));
+        }
+        return;
     }
-    // SAFETY: per the contract; the driver's memory, written through
-    // its pointer.
+    let me = thread::current();
+    // SAFETY: `me` is the running thread and `process` is a live process.
+    // Holding the thread's APC lock raises IRQL to DISPATCH_LEVEL so no
+    // preemption or concurrent APC insertion can observe a half-swapped state.
     unsafe {
-        (&raw mut (*apc_state).Process)
-            .write_unaligned(core::ptr::without_provenance_mut(KAPC_STATE_NOT_ATTACHED));
+        let _lock = thread::apc_lock(me).lock();
+        let active = thread::object_field::<KAPC_STATE>(me, thread_layout::APC_STATE);
+        let saved = thread::object_field::<KAPC_STATE>(me, thread_layout::SAVED_APC_STATE);
+        let index_ptr = thread::object_field::<u8>(me, thread_layout::APC_STATE_INDEX);
+        if index_ptr.read() == 0 {
+            // Top-level attach: save original state inside `KTHREAD.SavedApcState`
+            // and mark the caller's `KAPC_STATE.Process` as null.
+            move_apc_state(active, saved);
+            (&raw mut (*apc_state).Process).write_unaligned(core::ptr::null_mut());
+            index_ptr.write(1);
+        } else {
+            // Nested attach: save current attached state in caller's `apc_state`.
+            move_apc_state(active, apc_state);
+        }
+        (&raw mut (*active).Process).write(process);
+        arch::switch_address_space(directory_table_base(process.cast()));
     }
 }
 
 /// [`KeUnstackDetachProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-keunstackdetachprocess):
 /// undo [`KeStackAttachProcess`]. A state marked as an attach that did
-/// nothing needs nothing undone. Any other state was not left by an
-/// attach, the thread being attached nowhere: Windows stops there
-/// ([`INVALID_PROCESS_DETACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x6--invalid-process-detach-attempt)),
-/// and so does NK.
+/// nothing needs nothing undone. Any other state on an unattached thread
+/// stops the system
+/// ([`INVALID_PROCESS_DETACH_ATTEMPT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x6--invalid-process-detach-attempt)).
 ///
 /// # Safety
 /// `apc_state` is the state a `KeStackAttachProcess` filled in.
 pub unsafe extern "C" fn KeUnstackDetachProcess(apc_state: *mut KAPC_STATE) {
     // SAFETY: per the contract.
-    let saved = unsafe { (&raw const (*apc_state).Process).read_unaligned() };
-    if saved.addr() != KAPC_STATE_NOT_ATTACHED {
-        crate::kd::bugcheck(format_args!(
-            "0x00000006 INVALID_PROCESS_DETACH_ATTEMPT: a detach by a thread that is not \
-             attached (saved process {saved:p})"
-        ));
+    let saved_proc = unsafe { (&raw const (*apc_state).Process).read_unaligned() };
+    if saved_proc.addr() == KAPC_STATE_NOT_ATTACHED {
+        return;
+    }
+    let me = thread::current();
+    // SAFETY: `me` is the running thread.
+    let deliver_apc = unsafe {
+        let _lock = thread::apc_lock(me).lock();
+        let index_ptr = thread::object_field::<u8>(me, thread_layout::APC_STATE_INDEX);
+        if index_ptr.read() == 0 {
+            crate::kd::bugcheck(format_args!(
+                "0x00000006 INVALID_PROCESS_DETACH_ATTEMPT: a detach by a thread that is not \
+                 attached (saved process {saved_proc:p})"
+            ));
+        }
+        let active = thread::object_field::<KAPC_STATE>(me, thread_layout::APC_STATE);
+        let kernel_head = (&raw mut (*active).ApcListHead).cast::<LIST_ENTRY>();
+        let user_head = kernel_head.add(1);
+        if (*active).InProgressFlags != 0
+            || (*kernel_head).Flink != kernel_head
+            || (*user_head).Flink != user_head
+        {
+            crate::kd::bugcheck(format_args!(
+                "0x00000006 INVALID_PROCESS_DETACH_ATTEMPT: attached APC state not empty on detach"
+            ));
+        }
+        if saved_proc.is_null() {
+            let saved = thread::object_field::<KAPC_STATE>(me, thread_layout::SAVED_APC_STATE);
+            move_apc_state(saved, active);
+            index_ptr.write(0);
+        } else {
+            move_apc_state(apc_state, active);
+        }
+        let restored = (*active).Process;
+        arch::switch_address_space(directory_table_base(restored.cast()));
+        let restored_kernel_head = (&raw mut (*active).ApcListHead).cast::<LIST_ENTRY>();
+        let has_kernel_apc = (*active).KernelApcPending != 0
+            || (*restored_kernel_head).Flink != restored_kernel_head;
+        if has_kernel_apc {
+            (*active).KernelApcPending = 1;
+        }
+        has_kernel_apc
+    };
+    if deliver_apc {
+        arch::self_interrupt(arch::APC.0);
     }
 }
 
@@ -740,9 +889,10 @@ pub fn identity_test() -> Result<u32, &'static str> {
     Ok(11)
 }
 
-/// Attaching to the process the thread is in: the caller's state gets
-/// the mark and nothing else, the thread stays where and as it was,
-/// and the detach that follows is accepted.
+/// Attaching to the process the thread is in, single and nested attaches to
+/// distinct per-process address spaces with isolation at the same VA,
+/// firmware CR3 save/restore while attached, and zero frame/pool leak on
+/// teardown.
 pub fn attach_test() -> Result<(), &'static str> {
     let process = system().cast::<c_void>();
     let before = crate::ke::irql::current();
@@ -768,6 +918,103 @@ pub fn attach_test() -> Result<(), &'static str> {
     unsafe { KeUnstackDetachProcess(state.as_mut_ptr().cast()) };
     if PsGetCurrentProcess() != process || crate::ke::irql::current() != before {
         return Err("a detach moved the thread or the IRQL");
+    }
+
+    // F7: two isolated address spaces mapped at the same low-half VA, nested
+    // attach/detach, firmware CR3 save/restore, and leak-free teardown.
+    use crate::mm::{self, pool};
+    use crate::ob::handle;
+    use nk_mm::pt::Prot;
+
+    const TEST_VA: u64 = 0x2000_0000;
+    let frames_before = mm::free_frame_count();
+    let pool_before = pool::usage().blocks - handle::storage().0;
+    let sys_root = arch::kernel_address_space();
+
+    // SAFETY: `system()` is live.
+    let p1 = unsafe { create_minimal(b"space1.exe", system(), false) }
+        .map_err(|_| "F7: could not create process 1")?;
+    // SAFETY: `system()` is live.
+    let p2 = unsafe { create_minimal(b"space2.exe", system(), false) }
+        .map_err(|_| "F7: could not create process 2")?;
+    let f1 = mm::alloc_frames(1).ok_or("F7: no frame for p1")?;
+    let f2 = mm::alloc_frames(1).ok_or("F7: no frame for p2")?;
+    // SAFETY: `p1` and `p2` are live non-System processes with distinct spaces.
+    let (s1, s2) = unsafe {
+        (
+            address_space(p1.body()).ok_or("F7: p1 has no address space")?,
+            address_space(p2.body()).ok_or("F7: p2 has no address space")?,
+        )
+    };
+    if s1.root() == sys_root || s2.root() == sys_root || s1.root() == s2.root() {
+        return Err("F7: processes do not have distinct root page tables");
+    }
+    s1.map_page(TEST_VA, f1, Prot::USER_RW)
+        .map_err(|_| "F7: map_page failed for p1")?;
+    s2.map_page(TEST_VA, f2, Prot::USER_RW)
+        .map_err(|_| "F7: map_page failed for p2")?;
+    if s1.translate(TEST_VA) != Some(f1) || s2.translate(TEST_VA) != Some(f2) {
+        return Err("F7: AddressSpace::translate did not return the mapped frame");
+    }
+
+    let mut st1 = core::mem::MaybeUninit::<KAPC_STATE>::zeroed();
+    let mut st2 = core::mem::MaybeUninit::<KAPC_STATE>::zeroed();
+    // Attach to p1, write pattern A, nested attach to p2, write pattern B,
+    // check isolation on both sides and across firmware_enter/leave.
+    // SAFETY: `p1`, `p2` are live; `TEST_VA` is mapped RW in each.
+    let (seen_p1_after, seen_p2, fw_ok) = unsafe {
+        KeStackAttachProcess(p1.body().cast(), st1.as_mut_ptr());
+        if PsGetCurrentProcess() != p1.body().cast() || arch::current_address_space() != s1.root() {
+            KeUnstackDetachProcess(st1.as_mut_ptr());
+            return Err("F7: top-level attach did not switch process/address space");
+        }
+        (TEST_VA as *mut u64).write_volatile(0x1111_2222_3333_4444);
+
+        // Nested attach to p2.
+        KeStackAttachProcess(p2.body().cast(), st2.as_mut_ptr());
+        let nested_ok =
+            PsGetCurrentProcess() == p2.body().cast() && arch::current_address_space() == s2.root();
+        let initial_p2 = (TEST_VA as *const u64).read_volatile();
+        (TEST_VA as *mut u64).write_volatile(0x5555_6666_7777_8888);
+        let read_p2 = (TEST_VA as *const u64).read_volatile();
+
+        // Firmware enter/leave while attached to p2 must switch to System and back.
+        let saved = arch::firmware_enter();
+        let in_fw = arch::current_address_space() == sys_root;
+        arch::firmware_leave(saved);
+        let after_fw = arch::current_address_space() == s2.root();
+
+        KeUnstackDetachProcess(st2.as_mut_ptr());
+        let back_p1 =
+            PsGetCurrentProcess() == p1.body().cast() && arch::current_address_space() == s1.root();
+        let read_p1 = (TEST_VA as *const u64).read_volatile();
+
+        KeUnstackDetachProcess(st1.as_mut_ptr());
+        let back_sys =
+            PsGetCurrentProcess() == process && arch::current_address_space() == sys_root;
+        if !nested_ok || !back_p1 || !back_sys || initial_p2 != 0 {
+            return Err("F7: nested attach/detach or address-space isolation failed");
+        }
+        (read_p1, read_p2, in_fw && after_fw)
+    };
+    if seen_p1_after != 0x1111_2222_3333_4444 || seen_p2 != 0x5555_6666_7777_8888 {
+        return Err("F7: writes in p1 and p2 did not stay isolated");
+    }
+    if !fw_ok {
+        return Err("F7: firmware_enter/leave did not switch to System CR3 and back");
+    }
+    if s1.unmap_page(TEST_VA) != Some(f1) || s2.unmap_page(TEST_VA) != Some(f2) {
+        return Err("F7: unmap_page did not return the mapped frame");
+    }
+    mm::free_frames(f1, 1);
+    mm::free_frames(f2, 1);
+    drop(p2);
+    drop(p1);
+    if mm::free_frame_count() != frames_before {
+        return Err("F7: destroying process address spaces leaked frames");
+    }
+    if pool::usage().blocks - handle::storage().0 != pool_before {
+        return Err("F7: destroying processes leaked pool blocks");
     }
     Ok(())
 }

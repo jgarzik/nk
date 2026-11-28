@@ -4,5 +4,5 @@
 scenario: x86_64
 fails: ps.attach
 file: kernel/ps/process.rs
-replace:             .write_unaligned(core::ptr::without_provenance_mut(KAPC_STATE_NOT_ATTACHED));
-with:             .write_unaligned((&raw const (*apc_state).Process).read_unaligned());
+replace:                 .write_unaligned(core::ptr::without_provenance_mut(KAPC_STATE_NOT_ATTACHED));
+with:                 .write_unaligned((&raw const (*apc_state).Process).read_unaligned());

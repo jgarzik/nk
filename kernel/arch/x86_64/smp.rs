@@ -47,10 +47,10 @@ nk_ap_trampoline:
     movw %ax, %ds
     movw %ax, %es
     movw %ax, %ss
-    // PAE, then the kernel's page tables, then long mode with NX, then
+    // PAE + PGE, then the kernel's page tables, then long mode with NX, then
     // paging with write protection.
     movl %cr4, %eax
-    orl $0x20, %eax
+    orl $0xA0, %eax
     movl %eax, %cr4
     movl (0x8000 + nk_ap_cr3 - nk_ap_trampoline), %eax
     movl %eax, %cr3
@@ -176,7 +176,7 @@ unsafe fn patch(field: *const u8, value: u64) {
 pub fn start(number: usize, apic_id: u64, stack_top: u64) {
     // SAFETY: the four symbols are the trampoline's data words.
     unsafe {
-        patch(&raw const nk_ap_cr3, super::pt_root());
+        patch(&raw const nk_ap_cr3, super::kernel_address_space());
         patch(&raw const nk_ap_stack, stack_top);
         patch(
             &raw const nk_ap_entry,
