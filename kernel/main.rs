@@ -154,6 +154,7 @@ fn system_thread(info: usize) {
     // for ever and is never written.
     let info = unsafe { &*(info as *const BootInfo) };
     export::print_all();
+    svc::print_all();
     if let Err(why) = io::raw::init()
         .and_then(|()| pnp::init())
         .and_then(|()| hal::bus::init())

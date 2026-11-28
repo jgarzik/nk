@@ -664,6 +664,8 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             if log.exports():
                 (OUT / f"exports-{arch}.txt").write_text("\n".join(log.exports()) + "\n")
                 (OUT / f"lookups-{arch}.txt").write_text("".join(f"{l}\n" for l in log.lookups()))
+            if log.services():
+                (OUT / f"svcs-{arch}.txt").write_text("\n".join(log.services()) + "\n")
 
         for test, verdict, detail in log.tests:
             if verdict != "OK":

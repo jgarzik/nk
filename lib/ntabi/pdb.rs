@@ -27,6 +27,37 @@ fn kernel_types() -> Option<Types> {
     Some(pdb.types().expect("the kernel PDB's types"))
 }
 
+/// `ntdll.dll`'s type records, or `None` (with a note) without the fixture.
+fn ntdll_types() -> Option<Types> {
+    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "target", "fixtures"]
+        .iter()
+        .collect();
+    let Ok(file) = std::fs::read(path.join("ntdll.x64.pdb")) else {
+        eprintln!("SKIP: no ntdll symbols (target/fixtures/ntdll.x64.pdb)");
+        return None;
+    };
+    let pdb = Pdb::parse(&file).expect("the ntdll PDB");
+    Some(pdb.types().expect("the ntdll PDB's types"))
+}
+
+#[test]
+fn ntdll_pdb_exposes_user_structures() {
+    let Some(types) = ntdll_types() else { return };
+    for name in [
+        "_PEB",
+        "_TEB",
+        "_NT_TIB",
+        "_RTL_USER_PROCESS_PARAMETERS",
+        "_PEB_LDR_DATA",
+        "_LDR_DATA_TABLE_ENTRY",
+    ] {
+        let layout = types
+            .layout(name)
+            .unwrap_or_else(|e| panic!("ntdll.pdb missing {name}: {e:?}"));
+        assert!(layout.size > 0, "{name} has zero size");
+    }
+}
+
 fn offset(layout: &Layout, ty: &str, field: &str) -> usize {
     let member = layout
         .member(field)

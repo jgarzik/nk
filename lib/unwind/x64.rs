@@ -333,6 +333,8 @@ pub struct Epilog {
     /// Bytes from the decoded address to the end of the return or jump.
     pub len: u32,
     pub trim: Trim,
+    /// Terminated by `iretq` (pops RIP + CS + RFLAGS + RSP + SS) instead of `ret`.
+    pub iretq: bool,
     pops: [u8; 16],
     npops: usize,
 }
@@ -398,20 +400,24 @@ pub fn decode_epilog(image: &[u8], func: &RuntimeFunction, pc: u32) -> Option<Ep
             || target >= i64::from(func.end)
             || target == i64::from(func.begin)
     };
-    let end = match (b(i)?, b(i + 1), b(i + 2)) {
-        (0xC3, ..) => i + 1,
-        (0xC2, ..) => i + 3,
-        (0xF3, Some(0xC3), _) => i + 2,
-        (0xEB, ..) if leaves(i + 2, imm8(i + 1)?) => i + 2,
-        (0xE9, ..) if leaves(i + 5, imm32(i + 1)?) => i + 5,
-        (0xFF, Some(0x25), _) => i + 6,
+    let (end, iretq) = match (b(i)?, b(i + 1), b(i + 2)) {
+        (0xC3, ..) => (i + 1, false),
+        (0xC2, ..) => (i + 3, false),
+        (0xF3, Some(0xC3), _) => (i + 2, false),
+        (0x48, Some(0xCF), _) => (i + 2, true),
+        (0xEB, ..) if leaves(i + 2, imm8(i + 1)?) => (i + 2, false),
+        (0xE9, ..) if leaves(i + 5, imm32(i + 1)?) => (i + 5, false),
+        (0xFF, Some(0x25), _) => (i + 6, false),
         // `rex.w jmp r/m64`: the compiler's marker for a tail call.
-        (0x48..=0x4F, Some(0xFF), Some(m)) if m & 0x38 == 0x20 => i + 3 + modrm_tail(m, b(i + 3)?),
+        (0x48..=0x4F, Some(0xFF), Some(m)) if m & 0x38 == 0x20 => {
+            (i + 3 + modrm_tail(m, b(i + 3)?), false)
+        }
         _ => return None,
     };
     Some(Epilog {
         len: end as u32,
         trim,
+        iretq,
         pops,
         npops,
     })
@@ -630,5 +636,12 @@ fn run_epilog(
         r.gpr[reg as usize] = slot(read, r.gpr[RSP])?;
         r.gpr[RSP] = r.gpr[RSP].wrapping_add(8);
     }
-    pop_return(r, read)
+    if e.iretq {
+        let rsp = r.gpr[RSP];
+        r.rip = slot(read, rsp)?;
+        r.gpr[RSP] = slot(read, rsp.wrapping_add(24))?;
+        Ok(())
+    } else {
+        pop_return(r, read)
+    }
 }

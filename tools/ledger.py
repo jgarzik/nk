@@ -66,6 +66,35 @@ def kernel_lookups(arch):
     return looked_up_absent(path.read_text().splitlines()) if path.exists() else []
 
 
+def parse_services(lines):
+    """Parse `NK-SVC-TOTAL <n>` and `NK-SVC <num> <name> <state>` lines from a
+    boot log into a ledger summary dict, or None when no lines are present."""
+    total = 0
+    entries = []
+    for line in lines:
+        words = line.split()
+        if len(words) == 2 and words[0] == "NK-SVC-TOTAL":
+            total = int(words[1])
+        elif len(words) == 4 and words[0] == "NK-SVC":
+            entries.append({"number": int(words[1]), "name": words[2], "state": words[3]})
+    if not total and not entries:
+        return None
+    entries.sort(key=lambda e: e["number"])
+    counts = {s: sum(1 for e in entries if e["state"] == s) for s in ("implemented", "partial", "traps")}
+    counts["missing"] = max(0, total - len(entries))
+    return {
+        "note": "NT system service dispatch table (SSDT) entries registered in kernel/svc/mod.rs",
+        "total": total,
+        **counts,
+        "registered": entries,
+    }
+
+
+def kernel_services(arch):
+    path = ROOT / "target" / "qemu" / f"svcs-{arch}.txt"
+    return parse_services(path.read_text().splitlines()) if path.exists() else None
+
+
 def peinfo(path):
     return subprocess.run([PEINFO, path], check=True, capture_output=True, text=True).stdout
 
@@ -244,6 +273,7 @@ def build(arch, fixtures):
             "names": kernel_lookups(arch),
         },
         "fixtures": entries,
+        **({"services": svcs} if (svcs := kernel_services(arch)) is not None else {}),
         # No source offers Windows 10 arm64 binaries, so only x86-64 has one.
         **({"corpus": corpus(exports, CORPUS.read_text())} if arch == "x86_64" else {}),
     }

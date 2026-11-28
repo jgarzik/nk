@@ -91,6 +91,17 @@ def registry_file(name):
     return ROOT / "fixtures" / f"registry-{name}.txt"
 
 
+def user_fixture(name, arch="x86_64"):
+    """Path to a `kind = "user"` fixture (e.g. `ntdll`, `autochk`) in the
+    fixture cache, or None if not downloaded."""
+    manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
+    for fx in manifest:
+        if fx.get("kind") == "user" and fx["name"] == name and fx["arch"] == arch:
+            path = FIXTURES / fx["file"]
+            return path if path.exists() else None
+    return None
+
+
 def hive():
     """(path, missing file name or None) of the registry hive fixture: the
     one fixture of kind "hive", the same for every architecture."""

@@ -128,7 +128,6 @@ impl<T> FromSyscallArg for *mut T {
 #[derive(Clone, Copy)]
 pub struct ServiceSlot {
     pub trampoline: unsafe fn(&[usize; MAX_SYSCALL_ARGS]) -> NTSTATUS,
-    #[allow(dead_code)]
     pub state: State,
 }
 
@@ -493,6 +492,21 @@ register_services! {
         information: u32,
         descriptor: *const c_void,
     );
+}
+
+/// Print the SSDT service table for the ledger: `NK-SVC-TOTAL <count>` and
+/// `NK-SVC <number> <name> <state>` for every registered service.
+pub fn print_all() {
+    kprintln!("NK-SVC-TOTAL {SERVICE_COUNT}");
+    for (num, slot) in HANDLERS.iter().enumerate() {
+        if let Some(slot) = slot {
+            kprintln!(
+                "NK-SVC {num} {} {}",
+                SERVICE_META[num].name,
+                slot.state.name()
+            );
+        }
+    }
 }
 
 /// Metadata for NT service `index` (`0..SERVICE_COUNT`), if in range.

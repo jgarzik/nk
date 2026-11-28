@@ -167,5 +167,28 @@ class Missing(unittest.TestCase):
         ])
 
 
+class Services(unittest.TestCase):
+    def test_parses_ssdt_summary_lines(self):
+        lines = [
+            "NK-SVC-TOTAL 471",
+            "NK-SVC 15 NtClose implemented",
+            "NK-SVC 4 NtWaitForSingleObject partial",
+        ]
+        summary = ledger.parse_services(lines)
+        self.assertEqual(summary["total"], 471)
+        self.assertEqual(summary["implemented"], 1)
+        self.assertEqual(summary["partial"], 1)
+        self.assertEqual(summary["traps"], 0)
+        self.assertEqual(summary["missing"], 469)
+        self.assertEqual(
+            summary["registered"],
+            [
+                {"number": 4, "name": "NtWaitForSingleObject", "state": "partial"},
+                {"number": 15, "name": "NtClose", "state": "implemented"},
+            ],
+        )
+        self.assertIsNone(ledger.parse_services([]))
+
+
 if __name__ == "__main__":
     unittest.main()

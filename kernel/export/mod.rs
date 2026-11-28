@@ -25,7 +25,7 @@ pub enum State {
 }
 
 impl State {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             State::Implemented => "implemented",
             State::Partial => "partial",
