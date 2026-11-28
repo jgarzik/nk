@@ -267,7 +267,14 @@ pub unsafe extern "C" fn RtlVerifyVersionInfo(
             return STATUS_REVISION_MISMATCH;
         }
     }
-    // Version tuple comparison (major, minor, sp_major, sp_minor, build).
+    if type_mask & VER_BUILDNUMBER != 0
+        && !version_matches(actual_build, info.dwBuildNumber, cond(2))
+    {
+        return STATUS_REVISION_MISMATCH;
+    }
+    // Hierarchical version tuple comparison (major, minor, sp_major, sp_minor).
+    // VER_BUILDNUMBER is intentionally evaluated independently above: on Windows
+    // a strictly greater major version does not short-circuit build-number checks.
     let mut decided = false;
     for (mask, bit, actual, asked) in [
         (VER_MAJORVERSION, 1, actual_major, info.dwMajorVersion),
@@ -284,7 +291,6 @@ pub unsafe extern "C" fn RtlVerifyVersionInfo(
             actual_sp_minor,
             u32::from(info.wServicePackMinor),
         ),
-        (VER_BUILDNUMBER, 2, actual_build, info.dwBuildNumber),
     ] {
         if type_mask & mask == 0 || decided {
             continue;

@@ -2,12 +2,22 @@
 //! one step of the walk, over `nk_unwind::x64`.
 
 use core::arch::global_asm;
+use core::ffi::c_void;
 use core::mem::MaybeUninit;
+use nk_ntabi::seh::x64::{CONTEXT, CONTEXT_FULL, CONTEXT_SEGMENTS};
 use nk_pe::DataDir;
 use nk_unwind::UnwindError;
 use nk_unwind::x64::{self, RSP};
 
 pub use nk_unwind::x64::Regs;
+
+/// `ContextFlags` populated by [`nk_rtl_capture_context`].
+pub const CAPTURE_CONTEXT_FLAGS: u32 = CONTEXT_FULL | CONTEXT_SEGMENTS;
+
+/// Return `ContextFlags` from an x86-64 `CONTEXT`.
+pub fn context_flags(context: &CONTEXT) -> u32 {
+    context.ContextFlags
+}
 
 /// What `nk_capture_context` stores: the registers a call preserves, as
 /// its caller has them.
@@ -60,11 +70,80 @@ nk_capture_context:
     movups [rcx + 0xE0], xmm15
     ret
     .seh_endproc
-"#
+
+    .globl nk_rtl_capture_context
+// rcx: a Windows x64 `CONTEXT` (`0x4D0` bytes) to fill with the caller's
+// state directly at the ABI boundary, with no intervening wrapper frame.
+// Volatile scratch registers `r10` and `r11` are recorded as zero.
+nk_rtl_capture_context:
+    .seh_proc nk_rtl_capture_context
+    pushfq
+    .seh_stackalloc 8
+    .seh_endprologue
+    test rcx, rcx
+    jz 9f
+    xor r10d, r10d
+    xor r11d, r11d
+2:  mov qword ptr [rcx + r10], r11
+    add r10, 8
+    cmp r10, 0x4D0
+    jb 2b
+    mov dword ptr [rcx + 0x30], {flags}
+    stmxcsr dword ptr [rcx + 0x34]
+    mov word ptr [rcx + 0x38], cs
+    mov word ptr [rcx + 0x3A], ds
+    mov word ptr [rcx + 0x3C], es
+    mov word ptr [rcx + 0x3E], fs
+    mov word ptr [rcx + 0x40], gs
+    mov word ptr [rcx + 0x42], ss
+    mov r10, [rsp]
+    mov dword ptr [rcx + 0x44], r10d
+    mov [rcx + 0x78], rax
+    mov [rcx + 0x80], rcx
+    mov [rcx + 0x88], rdx
+    mov [rcx + 0x90], rbx
+    lea r10, [rsp + 0x10]
+    mov [rcx + 0x98], r10
+    mov [rcx + 0xA0], rbp
+    mov [rcx + 0xA8], rsi
+    mov [rcx + 0xB0], rdi
+    mov [rcx + 0xB8], r8
+    mov [rcx + 0xC0], r9
+    mov [rcx + 0xD8], r12
+    mov [rcx + 0xE0], r13
+    mov [rcx + 0xE8], r14
+    mov [rcx + 0xF0], r15
+    mov r10, [rsp + 8]
+    mov [rcx + 0xF8], r10
+    stmxcsr dword ptr [rcx + 0x118]
+    movups xmmword ptr [rcx + 0x1A0], xmm0
+    movups xmmword ptr [rcx + 0x1B0], xmm1
+    movups xmmword ptr [rcx + 0x1C0], xmm2
+    movups xmmword ptr [rcx + 0x1D0], xmm3
+    movups xmmword ptr [rcx + 0x1E0], xmm4
+    movups xmmword ptr [rcx + 0x1F0], xmm5
+    movups xmmword ptr [rcx + 0x200], xmm6
+    movups xmmword ptr [rcx + 0x210], xmm7
+    movups xmmword ptr [rcx + 0x220], xmm8
+    movups xmmword ptr [rcx + 0x230], xmm9
+    movups xmmword ptr [rcx + 0x240], xmm10
+    movups xmmword ptr [rcx + 0x250], xmm11
+    movups xmmword ptr [rcx + 0x260], xmm12
+    movups xmmword ptr [rcx + 0x270], xmm13
+    movups xmmword ptr [rcx + 0x280], xmm14
+    movups xmmword ptr [rcx + 0x290], xmm15
+9:  add rsp, 8
+    ret
+    .seh_endproc
+"#,
+    flags = const CAPTURE_CONTEXT_FLAGS,
 );
 
 unsafe extern "C" {
     fn nk_capture_context(into: *mut Captured);
+    /// [`RtlCaptureContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-rtlcapturecontext):
+    /// capture the caller's register context into `context` at the ABI boundary.
+    pub fn nk_rtl_capture_context(context: *mut c_void);
 }
 
 /// The registers of the function this is written in, as they are right
@@ -99,32 +178,6 @@ pub fn pc(regs: &Regs) -> u64 {
 
 pub fn sp(regs: &Regs) -> u64 {
     regs.gpr[RSP]
-}
-
-/// Fill a Windows `CONTEXT` record with the captured register state.
-///
-/// # Safety
-/// `context` is writable for an x86-64 `CONTEXT` structure.
-pub unsafe fn fill_context(regs: &Regs, context: *mut core::ffi::c_void) {
-    let context = context.cast::<nk_ntabi::seh::x64::CONTEXT>();
-    // SAFETY: per the contract.
-    unsafe {
-        core::ptr::write_bytes(
-            context.cast::<u8>(),
-            0,
-            size_of::<nk_ntabi::seh::x64::CONTEXT>(),
-        );
-        (*context).Rip = regs.rip;
-        (*context).Rsp = regs.gpr[RSP];
-        (*context).Rbx = regs.gpr[3];
-        (*context).Rbp = regs.gpr[5];
-        (*context).Rsi = regs.gpr[6];
-        (*context).Rdi = regs.gpr[7];
-        (*context).R12 = regs.gpr[12];
-        (*context).R13 = regs.gpr[13];
-        (*context).R14 = regs.gpr[14];
-        (*context).R15 = regs.gpr[15];
-    }
 }
 
 /// One frame undone.

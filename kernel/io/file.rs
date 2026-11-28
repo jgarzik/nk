@@ -141,6 +141,11 @@ pub struct Pending {
 }
 
 impl Pending {
+    /// Whether the driver returned `STATUS_PENDING` for this request.
+    pub fn is_pending(&self) -> bool {
+        self.dispatch_status == STATUS_PENDING
+    }
+
     /// Ask the driver to give the request up
     /// ([`irp::IoCancelIrp`]). `false` if the driver had no cancel
     /// routine set: the request is past cancelling, or was never

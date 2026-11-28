@@ -22,9 +22,8 @@ use crate::pnp::node::{self, State};
 use crate::pnp::registry;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
-use nk_ntabi::status::STATUS_SUCCESS;
+use nk_ntabi::status::{STATUS_CANCELLED, STATUS_SUCCESS};
 
 pub static GROUP: Group = Group {
     names: &["usb.boot", "usb.hotplug"],
@@ -187,26 +186,6 @@ fn read_keys(handle: u64, want: usize) -> Result<Vec<(u16, u16)>, &'static str> 
     Ok(out)
 }
 
-static PENDING_HANDLE: AtomicU64 = AtomicU64::new(0);
-static PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
-static PENDING_DONE: AtomicBool = AtomicBool::new(false);
-static PENDING_STATUS: AtomicI32 = AtomicI32::new(0);
-
-fn pending_reader(_: usize) {
-    let handle = PENDING_HANDLE.load(Ordering::Acquire);
-    let mut buf = [0u8; 12 * 4];
-    PENDING_ENTERED.store(true, Ordering::Release);
-    let status = match file::read(handle, &mut buf) {
-        Ok(r) => r.status,
-        Err(e) => {
-            kprintln!("usb: in-flight read IoError: {e:?}");
-            -1
-        }
-    };
-    PENDING_STATUS.store(status, Ordering::Release);
-    PENDING_DONE.store(true, Ordering::Release);
-}
-
 /// Verify hotplug attach -> key seq1 -> hot-unplug with in-flight read ->
 /// reattach -> distinct key seq2.
 pub(super) fn hotplug_lifecycle() -> Result<(), &'static str> {
@@ -279,40 +258,53 @@ pub(super) fn hotplug_lifecycle() -> Result<(), &'static str> {
         return Err("seq1 scancodes did not match expected a/b make+break");
     }
 
-    // 3. Issue an in-flight read, then unplug the keyboard via QMP.
-    PENDING_HANDLE.store(handle, Ordering::Release);
-    PENDING_ENTERED.store(false, Ordering::Release);
-    PENDING_DONE.store(false, Ordering::Release);
-    PENDING_STATUS.store(0, Ordering::Release);
-    thread::create(pending_reader, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)
-        .map_err(|_| "failed to spawn keyboard reader thread")?;
-    let _ = wait_until(2_000, || PENDING_ENTERED.load(Ordering::Acquire));
-    time::stall(150_000); // 150ms so the read IRP is queued in kbdclass
+    // 3. Submit an in-flight read and confirm the driver pended it BEFORE
+    //    unplugging the keyboard via QMP.
+    let mut pending_buf = [0u8; 12 * 4];
+    // SAFETY: `pending_buf` stays live and untouched until `pending.wait()` returns below.
+    let pending = match unsafe { file::read_start(handle, &mut pending_buf) } {
+        Ok(p) => p,
+        Err(e) => {
+            kprintln!("usb: read_start failed: {e:?}");
+            file::close(handle);
+            return Err("failed to start in-flight keyboard read");
+        }
+    };
+    if !pending.is_pending() {
+        let _ = pending.wait();
+        file::close(handle);
+        return Err("in-flight keyboard read did not return STATUS_PENDING before unplug");
+    }
 
     kprintln!("NK-QMP-DEL-KBD");
     // On Windows PnP, surprise removal disables the keyboard interface and
     // delivers IRP_MN_SURPRISE_REMOVAL while deferring IRP_MN_REMOVE_DEVICE
-    // until all open handles are closed. Closing the handle while the read is
-    // in flight sends IRP_MJ_CLEANUP, causing kbdclass to cancel the pending
-    // read, drop the last file reference (IRP_MJ_CLOSE), and complete removal.
+    // until all open handles are closed. Require the HID node to enter and stay
+    // in SurpriseRemoved (not prematurely removed) while our handle is open.
     if !wait_until(15_000, || {
         interface::enabled_of(&GUID_DEVINTERFACE_KEYBOARD).is_empty()
-            && find_any("HID\\VID_0627").is_none_or(|n| n.state == State::SurpriseRemoved)
+            && find_any("HID\\VID_0627").is_some_and(|n| n.state == State::SurpriseRemoved)
     }) {
         file::close(handle);
+        let _ = pending.wait();
         return Err("USB keyboard did not enter SurpriseRemoved with interface disabled");
     }
-    file::close(handle);
-    if !wait_until(5_000, || PENDING_DONE.load(Ordering::Acquire)) {
-        return Err("in-flight keyboard read did not complete after unplug + close");
+    if !find_any("HID\\VID_0627").is_some_and(|n| n.state == State::SurpriseRemoved) {
+        file::close(handle);
+        let _ = pending.wait();
+        return Err("HID keyboard node did not remain in SurpriseRemoved while handle open");
     }
-    let unplug_status = PENDING_STATUS.load(Ordering::Acquire);
+    file::close(handle);
+    let unplug_res = pending.wait().map_err(|e| {
+        kprintln!("usb: in-flight read IoError: {e:?}");
+        "in-flight keyboard read failed with IoError after unplug + close"
+    })?;
     kprintln!(
         "usb: surprise-unplugged; in-flight read completed with status={:#010x}",
-        unplug_status as u32
+        unplug_res.status as u32
     );
-    if unplug_status == STATUS_SUCCESS {
-        return Err("in-flight keyboard read unexpectedly succeeded on unplug");
+    if unplug_res.status != STATUS_CANCELLED {
+        return Err("in-flight keyboard read did not complete with STATUS_CANCELLED");
     }
     if !wait_until(15_000, || {
         find_any("HID\\VID_0627").is_none() && find_any("USB\\VID_0627").is_none()

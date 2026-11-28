@@ -130,6 +130,43 @@ fn crt() -> Result<(), &'static str> {
         if found != [Some(4), Some(0), None, None, None, Some(1), Some(6)] {
             return Err("wcsstr found the wrong place");
         }
+        // `wcsncpy_s`: exact-fit NUL-terminated source with `count >= size`
+        // must succeed, while an overflowing source fails with ERANGE and
+        // clears `dst[0]`.
+        use crate::rtl::crt::wcsncpy_s;
+        const ERANGE: i32 = 34;
+        const STRUNCATE: i32 = 80;
+        let mut dst = [0xEEEEu16; 4];
+        let abc = wide("abc");
+        let abcd = wide("abcd");
+        let empty = wide("");
+        if wcsncpy_s(dst.as_mut_ptr(), 4, abc.as_ptr(), 4) != 0 || dst != abc[..4] {
+            return Err("wcsncpy_s failed on exact-fit NUL-terminated source");
+        }
+        dst = [0xEEEEu16; 4];
+        if wcsncpy_s(dst.as_mut_ptr(), 4, abc.as_ptr(), 100) != 0 || dst != abc[..4] {
+            return Err("wcsncpy_s failed on exact-fit source with large count");
+        }
+        dst = [0xEEEEu16; 4];
+        if wcsncpy_s(dst.as_mut_ptr(), 4, abcd.as_ptr(), 4) != ERANGE || dst[0] != 0 {
+            return Err("wcsncpy_s did not reject overflowing source with ERANGE");
+        }
+        dst = [0xEEEEu16; 4];
+        if wcsncpy_s(dst.as_mut_ptr(), 4, abc.as_ptr(), usize::MAX) != 0 || dst != abc[..4] {
+            return Err("wcsncpy_s(_TRUNCATE) failed on exact-fit source");
+        }
+        dst = [0xEEEEu16; 4];
+        if wcsncpy_s(dst.as_mut_ptr(), 4, abcd.as_ptr(), usize::MAX) != STRUNCATE || dst != abc[..4]
+        {
+            return Err("wcsncpy_s(_TRUNCATE) did not truncate cleanly");
+        }
+        dst = [0xEEEEu16; 4];
+        if wcsncpy_s(dst.as_mut_ptr(), 1, empty.as_ptr(), 1) != 0 || dst[0] != 0 {
+            return Err("wcsncpy_s failed on empty source into 1-unit buffer");
+        }
+        if wcsncpy_s(dst.as_mut_ptr(), 1, abc.as_ptr(), 1) != ERANGE || dst[0] != 0 {
+            return Err("wcsncpy_s did not reject non-empty source into 1-unit buffer");
+        }
     }
     Ok(())
 }

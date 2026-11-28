@@ -432,8 +432,11 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void)
                 break None;
             }
         }
-        // A callback is running on another thread: let it finish.
-        crate::ke::thread::yield_now();
+        // A callback is running on another thread: sleep briefly rather than
+        // spinning on yield_now so a higher-priority unregisterer cannot
+        // starve a lower-priority callback thread on a single-CPU system.
+        // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+        unsafe { crate::ke::wait::wait(None, Some(-10_000)) };
     };
     if let Some((driver, target)) = refs {
         // SAFETY: the registration's references, released outside the lock.

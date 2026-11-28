@@ -402,13 +402,16 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         !(*object).DeviceObject.is_null()
     };
     // Wait for any active `IoSetCompletionRoutineEx` trampolines referencing
-    // this driver to finish before unmapping its image.
+    // this driver to finish before unmapping its image. Sleep briefly rather
+    // than yield_now so a higher-priority unloader cannot starve a lower-
+    // priority completion thread on a single-CPU system.
     while DRIVERS
         .lock()
         .iter()
         .any(|r| r.object == object && r.active_completions > 0)
     {
-        crate::ke::thread::yield_now();
+        // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+        unsafe { crate::ke::wait::wait(None, Some(-10_000)) };
     }
     let record = {
         let mut drivers = DRIVERS.lock();

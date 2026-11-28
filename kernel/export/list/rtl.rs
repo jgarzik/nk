@@ -10,7 +10,11 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlIsStateSeparationEnabled),
     export!(Implemented, rtl::RtlVerifyVersionInfo),
     export!(Implemented, rtl::VerSetConditionMask),
-    export!(Implemented, crate::ke::unwind::RtlCaptureContext),
+    export_entry!(
+        Implemented,
+        "RtlCaptureContext",
+        crate::arch::unwind::nk_rtl_capture_context
+    ),
     export!(Implemented, crate::ke::unwind::RtlCaptureStackBackTrace),
     export!(Implemented, rtl::RtlInitUnicodeString),
     export!(Implemented, rtl::persist::RtlGetPersistedStateLocation),

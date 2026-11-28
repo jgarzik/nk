@@ -1275,7 +1275,10 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
         unsafe extern "C" fn race_cb(_: *mut core::ffi::c_void, _: usize) -> NTSTATUS {
             RACE_ENTERED.store(true, Ordering::Release);
             while !RACE_RELEASE.load(Ordering::Acquire) {
-                thread::yield_now();
+                // Sleep rather than yield_now so a higher-priority worker
+                // thread never starves NORMAL_PRIORITY threads on SMP=1.
+                // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+                unsafe { crate::ke::wait::wait(None, Some(-10_000)) };
             }
             STATUS_SUCCESS
         }
@@ -1283,7 +1286,8 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             while !RACE_ENTERED.load(Ordering::Acquire) {
                 thread::yield_now();
             }
-            time::stall(20_000);
+            // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+            unsafe { crate::ke::wait::wait(None, Some(-200_000)) };
             RACE_RELEASE.store(true, Ordering::Release);
             RACE_UNREG_DONE.store(true, Ordering::Release);
         }

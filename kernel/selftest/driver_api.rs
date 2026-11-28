@@ -171,6 +171,154 @@ fn version() -> Result<(), &'static str> {
         crate::ldr::MmLockPagableSectionByHandle(core::ptr::null_mut());
         crate::ldr::MmUnlockPagableImageSection(core::ptr::null_mut());
     }
+    verify_version_info()?;
+    capture_context_boundary()?;
+    Ok(())
+}
+
+/// Regression checks for `RtlVerifyVersionInfo`: `VER_BUILDNUMBER` must not be
+/// bypassed when `VER_MAJORVERSION` is strictly greater, while hierarchical
+/// short-circuiting still applies to minor and service-pack numbers.
+fn verify_version_info() -> Result<(), &'static str> {
+    use crate::rtl::{RtlVerifyVersionInfo, VerSetConditionMask};
+    use nk_ntabi::status::STATUS_REVISION_MISMATCH;
+    const VER_MINORVERSION: u32 = 0x01;
+    const VER_MAJORVERSION: u32 = 0x02;
+    const VER_BUILDNUMBER: u32 = 0x04;
+    const VER_EQUAL: u8 = 1;
+    const VER_GREATER_EQUAL: u8 = 3;
+
+    // SAFETY: zeroed `RTL_OSVERSIONINFOEXW` has valid bit representation.
+    let mut info: RTL_OSVERSIONINFOEXW = unsafe { core::mem::zeroed() };
+    info.dwOSVersionInfoSize = size_of::<RTL_OSVERSIONINFOEXW>() as u32;
+
+    // Major >= 6 && Build >= 20000 must fail on 10.0.19045.
+    info.dwMajorVersion = 6;
+    info.dwBuildNumber = 20000;
+    let mask = VerSetConditionMask(
+        VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL),
+        VER_BUILDNUMBER,
+        VER_GREATER_EQUAL,
+    );
+    // SAFETY: `info` is a valid local structure.
+    if unsafe { RtlVerifyVersionInfo(&raw const info, VER_MAJORVERSION | VER_BUILDNUMBER, mask) }
+        != STATUS_REVISION_MISMATCH
+    {
+        return Err("RtlVerifyVersionInfo bypassed VER_BUILDNUMBER when Major > asked");
+    }
+
+    // Major >= 6 && Build >= 19045 must succeed on 10.0.19045.
+    info.dwBuildNumber = 19045;
+    // SAFETY: `info` is a valid local structure.
+    if unsafe { RtlVerifyVersionInfo(&raw const info, VER_MAJORVERSION | VER_BUILDNUMBER, mask) }
+        != STATUS_SUCCESS
+    {
+        return Err("RtlVerifyVersionInfo rejected matching VER_BUILDNUMBER");
+    }
+
+    // Major >= 6 && Minor >= 99 still short-circuits hierarchically on 10.0.19045.
+    info.dwMinorVersion = 99;
+    let minor_mask = VerSetConditionMask(
+        VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL),
+        VER_MINORVERSION,
+        VER_GREATER_EQUAL,
+    );
+    // SAFETY: `info` is a valid local structure.
+    if unsafe {
+        RtlVerifyVersionInfo(
+            &raw const info,
+            VER_MAJORVERSION | VER_MINORVERSION,
+            minor_mask,
+        )
+    } != STATUS_SUCCESS
+    {
+        return Err("RtlVerifyVersionInfo broke hierarchical Major/Minor comparison");
+    }
+
+    // Exact match on 10.0.19045.
+    info.dwMajorVersion = 10;
+    info.dwMinorVersion = 0;
+    info.dwBuildNumber = 19045;
+    let eq_mask = VerSetConditionMask(
+        0,
+        VER_MAJORVERSION | VER_MINORVERSION | VER_BUILDNUMBER,
+        VER_EQUAL,
+    );
+    // SAFETY: `info` is a valid local structure.
+    if unsafe {
+        RtlVerifyVersionInfo(
+            &raw const info,
+            VER_MAJORVERSION | VER_MINORVERSION | VER_BUILDNUMBER,
+            eq_mask,
+        )
+    } != STATUS_SUCCESS
+    {
+        return Err("RtlVerifyVersionInfo rejected exact 10.0.19045 match");
+    }
+    Ok(())
+}
+
+/// Regression check for `RtlCaptureContext`: must capture directly at the ABI
+/// boundary (no wrapper frame), populate accurate `ContextFlags`, and yield a
+/// walkable caller context whose top frame is this function.
+#[inline(never)]
+fn capture_context_boundary() -> Result<(), &'static str> {
+    use crate::arch::{seh, unwind};
+    use crate::ke::unwind as ke_unwind;
+
+    // Null pointer must be a safe no-op.
+    // SAFETY: null is explicitly handled by `nk_rtl_capture_context`.
+    unsafe { unwind::nk_rtl_capture_context(core::ptr::null_mut()) };
+
+    let mut ctx = seh::empty_context();
+    // SAFETY: `ctx` is a valid, aligned local `CONTEXT`.
+    unsafe { unwind::nk_rtl_capture_context((&raw mut ctx).cast()) };
+
+    if unwind::context_flags(&ctx) != unwind::CAPTURE_CONTEXT_FLAGS {
+        return Err("RtlCaptureContext did not set expected ContextFlags");
+    }
+    let captured_regs = seh::regs(&ctx);
+    let captured_pc = unwind::pc(&captured_regs);
+    let captured_sp = unwind::sp(&captured_regs);
+    if captured_pc == 0 || ke_unwind::stack_holding(captured_sp).is_none() {
+        return Err("RtlCaptureContext captured invalid PC or SP");
+    }
+    if !crate::ldr::module_containing(captured_pc)
+        .is_some_and(|m| m.name().eq_ignore_ascii_case(b"ntoskrnl.exe"))
+    {
+        return Err("RtlCaptureContext PC is not inside ntoskrnl.exe");
+    }
+
+    // Compare the first frame of a stack walk starting from `RtlCaptureContext`
+    // against an inlined `arch::unwind::capture()` inside the same function:
+    // both must land in `capture_context_boundary`, proving no wrapper frame.
+    let mut ctx_top = None;
+    let ctx_depth = ke_unwind::walk(&captured_regs, false, |frame| {
+        if ctx_top.is_none() {
+            ctx_top = Some(*frame);
+        }
+    })
+    .map_err(|_| "stack walk from RtlCaptureContext failed")?;
+
+    let direct_regs = unwind::capture();
+    let mut direct_top = None;
+    let _ = ke_unwind::walk(&direct_regs, false, |frame| {
+        if direct_top.is_none() {
+            direct_top = Some(*frame);
+        }
+    })
+    .map_err(|_| "direct stack walk failed")?;
+
+    let (Some(ctx_frame), Some(direct_frame)) = (ctx_top, direct_top) else {
+        return Err("stack walk produced no frames");
+    };
+    if ctx_depth < 2
+        || ctx_frame.function.is_none()
+        || ctx_frame.function != direct_frame.function
+        || captured_sp != unwind::sp(&direct_regs)
+    {
+        return Err("RtlCaptureContext captured a wrapper frame instead of its caller");
+    }
     Ok(())
 }
 

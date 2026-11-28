@@ -283,7 +283,7 @@ pub unsafe extern "C" fn wcsncpy_s(
             let ended = source.add(i).read() == 0;
             return if ended { 0 } else { STRUNCATE };
         }
-        if i == limit {
+        if i == limit || source.add(i).read() == 0 {
             destination.add(i).write(0);
             return 0;
         }

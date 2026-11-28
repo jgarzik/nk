@@ -339,30 +339,60 @@ def run_serial2_peer(directory, stop_event, errors):
 
 class QmpSession:
     """Persistent QMP connection supporting command replies and async events
-    (such as `DEVICE_DELETED`) for host-driven USB hotplug scenarios."""
+    (such as `DEVICE_DELETED`) for host-driven USB hotplug scenarios.
 
-    def __init__(self, directory):
-        self.sock = _connect_unix(directory, "qmp.sock", timeout=30.0)
-        self.sock.settimeout(20.0)
-        self.f = self.sock.makefile("rw")
+    Uses raw `socket.recv()` with an internal byte buffer rather than
+    `socket.makefile()`, because a `TimeoutError` on a Python `BufferedReader`
+    invalidates the file wrapper and drops subsequent reads."""
+
+    def __init__(self, directory=None, sock=None):
+        if sock is None:
+            self.sock = _connect_unix(directory, "qmp.sock", timeout=30.0)
+        else:
+            self.sock = sock
+        self._buf = bytearray()
         self.events = []
-        json.loads(self.f.readline())  # greeting
+        greeting = self._readline(timeout=20.0)
+        if not greeting:
+            raise OSError("QMP socket closed before greeting")
+        json.loads(greeting)
         self.execute("qmp_capabilities")
 
     def close(self):
-        try:
-            self.f.close()
-        finally:
-            self.sock.close()
+        self.sock.close()
 
-    def execute(self, cmd, arguments=None):
+    def _readline(self, timeout):
+        deadline = time.monotonic() + timeout
+        while True:
+            nl = self._buf.find(b"\n")
+            if nl != -1:
+                line = bytes(self._buf[:nl + 1])
+                del self._buf[:nl + 1]
+                return line.decode("utf-8")
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                raise TimeoutError("timed out reading QMP line")
+            self.sock.settimeout(min(rem, 1.0))
+            try:
+                chunk = self.sock.recv(4096)
+            except TimeoutError:
+                continue
+            if not chunk:
+                return ""
+            self._buf.extend(chunk)
+
+    def execute(self, cmd, arguments=None, timeout=20.0):
         req = {"execute": cmd}
         if arguments is not None:
             req["arguments"] = arguments
-        self.f.write(json.dumps(req) + "\n")
-        self.f.flush()
+        self.sock.settimeout(timeout)
+        self.sock.sendall((json.dumps(req) + "\n").encode("utf-8"))
+        deadline = time.monotonic() + timeout
         while True:
-            line = self.f.readline()
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                raise TimeoutError(f"timed out waiting for QMP reply to {cmd}")
+            line = self._readline(timeout=rem)
             if not line:
                 raise OSError("QMP socket closed")
             msg = json.loads(line)
@@ -385,11 +415,7 @@ class QmpSession:
             rem = deadline - time.monotonic()
             if rem <= 0:
                 raise TimeoutError(f"timed out waiting for QMP event {name} ({device_id})")
-            self.sock.settimeout(min(rem, 1.0))
-            try:
-                line = self.f.readline()
-            except TimeoutError:
-                continue
+            line = self._readline(timeout=rem)
             if not line:
                 raise OSError("QMP socket closed while waiting for event")
             msg = json.loads(line)

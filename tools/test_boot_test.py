@@ -1,6 +1,10 @@
 """Unit tests for the parts of tools/boot_test.py that boot nothing. Run by
 `make test`."""
 
+import json
+import socket
+import threading
+import time
 import unittest
 
 import boot_test
@@ -147,6 +151,48 @@ class Devices(unittest.TestCase):
             boot_test.disk_devices("aarch64", "nvme")
         with self.assertRaises(ValueError):
             boot_test.extra_devices("x86_64", usb_kbd=True)
+
+
+class Qmp(unittest.TestCase):
+    def test_wait_event_survives_internal_recv_timeout_and_chunked_lines(self):
+        client, server = socket.socketpair()
+        errors = []
+
+        def peer():
+            try:
+                server.sendall(b'{"QMP": {"version": {}}}\n')
+                buf = b""
+                while b"\n" not in buf:
+                    buf += server.recv(4096)
+                req = json.loads(buf.decode("utf-8"))
+                if req.get("execute") != "qmp_capabilities":
+                    errors.append(f"unexpected cmd {req!r}")
+                    return
+                server.sendall(b'{"return": {}}\n')
+                # Delay past QmpSession's 1.0s internal recv timeout slice so
+                # socket.makefile() would have poisoned the reader, then send
+                # the event split across two chunks.
+                time.sleep(1.15)
+                ev = b'{"event": "DEVICE_DELETED", "data": {"device": "kbd0"}}\n'
+                server.sendall(ev[:20])
+                time.sleep(0.05)
+                server.sendall(ev[20:])
+            except OSError as e:
+                errors.append(str(e))
+            finally:
+                server.close()
+
+        t = threading.Thread(target=peer, daemon=True)
+        t.start()
+        session = boot_test.QmpSession(sock=client)
+        try:
+            event = session.wait_event("DEVICE_DELETED", device_id="kbd0", timeout=3.0)
+            self.assertEqual(event["event"], "DEVICE_DELETED")
+            self.assertEqual(event["data"]["device"], "kbd0")
+        finally:
+            session.close()
+            t.join(timeout=2.0)
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
