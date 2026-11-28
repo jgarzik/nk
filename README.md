@@ -48,17 +48,17 @@ Absent: user mode, physical hardware, file systems beyond FAT and RAW
 
 ## What it intends to do
 
-Boot the rest of Windows on top of NK, unmodified: Microsoft's own bus,
-storage and file-system drivers, then Microsoft's user mode, up to a
-Windows rescue disk at a `cmd.exe` prompt. NK contains and ships no
-Windows code. The phases are in [doc/ROADMAP.md](doc/ROADMAP.md).
+Boot the rest of Windows on top of NK, unmodified: Microsoft's user mode
+(native processes, session manager, Win32 base, window system and
+console), up to a Windows rescue disk at a `cmd.exe` prompt. NK contains
+and ships no Windows code. The phases are in [doc/ROADMAP.md](doc/ROADMAP.md).
 
 ## Quick start
 
 On Ubuntu 24.04:
 
 ```sh
-sudo apt-get install make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 mtools python3
+sudo apt-get install make qemu-system-x86 qemu-system-arm ovmf qemu-efi-aarch64 mtools dosfstools python3
 # Rust: install rustup from https://rustup.rs; the repository selects the toolchain.
 
 make check        # build, boot x86-64 under QEMU, run the driver tests

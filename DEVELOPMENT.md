@@ -9,7 +9,7 @@ distribution-specific.
 
 ```sh
 sudo apt-get install make qemu-system-x86 qemu-system-arm \
-    ovmf qemu-efi-aarch64 mtools python3
+    ovmf qemu-efi-aarch64 mtools dosfstools python3
 ```
 
 | Package | Why |
@@ -17,6 +17,7 @@ sudo apt-get install make qemu-system-x86 qemu-system-arm \
 | `qemu-system-x86`, `qemu-system-arm` | boot tests run under QEMU |
 | `ovmf`, `qemu-efi-aarch64` | UEFI firmware for the two architectures |
 | `mtools` | builds the FAT boot image without root privileges |
+| `dosfstools` | `fsck.fat` verifies FAT32 disk images after boot tests |
 | `python3` | the scripts in `tools/` (3.11 or newer) |
 
 No C compiler or cross toolchain is needed: the loader and kernel are

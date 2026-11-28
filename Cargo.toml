@@ -6,7 +6,7 @@ members = ["lib/pe", "lib/pdb", "lib/unwind", "lib/oracle", "lib/ke", "lib/selft
 default-members = ["lib/pe", "lib/pdb", "lib/unwind", "lib/oracle", "lib/ke", "lib/selftest", "lib/bootinfo", "lib/acpi", "lib/hal", "lib/mm", "lib/ntabi", "lib/rtl", "lib/se", "lib/cm", "lib/ob", "lib/ex", "lib/etw", "lib/ps", "lib/whea", "lib/pnp", "lib/po", "lib/disk", "lib/fsrtl", "lib/io", "tools/peinfo", "tools/pdbinfo", "boot", "kernel", "lib/cc"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.5.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/jgarzik/nk"
