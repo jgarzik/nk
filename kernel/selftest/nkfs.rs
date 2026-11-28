@@ -15,13 +15,14 @@ use crate::io::file::{self, OpenRequest};
 use crate::io::{device, irp, mdl};
 use crate::mm::pool;
 use crate::ob::{handle, object};
+use core::cell::UnsafeCell;
 use core::ffi::c_void;
-use core::sync::atomic::{
-    AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
-};
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use nk_ntabi::ex::ERESOURCE;
 use nk_ntabi::fsrtl::FSRTL_ADVANCED_FCB_HEADER;
 use nk_ntabi::io::*;
+use nk_ntabi::ke::KEVENT;
 use nk_ntabi::status::*;
 use nk_ntabi::thread::CACHE_MANAGER_ACTIVE;
 
@@ -65,12 +66,24 @@ static LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// A read at this offset plus one fails; 0 for none.
 static FAIL_AT: AtomicU64 = AtomicU64::new(0);
 /// Optional write-pause hook for deterministic in-flight flush tests:
-/// when `PAUSE_WRITE_AT == offset + 1`, the paging write sets
-/// `WRITE_PAUSED = true` and waits until `WRITE_RELEASE` is set, then
-/// completes with `WRITE_STATUS` (skipping the buffer copy on error).
+/// when `PAUSE_WRITE_AT == offset + 1`, the paging write signals
+/// `PAUSE_EVENTS.paused` and waits on `PAUSE_EVENTS.release` (blocking
+/// cleanly so priority-13 workers never starve priority-8 test threads
+/// on 1-CPU boots), then completes with `WRITE_STATUS`.
+struct PauseEvents {
+    paused: UnsafeCell<MaybeUninit<KEVENT>>,
+    release: UnsafeCell<MaybeUninit<KEVENT>>,
+}
+
+// SAFETY: initialised by `arm_write_pause` before any worker can match
+// `PAUSE_WRITE_AT`, then accessed only through kernel event routines.
+unsafe impl Sync for PauseEvents {}
+
+static PAUSE_EVENTS: PauseEvents = PauseEvents {
+    paused: UnsafeCell::new(MaybeUninit::uninit()),
+    release: UnsafeCell::new(MaybeUninit::uninit()),
+};
 static PAUSE_WRITE_AT: AtomicU64 = AtomicU64::new(0);
-static WRITE_PAUSED: AtomicBool = AtomicBool::new(false);
-static WRITE_RELEASE: AtomicBool = AtomicBool::new(false);
 static WRITE_STATUS: AtomicI32 = AtomicI32::new(STATUS_SUCCESS);
 /// Persistent write-failure injection for error-handling tests: fails
 /// every paging write while non-zero.
@@ -113,16 +126,21 @@ pub fn fail_read_at(offset: Option<u64>) {
 
 /// Arm a one-shot pause on the next paging write starting at `offset`.
 pub fn arm_write_pause(offset: u64) {
-    WRITE_PAUSED.store(false, Ordering::Release);
-    WRITE_RELEASE.store(false, Ordering::Release);
+    // SAFETY: static notification events initialised before arming
+    // `PAUSE_WRITE_AT`.
+    unsafe {
+        crate::ke::wait::KeInitializeEvent(PAUSE_EVENTS.paused.get().cast(), 0, 0);
+        crate::ke::wait::KeInitializeEvent(PAUSE_EVENTS.release.get().cast(), 0, 0);
+    }
     WRITE_STATUS.store(STATUS_SUCCESS, Ordering::Release);
     PAUSE_WRITE_AT.store(offset + 1, Ordering::Release);
 }
 
 /// Wait until the armed paging write has entered `nkfs::transfer`.
 pub fn wait_write_paused() {
-    while !WRITE_PAUSED.load(Ordering::Acquire) {
-        crate::ke::thread::yield_now();
+    // SAFETY: initialised by `arm_write_pause`.
+    unsafe {
+        crate::ke::wait::wait(Some(PAUSE_EVENTS.paused.get().cast()), None);
     }
 }
 
@@ -130,7 +148,10 @@ pub fn wait_write_paused() {
 pub fn release_write_pause(status: NTSTATUS) {
     PAUSE_WRITE_AT.store(0, Ordering::Release);
     WRITE_STATUS.store(status, Ordering::Release);
-    WRITE_RELEASE.store(true, Ordering::Release);
+    // SAFETY: initialised by `arm_write_pause`.
+    unsafe {
+        crate::ke::wait::KeSetEvent(PAUSE_EVENTS.release.get().cast(), 0, 0);
+    }
 }
 
 /// Fail every subsequent paging write with `status` (`STATUS_SUCCESS`
@@ -339,10 +360,8 @@ unsafe fn transfer(irp: *mut IRP, location: *mut IO_STACK_LOCATION) -> (NTSTATUS
         }
         if major == IRP_MJ_WRITE && flags & IRP_PAGING_IO != 0 {
             if PAUSE_WRITE_AT.load(Ordering::Acquire) == offset + 1 {
-                WRITE_PAUSED.store(true, Ordering::Release);
-                while !WRITE_RELEASE.load(Ordering::Acquire) {
-                    crate::ke::thread::yield_now();
-                }
+                crate::ke::wait::KeSetEvent(PAUSE_EVENTS.paused.get().cast(), 0, 0);
+                crate::ke::wait::wait(Some(PAUSE_EVENTS.release.get().cast()), None);
                 let st = WRITE_STATUS.load(Ordering::Acquire);
                 if nt_error(st) {
                     return (st, 0);

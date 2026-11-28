@@ -1875,8 +1875,8 @@ fn shutdown_drain_test(volume: &Volume) -> Result<(), &'static str> {
         flush_all(failing[0].sop());
         let recovered_after_clear = dirty_pages(failing[0].file) == 0
             && failing[0].data()[..0x100].iter().all(|&b| b == 0x40);
-        teardown_extras(&healthy)?;
         teardown_extras(&failing)?;
+        teardown_extras(&healthy)?;
         if !healthy_flushed {
             return Err("64 failing maps at head starved healthy maps behind them");
         }
