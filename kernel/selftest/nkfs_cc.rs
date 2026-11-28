@@ -50,6 +50,7 @@ static CC: Group = Group {
         "cc.lifecycle-race",
         "cc.pin-attribute-race",
         "cc.flush-inflight",
+        "cc.copy-write-nowait-mixed",
     ],
     run: cc_tests,
     manual: false,
@@ -967,7 +968,156 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
     verdicts.push(("cc.lifecycle-race", lifecycle_race(file, sop)));
     verdicts.push(("cc.pin-attribute-race", pin_attribute_race(file, sop)));
     verdicts.push(("cc.flush-inflight", flush_inflight_test(file, sop)));
+    verdicts.push((
+        "cc.copy-write-nowait-mixed",
+        copy_write_nowait_mixed_test(file, sop),
+    ));
     Ok(())
+}
+
+static FAULT_WRITE_FILE: core::sync::atomic::AtomicPtr<FILE_OBJECT> =
+    core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+static FAULT_WRITE_BUF: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn copy_write_faulting_source(offset: usize) {
+    let file = FAULT_WRITE_FILE.load(Ordering::Acquire);
+    let buf = FAULT_WRITE_BUF.load(Ordering::Acquire) as *const u8;
+    let off = offset as i64;
+    // SAFETY: cached file and caller buffer whose second page is unmapped.
+    unsafe {
+        let _ = entry::nk_entry_CcCopyWriteEx(
+            file.cast(),
+            &raw const off,
+            0x1100,
+            1,
+            buf.cast(),
+            core::ptr::null_mut(),
+        );
+    }
+}
+
+/// A failed no-wait `CcCopyWriteEx` spanning a full page followed by a cold
+/// partial page below VDL must neither modify the first page nor leave
+/// untracked dirt; a faulting source buffer mid-write must leave any already
+/// modified page accounted for in the dirty bitmap.
+fn copy_write_nowait_mixed_test(
+    file: *mut FILE_OBJECT,
+    sop: *mut SECTION_OBJECT_POINTERS,
+) -> Result<(), &'static str> {
+    initialize(file, false);
+    // Ensure [0x80000, 0x82000) is clean and purged, then fault in only page
+    // 0x80000 and purge 0x81000 so 0x80000 is resident while 0x81000 is cold.
+    let base = 0x80000i64;
+    let cold = 0x81000i64;
+    // SAFETY: live `sop` and stack offsets.
+    unsafe {
+        cc::size::CcPurgeCacheSection(sop, &raw const base, 0x2000, 0);
+    }
+    let mut probe = [0u8; 0x10];
+    let mut iosb = IO_STATUS_BLOCK {
+        Status: STATUS_PENDING,
+        Information: 0,
+    };
+    // SAFETY: cached file and stack buffers.
+    let read_ok = unsafe {
+        entry::nk_entry_CcCopyReadEx(
+            file.cast(),
+            &raw const base,
+            probe.len() as u32,
+            1,
+            probe.as_mut_ptr().cast(),
+            (&raw mut iosb).cast(),
+            core::ptr::null_mut(),
+        )
+    };
+    // SAFETY: live `sop` and stack offset.
+    let purged_cold = unsafe { cc::size::CcPurgeCacheSection(sop, &raw const cold, 0x1000, 0) };
+    if read_ok != 1 || purged_cold != 1 {
+        let zero = 0i64;
+        // SAFETY: cached file.
+        unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+        cc::lazy::CcWaitForCurrentLazyWriterActivity();
+        return Err("could not prepare mixed resident/cold pages");
+    }
+
+    // 1. No-wait write of 0x1100 bytes (full page 0x80000 + partial cold page
+    //    0x81000 < VDL) must fail cleanly without modifying 0x80000 or dirtying.
+    let src = alloc::vec![0xE5_u8; 0x1100];
+    // SAFETY: cached file and live source buffer.
+    let wrote = unsafe {
+        entry::nk_entry_CcCopyWriteEx(
+            file.cast(),
+            &raw const base,
+            src.len() as u32,
+            0,
+            src.as_ptr().cast(),
+            core::ptr::null_mut(),
+        )
+    };
+    let dirty_after_nowait = dirty_pages(file);
+    let mut check_buf = [0u8; 0x20];
+    // SAFETY: cached file and stack buffer.
+    let _ = unsafe {
+        entry::nk_entry_CcCopyReadEx(
+            file.cast(),
+            &raw const base,
+            check_buf.len() as u32,
+            1,
+            check_buf.as_mut_ptr().cast(),
+            (&raw mut iosb).cast(),
+            core::ptr::null_mut(),
+        )
+    };
+    let unmodified = check_buf
+        .iter()
+        .enumerate()
+        .all(|(i, &b)| b == nkfs::pattern(0x80000 + i));
+
+    // 2. Source-buffer fault on page 2 after overwriting page 1 must leave
+    //    page 1 tracked dirty so a whole-file flush writes it to disk.
+    let user_va = 0x4000_1000_0000_u64;
+    let mut verdict = if wrote != 0 {
+        Err("no-wait CcCopyWriteEx succeeded across a cold partial page below VDL")
+    } else if dirty_after_nowait != 0 {
+        Err("failed no-wait CcCopyWriteEx left dirty pages marked")
+    } else if !unmodified {
+        Err("failed no-wait CcCopyWriteEx modified the first page before failing")
+    } else {
+        Ok(())
+    };
+    if verdict.is_ok() {
+        if crate::mm::user::map_pages(user_va, 1).is_err() {
+            verdict = Err("could not map user page for source-fault write test");
+        } else {
+            // SAFETY: freshly mapped writable user page.
+            unsafe { core::ptr::write_bytes(user_va as *mut u8, 0x7C, 0x1000) };
+            FAULT_WRITE_FILE.store(file, Ordering::Release);
+            FAULT_WRITE_BUF.store(user_va as usize, Ordering::Release);
+            let raised = except::raises(
+                copy_write_faulting_source,
+                base as usize,
+                cc::STATUS_INVALID_USER_BUFFER as u32,
+            );
+            crate::mm::user::unmap_pages(user_va, 1);
+            let dirty_after_fault = dirty_pages(file);
+            flush_all(sop);
+            if let Err(why) = raised {
+                verdict = Err(why);
+            } else if dirty_after_fault == 0 {
+                verdict =
+                    Err("faulting CcCopyWriteEx left modified page untracked in dirty bitmap");
+            } else if nkfs::data()[0x80000..0x80020] != [0x7C; 0x20] {
+                verdict = Err("whole-file flush did not write page modified before source fault");
+            }
+        }
+    }
+
+    nkfs::take_log();
+    let zero = 0i64;
+    // SAFETY: cached file.
+    unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+    verdict
 }
 
 /// Synchronous whole-file and ranged `CcFlushCache` (as well as direct
@@ -1394,7 +1544,7 @@ fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
                 1,
                 0,
                 buffer.as_mut_ptr().cast(),
-                &raw mut iosb,
+                (&raw mut iosb).cast(),
                 core::ptr::null_mut(),
             )
         };
@@ -1463,7 +1613,7 @@ fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
                 1,
                 0,
                 bytes.as_ptr().cast_mut().cast(),
-                &raw mut iosb,
+                (&raw mut iosb).cast(),
                 core::ptr::null_mut(),
             )
         };
@@ -1479,7 +1629,7 @@ fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
                 1,
                 0,
                 bytes.as_ptr().cast_mut().cast(),
-                &raw mut iosb,
+                (&raw mut iosb).cast(),
                 core::ptr::null_mut(),
             )
         };
@@ -1508,7 +1658,7 @@ fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
                 0x1000,
                 0,
                 &raw mut chain,
-                &raw mut iosb,
+                (&raw mut iosb).cast(),
                 core::ptr::null_mut(),
             )
         };
@@ -1525,7 +1675,7 @@ fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
                 0x1000,
                 0,
                 &raw mut chain,
-                &raw mut iosb,
+                (&raw mut iosb).cast(),
                 core::ptr::null_mut(),
             )
         };

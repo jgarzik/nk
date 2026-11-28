@@ -180,6 +180,33 @@ pub unsafe fn copy_write(
         return Ok(false);
     }
     let page = PAGE_SIZE as u64;
+    // Preflight no-wait writes across the entire requested range before
+    // modifying any cache byte so a cold partial page below valid data
+    // length (or a busy VACB) returns `FALSE` without leaving earlier
+    // pages modified.
+    if !wait {
+        let ready = each_view(scm, offset, u64::from(length), false, |v, at, part| {
+            let mut p = at;
+            while p < at + part {
+                let page_start = p & !(page - 1);
+                let stop = (page_start + page).min(at + part);
+                let whole = p == page_start && stop == page_start + page;
+                if !whole && page_start < vdl {
+                    let va = v.va + (p - at) as usize;
+                    if !cache::make_resident(va, (stop - p) as usize, Resident::NoIo)
+                        .map_err(io_status)?
+                    {
+                        return Ok(false);
+                    }
+                }
+                p = stop;
+            }
+            Ok(true)
+        })?;
+        if !ready {
+            return Ok(false);
+        }
+    }
     let done = each_view(scm, offset, u64::from(length), wait, |v, at, part| {
         let mut p = at;
         while p < at + part {
@@ -189,6 +216,10 @@ pub unsafe fn copy_write(
             let src = buffer.wrapping_add((p - offset) as usize);
             let whole = p == page_start && stop == page_start + page;
             if whole || page_start >= vdl {
+                // Record dirty before mutating the page so a source-buffer
+                // fault mid-copy never leaves modified bytes untracked, and
+                // a bitmap allocation failure aborts before changing bytes.
+                set_dirty_in_mask(scm, p, stop - p)?;
                 // SAFETY: the view's page; the caller's bytes, whose
                 // faults are an error.
                 unsafe {
@@ -210,13 +241,13 @@ pub unsafe fn copy_write(
                 if !cache::make_resident(va, (stop - p) as usize, mode).map_err(io_status)? {
                     return Ok(false);
                 }
+                set_dirty_in_mask(scm, p, stop - p)?;
                 // SAFETY: as above.
                 unsafe { user::copy(va as *mut u8, src, (stop - p) as usize) }
                     .map_err(|_| STATUS_INVALID_USER_BUFFER)?;
             }
             p = stop;
         }
-        set_dirty_in_mask(scm, at, part)?;
         Ok(true)
     })?;
     if done && flags & FO_WRITE_THROUGH != 0 {

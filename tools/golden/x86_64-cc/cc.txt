@@ -26,3 +26,4 @@ cc.vacb-evict-race ok
 cc.lifecycle-race ok
 cc.pin-attribute-race ok
 cc.flush-inflight ok
+cc.copy-write-nowait-mixed ok

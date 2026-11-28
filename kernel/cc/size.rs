@@ -289,6 +289,22 @@ pub unsafe fn zero_data(
     }
     // SAFETY: per the contract.
     let scm = unsafe { cached(file, "CcZeroData") };
+    if !wait {
+        let mut at = start;
+        while at < end {
+            let Some(v) = vacb::get_va_wait(scm, at, false)? else {
+                return Ok(false);
+            };
+            let part = u64::from(v.left).min(end - at);
+            let resident =
+                cache::make_resident(v.va, part as usize, Resident::NoIo).map_err(io_status);
+            vacb::free_va(v.vacb);
+            if !resident? {
+                return Ok(false);
+            }
+            at += part;
+        }
+    }
     let mut at = start;
     while at < end {
         let Some(v) = vacb::get_va_wait(scm, at, wait)? else {
@@ -303,11 +319,14 @@ pub unsafe fn zero_data(
         // Pages zeroed whole need no read; without waiting nothing is read.
         let resident = cache::make_resident(v.va, part as usize, mode).map_err(io_status);
         let r = match resident {
-            Ok(true) => {
-                // SAFETY: the view's resident bytes.
-                unsafe { core::ptr::write_bytes(v.va as *mut u8, 0, part as usize) };
-                set_dirty_in_mask(scm, at, part).map(|()| true)
-            }
+            Ok(true) => match set_dirty_in_mask(scm, at, part) {
+                Ok(()) => {
+                    // SAFETY: the view's resident bytes.
+                    unsafe { core::ptr::write_bytes(v.va as *mut u8, 0, part as usize) };
+                    Ok(true)
+                }
+                Err(status) => Err(status),
+            },
             other => other,
         };
         vacb::free_va(v.vacb);
