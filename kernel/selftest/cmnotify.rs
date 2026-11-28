@@ -244,6 +244,67 @@ fn watching(key: *mut c_void, sub: *mut c_void) -> Result<(), &'static str> {
     if RUNS.load(Ordering::Relaxed) != 5 {
         return Err("the watcher's work item did not run once for each telling");
     }
+
+    // Kernel-internal `cm::delete_value` and `cm::delete_tree` notify watches.
+    const SUB_REL: &str = "Machine\\System\\CurrentControlSet\\Services\\NkWatched\\DelTree";
+    cm::write(SUB_REL, &[("Tmp", 4, &7u32.to_le_bytes())])
+        .map_err(|_| "could not create key for cm::delete_value/delete_tree watch test")?;
+    if watcher.watch(key, LAST_SET, true) != STATUS_PENDING {
+        let _ = cm::delete_tree(SUB_REL);
+        return Err("could not arm watch for cm::delete_value");
+    }
+    cm::delete_value(SUB_REL, "Tmp");
+    if watcher.told() != Some(STATUS_NOTIFY_ENUM_DIR) {
+        let _ = cm::delete_tree(SUB_REL);
+        return Err("cm::delete_value did not trigger registry watch");
+    }
+    if watcher.watch(key, NAME, false) != STATUS_PENDING {
+        let _ = cm::delete_tree(SUB_REL);
+        return Err("could not arm watch for cm::delete_tree");
+    }
+    if cm::delete_tree(SUB_REL).is_err() || watcher.told() != Some(STATUS_NOTIFY_ENUM_DIR) {
+        return Err("cm::delete_tree did not trigger registry watch");
+    }
+
+    // Synchronous `ZwNotifyChangeKey` (`asynchronous = 0`) blocks until a
+    // helper thread mutates the key.
+    fn writer(handle_addr: usize) {
+        let h = core::ptr::with_exposed_provenance_mut::<c_void>(handle_addr);
+        // SAFETY: small delay so the synchronous caller enters its wait first.
+        unsafe { crate::ke::wait::wait(None, Some(-200_000)) };
+        let _ = set(h, 99);
+    }
+    let before_threads = crate::ke::thread::count();
+    let _ = crate::ke::thread::create(
+        writer,
+        key.expose_provenance(),
+        crate::ke::thread::NORMAL_PRIORITY,
+        crate::ke::thread::ANYWHERE,
+    )
+    .map_err(|_| "no thread for synchronous ZwNotifyChangeKey test")?;
+    let mut sync_iosb = IO_STATUS_BLOCK {
+        Status: 0,
+        Information: 0,
+    };
+    // SAFETY: `key` is a valid key handle and `sync_iosb` is a live local.
+    let sync_st = unsafe {
+        notify::ZwNotifyChangeKey(
+            key,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            &raw mut sync_iosb,
+            LAST_SET,
+            0,
+            core::ptr::null_mut(),
+            0,
+            0,
+        )
+    };
+    crate::ke::thread::settle(before_threads);
+    if sync_st != STATUS_NOTIFY_ENUM_DIR || sync_iosb.Status != STATUS_NOTIFY_ENUM_DIR {
+        return Err("synchronous ZwNotifyChangeKey did not wake with STATUS_NOTIFY_ENUM_DIR");
+    }
     Ok(())
 }
 

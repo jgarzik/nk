@@ -28,11 +28,117 @@
 #![allow(non_snake_case)]
 
 use crate::ke::{Rank, SpinLock, wait};
+use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_ex::pushlock::{self, Access, Acquire, NotHeld, Release, Wake};
 use nk_ntabi::ex::EX_PUSH_LOCK;
 use nk_ntabi::ke::KEVENT;
+
+/// A passive reader/writer lock built on [`EX_PUSH_LOCK`].
+///
+/// Acquiring enters a kernel critical region (`KeEnterCriticalRegion`) and
+/// sleeps on contention, so it may only be taken at `<= APC_LEVEL` with no
+/// spin lock held. Releasing leaves the critical region.
+pub struct PushLock<T> {
+    lock: UnsafeCell<EX_PUSH_LOCK>,
+    value: UnsafeCell<T>,
+}
+
+// SAFETY: the push lock serialises mutable access and synchronises shared
+// access to `T`.
+unsafe impl<T: Send> Sync for PushLock<T> {}
+
+/// Shared (reader) guard for [`PushLock`].
+pub struct ReadGuard<'a, T> {
+    lock: &'a PushLock<T>,
+}
+
+/// Exclusive (writer) guard for [`PushLock`].
+pub struct WriteGuard<'a, T> {
+    lock: &'a PushLock<T>,
+}
+
+impl<T> PushLock<T> {
+    /// A new unlocked push lock protecting `value`.
+    pub const fn new(value: T) -> Self {
+        Self {
+            lock: UnsafeCell::new(0),
+            value: UnsafeCell::new(value),
+        }
+    }
+
+    fn check_irql(&self) {
+        let level = crate::ke::irql::current();
+        if level >= crate::ke::irql::DISPATCH_LEVEL {
+            crate::kd::bugcheck(format_args!(
+                "0x0000000A IRQL_NOT_LESS_OR_EQUAL: passive PushLock at {:p} taken at IRQL {level}",
+                self.lock.get()
+            ));
+        }
+    }
+
+    /// Acquire exclusive access (writer), entering a critical region.
+    pub fn lock(&self) -> WriteGuard<'_, T> {
+        self.check_irql();
+        crate::ke::mutex::KeEnterCriticalRegion();
+        // SAFETY: `self.lock` is a live `EX_PUSH_LOCK` and IRQL <= APC_LEVEL.
+        unsafe { acquire(self.lock.get(), Access::Exclusive) };
+        WriteGuard { lock: self }
+    }
+
+    /// Acquire shared access (reader), entering a critical region.
+    pub fn read(&self) -> ReadGuard<'_, T>
+    where
+        T: Sync,
+    {
+        self.check_irql();
+        crate::ke::mutex::KeEnterCriticalRegion();
+        // SAFETY: `self.lock` is a live `EX_PUSH_LOCK` and IRQL <= APC_LEVEL.
+        unsafe { acquire(self.lock.get(), Access::Shared) };
+        ReadGuard { lock: self }
+    }
+}
+
+impl<T> Deref for ReadGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        // SAFETY: shared hold prevents concurrent writers.
+        unsafe { &*self.lock.value.get() }
+    }
+}
+
+impl<T> Drop for ReadGuard<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: matching shared acquire in `PushLock::read`.
+        unsafe { release(self.lock.lock.get(), pushlock::release_shared) };
+        crate::ke::mutex::KeLeaveCriticalRegion();
+    }
+}
+
+impl<T> Deref for WriteGuard<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        // SAFETY: exclusive hold prevents concurrent readers and writers.
+        unsafe { &*self.lock.value.get() }
+    }
+}
+
+impl<T> DerefMut for WriteGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        // SAFETY: exclusive hold prevents concurrent readers and writers.
+        unsafe { &mut *self.lock.value.get() }
+    }
+}
+
+impl<T> Drop for WriteGuard<'_, T> {
+    fn drop(&mut self) {
+        // SAFETY: matching exclusive acquire in `PushLock::lock`.
+        unsafe { release(self.lock.lock.get(), pushlock::release_exclusive) };
+        crate::ke::mutex::KeLeaveCriticalRegion();
+    }
+}
 
 /// A thread waiting for a push lock. It lives on that thread's stack,
 /// which stays put while the thread sleeps: until its event is set.

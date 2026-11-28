@@ -24,7 +24,7 @@
 #![allow(non_snake_case)]
 
 use super::object::{self, ObRef, ObjectType};
-use crate::ke::{Rank, SpinLock};
+use crate::ex::pushlock::PushLock;
 use core::ffi::c_void;
 use core::sync::atomic::Ordering;
 use nk_ntabi::ob::{handle_index, kernel_handle, process_handle};
@@ -51,26 +51,30 @@ struct Entry(*mut u8);
 
 // SAFETY: the table holds a reference to each object it lists, and the
 // pointer is only used under the table's lock or with a reference taken
-// there.
+// there. Shared readers only read the pointer identity and bump the atomic
+// reference count.
 unsafe impl Send for Entry {}
+// SAFETY: as above.
+unsafe impl Sync for Entry {}
 
-/// One process's handle table (`EPROCESS.ObjectTable`).
-pub struct HandleTable(SpinLock<Handles<Entry>>);
+/// One process's handle table (`EPROCESS.ObjectTable`), guarded by a passive
+/// push lock.
+pub struct HandleTable(PushLock<Handles<Entry>>);
 
 impl HandleTable {
     /// An empty handle table.
     pub const fn new() -> Self {
-        Self(SpinLock::new(Rank::Handles, Handles::new()))
+        Self(PushLock::new(Handles::new()))
     }
 
     /// Number of open handles in this table.
     pub fn count(&self) -> usize {
-        self.0.lock().count()
+        self.0.read().count()
     }
 
     /// Pool bytes occupied by the table's slot array.
     pub fn storage(&self) -> usize {
-        self.0.lock().storage()
+        self.0.read().storage()
     }
 }
 
@@ -144,11 +148,11 @@ pub unsafe fn inherit_handles(parent: *mut u8, child: *mut u8) -> Result<(), NTS
     if core::ptr::eq(src, dst) {
         return Ok(());
     }
-    // Snapshot inheritable handles under `src`'s lock with fresh references so
-    // we never hold two Rank::Handles locks simultaneously.
+    // Snapshot inheritable handles under `src`'s shared lock with fresh
+    // references so we never hold two handle-table locks simultaneously.
     let mut inherited = alloc::vec::Vec::new();
     {
-        let src_guard = src.0.lock();
+        let src_guard = src.0.read();
         for (_, h) in src_guard.iter() {
             if h.attributes.inherit {
                 let target = h.object.0;
@@ -403,7 +407,7 @@ pub unsafe fn reference_in(
     let index = handle_index(handle, mode == Mode::Kernel).ok_or(STATUS_INVALID_HANDLE)?;
     // SAFETY: per the contract.
     let handle_table = unsafe { table_for(process, handle) }.ok_or(STATUS_INVALID_HANDLE)?;
-    let table = handle_table.0.lock();
+    let table = handle_table.0.read();
     let Entry(body) = table.reference(index, desired, mode).map_err(status)?;
     // SAFETY: the table holds a reference, and its lock is held, so the
     // object cannot go away before the new reference is taken.
@@ -468,7 +472,7 @@ pub unsafe fn close_in(process: *mut u8, handle: u64, mode: Mode) -> NTSTATUS {
         process
     };
     let veto_check = {
-        let table = handle_table.0.lock();
+        let table = handle_table.0.read();
         if let Some(open) = table.get(index) {
             let body = open.object.0;
             // SAFETY: the table holds a reference while locked.

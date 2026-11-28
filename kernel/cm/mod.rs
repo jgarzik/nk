@@ -28,7 +28,7 @@ pub use helper::{
 };
 pub use table::{RtlQueryRegistryValues, RtlQueryRegistryValuesEx};
 
-use crate::ke::{Rank, SpinLock};
+use crate::ex::pushlock::PushLock;
 use crate::ob::object::ObRef;
 use crate::ob::{handle, object};
 use alloc::string::String;
@@ -43,7 +43,7 @@ use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
 
-static HIVE: SpinLock<Hive> = SpinLock::new(Rank::Registry, Hive::new());
+static HIVE: PushLock<Hive> = PushLock::new(Hive::new());
 
 /// `REG_CREATED_NEW_KEY`, `REG_OPENED_EXISTING_KEY`.
 const CREATED: u32 = 1;
@@ -249,7 +249,7 @@ pub fn init() -> Result<(), &'static str> {
 /// The pool memory the registry holds, as `(blocks, bytes)`: it keeps
 /// what drivers write to it, which a leak check must not count as lost.
 pub fn storage() -> (usize, usize) {
-    HIVE.lock().storage()
+    HIVE.read().storage()
 }
 
 fn status(error: Error) -> NTSTATUS {
@@ -595,8 +595,8 @@ pub fn copy_tree(from: &str, to: &str) -> Result<(), NTSTATUS> {
 }
 
 /// Delete the key at `path` (from the registry's root) and everything
-/// below it. A key that is not there is not an error. For the kernel's
-/// own use.
+/// below it. A key that is not there is not an error. Watches on the parent
+/// key are notified (`CHANGE_NAME`). For the kernel's own use.
 pub fn delete_tree(path: &str) -> Result<(), NTSTATUS> {
     for child in subkeys(path) {
         delete_tree(&alloc::format!("{path}\\{child}"))?;
@@ -607,23 +607,41 @@ pub fn delete_tree(path: &str) -> Result<(), NTSTATUS> {
     let Ok(key) = hive.root().and_then(|root| hive.open(root, &wide)) else {
         return Ok(());
     };
-    hive.parent(key)
-        .and_then(|parent| {
-            hive.delete(key)?;
-            hive.set_last_write(parent, now)
-        })
-        .map_err(status)
+    let deleted = hive.parent(key).and_then(|parent| {
+        hive.delete(key)?;
+        hive.set_last_write(parent, now)?;
+        Ok(parent)
+    });
+    let met = deleted
+        .ok()
+        .map(|parent| notify::changed(&hive, parent, CHANGE_NAME));
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
+    }
+    deleted.map(|_| ()).map_err(status)
 }
 
 /// Delete the value `name` of the key at `path` (from the registry's
-/// root). Neither a missing key nor a missing value is an error. For
-/// the kernel's own use.
+/// root). Neither a missing key nor a missing value is an error. Watches on
+/// the key are notified (`CHANGE_LAST_SET`). For the kernel's own use.
 pub fn delete_value(path: &str, name: &str) {
     let path = wide(path);
     let name = wide(name);
+    let now = now();
     let mut hive = HIVE.lock();
-    if let Ok(key) = hive.root().and_then(|root| hive.open(root, &path)) {
-        let _ = hive.delete_value(key, &name);
+    let met = hive
+        .root()
+        .and_then(|root| hive.open(root, &path))
+        .ok()
+        .and_then(|key| {
+            hive.delete_value(key, &name).ok()?;
+            let _ = hive.set_last_write(key, now);
+            Some(notify::changed(&hive, key, CHANGE_LAST_SET))
+        });
+    drop(hive);
+    if let Some(met) = met {
+        met.tell();
     }
 }
 

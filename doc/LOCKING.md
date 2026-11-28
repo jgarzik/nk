@@ -77,12 +77,9 @@ already held has a lower rank; two locks of one rank never nest.
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
-| 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
 | 32 | `ps::notify::TABLE` | the process-creation notify routines drivers have registered, and their kinds | DISPATCH |
-| 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
-| 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
 | 36 | `mm::map::LIVE` | which ranges of the dynamic kernel region are handed out; taken with no lock of the address space held | DISPATCH |
 | 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing; the devices registered with the runtime power framework, their components' counts and conditions, and which are owed callbacks from a worker | DISPATCH |
 | 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |
@@ -280,6 +277,29 @@ never looser.
 path that stops the system uses it, on the console, the table of
 loaded images and the list of bugcheck callback records, and never
 returns.
+
+### Passive push locks (`ex::pushlock::PushLock`)
+
+Long-held tables that allocate from the pool, serve concurrent readers,
+and are only touched below `DISPATCH_LEVEL` use `ex::pushlock::PushLock<T>`,
+which enters a kernel critical region (`KeEnterCriticalRegion`) and sleeps
+on contention (bugchecking `IRQL_NOT_LESS_OR_EQUAL` if entered above
+`APC_LEVEL`):
+
+- `ob::NAMESPACE` — the object namespace's directories, entries, and
+  named objects' name information (`read()` for look-ups and counts,
+  `lock()` for mutations).
+- `cm::HIVE` — the registry's keys and values (`read()` for queries,
+  `lock()` for mutations; takes `cm::notify::WATCHES` inside when
+  collecting triggered watches).
+- `ob::handle::HandleTable` — each process's handle table (including the
+  System/kernel table; `read()` for handle look-ups and counts, `lock()`
+  for insert/close/teardown; two handle tables are never locked together).
+
+Because `DIRECTORY_TYPE`, `KEY_TYPE`, and `PROCESS_TYPE` delete
+procedures take these passive locks, `ob::object::ObjectType::deletes_at_passive`
+defers their final deletion to a passive worker thread whenever the last
+reference drops above `PASSIVE_LEVEL`.
 
 ### The loader's mutex
 

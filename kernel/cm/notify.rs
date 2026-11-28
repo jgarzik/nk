@@ -16,9 +16,12 @@ use crate::ke::{Rank, SpinLock, wait};
 use crate::ob::{handle, object};
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicI32, Ordering};
 use nk_cm::notify::{self, Watch, Watches};
 use nk_cm::{Hive, KeyId};
 use nk_ntabi::io::IO_STATUS_BLOCK;
+use nk_ntabi::ke::KEVENT;
 use nk_ntabi::status::{
     NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER, STATUS_NOTIFY_CLEANUP,
     STATUS_NOTIFY_ENUM_DIR, STATUS_PENDING,
@@ -27,13 +30,17 @@ use nk_ntabi::status::{
 /// How a watcher is told: each part may be absent (0).
 #[derive(Clone, Copy)]
 struct Telling {
-    /// The caller's `IO_STATUS_BLOCK`.
+    /// The caller's `IO_STATUS_BLOCK` (for async watches).
     status_block: usize,
     /// The caller's event, an object referenced for the watch.
     event: usize,
     /// The caller's `WORK_QUEUE_ITEM`, and the queue it goes on.
     work_item: usize,
     queue: u32,
+    /// Stack-resident `KEVENT` and status slot for synchronous watches
+    /// (`asynchronous == 0`); not an object-manager object.
+    sync_event: usize,
+    sync_status: usize,
 }
 
 static WATCHES: SpinLock<Watches<Telling>> = SpinLock::new(Rank::RegistryWatches, Watches::new());
@@ -65,9 +72,13 @@ fn tell_all(watches: Option<Vec<Watch<Telling>>>, status: NTSTATUS) {
 /// The parts of `telling` are what `ZwNotifyChangeKey` was given, still
 /// valid, and the event is referenced.
 unsafe fn tell(telling: Telling, status: NTSTATUS) {
-    // SAFETY: per the contract. The work item is queued last: its
-    // routine may free the rest.
+    // SAFETY: per the contract. The work item and sync event are signalled
+    // last: their waiters may free the rest.
     unsafe {
+        if telling.sync_status != 0 {
+            let slot = core::ptr::with_exposed_provenance::<AtomicI32>(telling.sync_status);
+            (*slot).store(status, Ordering::Release);
+        }
         if telling.status_block != 0 {
             core::ptr::with_exposed_provenance_mut::<IO_STATUS_BLOCK>(telling.status_block)
                 .write_unaligned(IO_STATUS_BLOCK {
@@ -79,6 +90,10 @@ unsafe fn tell(telling: Telling, status: NTSTATUS) {
             let event = core::ptr::with_exposed_provenance_mut::<u8>(telling.event);
             wait::KeSetEvent(event.cast(), 0, 0);
             object::dereference(event);
+        }
+        if telling.sync_event != 0 {
+            let event = core::ptr::with_exposed_provenance_mut::<KEVENT>(telling.sync_event);
+            wait::KeSetEvent(event, 0, 0);
         }
         if telling.work_item != 0 {
             work::ExQueueWorkItem(
@@ -164,6 +179,8 @@ pub unsafe extern "C" fn NtNotifyChangeKey(
     _buffer_size: u32,
     asynchronous: u8,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let handle_mode = crate::svc::capture::handle_mode(mode);
     // Held to the end of the call: longer than any lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
@@ -172,21 +189,63 @@ pub unsafe extern "C" fn NtNotifyChangeKey(
     if !notify::filter_is_legal(filter) {
         return STATUS_INVALID_PARAMETER;
     }
-    if asynchronous == 0 {
-        crate::kd::bugcheck(format_args!(
-            "ZwNotifyChangeKey: NK does not implement the synchronous request, which waits for the change"
-        ));
-    }
     let event = if event.is_null() {
         core::ptr::null_mut()
     } else {
-        match handle::reference(event as u64, Some(&raw const object::EVENT_TYPE)) {
+        match handle::reference_for(
+            event as u64,
+            Some(&raw const object::EVENT_TYPE),
+            0x2,
+            handle_mode,
+        ) {
             // The watch's reference from here: given up when it fires
             // or goes.
-            Ok(body) => body.into_raw(),
+            Ok((body, _)) => body.into_raw(),
             Err(status) => return status,
         }
     };
+    if asynchronous == 0 {
+        let mut sync_event = MaybeUninit::<KEVENT>::uninit();
+        let sync_status = AtomicI32::new(STATUS_PENDING);
+        // SAFETY: stack-resident `KEVENT` initialised before registration and
+        // kept alive until `wait_as` returns (after `tell` signals it).
+        unsafe { wait::KeInitializeEvent(sync_event.as_mut_ptr(), 0, 0) };
+        let watch = Watch {
+            key: held.key().index(),
+            owner: held.body().addr(),
+            filter,
+            subtree: watch_tree != 0,
+            what: Telling {
+                status_block: 0,
+                event: event.expose_provenance(),
+                work_item: 0,
+                queue: 0,
+                sync_event: sync_event.as_mut_ptr().expose_provenance(),
+                sync_status: (&raw const sync_status).expose_provenance(),
+            },
+        };
+        if WATCHES.lock().add(watch).is_err() {
+            if !event.is_null() {
+                // SAFETY: the reference taken above.
+                unsafe { object::dereference(event) };
+            }
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        // SAFETY: `sync_event` is initialised and live until `tell` signals it.
+        let _ = unsafe { wait::wait_as(Some(sync_event.as_mut_ptr().cast()), None, mode, false) };
+        let final_status = sync_status.load(Ordering::Acquire);
+        if !status_block.is_null() {
+            let iosb = IO_STATUS_BLOCK {
+                Status: final_status,
+                Information: 0,
+            };
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            if let Err(fault) = unsafe { crate::svc::capture::write(status_block, iosb, mode) } {
+                return fault;
+            }
+        }
+        return final_status;
+    }
     let watch = Watch {
         key: held.key().index(),
         owner: held.body().addr(),
@@ -198,6 +257,8 @@ pub unsafe extern "C" fn NtNotifyChangeKey(
             work_item: work_item.expose_provenance(),
             // A `WORK_QUEUE_TYPE`, passed in a pointer's place.
             queue: queue.addr() as u32,
+            sync_event: 0,
+            sync_status: 0,
         },
     };
     let added = WATCHES.lock().add(watch);

@@ -51,20 +51,14 @@ pub enum Rank {
     Whea = 28,
     /// Which interrupts each device has been given (`io::interrupt`).
     DeviceInterrupts = 29,
-    /// The object namespace (`ob`).
-    Namespace = 30,
     /// The routines registered with the kernel debugger for power
     /// transitions (`kd::debugger`).
     KdPower = 31,
     /// The process-creation notify routines drivers registered
     /// (`ps::notify`).
     ProcessNotify = 32,
-    /// The registry (`cm`).
-    Registry = 33,
     /// The watches on registry keys (`cm::notify`).
     RegistryWatches = 34,
-    /// The kernel handle table (`ob::handle`).
-    Handles = 35,
     /// The ranges of the dynamic kernel region that are handed out
     /// (`mm::map`).
     Mappings = 36,

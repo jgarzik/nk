@@ -262,9 +262,14 @@ impl ObjectType {
     }
 
     /// Whether the type's delete procedure must run at `PASSIVE_LEVEL`:
-    /// a file's sends its driver the close request.
+    /// a file's sends its driver the close request, and directories, keys,
+    /// and processes take passive push locks (`ob::NAMESPACE`, `cm::HIVE`,
+    /// `ob::handle::HandleTable`).
     fn deletes_at_passive(&self) -> bool {
         core::ptr::eq(self, &raw const FILE_TYPE)
+            || core::ptr::eq(self, &raw const DIRECTORY_TYPE)
+            || core::ptr::eq(self, &raw const KEY_TYPE)
+            || core::ptr::eq(self, &raw const PROCESS_TYPE)
     }
 
     /// The type's name.

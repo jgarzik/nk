@@ -25,7 +25,7 @@ pub mod handle;
 pub mod object;
 pub mod security;
 
-use crate::ke::{Rank, SpinLock};
+use crate::ex::pushlock::PushLock;
 use alloc::vec::Vec;
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::ob::{OBJECT_DIRECTORY_SIZE, OBJECT_SYMBOLIC_LINK};
@@ -38,8 +38,11 @@ use object::ObRef;
 struct Entry(*mut u8);
 
 // SAFETY: the pointer is an identity here, and is used only under the
-// namespace's lock or with a reference taken there.
+// namespace's lock or with a reference taken there. Shared readers only read
+// the pointer identity and bump the atomic reference count.
 unsafe impl Send for Entry {}
+// SAFETY: as above.
+unsafe impl Sync for Entry {}
 
 struct Namespace {
     tree: Tree<Entry>,
@@ -49,14 +52,11 @@ struct Namespace {
     directories: Vec<(DirId, Entry)>,
 }
 
-static NAMESPACE: SpinLock<Namespace> = SpinLock::new(
-    Rank::Namespace,
-    Namespace {
-        tree: Tree::new(),
-        root: Entry(core::ptr::null_mut()),
-        directories: Vec::new(),
-    },
-);
+static NAMESPACE: PushLock<Namespace> = PushLock::new(Namespace {
+    tree: Tree::new(),
+    root: Entry(core::ptr::null_mut()),
+    directories: Vec::new(),
+});
 
 /// How every path is read: any case, links followed.
 const OPTIONS: Options = Options::new(true);
@@ -309,7 +309,7 @@ pub fn lookup_with(
     open_link: bool,
 ) -> Result<(ObRef, Vec<u16>), NTSTATUS> {
     let options = if open_link { THE_LINK } else { OPTIONS };
-    let ns = NAMESPACE.lock();
+    let ns = NAMESPACE.read();
     let start = match start {
         None => None,
         Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn directory_deleted(object: *mut core::ffi::c_void) {
 /// Number of entries in the namespace, the boot directories included
 /// (for leak checks, which compare).
 pub fn count() -> usize {
-    NAMESPACE.lock().tree.counts().total()
+    NAMESPACE.read().tree.counts().total()
 }
 
 // ---- tests --------------------------------------------------------------
