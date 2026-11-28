@@ -31,11 +31,14 @@ fn each_view(
     scm: &Scm,
     offset: u64,
     length: u64,
+    wait: bool,
     mut f: impl FnMut(&View, u64, u64) -> Result<bool, NTSTATUS>,
 ) -> Result<bool, NTSTATUS> {
     let (mut at, end) = (offset, offset + length);
     while at < end {
-        let v = vacb::get_va(scm, at)?;
+        let Some(v) = vacb::get_va_wait(scm, at, wait)? else {
+            return Ok(false);
+        };
         let part = u64::from(v.left).min(end - at);
         let r = f(&v, at, part);
         vacb::free_va(v.vacb);
@@ -102,7 +105,7 @@ pub unsafe fn copy_read(
     if buffer.is_null() {
         return Err(STATUS_INVALID_USER_BUFFER);
     }
-    let done = each_view(scm, offset, u64::from(length), |v, at, part| {
+    let done = each_view(scm, offset, u64::from(length), wait, |v, at, part| {
         let mode = if wait {
             Resident::FaultIn
         } else {
@@ -177,7 +180,7 @@ pub unsafe fn copy_write(
         return Ok(false);
     }
     let page = PAGE_SIZE as u64;
-    let done = each_view(scm, offset, u64::from(length), |v, at, part| {
+    let done = each_view(scm, offset, u64::from(length), wait, |v, at, part| {
         let mut p = at;
         while p < at + part {
             let page_start = p & !(page - 1);

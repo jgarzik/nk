@@ -173,7 +173,9 @@ unsafe fn map_data(
         // SAFETY: per the contract (CcPinFileData clears it first).
         unsafe { buffer_out.write(0) };
     }
-    let v = vacb::get_va(scm, offset)?;
+    let Some(v) = vacb::get_va_wait(scm, offset, wait)? else {
+        return Ok(false);
+    };
     within_view(&v, offset, length, "CcMapData");
     let resident = if wait && flags & MAP_NO_READ != 0 {
         Ok(true)
@@ -240,7 +242,9 @@ fn pin_file_data(
             scm.section_size.get()
         ));
     }
-    let v = vacb::get_va(scm, offset)?;
+    let Some(v) = vacb::get_va_wait(scm, offset, wait)? else {
+        return Ok(None);
+    };
     within_view(&v, offset, length, routine);
     let takes_resource = how != Use::ReadOnly && uses_resource(scm);
     // A new BCB of a pinned metadata stream covers whole pages, within

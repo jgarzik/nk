@@ -22,3 +22,4 @@ cc.lazy-write ok
 cc.defer-write ok
 cc.lazy-close ok
 cc.wait-twice ok
+cc.vacb-evict-race ok

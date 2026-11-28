@@ -301,7 +301,9 @@ pub unsafe fn zero_data(
     let scm = unsafe { cached(file, "CcZeroData") };
     let mut at = start;
     while at < end {
-        let v = vacb::get_va(scm, at)?;
+        let Some(v) = vacb::get_va_wait(scm, at, wait)? else {
+            return Ok(false);
+        };
         let part = u64::from(v.left).min(end - at);
         let mode = if !wait {
             Resident::NoIo

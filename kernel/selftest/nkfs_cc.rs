@@ -46,6 +46,7 @@ static CC: Group = Group {
         "cc.defer-write",
         "cc.lazy-close",
         "cc.wait-twice",
+        "cc.vacb-evict-race",
     ],
     run: cc_tests,
     manual: false,
@@ -915,6 +916,15 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
         }
     };
     verdicts.push(("cc.defer-write", deferred));
+
+    // Exercise concurrent VACB eviction (recycling and `unmap_views`) against
+    // waiting and no-wait lookups on another CPU while `file` is still cached.
+    let evict_race = {
+        // SAFETY: `file` is cached right now.
+        let scm = unsafe { cc::cached(file, "cc.vacb-evict-race") };
+        cc::vacb::evict_race_test(scm)
+    };
+    verdicts.push(("cc.vacb-evict-race", evict_race));
 
     // A file cached for copying and closed without a truncate size is
     // left to the lazy writer, which deletes its map and signals the
