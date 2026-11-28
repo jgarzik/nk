@@ -277,4 +277,66 @@ pub unsafe extern "C" fn NtQuerySecurityAttributesToken(
     STATUS_NOT_FOUND
 }
 
+/// `NtOpenProcessToken`: open the primary token of `process_handle`.
+///
+/// # Safety
+/// `token_handle` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenProcessToken(
+    process_handle: *mut c_void,
+    desired_access: u32,
+    token_handle: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { NtOpenProcessTokenEx(process_handle, desired_access, 0, token_handle) }
+}
+
+/// `NtOpenThreadToken`: open the impersonation token of `thread_handle`.
+///
+/// # Safety
+/// `token_handle` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtOpenThreadToken(
+    thread_handle: *mut c_void,
+    desired_access: u32,
+    open_as_self: u8,
+    token_handle: *mut *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        super::impersonate::NtOpenThreadTokenEx(
+            thread_handle,
+            desired_access,
+            open_as_self,
+            0,
+            token_handle,
+        )
+    }
+}
+
+/// `NtAdjustPrivilegesToken`: enable or disable privileges on `token_handle`.
+/// NK's SYSTEM token holds all privileges enabled.
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtAdjustPrivilegesToken(
+    token_handle: *mut c_void,
+    _disable_all_privileges: u8,
+    _new_state: *const c_void,
+    _buffer_length: u32,
+    _previous_state: *mut c_void,
+    return_length: *mut u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    if let Err(st) = referenced(token_handle, &object::TOKEN_TYPE) {
+        return st;
+    }
+    if !return_length.is_null() {
+        // SAFETY: per the contract.
+        let wr = unsafe { crate::svc::capture::write(return_length, 0u32, mode) };
+        if let Err(st) = wr {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
 pub use crate::svc::zw::{ZwDuplicateToken, ZwOpenProcessTokenEx, ZwQueryInformationToken};

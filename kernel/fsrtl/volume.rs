@@ -98,3 +98,12 @@ pub unsafe extern "C" fn FsRtlNotifyVolumeEvent(file: *mut FILE_OBJECT, event: u
     }
     nk_ntabi::status::STATUS_SUCCESS
 }
+
+/// [`FsRtlDismountComplete`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-fsrtldismountcomplete):
+/// notify filter manager that a volume dismount completed (no `FltMgr` on NK).
+pub extern "C" fn FsRtlDismountComplete(
+    _device_object: *mut DEVICE_OBJECT,
+    _status: NTSTATUS,
+) -> NTSTATUS {
+    nk_ntabi::status::STATUS_SUCCESS
+}

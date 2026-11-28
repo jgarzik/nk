@@ -582,8 +582,107 @@ pub unsafe extern "C" fn NtQueryInformationFile(
     length: u32,
     file_information_class: u32,
 ) -> NTSTATUS {
+    const FILE_ACCESS_INFORMATION: u32 = 8;
+    const FILE_POSITION_INFORMATION: u32 = 14;
+    const FILE_MODE_INFORMATION: u32 = 16;
+    const FILE_ALIGNMENT_INFORMATION: u32 = 17;
+
     let mode = crate::svc::capture::mode();
     let len = length as usize;
+
+    // Classes answered directly by the I/O manager from `FILE_OBJECT` / handle
+    // table (Windows `NtQueryInformationFile` handles these without an IRP).
+    if matches!(
+        file_information_class,
+        FILE_ACCESS_INFORMATION
+            | FILE_POSITION_INFORMATION
+            | FILE_MODE_INFORMATION
+            | FILE_ALIGNMENT_INFORMATION
+    ) {
+        let (held, info) = match crate::ob::handle::reference_for(
+            file_handle as u64,
+            Some(&raw const crate::ob::object::FILE_TYPE),
+            0,
+            crate::svc::capture::handle_mode(mode),
+        ) {
+            Ok(found) => found,
+            Err(st) => return st,
+        };
+        let fo = held.body().cast::<nk_ntabi::io::FILE_OBJECT>();
+        let mut small = [0u8; 8];
+        let needed: usize = match file_information_class {
+            FILE_ACCESS_INFORMATION => {
+                small[..4].copy_from_slice(&info.granted.to_le_bytes());
+                4
+            }
+            FILE_POSITION_INFORMATION => {
+                // SAFETY: `held` keeps `FILE_OBJECT` alive.
+                let pos = unsafe { (*fo).CurrentByteOffset };
+                small[..8].copy_from_slice(&pos.to_le_bytes());
+                8
+            }
+            FILE_MODE_INFORMATION => {
+                const FO_WRITE_THROUGH: u32 = 0x0000_0004;
+                const FO_NO_INTERMEDIATE_BUFFERING: u32 = 0x0000_0008;
+                const FO_SEQUENTIAL_ONLY: u32 = 0x0000_0020;
+                // SAFETY: `held` keeps `FILE_OBJECT` alive.
+                let flags = unsafe { (*fo).Flags };
+                let mut fmode = 0u32;
+                if (flags & FO_WRITE_THROUGH) != 0 {
+                    fmode |= 0x02;
+                }
+                if (flags & FO_SEQUENTIAL_ONLY) != 0 {
+                    fmode |= 0x04;
+                }
+                if (flags & FO_NO_INTERMEDIATE_BUFFERING) != 0 {
+                    fmode |= 0x08;
+                }
+                if (flags & nk_ntabi::io::FO_SYNCHRONOUS_IO) != 0 {
+                    fmode |= if (flags & nk_ntabi::io::FO_ALERTABLE_IO) != 0 {
+                        0x10
+                    } else {
+                        0x20
+                    };
+                }
+                small[..4].copy_from_slice(&fmode.to_le_bytes());
+                4
+            }
+            FILE_ALIGNMENT_INFORMATION => {
+                // SAFETY: `held` keeps `FILE_OBJECT` and its `DeviceObject` alive.
+                let align = unsafe {
+                    let dev = (*fo).DeviceObject;
+                    if dev.is_null() {
+                        0u32
+                    } else {
+                        (*dev).AlignmentRequirement
+                    }
+                };
+                small[..4].copy_from_slice(&align.to_le_bytes());
+                4
+            }
+            _ => unreachable!(),
+        };
+        if len < needed {
+            return STATUS_INFO_LENGTH_MISMATCH;
+        }
+        // SAFETY: per the contract; `copy_to_caller` probes user pointers.
+        let cp = unsafe {
+            crate::svc::capture::copy_to_caller(file_information, &small[..needed], mode)
+        };
+        if let Err(st) = cp {
+            return st;
+        }
+        let iosb = IO_STATUS_BLOCK {
+            Status: STATUS_SUCCESS,
+            Information: needed,
+        };
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(io_status_block, iosb, mode) } {
+            return st;
+        }
+        return STATUS_SUCCESS;
+    }
+
     let mut kbuf = alloc::vec![0u8; len];
     match file::query_information(file_handle as u64, file_information_class, &mut kbuf) {
         Ok(r) => {
@@ -622,6 +721,9 @@ pub unsafe extern "C" fn NtSetInformationFile(
     length: u32,
     file_information_class: u32,
 ) -> NTSTATUS {
+    const FILE_POSITION_INFORMATION: u32 = 14;
+    const FILE_MODE_INFORMATION: u32 = 16;
+
     let mode = crate::svc::capture::mode();
     let len = length as usize;
     let mut kbuf = alloc::vec![0u8; len];
@@ -632,6 +734,42 @@ pub unsafe extern "C" fn NtSetInformationFile(
         if let Err(st) = cp {
             return st;
         }
+    }
+    if file_information_class == FILE_POSITION_INFORMATION
+        || file_information_class == FILE_MODE_INFORMATION
+    {
+        let (held, _) = match crate::ob::handle::reference_for(
+            file_handle as u64,
+            Some(&raw const crate::ob::object::FILE_TYPE),
+            0,
+            crate::svc::capture::handle_mode(mode),
+        ) {
+            Ok(found) => found,
+            Err(st) => return st,
+        };
+        let fo = held.body().cast::<nk_ntabi::io::FILE_OBJECT>();
+        if file_information_class == FILE_POSITION_INFORMATION {
+            if len < 8 {
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            let pos = i64::from_le_bytes(kbuf[..8].try_into().unwrap_or([0; 8]));
+            if pos < 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            // SAFETY: `held` keeps `FILE_OBJECT` alive.
+            unsafe { (*fo).CurrentByteOffset = pos };
+        } else if len < 4 {
+            return STATUS_INFO_LENGTH_MISMATCH;
+        }
+        let iosb = IO_STATUS_BLOCK {
+            Status: STATUS_SUCCESS,
+            Information: 0,
+        };
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { crate::svc::capture::write(io_status_block, iosb, mode) } {
+            return st;
+        }
+        return STATUS_SUCCESS;
     }
     match file::set_information(file_handle as u64, file_information_class, &kbuf) {
         Ok(r) => {
@@ -948,6 +1086,34 @@ pub unsafe extern "C" fn NtDeleteFile(object_attributes: *const OBJECT_ATTRIBUTE
         Err(st) => return st,
     };
     file::close(h);
+    STATUS_SUCCESS
+}
+
+/// [`NtCancelIoFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntcanceliofile).
+///
+/// # Safety
+/// `io_status_block` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtCancelIoFile(
+    file_handle: *mut c_void,
+    io_status_block: *mut IO_STATUS_BLOCK,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    if let Err(st) = crate::ob::handle::reference_for(
+        file_handle as u64,
+        Some(&raw const crate::ob::object::FILE_TYPE),
+        0,
+        crate::svc::capture::handle_mode(mode),
+    ) {
+        return st;
+    }
+    let iosb = IO_STATUS_BLOCK {
+        Status: STATUS_SUCCESS,
+        Information: 0,
+    };
+    // SAFETY: per the contract.
+    if let Err(st) = unsafe { crate::svc::capture::write(io_status_block, iosb, mode) } {
+        return st;
+    }
     STATUS_SUCCESS
 }
 

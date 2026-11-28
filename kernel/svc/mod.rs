@@ -514,6 +514,10 @@ register_services! {
     unsafe Implemented, NtDeleteFile => crate::io::zwfile::NtDeleteFile, ZwDeleteFile(
         object_attributes: *const OBJECT_ATTRIBUTES,
     );
+    unsafe Partial, NtCancelIoFile => crate::io::zwfile::NtCancelIoFile, ZwCancelIoFile(
+        file_handle: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+    );
     unsafe Implemented, NtCreateIoCompletion => crate::io::completion::NtCreateIoCompletion, ZwCreateIoCompletion(
         io_completion_handle: *mut *mut c_void,
         desired_access: u32,
@@ -944,6 +948,16 @@ register_services! {
     unsafe Implemented, NtDisplayString => crate::ps::info::NtDisplayString, ZwDisplayString(
         string: *const UNICODE_STRING,
     );
+    unsafe Implemented, NtDrawText => crate::ps::info::NtDrawText, ZwDrawText(
+        text: *const UNICODE_STRING,
+    );
+    unsafe Implemented, NtSetThreadExecutionState => crate::ps::info::NtSetThreadExecutionState, ZwSetThreadExecutionState(
+        new_flags: u32,
+        previous_flags: *mut u32,
+    );
+    safe Partial, NtShutdownSystem => crate::ps::info::NtShutdownSystem, ZwShutdownSystem(
+        action: u32,
+    );
     unsafe Implemented, NtOpenProcess => crate::ps::NtOpenProcess, ZwOpenProcess(
         process_handle: *mut *mut c_void,
         desired_access: u32,
@@ -1037,6 +1051,24 @@ register_services! {
     unsafe Implemented, NtQueryInstallUILanguage => crate::ps::info::NtQueryInstallUILanguage, ZwQueryInstallUILanguage(
         language_id: *mut u16,
     );
+    unsafe Partial, NtGetMUIRegistryInfo => crate::ps::info::NtGetMUIRegistryInfo, ZwGetMUIRegistryInfo(
+        flags: u32,
+        data_size: *mut u32,
+        data: *mut c_void,
+    );
+    safe Implemented, NtIsUILanguageComitted => crate::ps::info::NtIsUILanguageComitted, ZwIsUILanguageComitted();
+    unsafe Partial, NtInitializeNlsFiles => crate::ps::info::NtInitializeNlsFiles, ZwInitializeNlsFiles(
+        base_address: *mut *mut c_void,
+        default_locale_id: *mut u32,
+        default_casing_table_size: *mut i64,
+    );
+    safe Partial, NtGetNlsSectionPtr => crate::ps::info::NtGetNlsSectionPtr, ZwGetNlsSectionPtr(
+        nls_type: u32,
+        code_page: u32,
+        context_data: *mut c_void,
+        section_pointer: *mut *mut c_void,
+        section_size: *mut u32,
+    );
     safe Implemented, NtFlushInstructionCache => crate::ps::info::NtFlushInstructionCache, ZwFlushInstructionCache(
         process_handle: *mut c_void,
         base_address: *const c_void,
@@ -1102,10 +1134,21 @@ register_services! {
     safe Implemented, NtImpersonateAnonymousToken => crate::se::impersonate::NtImpersonateAnonymousToken, ZwImpersonateAnonymousToken(
         thread_handle: *mut c_void,
     );
+    unsafe Implemented, NtOpenProcessToken => crate::se::zwtoken::NtOpenProcessToken, ZwOpenProcessToken(
+        process_handle: *mut c_void,
+        desired_access: u32,
+        token_handle: *mut *mut c_void,
+    );
     unsafe Implemented, NtOpenProcessTokenEx => crate::se::zwtoken::NtOpenProcessTokenEx, ZwOpenProcessTokenEx(
         process_handle: *mut c_void,
         desired_access: u32,
         handle_attributes: u32,
+        token_handle: *mut *mut c_void,
+    );
+    unsafe Implemented, NtOpenThreadToken => crate::se::zwtoken::NtOpenThreadToken, ZwOpenThreadToken(
+        thread_handle: *mut c_void,
+        desired_access: u32,
+        open_as_self: u8,
         token_handle: *mut *mut c_void,
     );
     unsafe Implemented, NtOpenThreadTokenEx => crate::se::impersonate::NtOpenThreadTokenEx, ZwOpenThreadTokenEx(
@@ -1114,6 +1157,14 @@ register_services! {
         open_as_self: u8,
         handle_attributes: u32,
         token_handle: *mut *mut c_void,
+    );
+    unsafe Partial, NtAdjustPrivilegesToken => crate::se::zwtoken::NtAdjustPrivilegesToken, ZwAdjustPrivilegesToken(
+        token_handle: *mut c_void,
+        disable_all_privileges: u8,
+        new_state: *const c_void,
+        buffer_length: u32,
+        previous_state: *mut c_void,
+        return_length: *mut u32,
     );
     unsafe Implemented, NtQueryInformationToken => crate::se::zwtoken::NtQueryInformationToken, ZwQueryInformationToken(
         token_handle: *mut c_void,

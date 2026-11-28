@@ -162,6 +162,13 @@ def corrupt_fat32_partition(path, start=START2):
         fat_sectors = struct.unpack_from("<I", bpb, 36)[0]
         fat_bytes = fat_sectors * bytes_per_sector
 
+        # Set Windows fastfat.sys's boot-sector dirty flag (BS_Reserved1 / CurrentHead
+        # bit 0 at offset 0x41) AND clear FAT[1] ClnShutBitMask (bit 27).
+        bpb_mut = bytearray(bpb)
+        bpb_mut[0x41] |= 0x01
+        f.seek(base)
+        f.write(bpb_mut)
+
         # Read FAT 0, clear ClnShutBitMask (0x0800_0000) in entry 1, and find
         # two free clusters to link into an orphaned chain.
         fat0_off = base + reserved * bytes_per_sector

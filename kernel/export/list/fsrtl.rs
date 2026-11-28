@@ -86,6 +86,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, fsrtl::tunnel::FsRtlFindInTunnelCache),
     export!(Implemented, fsrtl::tunnel::FsRtlDeleteKeyFromTunnelCache),
     export!(Partial, fsrtl::volume::FsRtlNotifyVolumeEvent),
+    export!(Implemented, fsrtl::volume::FsRtlDismountComplete),
     export!(Implemented, fsrtl::device::FsRtlVolumeDeviceToCorrelationId),
     export!(Implemented, fsrtl::device::FsRtlGetEcpListFromIrp),
     export!(

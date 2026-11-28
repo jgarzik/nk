@@ -580,6 +580,58 @@ pub unsafe extern "C" fn NtQueryInstallUILanguage(language_id: *mut u16) -> NTST
     }
 }
 
+/// `NtGetMUIRegistryInfo`: MUI language-pack registry info (none installed on NK,
+/// causing `ntdll!LdrFindResource_U` to use each binary's built-in resources).
+///
+/// # Safety
+/// `data_size` is null or satisfies `PreviousMode`.
+pub unsafe extern "C" fn NtGetMUIRegistryInfo(
+    _flags: u32,
+    data_size: *mut u32,
+    _data: *mut c_void,
+) -> NTSTATUS {
+    let mode = capture::mode();
+    if !data_size.is_null() {
+        // SAFETY: per the contract.
+        let _ = unsafe { capture::write(data_size, 0u32, mode) };
+    }
+    STATUS_OBJECT_NAME_NOT_FOUND
+}
+
+/// `NtIsUILanguageComitted`: report UI language committed.
+pub extern "C" fn NtIsUILanguageComitted() -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// `NtInitializeNlsFiles`: NLS `locale.nls` mapping (absent on NK; `ntdll` falls
+/// back to built-in en-US resources when `STATUS_OBJECT_NAME_NOT_FOUND` is returned).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtInitializeNlsFiles(
+    _base_address: *mut *mut c_void,
+    default_locale_id: *mut u32,
+    _default_casing_table_size: *mut i64,
+) -> NTSTATUS {
+    let mode = capture::mode();
+    if !default_locale_id.is_null() {
+        // SAFETY: per the contract.
+        let _ = unsafe { capture::write(default_locale_id, 0x0409u32, mode) };
+    }
+    STATUS_OBJECT_NAME_NOT_FOUND
+}
+
+/// `NtGetNlsSectionPtr`: query a named NLS section (not mapped on NK).
+pub extern "C" fn NtGetNlsSectionPtr(
+    _nls_type: u32,
+    _code_page: u32,
+    _context_data: *mut c_void,
+    _section_pointer: *mut *mut c_void,
+    _section_size: *mut u32,
+) -> NTSTATUS {
+    STATUS_OBJECT_NAME_NOT_FOUND
+}
+
 /// `NtFlushInstructionCache`: no-op on x86-64 (coherent icache).
 pub extern "C" fn NtFlushInstructionCache(
     _process_handle: *mut c_void,
@@ -656,6 +708,42 @@ pub extern "C" fn NtUpdateWnfStateData(
     _matching_change_stamp: u32,
     _check_stamp: u32,
 ) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// `NtDrawText`: draw native boot-time text (routed to serial console via `NtDisplayString`).
+///
+/// # Safety
+/// `text` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtDrawText(text: *const UNICODE_STRING) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe { NtDisplayString(text) }
+}
+
+/// `NtSetThreadExecutionState`: record display/system stay-awake state.
+///
+/// # Safety
+/// `previous_flags` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtSetThreadExecutionState(
+    new_flags: u32,
+    previous_flags: *mut u32,
+) -> NTSTATUS {
+    static EXEC_STATE: core::sync::atomic::AtomicU32 =
+        core::sync::atomic::AtomicU32::new(0x8000_0000);
+    let mode = capture::mode();
+    let prev = EXEC_STATE.swap(new_flags, core::sync::atomic::Ordering::AcqRel);
+    if !previous_flags.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { capture::write(previous_flags, prev, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// `NtShutdownSystem`: flush dirty cache pages on shutdown/reboot request.
+pub extern "C" fn NtShutdownSystem(_action: u32) -> NTSTATUS {
+    crate::cc::lazy::shutdown_flush();
     STATUS_SUCCESS
 }
 

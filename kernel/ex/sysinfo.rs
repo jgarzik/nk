@@ -348,6 +348,19 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
         197 => (STATUS_NOT_IMPLEMENTED, 0),
         // `SystemFeatureConfiguration*` (210, 211): feature staging not present.
         210 | 211 => (STATUS_NOT_IMPLEMENTED, 0),
+        // `SystemPerformanceInformation` (2): 312+ bytes (Windows 10 `SYSTEM_PERFORMANCE_INFORMATION`).
+        2 => fixed(Fixed::AtLeast(312), &|| {
+            let free = crate::mm::free_frame_count() as u32;
+            // SAFETY: per the contract; `length >= 312`.
+            unsafe {
+                buffer.write_bytes(0, length as usize);
+                buffer.add(0x2C).cast::<u32>().write_unaligned(free); // AvailablePages
+                buffer
+                    .add(0x34)
+                    .cast::<u32>()
+                    .write_unaligned(free.max(0x10000)); // CommitLimit
+            }
+        }),
         // `SystemTimeOfDayInformation` (3): up to 48 bytes.
         3 => {
             let max = 48u32;
@@ -380,6 +393,19 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
         196 | 201 => fixed(Fixed::Exactly(4), &|| {
             // SAFETY: per the contract; length is 4 bytes.
             unsafe { buffer.write_bytes(0, 4) };
+        }),
+        // `SystemTimeZoneInformation` (44): 172 bytes UTC (`Bias = 0`).
+        44 => fixed(Fixed::Exactly(172), &|| {
+            // SAFETY: per the contract; length is 172 bytes.
+            unsafe { buffer.write_bytes(0, 172) };
+        }),
+        // `SystemBootEnvironmentInformation` (90): 32 bytes (`FirmwareTypeUefi = 2`).
+        90 => fixed(Fixed::Exactly(32), &|| {
+            // SAFETY: per the contract; length is 32 bytes.
+            unsafe {
+                buffer.write_bytes(0, 32);
+                buffer.add(16).cast::<u32>().write_unaligned(2); // FirmwareTypeUefi
+            }
         }),
         // `SystemErrorPortTimeouts` (115): 8 bytes (`StartTimeout`, `CommTimeout`).
         115 => fixed(Fixed::Exactly(8), &|| {

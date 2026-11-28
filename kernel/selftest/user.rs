@@ -16,7 +16,25 @@ pub static NKT: Group = Group {
     manual: true,
 };
 
-pub static GROUPS: &[&Group] = &[&GROUP, &NKT];
+pub static AUTOCHK_CLEAN: Group = Group {
+    names: &["user.autochk.clean"],
+    run: run_autochk_clean,
+    manual: true,
+};
+
+pub static AUTOCHK_DIRTY: Group = Group {
+    names: &["user.autochk.dirty"],
+    run: run_autochk_dirty,
+    manual: true,
+};
+
+pub static SVC_TRAP: Group = Group {
+    names: &["user.svc_trap"],
+    run: run_svc_trap,
+    manual: true,
+};
+
+pub static GROUPS: &[&Group] = &[&GROUP, &NKT, &AUTOCHK_CLEAN, &AUTOCHK_DIRTY, &SVC_TRAP];
 
 #[cfg(not(target_arch = "x86_64"))]
 fn run(r: &mut Report, _info: &BootInfo) {
@@ -28,6 +46,21 @@ fn run(r: &mut Report, _info: &BootInfo) {
 #[cfg(not(target_arch = "x86_64"))]
 fn run_nkt(r: &mut Report, _info: &BootInfo) {
     r.skip("user.nkt", format_args!("x86-64 only"));
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn run_autochk_clean(r: &mut Report, _info: &BootInfo) {
+    r.skip("user.autochk.clean", format_args!("x86-64 only"));
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn run_autochk_dirty(r: &mut Report, _info: &BootInfo) {
+    r.skip("user.autochk.dirty", format_args!("x86-64 only"));
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn run_svc_trap(r: &mut Report, _info: &BootInfo) {
+    r.skip("user.svc_trap", format_args!("x86-64 only"));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1156,6 +1189,9 @@ fn run_nkt(r: &mut Report, info: &BootInfo) {
             .cast::<NTSTATUS>()
             .read()
     };
+    // Ensure any partial line from `autochk.exe`'s `NtDisplayString` is
+    // terminated before emitting the structured `NK-TEST` verdict line.
+    kprintln!("");
     if exit_status != 0 {
         r.fail(
             "user.nkt",
@@ -1190,5 +1226,151 @@ fn run_nkt(r: &mut Report, info: &BootInfo) {
             "ntdll.dll + nkt.exe exited 0 and matched oracle/user/nkt.txt ({} bytes)",
             got.len()
         ),
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+fn run_autochk_common(r: &mut Report, info: &BootInfo, name: &str, expect_second_vol: bool) {
+    use crate::ke::wait;
+    use nk_ntabi::process as proc_layout;
+    use nk_ntabi::status::NTSTATUS;
+
+    crate::test::keeps_what_it_started();
+
+    if expect_second_vol {
+        // Wait up to 10 seconds for `\Device\HarddiskVolume2` to be published.
+        let vol2: alloc::vec::Vec<u16> = "\\Device\\HarddiskVolume2".encode_utf16().collect();
+        for _ in 0..100 {
+            if crate::ob::lookup(None, &vol2).is_ok_and(|(_, rest)| rest.is_empty()) {
+                break;
+            }
+            // SAFETY: delay wait with no dispatcher object.
+            unsafe { wait::wait(None, Some(-1_000_000)) };
+        }
+    }
+
+    let (proc_ref, _th_ref) = match crate::ps::user::start_first(
+        info,
+        "\\SystemRoot\\System32\\autochk.exe",
+        "autochk.exe *",
+    ) {
+        Ok(pair) => pair,
+        Err(st) => {
+            r.fail(name, format_args!("start_first failed: {st:#010x}"));
+            return;
+        }
+    };
+    // Wait up to 60 seconds for `autochk.exe` to complete.
+    // SAFETY: `proc_ref` holds a live `EPROCESS` dispatcher object.
+    let wait_st = unsafe { wait::wait(Some(proc_ref.body().cast()), Some(-600_000_000)) };
+    if wait_st != 0 {
+        r.fail(
+            name,
+            format_args!("timed out waiting for autochk.exe (wait={wait_st:#x})"),
+        );
+        return;
+    }
+    // SAFETY: `proc_ref` is live and terminated.
+    let exit_status = unsafe {
+        proc_ref
+            .body()
+            .add(proc_layout::EXIT_STATUS)
+            .cast::<NTSTATUS>()
+            .read()
+    };
+    // Ensure any partial line from `autochk.exe`'s `NtDisplayString` is
+    // terminated before emitting the structured `NK-TEST` verdict line.
+    kprintln!("");
+    if exit_status != 0 {
+        r.fail(
+            name,
+            format_args!("autochk.exe exited with status {exit_status:#010x}"),
+        );
+        return;
+    }
+    r.ok_with(
+        name,
+        format_args!("unmodified Microsoft autochk.exe exited 0"),
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+fn run_autochk_clean(r: &mut Report, info: &BootInfo) {
+    run_autochk_common(r, info, "user.autochk.clean", false);
+}
+
+#[cfg(target_arch = "x86_64")]
+fn run_autochk_dirty(r: &mut Report, info: &BootInfo) {
+    run_autochk_common(r, info, "user.autochk.dirty", true);
+}
+
+#[cfg(target_arch = "x86_64")]
+fn run_svc_trap(r: &mut Report, _info: &BootInfo) {
+    use crate::arch;
+    use crate::ke::{thread, wait};
+    use crate::mm;
+    use crate::ob::object;
+    use crate::ps::process;
+    use nk_mm::pt::Prot;
+
+    // Assemble a minimal Ring 3 stub that executes `syscall` with SSDT slot
+    // #0x91 (`NtAddAtom`, unimplemented) to verify named bugcheck enforcement.
+    const CODE_VA: u64 = 0x0040_0000;
+    const STACK_VA: u64 = 0x0041_0000;
+    #[rustfmt::skip]
+    const STUB: [u8; 9] = [
+        0xB8, 0x47, 0x00, 0x00, 0x00, // mov eax, 0x47 (NtAddAtom)
+        0x0F, 0x05,                   // syscall
+        0x0F, 0x0B,                   // ud2
+    ];
+
+    // SAFETY: `process::system()` is live forever.
+    let Ok(proc_ref) =
+        (unsafe { process::create_minimal(b"svctrap.exe", process::system(), false) })
+    else {
+        r.fail("user.svc_trap", format_args!("create_minimal failed"));
+        return;
+    };
+    let proc = proc_ref.body();
+    // SAFETY: `proc_ref` keeps `proc` alive.
+    let Some(space) = (unsafe { process::address_space(proc) }) else {
+        r.fail("user.svc_trap", format_args!("no AddressSpace"));
+        return;
+    };
+    let (Some(code_pa), Some(stack_pa)) = (mm::alloc_frames(1), mm::alloc_frames(1)) else {
+        r.fail("user.svc_trap", format_args!("out of memory"));
+        return;
+    };
+    if space.map_page(CODE_VA, code_pa, Prot::USER_RX).is_err()
+        || space.map_page(STACK_VA, stack_pa, Prot::USER_RW).is_err()
+    {
+        r.fail("user.svc_trap", format_args!("map_page failed"));
+        return;
+    }
+    // SAFETY: `code_pa` is our freshly allocated frame.
+    unsafe {
+        let dst = mm::phys_to_virt(code_pa);
+        core::ptr::copy_nonoverlapping(STUB.as_ptr(), dst, STUB.len());
+    }
+    fn enter(_: usize) {
+        // SAFETY: `CODE_VA` is mapped `USER_RX`, `STACK_VA + 0xF00` is writable.
+        unsafe { arch::user::enter_user_mode(CODE_VA, STACK_VA + 0xF00, 0, 0) }
+    }
+    let Ok(t) = thread::create_unstarted(enter, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)
+    else {
+        r.fail("user.svc_trap", format_args!("create_unstarted failed"));
+        return;
+    };
+    // SAFETY: `t` is unstarted and `proc` is live.
+    unsafe {
+        thread::assign_process(t, proc);
+        kprintln!("NK-NEG-ARMED user.svc_trap");
+        thread::begin(t);
+        wait::KeWaitForSingleObject(t.cast(), 0, 0, 0, core::ptr::null());
+        object::dereference(t.cast());
+    }
+    r.fail(
+        "user.svc_trap",
+        format_args!("unimplemented syscall did not bugcheck"),
     );
 }

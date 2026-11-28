@@ -42,6 +42,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, se::impersonate::SeCreateClientSecurity),
     export!(Implemented, se::descriptor::SeDeassignSecurity),
     export!(Implemented, se::token::SeDeleteAccessState),
+    export!(Partial, se::token::SeFilterToken),
     export_variable!(Implemented, "SeExports", se::SeExports),
     export!(Implemented, se::access::SeFreePrivileges),
     export!(Implemented, se::impersonate::SeImpersonateClientEx),
