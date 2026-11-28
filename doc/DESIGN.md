@@ -163,6 +163,7 @@ One document per part of the kernel, each with the decisions NK made there:
 - [Devices](design/devices.md): PCI configuration space, device memory, device interrupts, DMA.
 - [Threads and scheduling](design/threads.md): Threads, the System process and silos, waits, mutexes, DPCs, timers, work items.
 - [The executive's locks, lists and timers](design/executive.md): Push locks, sequenced and lookaside lists, resources, executive timers and the rest.
+- [System calls](design/syscalls.md): The system-service table, `Nt*`/`Zw*` split and `PreviousMode`.
 - [Objects, references and handles](design/objects.md): The object manager and the namespace.
 - [The kernel image and its exports](design/image.md): The kernel as a PE image, unwind tables, exports, ABI structures.
 - [Exceptions](design/exceptions.md): Structured exception handling and unwinding.

@@ -533,14 +533,15 @@ fn isolated_user_mode() -> Result<(), &'static str> {
     Ok(())
 }
 
-/// A class NK does not answer is refused, and nothing is written.
+/// Classes past `MaxSystemInfoClass` (228) are refused with
+/// `STATUS_INVALID_INFO_CLASS`, and nothing is written.
 fn unknown_class() -> Result<(), &'static str> {
-    for class in [1, 5, 0xA6, 0xFFFF] {
+    for class in [228, 0x100, 0xFFFF, u32::MAX] {
         let mut buffer = [FILL; 16];
         if query(class, &mut buffer, 16) != (STATUS_INVALID_INFO_CLASS, FILLED)
             || buffer != [FILL; 16]
         {
-            return Err("an unanswered class was not refused untouched");
+            return Err("an invalid class was not refused untouched");
         }
     }
     Ok(())

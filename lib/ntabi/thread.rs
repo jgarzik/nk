@@ -96,6 +96,10 @@ pub const WAIT_LIST_ENTRY: usize = 0xD8;
 pub const STATE: usize = 0x184;
 /// `NextProcessor`: the processor whose ready queue the thread uses.
 pub const NEXT_PROCESSOR: usize = 0x218;
+/// `PreviousMode`: one signed byte, `0` (`KernelMode`) or `1` (`UserMode`),
+/// recording which processor mode the current system service was entered from
+/// (`ExGetPreviousMode`).
+pub const PREVIOUS_MODE: usize = 0x232;
 /// `BasePriority`: one signed byte.
 pub const BASE_PRIORITY: usize = 0x233;
 /// `Saturation`: one signed byte, 1 while the thread's base priority

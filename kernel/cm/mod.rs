@@ -602,7 +602,7 @@ pub fn delete_value(path: &str, name: &str) {
 /// delete an open key that has no subkeys. It is gone by name at once;
 /// handles still open to it, this one included, are good only for
 /// closing.
-pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
     // Held to the end of the call: longer than the registry's lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
@@ -637,7 +637,7 @@ pub extern "C" fn ZwDeleteKey(key_handle: *mut c_void) -> NTSTATUS {
 /// # Safety
 /// `key_handle` is writable; `attributes` points to an
 /// `OBJECT_ATTRIBUTES`.
-pub unsafe extern "C" fn ZwOpenKey(
+pub unsafe extern "C" fn NtOpenKey(
     key_handle: *mut *mut c_void,
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
@@ -766,7 +766,7 @@ fn delete_value_of(key: KeyId, name: &[u16]) -> NTSTATUS {
 /// `key_handle` is writable; `attributes` points to an
 /// `OBJECT_ATTRIBUTES`; `class` is null or a counted string;
 /// `disposition` is null or writable.
-pub unsafe extern "C" fn ZwCreateKey(
+pub unsafe extern "C" fn NtCreateKey(
     key_handle: *mut *mut c_void,
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
@@ -803,7 +803,7 @@ pub unsafe extern "C" fn ZwCreateKey(
 /// # Safety
 /// `value_name` is null or a counted string; `data` is readable for
 /// `data_size` bytes.
-pub unsafe extern "C" fn ZwSetValueKey(
+pub unsafe extern "C" fn NtSetValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
     _title_index: u32,
@@ -835,7 +835,7 @@ pub unsafe extern "C" fn ZwSetValueKey(
 ///
 /// # Safety
 /// `value_name` is null or a counted string.
-pub unsafe extern "C" fn ZwDeleteValueKey(
+pub unsafe extern "C" fn NtDeleteValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
 ) -> NTSTATUS {
@@ -942,7 +942,7 @@ fn value_information(
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
 /// `result_length` writable for four.
-pub unsafe extern "C" fn ZwEnumerateKey(
+pub unsafe extern "C" fn NtEnumerateKey(
     key_handle: *mut c_void,
     index: u32,
     class: u32,
@@ -995,7 +995,7 @@ pub unsafe extern "C" fn ZwEnumerateKey(
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
 /// `result_length` writable for four.
-pub unsafe extern "C" fn ZwQueryKey(
+pub unsafe extern "C" fn NtQueryKey(
     key_handle: *mut c_void,
     class: u32,
     information: *mut u8,
@@ -1039,7 +1039,7 @@ pub unsafe extern "C" fn ZwQueryKey(
 /// # Safety
 /// `information` is readable and writable for `length` bytes and
 /// `result_length` writable for four.
-pub unsafe extern "C" fn ZwEnumerateValueKey(
+pub unsafe extern "C" fn NtEnumerateValueKey(
     key_handle: *mut c_void,
     index: u32,
     class: u32,
@@ -1079,7 +1079,7 @@ pub unsafe extern "C" fn ZwEnumerateValueKey(
 /// `value_name` is null or a counted string; `information` is readable
 /// and writable for `length` bytes and `result_length` writable for
 /// four.
-pub unsafe extern "C" fn ZwQueryValueKey(
+pub unsafe extern "C" fn NtQueryValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
     class: u32,
@@ -1171,3 +1171,8 @@ pub fn overlay_test() -> Result<(), &'static str> {
         Err(_) => Err("an overlay's control set is not the current one"),
     }
 }
+
+pub use crate::svc::zw::{
+    ZwCreateKey, ZwDeleteKey, ZwDeleteValueKey, ZwEnumerateKey, ZwEnumerateValueKey, ZwOpenKey,
+    ZwQueryKey, ZwQueryValueKey, ZwSetValueKey,
+};

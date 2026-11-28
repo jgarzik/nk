@@ -317,6 +317,72 @@ pub fn current() -> *mut Thread {
     pcr::current_thread().cast()
 }
 
+/// The current thread's `KTHREAD.PreviousMode` (`0` = `KernelMode`,
+/// `1` = `UserMode`). Returns `KERNEL_MODE` during early boot before
+/// the idle thread is installed.
+pub fn previous_mode() -> i8 {
+    let me = current();
+    if me.is_null() {
+        return nk_ntabi::io::KERNEL_MODE;
+    }
+    // SAFETY: `me` is the running thread; only this thread reads or
+    // modifies its own `PreviousMode`.
+    unsafe { field::<i8>(me, layout::PREVIOUS_MODE).read() }
+}
+
+/// Set the current thread's `KTHREAD.PreviousMode`, returning its
+/// previous value.
+pub fn set_previous_mode(mode: i8) -> i8 {
+    let me = current();
+    if me.is_null() {
+        return nk_ntabi::io::KERNEL_MODE;
+    }
+    // SAFETY: `me` is the running thread; only this thread writes its
+    // own `PreviousMode`.
+    unsafe {
+        let slot = field::<i8>(me, layout::PREVIOUS_MODE);
+        let old = slot.read();
+        slot.write(mode);
+        old
+    }
+}
+
+/// RAII guard that switches `KTHREAD.PreviousMode` for the current
+/// scope and restores the prior value on drop.
+pub struct PreviousModeGuard {
+    old: i8,
+}
+
+impl PreviousModeGuard {
+    /// Switch `PreviousMode` to `KERNEL_MODE` (used by `Zw*` thunks).
+    pub fn kernel() -> Self {
+        Self {
+            old: set_previous_mode(nk_ntabi::io::KERNEL_MODE),
+        }
+    }
+
+    /// Switch `PreviousMode` to `mode`.
+    #[allow(dead_code)]
+    pub fn enter(mode: i8) -> Self {
+        Self {
+            old: set_previous_mode(mode),
+        }
+    }
+}
+
+impl Drop for PreviousModeGuard {
+    fn drop(&mut self) {
+        set_previous_mode(self.old);
+    }
+}
+
+/// [`ExGetPreviousMode`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exgetpreviousmode):
+/// the current thread's `KTHREAD.PreviousMode`.
+#[allow(non_snake_case)]
+pub extern "C" fn ExGetPreviousMode() -> i8 {
+    previous_mode()
+}
+
 /// The stack the running thread is running on: its own, or the last
 /// segment it was given (`ke::expand`).
 pub fn current_stack() -> Stack {

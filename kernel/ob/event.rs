@@ -51,7 +51,7 @@ const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 /// # Safety
 /// `event_handle` points to room for a handle; `object_attributes` is
 /// null or points to an `OBJECT_ATTRIBUTES`.
-pub unsafe extern "C" fn ZwCreateEvent(
+pub unsafe extern "C" fn NtCreateEvent(
     event_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn ZwCreateEvent(
 /// # Safety
 /// `event_handle` points to room for a handle; `object_attributes`
 /// points to an `OBJECT_ATTRIBUTES` whose name is a counted string.
-pub unsafe extern "C" fn ZwOpenEvent(
+pub unsafe extern "C" fn NtOpenEvent(
     event_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -240,7 +240,7 @@ fn waitable(ty: &ObjectType) -> bool {
 ///
 /// # Safety
 /// `timeout` is null or points to a due time.
-pub unsafe extern "C" fn ZwWaitForSingleObject(
+pub unsafe extern "C" fn NtWaitForSingleObject(
     handle: *mut c_void,
     alertable: u8,
     timeout: *const i64,
@@ -480,3 +480,5 @@ pub fn self_test() -> Result<u32, &'static str> {
     }
     Ok(16)
 }
+
+pub use crate::svc::zw::{ZwCreateEvent, ZwOpenEvent, ZwWaitForSingleObject};

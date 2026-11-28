@@ -152,7 +152,7 @@ pub(super) fn closed(body: *mut c_void) {
 /// `status_block` and `work_item` are null or stay valid until the
 /// watcher is told.
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn ZwNotifyChangeKey(
+pub unsafe extern "C" fn NtNotifyChangeKey(
     key_handle: *mut c_void,
     event: *mut c_void,
     work_item: *mut c_void,
@@ -217,3 +217,5 @@ pub unsafe extern "C" fn ZwNotifyChangeKey(
 pub fn watches() -> usize {
     WATCHES.lock().count()
 }
+
+pub use crate::svc::zw::ZwNotifyChangeKey;

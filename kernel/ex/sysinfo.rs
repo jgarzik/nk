@@ -151,20 +151,20 @@ unsafe fn basic(to: *mut SYSTEM_BASIC_INFORMATION) {
     }
 }
 
-/// [`NtQuerySystemInformation`](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation),
-/// which drivers import under this name and as
-/// `ZwQuerySystemInformation`: for a caller in kernel mode the two do
-/// the same.
+/// `MaxSystemInfoClass` for Windows 10 19045.2006 (`ntkrnlmp.pdb`).
+const MAX_SYSTEM_INFO_CLASS: u32 = 228;
+
+/// [`NtQuerySystemInformation`](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntquerysysteminformation):
+/// query system-wide information by class.
 ///
 /// Answered: `SystemBasicInformation` (0), `SystemModuleInformation`
-/// (11), `SystemKernelDebuggerInformation` (35) and
-/// `SystemIsolatedUserModeInformation` (165), which says there is no
-/// secure kernel, and `SystemBootEntropyInformation` (0x75), the
-/// loader's entropy, once (`ex::entropy`), into a buffer of exactly its
-/// size. Any other class is `STATUS_INVALID_INFO_CLASS`, and
-/// leaves `return_length` alone, as Windows does for a class it does
-/// not know. Without memory to list the modules, class 11 is
-/// `STATUS_INSUFFICIENT_RESOURCES`, and nothing is written.
+/// (11), `SystemKernelDebuggerInformation` (35),
+/// `SystemIsolatedUserModeInformation` (165), and
+/// `SystemBootEntropyInformation` (0x75). Classes past
+/// `MaxSystemInfoClass` (228) return `STATUS_INVALID_INFO_CLASS` without
+/// touching `return_length`, as Windows does. Known Windows classes NK
+/// does not yet implement stop the system naming the class. Without
+/// memory to list modules, class 11 returns `STATUS_INSUFFICIENT_RESOURCES`.
 ///
 /// # Safety
 /// `buffer` is writable for `length` bytes, and `return_length` is null
@@ -215,6 +215,48 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
                 }
             },
         ),
+        SYSTEM_HYPERVISOR_INFORMATION_CLASS => {
+            if crate::ke::thread::previous_mode() != nk_ntabi::io::KERNEL_MODE {
+                (STATUS_ACCESS_DENIED, 0)
+            } else if length == SYSTEM_HYPERVISOR_INFORMATION_SIZE as u32 {
+                // No Hyper-V enlightenments active (`HvlQueryEnlightenmentInfo`).
+                // SAFETY: per the contract; the length is 16 bytes.
+                unsafe { buffer.write_bytes(0, SYSTEM_HYPERVISOR_INFORMATION_SIZE) };
+                (STATUS_SUCCESS, SYSTEM_HYPERVISOR_INFORMATION_SIZE as u32)
+            } else {
+                (STATUS_INFO_LENGTH_MISMATCH, 0)
+            }
+        }
+        SYSTEM_CODEINTEGRITY_INFORMATION_CLASS => {
+            // `ci.dll` is absent; `ntoskrnl` (`0x1407022e4`) returns
+            // `STATUS_UNSUCCESSFUL` with zero reported length.
+            (STATUS_UNSUCCESSFUL, 0)
+        }
+        SYSTEM_BOOT_GRAPHICS_INFORMATION_CLASS => {
+            let size = SYSTEM_BOOT_GRAPHICS_INFORMATION_SIZE as u32;
+            if length == size {
+                // No boot graphics framebuffer (`BgkQueryBootGraphicsInformation`).
+                (STATUS_UNSUCCESSFUL, size)
+            } else {
+                (STATUS_INFO_LENGTH_MISMATCH, size)
+            }
+        }
+        SYSTEM_POOL_ZEROING_INFORMATION_CLASS => fixed(Fixed::Exactly(1), &|| {
+            // NK's pool supports zeroing (`ExAllocatePool2` / `alloc_zeroed`).
+            // SAFETY: per the contract; the length is 1 byte.
+            unsafe { buffer.write(1) };
+        }),
+        SYSTEM_FIRMWARE_TABLE_INFORMATION_CLASS => {
+            // SAFETY: per the contract.
+            let (status, reported) = unsafe { super::firmware::query_table(buffer, length) };
+            if let Some(reported) = reported
+                && !return_length.is_null()
+            {
+                // SAFETY: per the contract.
+                unsafe { return_length.write_unaligned(reported) };
+            }
+            return status;
+        }
         SYSTEM_BOOT_ENTROPY_INFORMATION_CLASS => {
             let size = SYSTEM_BOOT_ENTROPY_INFORMATION_SIZE as u32;
             if length == size {
@@ -229,7 +271,10 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
             Some(answer) => answer,
             None => return STATUS_INSUFFICIENT_RESOURCES,
         },
-        _ => return STATUS_INVALID_INFO_CLASS,
+        c if c >= MAX_SYSTEM_INFO_CLASS => return STATUS_INVALID_INFO_CLASS,
+        other => kd::bugcheck(format_args!(
+            "NtQuerySystemInformation: NK does not implement information class {other}"
+        )),
     };
     if !return_length.is_null() {
         // SAFETY: per the contract.
@@ -402,6 +447,7 @@ pub fn answers_test() -> Result<(), &'static str> {
     if MmIsAddressValid(core::ptr::null()) != 0 || MmIsAddressValid(hole) != 0 {
         return Err("MmIsAddressValid says an address nothing maps is valid");
     }
+    crate::svc::self_test()?;
     Ok(())
 }
 

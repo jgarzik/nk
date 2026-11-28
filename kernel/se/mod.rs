@@ -752,7 +752,7 @@ impl Copies {
 /// # Safety
 /// `descriptor` points to a security descriptor whose parts are where
 /// it says.
-pub unsafe extern "C" fn ZwSetSecurityObject(
+pub unsafe extern "C" fn NtSetSecurityObject(
     handle: *mut c_void,
     information: u32,
     descriptor: *const c_void,
@@ -882,3 +882,5 @@ pub unsafe extern "C" fn SeCaptureSecurityDescriptor(
         }
     }
 }
+
+pub use crate::svc::zw::ZwSetSecurityObject;

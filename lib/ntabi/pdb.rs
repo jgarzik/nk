@@ -355,6 +355,7 @@ fn thread_matches_the_kernel() {
     assert_eq!(WAIT_LIST_ENTRY, field("WaitListEntry"));
     assert_eq!(STATE, field("State"));
     assert_eq!(NEXT_PROCESSOR, field("NextProcessor"));
+    assert_eq!(PREVIOUS_MODE, field("PreviousMode"));
     assert_eq!(BASE_PRIORITY, field("BasePriority"));
     assert_eq!(SATURATION, field("Saturation"));
     assert_eq!(

@@ -49,7 +49,7 @@ const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 /// `object_attributes` is null or points to an `OBJECT_ATTRIBUTES`
 /// whose name is null or a counted string; `allocation_size` is null
 /// or points to a size.
-pub unsafe extern "C" fn ZwCreateFile(
+pub unsafe extern "C" fn NtCreateFile(
     file_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn ZwCreateFile(
         create_options,
         disposition: create_disposition,
         kind: Kind::File,
-        requestor_mode: KERNEL_MODE,
+        requestor_mode: crate::ke::thread::previous_mode(),
     };
     let extra = Extra {
         file_attributes: file_attributes as u16,
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn ZwCreateFile(
 ///
 /// # Safety
 /// As [`ZwCreateFile`].
-pub unsafe extern "C" fn ZwOpenFile(
+pub unsafe extern "C" fn NtOpenFile(
     file_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -146,7 +146,7 @@ pub unsafe extern "C" fn ZwOpenFile(
 ) -> NTSTATUS {
     // SAFETY: per the contract.
     unsafe {
-        ZwCreateFile(
+        NtCreateFile(
             file_handle,
             desired_access,
             object_attributes,
@@ -161,3 +161,5 @@ pub unsafe extern "C" fn ZwOpenFile(
         )
     }
 }
+
+pub use crate::svc::zw::{ZwCreateFile, ZwOpenFile};

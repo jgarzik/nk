@@ -222,7 +222,7 @@ const INTERNAL_SLEEP_STUDY_ROUTINES: u32 = 0x3F;
 /// `input` points to `input_length` readable bytes and `output` to
 /// `output_length` writable bytes; a device object an internal request
 /// names is null or live.
-pub unsafe extern "C" fn ZwPowerInformation(
+pub unsafe extern "C" fn NtPowerInformation(
     level: i32,
     input: *mut c_void,
     input_length: u32,
@@ -435,3 +435,5 @@ pub unsafe fn test_drips(
         )
     }
 }
+
+pub use crate::svc::zw::ZwPowerInformation;

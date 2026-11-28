@@ -52,7 +52,7 @@ fn is_listed(state_name: u64) -> bool {
 ///
 /// # Safety
 /// `state_name` points to a state name; optional out pointers are writable.
-pub unsafe extern "C" fn ZwQueryWnfStateData(
+pub unsafe extern "C" fn NtQueryWnfStateData(
     state_name: *const u64,
     _type_id: *const c_void,
     _explicit_scope: *const c_void,
@@ -188,7 +188,7 @@ pub unsafe extern "C" fn ExQueryWnfStateData(
 /// # Safety
 /// `state_name` points to a state name; `info_buffer` is writable for
 /// `info_buffer_size` bytes.
-pub unsafe extern "C" fn ZwQueryWnfStateNameInformation(
+pub unsafe extern "C" fn NtQueryWnfStateNameInformation(
     state_name: *const u64,
     name_info_class: u32,
     _explicit_scope: *const c_void,
@@ -213,3 +213,5 @@ pub unsafe extern "C" fn ZwQueryWnfStateNameInformation(
     unsafe { info_buffer.cast::<u32>().write_unaligned(answer) };
     STATUS_SUCCESS
 }
+
+pub use crate::svc::zw::{ZwQueryWnfStateData, ZwQueryWnfStateNameInformation};

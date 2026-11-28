@@ -295,7 +295,7 @@ unsafe fn parse_service_key(
 /// # Safety
 /// `driver_service_name` is null or points to a counted string.
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn ZwLoadDriver(
+pub unsafe extern "C" fn NtLoadDriver(
     driver_service_name: *const nk_ntabi::io::UNICODE_STRING,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
@@ -318,7 +318,7 @@ pub unsafe extern "C" fn ZwLoadDriver(
 /// # Safety
 /// `driver_service_name` is null or points to a counted string.
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn ZwUnloadDriver(
+pub unsafe extern "C" fn NtUnloadDriver(
     driver_service_name: *const nk_ntabi::io::UNICODE_STRING,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
@@ -332,3 +332,5 @@ pub unsafe extern "C" fn ZwUnloadDriver(
         Err(_) => STATUS_INVALID_DEVICE_REQUEST,
     }
 }
+
+pub use crate::svc::zw::{ZwLoadDriver, ZwUnloadDriver};

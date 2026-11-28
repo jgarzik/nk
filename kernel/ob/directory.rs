@@ -77,7 +77,7 @@ pub(super) fn resolve_root(root: *mut c_void, name_empty: bool) -> Result<Option
 /// `directory_handle` is writable; `object_attributes` is null or
 /// points to an `OBJECT_ATTRIBUTES` whose name is null or a counted
 /// string.
-pub unsafe extern "C" fn ZwCreateDirectoryObject(
+pub unsafe extern "C" fn NtCreateDirectoryObject(
     directory_handle: *mut *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn ZwCreateDirectoryObject(
 /// object of another type has its name from the kernel code that made
 /// it, which takes it away again; making one temporary by handle stops
 /// the system by name: the ledger's "partial".
-pub extern "C" fn ZwMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtMakeTemporaryObject(handle: *mut c_void) -> NTSTATUS {
     let held = match handle::reference(handle as u64, None) {
         Ok(held) => held,
         Err(status) => return status,
@@ -417,3 +417,5 @@ pub fn directory_test() -> Result<u32, &'static str> {
     }
     Ok(17)
 }
+
+pub use crate::svc::zw::{ZwCreateDirectoryObject, ZwMakeTemporaryObject};

@@ -63,7 +63,7 @@ pub(super) unsafe fn open(
 ///
 /// # Safety
 /// `token_handle` is writable for a handle.
-pub unsafe extern "C" fn ZwOpenProcessTokenEx(
+pub unsafe extern "C" fn NtOpenProcessTokenEx(
     process_handle: *mut c_void,
     desired_access: u32,
     handle_attributes: u32,
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn ZwOpenProcessTokenEx(
 /// `object_attributes` is null or points to object attributes, whose
 /// quality of service is null or points to one; `new_handle` is
 /// writable for a handle.
-pub unsafe extern "C" fn ZwDuplicateToken(
+pub unsafe extern "C" fn NtDuplicateToken(
     existing_handle: *mut c_void,
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
@@ -165,7 +165,7 @@ pub unsafe extern "C" fn ZwDuplicateToken(
 /// # Safety
 /// `buffer` is writable for `length` bytes; `return_length` is
 /// writable.
-pub unsafe extern "C" fn ZwQueryInformationToken(
+pub unsafe extern "C" fn NtQueryInformationToken(
     token_handle: *mut c_void,
     class: u32,
     buffer: *mut u8,
@@ -196,3 +196,5 @@ pub unsafe extern "C" fn ZwQueryInformationToken(
         }
     }
 }
+
+pub use crate::svc::zw::{ZwDuplicateToken, ZwOpenProcessTokenEx, ZwQueryInformationToken};

@@ -56,5 +56,5 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, ps::ZwSetInformationThread),
     export!(Implemented, ps::process::KeStackAttachProcess),
     export!(Implemented, ps::process::KeUnstackDetachProcess),
-    export_entry!(Implemented, "NtClose", ps::ZwClose),
+    export!(Implemented, ps::NtClose),
 ];

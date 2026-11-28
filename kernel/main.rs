@@ -31,6 +31,7 @@ mod rt;
 mod rtl;
 mod se;
 mod selftest;
+mod svc;
 mod test;
 mod whea;
 

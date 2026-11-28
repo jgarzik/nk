@@ -20,7 +20,7 @@ use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NO
 ///
 /// # Safety
 /// `name` is null or points to a valid counted string.
-pub unsafe extern "C" fn ZwQueryLicenseValue(
+pub unsafe extern "C" fn NtQueryLicenseValue(
     name: *const UNICODE_STRING,
     _kind: *mut u32,
     _data: *mut c_void,
@@ -38,3 +38,5 @@ pub unsafe extern "C" fn ZwQueryLicenseValue(
     );
     STATUS_OBJECT_NAME_NOT_FOUND
 }
+
+pub use crate::svc::zw::ZwQueryLicenseValue;

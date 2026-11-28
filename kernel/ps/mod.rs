@@ -127,7 +127,7 @@ pub extern "C" fn PsTerminateSystemThread(_exit_status: NTSTATUS) -> NTSTATUS {
 }
 
 /// [`ZwClose`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwclose).
-pub extern "C" fn ZwClose(handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtClose(handle: *mut c_void) -> NTSTATUS {
     handle::close(handle as u64)
 }
 
@@ -138,7 +138,7 @@ const THREAD_ALERT: u32 = 0x4;
 /// alert the thread a handle names, in kernel mode, which is the mode
 /// of a caller of the `Zw` routine (`ke::wait::alert`). The handle
 /// must name a thread.
-pub extern "C" fn ZwAlertThread(thread_handle: *mut c_void) -> NTSTATUS {
+pub extern "C" fn NtAlertThread(thread_handle: *mut c_void) -> NTSTATUS {
     let found = handle::reference_for(
         thread_handle as u64,
         Some(&raw const object::THREAD_TYPE),
@@ -202,7 +202,7 @@ fn with_thread(
 ///
 /// # Safety
 /// `information` points to `length` readable bytes.
-pub unsafe extern "C" fn ZwSetInformationThread(
+pub unsafe extern "C" fn NtSetInformationThread(
     thread_handle: *mut c_void,
     class: u32,
     information: *const c_void,
@@ -466,3 +466,5 @@ pub extern "C" fn IoSetThreadHardErrorMode(enable: u8) -> u8 {
 pub extern "C" fn PsGetHostSilo() -> *mut c_void {
     core::ptr::null_mut()
 }
+
+pub use crate::svc::zw::{ZwAlertThread, ZwClose, ZwSetInformationThread};
