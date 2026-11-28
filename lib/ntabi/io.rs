@@ -514,10 +514,25 @@ pub struct DEVOBJ_EXTENSION {
 
 /// `FILE_OBJECT.Flags`
 pub const FO_SYNCHRONOUS_IO: u32 = 0x0000_0002;
+pub const FO_ALERTABLE_IO: u32 = 0x0000_0004;
 /// The last handle has been closed and the cleanup request completed.
 pub const FO_CLEANUP_COMPLETE: u32 = 0x0000_4000;
 /// A handle has been made for the file object.
 pub const FO_HANDLE_CREATED: u32 = 0x0004_0000;
+
+/// `FS_INFORMATION_CLASS` (`wdm.h` / `ntifs.h`).
+pub const FILE_FS_VOLUME_INFORMATION: u32 = 1;
+pub const FILE_FS_SIZE_INFORMATION: u32 = 3;
+pub const FILE_FS_DEVICE_INFORMATION: u32 = 4;
+pub const FILE_FS_ATTRIBUTE_INFORMATION: u32 = 5;
+pub const FILE_FS_FULL_SIZE_INFORMATION: u32 = 7;
+
+/// Volume file-system control codes (`winioctl.h` / `ntifs.h`).
+pub const FSCTL_LOCK_VOLUME: u32 = 0x0009_0018;
+pub const FSCTL_UNLOCK_VOLUME: u32 = 0x0009_001C;
+pub const FSCTL_DISMOUNT_VOLUME: u32 = 0x0009_0020;
+pub const FSCTL_IS_VOLUME_MOUNTED: u32 = 0x0009_0028;
+pub const FSCTL_ALLOW_EXTENDED_DASD_IO: u32 = 0x0009_0083;
 
 /// Create options (`NtCreateFile`'s `CreateOptions`): requests on the
 /// file are synchronous, alertable or not.

@@ -698,6 +698,9 @@ pub fn open_as(
         if request.create_options & (FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT) != 0
         {
             (*file).Flags = FO_SYNCHRONOUS_IO;
+            if request.create_options & FILE_SYNCHRONOUS_IO_ALERT != 0 {
+                (*file).Flags |= FO_ALERTABLE_IO;
+            }
         }
         ke::wait::KeInitializeEvent(&raw mut (*file).Lock, 1, 0);
         ke::wait::KeInitializeEvent(&raw mut (*file).Event, 0, 0);
@@ -1256,6 +1259,231 @@ pub fn set_information(handle: u64, class: u32, input: &[u8]) -> Result<IoResult
         )
     }?
     .wait()
+}
+
+/// Acquire a synchronous file object's per-file serialization lock
+/// (`IopAcquireFileObjectLock`).
+///
+/// # Safety
+/// `file` is a live `FILE_OBJECT` the caller holds a reference to.
+pub unsafe fn acquire_file_lock(file: *mut FILE_OBJECT, mode: i8) -> NTSTATUS {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    // SAFETY: per the contract; `Busy`, `Waiters`, and `Lock` are fields of `FILE_OBJECT`.
+    unsafe {
+        let busy = AtomicU32::from_ptr(&raw mut (*file).Busy);
+        let waiters = AtomicU32::from_ptr(&raw mut (*file).Waiters);
+        let alertable = (*file).Flags & FO_ALERTABLE_IO != 0;
+        loop {
+            if busy
+                .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return STATUS_SUCCESS;
+            }
+            waiters.fetch_add(1, Ordering::AcqRel);
+            let st = ke::wait::wait_as(Some((&raw mut (*file).Lock).cast()), None, mode, alertable)
+                as NTSTATUS;
+            if !nt_success(st) {
+                waiters.fetch_sub(1, Ordering::AcqRel);
+                return st;
+            }
+        }
+    }
+}
+
+/// Release a synchronous file object's per-file serialization lock
+/// (`IopReleaseFileObjectLock`).
+///
+/// # Safety
+/// `file` is a live `FILE_OBJECT` whose lock the caller acquired via
+/// [`acquire_file_lock`].
+pub unsafe fn release_file_lock(file: *mut FILE_OBJECT) {
+    use core::sync::atomic::{AtomicU32, Ordering};
+    // SAFETY: per the contract.
+    unsafe {
+        let busy = AtomicU32::from_ptr(&raw mut (*file).Busy);
+        let waiters = AtomicU32::from_ptr(&raw mut (*file).Waiters);
+        busy.store(0, Ordering::Release);
+        if waiters
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n > 0).then(|| n - 1)
+            })
+            .is_ok()
+        {
+            ke::wait::KeSetEvent(&raw mut (*file).Lock, 0, 0);
+        }
+    }
+}
+
+/// Query volume information `class` of the file into `output`
+/// (`IRP_MJ_QUERY_VOLUME_INFORMATION`, what `NtQueryVolumeInformationFile`
+/// sends): the driver writes a system buffer, copied back on completion.
+pub fn query_volume_information(
+    handle: u64,
+    class: u32,
+    output: &mut [u8],
+) -> Result<IoResult, IoError> {
+    query_volume_information_as(handle, class, Buffer::of(output), KERNEL_MODE)
+}
+
+/// As [`query_volume_information`], on behalf of `mode`.
+pub fn query_volume_information_as(
+    handle: u64,
+    class: u32,
+    output: Buffer,
+    mode: i8,
+) -> Result<IoResult, IoError> {
+    // SAFETY: user-mode buffer is probed before sending; kernel-mode buffer
+    // stays live until waited for here.
+    let pending = unsafe {
+        send(
+            handle,
+            IRP_MJ_QUERY_VOLUME_INFORMATION,
+            |_| [u64::from(output.len as u32), u64::from(class), 0, 0],
+            mode,
+            Needs::All(0),
+            |_, irp, _| {
+                if mode != KERNEL_MODE {
+                    probe_write(output)?;
+                }
+                system_buffer(irp, Buffer::NONE, output.len).map(|()| {
+                    if output.len != 0 {
+                        (*irp).Flags |= IRP_INPUT_OPERATION;
+                        (*irp).UserBuffer = output.ptr().cast();
+                        irp::set_requestor_room(irp, output.len);
+                    }
+                })
+            },
+        )
+    };
+    refused(pending.and_then(Pending::wait))
+}
+
+/// Start an asynchronous read on a file opened without `FO_SYNCHRONOUS_IO`:
+/// returns `STATUS_PENDING` immediately if the driver pends the request,
+/// completing later through the `IopCompleteRequest` special kernel APC
+/// (writing `iosb` and signalling `event` / `FileObject->Event`).
+///
+/// # Safety
+/// `buffer` and `iosb` must remain valid until the request completes (signalled
+/// through `event` or the file object).
+pub unsafe fn read_async(
+    handle: u64,
+    event_handle: Option<u64>,
+    iosb: *mut IO_STATUS_BLOCK,
+    buffer: Buffer,
+    offset: Option<i64>,
+    mode: i8,
+) -> Result<NTSTATUS, NTSTATUS> {
+    let handle_mode = if mode == KERNEL_MODE {
+        Mode::Kernel
+    } else {
+        Mode::User
+    };
+    let (file, _) = file_for(handle, mode, Needs::All(FILE_READ_DATA)).map_err(|e| match e {
+        IoError::Handle(st) | IoError::Refused(st) => st,
+        IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+        _ => STATUS_UNSUCCESSFUL,
+    })?;
+    let event_ref = match event_handle {
+        Some(eh) => {
+            match handle::reference_for(eh, Some(&raw const object::EVENT_TYPE), 0x2, handle_mode) {
+                Ok((ev, _)) => Some(ev),
+                Err(st) => {
+                    // SAFETY: `file_for` took a reference on `file`.
+                    unsafe { object::dereference(file.cast()) };
+                    return Err(st);
+                }
+            }
+        }
+        None => None,
+    };
+    // SAFETY: `file` is live and referenced.
+    let Ok(irp) = (unsafe {
+        let off = offset.unwrap_or((*file).CurrentByteOffset);
+        request(file, IRP_MJ_READ, rw_parameters(buffer.len as u32, off))
+    }) else {
+        // SAFETY: `file_for` took a reference on `file`.
+        unsafe { object::dereference(file.cast()) };
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
+    };
+    let build_res: Result<(), IoError> = (|| {
+        // SAFETY: `irp` is fresh and `file` is referenced.
+        unsafe {
+            if mode != KERNEL_MODE {
+                probe_write(buffer)?;
+            }
+            let dev_flags = (*(*irp::next_location(irp)).DeviceObject).Flags;
+            if dev_flags & DO_BUFFERED_IO != 0 {
+                if buffer.len != 0 {
+                    let system = pool::alloc(buffer.len, TAG_IO_BUFFER);
+                    if system.is_null() {
+                        return Err(IoError::NoMemory);
+                    }
+                    (*irp).SystemBuffer = system.cast();
+                    (*irp).Flags = IRP_BUFFERED_IO | IRP_DEALLOCATE_BUFFER | IRP_INPUT_OPERATION;
+                    (*irp).UserBuffer = buffer.ptr().cast();
+                    irp::set_requestor_room(irp, buffer.len);
+                }
+            } else if dev_flags & DO_DIRECT_IO != 0 {
+                if buffer.len != 0 {
+                    let described =
+                        mdl::IoAllocateMdl(buffer.ptr().cast(), buffer.len as u32, 0, 0, irp);
+                    if described.is_null() {
+                        return Err(IoError::NoMemory);
+                    }
+                    mdl::probe_and_lock(described, mode, IO_WRITE_ACCESS)
+                        .map_err(IoError::Refused)?;
+                }
+            } else {
+                (*irp).UserBuffer = buffer.ptr().cast();
+            }
+            Ok(())
+        }
+    })();
+    if let Err(err) = build_res {
+        // SAFETY: `irp` was not sent; `file` was referenced by `file_for`.
+        unsafe {
+            discard(irp);
+            object::dereference(file.cast());
+        }
+        return Err(match err {
+            IoError::Refused(st) | IoError::Handle(st) => st,
+            IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            _ => STATUS_UNSUCCESSFUL,
+        });
+    }
+    // SAFETY: `file` and optional `event_ref` ownership transfers to `irp`'s
+    // `IopCompleteRequest` APC, which signals and dereferences them on completion.
+    unsafe {
+        ke::wait::KeResetEvent(&raw mut (*file).Event);
+        let held_event = match event_ref {
+            Some(ev) => {
+                let ptr = ev.into_raw();
+                ke::wait::KeResetEvent(ptr.cast());
+                (*irp).UserEvent = ptr.cast();
+                ptr
+            }
+            None => {
+                (*irp).UserEvent = &raw mut (*file).Event;
+                core::ptr::null_mut()
+            }
+        };
+        (*irp).UserIosb = iosb;
+        (*irp).RequestorMode = mode;
+        (*irp).Thread = ke::pcr::current_thread().cast();
+        (*irp).OriginalFileObject = file;
+        (*irp::next_location(irp)).FileObject = file;
+        irp::set_async_completion(irp, file, held_event, true, mode != KERNEL_MODE);
+        let device_object = (*irp::next_location(irp)).DeviceObject;
+        let guard = Guard::Undo {
+            undo: leave_critical_region,
+            context: core::ptr::null_mut(),
+        };
+        Ok(ke::mutex::in_critical_region(|| {
+            irp::call_driver(device_object, irp, &guard)
+        }))
+    }
 }
 
 /// Query information `class` of the file into `output`

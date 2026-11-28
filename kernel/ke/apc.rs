@@ -113,6 +113,16 @@ unsafe fn special_disable<'a>(thread: *mut thread::Thread) -> &'a AtomicI16 {
     unsafe { AtomicI16::from_ptr(thread::object_field(thread, SPECIAL_APC_DISABLE)) }
 }
 
+/// Whether special kernel APCs are currently blocked on `thread`
+/// (`SpecialApcDisable != 0`).
+///
+/// # Safety
+/// `thread` is a live thread.
+pub unsafe fn special_apcs_blocked(thread: *mut thread::Thread) -> bool {
+    // SAFETY: per the contract.
+    unsafe { special_disable(thread).load(Ordering::Acquire) != 0 }
+}
+
 /// # Safety
 /// `thread` is a live thread.
 unsafe fn misc_flags<'a>(thread: *mut thread::Thread) -> &'a AtomicU32 {
