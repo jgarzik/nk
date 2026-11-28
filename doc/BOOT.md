@@ -32,9 +32,13 @@ it is the default path for a volume with no boot entry.
    relocation path runs on every boot.
 3. Finds the serial console (ACPI SPCR table; a per-architecture default
    if there is none) and the ACPI RSDP.
-4. Gathers boot entropy (below).
-5. Builds page tables.
-6. Calls `ExitBootServices`, then switches tables and jumps.
+4. Scans UEFI `SimpleFileSystem` volumes for `\Windows\System32\ntdll.dll`;
+   when found, records its GPT partition GUID or MBR signature and LBA in
+   `BootInfo::system_partition` so the kernel can bind `\Device\BootDevice`
+   and `\SystemRoot`.
+5. Gathers boot entropy (below).
+6. Builds page tables.
+7. Calls `ExitBootServices`, then switches tables and jumps.
 
 If anything fails, nkload prints an `NK-TEST boot:FAIL` line and powers
 off: a broken boot is a fast test failure, not a hang.
@@ -124,11 +128,10 @@ real hardware. NK never calls `SetVirtualAddressMap`.
 
 Every call into firmware's runtime code is made through one function,
 `hal::firmware_call`, on whichever processor and stack the caller is on;
-an architecture hook on each side of the call makes the address space
-what runtime code needs and puts it back. Both hooks are empty on both
-architectures: the low half every processor runs on already holds the
-runtime regions, and runtime code needs no table or translation
-settings of firmware's own. The arm64 code regions are executable while
+an architecture hook on each side of the call switches to the System
+process's address space (where firmware's runtime regions are
+identity-mapped in the low half) and restores the caller's address space
+afterwards. The arm64 code regions are executable while
 writable, which relies on firmware having left `SCTLR_EL1.WXN` clear.
 
 ## Known limits

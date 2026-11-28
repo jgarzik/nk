@@ -225,6 +225,13 @@ fn load(image: efi::Handle) -> Result<core::convert::Infallible, &'static str> {
         .unwrap_or(0);
     info.efi_runtime = efi::runtime() as u64;
     info.serial = serial();
+    if let Some(part) = efi::find_system_partition() {
+        info.system_partition = part;
+        println!(
+            "nkload: system partition #{} (type {}, lba {})",
+            part.number, part.sig_type, part.start_lba
+        );
+    }
     load_modules(&root_dir, &mut info)?;
     let hive = info
         .modules()

@@ -7,6 +7,10 @@ name = "nk-acpi"
 version = "0.5.0"
 
 [[package]]
+name = "nk-apiset"
+version = "0.5.0"
+
+[[package]]
 name = "nk-bootinfo"
 version = "0.5.0"
 dependencies = [
@@ -76,6 +80,10 @@ dependencies = [
 
 [[package]]
 name = "nk-mm"
+version = "0.5.0"
+
+[[package]]
+name = "nk-nls"
 version = "0.5.0"
 
 [[package]]
