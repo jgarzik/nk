@@ -1221,6 +1221,10 @@ fn surprise_remove_subtree(pdo: usize) {
     }
     node::with(pdo, |node| node.state = State::SurpriseRemoved);
     SURPRISE_PENDING.fetch_add(1, Ordering::AcqRel);
+    // Deliver GUID_TARGET_DEVICE_REMOVE_COMPLETE once at the surprise-removal
+    // transition (as Windows does) so target-device subscribers can close their
+    // handles and allow deferred IRP_MN_REMOVE_DEVICE to proceed.
+    super::notify::device_removed(pdo);
 }
 
 /// Phase 2 of removal: recursively deliver `IRP_MN_REMOVE_DEVICE` bottom-up
@@ -1259,7 +1263,9 @@ fn finish_remove_subtree(pdo: usize) -> bool {
         if !found.reported {
             query::pnp(device, IRP_MN_REMOVE_DEVICE, [0; 4]);
         }
-        super::notify::device_removed(pdo);
+        if found.state != State::SurpriseRemoved {
+            super::notify::device_removed(pdo);
+        }
         // What its drivers left with the power framework goes, as
         // Windows' `IopRemoveDevice` sees to.
         crate::po::fx::abandon_device(device);

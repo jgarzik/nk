@@ -182,11 +182,17 @@ volume's new names) is copied and told, from a worker, to every
 registration for that device, each with its own file in the
 structure, and then the reporter's routine is called; the call answers
 `STATUS_PENDING`. One of the predefined removal events is refused as
-Windows refuses it. When a device is finally removed, NK queues a
-`GUID_TARGET_DEVICE_REMOVE_COMPLETE` notification on an executive worker
-thread for every `EventCategoryTargetDeviceChange` registration targeting
-that physical device object. Notification registrations for hardware
-profile changes are never called: NK has one hardware profile.
+Windows refuses it. At surprise removal (and on non-surprise final
+removal), NK queues a `GUID_TARGET_DEVICE_REMOVE_COMPLETE` notification
+on an executive worker thread for every `EventCategoryTargetDeviceChange`
+registration targeting that physical device object so subscribers can
+close open handles and allow deferred `IRP_MN_REMOVE_DEVICE` to proceed.
+Queued notifications identify registrations by monotonic ID and category
+rather than heap address, and unregister finalization is owned by a
+single path (external unregister waits for active callbacks, while
+self-unregister defers entry removal and reference release until the
+callback returns). Notification registrations for hardware profile
+changes are never called: NK has one hardware profile.
 `IoInvalidateDeviceState` has a started device asked for its state
 again by the worker. Dependencies between devices
 (`IoReserveDependency`, `IoResolveDependency`, `IoSetDependency`;

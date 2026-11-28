@@ -27,13 +27,20 @@ use crate::ob::object;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use nk_ntabi::io::{DRIVER_OBJECT, UNICODE_STRING};
 use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
 
-/// One registration. Its address is the handle the driver holds.
+/// Monotonic identifier for registrations and unregister claims so queued
+/// worker deliveries never match a replacement registration that reused an
+/// address (ABA).
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// One registration. Its address is the opaque handle handed to the driver;
+/// queued notifications match by its monotonic [`id`](Self::id) and category.
 struct Registration {
+    id: u64,
     category: u32,
     /// For interface changes: the class.
     class: [u8; 16],
@@ -50,6 +57,11 @@ struct Registration {
     caller: usize,
     /// Taken back: no further callback begins.
     gone: bool,
+    /// Claim token of the unregister call that owns finalization (0 = active).
+    unregistered_by: u64,
+    /// Set when the callback itself unregistered this entry, transferring
+    /// removal and reference release to [`call`] on callback return.
+    self_unregistered: bool,
 }
 
 #[expect(
@@ -59,14 +71,29 @@ struct Registration {
 static REGISTRATIONS: SpinLock<Vec<alloc::boxed::Box<Registration>>> =
     SpinLock::new(Rank::DeviceTree, Vec::new());
 
-/// Call `callback(structure, context)` for the registration `handle`,
+/// Release the object references held by a removed registration, outside
+/// `REGISTRATIONS`.
+///
+/// # Safety
+/// `driver` and (when nonzero) `target` are the registration's own references.
+unsafe fn release_refs(driver: usize, target: usize) {
+    // SAFETY: per the contract.
+    unsafe {
+        if target != 0 {
+            object::dereference(target as *mut u8);
+        }
+        object::dereference(driver as *mut u8);
+    }
+}
+
+/// Call `callback(structure, context)` for the registration `id` of `category`,
 /// if it is still registered.
-fn call(handle: usize, structure: *mut c_void) {
+fn call(id: u64, category: u32, structure: *mut c_void) {
     let target = {
         let mut registrations = REGISTRATIONS.lock();
         registrations
             .iter_mut()
-            .find(|r| core::ptr::from_ref::<Registration>(r) as usize == handle && !r.gone)
+            .find(|r| r.id == id && r.category == category && !r.gone)
             .map(|r| {
                 r.calls += 1;
                 r.caller = crate::ke::pcr::current_thread() as usize;
@@ -83,24 +110,31 @@ fn call(handle: usize, structure: *mut c_void) {
     // registration then cannot be taken back, as an entry Windows'
     // callback never returned from cannot.
     unsafe { seh::call(callback, [structure.addr(), context, 0, 0], &Guard::Nothing) };
-    let mut registrations = REGISTRATIONS.lock();
-    if let Some(at) = registrations
-        .iter()
-        .position(|r| core::ptr::from_ref::<Registration>(r) as usize == handle)
-    {
-        registrations[at].calls -= 1;
-        // Taken back from inside its own callback: it goes now.
-        if registrations[at].gone && registrations[at].calls == 0 {
-            registrations.swap_remove(at);
-            registrations.shrink_to_fit();
+    let finalized = {
+        let mut registrations = REGISTRATIONS.lock();
+        if let Some(at) = registrations.iter().position(|r| r.id == id) {
+            registrations[at].calls -= 1;
+            // Only remove here when the callback itself unregistered this
+            // entry; an external unregister waits for `calls == 0` and owns
+            // removal and reference release.
+            (registrations[at].self_unregistered && registrations[at].calls == 0).then(|| {
+                let removed = registrations.swap_remove(at);
+                registrations.shrink_to_fit();
+                (removed.driver, removed.target)
+            })
+        } else {
+            None
         }
+    };
+    if let Some((driver, target)) = finalized {
+        // SAFETY: the registration's references, released outside the lock.
+        unsafe { release_refs(driver, target) };
     }
 }
 
-/// Tell `handles` that the interface `link` of `class` arrived or
-/// went.
-fn tell(handles: &[usize], class: &[u8; 16], link: &str, arrived: bool) {
-    if handles.is_empty() {
+/// Tell `ids` that the interface `link` of `class` arrived or went.
+fn tell(ids: &[u64], class: &[u8; 16], link: &str, arrived: bool) {
+    if ids.is_empty() {
         return;
     }
     crate::ke::irql::expect_passive("a Plug and Play notification");
@@ -134,8 +168,8 @@ fn tell(handles: &[usize], class: &[u8; 16], link: &str, arrived: bool) {
             SymbolicLinkName: string,
         });
     }
-    for handle in handles {
-        call(*handle, structure.cast());
+    for &id in ids {
+        call(id, EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE, structure.cast());
     }
     let _ = pool::free(block);
 }
@@ -146,7 +180,7 @@ static PENDING_INTERFACE: AtomicUsize = AtomicUsize::new(0);
 /// Work item payload for asynchronous interface arrival/removal delivery.
 struct InterfaceWork {
     item: nk_ntabi::ex::WORK_QUEUE_ITEM,
-    handles: Vec<usize>,
+    ids: Vec<u64>,
     class: [u8; 16],
     link: String,
     arrived: bool,
@@ -159,7 +193,7 @@ struct InterfaceWork {
 unsafe extern "C" fn deliver_interface(parameter: *mut c_void) {
     // SAFETY: created with `Box::into_raw` in `interface_changed`.
     let work = unsafe { alloc::boxed::Box::from_raw(parameter.cast::<InterfaceWork>()) };
-    tell(&work.handles, &work.class, &work.link, work.arrived);
+    tell(&work.ids, &work.class, &work.link, work.arrived);
     drop(work);
     PENDING_INTERFACE.fetch_sub(1, Ordering::Release);
 }
@@ -177,18 +211,18 @@ pub fn wait_idle() {
 /// Delivered on an executive worker thread so callers holding the PnP engine
 /// mutex do not deadlock with callbacks that unregister or close handles.
 pub fn device_removed(pdo: usize) {
-    let handles: Vec<(usize, usize)> = REGISTRATIONS
+    let targets: Vec<(u64, usize)> = REGISTRATIONS
         .lock()
         .iter()
         .filter(|r| r.category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE && r.target == pdo && !r.gone)
-        .map(|r| (core::ptr::from_ref::<Registration>(r) as usize, r.file))
+        .map(|r| (r.id, r.file))
         .collect();
-    if handles.is_empty() {
+    if targets.is_empty() {
         return;
     }
     struct RemovalWork {
         item: nk_ntabi::ex::WORK_QUEUE_ITEM,
-        handles: Vec<(usize, usize)>,
+        targets: Vec<(u64, usize)>,
     }
     /// # Safety
     /// `parameter` is a boxed `RemovalWork` queued by `device_removed`.
@@ -198,17 +232,17 @@ pub fn device_removed(pdo: usize) {
         let block = pool::alloc_zeroed(size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>(), super::TAG);
         if !block.is_null() {
             let notif = block.cast::<TARGET_DEVICE_REMOVAL_NOTIFICATION>();
-            for (handle, file) in &work.handles {
+            for &(id, file) in &work.targets {
                 // SAFETY: freshly allocated notification block.
                 unsafe {
                     notif.write(TARGET_DEVICE_REMOVAL_NOTIFICATION {
                         Version: 1,
                         Size: size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>() as u16,
                         Event: GUID_TARGET_DEVICE_REMOVE_COMPLETE,
-                        FileObject: *file as *mut _,
+                        FileObject: file as *mut _,
                     });
                 }
-                call(*handle, notif.cast());
+                call(id, EVENT_CATEGORY_TARGET_DEVICE_CHANGE, notif.cast());
             }
             let _ = pool::free(block);
         }
@@ -218,7 +252,7 @@ pub fn device_removed(pdo: usize) {
     let work = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RemovalWork {
         // SAFETY: plain C struct initialised immediately below.
         item: unsafe { core::mem::zeroed() },
-        handles,
+        targets,
     }));
     PENDING_INTERFACE.fetch_add(1, Ordering::AcqRel);
     // SAFETY: `work` stays allocated until `deliver_removal` frees it.
@@ -234,21 +268,21 @@ pub fn device_removed(pdo: usize) {
 /// lock inversions when callers hold device or PnP locks while toggling
 /// interfaces.
 pub fn interface_changed(class: &[u8; 16], link: &str, arrived: bool) {
-    let handles: Vec<usize> = REGISTRATIONS
+    let ids: Vec<u64> = REGISTRATIONS
         .lock()
         .iter()
         .filter(|r| {
             r.category == EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE && r.class == *class && !r.gone
         })
-        .map(|r| core::ptr::from_ref::<Registration>(r) as usize)
+        .map(|r| r.id)
         .collect();
-    if handles.is_empty() {
+    if ids.is_empty() {
         return;
     }
     let work = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(InterfaceWork {
         // SAFETY: `WORK_QUEUE_ITEM` is a plain C struct initialized immediately below.
         item: unsafe { core::mem::zeroed() },
-        handles,
+        ids,
         class: *class,
         link: String::from(link),
         arrived,
@@ -311,7 +345,9 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
     } else {
         (0, 0)
     };
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let registration = alloc::boxed::Box::new(Registration {
+        id,
         category,
         class,
         target,
@@ -322,11 +358,18 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
         calls: 0,
         caller: 0,
         gone: false,
+        unregistered_by: 0,
+        self_unregistered: false,
     });
     let own = core::ptr::from_ref::<Registration>(&registration) as usize;
     {
         let mut registrations = REGISTRATIONS.lock();
         if registrations.try_reserve_exact(1).is_err() {
+            drop(registrations);
+            if target != 0 {
+                // SAFETY: `related_target` returned a referenced PDO.
+                unsafe { object::dereference(target as *mut u8) };
+            }
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         registrations.push(registration);
@@ -341,7 +384,7 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
         && flags & PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES != 0
     {
         for link in super::interface::enabled_of(&class) {
-            tell(&[own], &class, &link, true);
+            tell(&[id], &class, &link, true);
         }
     }
     STATUS_SUCCESS
@@ -358,7 +401,8 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
 pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void) -> NTSTATUS {
     let own = handle as usize;
     let me = crate::ke::pcr::current_thread() as usize;
-    let driver = loop {
+    let claim = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let refs = loop {
         {
             let mut registrations = REGISTRATIONS.lock();
             let Some(at) = registrations
@@ -368,28 +412,33 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void)
                 return STATUS_INVALID_PARAMETER;
             };
             let found = &mut registrations[at];
-            found.gone = true;
-            if found.calls == 0 || (found.calls == 1 && found.caller == me) {
-                let driver = found.driver;
-                if found.target != 0 {
-                    // SAFETY: the registration's reference to its device.
-                    unsafe { object::dereference(found.target as *mut u8) };
-                    found.target = 0;
-                }
-                // A callback taking itself back leaves the entry for
-                // `call` to free when the callback returns.
-                if found.calls == 0 {
-                    registrations.swap_remove(at);
-                    registrations.shrink_to_fit();
-                }
-                break driver;
+            if found.unregistered_by == 0 {
+                found.gone = true;
+                found.unregistered_by = claim;
+            } else if found.unregistered_by != claim {
+                // Another unregister call (or self-unregister) already claimed this handle.
+                return STATUS_INVALID_PARAMETER;
+            }
+            if found.calls == 0 {
+                let removed = registrations.swap_remove(at);
+                registrations.shrink_to_fit();
+                break Some((removed.driver, removed.target));
+            }
+            if found.calls == 1 && found.caller == me {
+                // Self-unregister from inside the callback: defer removal and
+                // reference release to `call` when the callback returns so the
+                // driver and target objects stay pinned while it runs.
+                found.self_unregistered = true;
+                break None;
             }
         }
         // A callback is running on another thread: let it finish.
-        crate::ke::time::stall(100);
+        crate::ke::thread::yield_now();
     };
-    // SAFETY: the registration's reference to its driver object.
-    unsafe { object::dereference(driver as *mut u8) };
+    if let Some((driver, target)) = refs {
+        // SAFETY: the registration's references, released outside the lock.
+        unsafe { release_refs(driver, target) };
+    }
     STATUS_SUCCESS
 }
 
@@ -565,17 +614,17 @@ unsafe extern "C" fn deliver(parameter: *mut c_void) {
         let copy = block
             .add(size_of::<Report>())
             .cast::<TARGET_DEVICE_CUSTOM_NOTIFICATION>();
-        let handles: Vec<(usize, usize)> = REGISTRATIONS
+        let targets: Vec<(u64, usize)> = REGISTRATIONS
             .lock()
             .iter()
             .filter(|r| {
                 r.category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE && r.target == device && !r.gone
             })
-            .map(|r| (core::ptr::from_ref::<Registration>(r) as usize, r.file))
+            .map(|r| (r.id, r.file))
             .collect();
-        for (handle, file) in handles {
+        for (id, file) in targets {
             (&raw mut (*copy).FileObject).write_unaligned(file as *mut _);
-            call(handle, copy.cast());
+            call(id, EVENT_CATEGORY_TARGET_DEVICE_CHANGE, copy.cast());
         }
         let (callback, context) = ((*report).callback, (*report).context);
         if callback != 0 {
