@@ -283,18 +283,24 @@ impl AddressSpace {
             inner.vads.drain_all()
         };
         for vad in vads {
-            if matches!(vad.kind, VadKind::Private) {
-                let mut va = vad.start;
-                while va < vad.end {
-                    let old = clear_leaf_raw(root, va);
-                    if old != 0 {
-                        if arch_pt.present(old) {
-                            free_frames(arch_pt.addr(old), 1);
-                        } else if let UserSwPte::Transition { pfn, .. } = UserSwPte::decode(old) {
-                            free_frames(pfn * PAGE_SIZE as u64, 1);
+            match vad.kind {
+                VadKind::Private => {
+                    let mut va = vad.start;
+                    while va < vad.end {
+                        let old = clear_leaf_raw(root, va);
+                        if old != 0 {
+                            if arch_pt.present(old) {
+                                free_frames(arch_pt.addr(old), 1);
+                            } else if let UserSwPte::Transition { pfn, .. } = UserSwPte::decode(old)
+                            {
+                                free_frames(pfn * PAGE_SIZE as u64, 1);
+                            }
                         }
+                        va += PAGE_SIZE as u64;
                     }
-                    va += PAGE_SIZE as u64;
+                }
+                VadKind::Mapped { .. } => {
+                    super::view::unmap_vad(self, vad);
                 }
             }
         }

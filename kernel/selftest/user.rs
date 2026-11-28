@@ -5,7 +5,7 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["user.stub", "user.vm"],
+    names: &["user.stub", "user.vm", "user.section"],
     run,
     manual: false,
 };
@@ -16,6 +16,7 @@ pub static GROUPS: &[&Group] = &[&GROUP];
 fn run(r: &mut Report, _info: &BootInfo) {
     r.skip("user.stub", format_args!("x86-64 only"));
     r.skip("user.vm", format_args!("x86-64 only"));
+    r.skip("user.section", format_args!("x86-64 only"));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -725,6 +726,351 @@ nk_user_stub_cli_end:
             res
         }
     }
+
+    /// Build a minimal valid PE32+ image in memory (3 pages: headers, `.text`,
+    /// `.data`, and `.reloc` with one `DIR64` relocation at RVA `0x2000`) to test
+    /// `SEC_IMAGE` preferred-base mapping, relocation (`STATUS_IMAGE_NOT_AT_BASE`),
+    /// and `.data` CoW isolation.
+    fn synthetic_pe_image(preferred_base: u64) -> alloc::vec::Vec<u8> {
+        let mut img = alloc::vec![0u8; 0x2000];
+        let put16 = |b: &mut [u8], o: usize, v: u16| b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+        let put32 = |b: &mut [u8], o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        let put64 = |b: &mut [u8], o: usize, v: u64| b[o..o + 8].copy_from_slice(&v.to_le_bytes());
+
+        // DOS header
+        img[0] = b'M';
+        img[1] = b'Z';
+        put32(&mut img, 0x3C, 0x80);
+        // PE signature + COFF header at 0x80
+        img[0x80..0x84].copy_from_slice(b"PE\0\0");
+        put16(&mut img, 0x84, nk_pe::MACHINE_NATIVE);
+        put16(&mut img, 0x86, 3); // 3 sections: .text, .data, .reloc
+        put16(&mut img, 0x94, 0xF0); // SizeOfOptionalHeader
+        put16(&mut img, 0x96, 0x0022); // EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+
+        // OptionalHeader64 at 0x98
+        let opt = 0x98;
+        put16(&mut img, opt, 0x20B); // PE32+
+        put32(&mut img, opt + 16, 0x1000); // AddressOfEntryPoint
+        put64(&mut img, opt + 24, preferred_base);
+        put32(&mut img, opt + 32, 0x1000); // SectionAlignment
+        put32(&mut img, opt + 36, 0x200); // FileAlignment
+        put16(&mut img, opt + 40, 10); // MajorOSVersion
+        put16(&mut img, opt + 48, 10); // MajorSubsystemVersion
+        put32(&mut img, opt + 56, 0x4000); // SizeOfImage (4 pages)
+        put32(&mut img, opt + 60, 0x400); // SizeOfHeaders
+        put16(&mut img, opt + 68, 1); // IMAGE_SUBSYSTEM_NATIVE
+        put64(&mut img, opt + 72, 0x4_0000); // StackReserve
+        put64(&mut img, opt + 80, 0x1_0000); // StackCommit
+        put32(&mut img, opt + 108, 16); // NumberOfRvaAndSizes
+        // DIR_BASERELOC (index 5) at RVA 0x3000, size 12
+        put32(&mut img, opt + 112 + 5 * 8, 0x3000);
+        put32(&mut img, opt + 116 + 5 * 8, 12);
+
+        // Section table at 0x98 + 0xF0 = 0x188
+        let mut write_sec = |idx: usize, name: &[u8; 8], rva: u32, raw_off: u32, chars: u32| {
+            let s = 0x188 + idx * 40;
+            img[s..s + 8].copy_from_slice(name);
+            put32(&mut img, s + 8, 0x1000); // VirtualSize
+            put32(&mut img, s + 12, rva);
+            put32(&mut img, s + 16, 0x200); // SizeOfRawData
+            put32(&mut img, s + 20, raw_off);
+            put32(&mut img, s + 36, chars);
+        };
+        write_sec(
+            0,
+            b".text\0\0\0",
+            0x1000,
+            0x400,
+            nk_pe::SCN_MEM_READ | nk_pe::SCN_MEM_EXECUTE,
+        );
+        write_sec(
+            1,
+            b".data\0\0\0",
+            0x2000,
+            0x600,
+            nk_pe::SCN_MEM_READ | nk_pe::SCN_MEM_WRITE,
+        );
+        write_sec(2, b".reloc\0\0", 0x3000, 0x800, nk_pe::SCN_MEM_READ);
+
+        // .text byte at 0x400: `ret` (0xC3)
+        img[0x400] = 0xC3;
+        // .data pointer at 0x600 (RVA 0x2000): preferred_base + 0x1000
+        put64(&mut img, 0x600, preferred_base + 0x1000);
+        // .reloc block at 0x800: page RVA 0x2000, size 12, entry DIR64@0x000 + padding 0
+        put32(&mut img, 0x800, 0x2000);
+        put32(&mut img, 0x804, 12);
+        put16(&mut img, 0x808, 10 << 12);
+        put16(&mut img, 0x80A, 0);
+        img
+    }
+
+    pub fn run_section() -> Result<(), &'static str> {
+        use crate::svc::zw;
+        use core::ffi::c_void;
+        use nk_mm::protect::*;
+        use nk_ntabi::io::UNICODE_STRING;
+        use nk_ntabi::ke::KAPC_STATE;
+        use nk_ntabi::mm::{
+            SEC_COMMIT, SECTION_ALL_ACCESS, SECTION_BASIC_INFORMATION,
+            SECTION_BASIC_INFORMATION_CLASS, SECTION_IMAGE_INFORMATION,
+            SECTION_IMAGE_INFORMATION_CLASS, VIEW_UNMAP,
+        };
+        use nk_ntabi::ob::OBJECT_ATTRIBUTES;
+        use nk_ntabi::status::STATUS_IMAGE_NOT_AT_BASE;
+
+        // SAFETY: `process::system()` is live forever.
+        let proc_ref = unsafe { process::create_minimal(b"sectest.exe", process::system(), false) }
+            .map_err(|_| "failed to create sectest process")?;
+        let proc = proc_ref.body();
+        // SAFETY: `proc_ref` keeps `proc` alive for the test.
+        let Some(space) = (unsafe { process::address_space(proc) }) else {
+            return Err("sectest process has no AddressSpace");
+        };
+
+        // SAFETY: attach to `proc` and detach before dropping `proc_ref`.
+        unsafe {
+            let mut apc_state = core::mem::zeroed::<KAPC_STATE>();
+            process::KeStackAttachProcess(proc.cast(), &raw mut apc_state);
+
+            let res = (|| -> Result<(), &'static str> {
+                let cur = (-1isize) as *mut c_void;
+
+                // 1. Named pagefile section: create, open by name, map 2 shared views + 1 CoW view.
+                let mut name_w: alloc::vec::Vec<u16> =
+                    "\\BaseNamedObjects\\NkSecTest".encode_utf16().collect();
+                let mut us = UNICODE_STRING {
+                    Length: (name_w.len() * 2) as u16,
+                    MaximumLength: (name_w.len() * 2) as u16,
+                    Buffer: name_w.as_mut_ptr(),
+                };
+                let oa = OBJECT_ATTRIBUTES {
+                    Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+                    RootDirectory: core::ptr::null_mut(),
+                    ObjectName: &raw mut us,
+                    Attributes: 0x40, // OBJ_CASE_INSENSITIVE
+                    SecurityDescriptor: core::ptr::null_mut(),
+                    SecurityQualityOfService: core::ptr::null_mut(),
+                };
+                let max_sz: i64 = (2 * mm::PAGE_SIZE) as i64;
+                let mut sec_h: *mut c_void = core::ptr::null_mut();
+                let st = zw::ZwCreateSection(
+                    &raw mut sec_h,
+                    SECTION_ALL_ACCESS,
+                    &raw const oa,
+                    &raw const max_sz,
+                    PAGE_READWRITE,
+                    SEC_COMMIT,
+                    core::ptr::null_mut(),
+                );
+                if st != STATUS_SUCCESS || sec_h.is_null() {
+                    return Err("ZwCreateSection(pagefile) failed");
+                }
+
+                // Open the same named section via ZwOpenSection.
+                let mut sec_h2: *mut c_void = core::ptr::null_mut();
+                let st = zw::ZwOpenSection(&raw mut sec_h2, SECTION_ALL_ACCESS, &raw const oa);
+                if st != STATUS_SUCCESS || sec_h2.is_null() {
+                    let _ = zw::ZwClose(sec_h);
+                    return Err("ZwOpenSection failed");
+                }
+
+                // Query SectionBasicInformation.
+                let mut sbi = SECTION_BASIC_INFORMATION::default();
+                let mut ret_len = 0usize;
+                let st = zw::ZwQuerySection(
+                    sec_h,
+                    SECTION_BASIC_INFORMATION_CLASS,
+                    (&raw mut sbi).cast(),
+                    size_of::<SECTION_BASIC_INFORMATION>(),
+                    &raw mut ret_len,
+                );
+                if st != STATUS_SUCCESS || sbi.MaximumSize != max_sz {
+                    let _ = zw::ZwClose(sec_h2);
+                    let _ = zw::ZwClose(sec_h);
+                    return Err("ZwQuerySection(Basic) mismatch");
+                }
+
+                // Map view A and view B (both RW shared) + view C (WRITECOPY).
+                let mut va_a: *mut c_void = core::ptr::null_mut();
+                let mut sz_a: usize = 0;
+                let mut va_b: *mut c_void = core::ptr::null_mut();
+                let mut sz_b: usize = 0;
+                let mut va_c: *mut c_void = core::ptr::null_mut();
+                let mut sz_c: usize = 0;
+                let st_a = zw::ZwMapViewOfSection(
+                    sec_h,
+                    cur,
+                    &raw mut va_a,
+                    0,
+                    0,
+                    core::ptr::null_mut(),
+                    &raw mut sz_a,
+                    VIEW_UNMAP,
+                    0,
+                    PAGE_READWRITE,
+                );
+                let st_b = zw::ZwMapViewOfSection(
+                    sec_h2,
+                    cur,
+                    &raw mut va_b,
+                    0,
+                    0,
+                    core::ptr::null_mut(),
+                    &raw mut sz_b,
+                    VIEW_UNMAP,
+                    0,
+                    PAGE_READWRITE,
+                );
+                let st_c = zw::ZwMapViewOfSection(
+                    sec_h,
+                    cur,
+                    &raw mut va_c,
+                    0,
+                    0,
+                    core::ptr::null_mut(),
+                    &raw mut sz_c,
+                    VIEW_UNMAP,
+                    0,
+                    PAGE_WRITECOPY,
+                );
+                if st_a != STATUS_SUCCESS
+                    || st_b != STATUS_SUCCESS
+                    || st_c != STATUS_SUCCESS
+                    || va_a == va_b
+                {
+                    let _ = zw::ZwClose(sec_h2);
+                    let _ = zw::ZwClose(sec_h);
+                    return Err("ZwMapViewOfSection(pagefile) failed");
+                }
+
+                // Write through view A -> must appear in view B AND view C (before CoW).
+                let val1 = 0x1122_3344_5566_7788u64;
+                let mut seen_b = 0u64;
+                let mut seen_c = 0u64;
+                if mm::user::copy(va_a.cast(), (&raw const val1).cast(), 8).is_err()
+                    || mm::user::copy((&raw mut seen_b).cast(), va_b.cast(), 8).is_err()
+                    || mm::user::copy((&raw mut seen_c).cast(), va_c.cast(), 8).is_err()
+                    || seen_b != val1
+                    || seen_c != val1
+                {
+                    return Err("shared pagefile views did not observe shared write");
+                }
+
+                // Write through view C (WRITECOPY) -> view A/B stay `val1`, view C gets `val2`!
+                let val2 = 0xDEAD_BEEF_CAFE_BABEu64;
+                let mut seen_a_after = 0u64;
+                let mut seen_c_after = 0u64;
+                if mm::user::copy(va_c.cast(), (&raw const val2).cast(), 8).is_err()
+                    || mm::user::copy((&raw mut seen_a_after).cast(), va_a.cast(), 8).is_err()
+                    || mm::user::copy((&raw mut seen_c_after).cast(), va_c.cast(), 8).is_err()
+                    || seen_a_after != val1
+                    || seen_c_after != val2
+                {
+                    return Err("WRITECOPY section view broke shared isolation");
+                }
+
+                // Extend section and unmap all 3 views.
+                let mut new_sz: i64 = (4 * mm::PAGE_SIZE) as i64;
+                if zw::ZwExtendSection(sec_h, &raw mut new_sz) != STATUS_SUCCESS
+                    || new_sz != (4 * mm::PAGE_SIZE) as i64
+                {
+                    return Err("ZwExtendSection failed");
+                }
+                if zw::ZwUnmapViewOfSection(cur, va_a) != STATUS_SUCCESS
+                    || zw::ZwUnmapViewOfSection(cur, va_b) != STATUS_SUCCESS
+                    || zw::ZwUnmapViewOfSection(cur, va_c) != STATUS_SUCCESS
+                {
+                    return Err("ZwUnmapViewOfSection failed");
+                }
+                let _ = zw::ZwClose(sec_h2);
+                let _ = zw::ZwClose(sec_h);
+
+                // 2. PE Image section: preferred base (`STATUS_SUCCESS`) + relocated (`STATUS_IMAGE_NOT_AT_BASE`).
+                let pref: u64 = 0x0000_0001_4000_0000;
+                let pe_bytes = synthetic_pe_image(pref);
+                let img_name: alloc::vec::Vec<u16> =
+                    "\\Device\\Test\\synth.exe".encode_utf16().collect();
+                let img_sec = mm::view::create_image_section_from_bytes(&img_name, &pe_bytes)
+                    .map_err(|_| "create_image_section_from_bytes failed")?;
+                let img_info = mm::view::image_info(img_sec.body())
+                    .ok_or("missing SECTION_IMAGE_INFORMATION")?;
+                if img_info.TransferAddress != pref + 0x1000
+                    || img_info.SubSystemType != 1
+                    || img_info.MaximumStackSize != 0x4_0000
+                {
+                    return Err("SECTION_IMAGE_INFORMATION mismatch");
+                }
+                let _ = SECTION_IMAGE_INFORMATION_CLASS;
+                let _ = size_of::<SECTION_IMAGE_INFORMATION>();
+
+                // First mapping lands at preferred base (`STATUS_SUCCESS`).
+                let (base1, sz1, st1) = mm::view::map_view_in_space(
+                    img_sec.body(),
+                    space,
+                    0,
+                    0,
+                    0,
+                    0,
+                    PAGE_EXECUTE_READ,
+                    nk_mm::vad::USER_PROBE_VA,
+                )
+                .map_err(|_| "map image view #1 failed")?;
+                if st1 != STATUS_SUCCESS || base1 != pref || sz1 != 0x4000 {
+                    return Err("image view #1 did not land at preferred base");
+                }
+                // Second mapping cannot take `pref` -> relocated with `STATUS_IMAGE_NOT_AT_BASE`!
+                let (base2, sz2, st2) = mm::view::map_view_in_space(
+                    img_sec.body(),
+                    space,
+                    0,
+                    0,
+                    0,
+                    0,
+                    PAGE_EXECUTE_READ,
+                    nk_mm::vad::USER_PROBE_VA,
+                )
+                .map_err(|_| "map image view #2 failed")?;
+                if st2 != STATUS_IMAGE_NOT_AT_BASE || base2 == pref || sz2 != 0x4000 {
+                    return Err("image view #2 did not relocate with STATUS_IMAGE_NOT_AT_BASE");
+                }
+
+                // Read relocated pointer at RVA 0x2000 in both views!
+                let mut ptr1 = 0u64;
+                let mut ptr2 = 0u64;
+                if mm::user::copy((&raw mut ptr1).cast(), (base1 + 0x2000) as *const u8, 8).is_err()
+                    || mm::user::copy((&raw mut ptr2).cast(), (base2 + 0x2000) as *const u8, 8)
+                        .is_err()
+                {
+                    return Err("reading .data of image views failed");
+                }
+                if ptr1 != base1 + 0x1000 || ptr2 != base2 + 0x1000 {
+                    return Err("image base relocation fixup mismatch");
+                }
+
+                // Write to `.data` in view #1 (WRITECOPY) -> view #2 remains untouched.
+                let new_val = 0x55AA_55AA_1234_5678u64;
+                let mut check2 = 0u64;
+                if mm::user::copy((base1 + 0x2000) as *mut u8, (&raw const new_val).cast(), 8)
+                    .is_err()
+                    || mm::user::copy((&raw mut check2).cast(), (base2 + 0x2000) as *const u8, 8)
+                        .is_err()
+                    || check2 != base2 + 0x1000
+                {
+                    return Err("image .data WRITECOPY leaked across views");
+                }
+
+                // Leave view #1 and view #2 mapped on purpose so `AddressSpace::destroy()`
+                // proves full teardown with zero frame/pool/object leaks!
+                drop(img_sec);
+                Ok(())
+            })();
+
+            process::KeUnstackDetachProcess(&raw mut apc_state);
+            drop(proc_ref);
+            res
+        }
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -746,5 +1092,14 @@ fn run(r: &mut Report, _info: &BootInfo) {
             ),
         ),
         Err(why) => r.fail("user.vm", format_args!("{why}")),
+    }
+    match x64::run_section() {
+        Ok(()) => r.ok_with(
+            "user.section",
+            format_args!(
+                "named pagefile shared/CoW views, extend, SEC_IMAGE preferred+relocated, teardown"
+            ),
+        ),
+        Err(why) => r.fail("user.section", format_args!("{why}")),
     }
 }

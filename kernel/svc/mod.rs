@@ -461,6 +461,58 @@ register_services! {
         number_of_bytes_to_write: usize,
         number_of_bytes_written: *mut usize,
     );
+    unsafe Partial, NtCreateSection => crate::mm::view::NtCreateSection, ZwCreateSection(
+        section_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        maximum_size: *const i64,
+        section_page_protection: u32,
+        allocation_attributes: u32,
+        file_handle: *mut c_void,
+    );
+    unsafe Implemented, NtOpenSection => crate::mm::view::NtOpenSection, ZwOpenSection(
+        section_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtQuerySection => crate::mm::view::NtQuerySection, ZwQuerySection(
+        section_handle: *mut c_void,
+        section_information_class: u32,
+        section_information: *mut c_void,
+        section_information_length: usize,
+        return_length: *mut usize,
+    );
+    unsafe Partial, NtMapViewOfSection => crate::mm::view::NtMapViewOfSection, ZwMapViewOfSection(
+        section_handle: *mut c_void,
+        process_handle: *mut c_void,
+        base_address: *mut *mut c_void,
+        zero_bits: usize,
+        commit_size: usize,
+        section_offset: *mut i64,
+        view_size: *mut usize,
+        inherit_disposition: u32,
+        allocation_type: u32,
+        win32_protect: u32,
+    );
+    safe Implemented, NtUnmapViewOfSection => crate::mm::view::NtUnmapViewOfSection, ZwUnmapViewOfSection(
+        process_handle: *mut c_void,
+        base_address: *mut c_void,
+    );
+    safe Implemented, NtUnmapViewOfSectionEx => crate::mm::view::NtUnmapViewOfSectionEx, ZwUnmapViewOfSectionEx(
+        process_handle: *mut c_void,
+        base_address: *mut c_void,
+        flags: u32,
+    );
+    unsafe Partial, NtFlushVirtualMemory => crate::mm::view::NtFlushVirtualMemory, ZwFlushVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *mut *mut c_void,
+        region_size: *mut usize,
+        io_status: *mut IO_STATUS_BLOCK,
+    );
+    unsafe Implemented, NtExtendSection => crate::mm::view::NtExtendSection, ZwExtendSection(
+        section_handle: *mut c_void,
+        new_section_size: *mut i64,
+    );
 
     // Object manager (`kernel/ob`)
     unsafe Partial, NtCreateEvent => crate::ob::event::NtCreateEvent, ZwCreateEvent(

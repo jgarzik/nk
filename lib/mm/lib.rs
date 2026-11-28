@@ -18,6 +18,7 @@ pub mod probe;
 pub mod protect;
 pub mod pt;
 pub mod pte;
+pub mod reloc;
 pub mod section;
 pub mod space;
 pub mod vad;

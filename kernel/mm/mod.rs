@@ -20,6 +20,7 @@ pub mod section;
 pub mod space;
 pub mod stack;
 pub mod user;
+pub mod view;
 pub mod vm;
 
 use core::sync::atomic::{AtomicU64, Ordering};

@@ -1518,6 +1518,36 @@ macro_rules! same_layout {
 }
 
 #[test]
+fn section_image_information_matches_the_kernel() {
+    use crate::mm::SECTION_IMAGE_INFORMATION;
+    let Some(types) = kernel_types() else { return };
+    same_layout!(
+        types,
+        SECTION_IMAGE_INFORMATION,
+        "_SECTION_IMAGE_INFORMATION",
+        [
+            TransferAddress,
+            ZeroBits,
+            MaximumStackSize,
+            CommittedStackSize,
+            SubSystemType,
+            SubSystemMinorVersion,
+            SubSystemMajorVersion,
+            MajorOperatingSystemVersion,
+            MinorOperatingSystemVersion,
+            ImageCharacteristics,
+            DllCharacteristics,
+            Machine,
+            ImageContainsCode,
+            ImageFlags,
+            LoaderFlags,
+            ImageFileSize,
+            CheckSum,
+        ]
+    );
+}
+
+#[test]
 fn privilege_sets_match_the_kernel() {
     use crate::se::{
         AUX_ACCESS_DATA, LUID_AND_ATTRIBUTES, PRIVILEGE_SET, SECURITY_CLIENT_CONTEXT,

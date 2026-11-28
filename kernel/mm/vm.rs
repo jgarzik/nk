@@ -68,9 +68,17 @@ pub enum UserFault {
 
 /// Target process referenced by a VM system call (`NtCurrentProcess` or an
 /// opened `Process` handle).
-struct TargetProcess {
+pub(super) struct TargetProcess {
     proc: *mut u8,
     _owned: Option<object::ObRef>,
+}
+
+pub(super) fn resolve_target_process(
+    process_handle: *mut c_void,
+    desired_access: u32,
+    mode: i8,
+) -> Result<TargetProcess, NTSTATUS> {
+    TargetProcess::resolve(process_handle, desired_access, mode)
 }
 
 impl TargetProcess {
@@ -96,8 +104,8 @@ impl TargetProcess {
         })
     }
 
-    fn space(&self) -> Result<&AddressSpace, NTSTATUS> {
-        // SAFETY: `self.proc` is either the current process or kept alive by `self.owned`.
+    pub(super) fn space(&self) -> Result<&AddressSpace, NTSTATUS> {
+        // SAFETY: `self.proc` is either the current process or kept alive by `self._owned`.
         unsafe { process::address_space(self.proc) }.ok_or(STATUS_INVALID_HANDLE)
     }
 
@@ -119,7 +127,7 @@ fn gran_down(va: u64) -> u64 {
 }
 
 /// Convert a `ZeroBits` parameter into an upper exclusive VA ceiling.
-fn zero_bits_ceiling(zero_bits: usize) -> Result<u64, NTSTATUS> {
+pub(super) fn zero_bits_ceiling(zero_bits: usize) -> Result<u64, NTSTATUS> {
     if zero_bits == 0 {
         return Ok(USER_PROBE_VA);
     }
@@ -143,7 +151,7 @@ fn zero_bits_ceiling(zero_bits: usize) -> Result<u64, NTSTATUS> {
 }
 
 /// Extract `(state, win32_protect)` of one page inside a known VAD from its raw PTE.
-fn pte_state_and_protect(raw: u64) -> (u32, u32) {
+fn pte_state_and_protect(vad: Vad, page: u64, raw: u64) -> (u32, u32) {
     let arch_pt = arch::pt_arch();
     if raw == 0 {
         return (MEM_RESERVE, 0);
@@ -161,7 +169,7 @@ fn pte_state_and_protect(raw: u64) -> (u32, u32) {
         UserSwPte::DemandZero { mm_prot } | UserSwPte::Transition { mm_prot, .. } => {
             (MEM_COMMIT, mm_to_win32(mm_prot))
         }
-        UserSwPte::Prototype { .. } => (MEM_COMMIT, PAGE_READWRITE),
+        UserSwPte::Prototype { .. } => (MEM_COMMIT, super::view::prototype_page_protect(vad, page)),
     }
 }
 
@@ -865,11 +873,11 @@ pub unsafe extern "C" fn NtQueryVirtualMemory(
                     Type: protect::MEM_PRIVATE,
                     _pad1: 0,
                 }
-            } else if let Some(vad) = inner.vads.find_containing(va) {
-                let (state, prot) = pte_state_and_protect(space.read_pte(va));
+            } else if let Some(&vad) = inner.vads.find_containing(va) {
+                let (state, prot) = pte_state_and_protect(vad, va, space.read_pte(va));
                 let mut end = va + PAGE_SIZE as u64;
                 while end < vad.end {
-                    let (s2, p2) = pte_state_and_protect(space.read_pte(end));
+                    let (s2, p2) = pte_state_and_protect(vad, end, space.read_pte(end));
                     if s2 != state || p2 != prot {
                         break;
                     }
@@ -973,7 +981,56 @@ pub unsafe extern "C" fn NtQueryVirtualMemory(
             }
             STATUS_SUCCESS
         }
-        MEMORY_MAPPED_FILENAME_INFORMATION_CLASS => STATUS_INVALID_ADDRESS,
+        MEMORY_MAPPED_FILENAME_INFORMATION_CLASS => {
+            let name_opt = {
+                let inner = space.read();
+                inner
+                    .vads
+                    .find_containing(va)
+                    .copied()
+                    .and_then(super::view::mapped_filename)
+            };
+            let Some(name) = name_opt else {
+                return STATUS_INVALID_ADDRESS;
+            };
+            let byte_len = name.len() * 2;
+            let needed = size_of::<nk_ntabi::io::UNICODE_STRING>() + byte_len + 2;
+            if !return_length.is_null() {
+                // SAFETY: per the contract; `capture::write` probes user pointers.
+                let _ = unsafe { capture::write(return_length, needed, mode) };
+            }
+            if memory_information_length < needed {
+                return STATUS_BUFFER_OVERFLOW;
+            }
+            let buf_va = memory_information.addr() + size_of::<nk_ntabi::io::UNICODE_STRING>();
+            let hdr = nk_ntabi::io::UNICODE_STRING {
+                Length: byte_len as u16,
+                MaximumLength: (byte_len + 2) as u16,
+                Buffer: core::ptr::with_exposed_provenance_mut(buf_va),
+            };
+            // SAFETY: per the contract; `capture::write` probes user pointers.
+            if let Err(st) = unsafe {
+                capture::write(
+                    memory_information.cast::<nk_ntabi::io::UNICODE_STRING>(),
+                    hdr,
+                    mode,
+                )
+            } {
+                return st;
+            }
+            let mut wide = name;
+            wide.push(0);
+            let dst = memory_information
+                .cast::<u8>()
+                .wrapping_add(size_of::<nk_ntabi::io::UNICODE_STRING>());
+            // SAFETY: `wide` is `byte_len + 2` bytes; `mm::user::copy` fault-protects `dst`.
+            if unsafe { crate::mm::user::copy(dst, wide.as_ptr().cast::<u8>(), wide.len() * 2) }
+                .is_err()
+            {
+                return STATUS_ACCESS_VIOLATION;
+            }
+            STATUS_SUCCESS
+        }
         _ => STATUS_INVALID_INFO_CLASS,
     }
 }
@@ -1311,9 +1368,10 @@ fn resolve_in_space(
                 return UserFault::InPageError(STATUS_INSUFFICIENT_RESOURCES);
             }
             arch::flush_tlb_page(page);
-            // For a private VAD, this page was the sole owner of `old_pa`.
-            if matches!(vad.kind, VadKind::Private) {
-                free_frames(old_pa, 1);
+            // Release old frame ownership per VAD kind.
+            match vad.kind {
+                VadKind::Private => free_frames(old_pa, 1),
+                VadKind::Mapped { .. } => super::view::cow_released_frame(vad, page, old_pa),
             }
             return UserFault::Resolved;
         }
@@ -1413,8 +1471,10 @@ fn resolve_in_space(
             UserFault::GuardViolation
         }
         UserSwPte::Prototype { .. } => {
-            // Section view faults are wired in Stage 2B.
-            UserFault::AccessViolation
+            // Drop `space.lock()` before resolving a mapped section page so
+            // data-file paging I/O can block freely without holding the VAD lock.
+            drop(inner);
+            super::view::fault_mapped_page(space, vad, page, access)
         }
     }
 }

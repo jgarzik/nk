@@ -511,6 +511,7 @@ pub static SECTION_TYPE: ObjectType = ObjectType::new(
     &SECTION_NAME,
     Some(crate::mm::section::deleted),
 )
+.closing(crate::ob::event_handle_closed)
 .rights(GENERIC_MAPPING {
     GenericRead: 0x0002_0005,
     GenericWrite: 0x0002_0002,

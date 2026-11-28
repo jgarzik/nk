@@ -592,6 +592,60 @@ pub fn create_directory(
 /// synchronization, initial signal state `initial_state`): called
 /// `path` (absolute, or relative to the directory object `start`), or
 /// without a name if `path` is empty. `permanent` is `OBJ_PERMANENT`.
+/// Insert an already-allocated object `body` of type `ty` into the namespace
+/// at `path` (relative to `start`), optionally opening an existing object of
+/// the same type when `open_if` (`OBJ_OPENIF`) is set. On `Ok((existing, true))`,
+/// returns a new reference to `existing`; on `Ok((body, false))`, the namespace
+/// now holds its own reference to `body`.
+///
+/// # Safety
+/// `body` is a live object of type `ty` allocated via `object::create` or
+/// `object::create_named`.
+pub unsafe fn insert_named(
+    start: Option<*mut u8>,
+    path: &[u16],
+    body: *mut u8,
+    ty: &object::ObjectType,
+    permanent: bool,
+    open_if: bool,
+) -> Result<(*mut u8, bool), NTSTATUS> {
+    let mut ns = NAMESPACE.lock();
+    let start = match start {
+        None => None,
+        Some(object) => Some(dir_of(&ns, object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?),
+    };
+    match ns.tree.insert_object(start, path, OPTIONS, Entry(body)) {
+        Ok(dir) => {
+            let parent = directory(&ns, dir);
+            // SAFETY: per the contract; the namespace takes its own reference.
+            unsafe {
+                object::set_permanent(body, permanent);
+                object::reference(body);
+                object::entered(body, parent);
+            }
+            Ok((body, false))
+        }
+        Err(Error::Collision) if open_if => {
+            let outcome = ns.tree.lookup(start, path, OPTIONS).map_err(status)?;
+            match outcome.found {
+                Found::Object(&Entry(existing)) if outcome.remainder.is_empty() => {
+                    // SAFETY: live under the namespace lock.
+                    let same = unsafe { core::ptr::eq(object::type_of(existing), ty) };
+                    if same {
+                        // SAFETY: as above.
+                        unsafe { object::reference(existing) };
+                        Ok((existing, true))
+                    } else {
+                        Err(STATUS_OBJECT_TYPE_MISMATCH)
+                    }
+                }
+                _ => Err(STATUS_OBJECT_TYPE_MISMATCH),
+            }
+        }
+        Err(error) => Err(status(error)),
+    }
+}
+
 /// If the name is taken the creation fails, unless `open_if`
 /// (`OBJ_OPENIF`) and an event has it: that event is then the result.
 /// Returns the event with a reference for the caller, and whether it
