@@ -252,6 +252,12 @@ pub extern "C" fn PsGetCurrentThreadId() -> *mut c_void {
     current_client_id()[1]
 }
 
+/// `PsGetProcessImageFileName` (undocumented): short ASCII image name of a
+/// process. NK runs only the System process, whose name is `"System"`.
+pub extern "C" fn PsGetProcessImageFileName(_process: *mut c_void) -> *const u8 {
+    c"System".as_ptr().cast()
+}
+
 /// [`PsGetProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psgetprocessid).
 ///
 /// # Safety

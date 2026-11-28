@@ -1,6 +1,10 @@
 """Unit tests for the parts of tools/boot_test.py that boot nothing. Run by
 `make test`."""
 
+import json
+import socket
+import threading
+import time
 import unittest
 
 import boot_test
@@ -127,6 +131,100 @@ class Selection(unittest.TestCase):
                 names = self.select(gate, changed)
                 self.assertFalse([n for n in names if SCENARIOS[n]["arch"] != "x86_64"])
                 self.assertNotIn("x86_64-soak", names)
+
+
+class Devices(unittest.TestCase):
+    def test_nvme_and_phase5_devices_emit_expected_qemu_args(self):
+        self.assertEqual(
+            boot_test.disk_devices("x86_64", "nvme"),
+            ["-drive", "if=none,id=nkdata,format=raw,file=data.img",
+             "-device", "nvme,drive=nkdata,serial=nk-nvme"],
+        )
+        self.assertEqual(
+            boot_test.extra_devices("x86_64", usb="xhci", usb_kbd=True, serial2=True),
+            ["-device", "qemu-xhci,id=xhci",
+             "-device", "usb-kbd,bus=xhci.0,port=1,id=kbd0",
+             "-chardev", "socket,id=ser2,path=ser2.sock,server=on,wait=off",
+             "-device", "isa-serial,index=1,chardev=ser2"],
+        )
+        with self.assertRaises(ValueError):
+            boot_test.disk_devices("aarch64", "nvme")
+        with self.assertRaises(ValueError):
+            boot_test.extra_devices("x86_64", usb_kbd=True)
+
+
+class Qmp(unittest.TestCase):
+    def test_wait_event_survives_internal_recv_timeout_and_chunked_lines(self):
+        client, server = socket.socketpair()
+        errors = []
+
+        def peer():
+            try:
+                server.sendall(b'{"QMP": {"version": {}}}\n')
+                buf = b""
+                while b"\n" not in buf:
+                    buf += server.recv(4096)
+                req = json.loads(buf.decode("utf-8"))
+                if req.get("execute") != "qmp_capabilities":
+                    errors.append(f"unexpected cmd {req!r}")
+                    return
+                server.sendall(b'{"return": {}}\n')
+                # Delay past QmpSession's 1.0s internal recv timeout slice so
+                # socket.makefile() would have poisoned the reader, then send
+                # the event split across two chunks.
+                time.sleep(1.15)
+                ev = b'{"event": "DEVICE_DELETED", "data": {"device": "kbd0"}}\n'
+                server.sendall(ev[:20])
+                time.sleep(0.05)
+                server.sendall(ev[20:])
+            except OSError as e:
+                errors.append(str(e))
+            finally:
+                server.close()
+
+        t = threading.Thread(target=peer, daemon=True)
+        t.start()
+        session = boot_test.QmpSession(sock=client)
+        try:
+            event = session.wait_event("DEVICE_DELETED", device_id="kbd0", timeout=3.0)
+            self.assertEqual(event["event"], "DEVICE_DELETED")
+            self.assertEqual(event["data"]["device"], "kbd0")
+        finally:
+            session.close()
+            t.join(timeout=2.0)
+        self.assertEqual(errors, [])
+
+    def test_qmp_session_stops_promptly_on_stop_event(self):
+        client, server = socket.socketpair()
+        stop = threading.Event()
+
+        def peer():
+            try:
+                server.sendall(b'{"QMP": {"version": {}}}\n')
+                buf = b""
+                while b"\n" not in buf:
+                    buf += server.recv(4096)
+                server.sendall(b'{"return": {}}\n')
+                time.sleep(0.15)
+                stop.set()
+                time.sleep(0.5)
+            except OSError:
+                pass
+            finally:
+                server.close()
+
+        t = threading.Thread(target=peer, daemon=True)
+        t.start()
+        session = boot_test.QmpSession(sock=client, stop_event=stop)
+        started = time.monotonic()
+        try:
+            with self.assertRaises(TimeoutError):
+                session.wait_event("DEVICE_DELETED", device_id="kbd0", timeout=20.0)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 2.0)
+        finally:
+            session.close()
+            t.join(timeout=2.0)
 
 
 if __name__ == "__main__":

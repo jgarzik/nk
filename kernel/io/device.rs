@@ -503,6 +503,72 @@ pub unsafe extern "C" fn IoDetachDevice(target: *mut DEVICE_OBJECT) {
     }
 }
 
+/// [`IoGetLowerDeviceObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-iogetlowerdeviceobject):
+/// the next-lower device object beneath `device` in its stack, with a pointer
+/// reference the caller gives up with `ObDereferenceObject`, or null if none.
+///
+/// # Safety
+/// `device` is a live device object.
+pub unsafe extern "C" fn IoGetLowerDeviceObject(device: *mut DEVICE_OBJECT) -> *mut DEVICE_OBJECT {
+    // SAFETY: per the contract; the stack chain belongs to `DATABASE`.
+    unsafe {
+        check(device, "IoGetLowerDeviceObject");
+        let _database = DATABASE.lock();
+        let lower = (*extra(device)).AttachedTo;
+        if !lower.is_null() {
+            ob::object::reference(lower.cast());
+        }
+        lower
+    }
+}
+
+/// [`IoEnumerateDeviceObjectList`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioenumeratedeviceobjectlist):
+/// list every device object owned by `driver`, taking a pointer reference on
+/// each entry written. When `list` is smaller than the driver's device count,
+/// fills and references as many entries as fit, writes the total count to
+/// `actual`, and returns `STATUS_BUFFER_TOO_SMALL`, matching Windows.
+///
+/// # Safety
+/// `driver` is a live driver object; `actual` is writable; `list` is null or
+/// writable for `list_size` bytes.
+pub unsafe extern "C" fn IoEnumerateDeviceObjectList(
+    driver: *mut DRIVER_OBJECT,
+    list: *mut *mut DEVICE_OBJECT,
+    list_size: u32,
+    actual: *mut u32,
+) -> NTSTATUS {
+    if driver.is_null() || actual.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let capacity = if list.is_null() {
+        0
+    } else {
+        list_size as usize / size_of::<*mut DEVICE_OBJECT>()
+    };
+    // SAFETY: per the contract; `DriverObject.DeviceObject` list belongs to `DATABASE`.
+    unsafe {
+        let _database = DATABASE.lock();
+        let mut count = 0u32;
+        let mut cur = (*driver).DeviceObject;
+        while !cur.is_null() {
+            count += 1;
+            cur = (*cur).NextDevice;
+        }
+        actual.write_unaligned(count);
+        let to_copy = capacity.min(count as usize);
+        let mut cur = (*driver).DeviceObject;
+        for idx in 0..to_copy {
+            ob::object::reference(cur.cast());
+            list.add(idx).write_unaligned(cur);
+            cur = (*cur).NextDevice;
+        }
+        if capacity < count as usize {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+    }
+    STATUS_SUCCESS
+}
+
 /// [`IoGetAttachedDeviceReference`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetattacheddevicereference):
 /// the top of the stack `device` is in, with a pointer reference the
 /// caller gives up with `ObDereferenceObject`.
@@ -576,6 +642,27 @@ pub unsafe fn reference(device: *mut DEVICE_OBJECT) {
     unsafe { (*device).ReferenceCount += 1 };
 }
 
+/// Whether any device in the stack rooted at `pdo` currently holds a nonzero
+/// `ReferenceCount` (open file handles or queued work items).
+///
+/// # Safety
+/// `pdo` must be a live device object.
+pub unsafe fn stack_has_references(pdo: *mut DEVICE_OBJECT) -> bool {
+    let _database = DATABASE.lock();
+    // SAFETY: per the contract; the attachment chain and ReferenceCount belong
+    // to the device database lock.
+    unsafe {
+        let mut at = pdo;
+        while !at.is_null() {
+            if (*at).ReferenceCount > 0 {
+                return true;
+            }
+            at = (*at).AttachedDevice;
+        }
+    }
+    false
+}
+
 /// Drop a reference; free the device if it was deleted meanwhile and
 /// this was the last.
 ///
@@ -586,15 +673,19 @@ pub unsafe fn dereference(device: *mut DEVICE_OBJECT) {
     // SAFETY: per the contract. Nothing of the device is read after the
     // lock is dropped unless this call is the one to free it.
     unsafe {
-        let last = {
+        let (became_zero, last) = {
             let database = DATABASE.lock();
             (*device).ReferenceCount -= 1;
-            ((*device).ReferenceCount == 0
-                && (*extra(device)).ExtensionFlags & DOE_DELETE_PENDING != 0)
-                .then_some(database)
+            let zero = (*device).ReferenceCount == 0;
+            let deleting = (zero && (*extra(device)).ExtensionFlags & DOE_DELETE_PENDING != 0)
+                .then_some(database);
+            (zero, deleting)
         };
         if let Some(database) = last {
             complete_delete(device, database);
+        }
+        if became_zero {
+            crate::pnp::engine::device_unreferenced();
         }
     }
 }

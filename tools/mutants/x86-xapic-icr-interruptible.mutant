@@ -1,0 +1,8 @@
+# xAPIC writes the interrupt command register in two halves (ICR_HIGH then
+# ICR_LOW) with interrupts on, so an interrupt handler that also sends an
+# IPI can land between them and overwrite the destination.
+scenario: x86_64-soak-tcg
+fails: smp.ipi-interrupted
+file: kernel/arch/x86_64/apic.rs
+replace:         let saved = interrupts_off();
+with:         let saved = interrupts_off(); interrupts_restore(saved);

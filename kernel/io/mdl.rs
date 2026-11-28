@@ -62,6 +62,12 @@ unsafe fn pages(mdl: *mut MDL) -> usize {
     unsafe { span_pages((*mdl).ByteOffset as usize, (*mdl).ByteCount as usize) }
 }
 
+/// [`MmSizeOfMdl`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmsizeofmdl):
+/// number of bytes required for an MDL describing `length` bytes starting at `base`.
+pub extern "C" fn MmSizeOfMdl(base: *mut c_void, length: usize) -> usize {
+    mdl_size(base as usize, length)
+}
+
 /// `IoAllocateMdl`: allocate an MDL describing `length` bytes at
 /// `virtual_address`, and optionally attach it to an IRP.
 ///

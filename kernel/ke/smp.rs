@@ -11,7 +11,7 @@ use crate::mm::stack::Stack;
 use crate::ob::handle::OBJ_KERNEL_HANDLE;
 use crate::{arch, mm};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use nk_bootinfo::BootInfo;
 use nk_ke::topology::{self, Record};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
@@ -32,6 +32,19 @@ use nk_ntabi::sysinfo::{
 
 /// Bit `n` is set once processor `n` is running. The boot processor is.
 static ONLINE: AtomicU64 = AtomicU64::new(1);
+
+/// [`KeNumberProcessors`](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/kenumberprocessors):
+/// exported single-byte count of active processors in group 0.
+#[allow(non_upper_case_globals)]
+pub static KeNumberProcessors: crate::kd::variables::Variable<AtomicU8> =
+    crate::kd::variables::Variable::new(AtomicU8::new(1));
+
+/// [`KeQueryActiveProcessors`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryactiveprocessors):
+/// the bitmask of currently active processors in group 0.
+#[allow(non_snake_case)]
+pub extern "C" fn KeQueryActiveProcessors() -> usize {
+    online() as usize
+}
 
 /// How long a processor gets to report in: 100 ns units. Generous; an
 /// emulated machine with many processors starts them slowly.
@@ -141,6 +154,7 @@ pub fn ap_main(number: usize) -> ! {
     if let Err(why) = thread::init_cpu(stack_of(number)) {
         panic!("processor {number}: {why}");
     }
+    KeNumberProcessors.0.fetch_add(1, Ordering::AcqRel);
     ONLINE.fetch_or(1 << number, Ordering::Release);
     arch::enable_interrupts();
     thread::idle_loop()
@@ -152,6 +166,9 @@ pub fn self_test() -> Result<usize, &'static str> {
     let cpus = platform::get().cpus().len();
     if online_count() != cpus {
         return Err("not every processor firmware listed is running");
+    }
+    if usize::from(KeNumberProcessors.0.load(Ordering::Acquire)) != online_count() {
+        return Err("KeNumberProcessors does not match online processor count");
     }
     if KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS) as usize != online_count()
         || KeQueryActiveProcessorCountEx(0) as usize != online_count()

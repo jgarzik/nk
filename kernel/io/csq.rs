@@ -328,6 +328,42 @@ pub unsafe extern "C" fn IoCsqInsertIrpEx(
     }
 }
 
+/// [`IoCsqRemoveIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocsqremoveirp):
+/// remove the specific request named by `context` from `csq`, returning it if
+/// it was still queued and not already being cancelled, or null otherwise.
+///
+/// # Safety
+/// `csq` is an initialized queue; `context` is an `IO_CSQ_IRP_CONTEXT`
+/// previously passed to `IoCsqInsertIrp` / `IoCsqInsertIrpEx`.
+pub unsafe extern "C" fn IoCsqRemoveIrp(
+    csq: *mut IO_CSQ,
+    context: *mut IO_CSQ_IRP_CONTEXT,
+) -> *mut IRP {
+    if csq.is_null() || context.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: per the contract; `context.Irp` is read under the queue's lock.
+    unsafe {
+        let queue = callbacks(csq);
+        let mut irql = 0;
+        queue.acquire(csq, &raw mut irql);
+        let irp = (&raw const (*context).Irp).read_unaligned();
+        let removed = if !irp.is_null()
+            && !cancel_routine(irp)
+                .swap(core::ptr::null_mut(), Ordering::AcqRel)
+                .is_null()
+        {
+            queue.remove(csq, irp);
+            unmark(irp);
+            irp
+        } else {
+            core::ptr::null_mut()
+        };
+        queue.release(csq, irql);
+        removed
+    }
+}
+
 /// [`IoCsqRemoveNextIrp`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocsqremovenextirp):
 /// take the first request off the queue that matches `peek_context`
 /// and is not being cancelled; null if there is none.

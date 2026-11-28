@@ -592,6 +592,22 @@ pub struct TARGET_DEVICE_CUSTOM_NOTIFICATION {
 /// The bytes of a [`TARGET_DEVICE_CUSTOM_NOTIFICATION`] before its data.
 pub const TARGET_DEVICE_CUSTOM_HEADER: usize = 0x24;
 
+/// [`TARGET_DEVICE_REMOVAL_NOTIFICATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_target_device_removal_notification):
+/// delivered to `EVENT_CATEGORY_TARGET_DEVICE_CHANGE` registrations on device removal.
+#[repr(C)]
+pub struct TARGET_DEVICE_REMOVAL_NOTIFICATION {
+    pub Version: u16,
+    pub Size: u16,
+    pub Event: [u8; 16],
+    pub FileObject: *mut crate::io::FILE_OBJECT,
+}
+
+const _: () = {
+    assert!(size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>() == 0x20);
+    assert!(core::mem::offset_of!(TARGET_DEVICE_REMOVAL_NOTIFICATION, Event) == 4);
+    assert!(core::mem::offset_of!(TARGET_DEVICE_REMOVAL_NOTIFICATION, FileObject) == 0x18);
+};
+
 /// The predefined target-device events, which a driver may not report:
 /// `GUID_TARGET_DEVICE_QUERY_REMOVE` (`{cb3a4009-46f0-11d0-b08f-00609713053f}`),
 /// `..._REMOVE_CANCELLED` (`...400a...`) and `..._REMOVE_COMPLETE`

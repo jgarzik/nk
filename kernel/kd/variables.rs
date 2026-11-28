@@ -10,9 +10,13 @@ use nk_bootinfo::{BootInfo, Serial};
 /// A variable drivers import and read: `T` is an atomic, so that the
 /// kernel can set it once the machine is known.
 #[repr(transparent)]
-pub struct Variable<T>(T);
+pub struct Variable<T>(pub(crate) T);
 
 impl<T> Variable<T> {
+    pub const fn new(value: T) -> Self {
+        Self(value)
+    }
+
     /// The address drivers import.
     pub const fn address(&'static self) -> *const () {
         (&raw const self.0).cast()
@@ -46,6 +50,10 @@ pub static InitSafeBootMode: Variable<AtomicU32> = Variable(AtomicU32::new(0));
 /// `Mm64BitPhysicalAddress`: whether physical addresses may exceed 32
 /// bits. They may on both architectures NK runs on.
 pub static Mm64BitPhysicalAddress: Variable<AtomicU8> = Variable(AtomicU8::new(1));
+
+/// `NtBuildNumber`: free-build Windows 10 22H2 build 19045 (`0xF000_4A65`),
+/// matching `RtlGetVersion`.
+pub static NtBuildNumber: Variable<AtomicU32> = Variable(AtomicU32::new(0xF000_0000 | 19045));
 
 /// Record what the loader said of the console.
 pub fn init(info: &BootInfo) {

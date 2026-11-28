@@ -34,7 +34,7 @@ use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, Ordering};
 use nk_ke::{ListEntry, TIMER_BUCKETS, TimerBuckets, hands_to_check, ticks_in, timer_hand};
 use nk_ntabi::ke::{
     DISPATCHER_HEADER, KDPC, KTIMER, LIST_ENTRY, TIMER_EXPIRED, TIMER_INSERTED,
-    TIMER_NOTIFICATION_OBJECT,
+    TIMER_NOTIFICATION_OBJECT, TIMER_SYNCHRONIZATION_OBJECT,
 };
 
 /// One processor's pending timers.
@@ -305,11 +305,18 @@ pub unsafe fn cancel_and_settle(timer: *mut KTIMER) {
     }
 }
 
-/// [`KeInitializeTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimer).
+/// [`KeInitializeTimerEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimerex):
+/// initialise `timer` as a notification (`timer_type == 0`) or
+/// synchronization (`timer_type != 0`) timer.
 ///
 /// # Safety
 /// `timer` points to writable storage for a `KTIMER`.
-pub unsafe extern "C" fn KeInitializeTimer(timer: *mut KTIMER) {
+pub unsafe extern "C" fn KeInitializeTimerEx(timer: *mut KTIMER, timer_type: u32) {
+    let kind = if timer_type == 0 {
+        TIMER_NOTIFICATION_OBJECT
+    } else {
+        TIMER_SYNCHRONIZATION_OBJECT
+    };
     // SAFETY: per the contract. The wait list is empty: it points at
     // itself.
     unsafe {
@@ -317,7 +324,7 @@ pub unsafe extern "C" fn KeInitializeTimer(timer: *mut KTIMER) {
         object::init_wait_list(&raw mut (*timer).Header);
         timer.write(KTIMER {
             Header: DISPATCHER_HEADER {
-                Type: TIMER_NOTIFICATION_OBJECT,
+                Type: kind,
                 TimerControlFlags: 0,
                 Hand: 0,
                 TimerMiscFlags: 0,
@@ -338,6 +345,15 @@ pub unsafe extern "C" fn KeInitializeTimer(timer: *mut KTIMER) {
             Period: 0,
         });
     }
+}
+
+/// [`KeInitializeTimer`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-keinitializetimer).
+///
+/// # Safety
+/// `timer` points to writable storage for a `KTIMER`.
+pub unsafe extern "C" fn KeInitializeTimer(timer: *mut KTIMER) {
+    // SAFETY: per the contract.
+    unsafe { KeInitializeTimerEx(timer, 0) };
 }
 
 /// [`KeSetTimerEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettimerex).

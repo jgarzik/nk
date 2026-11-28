@@ -12,7 +12,8 @@
 use crate::arch::InterruptTestSource;
 use crate::cm;
 use crate::hal::interrupt as routing;
-use crate::io::{device, driver, irp};
+use crate::io::{device, driver, file, irp};
+use crate::ke::{thread, time};
 use crate::pnp::node::{self, State};
 use crate::pnp::root::{complete, complete_unchanged, pool_string, relations_of};
 use crate::pnp::{self, query, registry};
@@ -20,7 +21,9 @@ use crate::test::{Group, Report};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 use nk_bootinfo::BootInfo;
 use nk_ntabi::io::*;
 use nk_ntabi::pnp::*;
@@ -288,6 +291,11 @@ unsafe fn child_pnp(device: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
                 answer(request, block as usize)
             }
             IRP_MN_START_DEVICE => complete(request, STATUS_SUCCESS, 0),
+            IRP_MN_SURPRISE_REMOVAL => complete(request, STATUS_SUCCESS, 0),
+            IRP_MN_QUERY_DEVICE_RELATIONS if parameters[0] as u32 == TARGET_DEVICE_RELATION => {
+                // `relations_of` references each reported device for the caller.
+                answer(request, relations_of(&[device as usize]))
+            }
             IRP_MN_REMOVE_DEVICE => {
                 // A device the bus no longer has goes for good.
                 let gone = PRESENT.load(Ordering::Acquire) < number;
@@ -337,6 +345,24 @@ unsafe fn record_start(parameters: [u64; 4]) {
             VECTOR.store(vector, Ordering::Release);
             LEVEL.store(u32::from(level), Ordering::Release);
         }
+    }
+}
+
+/// Pass open/cleanup/close requests down the test stack, completing at the PDO.
+///
+/// # Safety
+/// Called as a dispatch routine.
+unsafe extern "C" fn dispatch_file(device: *mut DEVICE_OBJECT, request: *mut IRP) -> NTSTATUS {
+    // SAFETY: live IRP at this device's stack location.
+    unsafe {
+        let own = extension(device);
+        if matches!((*own).role, Role::Child | Role::BusFunction) {
+            return complete(request, STATUS_SUCCESS, 0);
+        }
+        let lower = (*own).lower;
+        (*request).CurrentLocation += 1;
+        (*request).CurrentStackLocation = (*request).CurrentStackLocation.add(1);
+        irp::IofCallDriver(lower, request)
     }
 }
 
@@ -528,6 +554,7 @@ struct Bench {
     drivers: Vec<*mut DRIVER_OBJECT>,
     reported: *mut DEVICE_OBJECT,
     function: *mut DEVICE_OBJECT,
+    saved_prefix: Option<String>,
 }
 
 impl Bench {
@@ -536,6 +563,7 @@ impl Bench {
             drivers: Vec::new(),
             reported: core::ptr::null_mut(),
             function: core::ptr::null_mut(),
+            saved_prefix: None,
         };
         ADDED.store(0, Ordering::Release);
         REMOVED.store(0, Ordering::Release);
@@ -550,6 +578,9 @@ impl Bench {
                 // SAFETY: the driver object being set up.
                 unsafe {
                     (*object).MajorFunction[usize::from(IRP_MJ_PNP)] = Some(dispatch);
+                    (*object).MajorFunction[usize::from(IRP_MJ_CREATE)] = Some(dispatch_file);
+                    (*object).MajorFunction[usize::from(IRP_MJ_CLEANUP)] = Some(dispatch_file);
+                    (*object).MajorFunction[usize::from(IRP_MJ_CLOSE)] = Some(dispatch_file);
                     let extension = (*object).DriverExtension;
                     (*extension).Count = number;
                     if number != 0 {
@@ -593,7 +624,9 @@ impl Bench {
 
 impl Drop for Bench {
     fn drop(&mut self) {
-        let prefix = node::with(self.reported as usize, |node| node.child_prefix.clone()).flatten();
+        let prefix = node::with(self.reported as usize, |node| node.child_prefix.clone())
+            .flatten()
+            .or_else(|| self.saved_prefix.take());
         // The bus loses its children, then its own devices go.
         if !self.reported.is_null() {
             self.report(0);
@@ -1139,6 +1172,10 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
                 REMOVALS.load(Ordering::Acquire),
             )
         };
+        let wait_seen = |target: (u32, u32)| {
+            pnp::notify::wait_idle();
+            seen() == target
+        };
         let linked = || {
             crate::ob::lookup(None, &wide_link)
                 .is_ok_and(|(body, rest)| body.body() == pdo.cast() && rest.is_empty())
@@ -1146,20 +1183,20 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
         let checks = (|| {
             // Disabling answers success whatever came of it, as Windows'
             // routine does; nothing is told.
-            if switch(false) != STATUS_SUCCESS || seen() != (0, 0) {
+            if switch(false) != STATUS_SUCCESS || !wait_seen((0, 0)) {
                 return Err("disabling an interface that is not enabled did not answer success");
             }
-            if switch(true) != STATUS_SUCCESS || seen() != (1, 0) || !linked() {
+            if switch(true) != STATUS_SUCCESS || !wait_seen((1, 0)) || !linked() {
                 return Err("enabling did not make the link and tell the callback");
             }
             if registry::dword(&format!("{key}\\#\\Control"), "Linked") != Some(1) {
                 return Err("the registry does not say the interface is linked");
             }
-            if switch(true) != STATUS_OBJECT_NAME_EXISTS || seen() != (1, 0) {
+            if switch(true) != STATUS_OBJECT_NAME_EXISTS || !wait_seen((1, 0)) {
                 return Err("enabling twice did not say the interface is enabled");
             }
             // A second registration that asks for what exists is told
-            // at once.
+            // at once (synchronously before registration returns).
             let mut second = core::ptr::null_mut();
             // SAFETY: as above.
             let registered = unsafe {
@@ -1180,11 +1217,11 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             if unsafe { IoUnregisterPlugPlayNotificationEx(second) } != STATUS_SUCCESS {
                 return Err("the second registration could not be taken back");
             }
-            if switch(false) != STATUS_SUCCESS || seen() != (2, 1) || linked() {
+            if switch(false) != STATUS_SUCCESS || !wait_seen((2, 1)) || linked() {
                 return Err("disabling did not remove the link and tell the callback once");
             }
             // The device's start being undone disables what is enabled.
-            if switch(true) != STATUS_SUCCESS || seen() != (3, 1) {
+            if switch(true) != STATUS_SUCCESS || !wait_seen((3, 1)) {
                 return Err("the interface could not be enabled again");
             }
             Ok(())
@@ -1196,7 +1233,7 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
             return Err("the registration could not be taken back");
         }
         // Taken back, the callback hears nothing more.
-        if switch(false) != STATUS_SUCCESS || seen() != (3, 1) {
+        if switch(false) != STATUS_SUCCESS || !wait_seen((3, 1)) {
             return Err("a callback was called after its registration was taken back");
         }
         if switch(true) != STATUS_SUCCESS {
@@ -1222,6 +1259,260 @@ fn interface(bench: &Bench) -> Result<(), &'static str> {
         if refused != STATUS_INVALID_DEVICE_REQUEST {
             return Err("a reserved event category was accepted");
         }
+
+        // Regression tests for PnP notification lifecycle:
+        // (a) external unregister racing an active callback preserves ownership
+        //     and releases references cleanly;
+        // (b) self-unregister from inside a callback succeeds and releases refs;
+        // (c) queued work for an unregistered handle never fires on a new
+        //     registration reusing the same heap address (ABA).
+        static RACE_ENTERED: AtomicBool = AtomicBool::new(false);
+        static RACE_RELEASE: AtomicBool = AtomicBool::new(false);
+        static RACE_UNREG_DONE: AtomicBool = AtomicBool::new(false);
+        static SELF_HANDLE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
+        static SELF_STATUS: AtomicI32 = AtomicI32::new(-1);
+        static SELF_HITS: AtomicU32 = AtomicU32::new(0);
+        static ABA_HITS: AtomicU32 = AtomicU32::new(0);
+
+        /// # Safety
+        /// Called as a PnP notification callback.
+        unsafe extern "C" fn race_cb(_: *mut core::ffi::c_void, _: usize) -> NTSTATUS {
+            RACE_ENTERED.store(true, Ordering::Release);
+            while !RACE_RELEASE.load(Ordering::Acquire) {
+                // Sleep rather than yield_now so a higher-priority worker
+                // thread never starves NORMAL_PRIORITY threads on SMP=1.
+                // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+                unsafe { crate::ke::wait::wait(None, Some(-10_000)) };
+            }
+            STATUS_SUCCESS
+        }
+        fn release_helper(_: usize) {
+            while !RACE_ENTERED.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+            unsafe { crate::ke::wait::wait(None, Some(-200_000)) };
+            RACE_RELEASE.store(true, Ordering::Release);
+            RACE_UNREG_DONE.store(true, Ordering::Release);
+        }
+        /// # Safety
+        /// Called as a PnP notification callback.
+        unsafe extern "C" fn self_unreg_cb(_: *mut core::ffi::c_void, _: usize) -> NTSTATUS {
+            SELF_HITS.fetch_add(1, Ordering::AcqRel);
+            let h = SELF_HANDLE.load(Ordering::Acquire);
+            // SAFETY: handle of this registration.
+            let st = unsafe { IoUnregisterPlugPlayNotificationEx(h) };
+            SELF_STATUS.store(st, Ordering::Release);
+            STATUS_SUCCESS
+        }
+        /// # Safety
+        /// Called as a PnP notification callback.
+        unsafe extern "C" fn aba_cb(_: *mut core::ffi::c_void, _: usize) -> NTSTATUS {
+            ABA_HITS.fetch_add(1, Ordering::AcqRel);
+            STATUS_SUCCESS
+        }
+
+        // (a) External unregister racing an active callback.
+        RACE_ENTERED.store(false, Ordering::Release);
+        RACE_RELEASE.store(false, Ordering::Release);
+        RACE_UNREG_DONE.store(false, Ordering::Release);
+        let mut race_h = core::ptr::null_mut();
+        // SAFETY: live driver object and callback.
+        if unsafe {
+            IoRegisterPlugPlayNotification(
+                EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                0,
+                (&raw const class).cast(),
+                bench.drivers[0],
+                race_cb as *const () as usize,
+                0,
+                &raw mut race_h,
+            )
+        } != STATUS_SUCCESS
+        {
+            return Err("could not register external-race notification");
+        }
+        let _ = thread::create(release_helper, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)
+            .map_err(|_| "could not spawn race release thread")?;
+        if switch(false) != STATUS_SUCCESS {
+            return Err("could not toggle interface for external-race test");
+        }
+        while !RACE_ENTERED.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        // SAFETY: racing against active `race_cb` on worker thread.
+        let race_st = unsafe { IoUnregisterPlugPlayNotificationEx(race_h) };
+        while !RACE_UNREG_DONE.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        pnp::notify::wait_idle();
+        if race_st != STATUS_SUCCESS {
+            return Err("external unregister racing active callback failed");
+        }
+        // SAFETY: second unregister of the same handle must be rejected.
+        if unsafe { IoUnregisterPlugPlayNotificationEx(race_h) } != STATUS_INVALID_PARAMETER {
+            return Err("duplicate unregister after external race was not refused");
+        }
+
+        // (b) Self-unregister from inside callback.
+        SELF_HITS.store(0, Ordering::Release);
+        SELF_STATUS.store(-1, Ordering::Release);
+        let mut self_h = core::ptr::null_mut();
+        // SAFETY: live driver object and callback.
+        if unsafe {
+            IoRegisterPlugPlayNotification(
+                EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                0,
+                (&raw const class).cast(),
+                bench.drivers[0],
+                self_unreg_cb as *const () as usize,
+                0,
+                &raw mut self_h,
+            )
+        } != STATUS_SUCCESS
+        {
+            return Err("could not register self-unregister notification");
+        }
+        SELF_HANDLE.store(self_h, Ordering::Release);
+        if switch(true) != STATUS_SUCCESS {
+            return Err("could not enable interface for self-unregister test");
+        }
+        pnp::notify::wait_idle();
+        if SELF_HITS.load(Ordering::Acquire) != 1
+            || SELF_STATUS.load(Ordering::Acquire) != STATUS_SUCCESS
+        {
+            return Err("self-unregister from callback did not succeed");
+        }
+        if switch(false) != STATUS_SUCCESS {
+            return Err("could not disable interface after self-unregister");
+        }
+        pnp::notify::wait_idle();
+        if SELF_HITS.load(Ordering::Acquire) != 1 {
+            return Err("self-unregistered callback fired again");
+        }
+
+        // (c) Queued work must not invoke a replacement registration at a reused address.
+        ABA_HITS.store(0, Ordering::Release);
+        let mut old_h = core::ptr::null_mut();
+        // SAFETY: live driver object and callback.
+        if unsafe {
+            IoRegisterPlugPlayNotification(
+                EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                0,
+                (&raw const class).cast(),
+                bench.drivers[0],
+                notified as *const () as usize,
+                NOTIFY_CONTEXT,
+                &raw mut old_h,
+            )
+        } != STATUS_SUCCESS
+        {
+            return Err("could not register ABA old handle");
+        }
+        if switch(true) != STATUS_SUCCESS {
+            return Err("could not enable interface for ABA test");
+        }
+        // Immediately unregister old_h and register a new handle that may reuse its Box address.
+        let mut new_h = core::ptr::null_mut();
+        // SAFETY: `old_h` came from `IoRegisterPlugPlayNotification`.
+        let unreg_old = unsafe { IoUnregisterPlugPlayNotificationEx(old_h) };
+        // SAFETY: live driver object, class GUID, and callback.
+        let reg_new = unsafe {
+            IoRegisterPlugPlayNotification(
+                EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                0,
+                (&raw const class).cast(),
+                bench.drivers[0],
+                aba_cb as *const () as usize,
+                0,
+                &raw mut new_h,
+            )
+        };
+        pnp::notify::wait_idle();
+        // SAFETY: unregister replacement handle.
+        let unreg_new = unsafe { IoUnregisterPlugPlayNotificationEx(new_h) };
+        if unreg_old != STATUS_SUCCESS
+            || reg_new != STATUS_SUCCESS
+            || unreg_new != STATUS_SUCCESS
+            || ABA_HITS.load(Ordering::Acquire) != 0
+        {
+            return Err("queued PnP work invoked replacement registration (ABA)");
+        }
+
+        // (d) Rapid arrival + removal must be delivered in strict FIFO order
+        //     even when the arrival callback sleeps (serialized dispatch queue).
+        static ORDER_EVENTS: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+        static ORDER_LEN: AtomicU32 = AtomicU32::new(0);
+        /// # Safety
+        /// Called as a PnP interface notification callback.
+        unsafe extern "C" fn order_cb(notif: *mut core::ffi::c_void, _: usize) -> NTSTATUS {
+            // SAFETY: notification block passed by `pnp::notify`.
+            let event = unsafe { (*notif.cast::<DEVICE_INTERFACE_CHANGE_NOTIFICATION>()).Event };
+            let tag = if event == GUID_DEVICE_INTERFACE_ARRIVAL {
+                // Delay arrival so an unserialized second worker would overtake it with removal.
+                // SAFETY: relative delay wait at PASSIVE_LEVEL.
+                unsafe { crate::ke::wait::wait(None, Some(-150_000)) };
+                1u32
+            } else if event == GUID_DEVICE_INTERFACE_REMOVAL {
+                2u32
+            } else {
+                3u32
+            };
+            let idx = ORDER_LEN.fetch_add(1, Ordering::AcqRel) as usize;
+            if idx < ORDER_EVENTS.len() {
+                ORDER_EVENTS[idx].store(tag, Ordering::Release);
+            }
+            STATUS_SUCCESS
+        }
+        for slot in &ORDER_EVENTS {
+            slot.store(0, Ordering::Release);
+        }
+        ORDER_LEN.store(0, Ordering::Release);
+        if switch(false) != STATUS_SUCCESS {
+            return Err("could not disable interface before FIFO order test");
+        }
+        pnp::notify::wait_idle();
+        let mut order_h = core::ptr::null_mut();
+        // SAFETY: live driver object, class GUID, and callback.
+        if unsafe {
+            IoRegisterPlugPlayNotification(
+                EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE,
+                0,
+                (&raw const class).cast(),
+                bench.drivers[0],
+                order_cb as *const () as usize,
+                0,
+                &raw mut order_h,
+            )
+        } != STATUS_SUCCESS
+        {
+            return Err("could not register FIFO order notification");
+        }
+        let fifo_res = (|| {
+            if switch(true) != STATUS_SUCCESS || switch(false) != STATUS_SUCCESS {
+                return Err("could not toggle interface rapidly for FIFO order test");
+            }
+            pnp::notify::wait_idle();
+            if ORDER_LEN.load(Ordering::Acquire) != 2
+                || ORDER_EVENTS[0].load(Ordering::Acquire) != 1
+                || ORDER_EVENTS[1].load(Ordering::Acquire) != 2
+            {
+                return Err(
+                    "PnP interface arrival/removal notifications arrived out of FIFO order",
+                );
+            }
+            Ok(())
+        })();
+        // SAFETY: valid notification handle.
+        let unreg_order = unsafe { IoUnregisterPlugPlayNotificationEx(order_h) };
+        fifo_res?;
+        if unreg_order != STATUS_SUCCESS {
+            return Err("could not unregister FIFO order notification");
+        }
+        if switch(true) != STATUS_SUCCESS {
+            return Err("could not re-enable interface after FIFO order test");
+        }
+        pnp::notify::wait_idle();
         Ok(())
     })();
     // SAFETY: the string the registration handed out.
@@ -1356,7 +1647,7 @@ fn failed_start() -> Result<(), &'static str> {
 fn run(r: &mut Report, _: &BootInfo) {
     r.check("pnp.root", root);
     r.check("pnp.hal-device", hal_device);
-    let bench = match Bench::new() {
+    let mut bench = match Bench::new() {
         Ok(bench) => bench,
         Err(why) => {
             r.skip_rest(format_args!("{why}"));
@@ -1556,17 +1847,219 @@ fn run(r: &mut Report, _: &BootInfo) {
         bench.report(1);
         pnp::settle();
         let found = child(1).ok_or("the device that came back has no node")?;
-        let result = if found.requirements != child_requirements(1, true).to_bytes() {
+        let mut result = if found.requirements != child_requirements(1, true).to_bytes() {
             Err("its bus driver did not find its key when asked what it requires")
         } else if found.state != State::Started {
             Err("the device that came back was not started")
         } else {
             Ok(())
         };
+        // Register a target-device subscriber that owns the last open handle
+        // and closes it ONLY from its GUID_TARGET_DEVICE_REMOVE_COMPLETE
+        // callback: surprise removal must deliver the notification first so
+        // deferred IRP_MN_REMOVE_DEVICE does not deadlock.
+        static TD_FILE_HANDLE: AtomicU64 = AtomicU64::new(0);
+        static TD_NOTIFY_HANDLE: AtomicPtr<core::ffi::c_void> =
+            AtomicPtr::new(core::ptr::null_mut());
+        static TD_FIRED: AtomicU32 = AtomicU32::new(0);
+        /// # Safety
+        /// Called as a PnP target-device notification callback.
+        unsafe extern "C" fn td_remove_cb(notif: *mut core::ffi::c_void, _: usize) -> NTSTATUS {
+            // SAFETY: notification header from `notify::device_removed`.
+            let event = unsafe { (*notif.cast::<TARGET_DEVICE_REMOVAL_NOTIFICATION>()).Event };
+            if event == GUID_TARGET_DEVICE_REMOVE_COMPLETE {
+                TD_FIRED.fetch_add(1, Ordering::AcqRel);
+                let nh = TD_NOTIFY_HANDLE.swap(core::ptr::null_mut(), Ordering::AcqRel);
+                if !nh.is_null() {
+                    // SAFETY: self-unregister this callback's registration.
+                    let _ = unsafe { pnp::notify::IoUnregisterPlugPlayNotificationEx(nh) };
+                }
+                let fh = TD_FILE_HANDLE.swap(0, Ordering::AcqRel);
+                if fh != 0 {
+                    file::close(fh);
+                }
+            }
+            STATUS_SUCCESS
+        }
+        if result.is_ok() {
+            let class = ids::guid_from_text(CLASS).ok_or("the class is not a GUID")?;
+            let mut link_name: UNICODE_STRING = UNICODE_STRING {
+                Length: 0,
+                MaximumLength: 0,
+                Buffer: core::ptr::null_mut(),
+            };
+            // SAFETY: live PDO and class GUID.
+            let reg_if = unsafe {
+                pnp::interface::IoRegisterDeviceInterface(
+                    again,
+                    &raw const class,
+                    core::ptr::null(),
+                    &raw mut link_name,
+                )
+            };
+            if reg_if == STATUS_SUCCESS {
+                // SAFETY: registered interface string.
+                let _ =
+                    unsafe { pnp::interface::IoSetDeviceInterfaceState(&raw const link_name, 1) };
+                // SAFETY: `link_name` was initialised by `IoRegisterDeviceInterface`.
+                let wide = unsafe { crate::rtl::copy_unicode(&raw const link_name) };
+                let link_str = String::from_utf16_lossy(&wide);
+                // SAFETY: string allocated by IoRegisterDeviceInterface.
+                unsafe { crate::rtl::print::RtlFreeUnicodeString(&raw mut link_name) };
+                match file::open(&file::OpenRequest::new(&link_str)) {
+                    Ok((fh, _)) => {
+                        let mut fobj: *mut core::ffi::c_void = core::ptr::null_mut();
+                        // SAFETY: open file handle.
+                        let ref_st = unsafe {
+                            crate::ob::handle::ObReferenceObjectByHandle(
+                                fh as *mut core::ffi::c_void,
+                                0,
+                                crate::ob::object::IoFileObjectType.value(),
+                                KERNEL_MODE,
+                                &raw mut fobj,
+                                core::ptr::null_mut(),
+                            )
+                        };
+                        if ref_st == STATUS_SUCCESS {
+                            TD_FIRED.store(0, Ordering::Release);
+                            TD_FILE_HANDLE.store(fh, Ordering::Release);
+                            let mut nh = core::ptr::null_mut();
+                            // SAFETY: open FILE_OBJECT and live driver object.
+                            let nr = unsafe {
+                                pnp::notify::IoRegisterPlugPlayNotification(
+                                    EVENT_CATEGORY_TARGET_DEVICE_CHANGE,
+                                    0,
+                                    fobj,
+                                    bench.drivers[0],
+                                    td_remove_cb as *const () as usize,
+                                    0,
+                                    &raw mut nh,
+                                )
+                            };
+                            // SAFETY: balance ObReferenceObjectByHandle.
+                            unsafe { crate::ob::object::dereference(fobj.cast()) };
+                            if nr == STATUS_SUCCESS {
+                                TD_NOTIFY_HANDLE.store(nh, Ordering::Release);
+                            } else {
+                                TD_FILE_HANDLE.store(0, Ordering::Release);
+                                file::close(fh);
+                                result =
+                                    Err("could not register target-device change notification");
+                            }
+                        } else {
+                            file::close(fh);
+                            result = Err("could not reference opened file object");
+                        }
+                    }
+                    Err(_) => result = Err("could not open re-enumerated child device"),
+                }
+            } else {
+                result = Err("could not register interface on re-enumerated child");
+            }
+        }
         bench.report(0);
         pnp::settle();
+        // Wait for worker callback to close the handle and PnP engine to finish removal.
+        let deadline = time::interrupt_time() + 5_000 * 10_000;
+        while (child(1).is_some() || !CHILDREN[0].load(Ordering::Acquire).is_null())
+            && time::interrupt_time() < deadline
+        {
+            pnp::notify::wait_idle();
+            pnp::settle();
+            thread::yield_now();
+        }
+        // Clean up if anything failed before callback ran.
+        let leftover_nh = TD_NOTIFY_HANDLE.swap(core::ptr::null_mut(), Ordering::AcqRel);
+        if !leftover_nh.is_null() {
+            // SAFETY: valid handle.
+            let _ = unsafe { pnp::notify::IoUnregisterPlugPlayNotificationEx(leftover_nh) };
+        }
+        let leftover_fh = TD_FILE_HANDLE.swap(0, Ordering::AcqRel);
+        if leftover_fh != 0 {
+            file::close(leftover_fh);
+        }
+        if result.is_ok() && TD_FIRED.load(Ordering::Acquire) != 1 {
+            result =
+                Err("GUID_TARGET_DEVICE_REMOVE_COMPLETE did not fire once on surprise removal");
+        }
         if child(1).is_some() || !CHILDREN[0].load(Ordering::Acquire).is_null() {
             return Err("the device that came back was not removed again");
+        }
+        if result.is_ok() {
+            // Regression test: an orderly removal (`remove_now(parent, false)`)
+            // while a child sits in `SurpriseRemoved` awaiting handle closure
+            // must mark the parent `RemovePending` and finish both once the
+            // child's handle closes.
+            let again2 = make(bench.drivers[0], Role::Child, 1)?;
+            // SAFETY: fresh device object.
+            unsafe { (*again2).Flags &= !DO_DEVICE_INITIALIZING };
+            CHILDREN[0].store(again2, Ordering::Release);
+            bench.report(1);
+            pnp::settle();
+            let class = ids::guid_from_text(CLASS).ok_or("the class is not a GUID")?;
+            let mut link_name = UNICODE_STRING {
+                Length: 0,
+                MaximumLength: 0,
+                Buffer: core::ptr::null_mut(),
+            };
+            // SAFETY: live PDO and class GUID.
+            let reg_if = unsafe {
+                pnp::interface::IoRegisterDeviceInterface(
+                    again2,
+                    &raw const class,
+                    core::ptr::null(),
+                    &raw mut link_name,
+                )
+            };
+            if reg_if != STATUS_SUCCESS {
+                return Err("could not register interface for deferred orderly removal test");
+            }
+            // SAFETY: registered interface string.
+            let _ = unsafe { pnp::interface::IoSetDeviceInterfaceState(&raw const link_name, 1) };
+            // SAFETY: initialised counted string.
+            let link_str = String::from_utf16_lossy(&unsafe {
+                crate::rtl::copy_unicode(&raw const link_name)
+            });
+            // SAFETY: allocated by IoRegisterDeviceInterface.
+            unsafe { crate::rtl::print::RtlFreeUnicodeString(&raw mut link_name) };
+            let (fh2, _) = file::open(&file::OpenRequest::new(&link_str))
+                .map_err(|_| "could not open child for deferred orderly removal test")?;
+            // Cache child_prefix before removing `bench.reported` so Bench::drop cleans registry.
+            bench.saved_prefix =
+                node::with(bench.reported as usize, |n| n.child_prefix.clone()).flatten();
+            // Surprise-remove child while fh2 stays open -> SurpriseRemoved.
+            bench.report(0);
+            pnp::settle();
+            let child_deferred = child(1).is_some_and(|n| n.state == State::SurpriseRemoved);
+            // Now request orderly removal of the Started parent.
+            pnp::engine::remove_now(bench.reported as usize, false);
+            let parent_pending =
+                node::get(bench.reported as usize).is_some_and(|n| n.state == State::RemovePending);
+            // Closing the last child handle must finish removing BOTH child and parent.
+            file::close(fh2);
+            let deadline = time::interrupt_time() + 5_000 * 10_000;
+            while (child(1).is_some()
+                || !CHILDREN[0].load(Ordering::Acquire).is_null()
+                || node::get(bench.reported as usize).is_some())
+                && time::interrupt_time() < deadline
+            {
+                pnp::settle();
+                thread::yield_now();
+            }
+            if !child_deferred {
+                return Err("child did not stay in SurpriseRemoved with handle open");
+            }
+            if !parent_pending {
+                return Err(
+                    "orderly parent removal did not enter RemovePending while child was deferred",
+                );
+            }
+            if child(1).is_some()
+                || !CHILDREN[0].load(Ordering::Acquire).is_null()
+                || node::get(bench.reported as usize).is_some()
+            {
+                return Err("deferred orderly parent removal did not complete after handle close");
+            }
         }
         result
     });

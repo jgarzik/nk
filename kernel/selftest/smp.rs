@@ -14,6 +14,7 @@ pub static GROUP: Group = Group {
         "smp.counter",
         "smp.tlb",
         "smp.lock-interrupted",
+        "smp.ipi-interrupted",
     ],
     run,
     manual: false,
@@ -58,6 +59,12 @@ fn run(r: &mut Report, _: &BootInfo) {
         "smp.lock-interrupted",
         "locks taken by the interrupt handler",
         spinlock::interrupted_test(),
+    );
+    counted(
+        r,
+        "smp.ipi-interrupted",
+        "calls completed under interrupts",
+        ipi::interrupted_test(),
     );
 }
 

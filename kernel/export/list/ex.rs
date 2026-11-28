@@ -4,14 +4,19 @@ use super::super::{Export, NT, State};
 use crate::ex;
 
 pub(in crate::export) static EXPORTS: &[Export] = &[
+    export!(Partial, ex::wnf::ExQueryWnfStateData),
     export!(Partial, ex::wnf::ExSubscribeWnfStateChange),
     export!(Partial, ex::wnf::ExUnsubscribeWnfStateChange),
     export!(Partial, ex::wnf::ZwQueryWnfStateData),
+    export!(Partial, ex::wnf::ZwQueryWnfStateNameInformation),
     export!(Implemented, ex::absent::HeadlessDispatch),
     export!(Implemented, ex::extension::ExRegisterExtension),
     export!(Implemented, ex::extension::ExUnregisterExtension),
     export!(Implemented, ex::pcw::PcwAddInstance),
+    export!(Implemented, ex::pcw::PcwCloseInstance),
+    export!(Implemented, ex::pcw::PcwCreateInstance),
     export!(Implemented, ex::pcw::PcwRegister),
+    export!(Implemented, ex::pcw::PcwUnregister),
     export!(Implemented, ex::absent::HviGetHypervisorFeatures),
     export!(Implemented, ex::absent::HviIsAnyHypervisorPresent),
     export!(Implemented, ex::absent::VfFailDeviceNode),
@@ -24,6 +29,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::vsl::VslQuerySecureDevice),
     export!(Implemented, ex::vsl::SkIsSecureKernel),
     export!(Implemented, ex::vsl::VslExchangeEntropy),
+    export!(Implemented, ex::vsl::VslCreateSecureSection),
+    export!(Implemented, ex::vsl::VslDeleteSecureSection),
     export_entry!(
         Implemented,
         "SkAcquirePushLockExclusive",
@@ -112,6 +119,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     ),
     export!(Implemented, ex::license::ZwQueryLicenseValue),
     export!(Partial, ex::firmware::ZwSetSystemInformation),
+    export!(Implemented, ex::shim::KseQueryDeviceFlags),
     export!(Implemented, ex::shim::KseRegisterShim),
     export!(Implemented, ex::vsl::VslGetSecurePciEnabled),
     export!(Implemented, ex::rundown::ExInitializeRundownProtection),

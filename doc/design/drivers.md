@@ -29,12 +29,20 @@ One image is loaded or unloaded at a time, under a mutex
 (`doc/LOCKING.md`): loading calls a library's `DllInitialize`, which may
 wait, and loads a library from inside the load of its importer.
 
-**Paging a driver.** `MmPageEntireDriver` and `MmResetDriverPaging`,
-which a driver calls to let its whole image be paged out while it is
-idle and to take that back, change nothing: NK never pages kernel
-memory out, so an image is resident from load to unload, which is
-within what both promise. The first still answers the base of the image
-an address is in, or null.
+**Paging a driver.** `MmPageEntireDriver`, `MmResetDriverPaging`,
+`MmLockPagableCodeSection`, `MmLockPagableDataSection`,
+`MmLockPagableSectionByHandle` and `MmUnlockPagableImageSection` change
+no page residency: NK never pages kernel memory out, so an image is
+resident from load to unload, which is within what every one of those
+routines promises. `MmPageEntireDriver`, `MmLockPagableCodeSection` and
+`MmLockPagableDataSection` still answer with the base of the image an
+address lies in, or null.
+
+**Driver and library duality.** A kernel image loaded as a library via
+another image's imports (such as `wdfldr.sys`, `ucx01000.sys`,
+`usbd.sys`, or `hidclass.sys`) can also be started as a service driver
+without reloading the binary; `io::driver::load` reuses the resident
+image and keeps its export table live while any importer holds it.
 
 **An image's messages.** A driver reads text from a message table in
 an image's resources with
@@ -59,8 +67,14 @@ The last part of the path is looked up among the boot files, the
 contents of `\NK\drivers`, which stand for `System32\drivers`: NK
 reads no file system. Nothing else starts a driver; a library is
 loaded when an image imports from it ([Exports](image.md)). The driver's entry
-point is given the path to its key. Stopping a service runs the driver's
-unload routine and frees its image; the key stays. An entry point that
+point is given the path to its key, and its record is entered before
+`DriverEntry` runs (marked unready so `IoOpenDriverRegistryKey` works
+during entry without publishing the driver as running yet). Stopping a
+service claims unload once on both the driver record and the module
+table under the loader mutex—blocking duplicate unloads and concurrent
+import bindings—calls the driver's unload routine, waits for any
+pending `IoSetCompletionRoutineEx` trampolines to finish, and then
+frees its image; the key stays. An entry point that
 fails gets no unload call, as on Windows, and its image is freed;
 one that fails or unloads with device objects left behind keeps its
 image and object, which the devices point into (on Windows the devices

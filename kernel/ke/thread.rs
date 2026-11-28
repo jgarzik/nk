@@ -153,6 +153,41 @@ static THREADS: AtomicU32 = AtomicU32::new(0);
 static UNCOUNTED_OBJECTS: AtomicUsize = AtomicUsize::new(0);
 /// Live uncounted worker thread stacks (for leak-check accounting).
 static UNCOUNTED_STACKS: AtomicUsize = AtomicUsize::new(0);
+/// Transitions of uncounted worker threads currently in progress (allocating
+/// or freeing stack/TCB) and monotonic transition epoch so `selftest::resources`
+/// never takes a torn snapshot while a dynamic worker spawns or retires.
+static UNCOUNTED_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+static UNCOUNTED_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// `(epoch, in_flight)` for uncounted worker thread lifecycle transitions.
+pub fn uncounted_state() -> (u64, usize) {
+    let in_flight = UNCOUNTED_IN_FLIGHT.load(Ordering::SeqCst);
+    let epoch = UNCOUNTED_GEN.load(Ordering::SeqCst);
+    (epoch, in_flight)
+}
+
+/// Guards an uncounted worker thread's allocation or teardown so leak checks
+/// retry instead of observing intermediate pool/frame states.
+struct UncountedTransition(bool);
+
+impl UncountedTransition {
+    fn begin(uncounted: bool) -> Self {
+        if uncounted {
+            UNCOUNTED_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+            UNCOUNTED_GEN.fetch_add(1, Ordering::SeqCst);
+        }
+        Self(uncounted)
+    }
+}
+
+impl Drop for UncountedTransition {
+    fn drop(&mut self) {
+        if self.0 {
+            UNCOUNTED_GEN.fetch_add(1, Ordering::SeqCst);
+            UNCOUNTED_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
 
 /// The threads that exist, but for the idle threads and the executive's
 /// worker threads, which come and go as work waits for them
@@ -629,6 +664,7 @@ fn new_thread(
     // The ideal processor: the next in turn among those allowed.
     let turn = NEXT_IDEAL.fetch_add(1, Ordering::Relaxed);
     let ideal = sched::ideal_processor(allowed, turn).unwrap_or(0);
+    let _transition = UncountedTransition::begin(!counted);
     let stack = mm::stack::alloc().ok_or("no memory for a thread's stack")?;
     let Some(thread) = allocate(stack, thread_priority, layout::state::INITIALIZED) else {
         mm::stack::free(stack);
@@ -1094,6 +1130,7 @@ fn after_switch() {
             );
             super::mutex::check_none_held(previous);
             let counted = (*previous).counted;
+            let _transition = UncountedTransition::begin(!counted);
             mm::stack::free((*previous).stack);
             if !counted {
                 UNCOUNTED_STACKS.fetch_sub(1, Ordering::AcqRel);
@@ -1238,6 +1275,33 @@ fn set_affinity(affinity: u64, ideal: Option<u32>, old: u8) {
         }
     }
     arch::set_irql(old);
+}
+
+/// [`KeSetSystemAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemaffinitythread):
+/// restrict the calling thread to the processors in group 0 named by `affinity`.
+#[allow(non_snake_case)]
+pub extern "C" fn KeSetSystemAffinityThread(affinity: usize) {
+    let mut group_affinity = GROUP_AFFINITY {
+        Mask: affinity,
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    // SAFETY: local `GROUP_AFFINITY`, null `previous`.
+    unsafe { KeSetSystemGroupAffinityThread(&raw mut group_affinity, core::ptr::null_mut()) };
+}
+
+/// [`KeRevertToUserAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kereverttouseraffinitythread):
+/// restore the calling thread's user affinity after `KeSetSystemAffinityThread`.
+#[allow(non_snake_case)]
+pub extern "C" fn KeRevertToUserAffinityThread() {
+    let mut zero = GROUP_AFFINITY {
+        Mask: 0,
+        Group: 0,
+        Reserved: [0; 3],
+    };
+    // SAFETY: local zeroed `GROUP_AFFINITY` tells `KeRevertToUserGroupAffinityThread`
+    // to revert to the thread's original user affinity.
+    unsafe { KeRevertToUserGroupAffinityThread(&raw mut zero) };
 }
 
 /// [`KeSetSystemGroupAffinityThread`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesetsystemgroupaffinitythread):

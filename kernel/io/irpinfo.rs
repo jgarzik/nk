@@ -151,6 +151,62 @@ pub unsafe extern "C" fn IoGetRequestorProcessId(irp: *mut IRP) -> u32 {
     }
 }
 
+/// [`IoGetInitiatorProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetinitiatorprocess):
+/// the process that initiated creating `file_object`, if different from
+/// the current process. NK attaches no separate initiator-process context
+/// to file objects, so this returns null (as Windows does when none was
+/// recorded).
+///
+/// # Safety
+/// `file_object` is null or a live `FILE_OBJECT`.
+pub unsafe extern "C" fn IoGetInitiatorProcess(_file_object: *mut FILE_OBJECT) -> *mut c_void {
+    core::ptr::null_mut()
+}
+
+/// [`IoGetRequestorSessionId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iogetrequestorsessionid):
+/// session id of the process that originated `irp`. On Windows, when
+/// `IoGetRequestorProcess(irp)` is null this writes `u32::MAX` (`-1`) and
+/// returns `STATUS_UNSUCCESSFUL`; when the process has no session
+/// (`EPROCESS.Session == NULL`, as for the System process on Windows and NK)
+/// `MmGetSessionIdEx` writes `u32::MAX` (`-1`) and returns `STATUS_SUCCESS`.
+///
+/// # Safety
+/// `irp` is a live IRP; `session_id` is writable.
+pub unsafe extern "C" fn IoGetRequestorSessionId(irp: *mut IRP, session_id: *mut u32) -> NTSTATUS {
+    if irp.is_null() || session_id.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract.
+    let process = unsafe { irp::IoGetRequestorProcess(irp) };
+    // SAFETY: checked non-null; per the contract.
+    unsafe { session_id.write_unaligned(u32::MAX) };
+    if process.is_null() {
+        STATUS_UNSUCCESSFUL
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// [`IoIncrementKeepAliveCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-ioincrementkeepalivecount):
+/// keep a packaged/app process awake while I/O is in flight. NK runs no
+/// packaged processes, so this succeeds without modifying process state
+/// (as on Windows for system and desktop processes).
+pub extern "C" fn IoIncrementKeepAliveCount(
+    _file_object: *mut FILE_OBJECT,
+    _process: *mut c_void,
+) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// [`IoDecrementKeepAliveCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-iodecrementkeepalivecount):
+/// counterpart of [`IoIncrementKeepAliveCount`].
+pub extern "C" fn IoDecrementKeepAliveCount(
+    _file_object: *mut FILE_OBJECT,
+    _process: *mut c_void,
+) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
 /// [`IoIs32bitProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iois32bitprocess):
 /// whether the request comes from a 32-bit process, whose structures
 /// a driver must then read as 32-bit ones. Windows answers by the
@@ -200,6 +256,51 @@ pub unsafe extern "C" fn IoSetHardErrorOrVerifyDevice(irp: *mut IRP, device: *mu
                 .cast::<*mut DEVICE_OBJECT>()
                 .write(device);
         }
+    }
+}
+
+/// [`IoValidateDeviceIoControlAccess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iovalidatedeviceiocontrolaccess):
+/// verify that the requestor of an I/O or file-system control IRP has
+/// the read/write access bits `required_access` asks for (`FILE_READ_ACCESS`
+/// = 1, `FILE_WRITE_ACCESS` = 2). Kernel-mode requests always succeed;
+/// user-mode requests are checked against the current stack location's
+/// `SL_READ_ACCESS_GRANTED` / `SL_WRITE_ACCESS_GRANTED` flags, as on Windows.
+///
+/// # Safety
+/// `irp` is a live IRP with a valid current stack location.
+pub unsafe extern "C" fn IoValidateDeviceIoControlAccess(
+    irp: *mut IRP,
+    required_access: u32,
+) -> NTSTATUS {
+    const FILE_READ_ACCESS: u32 = 1;
+    const FILE_WRITE_ACCESS: u32 = 2;
+    if irp.is_null() || required_access & !(FILE_READ_ACCESS | FILE_WRITE_ACCESS) != 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        let location = (&raw const (*irp).CurrentStackLocation).read();
+        if location.is_null() {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let major = (&raw const (*location).MajorFunction).read();
+        if !matches!(
+            major,
+            IRP_MJ_DEVICE_CONTROL | IRP_MJ_INTERNAL_DEVICE_CONTROL | IRP_MJ_FILE_SYSTEM_CONTROL
+        ) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (&raw const (*irp).RequestorMode).read() == KERNEL_MODE || required_access == 0 {
+            return STATUS_SUCCESS;
+        }
+        let flags = (&raw const (*location).Flags).read();
+        if required_access & FILE_READ_ACCESS != 0 && flags & SL_READ_ACCESS_GRANTED == 0 {
+            return STATUS_ACCESS_DENIED;
+        }
+        if required_access & FILE_WRITE_ACCESS != 0 && flags & SL_WRITE_ACCESS_GRANTED == 0 {
+            return STATUS_ACCESS_DENIED;
+        }
+        STATUS_SUCCESS
     }
 }
 
@@ -298,7 +399,44 @@ pub fn test() -> Result<u32, &'static str> {
             {
                 return Err("I/O attribution was not answered as on a system that has none");
             }
-            Ok(16)
+            // IoValidateDeviceIoControlAccess: checks major function, mode and
+            // per-request SL_READ_ACCESS_GRANTED / SL_WRITE_ACCESS_GRANTED flags
+            // (not FileObject->ReadAccess/WriteAccess, which belong to share access).
+            let mut fake_file = core::mem::zeroed::<FILE_OBJECT>();
+            let fake_file_ptr = &raw mut fake_file;
+            let loc = irp::next_location(request);
+            (*request).CurrentStackLocation = loc;
+            (*loc).MajorFunction = IRP_MJ_READ;
+            (*loc).FileObject = fake_file_ptr;
+            (*loc).Flags = 0;
+            if IoValidateDeviceIoControlAccess(request, 1) != STATUS_INVALID_PARAMETER {
+                return Err("IoValidateDeviceIoControlAccess accepted a non-control IRP");
+            }
+            (*loc).MajorFunction = IRP_MJ_DEVICE_CONTROL;
+            (*request).RequestorMode = KERNEL_MODE;
+            if IoValidateDeviceIoControlAccess(request, 3) != STATUS_SUCCESS {
+                return Err("IoValidateDeviceIoControlAccess refused a kernel-mode request");
+            }
+            (*request).RequestorMode = USER_MODE;
+            // Setting FileObject.ReadAccess alone must not satisfy user-mode IOCTL access.
+            (&raw mut (*fake_file_ptr).ReadAccess).write(1);
+            if IoValidateDeviceIoControlAccess(request, 1) != STATUS_ACCESS_DENIED
+                || IoValidateDeviceIoControlAccess(request, 2) != STATUS_ACCESS_DENIED
+                || IoValidateDeviceIoControlAccess(request, 4) != STATUS_INVALID_PARAMETER
+            {
+                return Err("IoValidateDeviceIoControlAccess missed a denied or invalid access");
+            }
+            (*loc).Flags = SL_READ_ACCESS_GRANTED;
+            if IoValidateDeviceIoControlAccess(request, 1) != STATUS_SUCCESS
+                || IoValidateDeviceIoControlAccess(request, 2) != STATUS_ACCESS_DENIED
+            {
+                return Err("IoValidateDeviceIoControlAccess mischecked SL_READ_ACCESS_GRANTED");
+            }
+            (*loc).Flags = SL_READ_ACCESS_GRANTED | SL_WRITE_ACCESS_GRANTED;
+            if IoValidateDeviceIoControlAccess(request, 3) != STATUS_SUCCESS {
+                return Err("IoValidateDeviceIoControlAccess mischecked read+write granted flags");
+            }
+            Ok(22)
         })()
     };
     // SAFETY: the test's IRP, which no driver holds.

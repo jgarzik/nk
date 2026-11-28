@@ -197,3 +197,69 @@ pub fn walk(
     }
     Err(WalkError::TooDeep)
 }
+
+/// [`RtlCaptureStackBackTrace`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlcapturestackbacktrace):
+/// walk the calling thread's stack, skipping `frames_to_skip` frames above
+/// this call, and store up to `frames_to_capture` return addresses into
+/// `back_trace`. Returns the number of frames captured.
+///
+/// # Safety
+/// `back_trace` is writable for `frames_to_capture` pointers;
+/// `back_trace_hash` is null or writable.
+#[allow(non_snake_case)]
+#[inline(never)]
+pub unsafe extern "C" fn RtlCaptureStackBackTrace(
+    frames_to_skip: u32,
+    frames_to_capture: u32,
+    back_trace: *mut *mut core::ffi::c_void,
+    back_trace_hash: *mut u32,
+) -> u16 {
+    if back_trace.is_null() || frames_to_capture == 0 {
+        if !back_trace_hash.is_null() {
+            // SAFETY: per the contract.
+            unsafe { back_trace_hash.write_unaligned(0) };
+        }
+        return 0;
+    }
+    let regs = unwind::capture();
+    let skip = (frames_to_skip as usize).saturating_add(1);
+    let max = (frames_to_capture as usize).min(usize::from(u16::MAX));
+    let mut seen = 0usize;
+    let mut captured = 0usize;
+    let mut hash = 0u32;
+    let _ = walk(&regs, false, |frame| {
+        if seen >= skip && captured < max {
+            // SAFETY: `back_trace` has room for `frames_to_capture` pointers.
+            unsafe {
+                back_trace
+                    .add(captured)
+                    .write_unaligned(frame.pc as usize as *mut core::ffi::c_void);
+            }
+            hash = hash.wrapping_add(frame.pc as u32);
+            captured += 1;
+        }
+        seen += 1;
+    });
+    if !back_trace_hash.is_null() {
+        // SAFETY: per the contract.
+        unsafe { back_trace_hash.write_unaligned(hash) };
+    }
+    captured as u16
+}
+
+/// `KeCapturePersistentThreadState` (undocumented): crash-dump triage helper
+/// that serialises a minidump header for live kernel dump telemetry. NK writes
+/// no crash dumps, so this returns 0 bytes captured.
+#[allow(non_snake_case, clippy::too_many_arguments)]
+pub extern "C" fn KeCapturePersistentThreadState(
+    _context: *mut core::ffi::c_void,
+    _thread: *mut core::ffi::c_void,
+    _bugcheck_code: u32,
+    _param1: usize,
+    _param2: usize,
+    _param3: usize,
+    _param4: usize,
+    _virtual_address: *mut core::ffi::c_void,
+) -> u32 {
+    0
+}

@@ -185,6 +185,166 @@ pub unsafe extern "C" fn invalid_device_request(
     STATUS_INVALID_DEVICE_REQUEST
 }
 
+/// Context for a completion routine installed by [`IoSetCompletionRoutineEx`].
+struct CompletionEx {
+    device: *mut DEVICE_OBJECT,
+    driver: *mut DRIVER_OBJECT,
+    pinned: bool,
+    routine: IO_COMPLETION_ROUTINE,
+    context: *mut core::ffi::c_void,
+    control: u8,
+}
+
+const TAG_COMPLETION_EX: u32 = u32::from_le_bytes(*b"IoCp");
+
+/// Trampoline invoked on every IRP completion for [`IoSetCompletionRoutineEx`]:
+/// frees the wrapper before calling the driver's routine (if the requested
+/// condition holds), releases the device reference, and unpins the driver
+/// image after it returns so the image cannot unload while its completion
+/// routine executes or while the IRP is pending.
+///
+/// # Safety
+/// Called by `IofCompleteRequest` with `context` from `IoSetCompletionRoutineEx`.
+unsafe extern "C" fn completion_ex_trampoline(
+    device: *mut DEVICE_OBJECT,
+    irp: *mut IRP,
+    context: *mut core::ffi::c_void,
+) -> NTSTATUS {
+    let raw = context.cast::<CompletionEx>();
+    // SAFETY: allocated by `IoSetCompletionRoutineEx`; consumed once here.
+    let saved = unsafe { raw.read() };
+    let _ = pool::free(raw.cast());
+    // SAFETY: `irp` is live during completion; `saved.device` and `saved.driver`
+    // were pinned by `IoSetCompletionRoutineEx`.
+    let status = unsafe {
+        let wanted =
+            completion_routine_wanted(saved.control, (*irp).IoStatus.Status, (*irp).Cancel != 0);
+        if wanted {
+            seh::call(
+                saved.routine as usize,
+                [device.addr(), irp.addr(), saved.context.addr(), 0],
+                &Guard::Nothing,
+            ) as u32 as NTSTATUS
+        } else {
+            if (*irp).PendingReturned != 0 && (*irp).CurrentLocation <= (*irp).StackCount {
+                (*(*irp).CurrentStackLocation).Control |= SL_PENDING_RETURNED;
+            }
+            STATUS_SUCCESS
+        }
+    };
+    // SAFETY: releases the reference taken in `IoSetCompletionRoutineEx`.
+    unsafe { crate::ob::object::dereference(saved.device.cast()) };
+    if saved.pinned {
+        super::driver::unpin_completion(saved.driver);
+    }
+    status
+}
+
+/// Release any [`CompletionEx`] wrapper, device reference, and driver unload
+/// pin installed on stack location `loc`.
+///
+/// # Safety
+/// `loc` is a valid stack location inside a live IRP that no completion path
+/// is concurrently running on.
+unsafe fn release_completion_ex_at(loc: *mut IO_STACK_LOCATION) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*loc).CompletionRoutine.is_some_and(|r| {
+            core::ptr::fn_addr_eq(r, completion_ex_trampoline as IO_COMPLETION_ROUTINE)
+        }) && !(*loc).Context.is_null()
+        {
+            let raw = (*loc).Context.cast::<CompletionEx>();
+            let saved = raw.read();
+            (*loc).CompletionRoutine = None;
+            (*loc).Context = core::ptr::null_mut();
+            let _ = pool::free(raw.cast());
+            crate::ob::object::dereference(saved.device.cast());
+            if saved.pinned {
+                super::driver::unpin_completion(saved.driver);
+            }
+        }
+    }
+}
+
+/// Release every uncompleted [`CompletionEx`] wrapper attached to `irp` so
+/// freeing or reusing an IRP that was never completed never leaks its pool
+/// block, device reference, or driver unload pin.
+///
+/// # Safety
+/// `irp` is a live IRP that no driver holds.
+unsafe fn release_all_completion_ex(irp: *mut IRP) {
+    // SAFETY: per the contract; stack locations immediately follow `IRP`.
+    unsafe {
+        let count = usize::try_from((*irp).StackCount).unwrap_or(0);
+        let base = irp.add(1).cast::<IO_STACK_LOCATION>();
+        for i in 0..count {
+            release_completion_ex_at(base.add(i));
+        }
+    }
+}
+
+/// [`IoSetCompletionRoutineEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcompletionroutineex):
+/// install a completion routine on the next stack location of `irp`, holding a
+/// reference on `device` and pinning its driver image against unload until the
+/// completion trampoline returns.
+///
+/// # Safety
+/// `device` is a live `DEVICE_OBJECT`; `irp` is a live `IRP` with a next stack
+/// location available.
+pub unsafe extern "C" fn IoSetCompletionRoutineEx(
+    device: *mut DEVICE_OBJECT,
+    irp: *mut IRP,
+    completion_routine: Option<IO_COMPLETION_ROUTINE>,
+    context: *mut core::ffi::c_void,
+    invoke_on_success: u8,
+    invoke_on_error: u8,
+    invoke_on_cancel: u8,
+) -> NTSTATUS {
+    let Some(routine) = completion_routine else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    if device.is_null() || irp.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mut control = 0u8;
+    if invoke_on_success != 0 {
+        control |= SL_INVOKE_ON_SUCCESS;
+    }
+    if invoke_on_error != 0 {
+        control |= SL_INVOKE_ON_ERROR;
+    }
+    if invoke_on_cancel != 0 {
+        control |= SL_INVOKE_ON_CANCEL;
+    }
+    let block = pool::alloc(size_of::<CompletionEx>(), TAG_COMPLETION_EX).cast::<CompletionEx>();
+    if block.is_null() {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    // SAFETY: per the contract; `block` is freshly allocated and `device` is live.
+    unsafe {
+        let driver = (*device).DriverObject;
+        crate::ob::object::reference(device.cast());
+        let pinned = super::driver::pin_completion(driver);
+        block.write(CompletionEx {
+            device,
+            driver,
+            pinned,
+            routine,
+            context,
+            control,
+        });
+        let next = next_location(irp);
+        release_completion_ex_at(next);
+        (*next).CompletionRoutine = Some(completion_ex_trampoline);
+        (*next).Context = block.cast();
+        // Always invoke the trampoline so the wrapper, device reference, and
+        // driver unload pin are released even when the caller's condition does
+        // not match.
+        (*next).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
+    }
+    STATUS_SUCCESS
+}
+
 /// `IofCompleteRequest` (`IoCompleteRequest`): the driver is done with
 /// the IRP. Runs completion routines of the drivers above it, then
 /// finishes the request and frees the IRP.
@@ -220,7 +380,21 @@ pub unsafe extern "C" fn IofCompleteRequest(irp: *mut IRP, _priority_boost: i8) 
             let status = (*irp).IoStatus.Status;
             let wanted = completion_routine_wanted(control, status, (*irp).Cancel != 0);
             let (routine, context) = ((*location).CompletionRoutine, (*location).Context);
-            core::ptr::write_bytes(location, 0, 1);
+            // Match Windows `IopfCompleteRequest`: clear MinorFunction, Flags,
+            // Control (except SL_ERROR_RETURNED = 0x02), Parameters[0..3],
+            // FileObject, CompletionRoutine, and Context, while preserving
+            // MajorFunction (drivers such as `kbdclass.sys` reuse the
+            // completing stack location's MajorFunction after returning
+            // STATUS_MORE_PROCESSING_REQUIRED).
+            (*location).MinorFunction = 0;
+            (*location).Flags = 0;
+            (*location).Control = control & 0x02;
+            (*location).Parameters[0] = 0;
+            (*location).Parameters[1] = 0;
+            (*location).Parameters[2] = 0;
+            (*location).FileObject = core::ptr::null_mut();
+            (*location).CompletionRoutine = None;
+            (*location).Context = core::ptr::null_mut();
             if let (true, Some(routine)) = (wanted, routine) {
                 // The routine is told the device of the location above.
                 let device = if (*irp).CurrentLocation == top {
@@ -435,6 +609,7 @@ pub unsafe fn free(irp: *mut IRP) {
     // the check in `IofCompleteRequest`. The IRP's extension block, if
     // it has one, goes with it.
     unsafe {
+        release_all_completion_ex(irp);
         super::irpext::freed(irp);
         (*irp).Type = 0;
     }
@@ -519,6 +694,7 @@ pub unsafe extern "C" fn IoReuseIrp(irp: *mut IRP, status: NTSTATUS) {
             ));
         }
         let kept = (*irp).AllocationFlags & REUSE_KEEPS;
+        release_all_completion_ex(irp);
         let extension = super::irpext::before_reuse(irp);
         IoInitializeIrp(irp, (*irp).Size, (*irp).StackCount);
         (*irp).AllocationFlags = kept;

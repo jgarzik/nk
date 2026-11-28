@@ -283,6 +283,60 @@ pub extern "C" fn KeFlushQueuedDpcs() {
     flush();
 }
 
+/// [`KeQueryDpcWatchdogInformation`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerydpcwatchdoginformation):
+/// report this processor's DPC watchdog limits and remaining ticks.
+///
+/// # Safety
+/// `info` is writable for a `KDPC_WATCHDOG_INFORMATION` structure.
+pub unsafe extern "C" fn KeQueryDpcWatchdogInformation(
+    info: *mut nk_ntabi::ke::KDPC_WATCHDOG_INFORMATION,
+) -> NTSTATUS {
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let limit =
+        (TIME_LIMIT.load(Ordering::Relaxed) / TIME_INCREMENT).min(u64::from(u32::MAX)) as u32;
+    let running = arch::percpu().dpcs().running_since.load(Ordering::Relaxed);
+    let elapsed = if running != 0 {
+        (time::interrupt_time().saturating_sub(running) / TIME_INCREMENT).min(u64::from(limit))
+            as u32
+    } else {
+        0
+    };
+    let remaining = limit.saturating_sub(elapsed);
+    // SAFETY: checked non-null; per the contract.
+    unsafe {
+        info.write_unaligned(nk_ntabi::ke::KDPC_WATCHDOG_INFORMATION {
+            DpcTimeLimit: limit,
+            DpcTimeCount: remaining,
+            DpcWatchdogLimit: limit,
+            DpcWatchdogCount: remaining,
+            Reserved: 0,
+        });
+    }
+    STATUS_SUCCESS
+}
+
+/// [`KeSetTargetProcessorDpc`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettargetprocessordpc):
+/// have the DPC run on processor `number` in group 0.
+///
+/// # Safety
+/// `dpc` points to a `KDPC` set up by `KeInitializeDpc`.
+pub unsafe extern "C" fn KeSetTargetProcessorDpc(dpc: *mut KDPC, number: i8) {
+    if number < 0 {
+        return;
+    }
+    let proc_number = PROCESSOR_NUMBER {
+        Group: 0,
+        Number: number as u8,
+        Reserved: 0,
+    };
+    // SAFETY: per the contract; `proc_number` is a valid local struct.
+    unsafe {
+        let _ = KeSetTargetProcessorDpcEx(dpc, &raw const proc_number);
+    }
+}
+
 /// [`KeSetTargetProcessorDpcEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesettargetprocessordpcex):
 /// have the DPC run on the processor `number` names, whichever
 /// processor queues it. `STATUS_INVALID_PARAMETER` if it names none.

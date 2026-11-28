@@ -143,8 +143,17 @@ down (problem 43). A failed start has the stack told the device is
 removed, so that its drivers detach and delete what they attached, and
 what it was given is taken back (problem 10). Then the device is asked
 for its children; new ones get a node and `DO_BUS_ENUMERATED_DEVICE`,
-those no longer reported are told they are gone (surprise removal, then
-removal) with everything below them. That, the removal after a failed
+those no longer reported are told they are gone in two phases, matching
+Windows: `IRP_MN_SURPRISE_REMOVAL` is sent bottom-up across the
+disappeared subtree (disabling its interfaces and moving each node to
+`State::SurpriseRemoved`), and `IRP_MN_REMOVE_DEVICE` is deferred for
+any node whose device stack still holds open references
+(`ReferenceCount > 0`) until the last handle closes and the engine
+thread completes teardown. If an orderly removal is requested for an
+ancestor while a descendant is still deferred awaiting handle closure,
+the ancestor moves to `State::RemovePending` (interfaces disabled) so
+`advance` completes its removal as soon as its children drain. That,
+the removal after a failed
 start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
 
@@ -161,9 +170,14 @@ parent's instance path); any other is not found unless a driver set
 it. A
 device interface is registered under Windows' link name and
 `DeviceClasses` record; enabling it makes the symbolic link to the
-physical device object (which therefore needs a name) and calls the
-callbacks registered for the class's arrivals, on the caller's thread
-where Windows queues them for a worker; enabled before its device has
+physical device object (which therefore needs a name) and appends the
+notification to a single serialized FIFO dispatch queue drained by one
+executive worker item at a time (matching Windows' serialized PnP
+event delivery so arrival/removal order is preserved and callbacks for
+one registration never race concurrently across workers, while
+`PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES` still
+delivers existing interfaces synchronously before registration returns);
+enabled before its device has
 started, an interface waits for the start. Disabling one answers
 success whatever came of it, as Windows' routine does: `partmgr.sys`
 disables an interface it never enabled on each disk it starts. A
@@ -175,9 +189,17 @@ volume's new names) is copied and told, from a worker, to every
 registration for that device, each with its own file in the
 structure, and then the reporter's routine is called; the call answers
 `STATUS_PENDING`. One of the predefined removal events is refused as
-Windows refuses it. Notification registrations for hardware profile
-changes, and the removal events of a device, are never called: NK
-produces neither.
+Windows refuses it. At surprise removal (and on non-surprise final
+removal), NK queues a `GUID_TARGET_DEVICE_REMOVE_COMPLETE` notification
+on an executive worker thread for every `EventCategoryTargetDeviceChange`
+registration targeting that physical device object so subscribers can
+close open handles and allow deferred `IRP_MN_REMOVE_DEVICE` to proceed.
+Queued notifications identify registrations by monotonic ID and category
+rather than heap address, and unregister finalization is owned by a
+single path (external unregister waits for active callbacks, while
+self-unregister defers entry removal and reference release until the
+callback returns). Notification registrations for hardware profile
+changes are never called: NK has one hardware profile.
 `IoInvalidateDeviceState` has a started device asked for its state
 again by the worker. Dependencies between devices
 (`IoReserveDependency`, `IoResolveDependency`, `IoSetDependency`;

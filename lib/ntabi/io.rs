@@ -890,11 +890,36 @@ pub const IRP_DEVICE_QUEUE_ENTRY: usize = core::mem::offset_of!(IRP, DriverConte
 /// is to be compared case-sensitively.
 pub const SL_FORCE_ACCESS_CHECK: u8 = 0x01;
 pub const SL_CASE_SENSITIVE: u8 = 0x80;
+/// `IO_STACK_LOCATION.Flags` of a device or file-system control request:
+/// whether the handle was granted read or write access (`wdm.h`).
+pub const SL_READ_ACCESS_GRANTED: u8 = 0x01;
+pub const SL_WRITE_ACCESS_GRANTED: u8 = 0x04;
 /// `IO_STACK_LOCATION.Control`
 pub const SL_PENDING_RETURNED: u8 = 0x01;
 pub const SL_INVOKE_ON_CANCEL: u8 = 0x20;
 pub const SL_INVOKE_ON_SUCCESS: u8 = 0x40;
 pub const SL_INVOKE_ON_ERROR: u8 = 0x80;
+
+/// [`KEYBOARD_INPUT_DATA`](https://learn.microsoft.com/en-us/windows/win32/api/ntddkbd/ns-ntddkbd-keyboard_input_data)
+/// (`ntddkbd.h`): one keyboard scan-code event returned by `kbdclass.sys`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KEYBOARD_INPUT_DATA {
+    pub UnitId: u16,
+    pub MakeCode: u16,
+    pub Flags: u16,
+    pub Reserved: u16,
+    pub ExtraInformation: u32,
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<KEYBOARD_INPUT_DATA>() == 12);
+    assert!(core::mem::offset_of!(KEYBOARD_INPUT_DATA, UnitId) == 0);
+    assert!(core::mem::offset_of!(KEYBOARD_INPUT_DATA, MakeCode) == 2);
+    assert!(core::mem::offset_of!(KEYBOARD_INPUT_DATA, Flags) == 4);
+    assert!(core::mem::offset_of!(KEYBOARD_INPUT_DATA, Reserved) == 6);
+    assert!(core::mem::offset_of!(KEYBOARD_INPUT_DATA, ExtraInformation) == 8);
+};
 
 /// One driver's view of a request. `Parameters` is a union of per-request
 /// structs; it is kept as four raw 8-byte slots and decoded by the

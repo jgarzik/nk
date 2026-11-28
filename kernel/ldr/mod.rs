@@ -171,7 +171,7 @@ pub struct Image {
     libraries: Vec<u64>,
     /// A library's image, which a driver was started from: the library
     /// keeps it, and unloading the driver leaves it loaded.
-    shared: bool,
+    pub shared: bool,
 }
 
 /// A library: an image loaded because another imports from it.
@@ -347,7 +347,10 @@ fn export_address(
                     Symbol::Ordinal(ordinal) => export::resolve_ordinal(KERNEL_NAME, ordinal),
                 };
             }
-            let next = MODULES.lock().with_stem(stem).filter(|m| m.library)?;
+            let next = MODULES
+                .lock()
+                .with_stem(stem)
+                .filter(|m| !m.unloading && (m.library || m.exports.size != 0))?;
             hold(next.base, held).ok()?;
             export_address(&next, symbol, held, hops + 1)
         }
@@ -361,7 +364,11 @@ fn hold(base: u64, held: &mut Vec<u64>) -> Result<(), LoadError> {
         return Ok(());
     }
     held.try_reserve_exact(1).map_err(|_| LoadError::NoMemory)?;
-    MODULES.lock().count_importer(base, 1);
+    if MODULES.lock().count_importer(base, 1).is_none() {
+        return Err(LoadError::NotALibrary {
+            module: String::from("(unloading)"),
+        });
+    }
     held.push(base);
     Ok(())
 }
@@ -372,7 +379,7 @@ fn hold(base: u64, held: &mut Vec<u64>) -> Result<(), LoadError> {
 fn library(name: &[u8], depth: usize, held: &mut Vec<u64>) -> Result<Module, LoadError> {
     let found = MODULES.lock().named(name);
     let module = match found {
-        Some(module) if module.library => module,
+        Some(module) if !module.unloading && (module.library || module.exports.size != 0) => module,
         Some(_) => {
             return Err(LoadError::NotALibrary {
                 module: lossy(name),
@@ -509,7 +516,7 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
 pub fn load_boot(name: &str, file: &[u8]) -> Result<Image, LoadError> {
     serialised(|| {
         let module = MODULES.lock().named(name.as_bytes());
-        if let Some(module) = module.filter(|m| m.library) {
+        if let Some(module) = module.filter(|m| m.library && !m.unloading) {
             let entry = with_libraries(|libraries| {
                 libraries
                     .iter()
@@ -677,6 +684,17 @@ fn release(image: &Image) {
     }
 }
 
+/// Atomically claim unload of the image at `base` under the loader's mutex:
+/// succeeds only if it has zero active importers and is not already unloading,
+/// preventing any concurrent load from binding new imports to it. Shared
+/// library images stay mapped for importers and always succeed here.
+pub fn begin_unload_at(base: u64, shared: bool) -> bool {
+    if shared {
+        return true;
+    }
+    serialised(|| MODULES.lock().begin_unload(base))
+}
+
 /// Unmap an image and free its memory. No code in it may run again.
 /// The libraries it imported from lose an importer; one that has none
 /// left is unloaded after it.
@@ -824,6 +842,40 @@ pub unsafe extern "C" fn MmPageEntireDriver(address_within_section: *mut c_void)
 /// # Safety
 /// Callable with any pointer value; it is not used.
 pub unsafe extern "C" fn MmResetDriverPaging(_address_within_section: *mut c_void) {}
+
+/// [`MmLockPagableDataSection`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmlockpagabledatasection):
+/// lock the image section holding `address_within_section` into memory and
+/// return an opaque handle to it. NK keeps every kernel and driver image
+/// resident for its entire lifetime, so returning the containing image's
+/// base address (or null if the address belongs to no loaded image) fulfills
+/// the contract honestly.
+///
+/// # Safety
+/// Callable with any pointer value; it is only compared against loaded
+/// image ranges.
+pub unsafe extern "C" fn MmLockPagableDataSection(
+    address_within_section: *mut c_void,
+) -> *mut c_void {
+    module_containing(address_within_section as u64)
+        .map_or(core::ptr::null_mut(), |module| module.base as *mut c_void)
+}
+
+/// [`MmLockPagableSectionByHandle`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmlockpagablesectionbyhandle):
+/// increment the lock count on a section previously locked with
+/// [`MmLockPagableDataSection`]. NK never pages kernel images out, so every
+/// section is already resident.
+///
+/// # Safety
+/// `image_section_handle` came from `MmLockPagableDataSection`.
+pub unsafe extern "C" fn MmLockPagableSectionByHandle(_image_section_handle: *mut c_void) {}
+
+/// [`MmUnlockPagableImageSection`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-mmunlockpagableimagesection):
+/// release a lock obtained from [`MmLockPagableDataSection`] or
+/// [`MmLockPagableSectionByHandle`]. NK keeps kernel images resident.
+///
+/// # Safety
+/// `image_section_handle` came from `MmLockPagableDataSection`.
+pub unsafe extern "C" fn MmUnlockPagableImageSection(_image_section_handle: *mut c_void) {}
 
 // ---- tests --------------------------------------------------------------
 

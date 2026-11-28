@@ -602,6 +602,8 @@ fn no_extension() -> Result<u32, &'static str> {
             || perf(0, core::ptr::null(), core::ptr::null_mut()) != STATUS_INVALID_PARAMETER
             || perf(0, &raw const one, &raw mut out) != STATUS_INVALID_PARAMETER
             || perf(1, &raw const none, core::ptr::null_mut()) != STATUS_INVALID_PARAMETER
+            || perf(1, &raw const one, core::ptr::null_mut()) != STATUS_SUCCESS
+            || perf(1, &raw const one, core::ptr::null_mut()) != STATUS_INVALID_PARAMETER
             || !out.is_null()
         {
             return Err("performance states were not answered as with no extension");

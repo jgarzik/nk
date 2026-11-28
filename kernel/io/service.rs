@@ -232,6 +232,52 @@ pub fn stop(name: &str) -> Result<(), &'static str> {
     driver::unload(driver::running(name).ok_or("the service is not running")?)
 }
 
+/// Extract `<name>` from `\Registry\Machine\System\CurrentControlSet\Services\<name>`.
+///
+/// # Safety
+/// `driver_service_name` is null or points to a counted string.
+unsafe fn parse_service_key(
+    routine: &str,
+    driver_service_name: *const nk_ntabi::io::UNICODE_STRING,
+) -> Result<String, NTSTATUS> {
+    // SAFETY: per the contract.
+    let path = unsafe { crate::rtl::copy_unicode(driver_service_name) };
+    let (root, rest) = crate::ob::lookup(None, &path)?;
+    // SAFETY: the look-up's reference; the type is read before it is
+    // given up.
+    let is_key = unsafe {
+        core::ptr::eq(
+            crate::ob::object::type_of(root.body()),
+            &raw const crate::ob::object::KEY_TYPE,
+        )
+    };
+    drop(root);
+    if !is_key {
+        return Err(STATUS_OBJECT_TYPE_MISMATCH);
+    }
+    // What follows `\Registry`, without its backslash.
+    let rest = rest.get(1..).unwrap_or(&[]);
+    let services: Vec<u16> = SERVICES.encode_utf16().chain([u16::from(b'\\')]).collect();
+    let name = rest
+        .split_at_checked(services.len())
+        .filter(|(prefix, name)| {
+            nk_rtl::names_equal(prefix, &services)
+                && !name.is_empty()
+                && !name.contains(&u16::from(b'\\'))
+        })
+        .and_then(|(_, name)| String::from_utf16(name).ok());
+    let Some(name) = name else {
+        let rest = String::from_utf16_lossy(rest);
+        if !cm::exists(&rest) {
+            return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+        }
+        crate::kd::bugcheck(format_args!(
+            "{routine}: key \\Registry\\{rest} is not under ...\\Services, which is not implemented"
+        ));
+    };
+    Ok(name)
+}
+
 /// [`ZwLoadDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwloaddriver):
 /// start the driver whose service key `driver_service_name` names, by
 /// its full path from the namespace's root
@@ -253,43 +299,9 @@ pub unsafe extern "C" fn ZwLoadDriver(
     driver_service_name: *const nk_ntabi::io::UNICODE_STRING,
 ) -> NTSTATUS {
     // SAFETY: per the contract.
-    let path = unsafe { crate::rtl::copy_unicode(driver_service_name) };
-    let (root, rest) = match crate::ob::lookup(None, &path) {
-        Ok(found) => found,
+    let name = match unsafe { parse_service_key("ZwLoadDriver", driver_service_name) } {
+        Ok(name) => name,
         Err(status) => return status,
-    };
-    // SAFETY: the look-up's reference; the type is read before it is
-    // given up.
-    let is_key = unsafe {
-        core::ptr::eq(
-            crate::ob::object::type_of(root.body()),
-            &raw const crate::ob::object::KEY_TYPE,
-        )
-    };
-    drop(root);
-    if !is_key {
-        return STATUS_OBJECT_TYPE_MISMATCH;
-    }
-    // What follows `\Registry`, without its backslash.
-    let rest = rest.get(1..).unwrap_or(&[]);
-    let services: Vec<u16> = SERVICES.encode_utf16().chain([u16::from(b'\\')]).collect();
-    let name = rest
-        .split_at_checked(services.len())
-        .filter(|(prefix, name)| {
-            nk_rtl::names_equal(prefix, &services)
-                && !name.is_empty()
-                && !name.contains(&u16::from(b'\\'))
-        })
-        .and_then(|(_, name)| String::from_utf16(name).ok());
-    let Some(name) = name else {
-        let rest = String::from_utf16_lossy(rest);
-        if !cm::exists(&rest) {
-            return STATUS_OBJECT_NAME_NOT_FOUND;
-        }
-        crate::kd::bugcheck(format_args!(
-            "ZwLoadDriver: loading a driver from the key \\Registry\\{rest}, which is not a key \
-             of ...\\Services, is not implemented"
-        ));
     };
     match start(&name) {
         Ok(_) => {
@@ -297,5 +309,26 @@ pub unsafe extern "C" fn ZwLoadDriver(
             STATUS_SUCCESS
         }
         Err(error) => error.status(),
+    }
+}
+
+/// [`ZwUnloadDriver`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwunloaddriver):
+/// unload the driver whose service key `driver_service_name` names.
+///
+/// # Safety
+/// `driver_service_name` is null or points to a counted string.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ZwUnloadDriver(
+    driver_service_name: *const nk_ntabi::io::UNICODE_STRING,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    let name = match unsafe { parse_service_key("ZwUnloadDriver", driver_service_name) } {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    match stop(&name) {
+        Ok(()) => STATUS_SUCCESS,
+        Err("the service is not running") => STATUS_OBJECT_NAME_NOT_FOUND,
+        Err(_) => STATUS_INVALID_DEVICE_REQUEST,
     }
 }

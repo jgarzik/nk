@@ -3,18 +3,23 @@
 //! when one happens.
 //!
 //! The events NK produces are the arrival and the removal of a device
-//! interface (`super::interface`), and the custom events drivers report
-//! for a device (`IoReportTargetDeviceChangeAsynchronous`), which go to
-//! the registrations for that device's changes. A registration for a
-//! hardware profile change is kept and never called, nor is one for a
-//! device for its removal: NK has one hardware profile and removes no
-//! device on request.
+//! interface (`super::interface`), target-device removal
+//! (`GUID_TARGET_DEVICE_REMOVE_COMPLETE` on device removal / surprise
+//! removal), and the custom events drivers report for a device
+//! (`IoReportTargetDeviceChangeAsynchronous`), which go to the
+//! registrations for that device's changes. A registration for a
+//! hardware profile change is kept and never called: NK has one
+//! hardware profile.
 //!
-//! A callback is called at `PASSIVE_LEVEL` with no lock held: for an
-//! interface, on the thread that changed the interface's state
-//! (Windows queues the event for a worker of its own); for a custom
-//! event, on a worker thread. While it runs, the registration counts as
-//! in use, and taking it back waits for that to end.
+//! A callback is called at `PASSIVE_LEVEL` with no lock held. Async
+//! interface arrival/removal and target-device removal notifications are
+//! drained in strict FIFO order from a single serialized dispatch queue
+//! (avoiding lock inversions while preserving event ordering and
+//! preventing concurrent execution of one registration across workers);
+//! `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES` still
+//! notifies synchronously before `IoRegisterPlugPlayNotification`
+//! returns. While a callback runs, the registration counts as in use,
+//! and taking it back waits for that to end.
 
 #![allow(non_snake_case)]
 
@@ -22,14 +27,24 @@ use crate::ke::seh::{self, Guard};
 use crate::ke::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::ob::object;
+use alloc::collections::VecDeque;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use nk_ntabi::io::{DRIVER_OBJECT, UNICODE_STRING};
 use nk_ntabi::pnp::*;
 use nk_ntabi::status::*;
 
-/// One registration. Its address is the handle the driver holds.
+/// Monotonic identifier for registrations and unregister claims so queued
+/// worker deliveries never match a replacement registration that reused an
+/// address (ABA).
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// One registration. Its address is the opaque handle handed to the driver;
+/// queued notifications match by its monotonic [`id`](Self::id) and category.
 struct Registration {
+    id: u64,
     category: u32,
     /// For interface changes: the class.
     class: [u8; 16],
@@ -41,11 +56,16 @@ struct Registration {
     driver: usize,
     callback: usize,
     context: usize,
-    /// Callbacks in progress, and the thread of the last one to begin.
+    /// Callbacks in progress, and the threads currently executing them.
     calls: u32,
-    caller: usize,
+    active_callers: Vec<usize>,
     /// Taken back: no further callback begins.
     gone: bool,
+    /// Claim token of the unregister call that owns finalization (0 = active).
+    unregistered_by: u64,
+    /// Set when the callback itself unregistered this entry, transferring
+    /// removal and reference release to [`call`] on callback return.
+    self_unregistered: bool,
 }
 
 #[expect(
@@ -55,18 +75,37 @@ struct Registration {
 static REGISTRATIONS: SpinLock<Vec<alloc::boxed::Box<Registration>>> =
     SpinLock::new(Rank::DeviceTree, Vec::new());
 
-/// Call `callback(structure, context)` for the registration `handle`,
+/// Release the object references held by a removed registration, outside
+/// `REGISTRATIONS`.
+///
+/// # Safety
+/// `driver` and (when nonzero) `target` are the registration's own references.
+unsafe fn release_refs(driver: usize, target: usize) {
+    // SAFETY: per the contract.
+    unsafe {
+        if target != 0 {
+            object::dereference(target as *mut u8);
+        }
+        object::dereference(driver as *mut u8);
+    }
+}
+
+/// Call `callback(structure, context)` for the registration `id` of `category`,
 /// if it is still registered.
-fn call(handle: usize, structure: *mut c_void) {
+fn call(id: u64, category: u32, structure: *mut c_void) {
+    let me = crate::ke::pcr::current_thread() as usize;
     let target = {
         let mut registrations = REGISTRATIONS.lock();
         registrations
             .iter_mut()
-            .find(|r| core::ptr::from_ref::<Registration>(r) as usize == handle && !r.gone)
-            .map(|r| {
+            .find(|r| r.id == id && r.category == category && !r.gone)
+            .and_then(|r| {
+                if r.active_callers.try_reserve_exact(1).is_err() {
+                    return None;
+                }
                 r.calls += 1;
-                r.caller = crate::ke::pcr::current_thread() as usize;
-                (r.callback, r.context)
+                r.active_callers.push(me);
+                Some((r.callback, r.context))
             })
     };
     let Some((callback, context)) = target else {
@@ -79,24 +118,39 @@ fn call(handle: usize, structure: *mut c_void) {
     // registration then cannot be taken back, as an entry Windows'
     // callback never returned from cannot.
     unsafe { seh::call(callback, [structure.addr(), context, 0, 0], &Guard::Nothing) };
-    let mut registrations = REGISTRATIONS.lock();
-    if let Some(at) = registrations
-        .iter()
-        .position(|r| core::ptr::from_ref::<Registration>(r) as usize == handle)
-    {
-        registrations[at].calls -= 1;
-        // Taken back from inside its own callback: it goes now.
-        if registrations[at].gone && registrations[at].calls == 0 {
-            registrations.swap_remove(at);
-            registrations.shrink_to_fit();
+    let finalized = {
+        let mut registrations = REGISTRATIONS.lock();
+        if let Some(at) = registrations.iter().position(|r| r.id == id) {
+            registrations[at].calls -= 1;
+            if let Some(pos) = registrations[at]
+                .active_callers
+                .iter()
+                .position(|&t| t == me)
+            {
+                registrations[at].active_callers.swap_remove(pos);
+                registrations[at].active_callers.shrink_to_fit();
+            }
+            // Only remove here when the callback itself unregistered this
+            // entry; an external unregister waits for `calls == 0` and owns
+            // removal and reference release.
+            (registrations[at].self_unregistered && registrations[at].calls == 0).then(|| {
+                let removed = registrations.swap_remove(at);
+                registrations.shrink_to_fit();
+                (removed.driver, removed.target)
+            })
+        } else {
+            None
         }
+    };
+    if let Some((driver, target)) = finalized {
+        // SAFETY: the registration's references, released outside the lock.
+        unsafe { release_refs(driver, target) };
     }
 }
 
-/// Tell `handles` that the interface `link` of `class` arrived or
-/// went.
-fn tell(handles: &[usize], class: &[u8; 16], link: &str, arrived: bool) {
-    if handles.is_empty() {
+/// Tell `ids` that the interface `link` of `class` arrived or went.
+fn tell(ids: &[u64], class: &[u8; 16], link: &str, arrived: bool) {
+    if ids.is_empty() {
         return;
     }
     crate::ke::irql::expect_passive("a Plug and Play notification");
@@ -130,24 +184,175 @@ fn tell(handles: &[usize], class: &[u8; 16], link: &str, arrived: bool) {
             SymbolicLinkName: string,
         });
     }
-    for handle in handles {
-        call(*handle, structure.cast());
+    for &id in ids {
+        call(id, EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE, structure.cast());
     }
     let _ = pool::free(block);
 }
 
-/// The interface `link` of `class` was enabled or disabled: tell every
-/// registration for the class.
+/// Number of async PnP notification events queued or currently delivering.
+static PENDING_EVENTS: AtomicUsize = AtomicUsize::new(0);
+
+/// One queued asynchronous PnP notification delivered in strict FIFO order.
+enum NotifyEvent {
+    Interface {
+        ids: Vec<u64>,
+        class: [u8; 16],
+        link: String,
+        arrived: bool,
+    },
+    TargetRemoval {
+        targets: Vec<(u64, usize)>,
+    },
+}
+
+struct DispatchQueue {
+    events: VecDeque<NotifyEvent>,
+    running: bool,
+}
+
+/// Serialized FIFO queue for async PnP notifications so arrival/removal
+/// ordering is preserved and no two worker threads execute notifications
+/// out of order or concurrently for one registration.
+static DISPATCH_QUEUE: SpinLock<DispatchQueue> = SpinLock::new(
+    Rank::DeviceTree,
+    DispatchQueue {
+        events: VecDeque::new(),
+        running: false,
+    },
+);
+
+/// Drain all queued PnP notification events sequentially on one worker thread.
+///
+/// # Safety
+/// `parameter` is a boxed `WORK_QUEUE_ITEM` allocated by [`enqueue_event`].
+unsafe extern "C" fn drain_queue(parameter: *mut c_void) {
+    // SAFETY: created with `Box::into_raw` in `enqueue_event`.
+    drop(unsafe { alloc::boxed::Box::from_raw(parameter.cast::<nk_ntabi::ex::WORK_QUEUE_ITEM>()) });
+    loop {
+        let next = {
+            let mut queue = DISPATCH_QUEUE.lock();
+            match queue.events.pop_front() {
+                Some(event) => Some(event),
+                None => {
+                    // Release backing capacity when empty so leak checks see none.
+                    queue.events = VecDeque::new();
+                    queue.running = false;
+                    None
+                }
+            }
+        };
+        let Some(event) = next else {
+            return;
+        };
+        match event {
+            NotifyEvent::Interface {
+                ids,
+                class,
+                link,
+                arrived,
+            } => {
+                tell(&ids, &class, &link, arrived);
+            }
+            NotifyEvent::TargetRemoval { targets } => {
+                let block =
+                    pool::alloc_zeroed(size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>(), super::TAG);
+                if !block.is_null() {
+                    let notif = block.cast::<TARGET_DEVICE_REMOVAL_NOTIFICATION>();
+                    for &(id, file) in &targets {
+                        // SAFETY: freshly allocated notification block.
+                        unsafe {
+                            notif.write(TARGET_DEVICE_REMOVAL_NOTIFICATION {
+                                Version: 1,
+                                Size: size_of::<TARGET_DEVICE_REMOVAL_NOTIFICATION>() as u16,
+                                Event: GUID_TARGET_DEVICE_REMOVE_COMPLETE,
+                                FileObject: file as *mut _,
+                            });
+                        }
+                        call(id, EVENT_CATEGORY_TARGET_DEVICE_CHANGE, notif.cast());
+                    }
+                    let _ = pool::free(block);
+                }
+            }
+        }
+        PENDING_EVENTS.fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// Push `event` onto the serialized FIFO notification queue and kick the
+/// single worker drainer if none is active.
+fn enqueue_event(event: NotifyEvent) {
+    PENDING_EVENTS.fetch_add(1, Ordering::AcqRel);
+    let start_worker = {
+        let mut queue = DISPATCH_QUEUE.lock();
+        queue.events.push_back(event);
+        if queue.running {
+            false
+        } else {
+            queue.running = true;
+            true
+        }
+    };
+    if start_worker {
+        // SAFETY: plain C struct initialised immediately below.
+        let item = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(unsafe {
+            core::mem::zeroed::<nk_ntabi::ex::WORK_QUEUE_ITEM>()
+        }));
+        // SAFETY: `item` stays allocated until `drain_queue` frees it.
+        unsafe {
+            (*item).WorkerRoutine = Some(drain_queue);
+            (*item).Parameter = item.cast();
+            crate::ex::work::ExQueueWorkItem(item, nk_ntabi::ex::DELAYED_WORK_QUEUE);
+        }
+    }
+}
+
+/// Wait until all queued async PnP notifications have been delivered.
+/// Called at `PASSIVE_LEVEL` with no PnP lock held.
+pub fn wait_idle() {
+    while PENDING_EVENTS.load(Ordering::Acquire) != 0 {
+        crate::ke::thread::yield_now();
+    }
+}
+
+/// Notify every `EVENT_CATEGORY_TARGET_DEVICE_CHANGE` registration targeting
+/// `pdo` that the device has been removed (`GUID_TARGET_DEVICE_REMOVE_COMPLETE`).
+/// Delivered on the serialized notification queue so callers holding the PnP
+/// engine mutex do not deadlock with callbacks that unregister or close handles.
+pub fn device_removed(pdo: usize) {
+    let targets: Vec<(u64, usize)> = REGISTRATIONS
+        .lock()
+        .iter()
+        .filter(|r| r.category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE && r.target == pdo && !r.gone)
+        .map(|r| (r.id, r.file))
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    enqueue_event(NotifyEvent::TargetRemoval { targets });
+}
+
+/// The interface `link` of `class` was enabled or disabled: queue delivery to
+/// every registration for the class on the serialized notification queue,
+/// preserving FIFO arrival/removal order while avoiding lock inversions.
 pub fn interface_changed(class: &[u8; 16], link: &str, arrived: bool) {
-    let handles: Vec<usize> = REGISTRATIONS
+    let ids: Vec<u64> = REGISTRATIONS
         .lock()
         .iter()
         .filter(|r| {
             r.category == EVENT_CATEGORY_DEVICE_INTERFACE_CHANGE && r.class == *class && !r.gone
         })
-        .map(|r| core::ptr::from_ref::<Registration>(r) as usize)
+        .map(|r| r.id)
         .collect();
-    tell(&handles, class, link, arrived);
+    if ids.is_empty() {
+        return;
+    }
+    enqueue_event(NotifyEvent::Interface {
+        ids,
+        class: *class,
+        link: String::from(link),
+        arrived,
+    });
 }
 
 /// [`IoRegisterPlugPlayNotification`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioregisterplugplaynotification):
@@ -157,8 +362,10 @@ pub fn interface_changed(class: &[u8; 16], link: &str, arrived: bool) {
 /// For interface changes, `data` is the class's GUID, and with
 /// `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES` the
 /// callback is called, before this returns, for each interface of the
-/// class that is enabled now. Registrations of the other two
-/// categories are kept and never called (see the top of this file).
+/// class that is enabled now. Target-device registrations receive custom
+/// events (`IoReportTargetDeviceChangeAsynchronous`) and removal
+/// notifications (`GUID_TARGET_DEVICE_REMOVE_COMPLETE`); hardware-profile
+/// registrations are kept and never called.
 ///
 /// # Safety
 /// `driver` is a live driver object; `callback` is a notification
@@ -199,7 +406,9 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
     } else {
         (0, 0)
     };
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let registration = alloc::boxed::Box::new(Registration {
+        id,
         category,
         class,
         target,
@@ -208,13 +417,20 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
         callback,
         context,
         calls: 0,
-        caller: 0,
+        active_callers: Vec::new(),
         gone: false,
+        unregistered_by: 0,
+        self_unregistered: false,
     });
     let own = core::ptr::from_ref::<Registration>(&registration) as usize;
     {
         let mut registrations = REGISTRATIONS.lock();
         if registrations.try_reserve_exact(1).is_err() {
+            drop(registrations);
+            if target != 0 {
+                // SAFETY: `related_target` returned a referenced PDO.
+                unsafe { object::dereference(target as *mut u8) };
+            }
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         registrations.push(registration);
@@ -229,7 +445,7 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
         && flags & PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES != 0
     {
         for link in super::interface::enabled_of(&class) {
-            tell(&[own], &class, &link, true);
+            tell(&[id], &class, &link, true);
         }
     }
     STATUS_SUCCESS
@@ -246,7 +462,8 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
 pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void) -> NTSTATUS {
     let own = handle as usize;
     let me = crate::ke::pcr::current_thread() as usize;
-    let driver = loop {
+    let claim = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let refs = loop {
         {
             let mut registrations = REGISTRATIONS.lock();
             let Some(at) = registrations
@@ -256,28 +473,37 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotificationEx(handle: *mut c_void)
                 return STATUS_INVALID_PARAMETER;
             };
             let found = &mut registrations[at];
-            found.gone = true;
-            if found.calls == 0 || (found.calls == 1 && found.caller == me) {
-                let driver = found.driver;
-                if found.target != 0 {
-                    // SAFETY: the registration's reference to its device.
-                    unsafe { object::dereference(found.target as *mut u8) };
-                    found.target = 0;
-                }
-                // A callback taking itself back leaves the entry for
-                // `call` to free when the callback returns.
-                if found.calls == 0 {
-                    registrations.swap_remove(at);
-                    registrations.shrink_to_fit();
-                }
-                break driver;
+            if found.unregistered_by == 0 {
+                found.gone = true;
+                found.unregistered_by = claim;
+            } else if found.unregistered_by != claim {
+                // Another unregister call (or self-unregister) already claimed this handle.
+                return STATUS_INVALID_PARAMETER;
+            }
+            if found.calls == 0 {
+                let removed = registrations.swap_remove(at);
+                registrations.shrink_to_fit();
+                break Some((removed.driver, removed.target));
+            }
+            if found.active_callers.contains(&me) {
+                // Self-unregister from inside the callback: defer removal and
+                // reference release to `call` when the last active callback
+                // returns so the driver and target objects stay pinned while
+                // callbacks run.
+                found.self_unregistered = true;
+                break None;
             }
         }
-        // A callback is running on another thread: let it finish.
-        crate::ke::time::stall(100);
+        // A callback is running on another thread: sleep briefly rather than
+        // spinning on yield_now so a higher-priority unregisterer cannot
+        // starve a lower-priority callback thread on a single-CPU system.
+        // SAFETY: relative delay wait at PASSIVE_LEVEL with no object.
+        unsafe { crate::ke::wait::wait(None, Some(-10_000)) };
     };
-    // SAFETY: the registration's reference to its driver object.
-    unsafe { object::dereference(driver as *mut u8) };
+    if let Some((driver, target)) = refs {
+        // SAFETY: the registration's references, released outside the lock.
+        unsafe { release_refs(driver, target) };
+    }
     STATUS_SUCCESS
 }
 
@@ -453,17 +679,17 @@ unsafe extern "C" fn deliver(parameter: *mut c_void) {
         let copy = block
             .add(size_of::<Report>())
             .cast::<TARGET_DEVICE_CUSTOM_NOTIFICATION>();
-        let handles: Vec<(usize, usize)> = REGISTRATIONS
+        let targets: Vec<(u64, usize)> = REGISTRATIONS
             .lock()
             .iter()
             .filter(|r| {
                 r.category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE && r.target == device && !r.gone
             })
-            .map(|r| (core::ptr::from_ref::<Registration>(r) as usize, r.file))
+            .map(|r| (r.id, r.file))
             .collect();
-        for (handle, file) in handles {
+        for (id, file) in targets {
             (&raw mut (*copy).FileObject).write_unaligned(file as *mut _);
-            call(handle, copy.cast());
+            call(id, EVENT_CATEGORY_TARGET_DEVICE_CHANGE, copy.cast());
         }
         let (callback, context) = ((*report).callback, (*report).context);
         if callback != 0 {

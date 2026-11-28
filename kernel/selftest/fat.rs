@@ -118,7 +118,7 @@ fn contents(name: &str, room: usize) -> Result<alloc::vec::Vec<u8>, &'static str
 
 /// The host's files, read through `C:`: the first open mounts
 /// `fastfat.sys` on the volume.
-fn read() -> Result<(), &'static str> {
+pub(super) fn read() -> Result<(), &'static str> {
     super::volumes::arrives("\\GLOBAL??\\C:")?;
     let length = 3 * SECTOR + 100;
     let mut expected = vec![0u8; length.next_multiple_of(SECTOR)];
@@ -216,7 +216,7 @@ fn must(what: &str, result: Result<file::IoResult, file::IoError>) -> Result<(),
 /// cache manager's views over a hole, part of it written again, cut
 /// short and flushed; a file renamed; a file deleted. The new file reads
 /// back as written; the host checks the image after the boot.
-fn write() -> Result<(), &'static str> {
+pub(super) fn write() -> Result<(), &'static str> {
     let handle = open_rw("\\??\\C:\\NKWRITE.BIN", FILE_CREATE)?;
     let result = (|| {
         let data: alloc::vec::Vec<u8> = (WRITE_FROM..WRITE_TO).map(written).collect();

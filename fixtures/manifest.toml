@@ -106,8 +106,8 @@ sha256 = "c1a315d3dbb49eeea2ebd9e2bc9a06e74952123f2df315c17462b19c22b9a6bd"
 status = "wdk-built"
 note = "Windows-driver-samples d49bb7d7 general/ioctl/wdm, WDK 10.0.28000.2526, NT target 19041"
 
-# Not loaded by the kernel yet (KMDF is after 0.0.1); fetched so the ledger
-# shows what they will need.
+# KMDF echo sample: loaded on x86-64 once KMDF is present; arm64 has no
+# Microsoft KMDF runtime, so kept out of arm64 boot images.
 
 [[fixture]]
 name = "kmdf-echo"
@@ -116,7 +116,6 @@ file = "echo.x64.sys"
 url = "https://github.com/jgarzik/nk-fixtures/releases/download/v1/kmdf-echo-autosync.x64.echo.sys"
 sha256 = "ad65ceda796eeec7932d8f957856be82da24c3534c7628e1bad76e2de5bd80f6"
 status = "wdk-built"
-boot = false
 note = "Windows-driver-samples d49bb7d7 general/echo/kmdf AutoSync"
 
 [[fixture]]
@@ -406,6 +405,152 @@ url = "https://msdl.microsoft.com/download/symbols/pcw.sys/CD678B8914000/pcw.sys
 sha256 = "e69fcbc80fc35618f9f96d0b43ca5a9e91f7b8b322e16a9f6f6440d1535e46b6"
 status = "microsoft-inbox"
 note = "pcw.sys 10.0.19041.2728, the performance counter provider: a boot driver, as the reference installation loads it, that the kernel's Pcw* routines and so ksecdd.sys's start depend on"
+
+# Phase 5: KMDF, NVMe, USB xHCI + HID keyboard, and inbox serial.
+
+[[fixture]]
+name = "wdfldr"
+arch = "x86_64"
+file = "wdfldr.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wdfldr.sys/565B60B213000/wdfldr.sys"
+sha256 = "4e370cd1c8d17be2d6063daca9d4f148fc443eb35c44a8913473fc440f29fed1"
+status = "microsoft-inbox"
+note = "wdfldr.sys 1.31.19041.1151, the WDF loader library"
+
+[[fixture]]
+name = "wdf01000"
+arch = "x86_64"
+file = "wdf01000.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/wdf01000.sys/2F5B6E21d1000/wdf01000.sys"
+sha256 = "d19d0aa162146f31117fef463629d77b23f1c21bb863a1249470723c28f4be70"
+status = "microsoft-inbox"
+note = "wdf01000.sys 1.31.19041.1566, the KMDF runtime"
+
+[[fixture]]
+name = "sleepstudyhelper"
+arch = "x86_64"
+file = "sleepstudyhelper.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/sleepstudyhelper.sys/664F6ECBf000/sleepstudyhelper.sys"
+sha256 = "27780013f1a67ba895ff16c0420f32ee44c50ec088c1f43d5c415f79314c495f"
+status = "microsoft-inbox"
+note = "sleepstudyhelper.sys 10.0.19041.1, library imported by KMDF and USB drivers"
+
+[[fixture]]
+name = "stornvme"
+arch = "x86_64"
+file = "stornvme.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/stornvme.sys/8C8FFBBA2d000/stornvme.sys"
+sha256 = "977ca982a4e672a9f2c4d5da7d7a6e65c038eff6abfb1b9bc2557747fd95569e"
+status = "microsoft-inbox"
+note = "stornvme.sys 10.0.19041.1566, the inbox NVMe Storport miniport"
+
+[[fixture]]
+name = "usbxhci"
+arch = "x86_64"
+file = "usbxhci.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/usbxhci.sys/53BEE7459e000/usbxhci.sys"
+sha256 = "6a2161813473119912e75bdaf19033c8edaac2c2a946e1a82405fc7afae35d07"
+status = "microsoft-inbox"
+note = "usbxhci.sys 10.0.19041.1806, the USB 3.0 xHCI host controller driver"
+
+[[fixture]]
+name = "ucx01000"
+arch = "x86_64"
+file = "ucx01000.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/ucx01000.sys/11447CC944000/ucx01000.sys"
+sha256 = "38b88e5075c4b04ae1db1834daddd61614b8641568ad103659b2a8a7697465f9"
+status = "microsoft-inbox"
+note = "ucx01000.sys 10.0.19041.1, the USB host controller class extension"
+
+[[fixture]]
+name = "usbhub3"
+arch = "x86_64"
+file = "usbhub3.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/usbhub3.sys/8D1085E2a3000/usbhub3.sys"
+sha256 = "54c736c9a40a769ceb7bc094d5458f2ec4fa2a5128ecb86dbce2f2a83eaeb203"
+status = "microsoft-inbox"
+note = "usbhub3.sys 10.0.19041.1202, the USB 3.0 hub driver"
+
+[[fixture]]
+name = "usbd"
+arch = "x86_64"
+file = "usbd.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/usbd.sys/76AC3507e000/usbd.sys"
+sha256 = "9df625c8cec59f747a5adf5ebcc1169e102733534d7232b2a4461968e7ca7d41"
+status = "microsoft-inbox"
+note = "usbd.sys 10.0.19041.1, the USB driver helper library"
+
+[[fixture]]
+name = "hidusb"
+arch = "x86_64"
+file = "hidusb.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/hidusb.sys/1B0E634F12000/hidusb.sys"
+sha256 = "3d7e7bce4a5654aeec62482c850869e20a1ab505b16bd690ba63886c20f25d1d"
+status = "microsoft-inbox"
+note = "hidusb.sys 10.0.19041.868, the USB HID minidriver"
+
+[[fixture]]
+name = "hidclass"
+arch = "x86_64"
+file = "hidclass.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/hidclass.sys/021FDD4D3f000/hidclass.sys"
+sha256 = "469bac4950767e0cfbaf6452dff522fa4d6144772ad5e0b61d17039397529c9f"
+status = "microsoft-inbox"
+note = "hidclass.sys 10.0.19041.868, the HID class driver library"
+
+[[fixture]]
+name = "hidparse"
+arch = "x86_64"
+file = "hidparse.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/hidparse.sys/3404D24613000/hidparse.sys"
+sha256 = "f67cb92f6e58ae66ec29425c74d136d06abb96c2eb7db3b087fc67b16ac8aedc"
+status = "microsoft-inbox"
+note = "hidparse.sys 10.0.19041.868, the HID descriptor parser library"
+
+[[fixture]]
+name = "kbdhid"
+arch = "x86_64"
+file = "kbdhid.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/kbdhid.sys/DF2550C211000/kbdhid.sys"
+sha256 = "53823067641bf00effb1fbb6572592ff99e6a3d2acd02d09a938176fd8681467"
+status = "microsoft-inbox"
+note = "kbdhid.sys 10.0.19041.1, the HID keyboard client driver"
+
+[[fixture]]
+name = "kbdclass"
+arch = "x86_64"
+file = "kbdclass.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/kbdclass.sys/3156654A14000/kbdclass.sys"
+sha256 = "36b400ac58ad7be8f5a9f30fb6c9cc258998ccf70e499968a0f2437b5546081d"
+status = "microsoft-inbox"
+note = "kbdclass.sys 10.0.19041.1, the keyboard class driver"
+
+[[fixture]]
+name = "serial"
+arch = "x86_64"
+file = "serial.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/serial.sys/58F73A851c000/serial.sys"
+sha256 = "7e877f3a3001e3020fc80f73b60ef3f77b16443670a228616b5c69d3619b54ba"
+status = "microsoft-inbox"
+note = "serial.sys 10.0.19041.1, the inbox 16550 serial port driver"
+
+[[fixture]]
+name = "serenum"
+arch = "x86_64"
+file = "serenum.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/serenum.sys/A5178D42f000/serenum.sys"
+sha256 = "61bf587ba88c7e63146e51785c371853fbbf1f4fb4796c3c943d42979f770526"
+status = "microsoft-inbox"
+note = "serenum.sys 10.0.19041.1, the serial bus enumerator upper filter"
+
+[[fixture]]
+name = "msisadrv"
+arch = "x86_64"
+file = "msisadrv.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/msisadrv.sys/1AAAEF93b000/msisadrv.sys"
+sha256 = "46b2c56f21291d6375fbe33d8d48d0662bdd4770b8962d1d1aaa540893897a9a"
+status = "microsoft-inbox"
+note = "msisadrv.sys 10.0.19041.1202, the KMDF PCI-to-ISA bridge driver enumerating ACPI ISA devices"
 
 [[fixture]]
 name = "nkc-thread"

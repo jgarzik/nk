@@ -156,6 +156,13 @@ pub fn init_cpu() {
 
 /// Send an interprocessor interrupt command to the processor with local
 /// APIC id `target`.
+///
+/// In xAPIC mode the ICR is written as two 32-bit registers: the
+/// destination in `REG_ICR_HIGH`, then the command in `REG_ICR_LOW`
+/// which starts delivery. Mask interrupts across both writes and the
+/// delivery-status wait so an interrupt handler that sends an IPI (for
+/// example `KeInsertQueueDpc`) cannot land between them and overwrite
+/// `REG_ICR_HIGH`.
 fn command(target: u32, command: u32) {
     if X2APIC.load(Ordering::Relaxed) {
         wrmsr(
@@ -163,12 +170,17 @@ fn command(target: u32, command: u32) {
             u64::from(target) << 32 | u64::from(command),
         );
     } else {
-        write(REG_ICR_HIGH, target << 24);
-        write(REG_ICR_LOW, command);
-        // Bit 12: the command is still being sent.
+        let saved = interrupts_off();
+        // Bit 12: the previous command is still being sent.
         while read(REG_ICR_LOW) & 1 << 12 != 0 {
             core::hint::spin_loop();
         }
+        write(REG_ICR_HIGH, target << 24);
+        write(REG_ICR_LOW, command);
+        while read(REG_ICR_LOW) & 1 << 12 != 0 {
+            core::hint::spin_loop();
+        }
+        interrupts_restore(saved);
     }
 }
 
@@ -206,7 +218,15 @@ pub fn self_interrupt(vector: u32) {
     if X2APIC.load(Ordering::Relaxed) {
         wrmsr(MSR_X2APIC_SELF_IPI, u64::from(vector));
     } else {
+        let saved = interrupts_off();
+        while read(REG_ICR_LOW) & 1 << 12 != 0 {
+            core::hint::spin_loop();
+        }
         write(REG_ICR_LOW, ICR_SELF | vector);
+        while read(REG_ICR_LOW) & 1 << 12 != 0 {
+            core::hint::spin_loop();
+        }
+        interrupts_restore(saved);
     }
 }
 

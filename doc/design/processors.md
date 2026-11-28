@@ -40,12 +40,14 @@ reaching a bugcheck halts silently, so one report is printed.
 ## Interrupts
 
 Each controller comes up with everything masked that NK did not ask for:
-the local APIC (x2APIC when available) with the 8259s and every I/O APIC
-input masked; GICv3, where a processor finds its redistributor by
-affinity, not position. The IRQL is the controller's priority mask;
-levels and vectors are in `doc/LOCKING.md`. The kernel's own interrupts
-are the clock and ones a processor sends itself or another; a device's
-are in [Devices](devices.md).
+the local APIC (x2APIC when available; in xAPIC mode, ICR writes mask
+interrupts across the high/low register pair so an interrupt handler
+sending an IPI cannot overwrite the destination mid-command) with the
+8259s and every I/O APIC input masked; GICv3, where a processor finds its
+redistributor by affinity, not position. The IRQL is the controller's
+priority mask; levels and vectors are in `doc/LOCKING.md`. The kernel's
+own interrupts are the clock and ones a processor sends itself or
+another; a device's are in [Devices](devices.md).
 
 Each processor folds the cycle count at which a device interrupt
 arrives into a buffer of 64 words, as Windows does

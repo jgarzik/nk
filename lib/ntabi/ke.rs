@@ -272,6 +272,28 @@ const _: () = {
     assert!(core::mem::offset_of!(PROCESSOR_NUMBER, Reserved) == 3);
 };
 
+/// [`KDPC_WATCHDOG_INFORMATION`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_kdpc_watchdog_information)
+/// (`wdm.h`): DPC watchdog limits and remaining ticks reported by
+/// `KeQueryDpcWatchdogInformation`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KDPC_WATCHDOG_INFORMATION {
+    pub DpcTimeLimit: u32,
+    pub DpcTimeCount: u32,
+    pub DpcWatchdogLimit: u32,
+    pub DpcWatchdogCount: u32,
+    pub Reserved: u32,
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<KDPC_WATCHDOG_INFORMATION>() == 0x14);
+    assert!(core::mem::offset_of!(KDPC_WATCHDOG_INFORMATION, DpcTimeLimit) == 0x00);
+    assert!(core::mem::offset_of!(KDPC_WATCHDOG_INFORMATION, DpcTimeCount) == 0x04);
+    assert!(core::mem::offset_of!(KDPC_WATCHDOG_INFORMATION, DpcWatchdogLimit) == 0x08);
+    assert!(core::mem::offset_of!(KDPC_WATCHDOG_INFORMATION, DpcWatchdogCount) == 0x0C);
+    assert!(core::mem::offset_of!(KDPC_WATCHDOG_INFORMATION, Reserved) == 0x10);
+};
+
 /// `DISPATCHER_HEADER.Type`... of a `KDPC` made by
 /// `KeInitializeThreadedDpc`: `ThreadedDpcObject`.
 pub const THREADED_DPC_OBJECT: u8 = 0x1A;

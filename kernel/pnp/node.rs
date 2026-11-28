@@ -36,6 +36,13 @@ pub enum State {
     Stacked,
     /// Started.
     Started,
+    /// Surprise-removed (`IRP_MN_SURPRISE_REMOVAL` delivered); awaiting
+    /// closure of open file handles in its subtree before `IRP_MN_REMOVE_DEVICE`.
+    SurpriseRemoved,
+    /// Orderly removal requested while a descendant is deferred awaiting open
+    /// handle closure; interfaces are disabled and `IRP_MN_REMOVE_DEVICE` runs
+    /// once its children are removed.
+    RemovePending,
     /// Not started, and not to be tried again: `problem` says why.
     Failed,
 }
@@ -86,6 +93,10 @@ pub struct Node {
     /// (`report_detected_device`): that driver's device is on the stack
     /// already, and nothing is added or started by the manager.
     pub reported: bool,
+    /// `root::remove_reported_device` was called while removal of this
+    /// reported device was deferred behind a child; delete its PDO once the
+    /// deferred removal completes.
+    pub delete_reported: bool,
     /// The log has said that the device waits for a device it depends
     /// on.
     pub held_back: bool,
@@ -139,6 +150,7 @@ impl Node {
             state: State::New,
             problem: PROBLEM_NONE,
             reported: false,
+            delete_reported: false,
             held_back: false,
             enumerated: false,
             device_id: String::new(),

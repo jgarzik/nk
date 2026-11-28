@@ -47,6 +47,11 @@ pub static MmUserProbeAddress: Variable = Variable(USER_PROBE_ADDRESS);
 #[allow(non_upper_case_globals)]
 pub static MmHighestUserAddress: Variable = Variable(USER_PROBE_ADDRESS - 0x1_0001);
 
+/// `MmBadPointer`: a pointer value guaranteed to cause an access violation if
+/// dereferenced (in the permanently unmapped lowest 64 KiB guard region).
+#[allow(non_upper_case_globals)]
+pub static MmBadPointer: Variable = Variable(0x1000);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserError {
     /// Not whole pages inside the user range.

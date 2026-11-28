@@ -22,6 +22,7 @@ mod diskio;
 mod dma;
 mod dpc;
 mod driver_api;
+mod echo;
 mod em;
 mod etw;
 mod ex;
@@ -45,11 +46,13 @@ mod nkfs_cc;
 mod nkfs_mm;
 mod nkfs_mount;
 mod null;
+mod nvme;
 mod ob;
 mod open;
 mod oracle;
 mod pci;
 mod pend;
+mod phase5;
 mod pnp;
 mod po;
 mod pofx;
@@ -62,6 +65,7 @@ mod review;
 mod rtl;
 mod se;
 mod seh;
+mod serial;
 mod service;
 mod setoken;
 mod sioctl;
@@ -74,6 +78,7 @@ mod testdisk;
 mod thread;
 mod timer;
 mod timer2;
+mod usb_kbd;
 mod volumes;
 mod wait;
 mod whea;
@@ -235,6 +240,11 @@ pub static GROUPS: &[&[&Group]] = &[
     oracle::GROUPS,
     neg::GROUPS,
     storage::GROUPS,
+    nvme::GROUPS,
+    echo::GROUPS,
+    serial::GROUPS,
+    usb_kbd::GROUPS,
+    phase5::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,
@@ -268,38 +278,53 @@ pub struct Resources {
 }
 
 pub fn resources() -> Resources {
-    let pool = mm::pool::usage();
-    // The handle table keeps its own storage once it has grown.
-    let (table_blocks, table_bytes) = crate::ob::handle::storage();
-    // The registry keeps what is written to it.
-    let (registry_blocks, registry_bytes) = crate::cm::storage();
-    // Hardware error sources keep their table and what they removed.
-    let (whea_blocks, whea_bytes) = crate::whea::storage();
-    // The HAL keeps the list of firmware tables it once made.
-    let (hal_blocks, hal_bytes) = crate::hal::acpi::storage();
-    // Executive worker threads come and go as work waits for them.
-    let (worker_blocks, worker_bytes, worker_frames) = crate::ke::thread::uncounted_storage();
-    Resources {
-        pool_blocks: pool.blocks
-            - table_blocks
-            - registry_blocks
-            - whea_blocks
-            - hal_blocks
-            - worker_blocks,
-        pool_bytes: pool.bytes
-            - table_bytes
-            - registry_bytes
-            - whea_bytes
-            - hal_bytes
-            - worker_bytes,
-        irql: crate::ke::irql::current(),
-        spare_frames: mm::free_frame_count()
-            + mm::pool::frames()
-            + mm::map::table_frames()
-            + worker_frames,
-        names: crate::ob::count(),
-        threads: crate::ke::thread::count(),
-        handles: crate::ob::handle::count(),
-        providers: crate::etw::registered(),
+    loop {
+        let (gen_before, in_flight_before) = crate::ke::thread::uncounted_state();
+        if in_flight_before != 0 {
+            if crate::ke::irql::current() == crate::ke::irql::PASSIVE_LEVEL {
+                crate::ke::thread::yield_now();
+            } else {
+                core::hint::spin_loop();
+            }
+            continue;
+        }
+        let pool = mm::pool::usage();
+        // The handle table keeps its own storage once it has grown.
+        let (table_blocks, table_bytes) = crate::ob::handle::storage();
+        // The registry keeps what is written to it.
+        let (registry_blocks, registry_bytes) = crate::cm::storage();
+        // Hardware error sources keep their table and what they removed.
+        let (whea_blocks, whea_bytes) = crate::whea::storage();
+        // The HAL keeps the list of firmware tables it once made.
+        let (hal_blocks, hal_bytes) = crate::hal::acpi::storage();
+        // Executive worker threads come and go as work waits for them.
+        let (worker_blocks, worker_bytes, worker_frames) = crate::ke::thread::uncounted_storage();
+        let snapshot = Resources {
+            pool_blocks: pool.blocks
+                - table_blocks
+                - registry_blocks
+                - whea_blocks
+                - hal_blocks
+                - worker_blocks,
+            pool_bytes: pool.bytes
+                - table_bytes
+                - registry_bytes
+                - whea_bytes
+                - hal_bytes
+                - worker_bytes,
+            irql: crate::ke::irql::current(),
+            spare_frames: mm::free_frame_count()
+                + mm::pool::frames()
+                + mm::map::table_frames()
+                + worker_frames,
+            names: crate::ob::count(),
+            threads: crate::ke::thread::count(),
+            handles: crate::ob::handle::count(),
+            providers: crate::etw::registered(),
+        };
+        let (gen_after, in_flight_after) = crate::ke::thread::uncounted_state();
+        if in_flight_after == 0 && gen_after == gen_before {
+            return snapshot;
+        }
     }
 }

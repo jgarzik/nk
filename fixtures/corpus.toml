@@ -235,6 +235,12 @@ url = "https://msdl.microsoft.com/download/symbols/ramdisk.sys/17C23E96f000/ramd
 sha256 = "9f977e8e317fdfc86de78d952db9cf51029a1e4b1962d7d327e4616320b8e0f8"
 
 [[binary]]
+file = "serenum.sys"
+version = "10.0.19041.1"
+url = "https://msdl.microsoft.com/download/symbols/serenum.sys/A5178D42f000/serenum.sys"
+sha256 = "61bf587ba88c7e63146e51785c371853fbbf1f4fb4796c3c943d42979f770526"
+
+[[binary]]
 file = "serial.sys"
 version = "10.0.19041.1"
 url = "https://msdl.microsoft.com/download/symbols/serial.sys/58F73A851c000/serial.sys"

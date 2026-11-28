@@ -1,0 +1,46 @@
+# Microsoft WDK KMDF Echo (AutoSync) sample driver service, setup class,
+# DriverDatabase entry, and root-enumerated device instance ROOT\ECHO\0000.
+#
+# Hardware ID and ClassGUID come verbatim from Microsoft's
+# Windows-driver-samples general/echo/kmdf/driver/AutoSync/echo.inx.
+
+key ControlSet001\Services\Echo
+value DisplayName sz "Sample WDF Echo Driver"
+value ErrorControl dword 1
+value ImagePath expand_sz \SystemRoot\System32\drivers\kmdf-echo.sys
+value Start dword 3
+value Type dword 1
+
+key ControlSet001\Services\Echo\Parameters\Wdf
+value KmdfLibraryVersion sz 1.15
+
+key ControlSet001\Control\Class\{78a1c341-4539-11d3-b88d-00c04fad5171}
+value Class sz Sample
+
+key ControlSet001\Enum\ROOT\ECHO\0000
+value HardwareID multi_sz root\ECHO
+
+key DriverDatabase\DeviceIds\root\ECHO
+value echo.inf binary hex:01ff0000
+
+key DriverDatabase\DriverInfFiles\echo.inf
+value "" multi_sz echo.inf_amd64_nk
+value Active sz echo.inf_amd64_nk
+value Configurations multi_sz Echo_Device.NT
+
+key DriverDatabase\DriverPackages\echo.inf_amd64_nk
+value "" sz echo.inf
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value Version binary hex:ffff09000000000041c3a1783945d311b88d00c04fad5171000000000000000001000000000000000000000000000000
+
+key DriverDatabase\DriverPackages\echo.inf_amd64_nk\Configurations\Echo_Device.NT
+value ConfigFlags dword 0
+value ConfigScope dword 7
+value Service sz Echo
+
+key DriverDatabase\DriverPackages\echo.inf_amd64_nk\Descriptors\root\ECHO
+value Configuration sz Echo_Device.NT
+value Description sz "Sample WDF Echo Device"
+value Manufacturer sz Microsoft

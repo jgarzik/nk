@@ -119,7 +119,8 @@ def microsoft_kernel(exports, listing):
             unnamed += 1
         else:
             names.add(name)
-    ours = {name for (module, name) in exports if module == KERNEL_MODULES[0]}
+    ours = {name for (module, name) in exports
+            if module == KERNEL_MODULES[0] and not name.startswith("#")}
     return {
         "note": "the export directory of Microsoft's ntoskrnl.exe (fixtures/corpus.toml), "
                 "which NK never loads, against the names NK exports",

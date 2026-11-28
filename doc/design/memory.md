@@ -21,7 +21,10 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
   zero, standby if clean, modified if dirty, modified-no-write if its
   section is written only by the cache manager. The entry's layout is
   NK's (no driver sees `_MMPFN`).
-- **Pool.** Small requests come from 1 MiB arenas at 16-byte alignment;
+- **Pool.** Small requests come from 1 MiB arenas at 16-byte alignment,
+  staying within a single 4 KiB page (so neither the payload nor
+  `payload + 16` is page-aligned, matching Windows' executive pool
+  invariant relied on by KMDF `FxPoolFree`);
   requests of about a page or more get their own page-aligned frames, as
   on Windows. All pool is in the direct map: non-paged and physically
   contiguous. A paged-pool request gets non-paged memory, always a legal

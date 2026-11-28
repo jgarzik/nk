@@ -1,0 +1,54 @@
+# Registry content for Microsoft's inbox NVMe miniport (stornvme.sys),
+# laid over the SYSTEM hive alongside storage, volumes, mount and fat.
+#
+# Captured from the pinned reference Windows 10 22H2 (10.0.19045.2006)
+# installation with QEMU's NVMe controller (`1b36:0010`, class 010802).
+# SCSIAdapter class key is already provided by registry-storage.txt.
+
+key ControlSet001\Services\stornvme
+value DisplayName sz "@stornvme.inf,%StorNVMe_ServiceDesc%;Microsoft Standard NVM Express Driver"
+value ErrorControl dword 3
+value Group sz "SCSI Miniport"
+value ImagePath expand_sz System32\drivers\stornvme.sys
+value Owners multi_sz stornvme.inf
+value Start dword 0
+value Tag dword 32
+value Type dword 1
+key ControlSet001\Services\stornvme\Parameters
+value BusType dword 17
+value DmaRemappingCompatible dword 2
+value IoTimeoutValue dword 10
+key ControlSet001\Services\stornvme\Parameters\Device
+value IoStripeAlignment multi_sz "VEN_8086&DEV_0953&REV_?? 128" "VEN_8086&DEV_0984&REV_?? 128" "VEN_8086&DEV_0A53&REV_?? 128" "VEN_8086&DEV_0A54&REV_?? 128" "VEN_8086&DEV_0A55&REV_?? 128"
+key ControlSet001\Services\stornvme\Parameters\PnpInterface
+value 5 dword 1
+
+key DriverDatabase\DeviceIds\PCI\CC_010802
+value stornvme.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\stornvme.inf
+value "" multi_sz stornvme.inf_amd64_b71dfc19e9acb838
+value Active sz stornvme.inf_amd64_b71dfc19e9acb838
+value Configurations multi_sz Stornvme_Inst
+key DriverDatabase\DriverPackages\stornvme.inf_amd64_b71dfc19e9acb838
+value "" sz stornvme.inf
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value Version binary hex:ffff0900000000007be9364d25e3ce11bfc108002be1031800808ca3c594c6011e06614a00000a000000000000000000
+key DriverDatabase\DriverPackages\stornvme.inf_amd64_b71dfc19e9acb838\Descriptors\PCI\CC_010802
+value Configuration sz Stornvme_Inst
+value Description sz %pci\cc_010802.devicedesc%
+value Manufacturer sz %ms-nvme%
+key DriverDatabase\DriverPackages\stornvme.inf_amd64_b71dfc19e9acb838\Configurations\Stornvme_Inst
+value ConfigFlags dword 0
+value ConfigScope dword 7
+value Service sz stornvme
+key DriverDatabase\DriverPackages\stornvme.inf_amd64_b71dfc19e9acb838\Configurations\Stornvme_Inst\Device
+key "DriverDatabase\\DriverPackages\\stornvme.inf_amd64_b71dfc19e9acb838\\Configurations\\Stornvme_Inst\\Device\\Interrupt Management"
+key "DriverDatabase\\DriverPackages\\stornvme.inf_amd64_b71dfc19e9acb838\\Configurations\\Stornvme_Inst\\Device\\Interrupt Management\\Affinity Policy"
+value DevicePolicy dword 5
+value DevicePriority dword 3
+value GroupPolicy dword 1
+key "DriverDatabase\\DriverPackages\\stornvme.inf_amd64_b71dfc19e9acb838\\Configurations\\Stornvme_Inst\\Device\\Interrupt Management\\MessageSignaledInterruptProperties"
+value MessageNumberLimit dword 65
+value MSISupported dword 1

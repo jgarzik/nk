@@ -263,6 +263,8 @@ pub fn install(node: &Node, record: &Record) -> Result<(), i32> {
     let class = record.class.as_deref().map(ids::sz);
     let driver_key = record.class.as_deref().and_then(new_driver_key);
     let driver = driver_key.as_deref().map(ids::sz);
+    let upper_filters = cm::read(&record.configuration, "UpperFilters").ok();
+    let lower_filters = cm::read(&record.configuration, "LowerFilters").ok();
     let mut values: Vec<(&str, u32, &[u8])> = Vec::new();
     values.push(("ConfigFlags", REG_DWORD, &[0; 4]));
     for (name, data) in [
@@ -275,6 +277,12 @@ pub fn install(node: &Node, record: &Record) -> Result<(), i32> {
         if let Some(data) = data {
             values.push((name, REG_SZ, data));
         }
+    }
+    if let Some((kind, data)) = &upper_filters {
+        values.push(("UpperFilters", *kind, data));
+    }
+    if let Some((kind, data)) = &lower_filters {
+        values.push(("LowerFilters", *kind, data));
     }
     cm::write_path(&key, &values)?;
     if let Some(driver_key) = &driver_key {

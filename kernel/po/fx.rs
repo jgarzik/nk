@@ -54,6 +54,9 @@ struct Part {
     /// `PoFxSetComponentResidency`).
     latency: u64,
     residency: u64,
+    /// Performance states registered with `PO_FX_FLAG_PERF_PEP_OPTIONAL`:
+    /// `(set_count, callback)`.
+    perf_states: Option<(u32, usize)>,
 }
 
 /// A registered device. Its address is the driver's handle. Read and
@@ -603,6 +606,7 @@ pub unsafe extern "C" fn PoFxRegisterDevice(
                 rest: core::mem::zeroed(),
                 latency: 0,
                 residency: 0,
+                perf_states: None,
             });
         }
         for part in &mut parts {
@@ -970,9 +974,11 @@ const PERF_PEP_OPTIONAL: u64 = 1;
 /// `STATUS_INVALID_PARAMETER` for both or neither of `input` and
 /// `output`, or states that are no sets at all.
 ///
-/// Partial: states the driver describes and manages itself
-/// (`PO_FX_FLAG_PERF_PEP_OPTIONAL`), which Windows registers, stop the
-/// system: NK does not implement performance states.
+/// With `PO_FX_FLAG_PERF_PEP_OPTIONAL`, the driver's self-managed
+/// performance state set count and callback are recorded on the
+/// component and `STATUS_SUCCESS` is returned (matching Windows without
+/// a PEP). A second registration for the same component returns
+/// `STATUS_INVALID_PARAMETER`.
 ///
 /// # Safety
 /// `handle` came from `PoFxRegisterDevice`; `input` is null or a
@@ -981,14 +987,14 @@ pub unsafe extern "C" fn PoFxRegisterComponentPerfStates(
     handle: *mut c_void,
     index: u32,
     flags: u64,
-    _callback: *mut c_void,
+    callback: *mut c_void,
     input: *const c_void,
     output: *mut *mut c_void,
 ) -> NTSTATUS {
-    with("PoFxRegisterComponentPerfStates", handle, |_, fx| {
-        part(fx, handle, index);
-    });
     if input.is_null() {
+        with("PoFxRegisterComponentPerfStates", handle, |_, fx| {
+            part(fx, handle, index);
+        });
         return if output.is_null() {
             STATUS_INVALID_PARAMETER
         } else {
@@ -996,20 +1002,34 @@ pub unsafe extern "C" fn PoFxRegisterComponentPerfStates(
         };
     }
     if !output.is_null() {
+        with("PoFxRegisterComponentPerfStates", handle, |_, fx| {
+            part(fx, handle, index);
+        });
         return STATUS_INVALID_PARAMETER;
     }
     // SAFETY: per the contract: the structure begins with
     // `PerfStateSetsCount`.
-    if unsafe { input.cast::<u32>().read_unaligned() } == 0 {
+    let sets = unsafe { input.cast::<u32>().read_unaligned() };
+    if sets == 0 {
+        with("PoFxRegisterComponentPerfStates", handle, |_, fx| {
+            part(fx, handle, index);
+        });
         return STATUS_INVALID_PARAMETER;
     }
     if flags & PERF_PEP_OPTIONAL == 0 {
+        with("PoFxRegisterComponentPerfStates", handle, |_, fx| {
+            part(fx, handle, index);
+        });
         return STATUS_NOT_IMPLEMENTED;
     }
-    crate::kd::bugcheck(format_args!(
-        "PoFxRegisterComponentPerfStates: NK does not implement performance states a driver \
-         manages itself (PO_FX_FLAG_PERF_PEP_OPTIONAL)"
-    ))
+    with("PoFxRegisterComponentPerfStates", handle, |_, fx| {
+        let p = part(fx, handle, index);
+        if p.perf_states.is_some() {
+            return STATUS_INVALID_PARAMETER;
+        }
+        p.perf_states = Some((sets, callback.addr()));
+        STATUS_SUCCESS
+    })
 }
 
 /// [`PoFxRegisterCrashdumpDevice`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-pofxregistercrashdumpdevice):

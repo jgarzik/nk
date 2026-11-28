@@ -6,6 +6,7 @@ import tomllib
 import unittest
 
 import mkesp
+import negpe
 
 MANIFEST = tomllib.loads((mkesp.ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
 BOOTINFO = (mkesp.ROOT / "lib" / "bootinfo" / "lib.rs").read_text()
@@ -42,8 +43,7 @@ class BootNames(unittest.TestCase):
         self.assertEqual(
             [(name, fx["file"]) for name, fx in mkesp.boot_files("x86_64", manifest)],
             [("null.sys", "null.x64.sys"), ("pshed.dll", "pshed.x64.dll"),
-             ("sioctl.sys", "sioctl.x64.sys"), ("wrongarch.sys", "sioctl.arm64.sys"),
-             ("unresolved.sys", "kmdf-echo.x64.sys")])
+             ("sioctl.sys", "sioctl.x64.sys"), ("wrongarch.sys", "sioctl.arm64.sys")])
         self.assertEqual(
             [(name, fx["file"]) for name, fx in mkesp.boot_files("aarch64", manifest)],
             [("wrongarch.sys", "sioctl.x64.sys"), ("sioctl.sys", "sioctl.arm64.sys")])
@@ -51,6 +51,7 @@ class BootNames(unittest.TestCase):
     def test_the_manifests_boot_files_are_images_the_loader_can_hand_over(self):
         for arch in mkesp.BOOT_NAME:
             names = [name for name, _ in mkesp.boot_files(arch, MANIFEST)]
+            names += [name for name, _, _ in negpe.NEGATIVE_FIXTURES]
             with self.subTest(arch=arch):
                 self.assertTrue(names)
                 # The kernel finds a boot file by name, whatever its case.
@@ -59,8 +60,8 @@ class BootNames(unittest.TestCase):
                     self.assertRegex(name, r"\.(sys|dll)$")
                     # The loader cuts a longer name short.
                     self.assertLessEqual(len(name), limit("MODULE_NAME_LEN"), name)
-                # And the hive.
-                self.assertLessEqual(len(names) + 1, limit("MAX_MODULES"))
+                # Plus the hive and overlay.
+                self.assertLessEqual(len(names) + 2, limit("MAX_MODULES"))
 
 
 if __name__ == "__main__":

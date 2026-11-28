@@ -282,11 +282,14 @@ only that the load failed:
 A missing ordinal is `STATUS_DRIVER_ORDINAL_NOT_FOUND`, by the name of
 the status alone.
 
+An image already running as a driver that carries an export directory
+(such as `ksecdd.sys`, imported by `usbhub3.sys`) can also be imported
+from by later images; its importer count prevents unloading while
+importers remain loaded.
+
 Not handled:
 
 - API sets that must have a host (`api-ms-*`);
-- importing from an image that runs as a driver (started from its
-  service key) rather than as a library: refused;
 - images that import from each other in a circle: refused, at eight
   libraries deep.
 
