@@ -1,5 +1,6 @@
 ke.irql-and-locks ok
 ke.interrupts ok
+ke.entropy.register-race ok
 ke.bugcheck.register ok
 ke.bugcheck.order ok
 ke.queued-lock ok

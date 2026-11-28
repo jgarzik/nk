@@ -557,6 +557,13 @@ IRQL or because Windows defines it as one word changed atomically:
 - The table of registered trace providers (`kernel/etw`): a slot is
   claimed and given up by compare-and-swap, so a provider writes an
   event at any IRQL.
+- Interrupt-timing entropy (`kernel/ke/entropy.rs`): one-time
+  registration claims an atomic flag before touching any processor's
+  `KENTROPY_TIMING_STATE`, and each processor's state has an atomic
+  gate word coordinating `record()` (which skips a sample rather than
+  spinning with interrupts masked) against one-time initialisation; the
+  callback routine is published only after every processor's DPC and
+  state are initialised.
 - A sequenced list (`SLIST_HEADER`): push, pop and flush are one
   16-byte compare-and-swap on the header in the driver's memory
   (`arch::swap_pair`).
