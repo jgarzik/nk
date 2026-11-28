@@ -15,6 +15,15 @@ mod switch;
 mod trap;
 pub mod unwind;
 mod variadic;
+pub mod xstate;
+
+pub use xstate::{
+    AREA_BUF_SIZE as XSTATE_BUF_SIZE, align_area as xstate_align_area,
+    area_size as xstate_area_size, enabled_mask as xstate_enabled_mask,
+    init_area as xstate_init_area, restore as xstate_restore, restore_mask as xstate_restore_mask,
+    save as xstate_save, save_mask as xstate_save_mask, self_test as xstate_self_test,
+    write_kusd_features, write_kusd_xstate,
+};
 
 pub use atomic::swap_pair;
 pub use chkstk::{chkstk_test, nk_chkstk};

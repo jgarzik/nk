@@ -61,6 +61,8 @@ pub mod x64 {
     pub const CONTEXT_INTEGER: u32 = CONTEXT_AMD64 | 0x2;
     pub const CONTEXT_SEGMENTS: u32 = CONTEXT_AMD64 | 0x4;
     pub const CONTEXT_FLOATING_POINT: u32 = CONTEXT_AMD64 | 0x8;
+    pub const CONTEXT_DEBUG_REGISTERS: u32 = CONTEXT_AMD64 | 0x10;
+    pub const CONTEXT_XSTATE: u32 = CONTEXT_AMD64 | 0x40;
     pub const CONTEXT_FULL: u32 = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT;
 
     /// `XSAVE_FORMAT`: the legacy floating-point and SSE state.
@@ -159,6 +161,163 @@ pub mod x64 {
         pub Fill0: u32,
     }
 
+    /// `KTRAP_FRAME` on x86-64 (400 bytes, `0x190`): Windows' kernel trap
+    /// frame for interrupts, exceptions, and `syscall` entries.
+    #[repr(C, align(16))]
+    #[derive(Clone, Copy)]
+    pub struct KTRAP_FRAME {
+        pub P1Home: u64,
+        pub P2Home: u64,
+        pub P3Home: u64,
+        pub P4Home: u64,
+        pub P5: u64,
+        pub PreviousMode: i8,
+        pub PreviousIrql: u8,
+        pub FaultIndicator: u8,
+        pub ExceptionActive: u8,
+        pub MxCsr: u32,
+        pub Rax: u64,
+        pub Rcx: u64,
+        pub Rdx: u64,
+        pub R8: u64,
+        pub R9: u64,
+        pub R10: u64,
+        pub R11: u64,
+        pub GsBase: u64,
+        pub Xmm0: M128A,
+        pub Xmm1: M128A,
+        pub Xmm2: M128A,
+        pub Xmm3: M128A,
+        pub Xmm4: M128A,
+        pub Xmm5: M128A,
+        pub FaultAddress: u64,
+        pub Dr0: u64,
+        pub Dr1: u64,
+        pub Dr2: u64,
+        pub Dr3: u64,
+        pub Dr6: u64,
+        pub Dr7: u64,
+        pub DebugControl: u64,
+        pub LastBranchToRip: u64,
+        pub LastBranchFromRip: u64,
+        pub LastExceptionToRip: u64,
+        pub LastExceptionFromRip: u64,
+        pub SegDs: u16,
+        pub SegEs: u16,
+        pub SegFs: u16,
+        pub SegGs: u16,
+        pub TrapFrame: u64,
+        pub Rbx: u64,
+        pub Rdi: u64,
+        pub Rsi: u64,
+        pub Rbp: u64,
+        pub ErrorCode: u64,
+        pub Rip: u64,
+        pub SegCs: u16,
+        pub Fill0: u8,
+        pub Logging: u8,
+        pub Fill1: [u16; 2],
+        pub EFlags: u32,
+        pub Fill2: u32,
+        pub Rsp: u64,
+        pub SegSs: u16,
+        pub Fill3: u16,
+        pub Fill4: u32,
+    }
+
+    /// `KEXCEPTION_FRAME` on x86-64 (320 bytes, `0x140`): nonvolatile state
+    /// saved alongside a trap frame when entering exception/APC/context paths.
+    #[repr(C, align(16))]
+    #[derive(Clone, Copy)]
+    pub struct KEXCEPTION_FRAME {
+        pub P1Home: u64,
+        pub P2Home: u64,
+        pub P3Home: u64,
+        pub P4Home: u64,
+        pub P5: u64,
+        pub Spare1: u64,
+        pub Xmm6: M128A,
+        pub Xmm7: M128A,
+        pub Xmm8: M128A,
+        pub Xmm9: M128A,
+        pub Xmm10: M128A,
+        pub Xmm11: M128A,
+        pub Xmm12: M128A,
+        pub Xmm13: M128A,
+        pub Xmm14: M128A,
+        pub Xmm15: M128A,
+        pub TrapFrame: u64,
+        pub OutputBuffer: u64,
+        pub OutputLength: u64,
+        pub Spare2: u64,
+        pub MxCsr: u64,
+        pub Rbp: u64,
+        pub Rbx: u64,
+        pub Rdi: u64,
+        pub Rsi: u64,
+        pub R12: u64,
+        pub R13: u64,
+        pub R14: u64,
+        pub R15: u64,
+        pub Return: u64,
+    }
+
+    /// `XSTATE_FEATURE`: offset and byte size of one XSAVE component.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct XSTATE_FEATURE {
+        pub Offset: u32,
+        pub Size: u32,
+    }
+
+    /// `XSTATE_CONFIGURATION` (824 bytes): embedded at `KUSER_SHARED_DATA + 0x3D8`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct XSTATE_CONFIGURATION {
+        pub EnabledFeatures: u64,
+        pub EnabledVolatileFeatures: u64,
+        pub Size: u32,
+        pub ControlFlags: u32,
+        pub Features: [XSTATE_FEATURE; 64],
+        pub EnabledSupervisorFeatures: u64,
+        pub AlignedFeatures: u64,
+        pub AllFeatureSize: u32,
+        pub AllFeatures: [u32; 64],
+        pub EnabledUserVisibleSupervisorFeatures: u64,
+    }
+
+    /// `XSAVE_AREA_HEADER` (64 bytes): at offset `0x200` of an XSAVE area.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct XSAVE_AREA_HEADER {
+        pub Mask: u64,
+        pub CompactionMask: u64,
+        pub Reserved2: [u64; 6],
+    }
+
+    /// `XSTATE_CONTEXT` (32 bytes): embedded inside `XSTATE_SAVE`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct XSTATE_CONTEXT {
+        pub Mask: u64,
+        pub Length: u32,
+        pub Reserved1: u32,
+        pub Area: *mut c_void,
+        pub Buffer: *mut c_void,
+    }
+
+    /// `XSTATE_SAVE` (56 bytes): caller-owned record for
+    /// `KeSaveExtendedProcessorState` / `KeRestoreExtendedProcessorState`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct XSTATE_SAVE {
+        pub Prev: *mut XSTATE_SAVE,
+        pub Thread: *mut c_void,
+        pub Level: i8,
+        pub _pad: [u8; 7],
+        pub XStateContext: XSTATE_CONTEXT,
+    }
+
     const _: () = {
         use core::mem::{offset_of, size_of};
         assert!(size_of::<XSAVE_FORMAT>() == 0x200);
@@ -178,6 +337,31 @@ pub mod x64 {
         assert!(size_of::<DISPATCHER_CONTEXT>() == 0x50);
         assert!(offset_of!(DISPATCHER_CONTEXT, ContextRecord) == 0x28);
         assert!(offset_of!(DISPATCHER_CONTEXT, ScopeIndex) == 0x48);
+        assert!(size_of::<KTRAP_FRAME>() == 0x190);
+        assert!(offset_of!(KTRAP_FRAME, PreviousMode) == 0x28);
+        assert!(offset_of!(KTRAP_FRAME, Rax) == 0x30);
+        assert!(offset_of!(KTRAP_FRAME, Xmm0) == 0x70);
+        assert!(offset_of!(KTRAP_FRAME, FaultAddress) == 0xD0);
+        assert!(offset_of!(KTRAP_FRAME, TrapFrame) == 0x138);
+        assert!(offset_of!(KTRAP_FRAME, ErrorCode) == 0x160);
+        assert!(offset_of!(KTRAP_FRAME, Rip) == 0x168);
+        assert!(offset_of!(KTRAP_FRAME, SegCs) == 0x170);
+        assert!(offset_of!(KTRAP_FRAME, EFlags) == 0x178);
+        assert!(offset_of!(KTRAP_FRAME, Rsp) == 0x180);
+        assert!(offset_of!(KTRAP_FRAME, SegSs) == 0x188);
+        assert!(size_of::<KEXCEPTION_FRAME>() == 0x140);
+        assert!(offset_of!(KEXCEPTION_FRAME, Xmm6) == 0x30);
+        assert!(offset_of!(KEXCEPTION_FRAME, TrapFrame) == 0xD0);
+        assert!(offset_of!(KEXCEPTION_FRAME, MxCsr) == 0xF0);
+        assert!(offset_of!(KEXCEPTION_FRAME, R12) == 0x118);
+        assert!(offset_of!(KEXCEPTION_FRAME, Return) == 0x138);
+        assert!(size_of::<XSTATE_FEATURE>() == 8);
+        assert!(size_of::<XSTATE_CONFIGURATION>() == 824);
+        assert!(offset_of!(XSTATE_CONFIGURATION, Features) == 24);
+        assert!(offset_of!(XSTATE_CONFIGURATION, EnabledUserVisibleSupervisorFeatures) == 816);
+        assert!(size_of::<XSAVE_AREA_HEADER>() == 64);
+        assert!(size_of::<XSTATE_CONTEXT>() == 32);
+        assert!(size_of::<XSTATE_SAVE>() == 56);
     };
 }
 

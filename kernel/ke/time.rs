@@ -23,9 +23,30 @@ use nk_ke::{
 };
 use nk_mm::pt::Prot;
 use nk_ntabi::ke::{
-    SHARED_DATA, SHARED_INTERRUPT_TIME, SHARED_SYSTEM_TIME, SHARED_TICK_COUNT,
-    SHARED_TICK_MULTIPLIER,
+    SHARED_ACTIVE_GROUP_COUNT, SHARED_ACTIVE_PROCESSOR_COUNT, SHARED_COOKIE, SHARED_DATA,
+    SHARED_IMAGE_NUMBER_HIGH, SHARED_IMAGE_NUMBER_LOW, SHARED_INTERRUPT_TIME,
+    SHARED_LARGE_PAGE_MINIMUM, SHARED_MITIGATION_POLICIES, SHARED_NATIVE_PROCESSOR_ARCHITECTURE,
+    SHARED_NT_BUILD_NUMBER, SHARED_NT_MAJOR_VERSION, SHARED_NT_MINOR_VERSION,
+    SHARED_NT_PRODUCT_TYPE, SHARED_NT_SYSTEM_ROOT, SHARED_NUMBER_OF_PHYSICAL_PAGES,
+    SHARED_PRODUCT_TYPE_IS_VALID, SHARED_QPC_DATA, SHARED_QPC_FREQUENCY, SHARED_SYSTEM_CALL,
+    SHARED_SYSTEM_TIME, SHARED_TEST_RET_INSTRUCTION, SHARED_TICK_COUNT, SHARED_TICK_MULTIPLIER,
+    SHARED_UNPARKED_PROCESSOR_COUNT,
 };
+use nk_ntabi::seh::x64::{XSTATE_CONTEXT, XSTATE_SAVE};
+use nk_ntabi::status::{
+    NTSTATUS, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER, STATUS_NOT_SUPPORTED,
+    STATUS_SUCCESS,
+};
+
+/// Physical frame backing `KUSER_SHARED_DATA`, shared read-only into every
+/// user process at `USER_SHARED_DATA`.
+static SHARED_DATA_FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// Physical address of the `KUSER_SHARED_DATA` frame.
+#[allow(dead_code)]
+pub fn shared_data_frame() -> u64 {
+    SHARED_DATA_FRAME.load(Ordering::Acquire)
+}
 
 /// The counter's ticks per second.
 static FREQUENCY: AtomicU64 = AtomicU64::new(0);
@@ -121,20 +142,91 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     BOOT_TIME.store(info.boot_time, Ordering::Relaxed);
 
     let frame = mm::alloc_frames(1).ok_or("no memory for the shared data page")?;
+    SHARED_DATA_FRAME.store(frame, Ordering::Release);
     mm::map::map(SHARED_DATA, frame, 1, Prot::RW).map_err(|_| "cannot map the shared data page")?;
-    // SAFETY: the page was just mapped and zeroed; the fields are aligned.
+    let page = SHARED_DATA as *mut u8;
+    // SAFETY: the page was just mapped and zeroed; all offsets are checked
+    // against `ntkrnlmp.x64.pdb` in `nk_ntabi::pdb`.
     unsafe {
-        // The processor state NK saves for a thread is the legacy x87
-        // and SSE state, and no more: that is what the page says code
-        // may use (`RtlGetEnabledExtendedFeatures`).
-        (SHARED_DATA as *mut u8)
-            .add(nk_ntabi::ke::SHARED_XSTATE_ENABLED)
-            .cast::<u64>()
-            .write_volatile(nk_ntabi::ke::XSTATE_MASK_LEGACY);
-        (SHARED_DATA as *mut u8)
-            .add(SHARED_TICK_MULTIPLIER)
+        page.add(SHARED_TICK_MULTIPLIER)
             .cast::<u32>()
             .write_volatile(TICK_MULTIPLIER);
+        let (image_machine, native_arch, test_ret): (u16, u16, u64) =
+            if cfg!(target_arch = "x86_64") {
+                (0x8664, 9, 0xC3)
+            } else {
+                (0xAA64, 12, 0)
+            };
+        page.add(SHARED_IMAGE_NUMBER_LOW)
+            .cast::<u16>()
+            .write_volatile(image_machine);
+        page.add(SHARED_IMAGE_NUMBER_HIGH)
+            .cast::<u16>()
+            .write_volatile(image_machine);
+        let root_utf16: [u16; 11] = [
+            u16::from(b'C'),
+            u16::from(b':'),
+            u16::from(b'\\'),
+            u16::from(b'W'),
+            u16::from(b'i'),
+            u16::from(b'n'),
+            u16::from(b'd'),
+            u16::from(b'o'),
+            u16::from(b'w'),
+            u16::from(b's'),
+            0,
+        ];
+        for (i, ch) in root_utf16.iter().enumerate() {
+            page.add(SHARED_NT_SYSTEM_ROOT)
+                .cast::<u16>()
+                .add(i)
+                .write_volatile(*ch);
+        }
+        page.add(SHARED_LARGE_PAGE_MINIMUM)
+            .cast::<u32>()
+            .write_volatile(0x0020_0000);
+        page.add(SHARED_NT_BUILD_NUMBER)
+            .cast::<u32>()
+            .write_volatile(19045);
+        page.add(SHARED_NT_PRODUCT_TYPE)
+            .cast::<u32>()
+            .write_volatile(1);
+        page.add(SHARED_PRODUCT_TYPE_IS_VALID).write_volatile(1);
+        page.add(SHARED_NATIVE_PROCESSOR_ARCHITECTURE)
+            .cast::<u16>()
+            .write_volatile(native_arch);
+        page.add(SHARED_NT_MAJOR_VERSION)
+            .cast::<u32>()
+            .write_volatile(10);
+        page.add(SHARED_NT_MINOR_VERSION)
+            .cast::<u32>()
+            .write_volatile(0);
+        // NXSupportPolicy = AlwaysOn (2 in bits 0..2).
+        page.add(SHARED_MITIGATION_POLICIES).write_volatile(2);
+        let (phys_pages, _, _) = mm::physical_memory();
+        page.add(SHARED_NUMBER_OF_PHYSICAL_PAGES)
+            .cast::<u32>()
+            .write_volatile(phys_pages.min(u64::from(u32::MAX)) as u32);
+        page.add(SHARED_TEST_RET_INSTRUCTION)
+            .cast::<u64>()
+            .write_volatile(test_ret);
+        page.add(SHARED_QPC_FREQUENCY)
+            .cast::<u64>()
+            .write_volatile(frequency);
+        page.add(SHARED_SYSTEM_CALL).cast::<u32>().write_volatile(0);
+        let seed = arch::counter() ^ info.boot_time ^ 0x9E37_79B9_7F4A_7C15;
+        let cookie = ((seed as u32) ^ ((seed >> 32) as u32)) | 1;
+        page.add(SHARED_COOKIE).cast::<u32>().write_volatile(cookie);
+        page.add(SHARED_UNPARKED_PROCESSOR_COUNT)
+            .cast::<u16>()
+            .write_volatile(1);
+        page.add(SHARED_ACTIVE_PROCESSOR_COUNT)
+            .cast::<u32>()
+            .write_volatile(1);
+        page.add(SHARED_ACTIVE_GROUP_COUNT).write_volatile(1);
+        page.add(SHARED_QPC_DATA).cast::<u16>().write_volatile(0);
+        arch::write_kusd_features(page);
+        arch::write_kusd_xstate(page);
     }
     update();
 
@@ -145,8 +237,26 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
         Ordering::Relaxed,
     );
     start_cpu();
-    kprintln!("ke: time counter at {frequency} Hz, clock at 64 Hz");
+    kprintln!(
+        "ke: time counter at {frequency} Hz, clock at 64 Hz (xstate mask={:#x}, area={}B)",
+        arch::xstate_enabled_mask(),
+        arch::xstate_area_size()
+    );
     Ok(())
+}
+
+/// Update `KUSER_SHARED_DATA` processor counts once APs have come online.
+pub fn update_processor_count(count: usize) {
+    let page = SHARED_DATA as *mut u8;
+    // SAFETY: the shared data page is mapped from `time::init` onward.
+    unsafe {
+        page.add(SHARED_ACTIVE_PROCESSOR_COUNT)
+            .cast::<u32>()
+            .write_volatile(count as u32);
+        page.add(SHARED_UNPARKED_PROCESSOR_COUNT)
+            .cast::<u16>()
+            .write_volatile(count as u16);
+    }
 }
 
 /// [`KeQueryTimeIncrement`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerytimeincrement):
@@ -317,6 +427,37 @@ pub fn shared_page_test() -> Result<u64, &'static str> {
         if system < 132_223_104_000_000_000 {
             return Err("the wall clock is earlier than 2020: firmware gave no time");
         }
+        // Check static KUSER_SHARED_DATA fields and XState save/restore.
+        let page = SHARED_DATA as *const u8;
+        // SAFETY: the shared data page is mapped for the life of the kernel.
+        let (major, build, qpc, cpus, cookie) = unsafe {
+            (
+                page.add(SHARED_NT_MAJOR_VERSION)
+                    .cast::<u32>()
+                    .read_volatile(),
+                page.add(SHARED_NT_BUILD_NUMBER)
+                    .cast::<u32>()
+                    .read_volatile(),
+                page.add(SHARED_QPC_FREQUENCY).cast::<u64>().read_volatile(),
+                page.add(SHARED_ACTIVE_PROCESSOR_COUNT)
+                    .cast::<u32>()
+                    .read_volatile(),
+                page.add(SHARED_COOKIE).cast::<u32>().read_volatile(),
+            )
+        };
+        if major != 10 || build != 19045 {
+            return Err("shared page OS version mismatch");
+        }
+        if qpc != frequency() {
+            return Err("shared page QpcFrequency mismatch");
+        }
+        if cpus == 0 {
+            return Err("shared page ActiveProcessorCount is zero");
+        }
+        if cookie == 0 {
+            return Err("shared page Cookie is zero");
+        }
+        arch::xstate_self_test()?;
         return Ok(ticks);
     }
     Err(wrong)
@@ -349,5 +490,90 @@ pub extern "C" fn RtlGetEnabledExtendedFeatures(mask: u64) -> u64 {
             .cast::<u64>()
             .read_volatile();
         (user | supervisor) & mask
+    }
+}
+
+/// [`KeSaveExtendedProcessorState`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kesaveextendedprocessorstate):
+/// save the calling thread's extended processor state (x87, SSE, AVX) into a
+/// buffer referenced by `xstate_save` so a driver may safely use vector units.
+///
+/// # Safety
+/// `xstate_save` points to a writable caller-owned `XSTATE_SAVE` record that
+/// remains valid until [`KeRestoreExtendedProcessorState`] is called on it.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeSaveExtendedProcessorState(
+    mask: u64,
+    xstate_save: *mut XSTATE_SAVE,
+) -> NTSTATUS {
+    if mask == 0 || xstate_save.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let enabled = arch::xstate_enabled_mask();
+    if (mask & !enabled) != 0 {
+        return STATUS_NOT_SUPPORTED;
+    }
+    let area_size = arch::xstate_area_size();
+    let (raw, area) = if area_size > 0 {
+        let raw = mm::pool::alloc(area_size + 64, u32::from_le_bytes(*b"XSta"));
+        if raw.is_null() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        let area = arch::xstate_align_area(raw);
+        // SAFETY: `raw` is a fresh pool block of `area_size + 64` bytes, so
+        // `area` is 64-byte aligned with `area_size` writable bytes. Zero the
+        // buffer so `XSAVE_AREA_HEADER` starts clean before `xsave64`.
+        unsafe {
+            core::ptr::write_bytes(area, 0, area_size);
+            arch::xstate_save_mask(area, mask);
+        }
+        (raw, area)
+    } else {
+        (core::ptr::null_mut(), core::ptr::null_mut())
+    };
+    // SAFETY: per the contract, `xstate_save` is a valid writable `XSTATE_SAVE`.
+    unsafe {
+        xstate_save.write(XSTATE_SAVE {
+            Prev: core::ptr::null_mut(),
+            Thread: super::thread::current().cast(),
+            Level: super::irql::current() as i8,
+            _pad: [0; 7],
+            XStateContext: XSTATE_CONTEXT {
+                Mask: mask,
+                Length: area_size as u32,
+                Reserved1: 0,
+                Area: area.cast(),
+                Buffer: raw.cast(),
+            },
+        });
+    }
+    STATUS_SUCCESS
+}
+
+/// [`KeRestoreExtendedProcessorState`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kerestoreextendedprocessorstate):
+/// restore the extended processor state saved by [`KeSaveExtendedProcessorState`]
+/// and release its save buffer.
+///
+/// # Safety
+/// `xstate_save` was filled in by a matching successful call to
+/// [`KeSaveExtendedProcessorState`] and has not yet been restored.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeRestoreExtendedProcessorState(xstate_save: *mut XSTATE_SAVE) {
+    if xstate_save.is_null() {
+        return;
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        let ctx = &(*xstate_save).XStateContext;
+        let area = ctx.Area.cast::<u8>();
+        let raw = ctx.Buffer.cast::<u8>();
+        let mask = ctx.Mask;
+        if !area.is_null() {
+            arch::xstate_restore_mask(area, mask);
+        }
+        if !raw.is_null() {
+            let _ = mm::pool::free(raw);
+        }
+        (*xstate_save).XStateContext.Area = core::ptr::null_mut();
+        (*xstate_save).XStateContext.Buffer = core::ptr::null_mut();
     }
 }

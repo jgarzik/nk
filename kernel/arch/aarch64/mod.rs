@@ -385,6 +385,61 @@ pub fn sync_icache(start: *const u8, len: usize) {
     unsafe { core::arch::asm!("dsb ish", "ic ialluis", "dsb ish", "isb", options(nostack)) };
 }
 
+/// Size of the per-thread extended-state inline buffer (unused on arm64).
+pub const XSTATE_BUF_SIZE: usize = 64;
+
+pub fn xstate_align_area(buf: *mut u8) -> *mut u8 {
+    buf
+}
+
+pub fn xstate_area_size() -> usize {
+    0
+}
+
+pub fn xstate_enabled_mask() -> u64 {
+    0
+}
+
+/// # Safety
+/// No-op on arm64; `context_switch` preserves NEON state directly.
+pub unsafe fn xstate_init_area(_area: *mut u8) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_save(_area: *mut u8) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_restore(_area: *mut u8) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_save_mask(_area: *mut u8, _mask: u64) {}
+
+/// # Safety
+/// No-op on arm64.
+pub unsafe fn xstate_restore_mask(_area: *mut u8, _mask: u64) {}
+
+/// # Safety
+/// `page` points to the mapped `KUSER_SHARED_DATA` page.
+pub unsafe fn write_kusd_features(page: *mut u8) {
+    use nk_ntabi::ke::{SHARED_PROCESSOR_FEATURES, pf};
+    // SAFETY: per the contract.
+    unsafe {
+        let base = page.add(SHARED_PROCESSOR_FEATURES);
+        base.add(pf::NX_ENABLED).write_volatile(1);
+        base.add(pf::FASTFAIL_AVAILABLE).write_volatile(1);
+    }
+}
+
+/// # Safety
+/// `page` points to the mapped `KUSER_SHARED_DATA` page.
+pub unsafe fn write_kusd_xstate(_page: *mut u8) {}
+
+pub fn xstate_self_test() -> Result<(), &'static str> {
+    Ok(())
+}
+
 /// Make memory hold what the data cache holds of a range, and drop
 /// the cached lines, for a device that reads or writes the range
 /// behind the processor's back.

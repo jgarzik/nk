@@ -471,17 +471,63 @@ const _: () = {
 };
 
 /// `KUSER_SHARED_DATA`: a page at a fixed kernel address that code built
-/// with the WDK reads the time from directly. Only the fields NK
-/// maintains are named.
+/// with the WDK reads the time from directly, aliased read-only into every
+/// user process at [`USER_SHARED_DATA`].
 pub const SHARED_DATA: u64 = 0xFFFF_F780_0000_0000;
+/// User-mode read-only alias of `KUSER_SHARED_DATA`.
+pub const USER_SHARED_DATA: u64 = 0x0000_0000_7FFE_0000;
 /// `TickCountMultiplier`, 32 bits.
 pub const SHARED_TICK_MULTIPLIER: usize = 0x004;
 /// `InterruptTime`: 100 ns units since boot.
 pub const SHARED_INTERRUPT_TIME: usize = 0x008;
 /// `SystemTime`: 100 ns units since 1601, UTC.
 pub const SHARED_SYSTEM_TIME: usize = 0x014;
+/// `TimeZoneBias`: 100 ns units.
+pub const SHARED_TIME_ZONE_BIAS: usize = 0x020;
+/// `ImageNumberLow` / `ImageNumberHigh`, 16 bits each (`0x8664` on x64).
+pub const SHARED_IMAGE_NUMBER_LOW: usize = 0x02C;
+pub const SHARED_IMAGE_NUMBER_HIGH: usize = 0x02E;
+/// `NtSystemRoot`: 260 UTF-16 code units (`C:\Windows\0`).
+pub const SHARED_NT_SYSTEM_ROOT: usize = 0x030;
+/// `LargePageMinimum`, 32 bits (`2 MiB`).
+pub const SHARED_LARGE_PAGE_MINIMUM: usize = 0x244;
+/// `NtBuildNumber`, 32 bits (`19045`).
+pub const SHARED_NT_BUILD_NUMBER: usize = 0x260;
+/// `NtProductType`, 32 bits (`1` = `NtProductWinNt`).
+pub const SHARED_NT_PRODUCT_TYPE: usize = 0x264;
+/// `ProductTypeIsValid`, 8 bits (`1`).
+pub const SHARED_PRODUCT_TYPE_IS_VALID: usize = 0x268;
+/// `NativeProcessorArchitecture`, 16 bits (`9` = AMD64, `12` = ARM64).
+pub const SHARED_NATIVE_PROCESSOR_ARCHITECTURE: usize = 0x26A;
+/// `NtMajorVersion` (`10`) and `NtMinorVersion` (`0`).
+pub const SHARED_NT_MAJOR_VERSION: usize = 0x26C;
+pub const SHARED_NT_MINOR_VERSION: usize = 0x270;
+/// `ProcessorFeatures`: `[u8; 64]`, indexed by `PF_*`.
+pub const SHARED_PROCESSOR_FEATURES: usize = 0x274;
+/// `MitigationPolicies`, 8 bits.
+pub const SHARED_MITIGATION_POLICIES: usize = 0x2D5;
+/// `NumberOfPhysicalPages`, 32 bits.
+pub const SHARED_NUMBER_OF_PHYSICAL_PAGES: usize = 0x2E8;
+/// `TestRetInstruction`, 64 bits (`0xC3` on x64).
+pub const SHARED_TEST_RET_INSTRUCTION: usize = 0x2F8;
+/// `QpcFrequency`, 64 bits.
+pub const SHARED_QPC_FREQUENCY: usize = 0x300;
+/// `SystemCall`, 32 bits (`0` = `syscall` instruction).
+pub const SHARED_SYSTEM_CALL: usize = 0x308;
 /// `TickCount`: clock ticks since boot.
 pub const SHARED_TICK_COUNT: usize = 0x320;
+/// `Cookie`, 32 bits: process-shared pointer-encoding cookie.
+pub const SHARED_COOKIE: usize = 0x330;
+/// `UnparkedProcessorCount`, 16 bits.
+pub const SHARED_UNPARKED_PROCESSOR_COUNT: usize = 0x36A;
+/// `ActiveProcessorCount`, 32 bits.
+pub const SHARED_ACTIVE_PROCESSOR_COUNT: usize = 0x3C0;
+/// `ActiveGroupCount`, 8 bits (`1`).
+pub const SHARED_ACTIVE_GROUP_COUNT: usize = 0x3C4;
+/// `QpcData`, 16 bits (`QpcBypassEnabled` in low byte).
+pub const SHARED_QPC_DATA: usize = 0x3C6;
+/// `XState`: `XSTATE_CONFIGURATION` (824 bytes).
+pub const SHARED_XSTATE: usize = 0x3D8;
 /// `XState.EnabledFeatures`: the processor state components the kernel
 /// saves and lets code use, a mask of `XSTATE_*` bits.
 pub const SHARED_XSTATE_ENABLED: usize = 0x3D8;
@@ -491,6 +537,26 @@ pub const SHARED_XSTATE_SUPERVISOR: usize = 0x708;
 /// `XSTATE_MASK_LEGACY`: the x87 and SSE state, which every x64
 /// processor has and every thread's context holds.
 pub const XSTATE_MASK_LEGACY: u64 = 0x3;
+/// `XSTATE_MASK_AVX`: 256-bit YMM upper halves (component 2).
+pub const XSTATE_MASK_AVX: u64 = 0x4;
+
+/// Windows `PF_*` indices into `KUSER_SHARED_DATA.ProcessorFeatures`.
+pub mod pf {
+    pub const COMPARE_EXCHANGE_DOUBLE: usize = 2;
+    pub const MMX_INSTRUCTIONS_AVAILABLE: usize = 3;
+    pub const XMMI_INSTRUCTIONS_AVAILABLE: usize = 6;
+    pub const RDTSC_INSTRUCTION_AVAILABLE: usize = 8;
+    pub const PAE_ENABLED: usize = 9;
+    pub const XMMI64_INSTRUCTIONS_AVAILABLE: usize = 10;
+    pub const NX_ENABLED: usize = 12;
+    pub const SSE3_INSTRUCTIONS_AVAILABLE: usize = 13;
+    pub const COMPARE_EXCHANGE128: usize = 14;
+    pub const XSAVE_ENABLED: usize = 17;
+    pub const FASTFAIL_AVAILABLE: usize = 23;
+    pub const RDTSCP_INSTRUCTION_AVAILABLE: usize = 32;
+    pub const AVX_INSTRUCTIONS_AVAILABLE: usize = 39;
+    pub const AVX2_INSTRUCTIONS_AVAILABLE: usize = 40;
+}
 
 /// `KBUGCHECK_CALLBACK_REASON`: why a bugcheck callback is called. Only
 /// the values NK acts on are named.

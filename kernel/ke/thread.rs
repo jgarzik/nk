@@ -107,6 +107,9 @@ pub struct Thread {
     /// once no frame can be left there (`reap_stranded`).
     stranded: [Stack; MAX_STRANDED],
     stranded_count: u8,
+    /// Backing storage for the thread's 64-byte-aligned XSAVE/FXSAVE area
+    /// (`KTHREAD.StateSaveArea` points to the aligned slice inside this array).
+    xstate_buf: [u8; arch::XSTATE_BUF_SIZE],
 }
 
 /// The most segments unwinds can have left with frames still on them:
@@ -603,6 +606,9 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).entered_from).write([0; MAX_SEGMENTS]);
         (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_STRANDED]);
         (&raw mut (*thread).stranded_count).write(0);
+        let xstate_area = arch::xstate_align_area((&raw mut (*thread).xstate_buf).cast());
+        arch::xstate_init_area(xstate_area);
+        field::<*mut u8>(thread, layout::STATE_SAVE_AREA).write(xstate_area);
         // Every thread NK makes is a system thread.
         field::<u32>(thread, layout::MISC_FLAGS).write(layout::MISC_FLAG_SYSTEM_THREAD);
         super::apc::init_thread(thread);
@@ -1167,12 +1173,14 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
         }
         dispatcher.previous.store(me, Ordering::Release);
         dispatcher.switches.fetch_add(1, Ordering::Relaxed);
+        arch::xstate_save(field::<*mut u8>(me, layout::STATE_SAVE_AREA).read());
         arch::context_switch(
             field(me, layout::KERNEL_STACK),
             field::<u64>(next, layout::KERNEL_STACK).read(),
         );
+        // Running again, on whatever processor took this thread.
+        arch::xstate_restore(field::<*mut u8>(me, layout::STATE_SAVE_AREA).read());
     }
-    // Running again, on whatever processor took this thread.
     after_switch();
     super::apc::switched_in();
 }
@@ -1267,6 +1275,11 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
 
 /// Where a new thread begins.
 extern "C" fn start() -> ! {
+    // SAFETY: `current()` is a live thread whose `StateSaveArea` was
+    // initialised at allocation.
+    unsafe {
+        arch::xstate_restore(field::<*mut u8>(current(), layout::STATE_SAVE_AREA).read());
+    }
     after_switch();
     super::apc::switched_in();
     arch::set_irql(irql::PASSIVE_LEVEL);

@@ -128,7 +128,39 @@ fn shared_data_page_matches_the_kernel() {
     assert_eq!(SHARED_TICK_MULTIPLIER, field("TickCountMultiplier"));
     assert_eq!(SHARED_INTERRUPT_TIME, field("InterruptTime"));
     assert_eq!(SHARED_SYSTEM_TIME, field("SystemTime"));
+    assert_eq!(SHARED_TIME_ZONE_BIAS, field("TimeZoneBias"));
+    assert_eq!(SHARED_IMAGE_NUMBER_LOW, field("ImageNumberLow"));
+    assert_eq!(SHARED_IMAGE_NUMBER_HIGH, field("ImageNumberHigh"));
+    assert_eq!(SHARED_NT_SYSTEM_ROOT, field("NtSystemRoot"));
+    assert_eq!(SHARED_LARGE_PAGE_MINIMUM, field("LargePageMinimum"));
+    assert_eq!(SHARED_NT_BUILD_NUMBER, field("NtBuildNumber"));
+    assert_eq!(SHARED_NT_PRODUCT_TYPE, field("NtProductType"));
+    assert_eq!(SHARED_PRODUCT_TYPE_IS_VALID, field("ProductTypeIsValid"));
+    assert_eq!(
+        SHARED_NATIVE_PROCESSOR_ARCHITECTURE,
+        field("NativeProcessorArchitecture")
+    );
+    assert_eq!(SHARED_NT_MAJOR_VERSION, field("NtMajorVersion"));
+    assert_eq!(SHARED_NT_MINOR_VERSION, field("NtMinorVersion"));
+    assert_eq!(SHARED_PROCESSOR_FEATURES, field("ProcessorFeatures"));
+    assert_eq!(SHARED_MITIGATION_POLICIES, field("MitigationPolicies"));
+    assert_eq!(
+        SHARED_NUMBER_OF_PHYSICAL_PAGES,
+        field("NumberOfPhysicalPages")
+    );
+    assert_eq!(SHARED_TEST_RET_INSTRUCTION, field("TestRetInstruction"));
+    assert_eq!(SHARED_QPC_FREQUENCY, field("QpcFrequency"));
+    assert_eq!(SHARED_SYSTEM_CALL, field("SystemCall"));
     assert_eq!(SHARED_TICK_COUNT, field("TickCount"));
+    assert_eq!(SHARED_COOKIE, field("Cookie"));
+    assert_eq!(
+        SHARED_UNPARKED_PROCESSOR_COUNT,
+        field("UnparkedProcessorCount")
+    );
+    assert_eq!(SHARED_ACTIVE_PROCESSOR_COUNT, field("ActiveProcessorCount"));
+    assert_eq!(SHARED_ACTIVE_GROUP_COUNT, field("ActiveGroupCount"));
+    assert_eq!(SHARED_QPC_DATA, field("QpcData"));
+    assert_eq!(SHARED_XSTATE, field("XState"));
     let xstate = types
         .layout("_XSTATE_CONFIGURATION")
         .expect("_XSTATE_CONFIGURATION");
@@ -372,6 +404,11 @@ fn thread_matches_the_kernel() {
     assert_eq!(STACK_LIMIT, field("StackLimit"));
     assert_eq!(STACK_BASE, field("StackBase"));
     assert_eq!(KERNEL_STACK, field("KernelStack"));
+    assert_eq!(STATE_SAVE_AREA, field("StateSaveArea"));
+    assert_eq!(SYSTEM_CALL_NUMBER, field("SystemCallNumber"));
+    assert_eq!(FIRST_ARGUMENT, field("FirstArgument"));
+    assert_eq!(TRAP_FRAME, field("TrapFrame"));
+    assert_eq!(TEB, field("Teb"));
     assert_eq!(RUNNING, field("Running"));
     assert_eq!(PRIORITY, field("Priority"));
     assert_eq!(ALERTED, field("Alerted"));
@@ -804,6 +841,59 @@ fn exception_structures_match_the_kernel() {
     use crate::seh::*;
     use core::mem::{offset_of, size_of};
     let Some(types) = kernel_types() else { return };
+    let ktrap = types.layout("_KTRAP_FRAME").expect("_KTRAP_FRAME");
+    {
+        use crate::seh::x64::KTRAP_FRAME;
+        assert_eq!(size_of::<KTRAP_FRAME>(), ktrap.size as usize);
+        let f = |n| offset(&ktrap, "_KTRAP_FRAME", n);
+        assert_eq!(offset_of!(KTRAP_FRAME, PreviousMode), f("PreviousMode"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Rax), f("Rax"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Xmm0), f("Xmm0"));
+        assert_eq!(offset_of!(KTRAP_FRAME, FaultAddress), f("FaultAddress"));
+        assert_eq!(offset_of!(KTRAP_FRAME, TrapFrame), f("TrapFrame"));
+        assert_eq!(offset_of!(KTRAP_FRAME, ErrorCode), f("ErrorCode"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Rip), f("Rip"));
+        assert_eq!(offset_of!(KTRAP_FRAME, SegCs), f("SegCs"));
+        assert_eq!(offset_of!(KTRAP_FRAME, EFlags), f("EFlags"));
+        assert_eq!(offset_of!(KTRAP_FRAME, Rsp), f("Rsp"));
+        assert_eq!(offset_of!(KTRAP_FRAME, SegSs), f("SegSs"));
+    }
+    let kexc = types
+        .layout("_KEXCEPTION_FRAME")
+        .expect("_KEXCEPTION_FRAME");
+    {
+        use crate::seh::x64::KEXCEPTION_FRAME;
+        assert_eq!(size_of::<KEXCEPTION_FRAME>(), kexc.size as usize);
+        let f = |n| offset(&kexc, "_KEXCEPTION_FRAME", n);
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, Xmm6), f("Xmm6"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, TrapFrame), f("TrapFrame"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, MxCsr), f("MxCsr"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, R12), f("R12"));
+        assert_eq!(offset_of!(KEXCEPTION_FRAME, Return), f("Return"));
+    }
+    {
+        use crate::seh::x64::{XSTATE_CONFIGURATION, XSTATE_CONTEXT, XSTATE_SAVE};
+        let xc = types
+            .layout("_XSTATE_CONFIGURATION")
+            .expect("_XSTATE_CONFIGURATION");
+        assert_eq!(size_of::<XSTATE_CONFIGURATION>(), xc.size as usize);
+        let xctx = types.layout("_XSTATE_CONTEXT").expect("_XSTATE_CONTEXT");
+        assert_eq!(size_of::<XSTATE_CONTEXT>(), xctx.size as usize);
+        assert_eq!(
+            offset_of!(XSTATE_CONTEXT, Area),
+            offset(&xctx, "_XSTATE_CONTEXT", "Area")
+        );
+        assert_eq!(
+            offset_of!(XSTATE_CONTEXT, Buffer),
+            offset(&xctx, "_XSTATE_CONTEXT", "Buffer")
+        );
+        let xs = types.layout("_XSTATE_SAVE").expect("_XSTATE_SAVE");
+        assert_eq!(size_of::<XSTATE_SAVE>(), xs.size as usize);
+        assert_eq!(
+            offset_of!(XSTATE_SAVE, XStateContext),
+            offset(&xs, "_XSTATE_SAVE", "XStateContext")
+        );
+    }
     let context = types.layout("_CONTEXT").expect("_CONTEXT");
     let field = |name| offset(&context, "_CONTEXT", name);
     assert_eq!(size_of::<CONTEXT>(), context.size as usize);

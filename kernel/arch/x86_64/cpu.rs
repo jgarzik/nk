@@ -180,6 +180,7 @@ pub fn init(number: u32) {
             cr0_clear = const !0xCu64,
             options(nomem, nostack),
         );
+        super::xstate::detect_and_enable(number == 0);
 
         let pointer = TablePointer {
             limit: (size_of::<[u64; 10]>() - 1) as u16,

@@ -113,7 +113,10 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     }
     ke::apc::init();
     match ke::smp::start_all(info) {
-        Ok(running) => kprintln!("ke: {running} processors running"),
+        Ok(running) => {
+            ke::time::update_processor_count(running);
+            kprintln!("ke: {running} processors running");
+        }
         Err(why) => test::abort("ke.smp", format_args!("{why}")),
     }
     if let Err(why) = ex::work::init() {
