@@ -13,7 +13,7 @@
 use super::vacb::{self, Busy};
 use super::{
     MASTER, Pcm, Scm, TAG_PCM, TAG_SCM, alloc_in_pool, cache_manager_bugcheck, flag, free_in_pool,
-    or_raise, short_delay, trace,
+    or_raise, trace, wait_lifecycle, wake_lifecycle_waiters,
 };
 use crate::arch::seh::{Context, fourth_argument, stack_argument};
 use crate::mm::{flush, section};
@@ -204,8 +204,7 @@ unsafe fn initialize(
                 break (s, true);
             }
             Some(s) if s.flags.get() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
-                drop(m);
-                short_delay();
+                wait_lifecycle(m, sop);
             }
             Some(s) => {
                 s.refs.set(s.refs.get() + 1);
@@ -305,30 +304,36 @@ fn create(scm: &Scm, file: *mut FILE_OBJECT, sizes: &CC_FILE_SIZES) -> Result<()
         section::disable_modified_write(scm.sop);
         flags |= flag::MODIFIED_WRITE_DISABLED;
     }
-    let _m = MASTER.lock();
-    scm.section_size.set(size);
-    scm.file_size.set(sizes.FileSize);
-    scm.valid_data_length.set(sizes.ValidDataLength);
-    scm.valid_data_goal.set(sizes.ValidDataLength);
-    scm.flags
-        .set((scm.flags.get() | flags) & !flag::BEING_CREATED);
+    let waiters = {
+        let mut m = MASTER.lock();
+        scm.section_size.set(size);
+        scm.file_size.set(sizes.FileSize);
+        scm.valid_data_length.set(sizes.ValidDataLength);
+        scm.valid_data_goal.set(sizes.ValidDataLength);
+        scm.flags
+            .set((scm.flags.get() | flags) & !flag::BEING_CREATED);
+        m.take_waiters_for(scm.sop)
+    };
+    wake_lifecycle_waiters(waiters);
     Ok(())
 }
 
 /// Undo a map whose creation failed: out of `SharedCacheMap` and freed.
 fn abandon(scm: &Scm) {
-    {
+    let waiters = {
         let mut m = MASTER.lock();
         unlink(&mut m, scm);
         // SAFETY: the file system's block; the field is ours, under the
         // lock.
         unsafe { (*scm.sop).SharedCacheMap = core::ptr::null_mut() };
-    }
+        m.take_waiters_for(scm.sop)
+    };
     let file = scm.file_object.get();
     vacb::drop_index(scm);
     // SAFETY: nobody finds the map any more: it was being created, so
     // whoever looked waited and will look again.
     unsafe { free_in_pool(core::ptr::from_ref(scm).cast_mut()) };
+    wake_lifecycle_waiters(waiters);
     if !file.is_null() {
         // SAFETY: the reference `create` took.
         unsafe { object::dereference(file.cast()) };
@@ -379,14 +384,18 @@ pub unsafe extern "C" fn CcUninitializeCacheMap(
     // SAFETY: per the contract.
     let sop = unsafe { (*file).SectionObjectPointer }.cast::<SECTION_OBJECT_POINTERS>();
     let mut freed_pcm = core::ptr::null_mut();
-    let outcome = {
+    let outcome = loop {
         let mut m = MASTER.lock();
         // SAFETY: as in `initialize`.
         let scm = unsafe { sop.as_ref() }
             .map_or(core::ptr::null_mut(), |s| s.SharedCacheMap.cast::<Scm>());
         // SAFETY: as in `initialize`.
         match unsafe { scm.as_ref() } {
-            None => None,
+            None => break None,
+            Some(s) if s.flags.get() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
+                wait_lifecycle(m, sop);
+                continue;
+            }
             Some(scm) => {
                 // SAFETY: the file object's field is the cache manager's.
                 let pcm = unsafe { (*file).PrivateCacheMap }.cast::<Pcm>();
@@ -438,7 +447,7 @@ pub unsafe extern "C" fn CcUninitializeCacheMap(
                     unsafe { (*event).Next = scm.uninit_events.get() };
                     scm.uninit_events.set(event);
                 }
-                Some((scm, outcome))
+                break Some((scm, outcome));
             }
         }
     };
@@ -521,11 +530,14 @@ pub fn delete(scm: &Scm) {
     // SAFETY: the deletion owns the map now; nothing maps it.
     let section = unsafe { (*scm.section.get()).take() };
     drop(section);
-    let events = {
-        let _m = MASTER.lock();
+    let (events, waiters) = {
+        let mut m = MASTER.lock();
         // SAFETY: the file system's block; the field is ours.
         unsafe { (*scm.sop).SharedCacheMap = core::ptr::null_mut() };
-        scm.uninit_events.replace(core::ptr::null_mut())
+        (
+            scm.uninit_events.replace(core::ptr::null_mut()),
+            m.take_waiters_for(scm.sop),
+        )
     };
     let mut event = events;
     while !event.is_null() {
@@ -545,6 +557,10 @@ pub fn delete(scm: &Scm) {
     // SAFETY: off the list and out of `SharedCacheMap`: nothing names
     // it.
     unsafe { free_in_pool(core::ptr::from_ref(scm).cast_mut()) };
+    // Wake lifecycle waiters before dropping the file reference (which may
+    // call into the file system for IRP_MJ_CLOSE) so waiters never block on
+    // file-system callbacks or FCB locks.
+    wake_lifecycle_waiters(waiters);
     // SAFETY: the reference `create` took.
     unsafe { object::dereference(file.cast()) };
 }

@@ -138,18 +138,8 @@ pub fn purge(
     range: Option<(u64, u32)>,
     uninitialize: bool,
 ) -> bool {
-    let scm = {
-        let _m = MASTER.lock();
-        // SAFETY: the field is the cache manager's, under the lock.
-        let scm = unsafe { (*sop).SharedCacheMap }.cast::<Scm>();
-        // SAFETY: a map the field names is live under the lock.
-        let scm = unsafe { scm.as_ref() };
-        if let Some(s) = scm {
-            s.refs.set(s.refs.get() + 1);
-        }
-        scm
-    };
-    let Some(scm) = scm else {
+    // SAFETY: `sop` is a live `SECTION_OBJECT_POINTERS` at `PASSIVE_LEVEL`.
+    let Some(scm) = (unsafe { super::acquire_map(sop) }) else {
         return flush::purge_section(sop, range, false);
     };
     if uninitialize {

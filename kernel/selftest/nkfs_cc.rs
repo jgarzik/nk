@@ -47,6 +47,7 @@ static CC: Group = Group {
         "cc.lazy-close",
         "cc.wait-twice",
         "cc.vacb-evict-race",
+        "cc.lifecycle-race",
     ],
     run: cc_tests,
     manual: false,
@@ -961,6 +962,159 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
     };
     verdicts.push(("cc.lazy-close", close));
     verdicts.push(("cc.wait-twice", wait_twice()));
+    verdicts.push(("cc.lifecycle-race", lifecycle_race(file, sop)));
+    Ok(())
+}
+
+/// Exercise `CcPurgeCacheSection` and `CcFlushCache` racing with cache-map
+/// creation, failed creation (`abandon`), immediate deletion, and map
+/// replacement from multiple CPUs, plus dirty-data preservation across
+/// uninitialization.
+fn lifecycle_race(
+    file: *mut FILE_OBJECT,
+    sop: *mut SECTION_OBJECT_POINTERS,
+) -> Result<(), &'static str> {
+    use crate::ke::thread;
+    use core::sync::atomic::{AtomicBool, AtomicU32};
+
+    struct Shared {
+        sop: *mut SECTION_OBJECT_POINTERS,
+        stop: AtomicBool,
+        purges: AtomicU32,
+        flushes: AtomicU32,
+        bad: AtomicBool,
+    }
+
+    fn purger(arg: usize) {
+        // SAFETY: `arg` points to `Shared` on the test's stack until exit.
+        let s = unsafe { &*(arg as *const Shared) };
+        while !s.stop.load(Ordering::Acquire) {
+            // SAFETY: `sop` belongs to the live nkfs volume for the whole test.
+            unsafe {
+                let _ = cc::size::CcPurgeCacheSection(s.sop, core::ptr::null(), 0, 0);
+            }
+            s.purges.fetch_add(1, Ordering::Relaxed);
+            thread::yield_now();
+        }
+    }
+
+    fn flusher(arg: usize) {
+        // SAFETY: as above.
+        let s = unsafe { &*(arg as *const Shared) };
+        let mut iosb = IO_STATUS_BLOCK {
+            Status: STATUS_PENDING,
+            Information: 0,
+        };
+        while !s.stop.load(Ordering::Acquire) {
+            // SAFETY: as above.
+            unsafe {
+                cc::flush::CcFlushCache(s.sop, core::ptr::null(), 0, &raw mut iosb);
+            }
+            if nt_error(iosb.Status) {
+                s.bad.store(true, Ordering::Release);
+            }
+            s.flushes.fetch_add(1, Ordering::Relaxed);
+            thread::yield_now();
+        }
+    }
+
+    let shared = Shared {
+        sop,
+        stop: AtomicBool::new(false),
+        purges: AtomicU32::new(0),
+        flushes: AtomicU32::new(0),
+        bad: AtomicBool::new(false),
+    };
+    let ptr = core::ptr::from_ref(&shared).addr();
+    let before = thread::count();
+    let t_purge =
+        thread::create_referenced(purger, ptr, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+    let t_flush =
+        thread::create_referenced(flusher, ptr, thread::NORMAL_PRIORITY, thread::ANYWHERE)?;
+
+    let mut failed = None;
+    let zero = 0i64;
+    for round in 0..32 {
+        if round % 4 == 0 {
+            // Failed creation (`abandon`) while waiters contend on `sop`.
+            if let Err(why) = except::raises(
+                initialize_huge,
+                file.addr(),
+                STATUS_INSUFFICIENT_RESOURCES as u32,
+            ) {
+                failed = Some(why);
+                break;
+            }
+        }
+        initialize(file, true);
+        thread::yield_now();
+        // SAFETY: `file` is cached; `zero` lives on this stack.
+        unsafe {
+            cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut());
+        }
+        cc::lazy::CcWaitForCurrentLazyWriterActivity();
+    }
+
+    shared.stop.store(true, Ordering::Release);
+    for t in [t_purge, t_flush] {
+        // SAFETY: referenced thread objects.
+        unsafe {
+            crate::ke::wait::wait(Some(t.cast()), None);
+            crate::ob::object::dereference(t.cast());
+        }
+    }
+    thread::settle(before);
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+
+    if let Some(why) = failed {
+        return Err(why);
+    }
+    if shared.bad.load(Ordering::Acquire) {
+        return Err("concurrent CcFlushCache failed during lifecycle transitions");
+    }
+    if shared.purges.load(Ordering::Relaxed) == 0 || shared.flushes.load(Ordering::Relaxed) == 0 {
+        return Err("concurrent purger/flusher threads did not execute");
+    }
+
+    // Dirty-data preservation: write dirty data, uninitialize without truncate
+    // (leaving deletion to lazy close), flush concurrently, and verify the
+    // bytes reach disk and the map is cleanly deleted afterwards.
+    initialize(file, false);
+    let offset = 0x60000i64;
+    let marker = [0xAB_u8; 0x20];
+    // SAFETY: cached file and stack buffer.
+    let wrote = unsafe {
+        entry::nk_entry_CcCopyWriteEx(
+            file.cast(),
+            &raw const offset,
+            marker.len() as u32,
+            1,
+            marker.as_ptr().cast(),
+            core::ptr::null_mut(),
+        )
+    };
+    let mut iosb = IO_STATUS_BLOCK {
+        Status: STATUS_PENDING,
+        Information: 0,
+    };
+    // SAFETY: cached file, live `sop`, stack `iosb`.
+    unsafe {
+        cc::map::CcUninitializeCacheMap(file, core::ptr::null(), core::ptr::null_mut());
+        cc::flush::CcFlushCache(sop, core::ptr::null(), 0, &raw mut iosb);
+    }
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+    nkfs::take_log();
+    // SAFETY: live `sop`.
+    let leftover = unsafe { !(*sop).SharedCacheMap.is_null() };
+    if wrote != 1 || nt_error(iosb.Status) {
+        return Err("dirty write or flush failed during uninitialize");
+    }
+    if nkfs::data()[0x60000..0x60020] != marker {
+        return Err("dirty data was lost across CcUninitializeCacheMap + CcFlushCache");
+    }
+    if leftover {
+        return Err("shared cache map remained attached after lazy close");
+    }
     Ok(())
 }
 

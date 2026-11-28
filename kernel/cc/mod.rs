@@ -39,12 +39,13 @@ use crate::ke::spinlock::{Rank, SpinLock};
 use crate::mm::pool;
 use crate::mm::section::SectionRef;
 use core::cell::{Cell, UnsafeCell};
+use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, Ordering};
 use nk_cc::mbcb::Mbcb;
 use nk_cc::vacbidx::VacbIndex;
 use nk_ntabi::cc::CACHE_UNINITIALIZE_EVENT;
 use nk_ntabi::io::{FILE_OBJECT, SECTION_OBJECT_POINTERS};
-use nk_ntabi::ke::FAST_MUTEX;
+use nk_ntabi::ke::{FAST_MUTEX, KEVENT};
 use nk_ntabi::status::*;
 
 /// Windows' pool tags: shared cache map, private cache map, BCB.
@@ -123,13 +124,69 @@ pub struct Scm {
     pcm_used: Cell<bool>,
 }
 
-/// What [`MASTER`] guards beyond the maps' own fields: the list of every
-/// shared cache map.
-pub struct Master {
-    head: *mut Scm,
+/// A thread waiting for a shared cache map's creation or deletion on
+/// `sop` to finish, living on the sleeper's stack until signalled.
+pub struct LifecycleWaiter {
+    next: *mut LifecycleWaiter,
+    sop: *mut SECTION_OBJECT_POINTERS,
+    event: *mut KEVENT,
 }
 
-// SAFETY: the list's maps are reached only under the lock.
+/// What [`MASTER`] guards beyond the maps' own fields: the list of every
+/// shared cache map and waiters blocked on a lifecycle transition.
+pub struct Master {
+    head: *mut Scm,
+    waiters: *mut LifecycleWaiter,
+}
+
+impl Master {
+    /// Register `waiter` to be woken when the lifecycle transition on its
+    /// `sop` settles.
+    pub fn enqueue_waiter(&mut self, waiter: *mut LifecycleWaiter) {
+        // SAFETY: `waiter` lives on the caller's stack until signalled.
+        unsafe { (*waiter).next = self.waiters };
+        self.waiters = waiter;
+    }
+
+    /// Detach every waiter waiting on `sop` so the caller can wake them
+    /// after dropping [`MASTER`].
+    pub fn take_waiters_for(&mut self, sop: *mut SECTION_OBJECT_POINTERS) -> *mut LifecycleWaiter {
+        let mut woken = core::ptr::null_mut();
+        let mut cursor = &raw mut self.waiters;
+        // SAFETY: all queued waiters live on their sleepers' stacks until
+        // detached here and signalled.
+        unsafe {
+            while !(*cursor).is_null() {
+                let node = *cursor;
+                if (*node).sop == sop {
+                    *cursor = (*node).next;
+                    (*node).next = woken;
+                    woken = node;
+                } else {
+                    cursor = &raw mut (*node).next;
+                }
+            }
+        }
+        woken
+    }
+}
+
+/// Signal every waiter detached by [`Master::take_waiters_for`], with
+/// [`MASTER`] dropped.
+pub fn wake_lifecycle_waiters(mut head: *mut LifecycleWaiter) {
+    while !head.is_null() {
+        // SAFETY: each waiter lives on its sleeper's stack until signalled;
+        // read `next` before waking.
+        unsafe {
+            let next = (*head).next;
+            crate::ke::wait::KeSetEvent((*head).event, 0, 0);
+            head = next;
+        }
+    }
+}
+
+// SAFETY: the list's maps and stack-pinned waiters are reached only under
+// the lock.
 unsafe impl Send for Master {}
 
 /// The shared cache maps, their counts, flags, sizes and list.
@@ -137,6 +194,7 @@ pub static MASTER: SpinLock<Master> = SpinLock::new(
     Rank::CcMaster,
     Master {
         head: core::ptr::null_mut(),
+        waiters: core::ptr::null_mut(),
     },
 );
 
@@ -242,12 +300,51 @@ pub fn dereference(scm: &Scm) {
     scm.refs.set(scm.refs.get() - 1);
 }
 
-/// Wait about 10 ms (`Cc10Milliseconds`), as the cache manager waits for
-/// a map being made or deleted elsewhere.
-pub fn short_delay() {
-    let interval: i64 = -100_000;
-    // SAFETY: a due time on this stack.
-    unsafe { crate::ke::wait::KeDelayExecutionThread(0, 0, &raw const interval) };
+/// Wait on [`MASTER`] for a `BEING_CREATED` or `BEING_DELETED` map on
+/// `sop` to finish its transition, dropping `m` while sleeping.
+pub fn wait_lifecycle(
+    mut m: crate::ke::spinlock::Guard<'_, Master>,
+    sop: *mut SECTION_OBJECT_POINTERS,
+) {
+    let mut event = MaybeUninit::<KEVENT>::uninit();
+    // SAFETY: stack event, signalled before this function returns.
+    unsafe { crate::ke::wait::KeInitializeEvent(event.as_mut_ptr(), 0, 0) };
+    let mut waiter = LifecycleWaiter {
+        next: core::ptr::null_mut(),
+        sop,
+        event: event.as_mut_ptr(),
+    };
+    m.enqueue_waiter(&raw mut waiter);
+    drop(m);
+    // SAFETY: as above.
+    unsafe { crate::ke::wait::wait(Some(event.as_mut_ptr().cast()), None) };
+}
+
+/// Take a reference on the stable shared cache map attached to `sop`.
+/// Waits (event-driven, holding neither `MASTER` nor a map reference) for
+/// any `BEING_CREATED` or `BEING_DELETED` transition to settle, then
+/// revalidates `(*sop).SharedCacheMap`. Returns `None` if no shared cache
+/// map remains.
+///
+/// # Safety
+/// `sop` is a live `SECTION_OBJECT_POINTERS` at `PASSIVE_LEVEL`.
+pub unsafe fn acquire_map(sop: *mut SECTION_OBJECT_POINTERS) -> Option<&'static Scm> {
+    loop {
+        let m = MASTER.lock();
+        // SAFETY: per the contract; the field is the cache manager's under `MASTER`.
+        let scm = unsafe { (*sop).SharedCacheMap }.cast::<Scm>();
+        // SAFETY: a map the field names is live under `MASTER`.
+        match unsafe { scm.as_ref() } {
+            None => return None,
+            Some(s) if s.flags.get() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
+                wait_lifecycle(m, sop);
+            }
+            Some(s) => {
+                s.refs.set(s.refs.get() + 1);
+                return Some(s);
+            }
+        }
+    }
 }
 
 impl Scm {

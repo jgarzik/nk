@@ -174,23 +174,8 @@ pub unsafe extern "C" fn CcFlushCache(
 /// Flush a file by its section object pointers: through its cache map
 /// if it has one, else its section.
 pub fn flush_sop(sop: *mut SECTION_OBJECT_POINTERS, range: Option<(u64, u32)>) -> IO_STATUS_BLOCK {
-    let scm = {
-        let _m = MASTER.lock();
-        // SAFETY: the field is the cache manager's, under the lock.
-        let scm = unsafe { (*sop).SharedCacheMap }.cast::<Scm>();
-        // SAFETY: a map the field names is live under the lock.
-        match unsafe { scm.as_ref() } {
-            Some(s)
-                if s.flags.get() & (super::flag::BEING_CREATED | super::flag::BEING_DELETED)
-                    == 0 =>
-            {
-                s.refs.set(s.refs.get() + 1);
-                Some(s)
-            }
-            _ => None,
-        }
-    };
-    match scm {
+    // SAFETY: `sop` is a live `SECTION_OBJECT_POINTERS` at `PASSIVE_LEVEL`.
+    match unsafe { super::acquire_map(sop) } {
         Some(scm) => {
             let result = flush_scm(scm, range, None);
             dereference(scm);
