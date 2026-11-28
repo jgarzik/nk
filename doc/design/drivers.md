@@ -67,8 +67,14 @@ The last part of the path is looked up among the boot files, the
 contents of `\NK\drivers`, which stand for `System32\drivers`: NK
 reads no file system. Nothing else starts a driver; a library is
 loaded when an image imports from it ([Exports](image.md)). The driver's entry
-point is given the path to its key. Stopping a service runs the driver's
-unload routine and frees its image; the key stays. An entry point that
+point is given the path to its key, and its record is entered before
+`DriverEntry` runs (marked unready so `IoOpenDriverRegistryKey` works
+during entry without publishing the driver as running yet). Stopping a
+service claims unload once on both the driver record and the module
+table under the loader mutex—blocking duplicate unloads and concurrent
+import bindings—calls the driver's unload routine, waits for any
+pending `IoSetCompletionRoutineEx` trampolines to finish, and then
+frees its image; the key stays. An entry point that
 fails gets no unload call, as on Windows, and its image is freed;
 one that fails or unloads with device objects left behind keeps its
 image and object, which the devices point into (on Windows the devices

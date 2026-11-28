@@ -171,7 +171,7 @@ pub struct Image {
     libraries: Vec<u64>,
     /// A library's image, which a driver was started from: the library
     /// keeps it, and unloading the driver leaves it loaded.
-    shared: bool,
+    pub shared: bool,
 }
 
 /// A library: an image loaded because another imports from it.
@@ -350,7 +350,7 @@ fn export_address(
             let next = MODULES
                 .lock()
                 .with_stem(stem)
-                .filter(|m| m.library || m.exports.size != 0)?;
+                .filter(|m| !m.unloading && (m.library || m.exports.size != 0))?;
             hold(next.base, held).ok()?;
             export_address(&next, symbol, held, hops + 1)
         }
@@ -364,7 +364,11 @@ fn hold(base: u64, held: &mut Vec<u64>) -> Result<(), LoadError> {
         return Ok(());
     }
     held.try_reserve_exact(1).map_err(|_| LoadError::NoMemory)?;
-    MODULES.lock().count_importer(base, 1);
+    if MODULES.lock().count_importer(base, 1).is_none() {
+        return Err(LoadError::NotALibrary {
+            module: String::from("(unloading)"),
+        });
+    }
     held.push(base);
     Ok(())
 }
@@ -375,7 +379,7 @@ fn hold(base: u64, held: &mut Vec<u64>) -> Result<(), LoadError> {
 fn library(name: &[u8], depth: usize, held: &mut Vec<u64>) -> Result<Module, LoadError> {
     let found = MODULES.lock().named(name);
     let module = match found {
-        Some(module) if module.library || module.exports.size != 0 => module,
+        Some(module) if !module.unloading && (module.library || module.exports.size != 0) => module,
         Some(_) => {
             return Err(LoadError::NotALibrary {
                 module: lossy(name),
@@ -512,7 +516,7 @@ pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
 pub fn load_boot(name: &str, file: &[u8]) -> Result<Image, LoadError> {
     serialised(|| {
         let module = MODULES.lock().named(name.as_bytes());
-        if let Some(module) = module.filter(|m| m.library) {
+        if let Some(module) = module.filter(|m| m.library && !m.unloading) {
             let entry = with_libraries(|libraries| {
                 libraries
                     .iter()
@@ -680,12 +684,15 @@ fn release(image: &Image) {
     }
 }
 
-/// Whether any other loaded image currently imports from `image`.
-pub fn has_importers(image: &Image) -> bool {
-    MODULES
-        .lock()
-        .containing(image.base)
-        .is_some_and(|module| module.base == image.base && module.references > 0)
+/// Atomically claim unload of the image at `base` under the loader's mutex:
+/// succeeds only if it has zero active importers and is not already unloading,
+/// preventing any concurrent load from binding new imports to it. Shared
+/// library images stay mapped for importers and always succeed here.
+pub fn begin_unload_at(base: u64, shared: bool) -> bool {
+    if shared {
+        return true;
+    }
+    serialised(|| MODULES.lock().begin_unload(base))
 }
 
 /// Unmap an image and free its memory. No code in it may run again.

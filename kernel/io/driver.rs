@@ -22,6 +22,15 @@ struct Record {
     image: Option<Image>,
     _driver_name: Vec<u16>,
     _registry_path: Vec<u16>,
+    /// True once `DriverEntry` has succeeded (so `IoOpenDriverRegistryKey` can
+    /// find the service path during `DriverEntry` while `running` only reports
+    /// fully initialised drivers).
+    ready: bool,
+    /// True once an unload has claimed this driver; prevents duplicate unloads.
+    unloading: bool,
+    /// Active `IoSetCompletionRoutineEx` registrations pinning this driver's
+    /// image until their trampolines finish.
+    active_completions: usize,
 }
 
 // SAFETY: the pointer is an identity for a pool object the record owns.
@@ -62,11 +71,34 @@ pub fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
         .lock()
         .iter()
         .find(|r| {
-            // `\Driver\<name>` and its terminator.
-            let service = &r._driver_name[8..r._driver_name.len() - 1];
-            nk_rtl::names_equal(service, &name.encode_utf16().collect::<Vec<u16>>())
+            r.ready && !r.unloading && {
+                // `\Driver\<name>` and its terminator.
+                let service = &r._driver_name[8..r._driver_name.len() - 1];
+                nk_rtl::names_equal(service, &name.encode_utf16().collect::<Vec<u16>>())
+            }
         })
         .map(|r| r.object)
+}
+
+/// Pin `driver` for an installed `IoSetCompletionRoutineEx` so [`unload`] waits
+/// for the completion trampoline to finish before unmapping its image.
+pub(super) fn pin_completion(driver: *mut DRIVER_OBJECT) -> bool {
+    let mut drivers = DRIVERS.lock();
+    if let Some(record) = drivers.iter_mut().find(|r| r.object == driver) {
+        record.active_completions += 1;
+        true
+    } else {
+        false
+    }
+}
+
+/// Release a pin taken by [`pin_completion`] after the completion trampoline
+/// has finished.
+pub(super) fn unpin_completion(driver: *mut DRIVER_OBJECT) {
+    let mut drivers = DRIVERS.lock();
+    if let Some(record) = drivers.iter_mut().find(|r| r.object == driver) {
+        record.active_completions = record.active_completions.saturating_sub(1);
+    }
 }
 
 /// Load the driver in `file`, the contents of the image called
@@ -111,37 +143,68 @@ pub(super) fn load(
         name,
     );
     let mut registry = counted(&mut registry_path);
-
+    let entry_addr = image.entry as usize;
+    let image_base = image.base;
+    let image_size = image.size;
+    // Publish the record with `ready: false` BEFORE calling `DriverEntry` so
+    // `IoOpenDriverRegistryKey` can locate the service path during entry
+    // without reporting the driver as running yet. The backing `Vec<u16>`
+    // buffers stay at stable heap addresses while `Record` lives in `DRIVERS`.
     // SAFETY: `object` is a fresh zeroed block holding a DRIVER_OBJECT
-    // followed by its DRIVER_EXTENSION. `image.entry` is the entry point
-    // of an image that was just mapped, relocated and bound, with the
-    // driver-entry signature every kernel driver has.
-    let status = unsafe {
+    // followed by its DRIVER_EXTENSION.
+    unsafe {
         let extension = object.add(1).cast::<DRIVER_EXTENSION>();
         (*extension).DriverObject = object;
         (*extension).ServiceKeyName = counted(&mut driver_name[8..]);
         (*object).Type = IO_TYPE_DRIVER;
         (*object).Size = size_of::<DRIVER_OBJECT>() as i16;
-        (*object).DriverStart = image.base as PVOID;
-        (*object).DriverSize = image.size as u32;
+        (*object).DriverStart = image_base as PVOID;
+        (*object).DriverSize = image_size as u32;
         (*object).DriverExtension = extension;
         (*object).DriverName = counted(&mut driver_name);
-        let entry: DRIVER_INITIALIZE = core::mem::transmute(image.entry as usize);
+        let entry: DRIVER_INITIALIZE = core::mem::transmute(entry_addr);
         (*object).DriverInit = Some(entry);
         // Every request type starts out rejected, as on Windows.
         (*object).MajorFunction = [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
+    }
+    {
+        let mut drivers = DRIVERS.lock();
+        drivers.reserve_exact(1);
+        drivers.push(Record {
+            object,
+            image: Some(image),
+            _driver_name: driver_name,
+            _registry_path: registry_path,
+            ready: false,
+            unloading: false,
+            active_completions: 0,
+        });
+    }
+    // SAFETY: `entry_addr` is the entry point of the mapped image; `object`
+    // and `registry` live through the call.
+    let status = unsafe {
         // An exception the entry point lets out is unhandled in a
         // system thread, as on Windows, where one runs it. That holds
         // too when a driver started the service (`ZwLoadDriver`):
         // Windows would search that driver's frames for a handler, NK
         // stops the system.
         seh::call(
-            entry as usize,
+            entry_addr,
             [object.addr(), (&raw mut registry).addr(), 0, 0],
             &Guard::Base(Unhandled::SystemThread),
         ) as u32 as NTSTATUS
     };
     if !nt_success(status) {
+        let record = {
+            let mut drivers = DRIVERS.lock();
+            let index = drivers
+                .iter()
+                .position(|r| r.object == object)
+                .expect("driver record inserted before DriverEntry");
+            let record = drivers.swap_remove(index);
+            drivers.shrink_to_fit();
+            record
+        };
         // Windows does not call the unload routine of a driver whose entry
         // failed; the driver must have cleaned up after itself. One that
         // left a device behind has its image and object kept, as
@@ -158,16 +221,11 @@ pub(super) fn load(
             ));
             // Kept whole, as `unload` keeps a record: the object
             // points into its name and registry path too.
-            core::mem::forget(Record {
-                object,
-                image: Some(image),
-                _driver_name: driver_name,
-                _registry_path: registry_path,
-            });
+            core::mem::forget(record);
             return Err(DriverError::EntryFailed(status));
         }
         // SAFETY: the object is this module's, out of the records, and has no device.
-        unsafe { free(object, Some(&image)) };
+        unsafe { free(record.object, record.image.as_ref()) };
         return Err(DriverError::EntryFailed(status));
     }
     // SAFETY: the driver object and its device list are live; devices made
@@ -179,16 +237,12 @@ pub(super) fn load(
             device = (*device).NextDevice;
         }
     }
-    let mut drivers = DRIVERS.lock();
-    // Room for exactly one more, as unloading leaves exactly enough: the
-    // table's memory then depends only on how many drivers are loaded.
-    drivers.reserve_exact(1);
-    drivers.push(Record {
-        object,
-        image: Some(image),
-        _driver_name: driver_name,
-        _registry_path: registry_path,
-    });
+    {
+        let mut drivers = DRIVERS.lock();
+        if let Some(record) = drivers.iter_mut().find(|r| r.object == object) {
+            record.ready = true;
+        }
+    }
     Ok(object)
 }
 
@@ -245,6 +299,9 @@ pub fn builtin_in(
         image: None,
         _driver_name: driver_name,
         _registry_path: Vec::new(),
+        ready: true,
+        unloading: false,
+        active_completions: 0,
     });
     Ok(object)
 }
@@ -298,32 +355,45 @@ unsafe fn free(object: *mut DRIVER_OBJECT, image: Option<&Image>) {
 /// module's records before it is used (doc/UNSAFE.md, rule 1).
 pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
     irql::expect_passive("unloading a driver");
-    // A driver that is part of the kernel is not unloaded, nor one that
-    // another loaded image still imports from.
     let listed = |drivers: &[Record]| {
         drivers
             .iter()
             .position(|r| r.object == object && r.image.is_some())
     };
-    {
-        let drivers = DRIVERS.lock();
+    // Atomically claim the unload on the driver record before dropping DRIVERS,
+    // so two concurrent ZwUnloadDriver calls cannot both enter DriverUnload,
+    // and then claim the module under the loader mutex so no concurrent load
+    // can bind a new importer before the image is unmapped.
+    let (routine, base, shared) = {
+        let mut drivers = DRIVERS.lock();
         let Some(index) = listed(&drivers) else {
             return Err("not a loaded driver");
         };
-        if drivers[index]
-            .image
-            .as_ref()
-            .is_some_and(ldr::has_importers)
-        {
-            return Err("driver still has active importers");
+        let record = &mut drivers[index];
+        if !record.ready {
+            return Err("not a loaded driver");
         }
+        if record.unloading {
+            return Err("driver is already unloading");
+        }
+        // SAFETY: `object` is a live driver object owned by this module.
+        let Some(routine) = (unsafe { (*object).DriverUnload }) else {
+            return Err("driver has no unload routine");
+        };
+        let image = record.image.as_ref().expect("checked is_some above");
+        record.unloading = true;
+        (routine, image.base, image.shared)
+    };
+    if !ldr::begin_unload_at(base, shared) {
+        let mut drivers = DRIVERS.lock();
+        if let Some(record) = drivers.iter_mut().find(|r| r.object == object) {
+            record.unloading = false;
+        }
+        return Err("driver still has active importers");
     }
-    // SAFETY: `object` is a live driver object (it has a record), and its
-    // unload routine, if set, was set by the driver itself.
+    // SAFETY: `object` is exclusively claimed for unload; `routine` is its
+    // `DriverUnload`.
     let leftover = unsafe {
-        let routine = (*object)
-            .DriverUnload
-            .ok_or("driver has no unload routine")?;
         seh::call(
             routine as usize,
             [object.addr(), 0, 0, 0],
@@ -331,6 +401,15 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         );
         !(*object).DeviceObject.is_null()
     };
+    // Wait for any active `IoSetCompletionRoutineEx` trampolines referencing
+    // this driver to finish before unmapping its image.
+    while DRIVERS
+        .lock()
+        .iter()
+        .any(|r| r.object == object && r.active_completions > 0)
+    {
+        crate::ke::thread::yield_now();
+    }
     let record = {
         let mut drivers = DRIVERS.lock();
         let index = listed(&drivers).ok_or("not a loaded driver")?;
@@ -340,13 +419,79 @@ pub(super) fn unload(object: *mut DRIVER_OBJECT) -> Result<(), &'static str> {
         record
     };
     if leftover {
-        // The image still backs live device objects: keep it mapped.
+        // The image still backs live device objects: keep it mapped (and keep
+        // the module marked unloading so no new imports bind to it).
         core::mem::forget(record);
         return Err("unload routine left device objects behind");
     }
-    // SAFETY: the object is this module's, out of the records, and has no device.
+    // SAFETY: the object is this module's, out of the records, has no device,
+    // and all extended completion trampolines have finished.
     unsafe { free(record.object, record.image.as_ref()) };
     Ok(())
+}
+
+/// Exercise the `ready: false` initialization window used during `DriverEntry`
+/// for selftests: inserts a service-backed record with `ready: false`, runs
+/// `probe` (which can call `IoOpenDriverRegistryKey`), and tears it down.
+pub(crate) fn with_initializing_driver<R>(
+    name: &str,
+    probe: impl FnOnce(*mut DRIVER_OBJECT) -> R,
+) -> Result<R, DriverError> {
+    let mut driver_name = wide("\\Driver\\", name);
+    let size = size_of::<DRIVER_OBJECT>() + size_of::<DRIVER_EXTENSION>();
+    let path = &driver_name[..driver_name.len() - 1];
+    let body = ob::object::create_named(&ob::object::DRIVER_TYPE, size, ob::leaf(path))
+        .ok_or(DriverError::NoMemory)?;
+    let object = body.cast::<DRIVER_OBJECT>();
+    // SAFETY: fresh named object.
+    let named = unsafe { ob::insert(path, body) };
+    if !nt_success(named) {
+        // SAFETY: creating reference of an unused object.
+        unsafe { ob::object::dereference(body) };
+        return Err(DriverError::Name(named));
+    }
+    let registry_path = wide(
+        "\\Registry\\Machine\\System\\CurrentControlSet\\Services\\",
+        name,
+    );
+    // SAFETY: fresh zeroed DRIVER_OBJECT + DRIVER_EXTENSION.
+    unsafe {
+        let extension = object.add(1).cast::<DRIVER_EXTENSION>();
+        (*extension).DriverObject = object;
+        (*extension).ServiceKeyName = counted(&mut driver_name[8..]);
+        (*object).Type = IO_TYPE_DRIVER;
+        (*object).Size = size_of::<DRIVER_OBJECT>() as i16;
+        (*object).DriverExtension = extension;
+        (*object).DriverName = counted(&mut driver_name);
+        (*object).MajorFunction = [Some(irp::invalid_device_request); IRP_MJ_MAXIMUM_FUNCTION + 1];
+    }
+    {
+        let mut drivers = DRIVERS.lock();
+        drivers.reserve_exact(1);
+        drivers.push(Record {
+            object,
+            image: None,
+            _driver_name: driver_name,
+            _registry_path: registry_path,
+            ready: false,
+            unloading: false,
+            active_completions: 0,
+        });
+    }
+    let out = probe(object);
+    let record = {
+        let mut drivers = DRIVERS.lock();
+        let index = drivers
+            .iter()
+            .position(|r| r.object == object)
+            .expect("temporary initializing driver record");
+        let record = drivers.swap_remove(index);
+        drivers.shrink_to_fit();
+        record
+    };
+    // SAFETY: owned temporary driver object with no devices.
+    unsafe { free(record.object, None) };
+    Ok(out)
 }
 
 /// Pool tag of driver-object extensions, as Windows spells it.

@@ -188,6 +188,8 @@ pub unsafe extern "C" fn invalid_device_request(
 /// Context for a completion routine installed by [`IoSetCompletionRoutineEx`].
 struct CompletionEx {
     device: *mut DEVICE_OBJECT,
+    driver: *mut DRIVER_OBJECT,
+    pinned: bool,
     routine: IO_COMPLETION_ROUTINE,
     context: *mut core::ffi::c_void,
     control: u8,
@@ -197,8 +199,9 @@ const TAG_COMPLETION_EX: u32 = u32::from_le_bytes(*b"IoCp");
 
 /// Trampoline invoked on every IRP completion for [`IoSetCompletionRoutineEx`]:
 /// frees the wrapper before calling the driver's routine (if the requested
-/// condition holds) and releases the device reference after it returns so the
-/// driver image cannot unload while its completion routine executes.
+/// condition holds), releases the device reference, and unpins the driver
+/// image after it returns so the image cannot unload while its completion
+/// routine executes or while the IRP is pending.
 ///
 /// # Safety
 /// Called by `IofCompleteRequest` with `context` from `IoSetCompletionRoutineEx`.
@@ -211,8 +214,8 @@ unsafe extern "C" fn completion_ex_trampoline(
     // SAFETY: allocated by `IoSetCompletionRoutineEx`; consumed once here.
     let saved = unsafe { raw.read() };
     let _ = pool::free(raw.cast());
-    // SAFETY: `irp` is live during completion; `saved.device` was referenced
-    // by `IoSetCompletionRoutineEx`.
+    // SAFETY: `irp` is live during completion; `saved.device` and `saved.driver`
+    // were pinned by `IoSetCompletionRoutineEx`.
     let status = unsafe {
         let wanted =
             completion_routine_wanted(saved.control, (*irp).IoStatus.Status, (*irp).Cancel != 0);
@@ -231,12 +234,16 @@ unsafe extern "C" fn completion_ex_trampoline(
     };
     // SAFETY: releases the reference taken in `IoSetCompletionRoutineEx`.
     unsafe { crate::ob::object::dereference(saved.device.cast()) };
+    if saved.pinned {
+        super::driver::unpin_completion(saved.driver);
+    }
     status
 }
 
 /// [`IoSetCompletionRoutineEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcompletionroutineex):
 /// install a completion routine on the next stack location of `irp`, holding a
-/// reference on `device` until the routine returns.
+/// reference on `device` and pinning its driver image against unload until the
+/// completion trampoline returns.
 ///
 /// # Safety
 /// `device` is a live `DEVICE_OBJECT`; `irp` is a live `IRP` with a next stack
@@ -272,9 +279,13 @@ pub unsafe extern "C" fn IoSetCompletionRoutineEx(
     }
     // SAFETY: per the contract; `block` is freshly allocated and `device` is live.
     unsafe {
+        let driver = (*device).DriverObject;
         crate::ob::object::reference(device.cast());
+        let pinned = super::driver::pin_completion(driver);
         block.write(CompletionEx {
             device,
+            driver,
+            pinned,
             routine,
             context,
             control,
@@ -282,8 +293,9 @@ pub unsafe extern "C" fn IoSetCompletionRoutineEx(
         let next = next_location(irp);
         (*next).CompletionRoutine = Some(completion_ex_trampoline);
         (*next).Context = block.cast();
-        // Always invoke the trampoline so the wrapper and device reference
-        // are released even when the caller's condition does not match.
+        // Always invoke the trampoline so the wrapper, device reference, and
+        // driver unload pin are released even when the caller's condition does
+        // not match.
         (*next).Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR | SL_INVOKE_ON_CANCEL;
     }
     STATUS_SUCCESS

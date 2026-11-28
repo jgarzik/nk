@@ -105,6 +105,13 @@ goes to, as Windows' `IoGetRelatedTargetDevice` does. A RAW volume stays mounted
 (`VPB_REMOVE_PENDING`) and nothing but the mount holds its block; then
 RAW's device goes. Another file system's volume is its own to dismount.
 
+`IoSetCompletionRoutineEx` allocates a wrapper trampoline that
+references the device object and pins the owning driver's unload
+rundown until the trampoline finishes (including when the IRP status
+suppresses the driver's callback), ensuring the driver image stays
+mapped even if `IoDeleteDevice` and `DriverUnload` run while the IRP is
+pending.
+
 **Associated requests** (`io/irp.rs`). `IoMakeAssociatedIrp` makes a
 request for the master's thread whose `AssociatedIrp.MasterIrp` is the
 master; the file system sets the master's `IrpCount`. An associated

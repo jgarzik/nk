@@ -26,6 +26,8 @@ pub struct Module {
     /// How many loaded images import from it: what keeps a library
     /// loaded.
     pub references: u32,
+    /// Unload has been claimed: no new importer may bind to this image.
+    pub unloading: bool,
     /// Its place in the order images were loaded in, given when it is
     /// entered in a table.
     order: u64,
@@ -50,6 +52,7 @@ impl Module {
             exports: DataDir::default(),
             library: false,
             references: 0,
+            unloading: false,
             order: 0,
         })
     }
@@ -149,11 +152,35 @@ impl<const N: usize> Modules<N> {
 
     /// Count one more importer of the image loaded at `base`, or one
     /// fewer (`by` is 1 or -1). Returns how many it has now; `None` if
-    /// no image is loaded there or the count would leave its range.
+    /// no image is loaded there, it is unloading on an increment, or the
+    /// count would leave its range.
     pub fn count_importer(&mut self, base: u64, by: i32) -> Option<u32> {
         let module = self.slots.iter_mut().flatten().find(|m| m.base == base)?;
+        if by > 0 && module.unloading {
+            return None;
+        }
         module.references = module.references.checked_add_signed(by)?;
         Some(module.references)
+    }
+
+    /// Claim unload of the image at `base`: succeeds once when it has zero
+    /// importers and is not already unloading, preventing new bindings.
+    pub fn begin_unload(&mut self, base: u64) -> bool {
+        let Some(module) = self.slots.iter_mut().flatten().find(|m| m.base == base) else {
+            return false;
+        };
+        if module.references != 0 || module.unloading {
+            return false;
+        }
+        module.unloading = true;
+        true
+    }
+
+    /// Undo an unload claim on the image at `base`.
+    pub fn cancel_unload(&mut self, base: u64) {
+        if let Some(module) = self.slots.iter_mut().flatten().find(|m| m.base == base) {
+            module.unloading = false;
+        }
     }
 
     /// Hand the images to `take`, oldest load first, for as long as it
@@ -356,5 +383,20 @@ mod tests {
         table.insert(module("c.sys", 0x3000, 0x1000)).unwrap();
         assert_eq!(table.containing(0x3000).unwrap().name(), b"c.sys");
         assert_eq!(table.containing(0x2000).unwrap().name(), b"b.sys");
+    }
+
+    #[test]
+    fn begin_unload_blocks_importers_and_duplicate_claims() {
+        let mut table = Modules::<4>::new();
+        table.insert(module("drv.sys", 0x2000, 0x1000)).unwrap();
+        assert_eq!(table.count_importer(0x2000, 1), Some(1));
+        assert!(!table.begin_unload(0x2000));
+        assert_eq!(table.count_importer(0x2000, -1), Some(0));
+        assert!(table.begin_unload(0x2000));
+        // Once unloading is claimed, duplicate claims and new importers fail.
+        assert!(!table.begin_unload(0x2000));
+        assert_eq!(table.count_importer(0x2000, 1), None);
+        table.cancel_unload(0x2000);
+        assert_eq!(table.count_importer(0x2000, 1), Some(1));
     }
 }
