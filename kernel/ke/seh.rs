@@ -40,6 +40,9 @@ use nk_unwind::scope::{self, Action, Phase};
 pub const STATUS_DATATYPE_MISALIGNMENT: u32 = 0x8000_0002;
 pub const STATUS_BREAKPOINT: u32 = 0x8000_0003;
 pub const STATUS_ACCESS_VIOLATION: u32 = 0xC000_0005;
+/// A page could not be read in: `ExceptionInformation` holds the access,
+/// the address and the read's status.
+pub const STATUS_IN_PAGE_ERROR: u32 = 0xC000_0006;
 pub const STATUS_ILLEGAL_INSTRUCTION: u32 = 0xC000_001D;
 pub const STATUS_INTEGER_DIVIDE_BY_ZERO: u32 = 0xC000_0094;
 

@@ -55,6 +55,9 @@ const ABORT_WRITE: u64 = 1 << 6;
 /// SPSR_EL1: interrupts were masked; the condition flags, which are all
 /// of it a handler's context may change.
 const SPSR_I: u64 = 1 << 7;
+/// SPSR_EL1: the exception level and stack the interrupted code ran at;
+/// 0 is EL0, user mode.
+const SPSR_M: u64 = 0xF;
 const SPSR_NZCV: u64 = 0xF000_0000;
 /// `brk` immediates, as Windows on arm64 assigns them.
 const BRK_BREAKPOINT: u64 = 0xF000;
@@ -718,7 +721,7 @@ fn deliver(frame: &mut Frame, code: u32, parameters: &[u64]) {
 extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
     use crate::ke::seh::{
         ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE, STATUS_ACCESS_VIOLATION, STATUS_BREAKPOINT,
-        STATUS_ILLEGAL_INSTRUCTION, STATUS_INTEGER_DIVIDE_BY_ZERO,
+        STATUS_ILLEGAL_INSTRUCTION, STATUS_IN_PAGE_ERROR, STATUS_INTEGER_DIVIDE_BY_ZERO,
     };
     // Vectors come in fours: synchronous, IRQ, FIQ, SError.
     let class = (vector & 3 == 0).then_some(frame.esr >> 26);
@@ -755,11 +758,29 @@ extern "C" fn trap_handler(frame: &mut Frame, vector: u64) {
                 _ if frame.esr & ABORT_WRITE != 0 => ACCESS_WRITE,
                 _ => ACCESS_READ,
             };
+            // A page of a file the memory manager can bring in.
+            let in_page = match crate::mm::fault::page_fault(
+                frame.far,
+                access,
+                frame.spsr & SPSR_M == 0,
+                frame.spsr & SPSR_I == 0,
+            ) {
+                Some(Ok(())) => return,
+                Some(Err(status)) => Some(status),
+                None => None,
+            };
             // The kernel's own access to memory that may not be there:
             // the routine returns an error instead.
             if let Some(resume) = seh::fixup(frame.elr) {
                 (frame.elr, frame.x[9], frame.x[10]) = (resume, frame.far, access);
                 return;
+            }
+            if let Some(status) = in_page {
+                return deliver(
+                    frame,
+                    STATUS_IN_PAGE_ERROR,
+                    &[access, frame.far, u64::from(status as u32)],
+                );
             }
             stop = crate::ke::seh::memory_fault(frame.far, access, frame.elr);
             if stop.is_none() {

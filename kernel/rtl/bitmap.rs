@@ -150,6 +150,16 @@ pub unsafe extern "C" fn RtlFindSetBits(header: *const RTL_BITMAP, count: u32, h
     bitmap::find_set(&bits, size, count, hint).unwrap_or(u32::MAX)
 }
 
+/// [`RtlFindClearBits`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlfindclearbits).
+///
+/// # Safety
+/// `header` is an initialised bitmap.
+pub unsafe extern "C" fn RtlFindClearBits(header: *const RTL_BITMAP, count: u32, hint: u32) -> u32 {
+    // SAFETY: per the contract.
+    let (bits, size) = unsafe { of(header) };
+    bitmap::find_clear(&bits, size, count, hint).unwrap_or(u32::MAX)
+}
+
 /// Store a run's start and return its length.
 ///
 /// # Safety

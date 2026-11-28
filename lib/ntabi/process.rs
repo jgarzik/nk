@@ -25,6 +25,19 @@ pub const CREATE_TIME: usize = 0x468;
 /// to the token object whose low four bits ([`FAST_REF_COUNT_MASK`])
 /// count references handed out in advance.
 pub const TOKEN: usize = 0x4B8;
+/// `DiskCounters`: the process's `PROCESS_DISK_COUNTERS` (bytes read
+/// and written, read, write and flush operations), or null.
+pub const DISK_COUNTERS: usize = 0x8B8;
+/// `Flags2`, whose bits 12 to 14 are `DefaultPagePriority`, the page
+/// priority a new thread of the process starts with.
+pub const FLAGS2: usize = 0x460;
+pub const DEFAULT_PAGE_PRIORITY_SHIFT: u32 = 12;
+/// `Flags`, whose bits 27 to 29 are `DefaultIoPriority`, the I/O
+/// priority a new thread of the process starts with.
+pub const FLAGS: usize = 0x464;
+pub const DEFAULT_IO_PRIORITY_SHIFT: u32 = 27;
+/// `Flags.Background`: the process runs in background mode.
+pub const BACKGROUND: u32 = 1 << 20;
 /// The bits of an `EX_FAST_REF` that are a count, not part of the
 /// pointer. Objects are 16-byte aligned, so a pointer has them clear.
 pub const FAST_REF_COUNT_MASK: usize = 0xF;

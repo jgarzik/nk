@@ -1,0 +1,521 @@
+# Registry content for Microsoft's kernel cryptography and security
+# drivers, laid over the SYSTEM hive with registry-overlay.txt in the
+# boots that ask for it (a scenario's `registry = ["crypto"]`;
+# tools/mkesp.py).
+#
+# cng.sys and ksecdd.sys are boot drivers on Windows: the reference
+# installation's driver list shows both "Boot", "Running", "Kernel"
+# (sc/driverquery). ksecdd.sys opens \Device\CNG in its DriverEntry, so
+# CNG starts first. ksecdd.sys also registers performance counters
+# (PcwRegister) and fails its start if that fails; the kernel's Pcw
+# routines are pcw.sys's, which the reference installation loads at boot
+# too.
+#
+# Every value is that of the SYSTEM hive of the Windows 10 22H2 WinPE
+# image (boot.wim, image 1, Windows\System32\config\SYSTEM), the
+# destination's own registry: pcw in group System Reserved, the first of
+# ServiceGroupOrder; CNG in group Core; KSecDD in group Base; both of the
+# latter critical (ErrorControl 3).
+
+key ControlSet001\Services\pcw
+value ImagePath expand_sz System32\drivers\pcw.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 1
+value Group sz "System Reserved"
+value DisplayName sz "Performance Counters for Windows Driver"
+
+key ControlSet001\Services\CNG
+value ImagePath expand_sz System32\Drivers\cng.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz Core
+value Tag dword 4
+
+key ControlSet001\Services\KSecDD
+value ImagePath expand_sz System32\Drivers\ksecdd.sys
+value Type dword 1
+value Start dword 0
+value ErrorControl dword 3
+value Group sz Base
+value Tag dword 1
+
+# The cryptography configuration cng.sys reads when a driver opens an
+# algorithm provider (BCryptOpenAlgorithmProvider): every key and value
+# under Control\Cryptography of the same WinPE hive, as it is there.
+
+key ControlSet001\Control\Cryptography
+key ControlSet001\Control\Cryptography\Configuration
+key ControlSet001\Control\Cryptography\Configuration\Domain
+key ControlSet001\Control\Cryptography\Configuration\Domain\Default
+value Flags dword 0
+key ControlSet001\Control\Cryptography\Configuration\Local
+key ControlSet001\Control\Cryptography\Configuration\Local\Default
+value Flags dword 0
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001
+value "" sz CRYPT_CIPHER_INTERFACE
+value Functions multi_sz AES 3DES 3DES_112 XTS-AES DESX DES RC2 RC4
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\3DES
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\3DES\Properties
+value KeyLength binary hex:80000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\3DES_112
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\3DES_112\Properties
+value KeyLength binary hex:70000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\AES
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\AES\Properties
+value KeyLength binary hex:80000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\DES
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\DES\Properties
+value KeyLength binary hex:80000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\DESX
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\DESX\Properties
+value KeyLength binary hex:80000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\RC2
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\RC2\Properties
+value KeyLength binary hex:80000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\RC4
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\RC4\Properties
+value KeyLength binary hex:80000000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000001\XTS-AES
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002
+value "" sz CRYPT_HASH_INTERFACE
+value Functions multi_sz SHA256 SHA384 SHA512 SHA1 MD5 MD4 MD2 AES-GMAC AES-CMAC
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\AES-CMAC
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\AES-GMAC
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\MD2
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\MD4
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\MD5
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\SHA1
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000002\SHA512
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000003
+value "" sz CRYPT_ASYMMETRIC_ENCRYPTION_INTERFACE
+value Functions multi_sz RSA
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000003\RSA
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000003\RSA\Properties
+value KeyLength binary hex:00040000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004
+value "" sz CRYPT_SECRET_AGREEMENT_INTERFACE
+value Functions multi_sz DH ECDH_P256 ECDH_P384 ECDH_P521 ECDH
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\DH
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\DH\Properties
+value KeyLength binary hex:00040000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH_P256
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH_P256\Properties
+value KeyLength binary hex:00010000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH_P384
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH_P384\Properties
+value KeyLength binary hex:80010000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH_P521
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000004\ECDH_P521\Properties
+value KeyLength binary hex:09020000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005
+value "" sz CRYPT_SIGNATURE_INTERFACE
+value Functions multi_sz RSA_SIGN ECDSA_P256 ECDSA_P384 ECDSA_P521 ECDSA DSA
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\DSA
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\DSA\Properties
+value KeyLength binary hex:00040000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA_P256
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA_P256\Properties
+value KeyLength binary hex:00010000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA_P384
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA_P384\Properties
+value KeyLength binary hex:80010000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA_P521
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\ECDSA_P521\Properties
+value KeyLength binary hex:09020000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\RSA_SIGN
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000005\RSA_SIGN\Properties
+value KeyLength binary hex:00040000
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000006
+value "" sz CRYPT_RNG_INTERFACE
+value Functions multi_sz RNG FIPS186DSARNG DUALECRNG
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000006\DUALECRNG
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000006\FIPS186DSARNG
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000006\RNG
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007
+value "" sz CRYPT_KEY_DERIVATION_INTERFACE
+value Functions multi_sz SP800_108_CTR_HMAC SP800_56A_CONCAT PBKDF2 CAPI_KDF TLS1_1_KDF TLS1_2_KDF HKDF
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\CAPI_KDF
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\HKDF
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\PBKDF2
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\SP800_108_CTR_HMAC
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\SP800_56A_CONCAT
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\TLS1_1_KDF
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00000007\TLS1_2_KDF
+value Flags dword 0
+value Providers multi_sz "Microsoft Primitive Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010001
+value "" sz CRYPT_KEY_STORAGE_INTERFACE
+value Functions multi_sz KEY_STORAGE
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010001\KEY_STORAGE
+value Flags dword 0
+value Providers multi_sz "Microsoft Software Key Storage Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002
+value "" sz NCRYPT_SCHANNEL_INTERFACE
+value Functions multi_sz TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_AES_256_GCM_SHA384 TLS_RSA_WITH_AES_128_GCM_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA256 TLS_RSA_WITH_AES_128_CBC_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA TLS_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_3DES_EDE_CBC_SHA TLS_RSA_WITH_NULL_SHA256 TLS_RSA_WITH_NULL_SHA TLS_PSK_WITH_AES_256_GCM_SHA384 TLS_PSK_WITH_AES_128_GCM_SHA256 TLS_PSK_WITH_AES_256_CBC_SHA384 TLS_PSK_WITH_AES_128_CBC_SHA256 TLS_PSK_WITH_NULL_SHA384 TLS_PSK_WITH_NULL_SHA256
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_AES_128_GCM_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_AES_256_GCM_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_EXPORT1024_WITH_DES_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_WITH_AES_128_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_WITH_AES_128_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_WITH_AES_256_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_WITH_AES_256_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_DSS_WITH_DES_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_RSA_WITH_AES_128_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_RSA_WITH_AES_128_GCM_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_RSA_WITH_AES_256_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_PSK_WITH_AES_128_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_PSK_WITH_AES_128_GCM_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_PSK_WITH_AES_256_CBC_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_PSK_WITH_AES_256_GCM_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_PSK_WITH_NULL_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_PSK_WITH_NULL_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_EXPORT1024_WITH_DES_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_EXPORT1024_WITH_RC4_56_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_EXPORT_WITH_RC4_40_MD5
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_3DES_EDE_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_AES_128_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_AES_128_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_AES_128_GCM_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_AES_256_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_AES_256_CBC_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_AES_256_GCM_SHA384
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_DES_CBC_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_NULL_MD5
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_NULL_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_NULL_SHA256
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_RC4_128_MD5
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010002\TLS_RSA_WITH_RC4_128_SHA
+value Flags dword 0
+value Providers multi_sz "Microsoft SSL Protocol Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004
+value "" sz NCRYPT_KEY_PROTECTION_INTERFACE
+value Functions multi_sz SID SDDL LOCAL WEBCREDENTIALS MSIDCRL DRACERTIFICATE CERTIFICATE VAULTCREDENTIALS KEYFILE LOCKEDCREDENTIALS
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\CERTIFICATE
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\DRACERTIFICATE
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\KEYFILE
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\LOCAL
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\LOCKEDCREDENTIALS
+value Flags dword 0
+value Providers multi_sz "Windows Client Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\MSIDCRL
+value Flags dword 0
+value Providers multi_sz "Windows Client Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\SDDL
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\SID
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\VAULTCREDENTIALS
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\Default\00010004\WEBCREDENTIALS
+value Flags dword 0
+value Providers multi_sz "Microsoft Key Protection Provider"
+key ControlSet001\Control\Cryptography\Configuration\Local\SSL
+value Flags dword 1
+key ControlSet001\Control\Cryptography\Configuration\Local\SSL\00010002
+value "" sz NCRYPT_SCHANNEL_INTERFACE
+value EccCurves multi_sz curve25519 NistP256 NistP384
+value Functions multi_sz TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_AES_256_GCM_SHA384 TLS_RSA_WITH_AES_128_GCM_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA256 TLS_RSA_WITH_AES_128_CBC_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA TLS_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_3DES_EDE_CBC_SHA TLS_RSA_WITH_NULL_SHA256 TLS_RSA_WITH_NULL_SHA TLS_PSK_WITH_AES_256_GCM_SHA384 TLS_PSK_WITH_AES_128_GCM_SHA256 TLS_PSK_WITH_AES_256_CBC_SHA384 TLS_PSK_WITH_AES_128_CBC_SHA256 TLS_PSK_WITH_NULL_SHA384 TLS_PSK_WITH_NULL_SHA256
+key ControlSet001\Control\Cryptography\Configuration\Local\SSL\00010003
+value "" sz NCRYPT_SCHANNEL_SIGNATURE_INTERFACE
+value Functions multi_sz RSAE-PSS/SHA256 RSAE-PSS/SHA384 RSAE-PSS/SHA512 RSA/SHA256 RSA/SHA384 RSA/SHA1 ECDSA/SHA256 ECDSA/SHA384 ECDSA/SHA1 DSA/SHA1 RSA/SHA512 ECDSA/SHA512
+key ControlSet001\Control\Cryptography\ECCParameters
+key ControlSet001\Control\Cryptography\Providers
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Key Protection Provider"
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Key Protection Provider\\UM"
+value Image sz mskeyprotect.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Key Protection Provider\\UM\\00010004"
+value "" sz NCRYPT_KEY_PROTECTION_INTERFACE
+value Flags dword 65536
+value Functions multi_sz SID SDDL LOCAL WEBCREDENTIALS VAULTCREDENTIALS DRACERTIFICATE CERTIFICATE KEYFILE
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider"
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM"
+value Image sz cng.sys
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000001"
+value "" sz CRYPT_CIPHER_INTERFACE
+value Flags dword 1
+value Functions multi_sz AES 3DES 3DES_112 XTS-AES DESX DES RC2 RC4
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000002"
+value "" sz CRYPT_HASH_INTERFACE
+value Flags dword 1
+value Functions multi_sz SHA256 SHA384 SHA512 SHA1 MD5 MD4 MD2 AES-GMAC AES-CMAC
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000003"
+value "" sz CRYPT_ASYMMETRIC_ENCRYPTION_INTERFACE
+value Flags dword 1
+value Functions multi_sz RSA
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000004"
+value "" sz CRYPT_SECRET_AGREEMENT_INTERFACE
+value Flags dword 1
+value Functions multi_sz DH ECDH_P256 ECDH_P384 ECDH_P521 ECDH
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000005"
+value "" sz CRYPT_SIGNATURE_INTERFACE
+value Flags dword 1
+value Functions multi_sz RSA_SIGN ECDSA_P256 ECDSA_P384 ECDSA_P521 ECDSA
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000006"
+value "" sz CRYPT_RNG_INTERFACE
+value Flags dword 1
+value Functions multi_sz RNG FIPS186DSARNG DUALECRNG
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\KM\\00000007"
+value "" sz CRYPT_KEY_DERIVATION_INTERFACE
+value Flags dword 1
+value Functions multi_sz SP800_108_CTR_HMAC SP800_56A_CONCAT PBKDF2 CAPI_KDF TLS1_1_KDF TLS1_2_KDF HKDF
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM"
+value Image sz bcryptprimitives.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000001"
+value "" sz CRYPT_CIPHER_INTERFACE
+value Flags dword 1
+value Functions multi_sz AES 3DES 3DES_112 XTS-AES DESX DES RC2 RC4
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000002"
+value "" sz CRYPT_HASH_INTERFACE
+value Flags dword 1
+value Functions multi_sz SHA256 SHA384 SHA512 SHA1 MD5 MD4 MD2 AES-GMAC AES-CMAC
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000003"
+value "" sz CRYPT_ASYMMETRIC_ENCRYPTION_INTERFACE
+value Flags dword 1
+value Functions multi_sz RSA
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000004"
+value "" sz CRYPT_SECRET_AGREEMENT_INTERFACE
+value Flags dword 1
+value Functions multi_sz DH ECDH_P256 ECDH_P384 ECDH_P521 ECDH
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000005"
+value "" sz CRYPT_SIGNATURE_INTERFACE
+value Flags dword 1
+value Functions multi_sz RSA_SIGN ECDSA_P256 ECDSA_P384 ECDSA_P521 ECDSA DSA
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000006"
+value "" sz CRYPT_RNG_INTERFACE
+value Flags dword 1
+value Functions multi_sz RNG FIPS186DSARNG DUALECRNG
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Primitive Provider\\UM\\00000007"
+value "" sz CRYPT_KEY_DERIVATION_INTERFACE
+value Flags dword 1
+value Functions multi_sz SP800_108_CTR_HMAC SP800_56A_CONCAT PBKDF2 CAPI_KDF TLS1_1_KDF TLS1_2_KDF HKDF
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Software Key Storage Provider"
+value Aliases multi_sz "Microsoft Base Cryptographic Provider v1.0" "Microsoft Enhanced Cryptographic Provider v1.0" "Microsoft Strong Cryptographic Provider" "Microsoft RSA Signature Cryptographic Provider" "Microsoft RSA SChannel Cryptographic Provider" "Microsoft Base DSS Cryptographic Provider" "Microsoft Base DSS and Diffie-Hellman Cryptographic Provider" "Microsoft Enhanced DSS and Diffie-Hellman Cryptographic Provider" "Microsoft DH SChannel Cryptographic Provider" "Microsoft Enhanced RSA and AES Cryptographic Provider"
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Software Key Storage Provider\\Properties"
+value BioProtectionBioImage expand_sz %SystemRoot%\System32\winbio.dll
+value UXImage sz credui.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Software Key Storage Provider\\UM"
+value Image sz ncryptprov.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft Software Key Storage Provider\\UM\\00010001"
+value "" sz CRYPT_KEY_STORAGE_INTERFACE
+value Flags dword 65536
+value Functions multi_sz KEY_STORAGE
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft SSL Protocol Provider"
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft SSL Protocol Provider\\KM"
+value Image sz cng.sys
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft SSL Protocol Provider\\KM\\00010002"
+value "" sz NCRYPT_SCHANNEL_INTERFACE
+value Flags dword 0
+value Functions multi_sz TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA TLS_DHE_RSA_WITH_AES_256_CBC_SHA TLS_DHE_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_AES_256_GCM_SHA384 TLS_RSA_WITH_AES_128_GCM_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA256 TLS_RSA_WITH_AES_128_CBC_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA TLS_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_3DES_EDE_CBC_SHA TLS_DHE_DSS_WITH_AES_256_CBC_SHA256 TLS_DHE_DSS_WITH_AES_128_CBC_SHA256 TLS_DHE_DSS_WITH_AES_256_CBC_SHA TLS_DHE_DSS_WITH_AES_128_CBC_SHA TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA TLS_RSA_WITH_RC4_128_SHA TLS_RSA_WITH_RC4_128_MD5 TLS_RSA_WITH_DES_CBC_SHA TLS_DHE_DSS_WITH_DES_CBC_SHA TLS_DHE_DSS_EXPORT1024_WITH_DES_CBC_SHA TLS_RSA_WITH_NULL_SHA256 TLS_RSA_WITH_NULL_SHA TLS_RSA_WITH_NULL_MD5 TLS_RSA_EXPORT1024_WITH_RC4_56_SHA TLS_RSA_EXPORT_WITH_RC4_40_MD5 TLS_RSA_EXPORT1024_WITH_DES_CBC_SHA TLS_PSK_WITH_AES_256_GCM_SHA384 TLS_PSK_WITH_AES_128_GCM_SHA256 TLS_PSK_WITH_AES_256_CBC_SHA384 TLS_PSK_WITH_AES_128_CBC_SHA256 TLS_PSK_WITH_NULL_SHA384 TLS_PSK_WITH_NULL_SHA256
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft SSL Protocol Provider\\UM"
+value Image sz ncryptsslp.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Microsoft SSL Protocol Provider\\UM\\00010002"
+value "" sz NCRYPT_SCHANNEL_INTERFACE
+value Flags dword 0
+value Functions multi_sz TLS_AES_256_GCM_SHA384 TLS_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256 TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA TLS_DHE_RSA_WITH_AES_256_CBC_SHA TLS_DHE_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_AES_256_GCM_SHA384 TLS_RSA_WITH_AES_128_GCM_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA256 TLS_RSA_WITH_AES_128_CBC_SHA256 TLS_RSA_WITH_AES_256_CBC_SHA TLS_RSA_WITH_AES_128_CBC_SHA TLS_RSA_WITH_3DES_EDE_CBC_SHA TLS_DHE_DSS_WITH_AES_256_CBC_SHA256 TLS_DHE_DSS_WITH_AES_128_CBC_SHA256 TLS_DHE_DSS_WITH_AES_256_CBC_SHA TLS_DHE_DSS_WITH_AES_128_CBC_SHA TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA TLS_RSA_WITH_RC4_128_SHA TLS_RSA_WITH_RC4_128_MD5 TLS_RSA_WITH_DES_CBC_SHA TLS_DHE_DSS_WITH_DES_CBC_SHA TLS_DHE_DSS_EXPORT1024_WITH_DES_CBC_SHA TLS_RSA_WITH_NULL_SHA256 TLS_RSA_WITH_NULL_SHA TLS_RSA_WITH_NULL_MD5 TLS_RSA_EXPORT1024_WITH_RC4_56_SHA TLS_RSA_EXPORT_WITH_RC4_40_MD5 TLS_RSA_EXPORT1024_WITH_DES_CBC_SHA TLS_PSK_WITH_AES_256_GCM_SHA384 TLS_PSK_WITH_AES_128_GCM_SHA256 TLS_PSK_WITH_AES_256_CBC_SHA384 TLS_PSK_WITH_AES_128_CBC_SHA256 TLS_PSK_WITH_NULL_SHA384 TLS_PSK_WITH_NULL_SHA256
+key "ControlSet001\\Control\\Cryptography\\Providers\\Windows Client Key Protection Provider"
+value SessionLockProtectorProxy sz feclient.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Windows Client Key Protection Provider\\UM"
+value Image sz mskeyprotcli.dll
+key "ControlSet001\\Control\\Cryptography\\Providers\\Windows Client Key Protection Provider\\UM\\00010004"
+value "" sz NCRYPT_KEY_PROTECTION_INTERFACE
+value Flags dword 65536
+value Functions multi_sz MSIDCRL LOCKEDCREDENTIALS

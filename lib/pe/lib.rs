@@ -153,8 +153,14 @@ pub struct Headers {
     pub size_of_headers: u32,
     pub section_alignment: u32,
     pub subsystem: u16,
+    /// `IMAGE_DLLCHARACTERISTICS_*`.
+    pub dll_characteristics: u16,
     dirs: [DataDir; 16],
 }
+
+/// `IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY`: the image is signed and
+/// its signature must be checked (`/INTEGRITYCHECK`).
+pub const DLLCHARACTERISTICS_FORCE_INTEGRITY: u16 = 0x80;
 
 impl Headers {
     pub fn dir(&self, index: usize) -> DataDir {
@@ -197,6 +203,7 @@ fn read_headers(file: &[u8]) -> Result<(Headers, usize, usize), PeError> {
         size_of_headers: hdr(u32_at(file, opt + 60))?,
         section_alignment: hdr(u32_at(file, opt + 32))?,
         subsystem: hdr(u16_at(file, opt + 68))?,
+        dll_characteristics: hdr(u16_at(file, opt + 70))?,
         dirs,
     };
     Ok((headers, opt + opt_size, nsections))

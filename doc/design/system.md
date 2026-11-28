@@ -12,18 +12,21 @@ binaries NK runs ask for; any other is `STATUS_INVALID_INFO_CLASS`.
 Lengths, and what is reported as the length needed, are the pinned
 kernel's, class by class.
 
-`ZwSetSystemInformation` takes one class, the one `acpi.sys` sets:
-the registration of a firmware table provider (75), kept by the pinned
+`ZwSetSystemInformation` takes two classes. `acpi.sys` sets the
+registration of a firmware table provider (75), kept by the pinned
 kernel's rules with a reference to the provider's driver object
 (`kernel/ex/firmware.rs`, `nk_ex::firmware`). Nothing asks a provider
-for a table: the class that would is not among those answered. Any
-other class set stops the system naming it.
+for a table: the class that would is not among those answered.
+`cng.sys` registers its routine for the times of interrupts (0x83,
+[Processors](processors.md), Interrupts). Any other class set stops
+the system naming it.
 
 | Class | Answer |
 | --- | --- |
 | 0, basic | page size, 64 KiB granularity, Windows' user range, the processors running, the memory NK uses as RAM |
 | 11, modules | the images in memory (below) |
 | 35, kernel debugger | enabled and present with `debug=on`; else neither |
+| 0x75, boot entropy | the head of the loader's entropy block, once; `STATUS_UNSUCCESSFUL` after (`doc/BOOT.md`, Boot entropy) |
 | 165, isolated user mode | sixteen zero bytes: no secure kernel. `msrpc.sys` asks, and pages itself out unless the first bit is set |
 
 **The module list** is the table of images in load order, as Windows

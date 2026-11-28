@@ -150,6 +150,16 @@ type itself is real (`PsJobType`): a driver that asks for the job
 behind a handle is told the handle names another type of object, which
 is true of every handle there is.
 
+### Process notify routines
+
+Drivers register routines for process creation in a table of 64, as on
+Windows (`kernel/ps/notify.rs`): `PsSetCreateProcessNotifyRoutine`
+takes a routine of any loaded image, the `Ex2` form one of an image
+linked with `/INTEGRITYCHECK` (`STATUS_ACCESS_DENIED` otherwise),
+removal names the routine and its kind (`STATUS_PROCEDURE_NOT_FOUND`
+otherwise), and a full table is `STATUS_INVALID_PARAMETER`. NK creates
+no process but System, so no routine is called yet.
+
 ## Waits
 
 A thread waits on an event, semaphore, timer, mutex or thread by linking
@@ -164,14 +174,15 @@ A wait by handle (`ZwWaitForSingleObject`) is a wait on the object the
 handle names, referenced for as long: an event, a thread, or the
 process, which never ends. Windows waits on an object of any other
 type through that type's default object; NK does not, and stops by
-name. `ZwCreateEvent` makes an event object without a name and hands
-back a handle; a name, or the attributes that go with one, is refused
-(`STATUS_NOT_IMPLEMENTED`). `ZwOpenEvent` looks the name up and hands
-back a handle to an event found there; what it finds otherwise is
-answered as the namespace answers it (`mountmgr.sys` asks for an event
-that only the session manager makes, and it is not found), and a name
-relative to a directory handle stops by name. All three are `Partial`
-in the ledger for that.
+name. `ZwCreateEvent` makes an event object (unnamed, or named in the
+namespace, temporary or `OBJ_PERMANENT`, with `OBJ_OPENIF` supported;
+`OBJ_EXCLUSIVE` is refused with `STATUS_NOT_IMPLEMENTED`, so it stays
+`Partial`) and hands back a handle. `ZwOpenEvent` looks the name up
+(absolute or relative to a directory handle) and hands back a handle to
+an event found there; what it finds otherwise is answered as the
+namespace answers it (`mountmgr.sys` asks for an event that only the
+session manager makes, and it is not found). `ZwWaitForSingleObject`
+stays `Partial` in the ledger.
 
 A wait that would block at `DISPATCH_LEVEL` stops the system
 (`ATTEMPTED_SWITCH_FROM_DPC` from a DPC). Releasing a semaphore past
@@ -187,8 +198,8 @@ alert, one at most per mode, for its next alertable wait, which
 returns at once without looking at its objects or its time limit and
 takes nothing. An alert made in kernel mode ends a wait of either
 mode; `ZwAlertThread` alerts in kernel mode. Waits that are not
-alertable never see an alert. An alert is the only thing that ends a
-wait this way: there are no APCs to deliver.
+alertable never see an alert. Kernel APCs interrupt a wait too, and
+it goes on (below).
 
 ## Mutexes and critical regions
 
@@ -205,8 +216,79 @@ free, 0 held, one lower per waiter. Taking a free one is one atomic step;
 a release that finds waiters passes it on through the event. Holding it
 raises the IRQL to `APC_LEVEL`.
 
-NK queues no APCs. The counts and the IRQL are kept as Windows keeps
-them, so code that asks whether APCs are disabled gets Windows' answer.
+Releasing the mutex or leaving the last critical region lets through
+the kernel APCs held back meanwhile.
+
+## Asynchronous procedure calls
+
+An APC runs a routine in one thread's context (`kernel/ke/apc.rs`;
+[Types of APCs](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/types-of-apcs)).
+The `KAPC` is the caller's; it is linked into the thread's `KAPC_STATE`
+at Windows' offsets, under the thread's APC lock, and `KeInitializeApc`,
+`KeInsertQueueApc` and `KeRemoveQueueApc` are exported as ntoskrnl
+exports them. The rules are those of Windows' `KiInsertQueueApc`,
+`KiSignalThreadForApc` and `KiDeliverApc`, read in the pinned kernel;
+the decisions are `lib/ke/apc.rs`, tested on the host:
+
+- A special kernel APC (no normal routine) goes after the last special
+  one, ahead of every normal one; a normal one at the tail.
+- Special APCs run at `APC_LEVEL` unless the thread is in a guarded
+  region (`SpecialApcDisable`, `KeEnterGuardedRegion`). A normal one runs
+  its kernel routine at `APC_LEVEL` and then its normal routine at
+  `PASSIVE_LEVEL`, unless the thread is also in a critical region or
+  already delivering one; then it and those behind it wait.
+- They run when the IRQL falls below `APC_LEVEL`: queueing one for a
+  thread that can run it raises the APC_LEVEL interrupt on its processor
+  (vector `0x1F` on x86-64, as on Windows; SGI 4 on arm64), which the
+  processor holds back while the IRQL is higher however it came down,
+  and runs them after its end of interrupt. Leaving the last critical or
+  guarded region runs them at once at `PASSIVE_LEVEL`, or raises the
+  interrupt above it. A thread that gets a processor with APCs pending
+  raises it for itself.
+- A wait entered at `PASSIVE_LEVEL` (`WaitIrql`), alertable or not, is
+  ended internally for them (`STATUS_KERNEL_APC`); the thread runs them
+  and waits again with the same time limit. Whether the thread waits is
+  its wait register's to say, so an APC queued as the wait begins is
+  seen by one side or the other.
+- `KeAreAllApcsDisabled` is a guarded region, interrupts off or an IRQL
+  of `APC_LEVEL` and above.
+- An ending thread takes no more APCs, runs the kernel APCs it can, and
+  runs down its user APCs; one with kernel APCs it cannot run stops the
+  system (`KERNEL_APC_PENDING_DURING_EXIT`), as Windows'
+  `KeRundownApcQueues` does.
+
+User-mode APCs are queued but never delivered; see [absent](absent.md).
+
+## Stack expansion
+
+`KeExpandKernelStackAndCalloutEx` (`kernel/ke/expand.rs`) runs a
+routine with the stack it asks for, on the current stack when that has
+the room, else on a stack segment: a kernel stack like a thread's
+([Memory](memory.md): same size, alignment and guard, so both
+architectures' overflow checks hold on it). The rules are Windows'
+`KiExpandKernelStackAndCalloutSwitchStack`, read in the pinned kernel:
+a size above 0x11800 fails with `STATUS_INVALID_PARAMETER_3`; above
+`DISPATCH_LEVEL` the system stops; at `DISPATCH_LEVEL` a caller that
+may wait fails with `STATUS_INVALID_PARAMETER_4`; a size equal to the
+kernel stack's, or 0x6000, always gets a segment, as the file systems'
+0x6000 on every create and transfer does.
+
+The switch is `arch::call_on_stack`, whose unwind information leads a
+walk back to the stack it left. While the routine runs on a segment the
+thread's `InitialStack`, `StackBase` and `StackLimit`, `IoGetStackLimits`,
+the overflow check and the unwinder see the segment. An exception the
+routine lets out unwinds across the switch: the guarded call around it
+puts the thread back on its stack as the unwind passes, and the
+segment, still under the unwind, stays walkable and is never handed
+out again; it is freed once neither the stack pointer nor the place a
+segment in use was entered from is on it, or the thread ends. A segment is allocated before it is installed, and the counts
+change at `DISPATCH_LEVEL`, so an APC that expands the stack meanwhile
+finds them whole. A segment is never larger than a
+thread's stack, so a size it cannot hold fails with
+`STATUS_INSUFFICIENT_RESOURCES`, as does one at `DISPATCH_LEVEL` the
+current stack cannot hold (Windows may switch there), and a thread runs
+on at most six segments at once; beyond, and when no memory is left,
+the call fails with `STATUS_NO_MEMORY`, as Windows' does.
 
 ## Deferred procedure calls
 
@@ -290,10 +372,16 @@ Windows' value for a `KTIMER2`.
 
 ## Work items
 
-Three queues (critical, delayed, hypercritical), each with worker threads
-at that queue's priority, free to run on any processor. Windows 10's
-other kinds map onto them: normal and background to delayed, real-time
-to hypercritical, super-critical to critical. A work item is the
+Three queues (critical, delayed, hypercritical), each with a dynamic
+pool of worker threads (`nk_ex::work::Pool`, host-tested) at that
+queue's priority, free to run on any processor. Each queue starts with
+its base workers (2, 2 and 1) and a dedicated spawner thread grows a
+queue up to its cap (16, 16 and 4) when items remain queued with no
+idle worker past a short grace period; extra workers retire after five
+seconds idle with an empty queue. Executive worker threads are not
+counted in `ke::thread::count()`. Windows 10's other kinds map onto
+them: normal and background to delayed, real-time to hypercritical,
+super-critical to critical. A work item is the
 driver's memory, linked through its list entry, whose forward link is
 null exactly while it is on no queue, as Windows keeps it. A worker
 unlinks an item before running it, so a routine may requeue or free its

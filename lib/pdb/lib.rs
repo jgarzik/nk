@@ -35,6 +35,7 @@ const LF_BCLASS: u16 = 0x1400;
 const LF_INDEX: u16 = 0x1404;
 const LF_ENUMERATE: u16 = 0x1502;
 const LF_CLASS: u16 = 0x1504;
+const LF_ENUM: u16 = 0x1507;
 const LF_STRUCTURE: u16 = 0x1505;
 const LF_UNION: u16 = 0x1506;
 const LF_MEMBER: u16 = 0x150D;
@@ -386,13 +387,43 @@ impl Types {
         Ok(full)
     }
 
+    /// The enumerators of the enumeration called `name`, as
+    /// `(name, value)` in the order the compiler recorded them.
+    pub fn enumerators(&self, name: &str) -> Result<Vec<(String, u64)>, PdbError> {
+        for i in 0..self.records.len() as u32 {
+            let (kind, body) = self.record(self.first + i)?;
+            if kind != LF_ENUM {
+                continue;
+            }
+            let (text, _) = self::name(body.get(12..).ok_or(PdbError::Truncated)?)?;
+            if text == name && u16_at(body, 2)? & PROP_FORWARD == 0 {
+                let mut enumerators = Vec::new();
+                self.fields(u32_at(body, 8)?, &mut Vec::new(), &mut enumerators)?;
+                return Ok(enumerators);
+            }
+        }
+        Err(PdbError::NoSuchType)
+    }
+
     /// The data members of a field list, following its continuations.
-    fn members(&self, mut list: u32) -> Result<Vec<Member>, PdbError> {
+    fn members(&self, list: u32) -> Result<Vec<Member>, PdbError> {
         let mut members = Vec::new();
+        self.fields(list, &mut members, &mut Vec::new())?;
+        Ok(members)
+    }
+
+    /// The data members and the enumerators of a field list, following
+    /// its continuations.
+    fn fields(
+        &self,
+        mut list: u32,
+        members: &mut Vec<Member>,
+        enumerators: &mut Vec<(String, u64)>,
+    ) -> Result<(), PdbError> {
         for _ in 0..MAX_CONTINUATIONS {
             // An aggregate with no fields names field list 0.
             if list == 0 {
-                return Ok(members);
+                return Ok(());
             }
             let (kind, mut b) = self.record(list)?;
             if kind != LF_FIELDLIST {
@@ -423,8 +454,10 @@ impl Types {
                         8
                     }
                     LF_ENUMERATE => {
-                        let (_, n) = numeric(b.get(4..).ok_or(PdbError::Truncated)?)?;
-                        4 + n + name(&b[4 + n..])?.1
+                        let (value, n) = numeric(b.get(4..).ok_or(PdbError::Truncated)?)?;
+                        let (text, m) = name(&b[4 + n..])?;
+                        enumerators.push((String::from(text), value));
+                        4 + n + m
                     }
                     LF_NESTTYPE | LF_STMEMBER => {
                         8 + name(b.get(8..).ok_or(PdbError::Truncated)?)?.1
@@ -438,7 +471,7 @@ impl Types {
                 b = b.get(used..).ok_or(PdbError::BadRecord)?;
             }
             if list == 0 {
-                return Ok(members);
+                return Ok(());
             }
         }
         Err(PdbError::BadRecord)
@@ -768,6 +801,45 @@ mod tests {
             [m("First", 0), m("Second", 8)]
         );
         assert_eq!(layout_of(&records, "_EMPTY").unwrap().members, []);
+    }
+
+    fn enumeration(property: u16, fields: u32, name: &str) -> Vec<u8> {
+        let mut r = 2u16.to_le_bytes().to_vec();
+        r.extend_from_slice(&property.to_le_bytes());
+        r.extend_from_slice(&0x74u32.to_le_bytes());
+        r.extend_from_slice(&fields.to_le_bytes());
+        r.extend_from_slice(name.as_bytes());
+        r.push(0);
+        rec(LF_ENUM, &r)
+    }
+
+    fn enumerate(value: u64, name: &str) -> Vec<u8> {
+        let mut r = LF_ENUMERATE.to_le_bytes().to_vec();
+        r.extend_from_slice(&[3, 0]);
+        r.extend_from_slice(&num(value));
+        r.extend_from_slice(name.as_bytes());
+        r.push(0);
+        r
+    }
+
+    #[test]
+    fn enumerations_list_their_values() {
+        let records = [
+            fieldlist(&[enumerate(0x8_0000, "Far")]), // 0x1000
+            fieldlist(&[enumerate(0, "None"), enumerate(4, "Four"), index(0x1000)]),
+            enumeration(PROP_FORWARD, 0, "_E"),
+            enumeration(0, 0x1001, "_E"),
+        ];
+        let file = pdb_with(&records);
+        let types = Pdb::parse(&file).unwrap().types().unwrap();
+        let named = |v: &[(&str, u64)]| -> Vec<(String, u64)> {
+            v.iter().map(|&(n, v)| (String::from(n), v)).collect()
+        };
+        assert_eq!(
+            types.enumerators("_E").unwrap(),
+            named(&[("None", 0), ("Four", 4), ("Far", 0x8_0000)])
+        );
+        assert_eq!(types.enumerators("_F"), Err(PdbError::NoSuchType));
     }
 
     /// Offset in `file` of its stream directory, when that is one block.

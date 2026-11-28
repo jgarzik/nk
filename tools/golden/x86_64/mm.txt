@@ -7,9 +7,6 @@ mm.user.other-cpu ok
 mm.user.copy ok
 mm.pool ok
 mm.stack ok
-mm.probe-and-lock.read-only ok
-mm.routine-address ok
-mm.driver-paging ok
 mm.io.map ok
 mm.io.refused ok
 mm.io.ahci ok
@@ -18,3 +15,16 @@ mm.contiguous.refused ok
 mm.mdl.nonpaged ok
 mm.mdl.pages ok
 mm.answers ok
+mm.probe-and-lock.read-only ok
+mm.section ok
+mm.section-view ok
+mm.section-read ok
+mm.section-overwrite ok
+mm.section-inpage-error ok
+mm.section-fault ok
+mm.section-flush ok
+mm.section-truncate ok
+mm.section-purge ok
+mm.section-mdl-evict-purge ok
+mm.routine-address ok
+mm.driver-paging ok

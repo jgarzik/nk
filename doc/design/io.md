@@ -21,8 +21,7 @@ object's pointer count when its memory goes. A device of a type a file
 system mounts on (disk, CD-ROM, tape, virtual disk) is created with a
 volume parameter block (`VPB`), as Windows makes it, which a class
 driver writes to (`disk.sys` sets `VPB_RAW_MOUNT`); the block goes
-with the device. Nothing mounts on NK, so no block is ever another
-device's.
+with the device.
 
 **Stacks.** Devices are stacked as on Windows
 ([`IoAttachDeviceToDeviceStack`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioattachdevicetodevicestack),
@@ -43,26 +42,103 @@ file stays counted on the device that was named, and
 `IoGetDeviceObjectPointer` hands out the top. How a read's or a write's
 buffer travels is the top device's choice (`DO_BUFFERED_IO`).
 
-**Mounting** (`io/mount.rs`, `io/raw.rs`). A device a file system can be
-mounted on has a volume parameter block (`VPB`), and an open of it that
-is not a direct device open (the device itself, for its attributes,
-synchronisation or security alone) mounts the block first, as Windows'
-`IopCheckVpbMounted` does: the file object gets the block, with a
-reference, and its requests go to the top of the mounted volume
-device's stack. NK has one file system, RAW, the kernel's own as on
-Windows (`\FileSystem\RAW`): it mounts when the device itself is
-opened, or when the block allows a raw mount (`VPB_RAW_MOUNT`), and
-otherwise the open fails with `STATUS_UNRECOGNIZED_VOLUME`. RAW's
-volume device takes the buffering of the device beneath, lets the
-volume itself be opened and nothing in it (a name, a related file, a
-disposition other than "open", or a directory is
-`STATUS_INVALID_PARAMETER`, as Windows' RAW answers), and passes
-reads, writes, control requests and flushes down unchanged; NK's own
-disk tests read `\Device\Harddisk0\DR0` through it. Mounting clears
-the device's `DO_VERIFY_VOLUME`. Two opens mounting at once make two
-volume devices; the first published wins and the other is deleted. A
-volume stays mounted until its device is deleted (`VPB_REMOVE_PENDING`)
-and nothing is open on it; then RAW's device goes.
+**File systems** (`io/fs.rs`). A file system registers its control
+devices (`IoRegisterFileSystem`) on the queue for their type: disk,
+CD-ROM, tape or network. A new one goes at the head, one marked
+`DO_LOW_PRIORITY_FILESYSTEM` just ahead of the last, which on the disk,
+CD-ROM and tape queues is RAW, registered at boot before anything else
+(`\Device\RawDisk`, `RawCdRom`, `RawTape`). A driver that registers on
+one of those three is marked `DRVO_BASE_FILESYSTEM_DRIVER`, as Windows
+marks it. `IoUnregisterFileSystem` takes the device off again.
+
+**Mounting** (`io/mount.rs`, `io/fs.rs`, `io/raw.rs`). A device a file
+system can be mounted on has a volume parameter block (`VPB`), and an
+open of it that is not a direct device open (the device itself, for its
+attributes, synchronisation or security alone) mounts the block first,
+as Windows' `IopCheckVpbMounted` does: a locked volume refuses the open
+(`STATUS_ACCESS_DENIED`); a mounted one gives the file object the
+block, with a reference, and its requests go to the top of the volume
+device's stack (`IoGetRelatedDeviceObject`). An unmounted one is
+mounted as `IopMountVolume` mounts it, the rules read in the pinned
+kernel and host-tested in `lib/io/mount.rs`: with the device's
+`DeviceLock` held, so one device's mounts are one at a time, the file
+systems on the queue for the device's type are sent
+`IRP_MN_MOUNT_VOLUME` (flags `IRP_MOUNT_COMPLETION |
+IRP_SYNCHRONOUS_PAGING_IO`, completed inline; the volume parameter
+block and the top of the device's stack as parameters;
+`SL_ALLOW_RAW_MOUNT` when the open names the device itself) until one
+takes the volume. `STATUS_UNRECOGNIZED_VOLUME` asks the next; RAW, last,
+is asked only when the open allows a raw mount or it is alone on the
+queue, and a block marked `VPB_RAW_MOUNT` goes to RAW alone; a total
+device failure goes to RAW or ends the walk; a file system registered
+or gone during a request sends the walk back to the head. The queue is
+not held while a file system is asked. The file system fills in the
+block's `DeviceObject` and label; the I/O manager then marks it mounted
+(`VPB_DIRECT_WRITES_ALLOWED` too when RAW took it), sizes the volume
+device's stack, points its extension at the block, and counts the
+mount as a reference, as `IopMountInitializeVpb` does. Mounting clears
+the device's `DO_VERIFY_VOLUME`; after the file systems' shutdown
+nothing mounts (`STATUS_TOO_LATE`). NK has no file system recognizers
+(`fs_rec.sys` is not among its boot drivers), so RAW alone on the disk
+queue takes any open of a disk or volume, where Windows' recognizers
+would answer first.
+
+RAW takes every volume it is asked to (its serial number all ones, no
+label, as Windows' `RawMountVolume` leaves them). Its volume device
+takes the buffering of the device beneath, lets the volume itself be
+opened and nothing in it (a name, a related file, a disposition other
+than "open", or a directory is `STATUS_INVALID_PARAMETER`, as Windows'
+RAW answers), and passes reads, writes, control requests and flushes
+down unchanged; NK's own disk tests read `\Device\Harddisk0\DR0`
+through it. Plug and Play requests go down too, the target-device
+relation among them, so a registration for a file on a RAW volume finds
+the device's physical device object, except a query to remove the
+device, which RAW refuses (`STATUS_DEVICE_BUSY`), as Windows' RAW
+does. A target-device registration asks the stack a request on the file
+goes to, as Windows' `IoGetRelatedTargetDevice` does. A RAW volume stays mounted until its device is deleted
+(`VPB_REMOVE_PENDING`) and nothing but the mount holds its block; then
+RAW's device goes. Another file system's volume is its own to dismount.
+
+**Associated requests** (`io/irp.rs`). `IoMakeAssociatedIrp` makes a
+request for the master's thread whose `AssociatedIrp.MasterIrp` is the
+master; the file system sets the master's `IrpCount`. An associated
+request's completion frees its MDLs and the request and counts the
+master down, and the last completes the master with the status the
+file system left in it, as the pinned kernel's `IopfCompleteRequest`
+does.
+
+**Shutdown.** Between the shutdown-notification queue and the
+last-chance one (`io/shutdown.rs`, [Power](power.md)), each base file
+system's control device is sent `IRP_MJ_SHUTDOWN` and mounting stops.
+RAW's answer, as Windows' `RawShutdown`, unregisters and deletes its
+three control devices. Windows' `PopGracefulShutdown` waits for the
+cache manager's lazy writer right after this step; that is where NK's
+cache manager is to do the same.
+
+**Share access** (`io/share.rs`, rules in `lib/io/share.rs`).
+`IoCheckShareAccess`, `IoSetShareAccess`, `IoUpdateShareAccess` and
+`IoRemoveShareAccess` keep a file system's `SHARE_ACCESS` counts as the
+pinned kernel's `IoCheckLinkShareAccess` does: an open's access is
+recorded in its file object; one with no read, write or delete access
+neither conflicts nor counts.
+
+**Volume GUID names** (`io/guid.rs`). `IoVolumeDeviceToGuidPath` asks
+the volume its device name and the mount point manager that name's
+mount points, and answers the first `\??\Volume...` link, in pool the
+caller frees; `IoVolumeDeviceToGuid` parses the GUID out of it. Without
+the mount point manager both fail with the open's status and leave the
+output as it was, as Windows does.
+
+**File system services** (`io/fs.rs`, `io/file.rs`). `IoGetTopLevelIrp`
+and `IoSetTopLevelIrp` read and write `ETHREAD.TopLevelIrp`;
+`IoGetDeviceToVerify` and `IoSetDeviceToVerify` its `DeviceToVerify`;
+`IoIsSystemThread` reads `KTHREAD.SystemThread`, set on every NK thread;
+`IoIsOperationSynchronous` decides as the pinned kernel does.
+`IoCreateStreamFileObject` makes a file object marked `FO_STREAM_FILE`
+on the device (and block, referenced) of the file or device it is
+given, gives it a handle and closes it at once, so the file system gets
+its cleanup request then and its close when the caller drops the last
+reference, as on Windows.
 
 A deleted device with another still attached to it stays, deletion
 pending, until that one detaches. The driver of the attached device is
@@ -351,9 +427,20 @@ queued its fourth driver-context pointer names the queue (or the
 caller's context block) and its cancel routine is the I/O manager's,
 which unlinks it under the queue's lock and has the driver complete it.
 Removal skips a request whose cancel routine is already gone: the
-canceller has it.
+canceller has it. A queue made by `IoCsqInitializeEx` has an insert
+routine that may refuse a request (`IoCsqInsertIrpEx`): the request is
+then neither marked pending nor made cancellable, and the refusal is
+returned, its mark of the queue left as Windows leaves it.
 
-**Stream contexts** (`kernel/io/fsrtl.rs`). A file system puts an
+**Secure devices** (`kernel/io/secure.rs`). `IoCreateDeviceSecure`, which
+Microsoft's device-security library asks the kernel for by name before
+using a copy of its own, makes the device and sets on it the
+descriptor its SDDL string describes (`nk_se::sddl`), those parts the
+string gives. A class GUID whose class key has settings of its own
+(`Control\Class\{guid}\Properties`) stops the system: NK does not
+apply them. A class without them overrides nothing, as on Windows.
+
+**Stream contexts** (`kernel/fsrtl/mod.rs`). A file system puts an
 `FSRTL_ADVANCED_FCB_HEADER` at the front of each stream's control block
 and initialises it with code compiled into the driver; `npfs.sys` and
 `msfs.sys` make it version 3, advanced, supporting filter contexts.

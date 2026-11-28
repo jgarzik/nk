@@ -47,6 +47,16 @@ levels and vectors are in `doc/LOCKING.md`. The kernel's own interrupts
 are the clock and ones a processor sends itself or another; a device's
 are in [Devices](devices.md).
 
+Each processor folds the cycle count at which a device interrupt
+arrives into a buffer of 64 words, as Windows does
+(`kernel/ke/entropy.rs`): one driver, `cng.sys`, registers a routine
+for it with `ZwSetSystemInformation` (class 0x83), its initialisation
+routine is run over every processor's state, and from then on each
+1024th interrupt on a processor queues a DPC there that hands the
+routine the half of the buffer just filled. A second registration is
+refused, as on Windows. The state is NK's own per-processor record;
+the driver sees it only through the pointers it is given.
+
 A processor fault is an exception for the faulting code's handlers
 ([Exceptions](exceptions.md)) or a bugcheck with a register dump.
 

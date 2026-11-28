@@ -56,7 +56,7 @@ pub unsafe extern "C" fn wcsncmp(a: *const u16, b: *const u16, count: usize) -> 
 /// `string` is NUL-terminated.
 pub unsafe extern "C" fn strrchr(string: *const u8, character: i32) -> *mut u8 {
     // SAFETY: per the contract.
-    match crt::strrchr(unsafe { characters(string) }, character as u8) {
+    match crt::strrchr(unsafe { characters(string) }, u16::from(character as u8)) {
         Some(at) => string.wrapping_add(at).cast_mut(),
         None => core::ptr::null_mut(),
     }
@@ -239,4 +239,60 @@ pub unsafe extern "C" fn strtok_s(
             None => core::ptr::null_mut(),
         }
     }
+}
+
+/// [`wcscmp`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strcmp-wcscmp-mbscmp):
+/// compare two wide strings.
+///
+/// # Safety
+/// Both strings are NUL-terminated.
+pub unsafe extern "C" fn wcscmp(a: *const u16, b: *const u16) -> i32 {
+    // SAFETY: per the contract; neither is read past its terminator.
+    unsafe { crt::strncmp(characters(a), characters(b), usize::MAX) }
+}
+
+/// [`wcsrchr`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strrchr-wcsrchr-mbsrchr-mbsrchr-l):
+/// the last `character` in `string`, or null; the terminator is part of
+/// the string.
+///
+/// # Safety
+/// `string` is NUL-terminated.
+pub unsafe extern "C" fn wcsrchr(string: *const u16, character: u16) -> *mut u16 {
+    // SAFETY: per the contract.
+    match crt::strrchr(unsafe { characters(string) }, character) {
+        Some(at) => string.wrapping_add(at).cast_mut(),
+        None => core::ptr::null_mut(),
+    }
+}
+
+/// [`strcpy_s`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strcpy-s-wcscpy-s-mbscpy-s):
+/// a bad argument, or a source that does not fit, is answered with its
+/// error number, the buffer emptied: the kernel's C runtime has no
+/// invalid-parameter handler to stop in.
+///
+/// # Safety
+/// `destination` is null or writable for `size` characters; `source` is
+/// null or NUL-terminated.
+pub unsafe extern "C" fn strcpy_s(destination: *mut u8, size: usize, source: *const u8) -> i32 {
+    // SAFETY: per the contract: the rule writes below `size`.
+    let write = (!destination.is_null())
+        .then_some(move |index: usize, c: u8| unsafe { destination.add(index).write(c) });
+    // SAFETY: per the contract.
+    let read = (!source.is_null()).then(|| unsafe { at(source) });
+    crt::strcpy_s(write, size, read)
+}
+
+/// `wcscpy_s`: [`strcpy_s`] for wide strings.
+///
+/// # Safety
+/// As [`strcpy_s`], in characters of two bytes.
+pub unsafe extern "C" fn wcscpy_s(destination: *mut u16, size: usize, source: *const u16) -> i32 {
+    // SAFETY: per the contract: the rule writes below `size`.
+    let write = (!destination.is_null()).then_some(move |index: usize, c: u16| unsafe {
+        destination.add(index).write_unaligned(c)
+    });
+    // SAFETY: per the contract.
+    let read = (!source.is_null())
+        .then_some(move |index: usize| unsafe { source.add(index).read_unaligned() });
+    crt::strcpy_s(write, size, read)
 }

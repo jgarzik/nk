@@ -49,7 +49,9 @@ use super::{Rank, SpinLock, irql, pcr};
 use crate::arch;
 use crate::mm::{self, stack::Stack};
 use crate::ob;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{
+    AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 use nk_ke::sched::{self, Leaving};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
@@ -77,6 +79,9 @@ pub struct Thread {
     swap_busy: AtomicBool,
     /// A processor's idle thread: never queued.
     idle: bool,
+    /// Counted in [`count`]: every thread but the idle threads and the
+    /// executive's worker threads.
+    counted: bool,
     /// Clock ticks left before threads of this priority get a turn.
     quantum: AtomicU8,
     /// Where the thread stands with respect to waiting.
@@ -88,7 +93,30 @@ pub struct Thread {
     queued_on: AtomicU32,
     /// The priority it is queued at. That queue's lock.
     queued_at: AtomicU8,
+    /// Guards the thread's APC queues (`ke::apc`).
+    apc: SpinLock<()>,
+    /// Stack segments the thread has been given to expand its stack
+    /// (`ke::expand`): the first `segments_in_use` of them it is running
+    /// on, outermost first, and where the stack pointer was when each
+    /// was switched to. Only the thread itself changes these, and
+    /// whoever buries it.
+    segments: [Stack; MAX_SEGMENTS],
+    entered_from: [u64; MAX_SEGMENTS],
+    segments_in_use: u8,
+    /// Segments an unwind left while it may still run on them, freed
+    /// once no frame can be left there (`reap_stranded`).
+    stranded: [Stack; MAX_STRANDED],
+    stranded_count: u8,
 }
+
+/// The most segments unwinds can have left with frames still on them:
+/// each such segment holds the stack pointer, or the place a segment in
+/// use was switched to from.
+const MAX_STRANDED: usize = MAX_SEGMENTS + 1;
+
+/// The most stack segments a thread runs on at once, beyond its own
+/// stack.
+pub const MAX_SEGMENTS: usize = 6;
 
 /// One processor's dispatcher state.
 pub struct Dispatcher {
@@ -118,11 +146,35 @@ impl Dispatcher {
     }
 }
 
-/// Threads that exist, idle threads not counted.
+/// Threads that exist, idle threads and the executive's worker threads
+/// not counted.
 static THREADS: AtomicU32 = AtomicU32::new(0);
+/// Live uncounted worker thread objects (for leak-check accounting).
+static UNCOUNTED_OBJECTS: AtomicUsize = AtomicUsize::new(0);
+/// Live uncounted worker thread stacks (for leak-check accounting).
+static UNCOUNTED_STACKS: AtomicUsize = AtomicUsize::new(0);
 
+/// The threads that exist, but for the idle threads and the executive's
+/// worker threads, which come and go as work waits for them
+/// ([`create_uncounted`]): a test waits for this to fall back to what it
+/// was, once the threads it made have ended.
 pub fn count() -> u32 {
     THREADS.load(Ordering::Acquire)
+}
+
+/// Pool blocks, pool bytes and stack frames currently held by live
+/// uncounted worker threads (`create_uncounted`), so leak checks around
+/// test groups do not mistake dynamic worker scaling for a leak.
+pub fn uncounted_storage() -> (usize, usize, u64) {
+    let blocks = UNCOUNTED_OBJECTS.load(Ordering::Acquire);
+    let block_bytes =
+        (nk_ntabi::ob::OBJECT_BODY + size_of::<Thread>()).next_multiple_of(align_of::<u16>());
+    let stacks = UNCOUNTED_STACKS.load(Ordering::Acquire);
+    (
+        blocks,
+        blocks * block_bytes,
+        (stacks * mm::stack::STACK_PAGES) as u64,
+    )
 }
 
 /// A field of the thread's Windows-shaped block.
@@ -215,10 +267,13 @@ unsafe fn dequeue(ready: &mut ReadyQueues, floor: u8) -> Option<*mut Thread> {
 /// # Safety
 /// `thread` is a live thread that the caller may change the state of.
 unsafe fn set_state(thread: *mut Thread, state: u8) {
-    // SAFETY: per the contract.
+    // SAFETY: per the contract; other processors read `STATE` atomically
+    // (`ke::apc`), and `Release` publishes `next_processor` before
+    // `RUNNING` is visible.
     unsafe {
-        field::<u8>(thread, layout::STATE).write(state);
-        field::<u8>(thread, layout::RUNNING).write(u8::from(state == layout::state::RUNNING));
+        AtomicU8::from_ptr(field(thread, layout::STATE)).store(state, Ordering::Release);
+        AtomicU8::from_ptr(field(thread, layout::RUNNING))
+            .store(u8::from(state == layout::state::RUNNING), Ordering::Relaxed);
     }
 }
 
@@ -227,11 +282,185 @@ pub fn current() -> *mut Thread {
     pcr::current_thread().cast()
 }
 
-/// The running thread's stack.
+/// The stack the running thread is running on: its own, or the last
+/// segment it was given (`ke::expand`).
 pub fn current_stack() -> Stack {
-    // SAFETY: the running thread exists, and its stack is set when it is
-    // made and never changed.
-    unsafe { (*current()).stack }
+    // SAFETY: the running thread, which alone changes its segments.
+    unsafe { active_stack(current()) }
+}
+
+/// The stack `thread` runs on, or will when it next runs.
+///
+/// # Safety
+/// `thread` is live, and is the running thread or not running.
+unsafe fn active_stack(thread: *mut Thread) -> Stack {
+    // SAFETY: per the contract.
+    unsafe {
+        match (*thread).segments_in_use {
+            0 => (*thread).stack,
+            n => (*thread).segments[usize::from(n) - 1],
+        }
+    }
+}
+
+/// Every stack the running thread may have frames on: its own first,
+/// then the segments it runs on, outermost first, then those an unwind
+/// left (`pop_segment`): an unwind out of a segment goes on walking,
+/// and running, there after the thread has left it.
+pub fn current_stacks() -> impl Iterator<Item = Stack> {
+    let me = current();
+    // SAFETY: the running thread, which alone changes its segments.
+    let (own, segments, in_use, stranded, left) = unsafe {
+        (
+            (*me).stack,
+            (*me).segments,
+            usize::from((*me).segments_in_use),
+            (*me).stranded,
+            usize::from((*me).stranded_count),
+        )
+    };
+    core::iter::once(own)
+        .chain(segments.into_iter().take(in_use))
+        .chain(stranded.into_iter().take(left))
+}
+
+/// The stack pointer, near enough: the address of a local of the caller.
+#[inline(always)]
+fn stack_pointer() -> u64 {
+    let here = 0u8;
+    core::hint::black_box(&raw const here).addr() as u64
+}
+
+/// Run the running thread on `fresh`, a stack from `mm::stack`, as one
+/// more segment from now on, and say so where drivers and the overflow
+/// check look. Gives `fresh` back if the thread runs on as many as it
+/// may. The counts are read and changed at `DISPATCH_LEVEL`, so an APC
+/// that expands the stack in between finds them whole.
+pub fn push_segment(fresh: Stack) -> Result<(), Stack> {
+    let me = current();
+    let sp = stack_pointer();
+    // SAFETY: the running thread, which alone changes its segments; at
+    // DISPATCH_LEVEL nothing else runs on it meanwhile.
+    let (pushed, dead) = unsafe {
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        let dead = reap_stranded(me, sp);
+        let in_use = usize::from((*me).segments_in_use);
+        let pushed = in_use < MAX_SEGMENTS;
+        if pushed {
+            (*me).segments[in_use] = fresh;
+            (*me).entered_from[in_use] = sp;
+            (*me).segments_in_use += 1;
+            publish_stack(me, fresh);
+        }
+        irql::lower(old);
+        (pushed, dead)
+    };
+    dead.free();
+    if pushed { Ok(()) } else { Err(fresh) }
+}
+
+/// The running thread is back on the stack it ran on before its last
+/// segment. Unless `unwinding`, it is running there already and the
+/// segment is freed. An unwind out of a segment still runs on it: the
+/// segment is kept, walkable, until no frame can be left on it
+/// (`reap_stranded`).
+pub fn pop_segment(unwinding: bool) {
+    let me = current();
+    let sp = stack_pointer();
+    // SAFETY: the running thread, which alone changes its segments; at
+    // DISPATCH_LEVEL nothing else runs on it meanwhile.
+    let (segment, dead) = unsafe {
+        let old = irql::raise(irql::DISPATCH_LEVEL);
+        (*me).segments_in_use -= 1;
+        let segment = (*me).segments[usize::from((*me).segments_in_use)];
+        publish_stack(me, active_stack(me));
+        let dead = reap_stranded(me, sp);
+        if unwinding {
+            // Room by the bound on segments with live frames
+            // (`MAX_STRANDED`), once the dead ones are gone.
+            let left = usize::from((*me).stranded_count);
+            (*me).stranded[left] = segment;
+            (*me).stranded_count += 1;
+        }
+        irql::lower(old);
+        (segment, dead)
+    };
+    dead.free();
+    if !unwinding {
+        mm::stack::free(segment);
+    }
+}
+
+/// Segments taken off a thread, to free once the IRQL is down.
+struct Dead {
+    stacks: [Stack; MAX_STRANDED],
+    count: usize,
+}
+
+impl Dead {
+    fn free(self) {
+        for &segment in &self.stacks[..self.count] {
+            mm::stack::free(segment);
+        }
+    }
+}
+
+/// Take off `me`'s stranded segments those no frame can be on: neither
+/// the stack pointer `sp` nor the place any segment in use was switched
+/// to from is on them.
+///
+/// # Safety
+/// `me` is the running thread, at `DISPATCH_LEVEL`.
+unsafe fn reap_stranded(me: *mut Thread, sp: u64) -> Dead {
+    let mut dead = Dead {
+        stacks: [Stack { base: 0, top: 0 }; MAX_STRANDED],
+        count: 0,
+    };
+    // SAFETY: per the contract.
+    unsafe {
+        let in_use = usize::from((*me).segments_in_use);
+        let entered = (*me).entered_from;
+        let live = |stack: &Stack| {
+            core::iter::once(sp)
+                .chain(entered[..in_use].iter().copied())
+                .any(|at| (stack.base..stack.top).contains(&at))
+        };
+        let mut kept = 0;
+        for index in 0..usize::from((*me).stranded_count) {
+            let stack = (*me).stranded[index];
+            if live(&stack) {
+                (*me).stranded[kept] = stack;
+                kept += 1;
+            } else {
+                dead.stacks[dead.count] = stack;
+                dead.count += 1;
+            }
+        }
+        (*me).stranded_count = kept as u8;
+    }
+    dead
+}
+
+/// How many segments the running thread runs on.
+pub fn segments_in_use() -> usize {
+    // SAFETY: the running thread.
+    usize::from(unsafe { (*current()).segments_in_use })
+}
+
+/// Say that the running thread `me` now runs on `stack`: in its
+/// `KTHREAD`, as Windows reports a segment, and to this processor's
+/// overflow check.
+///
+/// # Safety
+/// `me` is the running thread, at `DISPATCH_LEVEL`.
+unsafe fn publish_stack(me: *mut Thread, stack: Stack) {
+    // SAFETY: per the contract.
+    unsafe {
+        field::<u64>(me, layout::INITIAL_STACK).write(stack.top);
+        field::<u64>(me, layout::STACK_BASE).write(stack.top);
+        field::<u64>(me, layout::STACK_LIMIT).write(stack.base);
+    }
+    arch::set_kernel_stack(stack.base);
 }
 
 fn set_current(thread: *mut Thread) {
@@ -261,11 +490,21 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).entry).write(None);
         (&raw mut (*thread).swap_busy).write(AtomicBool::new(false));
         (&raw mut (*thread).idle).write(false);
+        (&raw mut (*thread).counted).write(false);
         (&raw mut (*thread).quantum).write(AtomicU8::new(QUANTUM_TICKS));
         (&raw mut (*thread).wait).write(WaitRegister::new());
         (&raw mut (*thread).wake_link).write(core::ptr::null_mut());
         (&raw mut (*thread).queued_on).write(AtomicU32::new(0));
         (&raw mut (*thread).queued_at).write(AtomicU8::new(0));
+        (&raw mut (*thread).apc).write(SpinLock::new(Rank::Apc, ()));
+        (&raw mut (*thread).segments).write([Stack { base: 0, top: 0 }; MAX_SEGMENTS]);
+        (&raw mut (*thread).segments_in_use).write(0);
+        (&raw mut (*thread).entered_from).write([0; MAX_SEGMENTS]);
+        (&raw mut (*thread).stranded).write([Stack { base: 0, top: 0 }; MAX_STRANDED]);
+        (&raw mut (*thread).stranded_count).write(0);
+        // Every thread NK makes is a system thread.
+        field::<u32>(thread, layout::MISC_FLAGS).write(layout::MISC_FLAG_SYSTEM_THREAD);
+        super::apc::init_thread(thread);
         super::wait::init_thread(thread);
         super::mutex::init_thread(thread);
         field::<u8>(thread, 0).write(layout::THREAD_OBJECT);
@@ -278,6 +517,8 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         let process = crate::ps::process::system();
         field::<usize>(thread, layout::SILO).write(nk_ntabi::silo::THREAD_NOT_ATTACHED);
         field::<*mut u8>(thread, layout::PROCESS).write(process);
+        field::<u32>(thread, nk_ntabi::thread::CROSS_THREAD_FLAGS)
+            .write(crate::ps::process::thread_priorities(process));
         field::<*mut u8>(thread, layout::APC_STATE_PROCESS).write(process);
         field::<[u64; 2]>(thread, layout::CID).write([
             nk_ntabi::process::SYSTEM_PROCESS_ID,
@@ -318,7 +559,7 @@ fn create_thread(
     affinity: u64,
     keep: bool,
 ) -> Result<*mut Thread, &'static str> {
-    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    let thread = new_thread(entry, argument, thread_priority, affinity, true)?;
     // SAFETY: the thread is whole and on no queue. The caller's
     // reference is taken first: the thread may run and end at once.
     unsafe {
@@ -340,7 +581,7 @@ pub fn create_unstarted(
     thread_priority: u8,
     affinity: u64,
 ) -> Result<*mut Thread, &'static str> {
-    let thread = new_thread(entry, argument, thread_priority, affinity)?;
+    let thread = new_thread(entry, argument, thread_priority, affinity, true)?;
     // SAFETY: a live thread nothing else has.
     unsafe { ob::object::reference(thread.cast()) };
     Ok(thread)
@@ -372,13 +613,14 @@ pub unsafe fn discard(thread: *mut Thread) {
     THREADS.fetch_sub(1, Ordering::AcqRel);
 }
 
-/// A new thread that will run `entry(argument)`, whole, counted and on
-/// no queue: not yet ready.
+/// A new thread that will run `entry(argument)`, whole, on no queue
+/// and, if `counted`, counted: not yet ready.
 fn new_thread(
     entry: Entry,
     argument: usize,
     thread_priority: u8,
     affinity: u64,
+    counted: bool,
 ) -> Result<*mut Thread, &'static str> {
     let allowed = affinity & super::smp::online();
     if allowed == 0 {
@@ -402,8 +644,14 @@ fn new_thread(
         field::<u32>(thread, layout::IDEAL_PROCESSOR).write(ideal as u32);
         field::<u32>(thread, layout::USER_IDEAL_PROCESSOR).write(ideal as u32);
         field::<u64>(thread, layout::KERNEL_STACK).write(arch::new_context(stack.top, start));
+        (&raw mut (*thread).counted).write(counted);
     }
-    THREADS.fetch_add(1, Ordering::AcqRel);
+    if counted {
+        THREADS.fetch_add(1, Ordering::AcqRel);
+    } else {
+        UNCOUNTED_OBJECTS.fetch_add(1, Ordering::AcqRel);
+        UNCOUNTED_STACKS.fetch_add(1, Ordering::AcqRel);
+    }
     Ok(thread)
 }
 
@@ -416,6 +664,33 @@ pub fn create(
     affinity: u64,
 ) -> Result<*mut Thread, &'static str> {
     create_thread(entry, argument, thread_priority, affinity, false)
+}
+
+/// Create a thread as [`create`] does, one [`count`] does not count: an
+/// executive worker thread, which the work queues make when work waits
+/// and end when it has long been idle (`ex::work`).
+pub fn create_uncounted(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    let thread = create_uncounted_unstarted(entry, argument, thread_priority, affinity)?;
+    // SAFETY: the thread is whole and on no queue.
+    unsafe { make_ready(thread) };
+    Ok(thread)
+}
+
+/// As [`create_uncounted`], but not yet made ready: the caller records
+/// the thread in its pool state and then calls [`begin`], so the thread
+/// cannot run before its pool counts it.
+pub fn create_uncounted_unstarted(
+    entry: Entry,
+    argument: usize,
+    thread_priority: u8,
+    affinity: u64,
+) -> Result<*mut Thread, &'static str> {
+    new_thread(entry, argument, thread_priority, affinity, false)
 }
 
 /// Create a thread and keep a reference to it, to wait for its end. The
@@ -477,7 +752,7 @@ fn steal() -> Option<*mut Thread> {
             ready.remove(link, level);
             let thread = thread_of(link);
             (*thread).queued_on.store(0, Ordering::SeqCst);
-            next_processor(thread).store(me as u32, Ordering::Relaxed);
+            next_processor(thread).store(me as u32, Ordering::Release);
             return Some(thread);
         }
     }
@@ -493,6 +768,24 @@ pub unsafe fn wait_register<'a>(thread: *mut Thread) -> &'a WaitRegister {
     // SAFETY: per the contract; a thread's register lives as long as
     // the thread.
     unsafe { &(*thread).wait }
+}
+
+/// The lock of the thread's APC queues.
+///
+/// # Safety
+/// As [`wait_register`].
+pub unsafe fn apc_lock<'a>(thread: *mut Thread) -> &'a SpinLock<()> {
+    // SAFETY: per the contract.
+    unsafe { &(*thread).apc }
+}
+
+/// The processor a running thread runs on, or a ready one is queued for.
+///
+/// # Safety
+/// `thread` is a live thread.
+pub unsafe fn processor(thread: *mut Thread) -> usize {
+    // SAFETY: per the contract.
+    unsafe { next_processor(thread).load(Ordering::Acquire) as usize }
 }
 
 /// A field of the thread's Windows-shaped block, for the modules that
@@ -563,7 +856,7 @@ pub unsafe fn make_ready(thread: *mut Thread) {
             field::<u32>(thread, layout::IDEAL_PROCESSOR).read() as usize,
             idling,
         );
-        next_processor(thread).store(processor as u32, Ordering::Relaxed);
+        next_processor(thread).store(processor as u32, Ordering::Release);
         processor
     };
     let dispatcher = arch::percpu_of(processor)
@@ -763,7 +1056,7 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
         }
         set_state(next, layout::state::RUNNING);
         set_current(next);
-        arch::set_kernel_stack((*next).stack.base);
+        arch::set_kernel_stack(active_stack(next).base);
         dispatcher.previous.store(me, Ordering::Release);
         dispatcher.switches.fetch_add(1, Ordering::Relaxed);
         arch::context_switch(
@@ -773,6 +1066,7 @@ unsafe fn switch_to(me: *mut Thread, next: *mut Thread) {
     }
     // Running again, on whatever processor took this thread.
     after_switch();
+    super::apc::switched_in();
 }
 
 /// The first thing a thread does when it gets a processor: release, or
@@ -788,7 +1082,9 @@ fn after_switch() {
     // SAFETY: the previous thread is off its stack now. If it exited,
     // nothing else refers to it and it is on no queue.
     unsafe {
-        if field::<u8>(previous, layout::STATE).read() == layout::state::TERMINATED {
+        if AtomicU8::from_ptr(field(previous, layout::STATE)).load(Ordering::Acquire)
+            == layout::state::TERMINATED
+        {
             let header = previous.cast::<DISPATCHER_HEADER>();
             // Its memory is about to be reused: nothing may still point
             // into it. A wait cancels its own timer, so this holds.
@@ -797,7 +1093,17 @@ fn after_switch() {
                 "a thread exited with its wait timer pending"
             );
             super::mutex::check_none_held(previous);
+            let counted = (*previous).counted;
             mm::stack::free((*previous).stack);
+            if !counted {
+                UNCOUNTED_STACKS.fetch_sub(1, Ordering::AcqRel);
+            }
+            let (segments, stranded) = ((*previous).segments, (*previous).stranded);
+            let in_use = usize::from((*previous).segments_in_use);
+            let left = usize::from((*previous).stranded_count);
+            for &segment in segments[..in_use].iter().chain(&stranded[..left]) {
+                mm::stack::free(segment);
+            }
             // It has ended: whoever waits for it may go on. They are
             // to find it gone, so the reference it held on itself while
             // it could run is dropped and it is counted out before its
@@ -810,7 +1116,7 @@ fn after_switch() {
                 super::object::signal(header).store(1, Ordering::Release);
                 let woken = super::object::satisfy(header);
                 let buried = ob::object::dereference_unless_last(previous.cast());
-                if buried {
+                if buried && counted {
                     THREADS.fetch_sub(1, Ordering::AcqRel);
                 }
                 (woken, buried)
@@ -821,7 +1127,9 @@ fn after_switch() {
                 // thread to see it end. Counted out once the memory is
                 // back, for whoever waits for the count to fall.
                 ob::object::dereference(previous.cast());
-                THREADS.fetch_sub(1, Ordering::AcqRel);
+                if counted {
+                    THREADS.fetch_sub(1, Ordering::AcqRel);
+                }
             }
         } else {
             (*previous).swap_busy.store(false, Ordering::Release);
@@ -841,12 +1149,17 @@ pub unsafe extern "C" fn deleted(body: *mut core::ffi::c_void) {
     unsafe {
         drop(super::object::ObjectLock::take(body.cast()));
         crate::se::impersonate::thread_deleted(body);
+        let thread = body.cast::<Thread>();
+        if !(*thread).counted && !(*thread).idle {
+            UNCOUNTED_OBJECTS.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
 /// Where a new thread begins.
 extern "C" fn start() -> ! {
     after_switch();
+    super::apc::switched_in();
     arch::set_irql(irql::PASSIVE_LEVEL);
     let me = current();
     // SAFETY: `me` is the running thread; these were written at creation.
@@ -1036,6 +1349,7 @@ pub unsafe extern "C" fn KeRevertToUserGroupAffinityThread(previous: *mut GROUP_
 /// End the calling thread.
 pub fn exit() -> ! {
     irql::expect_passive("thread exit");
+    super::apc::rundown();
     arch::set_irql(irql::DISPATCH_LEVEL);
     dispatch(Leaving::Exit);
     unreachable!("a thread that exited ran again")

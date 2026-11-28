@@ -4,5 +4,5 @@
 scenario: x86_64
 fails: seh.walk.dpc
 file: kernel/ke/unwind.rs
-replace:     [Some(super::thread::current_stack()), dpc]
-with:     [Some(super::thread::current_stack()), None]
+replace:         stacks[2 * super::thread::MAX_SEGMENTS + 2] = Some(arch::percpu().dpcs().stack());
+with:         stacks[2 * super::thread::MAX_SEGMENTS + 2] = None;

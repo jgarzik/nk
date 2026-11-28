@@ -334,13 +334,29 @@ mod tests {
     #[test]
     fn firmware_statuses_become_windows_statuses() {
         assert_eq!(nt_status(EFI_SUCCESS), STATUS_SUCCESS);
-        assert_eq!(nt_status(EFI_NOT_FOUND), STATUS_VARIABLE_NOT_FOUND);
-        assert_eq!(nt_status(EFI_BUFFER_TOO_SMALL), STATUS_BUFFER_TOO_SMALL);
+        assert_eq!(nt_status(1) as u32, 0xC00A_0022);
+        assert_eq!(nt_status(2) as u32, 0xC000_0121);
+        assert_eq!(nt_status(4), STATUS_BUFFER_TOO_SMALL);
+        assert_eq!(nt_status(EFI_ERROR | 1) as u32, 0xC000_026C);
         assert_eq!(nt_status(EFI_ERROR | 2), STATUS_INVALID_PARAMETER);
         assert_eq!(nt_status(EFI_ERROR | 3), STATUS_NOT_SUPPORTED);
+        assert_eq!(nt_status(EFI_ERROR | 4) as u32, 0xC000_0206);
+        assert_eq!(nt_status(EFI_BUFFER_TOO_SMALL), STATUS_BUFFER_TOO_SMALL);
+        assert_eq!(nt_status(EFI_ERROR | 6), STATUS_DEVICE_NOT_READY);
+        assert_eq!(nt_status(EFI_ERROR | 7) as u32, 0xC000_0185);
         assert_eq!(nt_status(EFI_ERROR | 8) as u32, 0xC000_00A2);
         assert_eq!(nt_status(EFI_ERROR | 9) as u32, 0xC000_0454);
+        assert_eq!(nt_status(EFI_ERROR | 11) as u32, 0xC000_007F);
+        assert_eq!(nt_status(EFI_ERROR | 12) as u32, 0xC000_0178);
+        assert_eq!(nt_status(EFI_ERROR | 13) as u32, 0x8000_001C);
+        assert_eq!(nt_status(EFI_NOT_FOUND), STATUS_VARIABLE_NOT_FOUND);
         assert_eq!(nt_status(EFI_ERROR | 15), STATUS_ACCESS_DENIED);
+        assert_eq!(nt_status(EFI_ERROR | 17) as u32, 0xC000_0088);
+        assert_eq!(nt_status(EFI_ERROR | 18) as u32, 0xC000_00B5);
+        assert_eq!(nt_status(EFI_ERROR | 20) as u32, 0x8000_0011);
+        assert_eq!(nt_status(EFI_ERROR | 21) as u32, 0xC000_0240);
+        assert_eq!(nt_status(EFI_ERROR | 22) as u32, 0xC000_0186);
+        assert_eq!(nt_status(EFI_ERROR | 25), STATUS_REVISION_MISMATCH);
         assert_eq!(nt_status(EFI_ERROR | 26), STATUS_ACCESS_DENIED);
         assert_eq!(nt_status(EFI_ERROR | 27) as u32, 0xC000_003F);
         // Not in the table: an error past its end, a warning past its
@@ -349,8 +365,6 @@ mod tests {
         assert_eq!(nt_status(EFI_ERROR), STATUS_UNSUCCESSFUL);
         assert_eq!(nt_status(3), STATUS_UNSUCCESSFUL);
         assert_eq!(nt_status(5), STATUS_UNSUCCESSFUL);
-        assert_eq!(nt_status(1) as u32, 0xC00A_0022);
-        assert_eq!(nt_status(4), STATUS_BUFFER_TOO_SMALL);
     }
 
     #[test]
@@ -386,6 +400,14 @@ mod tests {
             [(0xA1, "Boot0000".into()), (0xB2, "Lang".into())]
         );
         assert_eq!(&short[0x48..], vec![0xEE; needed - 1 - 0x48]);
+        // Room for the first entry and one byte of its alignment padding,
+        // not the full padding before the second entry.
+        let mut pad_short = vec![0xEE; 0x27];
+        assert_eq!(
+            enumerate(&mut store(), CLASS_NAMES, &mut pad_short),
+            (STATUS_BUFFER_TOO_SMALL, needed as u32)
+        );
+        assert_eq!(names(&pad_short[..0x26]), [(0xA1, "Boot0000".into())]);
         // No buffer at all asks for the size.
         assert_eq!(
             enumerate(&mut store(), CLASS_NAMES, &mut []),

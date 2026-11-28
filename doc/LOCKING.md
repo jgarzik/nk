@@ -8,7 +8,7 @@ lock changes this file in the same commit.
 | Level | Value | x86-64 vector | arm64 interrupt | What runs there |
 | --- | --- | --- | --- | --- |
 | `PASSIVE_LEVEL` | 0 | | | threads: driver entry, dispatch routines, work items, the tests |
-| `APC_LEVEL` | 1 | | | a thread holding a fast mutex |
+| `APC_LEVEL` | 1 | `0x1F` | SGI 4 | a thread holding a fast mutex; kernel APCs (`ke::apc`) |
 | `DISPATCH_LEVEL` | 2 | `0x2F` | SGI 3 | DPCs, the dispatcher, code holding a spin lock |
 | device levels | 3 to 11 | `0x30` to `0xBF` | shared peripheral interrupts | interrupt service routines, at their object's `SynchronizeIrql`; code holding an interrupt's spin lock |
 | clock | 13 | `0xD1` | virtual timer PPI | the clock tick |
@@ -64,12 +64,14 @@ already held has a lower rank; two locks of one rank never nest.
 | 10 | `io::driver::DRIVERS` | records of loaded drivers | DISPATCH |
 | 10 | `io::driver::REINITIALIZE` | the routines drivers registered for reinitialisation, boot and other, and whether the boot queue has been run; never held with `DRIVERS` | DISPATCH |
 | 11 | `io::shutdown::QUEUES` | the devices registered for a shutdown request, before the file systems and last chance; never held across a driver's routine | DISPATCH |
+| 12 | `io::fs::DATABASE` | the queues of registered file systems' control devices and the count of registrations; never held across a request; takes `io::device::DATABASE` (25) inside it to count a control device before releasing the queue | DISPATCH |
 | 20 | `pnp::node::TREE` | the device tree: every node and its place | DISPATCH |
 | 20 | `pnp::engine::REQUESTS` | what drivers asked the Plug and Play manager for and its thread has yet to do; which boot drivers failed; never held with `TREE` | DISPATCH |
 | 20 | `pnp::interface::INTERFACES` | the device interfaces registered, and which are enabled; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::depend::DEPENDENCIES` | which device depends on which, and the strings devices are bound by; never held with another lock of this rank | DISPATCH |
 | 20 | `pnp::notify::REGISTRATIONS` | the Plug and Play notification registrations and each one's count of callbacks in progress; never held with another lock of this rank, nor across a callback | DISPATCH |
-| 24 | `io::mount::VPB_LOCK` | every volume parameter block's `Flags`, `DeviceObject` and `ReferenceCount`; never held across a device's creation or deletion | DISPATCH |
+| 21 | `ob::object::MAKING` | making a type of object: the names and indices of the types drivers have made (read without it) | DISPATCH |
+| 24 | `io::mount::VPB_LOCK` | every volume parameter block's `Flags`, `DeviceObject` and `ReferenceCount`; never held across a device's creation or deletion; file systems take it too, through `IoAcquireVpbSpinLock` | DISPATCH |
 | 25 | `io::device::DATABASE` | every device's reference count, `ExtensionFlags` (delete pending among them), place in a stack (`AttachedDevice`, the extension's `AttachedTo`, and `StackSize` as it is set by attaching) and security descriptor pointer; each driver's list of devices and of driver-object extensions | DISPATCH |
 | 26 | `ex::em::DATABASE` | the entry types and callbacks errata providers have registered | DISPATCH |
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
@@ -77,6 +79,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
 | 30 | `ob::NAMESPACE` | the namespace's directories and entries; each named object's name information | DISPATCH |
 | 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
+| 32 | `ps::notify::TABLE` | the process-creation notify routines drivers have registered, and their kinds | DISPATCH |
 | 33 | `cm::HIVE` | the registry's keys and values | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
 | 35 | `ob::handle::TABLE` | which object each handle names; a handle's reference and its place in its object's handle count from the moment it is in the table | DISPATCH |
@@ -85,12 +88,16 @@ already held has a lower rank; two locks of one rank never nest.
 | 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |
 | 39 | `hal::variables::FIRMWARE` | the firmware's variable services: one call into them at a time, held across the call and nothing else | DISPATCH |
 | 40 | `mm::pool::POOL` | pool arenas and large allocations | DISPATCH |
+| 41 | `cc::MASTER` | the cache manager's shared cache maps: `SectionObjectPointer->SharedCacheMap`, each map's open count, references, flags (written here, read atomically outside), sizes, in-flight write ranges, flush waiters and shutdown-drain state, the doubly-linked list of maps and lifecycle waiters, each map's private cache maps and `FileObject->PrivateCacheMap`, and its chain of uninitialize events | DISPATCH |
+| 42 | `cc::vacb::VACBS` | the cache manager's views: each VACB's map, view, users, readiness and waiters, and every map's index of its views; never held across a call to the memory manager | DISPATCH |
+| 43 | `cc::DIRTY` | the dirty pages of the cache and of each map, each BCB's dirty mark, the cache manager's work queue, lazy writer and shutdown-drain state, and the deferred writes; never held across a file system's routine | DISPATCH |
 | 50 | `mm::map::NEXT_VA` | kernel address space and page-table edits | DISPATCH |
-| 60 | `mm::FRAMES` | the frame bitmap | DISPATCH |
+| 60 | `mm::pfn::PFN` | the frame bitmap; every entry of the page-frame-number database and its page lists; every control area's counts and flags and subsection directory, every subsection's counts and prototype PTEs, the entries of the system-cache views, flush waiters for pages with `WRITE_IN_PROGRESS`, and each file's `SectionObjectPointer->DataSectionObject`; never held across I/O, a wait or a pool allocation | DISPATCH |
 | 200 | `ke::ipi::CALL` | the interprocessor call in progress | DISPATCH |
-| 210 | a work queue (`ex::work`) | the work items waiting for a worker thread | DISPATCH |
+| 210 | a work queue (`ex::work`) | the work items waiting for a worker thread and the queue's dynamic worker counts | DISPATCH |
 | 212 | `ke::kinterrupt::CONNECT` | which interrupt objects are connected: each object's `Connected` mark, and each vector's chain together with whether its line is unmasked | DISPATCH |
 | 215 | a queue of push-lock waiters (`ex::pushlock`) | which threads wait for the push locks whose addresses lead to that queue; the `Waiting` bit of those locks | DISPATCH |
+| 216 | a thread's APC queues (`ke::apc`) | the lists of its two `KAPC_STATE`s, each queued APC's `Inserted` mark, and whether APCs may still be queued to it (`ApcQueueable`); readying the thread for an APC that ends its wait takes rank 220 after it | DISPATCH |
 | 217 | `ex::uuid::IDENTITY` | the time of the last UUID made, and the clock sequence and node all of them carry | DISPATCH |
 | 218 | `hal::interrupt::STATE` | which vector each device interrupt has, and the routing registers of the I/O APICs and the GIC distributor | DISPATCH |
 | 219 | `ex::callback::LOCK` | every callback object's list of registrations, and each registration's count of calls under way and its mark of being unregistered | DISPATCH |
@@ -326,6 +333,19 @@ exception that unwinds a callback releases it (the guard of that call,
 `doc/design/exceptions.md`). What a monitor's slot holds is let go after the mutex
 is released.
 
+### The cache manager's mutexes
+
+Each shared cache map has a guarded mutex over its list of BCBs (their
+pin counts and views) and its dirty-page bitmap, as Windows guards them
+with a fast mutex: it is taken with no spin lock held, at or below
+`APC_LEVEL`, and the pool is used under it. A BCB's own resource is
+taken by pins of a metadata stream after the mutex is released (or, for
+a BCB just made, before), and by the writer of that BCB; the cache
+manager takes it only inside a call a file system makes with its own
+resources held, so a file system's order (its resources, then the
+BCB's) is never inverted. None of these is held across a call to a
+file system's routine.
+
 ### Per-processor state
 
 What a processor keeps for itself is found through a register that
@@ -410,6 +430,30 @@ the thread to its processor.
 The IRQL belongs to the processor, not the thread. Every switch happens
 at `DISPATCH_LEVEL`, and each thread lowers it again on its own way out
 of the dispatcher.
+
+### Kernel APCs across processors
+
+Queuing a kernel APC (`ke::apc::KeInsertQueueApc`) holds the target
+thread's APC lock (rank 216), links the APC into its queue, marks
+`KernelApcPending`, and issues a `SeqCst` fence before reading the
+target's wait register, state, processor and disable counts. Each path
+on the target that can make an APC deliverable does the mirror side
+with a `SeqCst` fence between its write and its check, so one of the
+two always sees the other:
+
+- **Waiting (`interrupts_wait`).** The target begins its wait before
+  reading `KernelApcPending`.
+- **Switching in (`switched_in`).** The dispatcher writes
+  `next_processor` and then `STATE = RUNNING` (`Release`) before the
+  switch, and `switched_in` fences before reading `KernelApcPending`
+  (`Acquire`), so either the queuer sees `RUNNING` and the new
+  processor and interrupts it, or the target sees `KernelApcPending`
+  and interrupts itself.
+- **Leaving a critical or guarded region.** The target raises its
+  disable count to zero, fences, and reads the queue head atomically.
+- **Clearing `KernelApcPending`.** `deliver` clears the pending byte
+  only under the thread's APC lock, so it cannot drop a mark set by a
+  concurrent insert without also seeing the queued APC.
 
 ### Object locks
 
@@ -513,6 +557,13 @@ IRQL or because Windows defines it as one word changed atomically:
 - The table of registered trace providers (`kernel/etw`): a slot is
   claimed and given up by compare-and-swap, so a provider writes an
   event at any IRQL.
+- Interrupt-timing entropy (`kernel/ke/entropy.rs`): one-time
+  registration claims an atomic flag before touching any processor's
+  `KENTROPY_TIMING_STATE`, and each processor's state has an atomic
+  gate word coordinating `record()` (which skips a sample rather than
+  spinning with interrupts masked) against one-time initialisation; the
+  callback routine is published only after every processor's DPC and
+  state are initialised.
 - A sequenced list (`SLIST_HEADER`): push, pop and flush are one
   16-byte compare-and-swap on the header in the driver's memory
   (`arch::swap_pair`).
@@ -599,8 +650,8 @@ driver's pointer. A thread that cannot have it sleeps: the routines
 are for `PASSIVE_LEVEL` and `APC_LEVEL`, and a wait at `DISPATCH_LEVEL`
 stops the system like any other. They leave the IRQL and the thread's
 APC state alone. As on Windows it is the caller that enters a critical
-region first, so that the holder cannot be suspended; NK queues no
-APCs and does not check that it did. The waiters are in NK's own
+region first, so that the holder cannot be suspended; NK does not
+check that it did. The waiters are in NK's own
 queues (rank 215), not chained through the word as Windows chains
 them.
 
@@ -615,7 +666,7 @@ too. The critical region is the caller's to enter, as for a push lock.
 
 The lock of a stream's FCB header is the file system's too: the push
 lock in the header, or in an old header the fast mutex it points to.
-`FsRtlTeardownPerStreamContexts` (`kernel/io/fsrtl.rs`) takes it, in a
+`FsRtlTeardownPerStreamContexts` (`kernel/fsrtl/mod.rs`) takes it, in a
 critical region it enters itself, only to unlink one context at a
 time; it holds neither while the context's `FreeCallback` runs, and
 takes no ranked lock inside it.

@@ -10,8 +10,11 @@
 
 #![cfg_attr(not(test), no_std)]
 
+pub mod entropy;
+pub mod sha512;
+
 pub const MAGIC: u64 = u64::from_le_bytes(*b"NKBOOT\0\0");
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// Where the loader maps things. Fixed, so the kernel can be linked and
 /// debugged against known addresses.
@@ -204,6 +207,11 @@ pub struct BootInfo {
     /// Wall-clock time when the loader ran, as Windows counts it: 100 ns
     /// units since 1601-01-01 UTC. 0 if firmware could not say.
     pub boot_time: u64,
+    /// The entropy the loader gathered, as Windows' loader hands it to
+    /// its kernel: a `BOOT_ENTROPY_LDR_RESULT` (`nk-ntabi`) in pages of
+    /// its own, which the kernel wipes once it has given the entropy
+    /// out (`doc/BOOT.md`, Boot entropy).
+    pub entropy: u64,
     /// The kernel command line: `key=value` words separated by spaces,
     /// NUL padded. Empty when the boot volume has no command-line file.
     pub cmdline: [u8; CMDLINE_LEN],
@@ -232,6 +240,7 @@ impl BootInfo {
             mair_device: 0,
             _pad: [0; 6],
             boot_time: 0,
+            entropy: 0,
             cmdline: [0; CMDLINE_LEN],
             modules: [Module::EMPTY; MAX_MODULES],
         }
@@ -706,7 +715,7 @@ mod tests {
         // Both loader and kernel are built from this source, but a silent
         // layout change should still be a deliberate VERSION bump.
         assert_eq!(size_of::<Module>(), 48);
-        assert_eq!(size_of::<BootInfo>(), 112 + CMDLINE_LEN + 48 * MAX_MODULES);
+        assert_eq!(size_of::<BootInfo>(), 120 + CMDLINE_LEN + 48 * MAX_MODULES);
         assert!(BootInfo::new().is_valid());
     }
 

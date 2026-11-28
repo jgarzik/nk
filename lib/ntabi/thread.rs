@@ -12,9 +12,19 @@
 
 /// Size of `ETHREAD`, which begins with the `KTHREAD`.
 pub const ETHREAD_SIZE: usize = 0x898;
+/// `ETHREAD.TopLevelIrp`: the file system request at the top of the
+/// thread's stack, or one of the `FSRTL_*_TOP_LEVEL_IRP` values
+/// (`IoGetTopLevelIrp`).
+pub const TOP_LEVEL_IRP: usize = 0x4C0;
 /// `ETHREAD.DeviceToVerify`: the device a file system asked to have
 /// verified (`IoSetHardErrorOrVerifyDevice`).
 pub const DEVICE_TO_VERIFY: usize = 0x4C8;
+/// `ETHREAD.CacheManagerActive` (a byte): 1 while the thread writes a
+/// section's pages for the cache manager (`MmFlushSection`); one half
+/// of `MmIsRecursiveIoFault`.
+pub const CACHE_MANAGER_ACTIVE: usize = 0x51C;
+/// `ETHREAD.DisablePageFaultClustering` (a byte): the other half.
+pub const DISABLE_PAGE_FAULT_CLUSTERING: usize = 0x51D;
 /// `ETHREAD.IoBoostCount`: how many times the thread's I/O priority is
 /// boosted now.
 pub const IO_BOOST_COUNT: usize = 0x550;
@@ -52,11 +62,34 @@ pub const MISC_FLAGS: usize = 0x74;
 pub const MISC_FLAG_SYSTEM_AFFINITY_ACTIVE: u32 = 1 << 3;
 /// `MiscFlags.Alertable`: the thread is in a wait an alert may end.
 pub const MISC_FLAG_ALERTABLE: u32 = 1 << 4;
+/// `MiscFlags.SystemThread`: a thread of the kernel's, not a user
+/// process's (`IoIsSystemThread`). Every NK thread is one.
+pub const MISC_FLAG_SYSTEM_THREAD: u32 = 1 << 10;
+/// `MiscFlags.ApcQueueable`: APCs may be queued to the thread; cleared
+/// as it ends.
+pub const MISC_FLAG_APC_QUEUEABLE: u32 = 1 << 14;
+/// `ApcState`: the thread's `KAPC_STATE` for the process it is in.
+pub const APC_STATE: usize = 0x98;
+/// `SavedApcState`: its own process's `KAPC_STATE` while it is attached
+/// to another.
+pub const SAVED_APC_STATE: usize = 0x258;
+/// `ApcStateIndex`: one byte, 0 while the thread is in its own process
+/// (`ApcState` is that process's), 1 while attached.
+pub const APC_STATE_INDEX: usize = 0x24A;
+/// `WaitIrql`: the IRQL the thread's current or last wait was entered
+/// at. A kernel APC interrupts a wait entered at `PASSIVE_LEVEL`.
+pub const WAIT_IRQL: usize = 0x186;
+/// `SpecialApcDisable`: 16 bits, negative while the thread is in a
+/// guarded region; no kernel APC runs then.
+pub const SPECIAL_APC_DISABLE: usize = 0x1E6;
 /// `WaitMode`: the processor mode of the thread's alertable wait, one
 /// signed byte.
 pub const WAIT_MODE: usize = 0x187;
 /// `Priority`: the current priority, one signed byte.
 pub const PRIORITY: usize = 0xC3;
+/// `KTHREAD.SchedulingGroup`: the CPU-rate group the thread runs in;
+/// none of NK's threads is in one.
+pub const SCHEDULING_GROUP: usize = 0x68;
 /// `WaitListEntry`: links the thread into a ready queue.
 pub const WAIT_LIST_ENTRY: usize = 0xD8;
 /// `State`: one byte, a `KTHREAD_STATE`.
@@ -75,6 +108,10 @@ pub const CLIENT_SECURITY: usize = 0x4A8;
 /// `ETHREAD.CrossThreadFlags`: 32 bits of flags, of which
 /// [`ACTIVE_IMPERSONATION_INFO`] says the thread impersonates.
 pub const CROSS_THREAD_FLAGS: usize = 0x510;
+/// `CrossThreadFlags.ThreadIoPriority`: bits 9 to 11.
+pub const THREAD_IO_PRIORITY_SHIFT: u32 = 9;
+/// `CrossThreadFlags.ThreadPagePriority`: bits 12 to 14.
+pub const THREAD_PAGE_PRIORITY_SHIFT: u32 = 12;
 /// `CrossThreadFlags.ActiveImpersonationInfo`.
 pub const ACTIVE_IMPERSONATION_INFO: u32 = 1 << 3;
 /// `CrossThreadFlags.HardErrorsAreDisabled`: the thread asked for no

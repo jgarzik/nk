@@ -192,6 +192,50 @@ tier has, for each architecture:
   whose DPC routine raises over a thread inside a `__try`;
 - `*-known-bad`, `*-wrong-cpus`: a failing test fails the run.
 
+- `*-ke-apc` (`test=ke.apc.*`), and `x86_64-ke-apc-smp1` on one
+  processor: kernel APCs, which no Microsoft binary on a boot path
+  queues yet, by NK's own tests: special before normal, held back by
+  guarded and critical regions and a raised IRQL and run when they end,
+  a wait interrupted for them and resumed, `KeAreAllApcsDisabled`.
+- `x86_64-mm-section` (`test=mm.section trace=mm`): the memory
+  manager's data sections, system-cache views and paging I/O, driven as
+  the cache manager drives them over nkfs, a test-only file system
+  (`kernel/selftest/nkfs.rs`) that records every paging request: views
+  map without reading, a fault reads a cluster of at most 16 pages in
+  one request flagged 0x43, overwritten pages are not read, a failed
+  read is the fault's status, touching a view's page brings it in, a
+  locked page holds its frame and refuses a purge, a flush writes exactly the modified pages
+  with the cache manager's mark, a purge is refused while a view is mapped
+  and afterwards gives every page and block back.
+- `x86_64-io-mount` (`test=io.mount.* trace=mount`): the mount path
+  with nkfs's mount half (`kernel/selftest/nkfs_mount.rs`): two control
+  devices on the disk queue asked in order on a first open, the block
+  marked and counted as Windows does, a stream file object's cleanup at
+  once and close at its last reference, creates on a 0x6000 stack
+  expansion and a raise across one, a read split into associated
+  requests, and the file systems' shutdown at the end of the boot.
+- `x86_64-cc` (`test=cc.* trace=cc`): the cache manager over nkfs,
+  called as a file system calls it (`kernel/selftest/nkfs_cc.rs`): a
+  cache map is made with its section; `CcMapData` reads the range and
+  hands back a view's handle, without waiting returns FALSE leaving the
+  handle alone and reading nothing, and raises a failed read's status;
+  pins get the covering BCB; a repinned dirty BCB written through is
+  written with paging I/O and left clean, the file taken for the flush
+  by the FCB header's resources or, when the file system has them, by
+  its fast-I/O flush routines alone; `CcPreparePinWrite` of a whole
+  page reads nothing and leaves it dirty; the last of two file objects
+  to uninitialize deletes the map and signals both events; a second
+  caller whose allocation size cannot be had raises and keeps no pool.
+  On a file cached for copying: copy reads, writes that read only the
+  pages they cover in part and below the valid data length, flushes,
+  MDL reads and writes, zeroing, purges refused while a view is in use,
+  shrinking and growing, and the attributes; the lazy writer writing a
+  dirty page within 4.5 s through the file system's callbacks,
+  `CcDeferWrite` posting at once on a clean cache, and a map closed
+  without a truncate size deleted by the lazy writer, its event
+  signalled, once `CcWaitForCurrentLazyWriterActivity` returns; two
+  threads waiting for the lazy writer at once both return; FsRtl's
+  fast reads, writes and MDL paths over the cache.
 - `x86_64-disk-present`: a boot with a data disk attached passes, and
   the disk is afterwards as it was made.
 - `x86_64-storage`: Microsoft's storage stack (`acpi.sys`, `pci.sys`,
@@ -377,8 +421,9 @@ and the proof reads it through RAW, as every open of a disk for data
 goes (`doc/design/io.md`, Mounting). `disk.raw.*` hold the mount to that:
 an open of the disk for its attributes alone mounts nothing
 (`disk.raw.direct`); an open of a name on the unmounted disk, whose
-block does not allow a raw mount, is `STATUS_UNRECOGNIZED_VOLUME`
-(`disk.raw.unrecognized`); an open of the disk for data mounts RAW,
+block does not allow a raw mount, is offered to RAW all the same, RAW
+being the only file system on the disk queue, and RAW refuses the name
+(`disk.raw.named`); an open of the disk for data mounts RAW,
 whose device then serves the disk's first sector, and a name on the
 mounted disk is RAW's `STATUS_INVALID_PARAMETER` (`disk.raw.mount`).
 The group deletes its disk at the end, which dismounts it; its count
@@ -399,9 +444,10 @@ pattern disk, a 64 MiB disk holding one FAT32 volume
 in an MBR (`fat32-mbr`, disk signature `0x4E4B0001`, type `0x0C`) or a
 GPT (`fat32-gpt`, a Basic Data partition, fixed disk and partition
 GUIDs). The volume has one sector a cluster, the serial `4e4b0002`,
-the label `NKVOL`, and three files: `HELLO.TXT`, `PATTERN.BIN` (three
-sectors and 100 bytes of the data disk's original pattern) and
-`DIR1\NESTED.TXT`. After the boot, `disk_expect = "fat-unchanged"`
+the label `NKVOL`, and the files of `fatdisk.FILES`: among them
+`PATTERN.BIN` (three sectors and 100 bytes of the data disk's original
+pattern, so a misplaced cluster shows), `DIR1\NESTED.TXT`, an empty
+file and one with a long name. After the boot, `disk_expect = "fat-unchanged"`
 requires `fsck.fat -n` to find the volume clean, every file to hold
 what it was given, and no other file. `tools/test_fatdisk.py` holds the
 check to that without booting.
@@ -435,6 +481,38 @@ check to that without booting.
   "fat32-gpt"`). `vol.partmgr` requires a GPT layout with the disk's
   GUID and one Basic Data partition with its GUID; the volume's name is
   the partition's GUID (`Volume{4e4b0000-...-000000000002}`).
+- `x86_64-fat-volume` (`test=fat.read`): the same machine with
+  Microsoft's `fastfat.sys` as a boot driver (`registry-fat.txt`).
+  `fat.load` requires its control devices; `fat.read` opens files on
+  `C:` by name, which mounts `fastfat.sys` on the volume, and requires
+  each of the host's files to read back as written, through the cache
+  manager. The image must be unchanged.
+- `x86_64-fat-write` (`test=fat.write`): writing through it. A new
+  file is written over a hole and across two of the cache manager's
+  views, rewritten in part, cut short (its size asked back) and
+  flushed, and reads back as written; `EMPTY.TXT` is renamed and
+  `HELLO.TXT` deleted. `disk_expect = "fat-written"` then requires
+  `fsck.fat` to find the volume clean and every file, the new one
+  included, to hold what `tools/fatdisk.py` (`expected`) says.
+- `x86_64-fat-write-gpt`: the same writes on the GPT disk.
+- `x86_64-fat-lazy` (`test=fat.lazy`): a file written and closed with
+  no flush, so only the cache manager's lazy writer, or its flush at
+  shutdown, writes it; `disk_expect = "fat-lazy"` requires it on the
+  disk, the volume clean.
+- `x86_64-fat-efs` (`test=fat.efs`, `registry = ["storage", "volumes",
+  "mount", "fat", "crypto"]`): `fastfat.sys` started alongside
+  `pcw.sys`, `cng.sys` and `ksecdd.sys`, as on Windows; requires its
+  reinitialisation routine to finish EFS initialisation (`\EFSInitEvent`
+  present) and `C:` to mount and read cleanly.
+
+- `x86_64-crypto-boot` (`test=crypto.boot`, `registry = ["crypto"]`,
+  `kernel/selftest/crypto.rs`): Microsoft's performance-counter,
+  cryptography and security drivers start as boot drivers, as on
+  Windows: `pcw.sys`, `cng.sys` (whose start needs the loader's boot
+  entropy, `doc/BOOT.md`) and `ksecdd.sys`, which opens `\Device\CNG`
+  and registers performance counters with `pcw.sys`. The test requires
+  CNG and KSecDD running and both devices there. The registry values
+  are the WinPE image's own (`fixtures/registry-crypto.txt`).
 
 ### Soak
 

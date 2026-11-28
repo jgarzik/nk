@@ -39,6 +39,30 @@ pub struct TIME_FIELDS {
     pub Weekday: i16,
 }
 
+/// [`GENERATE_NAME_CONTEXT`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-rtlgenerate8dot3name):
+/// what `RtlGenerate8dot3Name` keeps between the calls that make one long
+/// name's short names. The caller zeroes it before the first call.
+#[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct GENERATE_NAME_CONTEXT {
+    pub Checksum: u16,
+    pub ChecksumInserted: u8,
+    pub NameLength: u8,
+    pub NameBuffer: [u16; 8],
+    pub ExtensionLength: u32,
+    pub ExtensionBuffer: [u16; 4],
+    pub LastIndexValue: u32,
+}
+
+const _: () = {
+    assert!(size_of::<GENERATE_NAME_CONTEXT>() == 0x24);
+    assert!(offset_of!(GENERATE_NAME_CONTEXT, NameLength) == 0x03);
+    assert!(offset_of!(GENERATE_NAME_CONTEXT, NameBuffer) == 0x04);
+    assert!(offset_of!(GENERATE_NAME_CONTEXT, ExtensionLength) == 0x14);
+    assert!(offset_of!(GENERATE_NAME_CONTEXT, ExtensionBuffer) == 0x18);
+    assert!(offset_of!(GENERATE_NAME_CONTEXT, LastIndexValue) == 0x20);
+};
+
 /// [`RTL_BITMAP`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlinitializebitmap):
 /// the header of a bitmap. The buffer is the caller's, a whole number
 /// of `ULONG`s.

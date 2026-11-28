@@ -249,6 +249,14 @@ not load its target.
   `\Registry\Machine\System\CurrentControlSet\Services\<name>`, a
   key that need not exist. Its entry point is not called. A failing
   `DllInitialize` unloads it and fails the importer's load.
+- **A library that is also a boot driver.** A boot-start service whose image is loaded
+  already as a library (`ksecdd.sys`, which `fastfat.sys` imports from
+  and which starts after it) is started from that image: its entry point
+  is called then, as Windows' loader, which loads each image once,
+  calls a boot driver's entry point however many others import from
+  it. The library keeps the image; the driver's unload leaves it. A
+  service started later is refused, `STATUS_IMAGE_ALREADY_LOADED`, as
+  Windows refuses it.
 - **Lifetime.** Each loaded importer counts once, in the library's
   record in the table of images. When the last goes, the library's
   `DllUnload` is called and the library unloaded, after its importer;

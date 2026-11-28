@@ -8,6 +8,10 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, ex::wnf::ExUnsubscribeWnfStateChange),
     export!(Partial, ex::wnf::ZwQueryWnfStateData),
     export!(Implemented, ex::absent::HeadlessDispatch),
+    export!(Implemented, ex::extension::ExRegisterExtension),
+    export!(Implemented, ex::extension::ExUnregisterExtension),
+    export!(Implemented, ex::pcw::PcwAddInstance),
+    export!(Implemented, ex::pcw::PcwRegister),
     export!(Implemented, ex::absent::HviGetHypervisorFeatures),
     export!(Implemented, ex::absent::HviIsAnyHypervisorPresent),
     export!(Implemented, ex::absent::VfFailDeviceNode),
@@ -18,6 +22,30 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
         ex::vsl::VslGetSecurePciDeviceAlternateFunctionNumberForVtl0Dma
     ),
     export!(Implemented, ex::vsl::VslQuerySecureDevice),
+    export!(Implemented, ex::vsl::SkIsSecureKernel),
+    export!(Implemented, ex::vsl::VslExchangeEntropy),
+    export_entry!(
+        Implemented,
+        "SkAcquirePushLockExclusive",
+        ex::vsl::secure_kernel_only
+    ),
+    export_entry!(Implemented, "SkAllocatePool", ex::vsl::secure_kernel_only),
+    export_entry!(Implemented, "SkFreePool", ex::vsl::secure_kernel_only),
+    export_entry!(
+        Implemented,
+        "SkInitializePushLock",
+        ex::vsl::secure_kernel_only
+    ),
+    export_entry!(
+        Implemented,
+        "SkQuerySecureKernelInformation",
+        ex::vsl::secure_kernel_only
+    ),
+    export_entry!(
+        Implemented,
+        "SkReleasePushLockExclusive",
+        ex::vsl::secure_kernel_only
+    ),
     export!(Partial, ex::em::EmClientQueryRuleState),
     export!(Partial, ex::em::EmClientRuleEvaluate),
     export!(Implemented, ex::em::EmProviderDeregister),
@@ -34,6 +62,8 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::timer::ExCancelTimer),
     export!(Implemented, ex::resource::ExConvertExclusiveToSharedLite),
     export!(Implemented, ex::lookaside::ExDeleteNPagedLookasideList),
+    export!(Implemented, ex::lookaside::ExDeleteLookasideListEx),
+    export!(Implemented, ex::lookaside::ExInitializeLookasideListEx),
     export!(Implemented, ex::lookaside::ExDeletePagedLookasideList),
     export!(Implemented, ex::resource::ExDeleteResourceLite),
     export!(Implemented, ex::timer::ExDeleteTimer),
@@ -150,4 +180,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, ex::callback::ExUnregisterCallback),
     export!(Implemented, ex::callback::ExNotifyCallback),
     export!(Partial, ex::timer::ExAllocateTimerInternal2),
+    export!(Implemented, ex::resource::ExSetResourceOwnerPointer),
+    export!(Implemented, ex::timezone::ExSystemTimeToLocalTime),
+    export!(Implemented, ex::timezone::ExLocalTimeToSystemTime),
 ];

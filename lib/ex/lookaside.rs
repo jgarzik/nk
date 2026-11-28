@@ -78,6 +78,60 @@ pub const fn npaged(flags: u32, size: usize, tag: u32) -> Fields {
     fields(NON_PAGED_POOL | flags, size, tag)
 }
 
+/// Why `ExInitializeLookasideListEx` refused its arguments: the
+/// parameter that is wrong, counting from one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BadParameter(pub u8);
+
+/// `EX_LOOKASIDE_LIST_EX_FLAG_RAISE_ON_FAIL` and `..._FAIL_NO_RAISE`.
+pub const FLAG_RAISE_ON_FAIL: u32 = 1;
+pub const FLAG_FAIL_NO_RAISE: u32 = 2;
+/// The pool flags those stand for.
+const POOL_RAISE_IF_ALLOCATION_FAILURE: u32 = 0x10;
+const POOL_QUOTA_FAIL_INSTEAD_OF_RAISE: u32 = 0x8;
+
+/// `ExInitializeLookasideListEx`, as the pinned kernel checks and fills
+/// it: a `depth` of 0 means the default maximum, any other must be from
+/// 256 to 1024 (parameter 8); at most one flag (parameter 5); a pool
+/// type with no bits the pool does not know and not both paged and
+/// session-cache-aligned at once (parameter 4). The flags join the pool
+/// type as the pool's own; a size below 8 is made 8.
+pub fn ex(
+    pool_type: u32,
+    flags: u32,
+    size: usize,
+    tag: u32,
+    depth: u16,
+) -> Result<Fields, BadParameter> {
+    if depth != 0 && !(MAXIMUM_DEPTH_BASE..=4 * MAXIMUM_DEPTH_BASE).contains(&depth) {
+        return Err(BadParameter(8));
+    }
+    if flags & !(FLAG_RAISE_ON_FAIL | FLAG_FAIL_NO_RAISE) != 0
+        || !flags.is_power_of_two() && flags != 0
+    {
+        return Err(BadParameter(5));
+    }
+    if pool_type & 0xFFFF_FC18 != 0 || pool_type & 3 == 3 {
+        return Err(BadParameter(4));
+    }
+    let flag_bits = match flags {
+        FLAG_RAISE_ON_FAIL => POOL_RAISE_IF_ALLOCATION_FAILURE,
+        FLAG_FAIL_NO_RAISE => POOL_QUOTA_FAIL_INSTEAD_OF_RAISE,
+        _ => 0,
+    };
+    Ok(Fields {
+        depth: MINIMUM_DEPTH,
+        maximum_depth: if depth == 0 {
+            MAXIMUM_DEPTH_BASE
+        } else {
+            depth
+        },
+        pool_type: pool_type | flag_bits,
+        tag,
+        size: size.max(8) as u32,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +183,41 @@ mod tests {
         }
         // Only its low 32 bits fit the field.
         assert_eq!(npaged(0, 0x1_0000_0020, TAG).size, 0x20);
+    }
+
+    #[test]
+    fn an_ex_list_is_checked_and_filled_as_windows_does() {
+        assert_eq!(
+            ex(PAGED_POOL, 0, 3, TAG, 0),
+            Ok(Fields {
+                depth: 4,
+                maximum_depth: 256,
+                pool_type: 1,
+                tag: TAG,
+                size: 8,
+            })
+        );
+        assert_eq!(
+            ex(0x200, FLAG_RAISE_ON_FAIL, 64, TAG, 1024)
+                .unwrap()
+                .pool_type,
+            0x210
+        );
+        assert_eq!(
+            ex(0, FLAG_FAIL_NO_RAISE, 64, TAG, 300).unwrap(),
+            Fields {
+                depth: 4,
+                maximum_depth: 300,
+                pool_type: 8,
+                tag: TAG,
+                size: 64,
+            }
+        );
+        assert_eq!(ex(0, 0, 64, TAG, 255), Err(BadParameter(8)));
+        assert_eq!(ex(0, 0, 64, TAG, 1025), Err(BadParameter(8)));
+        assert_eq!(ex(0, 3, 64, TAG, 0), Err(BadParameter(5)));
+        assert_eq!(ex(0, 4, 64, TAG, 0), Err(BadParameter(5)));
+        assert_eq!(ex(3, 0, 64, TAG, 0), Err(BadParameter(4)));
+        assert_eq!(ex(0x8, 0, 64, TAG, 0), Err(BadParameter(4)));
     }
 }

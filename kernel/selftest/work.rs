@@ -8,7 +8,13 @@ use nk_bootinfo::BootInfo;
 use nk_ntabi::io::{DEVICE_OBJECT, DRIVER_EXTENSION, DRIVER_OBJECT};
 
 pub static GROUP: Group = Group {
-    names: &["work.runs", "work.many", "work.io", "work.delete-race"],
+    names: &[
+        "work.runs",
+        "work.many",
+        "work.io",
+        "work.delete-race",
+        "work.dynamic",
+    ],
     run,
     manual: false,
 };
@@ -60,6 +66,7 @@ fn run(r: &mut Report, _: &BootInfo) {
     counted(r, "work.many", "items, each run once:", work::many_test());
     counted(r, "work.io", "routines run:", with_device(work::io_test));
     counted(r, "work.delete-race", "devices deleted:", delete_race());
+    counted(r, "work.dynamic", "items run:", work::dynamic_test());
 }
 
 /// The driver object the delete-race test hangs its devices on.

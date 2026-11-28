@@ -1,4 +1,4 @@
-//! Routines Microsoft's storage stack imports that NK does not
+//! Routines Microsoft's binaries import that NK does not
 //! implement: each stops the system, naming itself, if called. A name
 //! leaves this list in the commit that implements the routine.
 
@@ -7,19 +7,23 @@
 use super::super::{Export, NT, State};
 
 trap_list!(
-    IoAcquireVpbSpinLock,
     IoAdjustStackSizeForRedirection,
+    IoAllocateMiniCompletionPacket,
     IoAssignResources,
+    IoCancelFileOpen,
     IoCreateFile,
     IoDuplicateDependency,
-    IoMakeAssociatedIrp,
+    IoFreeMiniCompletionPacket,
     IoQueryFullDriverPath,
+    IoRaiseHardError,
+    IoRaiseInformationalHardError,
     IoReadPartitionTableEx,
-    IoReleaseVpbSpinLock,
     IoRequestDeviceEject,
     IoRequestDeviceEjectEx,
     IoRequestDeviceRemovalForReset,
+    IoSetFsTrackOffsetState,
     IoTestDependency,
+    IoVerifyVolume,
     IoVolumeDeviceToDosName,
     IoWMIExecuteMethod,
     IoWMIQueryAllData,

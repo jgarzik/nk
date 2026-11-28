@@ -118,6 +118,11 @@ pub struct NPAGED_LOOKASIDE_LIST {
     pub L: GENERAL_LOOKASIDE,
 }
 
+/// `LOOKASIDE_LIST_EX`: the same block, whose routines take the list
+/// too (`AllocateEx(PoolType, NumberOfBytes, Tag, Lookaside)`,
+/// `FreeEx(Buffer, Lookaside)`) in the slots of `Allocate` and `Free`.
+pub type LOOKASIDE_LIST_EX = GENERAL_LOOKASIDE;
+
 /// `OWNER_ENTRY`: one owner of a resource. `Bits` is three flag bits
 /// and, from bit 3, `OwnerCount`; in the first entry of an owner table
 /// the same word is `TableSize`, the number of entries.

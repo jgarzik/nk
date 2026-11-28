@@ -82,6 +82,8 @@ def _run_problems(log, timed_out):
 
     if len(log.plans) != 1:
         problems.append(f"expected one NK-TEST-PLAN line, found {len(log.plans)}")
+    elif log.plans[0] == 0:
+        problems.append("the boot planned no tests: test= selected no group")
     elif log.plans[0] != len(log.tests):
         problems.append(f"plan declared {log.plans[0]} verdicts, {len(log.tests)} were reported")
 

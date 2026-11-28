@@ -54,7 +54,7 @@ const SHARE_READ_WRITE: u32 = 0x3;
 /// Wait for the device `name` to exist: the drivers hand partitions and
 /// volumes on in work items of their own, after the disk has started.
 /// Ten seconds, a tenth at a time.
-fn arrives(name: &str) -> Result<(), &'static str> {
+pub(crate) fn arrives(name: &str) -> Result<(), &'static str> {
     let wide: alloc::vec::Vec<u16> = name.encode_utf16().collect();
     for _ in 0..100 {
         if crate::ob::lookup(None, &wide).is_ok_and(|(_, rest)| rest.is_empty()) {

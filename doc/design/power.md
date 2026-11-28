@@ -115,8 +115,11 @@ path the kernel ends a run by: there is no user mode to ask and nothing
 to flush. That path first sends `IRP_MJ_SHUTDOWN` to the devices
 registered for it (`io::shutdown`), to the top of each one's stack, one
 at a time and waited for, newest first: the
-`IoRegisterShutdownNotification` queue, then the last-chance one, which
-on Windows comes after the file systems are flushed. A device deleted
+`IoRegisterShutdownNotification` queue; then each file system
+registered on the disk, CD-ROM and tape queues, the queues looked at
+afresh each time since a file system unregisters as it shuts down, as
+Windows' `IopShutdownBaseFileSystems` does, after which nothing mounts;
+then the last-chance queue ([I/O](io.md)). A device deleted
 while registered leaves its queue. What the pinned kernel refuses outright is refused; every
 other action is its policy manager's, which NK lacks, and stops the
 system naming the action.

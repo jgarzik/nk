@@ -202,3 +202,129 @@ const _: () = {
     assert!(offset_of!(AUX_MODULE_EXTENDED_INFO, FileNameOffset) == 0x0C);
     assert!(offset_of!(AUX_MODULE_EXTENDED_INFO, FullPathName) == 0x0E);
 };
+
+/// `SystemEntropyInterruptTimingInformation`, which
+/// `ZwSetSystemInformation` takes: a driver's routine for the times of
+/// interrupts ([`SYSTEM_ENTROPY_TIMING_INFORMATION`]).
+pub const SYSTEM_ENTROPY_INTERRUPT_TIMING_INFORMATION_CLASS: u32 = 0x83;
+
+/// What class 0x83 takes, as `cng.sys` builds it and the pinned
+/// kernel's `NtSetSystemInformation` reads it: the routine given each
+/// full half of a processor's timing buffer, the routine run once for
+/// each processor's state when it registers, and their context.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SYSTEM_ENTROPY_TIMING_INFORMATION {
+    pub EntropyRoutine: *mut c_void,
+    pub InitializationRoutine: *mut c_void,
+    pub InitializationContext: *mut c_void,
+}
+
+const _: () = assert!(size_of::<SYSTEM_ENTROPY_TIMING_INFORMATION>() == 0x18);
+
+/// `SystemBootEntropyInformation`: the entropy the loader gathered, for
+/// `cng.sys`. Answered once, in kernel mode, into a buffer of exactly
+/// [`SYSTEM_BOOT_ENTROPY_INFORMATION_SIZE`] bytes.
+pub const SYSTEM_BOOT_ENTROPY_INFORMATION_CLASS: u32 = 0x75;
+
+/// What class 0x75 returns: the head of [`BOOT_ENTROPY_LDR_RESULT`], up
+/// to and including `SeedBytesForCng`. The pinned kernel's
+/// `ExpQuerySystemInformation` asks for this length exactly, and
+/// `cng.sys`'s `GetBootEntropy` passes it.
+pub const SYSTEM_BOOT_ENTROPY_INFORMATION_SIZE: usize =
+    core::mem::offset_of!(BOOT_ENTROPY_LDR_RESULT, RngBytesForNtoskrnl);
+
+/// `BOOT_ENTROPY_SOURCE_ID`: each source of boot entropy, which is also
+/// its record's place in [`BOOT_ENTROPY_LDR_RESULT::EntropySourceResult`]
+/// plus one. Values from the pinned kernel's symbols.
+pub const BOOT_ENTROPY_SOURCE_NONE: u32 = 0;
+pub const BOOT_ENTROPY_SOURCE_SEEDFILE: u32 = 1;
+pub const BOOT_ENTROPY_SOURCE_EXTERNAL: u32 = 2;
+pub const BOOT_ENTROPY_SOURCE_TPM: u32 = 3;
+pub const BOOT_ENTROPY_SOURCE_RDRAND: u32 = 4;
+pub const BOOT_ENTROPY_SOURCE_TIME: u32 = 5;
+pub const BOOT_ENTROPY_SOURCE_ACPI_OEM0: u32 = 6;
+pub const BOOT_ENTROPY_SOURCE_UEFI: u32 = 7;
+pub const BOOT_ENTROPY_SOURCE_CNG: u32 = 8;
+pub const BOOT_ENTROPY_SOURCE_TCB_TPM: u32 = 9;
+pub const BOOT_ENTROPY_SOURCE_TCB_RDRAND: u32 = 10;
+/// `BootMaxEntropySources`: the number of records.
+pub const BOOT_MAX_ENTROPY_SOURCES: usize = 10;
+
+/// `BOOT_ENTROPY_SOURCE_RESULT_CODE`: what became of a source.
+pub const BOOT_ENTROPY_SOURCE_STRUCTURE_UNINITIALIZED: u32 = 0;
+pub const BOOT_ENTROPY_SOURCE_DISABLED_BY_POLICY: u32 = 1;
+pub const BOOT_ENTROPY_SOURCE_NOT_PRESENT: u32 = 2;
+pub const BOOT_ENTROPY_SOURCE_ERROR: u32 = 3;
+pub const BOOT_ENTROPY_SOURCE_SUCCESS: u32 = 4;
+
+/// The most entropy one source's record holds.
+pub const BOOT_ENTROPY_SOURCE_DATA_SIZE: usize = 64;
+
+/// `BOOT_ENTROPY_SOURCE_LDR_RESULT`: one source's record.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BOOT_ENTROPY_SOURCE_LDR_RESULT {
+    /// `BOOT_ENTROPY_SOURCE_*`.
+    pub SourceId: u32,
+    pub Policy: u64,
+    /// `BOOT_ENTROPY_SOURCE_*` result code.
+    pub ResultCode: u32,
+    pub ResultStatus: i32,
+    pub Time: u64,
+    pub EntropyLength: u32,
+    pub EntropyData: [u8; BOOT_ENTROPY_SOURCE_DATA_SIZE],
+}
+
+/// `BOOT_ENTROPY_LDR_RESULT`: what Windows' loader hands the kernel of
+/// the entropy it gathered (the loader block extension's
+/// `BootEntropyResult`). NK's loader hands over the same block
+/// (`nk-bootinfo`); the kernel copies its head out for class 0x75.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BOOT_ENTROPY_LDR_RESULT {
+    pub maxEntropySources: u32,
+    pub EntropySourceResult: [BOOT_ENTROPY_SOURCE_LDR_RESULT; BOOT_MAX_ENTROPY_SOURCES],
+    pub SeedBytesForCng: [u8; 48],
+    pub RngBytesForNtoskrnl: [u8; 1024],
+    pub KdEntropy: [u8; 32],
+}
+
+const _: () = {
+    use core::mem::offset_of;
+    assert!(size_of::<BOOT_ENTROPY_SOURCE_LDR_RESULT>() == 104);
+    assert!(offset_of!(BOOT_ENTROPY_SOURCE_LDR_RESULT, Policy) == 8);
+    assert!(offset_of!(BOOT_ENTROPY_SOURCE_LDR_RESULT, ResultCode) == 16);
+    assert!(offset_of!(BOOT_ENTROPY_SOURCE_LDR_RESULT, ResultStatus) == 20);
+    assert!(offset_of!(BOOT_ENTROPY_SOURCE_LDR_RESULT, Time) == 24);
+    assert!(offset_of!(BOOT_ENTROPY_SOURCE_LDR_RESULT, EntropyLength) == 32);
+    assert!(offset_of!(BOOT_ENTROPY_SOURCE_LDR_RESULT, EntropyData) == 36);
+    assert!(size_of::<BOOT_ENTROPY_LDR_RESULT>() == 2152);
+    assert!(offset_of!(BOOT_ENTROPY_LDR_RESULT, EntropySourceResult) == 8);
+    assert!(offset_of!(BOOT_ENTROPY_LDR_RESULT, SeedBytesForCng) == 0x418);
+    assert!(offset_of!(BOOT_ENTROPY_LDR_RESULT, RngBytesForNtoskrnl) == 0x448);
+    assert!(offset_of!(BOOT_ENTROPY_LDR_RESULT, KdEntropy) == 0x848);
+    assert!(SYSTEM_BOOT_ENTROPY_INFORMATION_SIZE == 0x448);
+};
+
+impl BOOT_ENTROPY_LDR_RESULT {
+    /// A block of no sources and no bytes.
+    pub const fn zeroed() -> Self {
+        const NONE: BOOT_ENTROPY_SOURCE_LDR_RESULT = BOOT_ENTROPY_SOURCE_LDR_RESULT {
+            SourceId: 0,
+            Policy: 0,
+            ResultCode: 0,
+            ResultStatus: 0,
+            Time: 0,
+            EntropyLength: 0,
+            EntropyData: [0; BOOT_ENTROPY_SOURCE_DATA_SIZE],
+        };
+        Self {
+            maxEntropySources: 0,
+            EntropySourceResult: [NONE; BOOT_MAX_ENTROPY_SOURCES],
+            SeedBytesForCng: [0; 48],
+            RngBytesForNtoskrnl: [0; 1024],
+            KdEntropy: [0; 32],
+        }
+    }
+}

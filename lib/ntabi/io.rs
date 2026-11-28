@@ -35,9 +35,13 @@ pub struct IO_STATUS_BLOCK {
 /// `IO_CSQ.Type` and `IO_CSQ_IRP_CONTEXT.Type`.
 pub const IO_TYPE_CSQ_IRP_CONTEXT: u32 = 1;
 pub const IO_TYPE_CSQ: u32 = 2;
+/// A queue set up by `IoCsqInitializeEx`, whose insert routine returns
+/// a status.
+pub const IO_TYPE_CSQ_EX: u32 = 3;
 
 /// A cancel-safe queue's callbacks, which the driver supplies.
 pub type CSQ_INSERT = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
+pub type CSQ_INSERT_EX = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP, PVOID) -> NTSTATUS;
 pub type CSQ_REMOVE = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
 pub type CSQ_PEEK = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP, PVOID) -> *mut IRP;
 pub type CSQ_ACQUIRE = unsafe extern "C" fn(*mut IO_CSQ, *mut u8);
@@ -49,7 +53,9 @@ pub type CSQ_COMPLETE = unsafe extern "C" fn(*mut IO_CSQ, *mut IRP);
 #[repr(C)]
 pub struct IO_CSQ {
     pub Type: u32,
-    pub CsqInsertIrp: Option<CSQ_INSERT>,
+    /// A [`CSQ_INSERT`], or a [`CSQ_INSERT_EX`] when `Type` is
+    /// [`IO_TYPE_CSQ_EX`].
+    pub CsqInsertIrp: PVOID,
     pub CsqRemoveIrp: Option<CSQ_REMOVE>,
     pub CsqPeekNextIrp: Option<CSQ_PEEK>,
     pub CsqAcquireLock: Option<CSQ_ACQUIRE>,
@@ -192,6 +198,34 @@ pub const VPB_RAW_MOUNT: u16 = 0x0010;
 /// `VPB_REMOVE_PENDING`: the device is being deleted; the volume is
 /// dismounted once nothing is open on it.
 pub const VPB_REMOVE_PENDING: u16 = 0x0008;
+/// `VPB_LOCKED`: the volume is locked; opens of it are refused.
+pub const VPB_LOCKED: u16 = 0x0002;
+/// `VPB_DIRECT_WRITES_ALLOWED`: set by the I/O manager when the last
+/// file system on the queue, RAW, mounted the volume.
+pub const VPB_DIRECT_WRITES_ALLOWED: u16 = 0x0020;
+
+/// `IRP_MN_MOUNT_VOLUME` and `IRP_MN_VERIFY_VOLUME`, minor functions
+/// of `IRP_MJ_FILE_SYSTEM_CONTROL`.
+pub const IRP_MN_USER_FS_REQUEST: u8 = 0x00;
+pub const IRP_MN_MOUNT_VOLUME: u8 = 0x01;
+/// `SL_ALLOW_RAW_MOUNT`: a mount request's location flag, the open
+/// that caused it allowing RAW.
+pub const SL_ALLOW_RAW_MOUNT: u8 = 0x01;
+/// `IRP_MOUNT_COMPLETION | IRP_SYNCHRONOUS_PAGING_IO`: the flags of
+/// the mount request the I/O manager sends.
+pub const IRP_MOUNT_COMPLETION: u32 = 0x0000_0002;
+/// `IRP_ASSOCIATED_IRP`: the request is one of a master's associated
+/// requests (`IoMakeAssociatedIrp`); `AssociatedIrp.MasterIrp` names it.
+pub const IRP_ASSOCIATED_IRP: u32 = 0x0000_0008;
+/// `DO_LOW_PRIORITY_FILESYSTEM`: a file system that registers behind
+/// the others, just ahead of RAW.
+pub const DO_LOW_PRIORITY_FILESYSTEM: u32 = 0x0001_0000;
+/// `DRVO_BASE_FILESYSTEM_DRIVER`: the driver registered a disk, CD-ROM
+/// or tape file system; it is sent the file systems' shutdown request.
+pub const DRVO_BASE_FILESYSTEM_DRIVER: u32 = 0x80;
+/// `FO_STREAM_FILE` and `FO_DIRECT_DEVICE_OPEN`.
+pub const FO_STREAM_FILE: u32 = 0x0000_0100;
+pub const FO_DIRECT_DEVICE_OPEN: u32 = 0x0000_0800;
 
 /// `DO_VERIFY_VOLUME`: the volume must be verified before its file
 /// system uses it again; mounting clears it.
@@ -544,6 +578,48 @@ pub struct MAILSLOT_CREATE_PARAMETERS {
     pub TimeoutSpecified: u8,
 }
 
+/// [`SECTION_OBJECT_POINTERS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/ns-wdm-_section_object_pointers):
+/// what a file system keeps per stream for the memory and cache
+/// managers (`FILE_OBJECT.SectionObjectPointer` points at it). The
+/// memory manager owns `DataSectionObject` and `ImageSectionObject`,
+/// the cache manager `SharedCacheMap`; file systems compare them with
+/// null.
+#[repr(C)]
+pub struct SECTION_OBJECT_POINTERS {
+    pub DataSectionObject: PVOID,
+    pub SharedCacheMap: PVOID,
+    pub ImageSectionObject: PVOID,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<SECTION_OBJECT_POINTERS>() == 0x18);
+    assert!(offset_of!(SECTION_OBJECT_POINTERS, SharedCacheMap) == 0x08);
+    assert!(offset_of!(SECTION_OBJECT_POINTERS, ImageSectionObject) == 0x10);
+    assert!(offset_of!(FILE_OBJECT, SectionObjectPointer) == 0x28);
+};
+
+/// [`SHARE_ACCESS`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocheckshareaccess):
+/// a file system's counts of a file's opens, by what they asked for and
+/// what they share.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SHARE_ACCESS {
+    pub OpenCount: u32,
+    pub Readers: u32,
+    pub Writers: u32,
+    pub Deleters: u32,
+    pub SharedRead: u32,
+    pub SharedWrite: u32,
+    pub SharedDelete: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<SHARE_ACCESS>() == 0x1C);
+    assert!(offset_of!(SHARE_ACCESS, SharedDelete) == 0x18);
+};
+
 #[repr(C)]
 pub struct FILE_OBJECT {
     pub Type: i16,
@@ -600,8 +676,17 @@ pub const IRP_ISSUING_PROCESS_IN_OVERLAY: u32 = 0x0000_2000;
 pub const IRP_PRIORITY_HINT_MASK: u32 = 0x000E_0000;
 pub const IRP_PRIORITY_HINT_NORMAL: u32 = 0x0006_0000;
 
+/// `IRP_NOCACHE`: the request goes past the cache, to the device.
+pub const IRP_NOCACHE: u32 = 0x0000_0001;
 /// `IRP_PAGING_IO`: the request is the memory manager's, for a page.
 pub const IRP_PAGING_IO: u32 = 0x0000_0002;
+/// `IRP_SYNCHRONOUS_PAGING_IO`: the memory manager waits for the paging
+/// request on its own event; completion signals it and frees the IRP,
+/// leaving the MDL and its pages to the memory manager.
+pub const IRP_SYNCHRONOUS_PAGING_IO: u32 = 0x0000_0040;
+/// `IRP.AllocationFlags`: a synchronous paging read into an MDL marked
+/// `MDL_IO_PAGE_READ`, as `IoPageReadEx` of the pinned kernel marks it.
+pub const IRP_ALLOCATION_PAGE_READ: u8 = 0x20;
 
 /// `IO_PRIORITY_HINT`.
 pub const IO_PRIORITY_VERY_LOW: u32 = 0;
@@ -677,6 +762,7 @@ pub struct IOP_IRP_EXTENSION {
 /// numbered.
 pub const IRP_EXTENSION_ACTIVITY_ID: u32 = 0;
 pub const IRP_EXTENSION_GENERIC: u32 = 2;
+pub const IRP_EXTENSION_FS_ZEROING_OFFSET: u32 = 4;
 pub const IRP_EXTENSION_FS_TRACK_OFFSET: u32 = 5;
 pub const IRP_EXTENSION_DISK_IO_ATTRIBUTION: u32 = 6;
 pub const IRP_EXTENSION_ADAPTER_CRYPTO: u32 = 7;

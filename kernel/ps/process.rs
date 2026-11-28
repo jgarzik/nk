@@ -41,6 +41,31 @@ pub static PsInitialSystemProcess: ProcessVariable =
 static NEXT_ID: AtomicU64 = AtomicU64::new(layout::SYSTEM_PROCESS_ID + 4);
 
 /// Make the System process, created at `time` (system time).
+/// `IoPriorityNormal`.
+pub const IO_PRIORITY_NORMAL: u32 = 2;
+/// `MEMORY_PRIORITY_NORMAL`, the page priority of a normal thread.
+pub const MEMORY_PRIORITY_NORMAL: u32 = 5;
+
+/// The I/O and page priority a new thread of `process` starts with, as
+/// `CrossThreadFlags` bits: the process's defaults, as `PspInsertThread`
+/// copies them.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe fn thread_priorities(process: *const u8) -> u32 {
+    // SAFETY: per the contract: two aligned 32-bit fields of its block.
+    unsafe {
+        let io = process.add(layout::FLAGS).cast::<u32>().read()
+            >> layout::DEFAULT_IO_PRIORITY_SHIFT
+            & 7;
+        let page = process.add(layout::FLAGS2).cast::<u32>().read()
+            >> layout::DEFAULT_PAGE_PRIORITY_SHIFT
+            & 7;
+        io << nk_ntabi::thread::THREAD_IO_PRIORITY_SHIFT
+            | page << nk_ntabi::thread::THREAD_PAGE_PRIORITY_SHIFT
+    }
+}
+
 pub fn init(time: u64) -> Result<(), &'static str> {
     let process = object::create(&object::PROCESS_TYPE, layout::EPROCESS_SIZE)
         .ok_or("no memory for the System process")?;
@@ -65,6 +90,16 @@ pub fn init(time: u64) -> Result<(), &'static str> {
         process
             .add(layout::BASE_PRIORITY)
             .write(thread::NORMAL_PRIORITY);
+        // The priorities its threads start with: Windows' normal I/O
+        // priority and normal page priority.
+        process
+            .add(layout::FLAGS2)
+            .cast::<u32>()
+            .write(MEMORY_PRIORITY_NORMAL << layout::DEFAULT_PAGE_PRIORITY_SHIFT);
+        process
+            .add(layout::FLAGS)
+            .cast::<u32>()
+            .write(IO_PRIORITY_NORMAL << layout::DEFAULT_IO_PRIORITY_SHIFT);
         process
             .add(layout::IMAGE_FILE_NAME)
             .copy_from_nonoverlapping(b"System".as_ptr(), 6);
@@ -282,16 +317,25 @@ pub unsafe extern "C" fn PsGetProcessSessionId(process: *mut c_void) -> u32 {
 /// # Safety
 /// `thread` is a thread object.
 pub unsafe extern "C" fn PsGetThreadSessionId(thread: *mut c_void) -> u32 {
+    // SAFETY: per the contract.
+    unsafe { PsGetProcessSessionId(PsGetThreadProcess(thread)) }
+}
+
+/// [`PsGetThreadProcess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psgetthreadprocess):
+/// the process a thread belongs to (`KTHREAD.Process`), without a
+/// reference, as on Windows.
+///
+/// # Safety
+/// `thread` is a thread object.
+pub unsafe extern "C" fn PsGetThreadProcess(thread: *mut c_void) -> *mut c_void {
     // SAFETY: per the contract: a thread names its process, which
     // lives at least as long, at a pointer-aligned offset.
     unsafe {
-        PsGetProcessSessionId(
-            thread
-                .cast::<u8>()
-                .add(thread_layout::PROCESS)
-                .cast::<*mut c_void>()
-                .read(),
-        )
+        thread
+            .cast::<u8>()
+            .add(thread_layout::PROCESS)
+            .cast::<*mut c_void>()
+            .read()
     }
 }
 
@@ -593,5 +637,58 @@ pub fn token_test() -> Result<u32, &'static str> {
             return Err("references taken on several processors were lost or left behind");
         }
         Ok(threads as u32 * ROUNDS + 2)
+    }
+}
+
+/// [`PsIsDiskCountersEnabled`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psisdiskcountersenabled):
+/// whether file systems are to count each process's disk I/O. Windows
+/// turns the counters off only for the registry value
+/// `Session Manager\kernel\DisableDiskCounters`, which NK does not
+/// read: the counters are on, as on Windows without the value.
+pub extern "C" fn PsIsDiskCountersEnabled() -> u8 {
+    1
+}
+
+/// [`PsUpdateDiskCounters`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-psupdatediskcounters):
+/// add a file system's disk I/O to the process's counters, where it has
+/// them (`EPROCESS.DiskCounters`); a process without counters is left
+/// alone, as on Windows.
+///
+/// # Safety
+/// `process` is a process object.
+pub unsafe extern "C" fn PsUpdateDiskCounters(
+    process: *mut core::ffi::c_void,
+    bytes_read: u64,
+    bytes_written: u64,
+    reads: u32,
+    writes: u32,
+    flushes: u32,
+) {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    // SAFETY: per the contract; the counters are five 64-bit words the
+    // kernel owns, updated atomically as Windows does.
+    unsafe {
+        let counters = process
+            .cast::<u8>()
+            .add(nk_ntabi::process::DISK_COUNTERS)
+            .cast::<*mut AtomicU64>()
+            .read();
+        if counters.is_null() {
+            return;
+        }
+        for (at, value) in [
+            bytes_read,
+            bytes_written,
+            u64::from(reads),
+            u64::from(writes),
+            u64::from(flushes),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if value != 0 {
+                (*counters.add(at)).fetch_add(value, Ordering::Relaxed);
+            }
+        }
     }
 }

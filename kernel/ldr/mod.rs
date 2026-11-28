@@ -169,6 +169,9 @@ pub struct Image {
     /// The libraries it imports from, by base address: it counts as one
     /// importer of each until it is unloaded.
     libraries: Vec<u64>,
+    /// A library's image, which a driver was started from: the library
+    /// keeps it, and unloading the driver leaves it loaded.
+    shared: bool,
 }
 
 /// A library: an image loaded because another imports from it.
@@ -490,9 +493,44 @@ fn refused(name: &str, error: &LoadError) {
 
 /// Load a driver image from the bytes of its file, called `name`. A
 /// refusal is logged, naming the module and symbol where an import is
-/// the reason.
+/// the reason. An image loaded already, as a driver or as a library, is
+/// refused (`STATUS_IMAGE_ALREADY_LOADED`), as Windows refuses to load a
+/// driver whose image is in memory.
 pub fn load(name: &str, file: &[u8]) -> Result<Image, LoadError> {
     serialised(|| load_image(name, file, false, 0)).inspect_err(|error| refused(name, error))
+}
+
+/// As [`load`], for a boot driver: an image already loaded as a library,
+/// because a boot driver loaded before imports from it, is this driver's
+/// image too. Windows' boot loader loads each image once, and the boot
+/// driver that others import from (`ksecdd.sys`, which `fastfat.sys`
+/// imports from) still has its entry point called as its turn comes.
+/// The library keeps that image.
+pub fn load_boot(name: &str, file: &[u8]) -> Result<Image, LoadError> {
+    serialised(|| {
+        let module = MODULES.lock().named(name.as_bytes());
+        if let Some(module) = module.filter(|m| m.library) {
+            let entry = with_libraries(|libraries| {
+                libraries
+                    .iter()
+                    .find(|l| l.image.base == module.base)
+                    .map(|l| l.image.entry)
+            });
+            if let Some(entry) = entry {
+                return Ok(Image {
+                    base: module.base,
+                    size: module.size as usize,
+                    entry,
+                    phys: 0,
+                    pages: 0,
+                    libraries: Vec::new(),
+                    shared: true,
+                });
+            }
+        }
+        load_image(name, file, false, 0)
+    })
+    .inspect_err(|error| refused(name, error))
 }
 
 /// Load an image, as a driver or as a `library`, `depth` libraries deep
@@ -526,6 +564,7 @@ fn load_image(name: &str, file: &[u8], library: bool, depth: usize) -> Result<Im
         phys,
         pages,
         libraries: Vec::new(),
+        shared: false,
     };
 
     // Build the image through the direct map, which is always writable;
@@ -642,6 +681,9 @@ fn release(image: &Image) {
 /// The libraries it imported from lose an importer; one that has none
 /// left is unloaded after it.
 pub fn unload(image: &Image) {
+    if image.shared {
+        return;
+    }
     serialised(|| unload_image(image));
 }
 

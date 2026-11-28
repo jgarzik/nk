@@ -13,6 +13,7 @@ pub static GROUP: Group = Group {
         "cpu.fp-preserved",
         "ke.irql-and-locks",
         "ke.interrupts",
+        "ke.entropy.register-race",
         "mm.frames",
         "mm.map",
         "mm.low-half",
@@ -41,6 +42,7 @@ fn run(r: &mut Report, info: &BootInfo) {
     r.check("cpu.fp-preserved", arch::fp_trap_test);
     r.check("ke.irql-and-locks", ke::irql::self_test);
     r.check("ke.interrupts", ke::interrupt::self_test);
+    r.check("ke.entropy.register-race", ke::entropy::self_test);
     r.check("mm.frames", mm::frames_self_test);
     r.check("mm.map", mm::map::self_test);
     match mm::map::low_half_test() {

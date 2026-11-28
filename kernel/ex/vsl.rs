@@ -38,3 +38,29 @@ pub unsafe extern "C" fn VslQuerySecureDevice(
     unsafe { answer.write_unaligned([0; 16]) };
     nk_ntabi::status::STATUS_DEVICE_NOT_CONNECTED
 }
+
+/// `VslExchangeEntropy` (undocumented): trade 64 bytes of entropy with
+/// the secure kernel. With no secure kernel connected Windows' routine
+/// fails with `STATUS_DEVICE_NOT_CONNECTED` and leaves the buffer as it
+/// was.
+pub extern "C" fn VslExchangeEntropy(_entropy: *mut [u8; 64]) -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_DEVICE_NOT_CONNECTED
+}
+
+/// `SkIsSecureKernel` (undocumented): whether the caller runs in the
+/// secure kernel. In the normal kernel Windows' routine answers
+/// `STATUS_NOT_IMPLEMENTED`, so a driver built for both knows it is
+/// not.
+pub extern "C" fn SkIsSecureKernel() -> nk_ntabi::status::NTSTATUS {
+    nk_ntabi::status::STATUS_NOT_IMPLEMENTED
+}
+
+/// The secure kernel's own services (`SkAllocatePool`, `SkFreePool`,
+/// `SkInitializePushLock`, `SkAcquirePushLockExclusive`,
+/// `SkReleasePushLockExclusive`, `SkQuerySecureKernelInformation`): in
+/// the normal kernel every one of them is the same routine, which stops
+/// the system with bugcheck 0x123 and no parameters. A driver calls them
+/// only after `SkIsSecureKernel` said it runs there.
+pub extern "C" fn secure_kernel_only() -> ! {
+    crate::ke::bugcheck::KeBugCheckEx(0x123, 0, 0, 0, 0)
+}

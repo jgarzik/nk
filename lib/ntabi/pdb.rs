@@ -98,6 +98,15 @@ fn shared_data_page_matches_the_kernel() {
     assert_eq!(SHARED_INTERRUPT_TIME, field("InterruptTime"));
     assert_eq!(SHARED_SYSTEM_TIME, field("SystemTime"));
     assert_eq!(SHARED_TICK_COUNT, field("TickCount"));
+    let xstate = types
+        .layout("_XSTATE_CONFIGURATION")
+        .expect("_XSTATE_CONFIGURATION");
+    let config = |name| field("XState") + offset(&xstate, "_XSTATE_CONFIGURATION", name);
+    assert_eq!(SHARED_XSTATE_ENABLED, config("EnabledFeatures"));
+    assert_eq!(
+        SHARED_XSTATE_SUPERVISOR,
+        config("EnabledUserVisibleSupervisorFeatures")
+    );
     assert!(page.size <= 4096, "it must fit the one page NK maps");
     // Each time is low word, high word, high word again.
     let time = types.layout("_KSYSTEM_TIME").expect("_KSYSTEM_TIME");
@@ -372,6 +381,15 @@ fn thread_matches_the_kernel() {
         hard_errors.bits,
         Some((HARD_ERRORS_ARE_DISABLED.trailing_zeros() as u8, 1))
     );
+    for (name, shift) in [
+        ("ThreadIoPriority", THREAD_IO_PRIORITY_SHIFT),
+        ("ThreadPagePriority", THREAD_PAGE_PRIORITY_SHIFT),
+    ] {
+        let member = ethread.member(name).expect(name);
+        assert_eq!(member.offset as usize, CROSS_THREAD_FLAGS);
+        assert_eq!(member.bits, Some((shift as u8, 3)));
+    }
+    assert_eq!(SCHEDULING_GROUP, field("SchedulingGroup"));
     assert_eq!(AFFINITY, field("Affinity"));
     assert_eq!(KERNEL_APC_DISABLE, field("KernelApcDisable"));
     assert_eq!(KERNEL_APC_DISABLE, field("CombinedApcDisable"));
@@ -430,13 +448,75 @@ fn thread_matches_the_kernel() {
         APC_STATE_PROCESS,
         field("ApcState") + offset(&apc_state, "_KAPC_STATE", "Process")
     );
+    assert_eq!(APC_STATE, field("ApcState"));
+    assert_eq!(SAVED_APC_STATE, field("SavedApcState"));
+    assert_eq!(APC_STATE_INDEX, field("ApcStateIndex"));
+    assert_eq!(WAIT_IRQL, field("WaitIrql"));
+    assert_eq!(SPECIAL_APC_DISABLE, field("SpecialApcDisable"));
+    let queueable = kthread
+        .member("ApcQueueable")
+        .expect("_KTHREAD.ApcQueueable");
+    assert_eq!(queueable.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        queueable.bits,
+        Some((MISC_FLAG_APC_QUEUEABLE.trailing_zeros() as u8, 1))
+    );
+    for (flag, name) in [
+        (crate::ke::KERNEL_APC_IN_PROGRESS, "KernelApcInProgress"),
+        (crate::ke::SPECIAL_APC_IN_PROGRESS, "SpecialApcInProgress"),
+    ] {
+        let member = apc_state.member(name).expect(name);
+        assert_eq!(
+            member.offset as usize,
+            core::mem::offset_of!(crate::ke::KAPC_STATE, InProgressFlags)
+        );
+        assert_eq!(member.bits, Some((flag.trailing_zeros() as u8, 1)));
+    }
+    {
+        use crate::ke::KAPC;
+        use core::mem::{offset_of, size_of};
+        let apc = types.layout("_KAPC").expect("_KAPC");
+        let field = |name| offset(&apc, "_KAPC", name);
+        assert_eq!(size_of::<KAPC>(), apc.size as usize);
+        assert_eq!(offset_of!(KAPC, Type), field("Type"));
+        assert_eq!(offset_of!(KAPC, Size), field("Size"));
+        assert_eq!(offset_of!(KAPC, Thread), field("Thread"));
+        assert_eq!(offset_of!(KAPC, ApcListEntry), field("ApcListEntry"));
+        // The public symbols name the three routines `Reserved[3]`; the
+        // order is KeInitializeApc's.
+        assert_eq!(offset_of!(KAPC, KernelRoutine), field("Reserved"));
+        assert_eq!(offset_of!(KAPC, NormalContext), field("Reserved") + 0x18);
+        assert_eq!(offset_of!(KAPC, NormalContext), field("NormalContext"));
+        assert_eq!(offset_of!(KAPC, SystemArgument1), field("SystemArgument1"));
+        assert_eq!(offset_of!(KAPC, SystemArgument2), field("SystemArgument2"));
+        assert_eq!(offset_of!(KAPC, ApcStateIndex), field("ApcStateIndex"));
+        assert_eq!(offset_of!(KAPC, ApcMode), field("ApcMode"));
+        assert_eq!(offset_of!(KAPC, Inserted), field("Inserted"));
+    }
     assert_eq!(CID, offset(&ethread, "_ETHREAD", "Cid"));
     assert_eq!(SILO, offset(&ethread, "_ETHREAD", "Silo"));
+    assert_eq!(TOP_LEVEL_IRP, offset(&ethread, "_ETHREAD", "TopLevelIrp"));
+    let system = kthread
+        .member("SystemThread")
+        .expect("_KTHREAD.SystemThread");
+    assert_eq!(system.offset as usize, MISC_FLAGS);
+    assert_eq!(
+        system.bits,
+        Some((MISC_FLAG_SYSTEM_THREAD.trailing_zeros() as u8, 1))
+    );
     assert_eq!(
         DEVICE_TO_VERIFY,
         offset(&ethread, "_ETHREAD", "DeviceToVerify")
     );
     assert_eq!(IO_BOOST_COUNT, offset(&ethread, "_ETHREAD", "IoBoostCount"));
+    assert_eq!(
+        CACHE_MANAGER_ACTIVE,
+        offset(&ethread, "_ETHREAD", "CacheManagerActive")
+    );
+    assert_eq!(
+        DISABLE_PAGE_FAULT_CLUSTERING,
+        offset(&ethread, "_ETHREAD", "DisablePageFaultClustering")
+    );
     assert_eq!(ACTIVITY_ID, offset(&ethread, "_ETHREAD", "ActivityId"));
     let cid = types.layout("_CLIENT_ID").expect("_CLIENT_ID");
     assert_eq!(offset(&cid, "_CLIENT_ID", "UniqueProcess"), 0);
@@ -465,6 +545,22 @@ fn process_matches_the_kernel() {
     assert_eq!(QUOTA_BLOCK, field("QuotaBlock"));
     assert_eq!(SERVER_SILO, field("ServerSilo"));
     assert_eq!(TOKEN, field("Token"));
+    assert_eq!(DISK_COUNTERS, field("DiskCounters"));
+    assert_eq!(FLAGS2, field("Flags2"));
+    assert_eq!(FLAGS, field("Flags"));
+    let bits = |name| eprocess.member(name).and_then(|m| m.bits);
+    assert_eq!(
+        bits("DefaultPagePriority"),
+        Some((DEFAULT_PAGE_PRIORITY_SHIFT as u8, 3))
+    );
+    assert_eq!(
+        bits("DefaultIoPriority"),
+        Some((DEFAULT_IO_PRIORITY_SHIFT as u8, 3))
+    );
+    assert_eq!(
+        bits("Background"),
+        Some((BACKGROUND.trailing_zeros() as u8, 1))
+    );
     // The token pointer is a fast reference: one pointer-sized word
     // whose low four bits are a count.
     let fast = types.layout("_EX_FAST_REF").expect("_EX_FAST_REF");
@@ -913,6 +1009,108 @@ fn timer_delete_parameters_match_the_kernel() {
     assert_eq!(
         offset_of!(EXT_DELETE_PARAMETERS, DeleteContext),
         field("DeleteContext")
+    );
+}
+
+#[test]
+fn section_object_pointers_match_the_kernel() {
+    use crate::io::SECTION_OBJECT_POINTERS;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let sop = types
+        .layout("_SECTION_OBJECT_POINTERS")
+        .expect("_SECTION_OBJECT_POINTERS");
+    let field = |name| offset(&sop, "_SECTION_OBJECT_POINTERS", name);
+    assert_eq!(size_of::<SECTION_OBJECT_POINTERS>(), sop.size as usize);
+    assert_eq!(
+        offset_of!(SECTION_OBJECT_POINTERS, DataSectionObject),
+        field("DataSectionObject")
+    );
+    assert_eq!(
+        offset_of!(SECTION_OBJECT_POINTERS, SharedCacheMap),
+        field("SharedCacheMap")
+    );
+    assert_eq!(
+        offset_of!(SECTION_OBJECT_POINTERS, ImageSectionObject),
+        field("ImageSectionObject")
+    );
+}
+
+#[test]
+fn cache_manager_structures_match_the_kernel() {
+    use crate::cc::{CACHE_MANAGER_CALLBACKS, CACHE_UNINITIALIZE_EVENT};
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let callbacks = types
+        .layout("_CACHE_MANAGER_CALLBACKS")
+        .expect("_CACHE_MANAGER_CALLBACKS");
+    let field = |name| offset(&callbacks, "_CACHE_MANAGER_CALLBACKS", name);
+    assert_eq!(
+        size_of::<CACHE_MANAGER_CALLBACKS>(),
+        callbacks.size as usize
+    );
+    assert_eq!(
+        offset_of!(CACHE_MANAGER_CALLBACKS, ReleaseFromLazyWrite),
+        field("ReleaseFromLazyWrite")
+    );
+    assert_eq!(
+        offset_of!(CACHE_MANAGER_CALLBACKS, AcquireForReadAhead),
+        field("AcquireForReadAhead")
+    );
+    assert_eq!(
+        offset_of!(CACHE_MANAGER_CALLBACKS, ReleaseFromReadAhead),
+        field("ReleaseFromReadAhead")
+    );
+    let event = types
+        .layout("_CACHE_UNINITIALIZE_EVENT")
+        .expect("_CACHE_UNINITIALIZE_EVENT");
+    assert_eq!(size_of::<CACHE_UNINITIALIZE_EVENT>(), event.size as usize);
+    assert_eq!(
+        offset_of!(CACHE_UNINITIALIZE_EVENT, Event),
+        offset(&event, "_CACHE_UNINITIALIZE_EVENT", "Event")
+    );
+}
+
+#[test]
+fn filter_callbacks_match_the_kernel() {
+    use crate::fsrtl::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let callbacks = types
+        .layout("_FS_FILTER_CALLBACKS")
+        .expect("_FS_FILTER_CALLBACKS");
+    let field = |name| offset(&callbacks, "_FS_FILTER_CALLBACKS", name);
+    assert_eq!(size_of::<FS_FILTER_CALLBACKS>(), callbacks.size as usize);
+    assert_eq!(
+        PRE_ACQUIRE_FOR_SECTION_SYNCHRONIZATION,
+        field("PreAcquireForSectionSynchronization")
+    );
+    assert_eq!(
+        PRE_RELEASE_FOR_SECTION_SYNCHRONIZATION,
+        field("PreReleaseForSectionSynchronization")
+    );
+    assert_eq!(PRE_ACQUIRE_FOR_CC_FLUSH, field("PreAcquireForCcFlush"));
+    assert_eq!(PRE_RELEASE_FOR_CC_FLUSH, field("PreReleaseForCcFlush"));
+    let data = types
+        .layout("_FS_FILTER_CALLBACK_DATA")
+        .expect("_FS_FILTER_CALLBACK_DATA");
+    let field = |name| offset(&data, "_FS_FILTER_CALLBACK_DATA", name);
+    assert_eq!(size_of::<FS_FILTER_CALLBACK_DATA>(), data.size as usize);
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, Operation),
+        field("Operation")
+    );
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, DeviceObject),
+        field("DeviceObject")
+    );
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, FileObject),
+        field("FileObject")
+    );
+    assert_eq!(
+        offset_of!(FS_FILTER_CALLBACK_DATA, Parameters),
+        field("Parameters")
     );
 }
 
@@ -1784,5 +1982,118 @@ fn timer2_matches_the_kernel() {
         AbsoluteSystemTime,
         TypeFlags,
         CollectionIndex
+    );
+}
+
+#[test]
+fn boot_entropy_result_matches_the_kernel() {
+    use crate::sysinfo::*;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let result = types
+        .layout("_BOOT_ENTROPY_LDR_RESULT")
+        .expect("_BOOT_ENTROPY_LDR_RESULT");
+    let field = |name| offset(&result, "_BOOT_ENTROPY_LDR_RESULT", name);
+    assert_eq!(size_of::<BOOT_ENTROPY_LDR_RESULT>(), result.size as usize);
+    macro_rules! same {
+        ($ty:ident, $field:ident, $($f:ident),*) => {
+            $(assert_eq!(offset_of!($ty, $f), $field(stringify!($f)));)*
+        };
+    }
+    same!(
+        BOOT_ENTROPY_LDR_RESULT,
+        field,
+        maxEntropySources,
+        EntropySourceResult,
+        SeedBytesForCng,
+        RngBytesForNtoskrnl,
+        KdEntropy
+    );
+    let source = types
+        .layout("_BOOT_ENTROPY_SOURCE_LDR_RESULT")
+        .expect("_BOOT_ENTROPY_SOURCE_LDR_RESULT");
+    let at = |name| offset(&source, "_BOOT_ENTROPY_SOURCE_LDR_RESULT", name);
+    assert_eq!(
+        size_of::<BOOT_ENTROPY_SOURCE_LDR_RESULT>(),
+        source.size as usize
+    );
+    same!(
+        BOOT_ENTROPY_SOURCE_LDR_RESULT,
+        at,
+        SourceId,
+        Policy,
+        ResultCode,
+        ResultStatus,
+        Time,
+        EntropyLength,
+        EntropyData
+    );
+    let values = |name: &str| -> Vec<(String, u64)> {
+        types
+            .enumerators(name)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"))
+    };
+    let named = |v: &[(&str, u32)]| -> Vec<(String, u64)> {
+        v.iter()
+            .map(|&(n, v)| (String::from(n), u64::from(v)))
+            .collect()
+    };
+    assert_eq!(
+        values("_BOOT_ENTROPY_SOURCE_ID"),
+        named(&[
+            ("BootEntropySourceNone", BOOT_ENTROPY_SOURCE_NONE),
+            ("BootEntropySourceSeedfile", BOOT_ENTROPY_SOURCE_SEEDFILE),
+            ("BootEntropySourceExternal", BOOT_ENTROPY_SOURCE_EXTERNAL),
+            ("BootEntropySourceTpm", BOOT_ENTROPY_SOURCE_TPM),
+            ("BootEntropySourceRdrand", BOOT_ENTROPY_SOURCE_RDRAND),
+            ("BootEntropySourceTime", BOOT_ENTROPY_SOURCE_TIME),
+            ("BootEntropySourceAcpiOem0", BOOT_ENTROPY_SOURCE_ACPI_OEM0),
+            ("BootEntropySourceUefi", BOOT_ENTROPY_SOURCE_UEFI),
+            ("BootEntropySourceCng", BOOT_ENTROPY_SOURCE_CNG),
+            ("BootEntropySourceTcbTpm", BOOT_ENTROPY_SOURCE_TCB_TPM),
+            ("BootEntropySourceTcbRdrand", BOOT_ENTROPY_SOURCE_TCB_RDRAND),
+            ("BootMaxEntropySources", BOOT_MAX_ENTROPY_SOURCES as u32),
+        ])
+    );
+    assert_eq!(
+        values("_BOOT_ENTROPY_SOURCE_RESULT_CODE"),
+        named(&[
+            (
+                "BootEntropySourceStructureUninitialized",
+                BOOT_ENTROPY_SOURCE_STRUCTURE_UNINITIALIZED
+            ),
+            (
+                "BootEntropySourceDisabledByPolicy",
+                BOOT_ENTROPY_SOURCE_DISABLED_BY_POLICY
+            ),
+            (
+                "BootEntropySourceNotPresent",
+                BOOT_ENTROPY_SOURCE_NOT_PRESENT
+            ),
+            ("BootEntropySourceError", BOOT_ENTROPY_SOURCE_ERROR),
+            ("BootEntropySourceSuccess", BOOT_ENTROPY_SOURCE_SUCCESS),
+        ])
+    );
+}
+
+#[test]
+fn entropy_timing_state_matches_the_kernel() {
+    use crate::ke::KENTROPY_TIMING_STATE;
+    use core::mem::{offset_of, size_of};
+    let Some(types) = kernel_types() else { return };
+    let layout = types
+        .layout("_KENTROPY_TIMING_STATE")
+        .expect("_KENTROPY_TIMING_STATE");
+    let field = |name| offset(&layout, "_KENTROPY_TIMING_STATE", name);
+    assert_eq!(size_of::<KENTROPY_TIMING_STATE>(), layout.size as usize);
+    assert_eq!(
+        offset_of!(KENTROPY_TIMING_STATE, EntropyCount),
+        field("EntropyCount")
+    );
+    assert_eq!(offset_of!(KENTROPY_TIMING_STATE, Buffer), field("Buffer"));
+    assert_eq!(offset_of!(KENTROPY_TIMING_STATE, Dpc), field("Dpc"));
+    assert_eq!(
+        offset_of!(KENTROPY_TIMING_STATE, LastDeliveredBuffer),
+        field("LastDeliveredBuffer")
     );
 }

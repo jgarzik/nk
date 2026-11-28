@@ -196,6 +196,52 @@ pub fn time_fields(time: u64) -> [i16; 8] {
     ]
 }
 
+/// `RtlTimeFieldsToTime`: the time, in 100 ns since the start of 1601,
+/// of fields in the order of `TIME_FIELDS` (the weekday is not looked
+/// at); `None` for fields the pinned kernel refuses: a year outside
+/// 1601 to 30827, a month outside 1 to 12, a day the month does not
+/// have, an hour past 23, a minute or second past 59, milliseconds past
+/// 999, or anything negative.
+pub fn fields_time(fields: [i16; 8]) -> Option<u64> {
+    let [year, month, day, hour, minute, second, ms, _] = fields.map(i64::from);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if !(1601..=30827).contains(&year)
+        || !(1..=12).contains(&month)
+        || !(1..=days_in_month[(month - 1) as usize]).contains(&day)
+        || !(0..24).contains(&hour)
+        || !(0..60).contains(&minute)
+        || !(0..60).contains(&second)
+        || !(0..1000).contains(&ms)
+    {
+        return None;
+    }
+    // Days from 0000-03-01, years counted from March, as `time_fields`
+    // counts them; then from 1601-01-01.
+    const DAYS_TO_1601: i64 = 584_694;
+    let y = if month <= 2 { year - 1 } else { year };
+    let (era, year_of_era) = (y / 400, y % 400);
+    let month_from_march = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_from_march + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - DAYS_TO_1601;
+    let ms_total = ((days * 24 + hour) * 60 + minute) * 60_000 + second * 1_000 + ms;
+    Some(ms_total as u64 * 10_000)
+}
+
 /// `RtlComputeCrc32`: the CRC-32 (the reflected polynomial 0xEDB88320)
 /// of `bytes`, carried on from `partial`, the sum of what came before
 /// them.
@@ -212,6 +258,37 @@ pub fn crc32(partial: u32, bytes: impl Iterator<Item = u8>) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn time_fields_round_trip_and_refuse_what_windows_refuses() {
+        for time in [
+            0u64,
+            1,
+            116_444_736_000_000_000,
+            132_000_000_123_450_000,
+            9_000_000_000_000_000_000,
+        ] {
+            let fields = time_fields(time);
+            assert_eq!(fields_time(fields), Some(time - time % 10_000), "{time}");
+        }
+        let ok = [2024, 2, 29, 23, 59, 59, 999, 0];
+        assert!(fields_time(ok).is_some());
+        for bad in [
+            [2023, 2, 29, 0, 0, 0, 0, 0],
+            [1600, 12, 31, 0, 0, 0, 0, 0],
+            [30828, 1, 1, 0, 0, 0, 0, 0],
+            [2024, 13, 1, 0, 0, 0, 0, 0],
+            [2024, 0, 1, 0, 0, 0, 0, 0],
+            [2024, 4, 31, 0, 0, 0, 0, 0],
+            [2024, 1, 1, 24, 0, 0, 0, 0],
+            [2024, 1, 1, 0, 60, 0, 0, 0],
+            [2024, 1, 1, 0, 0, -1, 0, 0],
+            [2024, 1, 1, 0, 0, 0, 1000, 0],
+        ] {
+            assert_eq!(fields_time(bad), None, "{bad:?}");
+        }
+        assert_eq!(fields_time([1601, 1, 1, 0, 0, 0, 0, 3]), Some(0));
+    }
+
     use super::*;
 
     fn integer(text: &str, base: u32) -> Option<u32> {

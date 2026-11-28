@@ -79,6 +79,24 @@ pub extern "C" fn KeQueryActiveProcessorCountEx(group: u16) -> u32 {
     }
 }
 
+/// [`KeQueryActiveProcessorCount`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-kequeryactiveprocessorcount):
+/// the processors running in group 0, and, if asked, their mask. With
+/// no mask asked for, Windows counts every group's processors; there is
+/// only group 0.
+///
+/// # Safety
+/// `mask` is null or writable.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn KeQueryActiveProcessorCount(mask: *mut u64) -> u32 {
+    if mask.is_null() {
+        return KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    }
+    let online = online();
+    // SAFETY: per the contract.
+    unsafe { mask.write_unaligned(online) };
+    online.count_ones()
+}
+
 pub fn is_online(number: usize) -> bool {
     ONLINE.load(Ordering::Acquire) & 1 << number != 0
 }

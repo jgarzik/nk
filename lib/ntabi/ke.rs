@@ -68,6 +68,32 @@ pub struct KDPC {
     pub DpcData: *mut c_void,
 }
 
+/// `KENTROPY_TIMING_STATE`: what each processor gathers of the times
+/// its device interrupts arrive, for the entropy routine a driver
+/// registers (`SystemEntropyInterruptTimingInformation`). The driver
+/// sees it through the pointer its initialisation routine is given and
+/// the halves of `Buffer` its routine is given.
+#[repr(C)]
+pub struct KENTROPY_TIMING_STATE {
+    /// Interrupts recorded.
+    pub EntropyCount: u32,
+    /// Two halves of 32 words each that the interrupts' cycle counts are
+    /// folded into, and one spare word.
+    pub Buffer: [u32; 65],
+    /// Queued when a half is full.
+    pub Dpc: KDPC,
+    /// The half last handed to the routine.
+    pub LastDeliveredBuffer: u32,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KENTROPY_TIMING_STATE>() == 336);
+    assert!(offset_of!(KENTROPY_TIMING_STATE, Buffer) == 4);
+    assert!(offset_of!(KENTROPY_TIMING_STATE, Dpc) == 264);
+    assert!(offset_of!(KENTROPY_TIMING_STATE, LastDeliveredBuffer) == 328);
+};
+
 const _: () = {
     use core::mem::{offset_of, size_of};
     assert!(size_of::<KDPC>() == 0x40);
@@ -94,6 +120,86 @@ pub struct KAPC_STATE {
 
 /// What `KAPC_STATE.Process` holds after an attach that did nothing.
 pub const KAPC_STATE_NOT_ATTACHED: usize = 1;
+/// `KAPC_STATE.InProgressFlags.KernelApcInProgress`: a normal kernel
+/// APC is being delivered.
+pub const KERNEL_APC_IN_PROGRESS: u8 = 1;
+/// `KAPC_STATE.InProgressFlags.SpecialApcInProgress`: a special kernel
+/// APC's kernel routine is running.
+pub const SPECIAL_APC_IN_PROGRESS: u8 = 2;
+
+/// `PKKERNEL_ROUTINE`: what an APC runs first, at `APC_LEVEL`. It may
+/// change the normal routine and its arguments, or clear the routine.
+pub type PKKERNEL_ROUTINE = unsafe extern "C" fn(
+    *mut KAPC,
+    *mut Option<PKNORMAL_ROUTINE>,
+    *mut *mut c_void,
+    *mut *mut c_void,
+    *mut *mut c_void,
+);
+/// `PKNORMAL_ROUTINE`: what a normal APC runs after its kernel routine.
+pub type PKNORMAL_ROUTINE = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
+/// `PKRUNDOWN_ROUTINE`: what is run for an APC still queued when its
+/// thread ends.
+pub type PKRUNDOWN_ROUTINE = unsafe extern "C" fn(*mut KAPC);
+
+/// The `Type` of a `KAPC`: `ApcObject`.
+pub const APC_OBJECT: u8 = 0x12;
+
+/// `KAPC_ENVIRONMENT`: which of a thread's APC states an APC is queued
+/// to.
+pub mod apc_environment {
+    /// The thread's own process's state, wherever the thread is attached.
+    pub const ORIGINAL: u8 = 0;
+    /// The state of the process the thread is attached to.
+    pub const ATTACHED: u8 = 1;
+    /// Whichever is current when `KeInitializeApc` runs.
+    pub const CURRENT: u8 = 2;
+    /// Whichever is current when the APC is inserted.
+    pub const INSERT: u8 = 3;
+}
+
+/// `KAPC`: an asynchronous procedure call, which the caller allocates
+/// and the kernel links into the target thread's `KAPC_STATE` through
+/// `ApcListEntry` while `Inserted` is set. Initialised with
+/// `KeInitializeApc`, which no header declares but ntoskrnl exports.
+#[repr(C)]
+pub struct KAPC {
+    pub Type: u8,
+    pub SpareByte0: u8,
+    pub Size: u8,
+    pub SpareByte1: u8,
+    pub SpareLong0: u32,
+    pub Thread: *mut c_void,
+    pub ApcListEntry: LIST_ENTRY,
+    pub KernelRoutine: Option<PKKERNEL_ROUTINE>,
+    pub RundownRoutine: Option<PKRUNDOWN_ROUTINE>,
+    /// None: a special kernel APC.
+    pub NormalRoutine: Option<PKNORMAL_ROUTINE>,
+    pub NormalContext: *mut c_void,
+    pub SystemArgument1: *mut c_void,
+    pub SystemArgument2: *mut c_void,
+    pub ApcStateIndex: u8,
+    /// A `KPROCESSOR_MODE`.
+    pub ApcMode: i8,
+    pub Inserted: u8,
+}
+
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<KAPC>() == 0x58);
+    assert!(offset_of!(KAPC, Size) == 0x02);
+    assert!(offset_of!(KAPC, Thread) == 0x08);
+    assert!(offset_of!(KAPC, ApcListEntry) == 0x10);
+    assert!(offset_of!(KAPC, KernelRoutine) == 0x20);
+    assert!(offset_of!(KAPC, RundownRoutine) == 0x28);
+    assert!(offset_of!(KAPC, NormalRoutine) == 0x30);
+    assert!(offset_of!(KAPC, NormalContext) == 0x38);
+    assert!(offset_of!(KAPC, SystemArgument1) == 0x40);
+    assert!(offset_of!(KAPC, SystemArgument2) == 0x48);
+    assert!(offset_of!(KAPC, ApcStateIndex) == 0x50);
+    assert!(offset_of!(KAPC, ApcMode) == 0x51);
+    assert!(offset_of!(KAPC, Inserted) == 0x52);
+};
 
 const _: () = {
     use core::mem::{offset_of, size_of};
@@ -354,6 +460,15 @@ pub const SHARED_INTERRUPT_TIME: usize = 0x008;
 pub const SHARED_SYSTEM_TIME: usize = 0x014;
 /// `TickCount`: clock ticks since boot.
 pub const SHARED_TICK_COUNT: usize = 0x320;
+/// `XState.EnabledFeatures`: the processor state components the kernel
+/// saves and lets code use, a mask of `XSTATE_*` bits.
+pub const SHARED_XSTATE_ENABLED: usize = 0x3D8;
+/// `XState.EnabledUserVisibleSupervisorFeatures`: the supervisor
+/// components user code sees.
+pub const SHARED_XSTATE_SUPERVISOR: usize = 0x708;
+/// `XSTATE_MASK_LEGACY`: the x87 and SSE state, which every x64
+/// processor has and every thread's context holds.
+pub const XSTATE_MASK_LEGACY: u64 = 0x3;
 
 /// `KBUGCHECK_CALLBACK_REASON`: why a bugcheck callback is called. Only
 /// the values NK acts on are named.

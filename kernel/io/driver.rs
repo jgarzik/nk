@@ -71,14 +71,21 @@ pub fn running(name: &str) -> Option<*mut DRIVER_OBJECT> {
 
 /// Load the driver in `file`, the contents of the image called
 /// `file_name`, and run its entry point. `name` is its service, whose
-/// key exists.
+/// key exists; `boot`, that it starts with the boot drivers
+/// (`ldr::load_boot`).
 pub(super) fn load(
     name: &str,
     file_name: &str,
     file: &[u8],
+    boot: bool,
 ) -> Result<*mut DRIVER_OBJECT, DriverError> {
     irql::expect_passive("loading a driver");
-    let image = ldr::load(file_name, file).map_err(DriverError::Load)?;
+    let loaded = if boot {
+        ldr::load_boot(file_name, file)
+    } else {
+        ldr::load(file_name, file)
+    };
+    let image = loaded.map_err(DriverError::Load)?;
     let mut driver_name = wide("\\Driver\\", name);
     // The driver object is an object called `\Driver\<service>`, with
     // its extension behind it.
@@ -413,7 +420,9 @@ pub unsafe extern "C" fn IoGetDriverObjectExtension(
 }
 
 /// The object manager's call when the last pointer to a driver object
-/// has gone: free the extensions the driver allocated for it.
+/// has gone: free the extensions the driver allocated for it, and the
+/// copy of its file-system filter callbacks
+/// (`fsrtl::filter::FsRtlRegisterFileSystemFilterCallbacks`).
 ///
 /// # Safety
 /// `body` is a driver object nothing refers to any more.
@@ -432,6 +441,11 @@ pub unsafe extern "C" fn deleted(body: *mut c_void) {
             let this = next;
             next = (*this).NextExtension;
             let _ = pool::free(this.cast());
+        }
+        let callbacks = (*extension).FsFilterCallbacks;
+        (*extension).FsFilterCallbacks = core::ptr::null_mut();
+        if !callbacks.is_null() {
+            let _ = pool::free(callbacks.cast());
         }
     }
 }

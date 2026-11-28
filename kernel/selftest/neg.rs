@@ -159,7 +159,7 @@ fn dpc_stack_overflow(r: &mut Report, _: &BootInfo) {
 }
 
 static LOW: SpinLock<()> = SpinLock::new(Rank::Pool, ());
-static HIGH: SpinLock<()> = SpinLock::new(Rank::Frames, ());
+static HIGH: SpinLock<()> = SpinLock::new(Rank::Pfn, ());
 
 /// Taking locks against their rank order must stop the system: two
 /// processors doing it in opposite orders would each wait for the other.

@@ -111,7 +111,7 @@ fn hypervisor() -> Result<(), &'static str> {
 
 fn no_paging_file() -> Result<(), &'static str> {
     let file = 0u64;
-    if crate::io::fsrtl::FsRtlIsSystemPagingFile((&raw const file).cast()) != 0 {
+    if crate::fsrtl::FsRtlIsSystemPagingFile((&raw const file).cast()) != 0 {
         return Err("a file was taken for a paging file");
     }
     Ok(())

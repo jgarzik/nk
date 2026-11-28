@@ -192,7 +192,7 @@ pub unsafe extern "C" fn IoRegisterPlugPlayNotification(
     // it is (`TargetDeviceRelation`), as Windows asks.
     let (target, file) = if category == EVENT_CATEGORY_TARGET_DEVICE_CHANGE {
         // SAFETY: per the contract, `data` is an open file object.
-        match unsafe { target_of(data.cast_mut().cast()) } {
+        match unsafe { related_target(data.cast_mut().cast()) } {
             Ok(target) => (target, data as usize),
             Err(status) => return status,
         }
@@ -291,24 +291,6 @@ pub unsafe extern "C" fn IoUnregisterPlugPlayNotification(handle: *mut c_void) -
     unsafe { IoUnregisterPlugPlayNotificationEx(handle) }
 }
 
-/// The physical device object of `file`'s stack, with a reference: what
-/// the stack answers `TargetDeviceRelation` with.
-///
-/// # Safety
-/// `file` is an open file object. Called at `PASSIVE_LEVEL`.
-unsafe fn target_of(file: *mut nk_ntabi::io::FILE_OBJECT) -> Result<usize, NTSTATUS> {
-    // SAFETY: per the contract: an open file holds its device.
-    let reported =
-        unsafe { super::query::relations((*file).DeviceObject, TARGET_DEVICE_RELATION) }?
-            .ok_or(STATUS_NOT_SUPPORTED)?;
-    let (first, rest) = reported.split_first().ok_or(STATUS_NOT_SUPPORTED)?;
-    for extra in rest {
-        // SAFETY: each device the driver reported comes referenced.
-        unsafe { object::dereference(*extra as *mut u8) };
-    }
-    Ok(*first)
-}
-
 /// A custom event on its way to a worker: the work item, the device,
 /// the reporter's callback and its context, then the event's copy.
 #[repr(C)]
@@ -317,6 +299,89 @@ struct Report {
     device: usize,
     callback: usize,
     context: usize,
+}
+
+/// The physical device object a file system's volume answers for, with
+/// a reference: the target-device relation of the top of the stack a
+/// request on `file` goes to, the file system's volume device on a
+/// mounted volume, as Windows' `IoGetRelatedTargetDevice` asks it.
+///
+/// # Safety
+/// `file` is an open file object. Called at `PASSIVE_LEVEL`.
+pub unsafe fn related_target(file: *mut nk_ntabi::io::FILE_OBJECT) -> Result<usize, NTSTATUS> {
+    // SAFETY: per the contract.
+    let reported = unsafe {
+        super::query::relations(
+            crate::io::file::related_device(file),
+            TARGET_DEVICE_RELATION,
+        )
+    }?
+    .ok_or(STATUS_NOT_SUPPORTED)?;
+    let (first, rest) = reported.split_first().ok_or(STATUS_NOT_SUPPORTED)?;
+    for extra in rest {
+        // SAFETY: each device the driver reported comes referenced.
+        unsafe { object::dereference(*extra as *mut u8) };
+    }
+    Ok(*first)
+}
+
+/// A report of `notification` for `device`, copied into a block for
+/// [`deliver`]; `Err` with Windows' status for an event a driver may not
+/// report, a structure too short, or no memory.
+///
+/// # Safety
+/// `device` is a physical device object; `notification` is readable for
+/// its `Size`.
+unsafe fn report(
+    device: *mut nk_ntabi::io::DEVICE_OBJECT,
+    notification: *const TARGET_DEVICE_CUSTOM_NOTIFICATION,
+    callback: usize,
+    context: usize,
+) -> Result<*mut u8, NTSTATUS> {
+    // SAFETY: per the contract; the header is read field by field.
+    let (event, size, name) = unsafe {
+        (
+            (&raw const (*notification).Event).read_unaligned(),
+            usize::from((&raw const (*notification).Size).read_unaligned()),
+            (&raw const (*notification).NameBufferOffset).read_unaligned(),
+        )
+    };
+    let predefined = [
+        GUID_TARGET_DEVICE_QUERY_REMOVE,
+        GUID_TARGET_DEVICE_REMOVE_CANCELLED,
+        GUID_TARGET_DEVICE_REMOVE_COMPLETE,
+    ];
+    let data = size.wrapping_sub(TARGET_DEVICE_CUSTOM_HEADER);
+    if predefined.contains(&event)
+        || size < TARGET_DEVICE_CUSTOM_HEADER
+        || (name != -1 && name as isize > data as isize)
+    {
+        return Err(STATUS_INVALID_DEVICE_REQUEST);
+    }
+    let block = pool::alloc(size_of::<Report>() + size, super::TAG);
+    if block.is_null() {
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
+    }
+    // SAFETY: a fresh block with room for the report and the copy; the
+    // device is referenced until the report is delivered.
+    unsafe {
+        object::reference(device.cast());
+        let record = block.cast::<Report>();
+        record.write(Report {
+            item: core::mem::zeroed(),
+            device: device as usize,
+            callback,
+            context,
+        });
+        core::ptr::copy_nonoverlapping(
+            notification.cast::<u8>(),
+            block.add(size_of::<Report>()),
+            size,
+        );
+        (*record).item.WorkerRoutine = Some(deliver);
+        (*record).item.Parameter = block.cast();
+    }
+    Ok(block)
 }
 
 /// [`IoReportTargetDeviceChangeAsynchronous`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ioreporttargetdevicechangeasynchronous):
@@ -336,51 +401,42 @@ pub unsafe extern "C" fn IoReportTargetDeviceChangeAsynchronous(
     callback: usize,
     context: usize,
 ) -> NTSTATUS {
-    // SAFETY: per the contract; the header is read field by field.
-    let (event, size, name) = unsafe {
-        (
-            (&raw const (*notification).Event).read_unaligned(),
-            usize::from((&raw const (*notification).Size).read_unaligned()),
-            (&raw const (*notification).NameBufferOffset).read_unaligned(),
-        )
-    };
-    let predefined = [
-        GUID_TARGET_DEVICE_QUERY_REMOVE,
-        GUID_TARGET_DEVICE_REMOVE_CANCELLED,
-        GUID_TARGET_DEVICE_REMOVE_COMPLETE,
-    ];
-    let data = size.wrapping_sub(TARGET_DEVICE_CUSTOM_HEADER);
-    if predefined.contains(&event)
-        || size < TARGET_DEVICE_CUSTOM_HEADER
-        || (name != -1 && name as isize > data as isize)
-    {
-        return STATUS_INVALID_DEVICE_REQUEST;
+    // SAFETY: per the contract.
+    match unsafe { report(device, notification, callback, context) } {
+        Ok(block) => {
+            // SAFETY: the block `report` made, its work item set up.
+            unsafe {
+                let record = block.cast::<Report>();
+                crate::ex::work::ExQueueWorkItem(
+                    &raw mut (*record).item,
+                    nk_ntabi::ex::DELAYED_WORK_QUEUE,
+                );
+            }
+            STATUS_PENDING
+        }
+        Err(status) => status,
     }
-    let block = pool::alloc(size_of::<Report>() + size, super::TAG);
-    if block.is_null() {
-        return STATUS_INSUFFICIENT_RESOURCES;
+}
+
+/// What Windows' `IoReportTargetDeviceChange` does for a custom event:
+/// tell the registrations for `device` before returning, in the
+/// caller's thread.
+///
+/// # Safety
+/// As [`IoReportTargetDeviceChangeAsynchronous`], at `PASSIVE_LEVEL`.
+pub unsafe fn report_target_change(
+    device: *mut nk_ntabi::io::DEVICE_OBJECT,
+    notification: *const TARGET_DEVICE_CUSTOM_NOTIFICATION,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    match unsafe { report(device, notification, 0, 0) } {
+        Ok(block) => {
+            // SAFETY: the block `report` made; `deliver` frees it.
+            unsafe { deliver(block.cast()) };
+            STATUS_SUCCESS
+        }
+        Err(status) => status,
     }
-    // SAFETY: a fresh block with room for the report and the copy; the
-    // device is referenced until the worker is done with it.
-    unsafe {
-        object::reference(device.cast());
-        let report = block.cast::<Report>();
-        report.write(Report {
-            item: core::mem::zeroed(),
-            device: device as usize,
-            callback,
-            context,
-        });
-        core::ptr::copy_nonoverlapping(
-            notification.cast::<u8>(),
-            block.add(size_of::<Report>()),
-            size,
-        );
-        (*report).item.WorkerRoutine = Some(deliver);
-        (*report).item.Parameter = block.cast();
-        crate::ex::work::ExQueueWorkItem(&raw mut (*report).item, nk_ntabi::ex::DELAYED_WORK_QUEUE);
-    }
-    STATUS_PENDING
 }
 
 /// The worker's part of [`IoReportTargetDeviceChangeAsynchronous`].

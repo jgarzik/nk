@@ -49,6 +49,11 @@ impl<'a> FrameBitmap<'a> {
         self.free
     }
 
+    /// Whether frame `pfn` is free: false for frames beyond the bitmap.
+    pub fn is_free(&self, pfn: u64) -> bool {
+        pfn < self.nframes && !self.used(pfn)
+    }
+
     /// Mark `count` frames starting at `pfn` free. Frames beyond the
     /// bitmap, and frames already free, are ignored.
     pub fn release(&mut self, pfn: u64, count: u64) {

@@ -32,11 +32,51 @@ it is the default path for a volume with no boot entry.
    relocation path runs on every boot.
 3. Finds the serial console (ACPI SPCR table; a per-architecture default
    if there is none) and the ACPI RSDP.
-4. Builds page tables.
-5. Calls `ExitBootServices`, then switches tables and jumps.
+4. Gathers boot entropy (below).
+5. Builds page tables.
+6. Calls `ExitBootServices`, then switches tables and jumps.
 
 If anything fails, nkload prints an `NK-TEST boot:FAIL` line and powers
 off: a broken boot is a fast test failure, not a hang.
+
+## Boot entropy
+
+Windows' loader gathers entropy from several sources and hands the
+kernel a `BOOT_ENTROPY_LDR_RESULT`; `cng.sys` cannot start without it
+(it asks for the head of the block with
+`ZwQuerySystemInformation(SystemBootEntropyInformation)` and stops the
+system with `0x5F` if that fails). nkload makes the same block, in
+pages of its own whose address is `BootInfo::entropy`; the layout is in
+`lib/ntabi/sysinfo.rs`, checked against the kernel's symbols, and the
+rules for each source in `lib/bootinfo/entropy.rs`.
+
+The records are what `cng.sys` reads, so they follow winload
+10.0.19041: ten records, the first seven filled in winload's order
+(seed file, external, TPM, time, ACPI `OEM0`, processor, UEFI), each with
+the result code, status and length winload gives, and the counter
+ticks the source took. What each source reads:
+
+| Source | Read from | NK |
+| --- | --- | --- |
+| Seed file | `RNG\Seed` in the SYSTEM hive (`\NK\SYSTEM`) | read; the test hive has none, so not present (`STATUS_OBJECT_NAME_NOT_FOUND`) |
+| External | `RNG\ExternalEntropy` in the same hive, hashed | as the seed file |
+| TPM | the TPM's `GetRandom` | not present without a TCG protocol (`STATUS_NOT_FOUND`), as on QEMU; with one, reported as failed (`STATUS_NOT_SUPPORTED`): nkload does not drive a TPM |
+| Time | cycle counter, counter frequency, firmware clock, loader time | always |
+| ACPI `OEM0` | the table's body | read; QEMU has none |
+| Processor | `RDSEED` (128 bytes), else `RDRAND` (24 KiB), hashed | x86-64, where the processor has either; never on arm64 |
+| UEFI | `EFI_RNG_PROTOCOL`, 32 bytes | read; OVMF as NK boots it offers none |
+
+The seeds (for `cng.sys`, for the kernel, for its debugger) come from
+the SHA-512 hash of every record's entropy in slot order, as winload's
+do. winload then draws them from an AES CTR_DRBG seeded with that
+hash; nkload draws them as SHA-512 of the hash and a block counter, a
+difference no binary can see.
+
+The kernel copies the head of the block out once, to the first caller of
+class `0x75`, and wipes it in the loader's block; every later call is
+`STATUS_UNSUCCESSFUL`, as Windows answers. Once the boot-start and
+system-start drivers have started, the head is wiped whether or not
+anyone asked (`kernel/ex/entropy.rs`).
 
 ## Address space at kernel entry
 

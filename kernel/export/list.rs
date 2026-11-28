@@ -5,9 +5,11 @@
 use super::Export;
 
 mod arch;
+mod cc;
 mod cm;
 mod etw;
 mod ex;
+mod fsrtl;
 mod hal;
 mod io;
 mod kd;
@@ -22,6 +24,9 @@ mod ps;
 mod rtl;
 mod se;
 mod trap;
+mod trap_crt;
+mod trap_ex;
+mod trap_fsrtl;
 mod trap_io;
 mod trap_ke;
 mod trap_mm;
@@ -29,15 +34,18 @@ mod trap_ob;
 mod trap_po;
 mod trap_ps;
 mod trap_rtl;
+mod trap_se;
 mod trap_zw;
 mod whea;
 
 /// Every list.
 pub(super) static ALL: &[&[Export]] = &[
     arch::EXPORTS,
+    cc::EXPORTS,
     cm::EXPORTS,
     etw::EXPORTS,
     ex::EXPORTS,
+    fsrtl::EXPORTS,
     hal::EXPORTS,
     io::EXPORTS,
     kd::EXPORTS,
@@ -52,6 +60,9 @@ pub(super) static ALL: &[&[Export]] = &[
     rtl::EXPORTS,
     se::EXPORTS,
     trap::EXPORTS,
+    trap_crt::EXPORTS,
+    trap_ex::EXPORTS,
+    trap_fsrtl::EXPORTS,
     trap_io::EXPORTS,
     trap_ke::EXPORTS,
     trap_mm::EXPORTS,
@@ -59,6 +70,7 @@ pub(super) static ALL: &[&[Export]] = &[
     trap_ob::EXPORTS,
     trap_ps::EXPORTS,
     trap_rtl::EXPORTS,
+    trap_se::EXPORTS,
     trap_zw::EXPORTS,
     whea::EXPORTS,
 ];

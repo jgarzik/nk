@@ -1,7 +1,10 @@
 //! Kernel core: synchronisation and processor state.
 
+pub mod apc;
 pub mod bugcheck;
 pub mod dpc;
+pub mod entropy;
+pub mod expand;
 pub mod interrupt;
 pub mod ipi;
 pub mod irql;

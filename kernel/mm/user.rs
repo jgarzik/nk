@@ -41,6 +41,12 @@ impl Variable {
 #[allow(non_upper_case_globals)]
 pub static MmUserProbeAddress: Variable = Variable(USER_PROBE_ADDRESS);
 
+/// `MmHighestUserAddress`: the last byte of the user range, as Windows
+/// x64 has it: the 64 KiB below `MmUserProbeAddress` are never part of
+/// the range.
+#[allow(non_upper_case_globals)]
+pub static MmHighestUserAddress: Variable = Variable(USER_PROBE_ADDRESS - 0x1_0001);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserError {
     /// Not whole pages inside the user range.

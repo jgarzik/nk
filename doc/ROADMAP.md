@@ -62,10 +62,7 @@ each. What NK has of each part is in `doc/design/`.
 
 | NT part | To build | Linux analogue | Phase |
 | --- | --- | --- | --- |
-| Io | file systems: registration, mounting one on a volume, share access, verify | VFS glue | 4 |
-| Ke | APCs | signals, task work | 4 |
-| Mm | sections, faults, paging I/O; user address spaces | `mm/` | 4, 6 |
-| Cc, FsRtl | file cache and the file-system helper library | page cache, `fs/` libs | 4 |
+| Mm | user address spaces, image sections, page writers and trimming | `mm/` | 6 |
 | Ps, Se | user processes and their tokens | task, cred, LSM hooks | 6 |
 | System calls | the system-call table, user entry and exit, user APCs and exceptions | syscall entry, signals | 6 |
 | Cm | a registry that is written back | (none; sysfs + /etc, as a database) | 7 |
@@ -74,52 +71,36 @@ each. What NK has of each part is in `doc/design/`.
 
 ## Phases
 
-In order. Phase 4 mounts FAT on the volume NK already reads, so hardware
-and file systems are one line up to there. After it, 5 (more hardware)
-and 6, 7, 8 (toward user mode) depend only on their own predecessors, so
-work can alternate; 9 and 10 need both. QEMU proves a phase first; the
+In order. Phase 4 (memory sections, cache manager, FsRtl, kernel APCs,
+`cng.sys`/`ksecdd.sys` with boot entropy, and `fastfat.sys` mounting,
+reading and writing `C:`) is proven. From here, 5 (more hardware) and
+the foundation, 6, 7, 8 (toward user mode) depend only on their own
+predecessors, so work can alternate; 9 and 10 need both. The foundation
+changes what was built on a single process and a boot-time scale
+(one address space, one handle table, spin locks around every table)
+before user mode builds on it. QEMU proves a phase first; the
 OptiPlex follows.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
-| 4 | Memory, cache, FAT | the libraries `fastfat.sys` imports from (`ksecdd.sys`, `msrpc.sys`, API sets); sections, fault path, paging I/O, cache manager, FsRtl, mounting a file system; APCs | `fastfat.sys` mounts the volume `mountmgr.sys` names `C:`; files read and written; the image checked afterwards by host tools |
 | 5 | Frameworks and input | whatever KMDF, USB and HID ask beyond what NK has | KMDF echo sample; first boot on the OptiPlex: its disk through `stornvme`, `usbxhci` + hub + HID keyboard; `serial.sys` |
-| 6 | User mode | user address spaces, image sections, `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens; `cng.sys` | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
+| | Foundation for user mode | what processes need of the kernel's own structure: the caller's previous mode and the capture of its arguments, one way to create and open objects by name (each type's parse routine), locks taken at `PASSIVE_LEVEL` for the tables a system call reaches, I/O completion in the requesting thread, a handle table per process, firmware's runtime regions out of the user half | every earlier scenario still passes; NK's own tests of each piece |
+| 6 | User mode | user address spaces, image sections, the memory manager's page writers and trimming (designed in `doc/design/memory.md`), `ntdll.dll`, the system-call table, user APCs and exceptions, user processes and their tokens | WDK-built native test programs agree with Windows; Microsoft's `autochk.exe` checks a FAT volume |
 | 7 | Session manager | ALPC, writable registry, known DLLs, sessions, process creation as `smss.exe` drives it | `smss.exe` runs from a real hive up to starting the Windows subsystem |
 | 8 | Win32 base | what `csrss.exe`, its server DLLs, `kernelbase.dll` and `kernel32.dll` ask: the first Win32 processes | `cmd.exe /c ver` with its output redirected to a file |
 | 9 | Window system and console | session space, user-mode callbacks, the second system-call table, display through `dxgkrnl.sys` and `BasicDisplay.sys`, `condrv.sys` and `conhost.exe` | `win32k` loads; an interactive `cmd.exe` in its console window |
-| 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services) | the Destination above |
+| 10 | Rescue disk | whatever stock WinPE start-up still asks (`winlogon`, `winpeshl`, services); release images without the boot self-tests | the Destination above |
 
 After the rescue disk, unordered: `ntfs.sys`; networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
 logon.
 
-## Next step: phase 4
+## Next step: phase 5
 
-NK already reads QEMU's AHCI disk through Microsoft's storage stack, and
-Microsoft's `partmgr.sys`, `volmgr.sys` and `mountmgr.sys` find the
-volume on it and name it `C:`; NK's own RAW file system serves it.
-Phase 4 puts Microsoft's `fastfat.sys` there: it mounts the volume,
-files are read and written through it, and host tools check the image
-afterwards.
-
-Its scope follows what its proof binaries import
-(`tools/ledger.py --missing fastfat.sys ksecdd.sys msrpc.sys`):
-
-- The cache manager (`Cc*`) and the file-system runtime library
-  (`FsRtl*`: mapping control blocks, file locks, oplocks, the tunnel
-  cache, change notification): most of the names, and the deepest work.
-- Memory behind the cache: sections, the fault path, paging I/O, and
-  locking a caller's pages (`MmProbeAndLockPages`).
-- I/O for file systems: registration (`IoRegisterFileSystem`), mounting
-  one on a volume, share access, the top-level IRP, volume verification,
-  stream file objects.
-- APCs, which file systems and the cache manager rely on.
-- OEM code-page strings and short names (`Rtl*Oem*`,
-  `RtlGenerate8dot3Name`).
-- The libraries `fastfat.sys` imports from, `ksecdd.sys` and
-  `msrpc.sys`; what they import that phase 4 does not reach (ALPC among
-  it) stays a named trap until its phase.
+Phase 5 brings up Microsoft's driver frameworks and input hardware
+(KMDF, USB and HID, `stornvme.sys` and `serial.sys`), proving the KMDF
+echo sample under QEMU and the first physical boot on the Dell OptiPlex.
+Its detailed plan will be written here when phase 5 starts.
 
 What NK lacks is listed in `doc/design/absent.md`.
 

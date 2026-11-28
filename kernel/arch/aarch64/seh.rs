@@ -146,6 +146,24 @@ nk_with_caller_context:
     nk_caller_context nk_entry_ProbeForRead, nk_probe_for_read
     nk_caller_context nk_entry_ProbeForWrite, nk_probe_for_write
     nk_caller_context nk_entry_MmProbeAndLockPages, nk_probe_and_lock_pages
+    nk_caller_context nk_entry_FsRtlInitializeLargeMcb, nk_fsrtl_initialize_large_mcb
+    nk_caller_context nk_entry_FsRtlAddLargeMcbEntry, nk_fsrtl_add_large_mcb_entry
+    nk_caller_context nk_entry_FsRtlRemoveLargeMcbEntry, nk_fsrtl_remove_large_mcb_entry
+    nk_caller_context nk_entry_FsRtlTruncateLargeMcb, nk_fsrtl_truncate_large_mcb
+    nk_caller_context nk_entry_CcInitializeCacheMap, nk_cc_initialize_cache_map
+    nk_caller_context nk_entry_CcMapData, nk_cc_map_data
+    nk_caller_context nk_entry_CcPinRead, nk_cc_pin_read
+    nk_caller_context nk_entry_CcPinMappedData, nk_cc_pin_mapped_data
+    nk_caller_context nk_entry_CcPreparePinWrite, nk_cc_prepare_pin_write
+    nk_caller_context nk_entry_CcCopyReadEx, nk_cc_copy_read_ex
+    nk_caller_context nk_entry_CcCopyWrite, nk_cc_copy_write_ex
+    nk_caller_context nk_entry_CcCopyWriteEx, nk_cc_copy_write_ex
+    nk_caller_context nk_entry_CcSetFileSizes, nk_cc_set_file_sizes
+    nk_caller_context nk_entry_CcZeroData, nk_cc_zero_data
+    nk_caller_context nk_entry_CcMdlRead, nk_cc_mdl_read
+    nk_caller_context nk_entry_CcPrepareMdlWrite, nk_cc_prepare_mdl_write
+    nk_caller_context nk_entry_CcMdlWriteComplete, nk_cc_mdl_write_complete
+    nk_caller_context nk_entry_FsRtlMdlWriteCompleteDev, nk_fsrtl_mdl_write_complete_dev
 
     .globl nk_guarded_call
 // x0: a routine. x1-x4: its arguments. x5: the caller's guard record,
@@ -289,6 +307,119 @@ unsafe extern "C" {
     pub fn nk_entry_ProbeForRead(address: *const c_void, length: usize, alignment: u32);
     pub fn nk_entry_ProbeForWrite(address: *mut c_void, length: usize, alignment: u32);
     pub fn nk_entry_MmProbeAndLockPages(mdl: *mut c_void, access_mode: i8, operation: u32);
+    pub fn nk_entry_FsRtlInitializeLargeMcb(mcb: *mut c_void, pool_type: u32);
+    pub fn nk_entry_FsRtlAddLargeMcbEntry(mcb: *mut c_void, vbn: i64, lbn: i64, count: i64) -> u8;
+    pub fn nk_entry_FsRtlRemoveLargeMcbEntry(mcb: *mut c_void, vbn: i64, count: i64);
+    pub fn nk_entry_FsRtlTruncateLargeMcb(mcb: *mut c_void, vbn: i64);
+    pub fn nk_entry_CcInitializeCacheMap(
+        file: *mut c_void,
+        sizes: *const c_void,
+        pin_access: u8,
+        callbacks: *const c_void,
+        context: *mut c_void,
+    );
+    pub fn nk_entry_CcMapData(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        flags: u32,
+        bcb: *mut *mut c_void,
+        buffer: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcPinRead(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        flags: u32,
+        bcb: *mut *mut c_void,
+        buffer: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcPinMappedData(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        flags: u32,
+        bcb: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcPreparePinWrite(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        zero: u8,
+        flags: u32,
+        bcb: *mut *mut c_void,
+        buffer: *mut *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcCopyReadEx(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        wait: u8,
+        buffer: *mut c_void,
+        iosb: *mut c_void,
+        thread: *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcCopyWrite(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        wait: u8,
+        buffer: *const c_void,
+    ) -> u8;
+    pub fn nk_entry_CcCopyWriteEx(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        wait: u8,
+        buffer: *const c_void,
+        thread: *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcSetFileSizes(file: *mut c_void, sizes: *const c_void);
+    pub fn nk_entry_CcZeroData(
+        file: *mut c_void,
+        start: *const i64,
+        end: *const i64,
+        wait: u8,
+    ) -> u8;
+    pub fn nk_entry_CcMdlRead(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        chain: *mut *mut c_void,
+        iosb: *mut c_void,
+    );
+    pub fn nk_entry_CcPrepareMdlWrite(
+        file: *mut c_void,
+        offset: *const i64,
+        length: u32,
+        chain: *mut *mut c_void,
+        iosb: *mut c_void,
+    );
+    pub fn nk_entry_FsRtlMdlWriteCompleteDev(
+        file: *mut c_void,
+        offset: *const i64,
+        chain: *mut c_void,
+        device: *mut c_void,
+    ) -> u8;
+    pub fn nk_entry_CcMdlWriteComplete(file: *mut c_void, offset: *const i64, chain: *mut c_void);
+}
+
+/// The fourth argument of a routine entered through
+/// `nk_with_caller_context`, which passes only the first three: the
+/// register it arrived in, as the context records it.
+pub fn fourth_argument(context: &Context) -> u64 {
+    context.X[3]
+}
+
+/// Argument `n` (counting from 0; 4 to 7) of a routine entered through
+/// `nk_with_caller_context`: in its register, as the context records
+/// it. No routine entered so has more than eight.
+///
+/// # Safety
+/// The routine was called with more than `n` arguments.
+pub unsafe fn stack_argument(context: &Context, n: usize) -> u64 {
+    assert!((4..8).contains(&n), "argument {n} is not in a register");
+    context.X[n]
 }
 
 /// Call `routine` with `args` through the guarded frame.

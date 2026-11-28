@@ -80,3 +80,21 @@ pub unsafe fn enter(root: u64, entry: u64, stack: u64, info: u64) -> ! {
         )
     }
 }
+
+/// The virtual counter (`CNTVCT_EL0`), in place of a cycle counter.
+pub fn cycles() -> u64 {
+    let count: u64;
+    // SAFETY: reading the virtual counter has no side effects.
+    unsafe { core::arch::asm!("isb", "mrs {}, cntvct_el0", out(reg) count) };
+    count
+}
+
+/// The processor's random number generator, as winload draws it on
+/// x86-64. NK's arm64 loader draws none (`doc/BOOT.md`, Boot entropy),
+/// and the source is reported not present.
+pub fn draw_random<'a>(
+    _seed: &'a mut [u8],
+    _rdrand: &'a mut [u8],
+) -> Result<Option<&'a [u8]>, &'static str> {
+    Ok(None)
+}

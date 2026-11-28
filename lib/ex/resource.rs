@@ -356,6 +356,27 @@ impl Resource {
         })
     }
 
+    /// `ExSetResourceOwnerPointer`: what `from` owns passes, count and
+    /// all, to `to`, an owner pointer (an address whose low two bits are
+    /// set) that later releases name. If `to` already owns the resource
+    /// shared, the counts are one entry.
+    pub fn set_owner(
+        &mut self,
+        table: &mut [OwnerEntry],
+        from: usize,
+        to: usize,
+    ) -> Result<(), NotOwned> {
+        let count = find(&mut self.owner, table, from).ok_or(NotOwned)?.bits;
+        if let Some(existing) = find(&mut self.owner, table, to) {
+            existing.bits += count;
+            *find(&mut self.owner, table, from).ok_or(NotOwned)? = OwnerEntry::FREE;
+            self.active_entries -= 1;
+        } else {
+            find(&mut self.owner, table, from).ok_or(NotOwned)?.thread = to;
+        }
+        Ok(())
+    }
+
     /// Whether `thread` owns the resource exclusively.
     pub const fn is_acquired_exclusive(&self, thread: usize) -> bool {
         self.flag & RESOURCE_OWNED_EXCLUSIVE != 0 && self.owner.thread == thread
@@ -383,6 +404,35 @@ mod tests {
 
     fn table(slots: usize) -> Vec<OwnerEntry> {
         vec![OwnerEntry::FREE; slots]
+    }
+
+    #[test]
+    fn ownership_passes_to_an_owner_pointer() {
+        const P: usize = 0x5003;
+        let mut t = table(4);
+        let mut r = Resource::new();
+        assert_eq!(r.acquire_exclusive(A, true), Acquire::Acquired);
+        assert_eq!(r.acquire_exclusive(A, true), Acquire::Acquired);
+        assert_eq!(r.set_owner(&mut t, A, P), Ok(()));
+        assert!(r.is_acquired_exclusive(P));
+        assert!(!r.is_acquired_exclusive(A));
+        assert_eq!(r.release(&mut t, P), Ok(Release::Done));
+        assert_eq!(r.release(&mut t, P), Ok(Release::Done));
+        assert_eq!(r.active_entries, 0);
+        assert_eq!(r.set_owner(&mut t, A, P), Err(NotOwned));
+        // Shared, onto a pointer that owns it already: one entry.
+        assert_eq!(
+            r.acquire_shared(&mut t, A, true, Shared::Plain),
+            Acquire::Acquired
+        );
+        assert_eq!(
+            r.acquire_shared(&mut t, B, true, Shared::Plain),
+            Acquire::Acquired
+        );
+        assert_eq!(r.set_owner(&mut t, A, P), Ok(()));
+        assert_eq!(r.set_owner(&mut t, B, P), Ok(()));
+        assert_eq!(r.is_acquired_shared(&t, P), 2);
+        assert_eq!(r.active_entries, 1);
     }
 
     #[test]

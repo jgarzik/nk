@@ -6,6 +6,20 @@ use crate::rtl;
 pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::RtlGetVersion),
     export!(Implemented, rtl::RtlInitUnicodeString),
+    export!(Implemented, rtl::persist::RtlGetPersistedStateLocation),
+    export!(Implemented, rtl::RtlDeriveCapabilitySidsFromName),
+    export!(Implemented, rtl::RtlNtStatusToDosError),
+    export!(Implemented, rtl::RtlNtStatusToDosErrorNoTeb),
+    export_variable!(
+        Implemented,
+        "NlsMbOemCodePageTag",
+        rtl::nls::NlsMbOemCodePageTag
+    ),
+    export_variable!(
+        Implemented,
+        "NlsOemLeadByteInfo",
+        rtl::nls::NlsOemLeadByteInfo
+    ),
     export_entry!(Implemented, "DbgPrint", rtl::print::nk_variadic_DbgPrint),
     export_entry!(
         Implemented,
@@ -51,6 +65,12 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::crt::wcsstr),
     export!(Implemented, rtl::crt::wcsncmp),
     export_entry!(Implemented, "sprintf_s", rtl::print::nk_variadic_sprintf_s),
+    export_entry!(
+        Implemented,
+        "_snwprintf_s",
+        rtl::print::nk_variadic__snwprintf_s
+    ),
+    export!(Implemented, rtl::print::_vsnprintf_s),
     export!(Implemented, rtl::RtlCheckPortableOperatingSystem),
     export!(Implemented, rtl::avl::RtlInitializeGenericTableAvl),
     export!(Implemented, rtl::avl::RtlInsertElementGenericTableAvl),
@@ -98,6 +118,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::counted::RtlxAnsiStringToUnicodeSize),
     export!(Implemented, rtl::counted::RtlAnsiCharToUnicodeChar),
     export!(Implemented, rtl::counted::RtlAppendUnicodeStringToString),
+    export!(Implemented, rtl::counted::RtlAppendUnicodeToString),
     export!(Implemented, rtl::counted::RtlCompareString),
     export!(Implemented, rtl::counted::RtlCompareUnicodeString),
     export!(Implemented, rtl::counted::RtlEqualUnicodeString),
@@ -139,4 +160,23 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, rtl::once::RtlRunOnceExecuteOnce),
     export!(Partial, rtl::image::RtlFindMessage),
     export!(Implemented, rtl::image::RtlPcToFileName),
+    export!(Implemented, rtl::oem::RtlOemToUnicodeN),
+    export!(Implemented, rtl::oem::RtlxOemStringToUnicodeSize),
+    export!(Implemented, rtl::oem::RtlOemStringToUnicodeString),
+    export!(Implemented, rtl::oem::RtlOemStringToCountedUnicodeString),
+    export!(Implemented, rtl::oem::RtlUnicodeStringToCountedOemString),
+    export!(
+        Implemented,
+        rtl::oem::RtlUpcaseUnicodeStringToCountedOemString
+    ),
+    export!(Implemented, rtl::oem::RtlFreeOemString),
+    export!(Implemented, rtl::gen83::RtlGenerate8dot3Name),
+    export!(Implemented, rtl::splay::RtlSplay),
+    export!(Implemented, rtl::splay::RtlDelete),
+    export!(Implemented, rtl::bitmap::RtlFindClearBits),
+    export!(Implemented, rtl::counted::RtlTimeFieldsToTime),
+    export!(Implemented, rtl::crt::wcscmp),
+    export!(Implemented, rtl::crt::wcsrchr),
+    export!(Implemented, rtl::crt::strcpy_s),
+    export!(Implemented, rtl::crt::wcscpy_s),
 ];

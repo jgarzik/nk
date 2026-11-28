@@ -70,7 +70,7 @@ pub fn expect_passive(what: &str) {
 pub fn self_test() -> Result<(), &'static str> {
     use super::{Rank, SpinLock};
     static OUTER: SpinLock<u32> = SpinLock::new(Rank::Pool, 1);
-    static INNER: SpinLock<u32> = SpinLock::new(Rank::Frames, 2);
+    static INNER: SpinLock<u32> = SpinLock::new(Rank::Pfn, 2);
     static CONSOLE_RANKED: SpinLock<u32> = SpinLock::new(Rank::Console, 3);
 
     if current() != PASSIVE_LEVEL {

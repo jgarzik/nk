@@ -1,4 +1,5 @@
-//! Memory manager: physical frames, kernel mappings, the pool.
+//! Memory manager: physical frames and their database, kernel mappings,
+//! the pool.
 //!
 //! The arithmetic lives in `lib/mm`, where the host tests it. This module
 //! binds it to real memory.
@@ -7,23 +8,26 @@
 //! the loader allocated and firmware's boot-services memory stay
 //! reserved.
 
+pub mod cache;
 pub mod contig;
+pub mod fault;
+pub mod flush;
 pub mod io;
 pub mod map;
+pub mod pfn;
 pub mod pool;
+pub mod section;
 pub mod stack;
 pub mod user;
 
-use crate::ke::{Rank, SpinLock};
 use core::sync::atomic::{AtomicU64, Ordering};
 use nk_bootinfo::{BootInfo, EFI_CONVENTIONAL, FirmwareUse, MemRegion, regions};
-use nk_mm::frames::{FrameBitmap, Layout, LayoutError, Within};
+use nk_mm::frames::{Layout, LayoutError, Within};
 
 pub const PAGE_SIZE: usize = 4096;
 static HHDM: AtomicU64 = AtomicU64::new(0);
 /// Where RAM ends, once `init` has run.
 static RAM_TOP: AtomicU64 = AtomicU64::new(0);
-static FRAMES: SpinLock<Option<FrameBitmap<'static>>> = SpinLock::new(Rank::Frames, None);
 
 /// The direct-map address of physical address `pa`.
 pub fn phys_to_virt(pa: u64) -> *mut u8 {
@@ -59,7 +63,8 @@ pub fn firmware_regions() -> impl Iterator<Item = (MemRegion, FirmwareUse)> {
     })
 }
 
-/// Set up the frame allocator from the firmware memory map.
+/// Set up the frame allocator and the page-frame-number database from
+/// the firmware memory map.
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     HHDM.store(info.hhdm_base, Ordering::Relaxed);
     for (slot, value) in MEMORY_MAP
@@ -85,13 +90,12 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let bits = unsafe {
         core::slice::from_raw_parts_mut(phys_to_virt(layout.home).cast::<u64>(), layout.words)
     };
-    *FRAMES.lock() = Some(layout.build(bits, usable()));
-    Ok(())
+    pfn::init(layout.build(bits, usable()), layout.nframes)
 }
 
 /// Allocate `count` contiguous, zeroed frames. Returns the physical address.
 pub fn alloc_frames(count: usize) -> Option<u64> {
-    let pfn = FRAMES.lock().as_mut()?.alloc(count as u64)?;
+    let pfn = pfn::take(&mut pfn::lock(), count as u64, None)?;
     let pa = pfn * PAGE_SIZE as u64;
     // SAFETY: the allocator just gave us exclusive ownership of these
     // frames, and the direct map covers all RAM.
@@ -102,7 +106,7 @@ pub fn alloc_frames(count: usize) -> Option<u64> {
 /// Allocate `count` contiguous, zeroed frames where `within` allows.
 /// Returns the physical address.
 pub fn alloc_frames_within(count: usize, within: &Within) -> Option<u64> {
-    let pfn = FRAMES.lock().as_mut()?.alloc_within(count as u64, within)?;
+    let pfn = pfn::take(&mut pfn::lock(), count as u64, Some(within))?;
     let pa = pfn * PAGE_SIZE as u64;
     // SAFETY: as in `alloc_frames`.
     unsafe { core::ptr::write_bytes(phys_to_virt(pa), 0, count * PAGE_SIZE) };
@@ -135,11 +139,7 @@ pub fn direct_map_bytes() -> u64 {
 
 /// Return frames from `alloc_frames`. A double free is a kernel bug.
 pub fn free_frames(pa: u64, count: usize) {
-    let ok = FRAMES
-        .lock()
-        .as_mut()
-        .is_some_and(|f| f.dealloc(pa / PAGE_SIZE as u64, count as u64));
-    assert!(ok, "free of frames not allocated: {pa:#x} x{count}");
+    pfn::give_back(&mut pfn::lock(), pa / PAGE_SIZE as u64, count as u64);
 }
 
 /// The memory NK uses as RAM, in frames: how many there are, and the
@@ -159,7 +159,7 @@ pub fn physical_memory() -> (u64, u64, u64) {
 }
 
 pub fn free_frame_count() -> u64 {
-    FRAMES.lock().as_ref().map_or(0, |f| f.free_frames())
+    pfn::lock().as_ref().map_or(0, |f| f.bitmap.free_frames())
 }
 
 /// Frames: allocate, write, free, and get the same count back.
@@ -181,10 +181,17 @@ pub fn frames_self_test() -> Result<(), &'static str> {
     if free_frame_count() != before - 17 {
         return Err("free count did not drop by 17");
     }
+    // The database knows them as the kernel's.
+    if pfn::state(b + 15 * PAGE_SIZE as u64) != (nk_mm::pfn::Location::Active, 1, 0) {
+        return Err("an allocated frame is not active in the PFN database");
+    }
     free_frames(a, 1);
     free_frames(b, 16);
     if free_frame_count() != before {
         return Err("frames leaked");
     }
-    Ok(())
+    if pfn::state(a).0 != nk_mm::pfn::Location::Free {
+        return Err("a freed frame is not free in the PFN database");
+    }
+    pfn::check()
 }

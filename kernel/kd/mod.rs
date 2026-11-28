@@ -15,7 +15,24 @@ pub fn console_init(info: &BootInfo) {
     *CONSOLE.lock() = Uart::new(info);
     variables::init(info);
     DEBUGGER.store(info.option("debug") == Some("on"), Ordering::Relaxed);
-    TRACE_REGISTRY.store(info.option("trace") == Some("registry"), Ordering::Relaxed);
+    let traced = |what| {
+        info.option("trace")
+            .is_some_and(|list| list.split(',').any(|t| t == what))
+    };
+    TRACE_REGISTRY.store(traced("registry"), Ordering::Relaxed);
+    TRACE_MM.store(traced("mm"), Ordering::Relaxed);
+    TRACE_MOUNT.store(traced("mount"), Ordering::Relaxed);
+    TRACE_CC.store(traced("cc"), Ordering::Relaxed);
+}
+
+/// The command line asked (`trace=mount`) for a line in the log for
+/// every file system registered or unregistered, every mount request
+/// and its answer, and every stream file object made.
+static TRACE_MOUNT: AtomicBool = AtomicBool::new(false);
+
+/// Whether the mount path is logged.
+pub fn trace_mount() -> bool {
+    TRACE_MOUNT.load(Ordering::Relaxed)
 }
 
 /// The command line asked (`trace=registry`) for a line in the log for
@@ -27,6 +44,27 @@ static TRACE_REGISTRY: AtomicBool = AtomicBool::new(false);
 /// Whether registry lookups are logged.
 pub fn trace_registry() -> bool {
     TRACE_REGISTRY.load(Ordering::Relaxed)
+}
+
+/// The command line asked (`trace=mm`) for a line in the log for every
+/// section made and deleted, view mapped and unmapped, page read in or
+/// written out, and purge: what the memory manager does for a file.
+/// `trace=` takes a list separated by commas.
+static TRACE_MM: AtomicBool = AtomicBool::new(false);
+
+/// Whether the memory manager's work on files is logged.
+pub fn trace_mm() -> bool {
+    TRACE_MM.load(Ordering::Relaxed)
+}
+
+/// The command line asked (`trace=cc`) for a line in the log for every
+/// cache map made and deleted, view mapped, pin, flush and write-behind:
+/// what the cache manager does for a file system.
+static TRACE_CC: AtomicBool = AtomicBool::new(false);
+
+/// Whether the cache manager's work is logged.
+pub fn trace_cc() -> bool {
+    TRACE_CC.load(Ordering::Relaxed)
 }
 
 /// A kernel debugger is attached and tells the kernel to go on at every

@@ -1,11 +1,79 @@
-//! What the kernel does for file systems with the header at the front
-//! of each stream's control block (`FSRTL_ADVANCED_FCB_HEADER`).
+//! The file-system runtime library: what the kernel does for file
+//! systems. Here, the header at the front of each stream's control
+//! block (`FSRTL_ADVANCED_FCB_HEADER`).
 //!
 //! The header is the file system's memory, set up by code compiled into
 //! the driver; NK reads and writes it through raw pointers, under the
 //! lock the header itself carries.
 
 #![allow(non_snake_case)]
+
+pub mod acquire;
+pub mod device;
+pub mod fastio;
+pub mod filter;
+pub mod lock;
+pub mod mcb;
+pub mod name;
+pub mod notify;
+pub mod oplock;
+pub mod status;
+pub mod tunnel;
+pub mod volume;
+
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use nk_fsrtl::tunnel::Limits;
+
+/// Whether a short name's extension of more than three characters ends
+/// in `~` (`RtlGenerate8dot3Name`): Windows' `FsRtlSafeExtensions`, true
+/// unless the registry's `Win95TruncatedExtensions` says otherwise.
+static SAFE_EXTENSIONS: AtomicBool = AtomicBool::new(true);
+
+/// The key Windows reads the file systems' compatibility values from.
+const FILE_SYSTEM: &str = "Machine\\System\\CurrentControlSet\\Control\\FileSystem";
+
+/// Read what the runtime library's behaviour depends on from the
+/// registry, as `FsRtlInitSystem` does: `Win95TruncatedExtensions`,
+/// whose first four bytes, whatever the value's type, turn safe
+/// extensions off when they are not zero.
+pub fn init() {
+    if value("Win95TruncatedExtensions").is_some_and(|v| v != 0) {
+        SAFE_EXTENSIONS.store(false, Ordering::Relaxed);
+    }
+    if let Some(entries) = value("MaximumTunnelEntries") {
+        TUNNEL_ENTRIES.store(entries, Ordering::Relaxed);
+    }
+    if let Some(age) = value("MaximumTunnelEntryAgeInSeconds") {
+        TUNNEL_AGE.store(age, Ordering::Relaxed);
+    }
+}
+
+/// The first four bytes of a value of the file systems' key, whatever
+/// its type, as Windows reads them.
+fn value(name: &str) -> Option<u32> {
+    let (_, data) = crate::cm::read(FILE_SYSTEM, name).ok()?;
+    Some(u32::from_le_bytes(*data.first_chunk::<4>()?))
+}
+
+/// How many entries a tunnel cache keeps (Windows' `TunnelMaxEntries`,
+/// 256 unless the registry says otherwise).
+static TUNNEL_ENTRIES: AtomicU32 = AtomicU32::new(256);
+/// How many seconds an entry is kept (15 unless the registry says
+/// otherwise).
+static TUNNEL_AGE: AtomicU32 = AtomicU32::new(15);
+
+/// The tunnel caches' limits.
+pub fn limits() -> Limits {
+    Limits::from_registry(
+        TUNNEL_AGE.load(Ordering::Relaxed),
+        TUNNEL_ENTRIES.load(Ordering::Relaxed),
+    )
+}
+
+/// [`SAFE_EXTENSIONS`].
+pub fn safe_extensions() -> bool {
+    SAFE_EXTENSIONS.load(Ordering::Relaxed)
+}
 
 use crate::ex::pushlock;
 use crate::kd;
@@ -182,9 +250,9 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
             Status: STATUS_PENDING,
             Information: 0,
         });
-        let held = ObRef::adopt(super::device::IoGetAttachedDeviceReference(device).cast());
+        let held = ObRef::adopt(crate::io::device::IoGetAttachedDeviceReference(device).cast());
         let top = held.cast::<nk_ntabi::io::DEVICE_OBJECT>();
-        let request = super::build::IoBuildDeviceIoControlRequest(
+        let request = crate::io::build::IoBuildDeviceIoControlRequest(
             IOCTL_STORAGE_GET_NESTING,
             top,
             core::ptr::null_mut(),
@@ -200,7 +268,7 @@ pub unsafe extern "C" fn FsRtlGetVirtualDiskNestingLevel(
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         let was_enabled = crate::ps::IoSetThreadHardErrorMode(0);
-        let returned = super::irp::IofCallDriver(top, request);
+        let returned = crate::io::irp::IofCallDriver(top, request);
         crate::ps::IoSetThreadHardErrorMode(was_enabled);
         if returned != STATUS_PENDING && crate::ke::wait::KeReadStateEvent(done) == 0 {
             // The driver may still complete the request, or pass it

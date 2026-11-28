@@ -241,6 +241,16 @@ pub unsafe extern "C" fn PsDereferenceSiloContext(context: *mut c_void) {
     unsafe { object::dereference(context.cast()) };
 }
 
+/// [`PsReferenceSiloContext`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-psreferencesilocontext):
+/// take another reference to a context.
+///
+/// # Safety
+/// `context` is a silo context the caller holds a reference to.
+pub unsafe extern "C" fn PsReferenceSiloContext(context: *mut c_void) {
+    // SAFETY: per the contract.
+    unsafe { object::reference(context.cast()) };
+}
+
 /// The slots, and what the host silo keeps in each: a context it holds
 /// a reference to, or null.
 struct Host {

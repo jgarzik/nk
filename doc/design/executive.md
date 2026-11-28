@@ -109,6 +109,13 @@ for each routine. NK's decisions:
 - `ExEnterCriticalRegionAndAcquireResource...` are not exported: what
   they return is not documented.
 
+An owner may pass what it holds to an owner pointer
+(`ExSetResourceOwnerPointer`), an address with its low two bits set
+that another thread later names to `ExReleaseResourceForThreadLite`:
+a file system does so when its I/O completes elsewhere. If the pointer
+already owns the resource shared, the two are one entry with both
+counts.
+
 ### Executive timers
 
 An
@@ -214,3 +221,38 @@ making one relative to a directory handle is refused.
 `RtlRunOnceExecuteOnce` keeps Windows' values in the driver's word
 (`nk_rtl::once`). A thread that finds the initialisation under way
 sleeps a millisecond and looks again, where Windows queues it.
+
+### Extension hosts and performance counters
+
+`ExRegisterExtension` plugs a driver's table of routines into one of
+the kernel's extension hosts (`kernel/ex/extension.rs`). Windows makes
+sixteen at boot; NK makes the ones its drivers use, as Windows makes
+them: `pcw.sys`'s performance counters (id 1), `ksecdd.sys`'s
+authorization routines (id 2) and `cng.sys`'s cryptography (id 3). A
+registration is checked as the pinned kernel checks it (version,
+table, number of routines, a null routine, one table per host). A host
+Windows has and NK does not stops the system naming it; one Windows
+does not have either is `STATUS_NOT_FOUND`. A host's table is used
+under run-down protection that is run down until a table is registered
+and again, waiting for its users, when it is taken back. Nothing on NK
+calls the tables of hosts 2 and 3 yet.
+
+The performance-counter routines (`Pcw*`, `kernel/ex/pcw.rs`) are
+`pcw.sys`'s: each passes its arguments to the routine of `pcw.sys`'s
+table. With no `pcw.sys` registered they give the status Windows gives
+then: not implemented when the `pcw` service is to start (or has no
+key), success with nothing registered when it is not.
+
+`ExInitializeLookasideListEx` fills in a lookaside list as the plain
+forms do, from the pool type given, with the flags joining it as pool
+flags, an optional maximum depth and routines that take the list as
+well; its arguments are checked as the pinned kernel checks them
+(`nk_ex::lookaside::ex`).
+
+### The time zone
+
+Local time is UTC (`kernel/ex/timezone.rs`): Windows' bias comes from
+the registry's `Control\TimeZoneInformation`, and NK's registry has
+none, so the bias is zero as on Windows without that key. NK computes
+no bias from a configured zone; a registry with one stops the system at
+boot by name.

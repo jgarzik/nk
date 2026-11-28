@@ -79,6 +79,39 @@ tier = "gate"
 smp = 1
 golden = "aarch64"
 
+# Kernel APCs on their own: the order of delivery, what holds it back,
+# and a wait interrupted for them and resumed; once on one processor,
+# where the busy thread is only ever ready, not running elsewhere.
+
+[x86_64-ke-apc]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/ke/apc.rs", "kernel/ke/wait.rs", "kernel/ke/interrupt.rs", "lib/ke/apc.rs"]
+cmdline = "test=ke.apc.*"
+
+[x86_64-ke-apc-smp1]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/ke/apc.rs", "kernel/ke/wait.rs", "kernel/ke/interrupt.rs", "lib/ke/apc.rs"]
+smp = 1
+cmdline = "test=ke.apc.*"
+
+[aarch64-ke-apc]
+arch = "aarch64"
+tier = "gate"
+cmdline = "test=ke.apc.*"
+
+# The mount path with nkfs's mount half: a file system registered on the
+# disk queue mounted by a first open, its stream file object's cleanup
+# and close, a create on a 0x6000 stack expansion, a raise across one,
+# and a read split into associated requests; the mount path traced.
+
+[x86_64-io-mount]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/io/", "lib/io/", "kernel/ke/expand.rs", "kernel/selftest/nkfs_mount.rs"]
+cmdline = "test=io.mount.* trace=mount"
+
 # A data disk on the machine changes nothing for a kernel that does not
 # write it: the boot passes, and the disk is as it was made. This is the
 # harness's own proof that the disk is attached, kept and compared.
@@ -213,6 +246,44 @@ tier = "gate"
 cmdline = "test=neg.fault"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000050 PAGE_FAULT_IN_NONPAGED_AREA"
+
+# The memory manager's data sections, system-cache views and paging
+# I/O, driven as the cache manager drives them over nkfs, the test-only
+# file system: what each paging request looked like, and every page and
+# block given back.
+
+[x86_64-mm-section]
+arch = "x86_64"
+tier = "gate"
+paths = [
+    "kernel/mm/",
+    "lib/mm/",
+    "kernel/io/paging.rs",
+    "kernel/io/irp.rs",
+    "kernel/io/mdl.rs",
+    "kernel/selftest/nkfs.rs",
+    "kernel/selftest/nkfs_mm.rs",
+]
+cmdline = "test=mm.section trace=mm"
+golden = "x86_64-mm-section"
+
+# The cache manager over nkfs, called as a file system calls it: cache
+# maps made and deleted, maps and pins, and what each reads and writes.
+
+[x86_64-cc]
+arch = "x86_64"
+tier = "gate"
+paths = [
+    "kernel/cc/",
+    "lib/cc/",
+    "kernel/fsrtl/acquire.rs",
+    "kernel/fsrtl/fastio.rs",
+    "kernel/io/shutdown.rs",
+    "kernel/selftest/nkfs.rs",
+    "kernel/selftest/nkfs_cc.rs",
+]
+cmdline = "test=cc.* trace=cc"
+golden = "x86_64-cc"
 
 # Unmapping system address space a mapping does not hold stops the
 # system as Windows does.
@@ -735,7 +806,7 @@ match = "BUGCHECK: ZwCreateIoCompletion: NK does not implement this routine"
 [x86_64-neg-stream-context-list]
 arch = "x86_64"
 tier = "gate"
-paths = ["kernel/io/fsrtl.rs"]
+paths = ["kernel/fsrtl/mod.rs"]
 cmdline = "test=neg.stream-context-list"
 expect = "bugcheck"
 match = "BUGCHECK: 0x00000139 KERNEL_SECURITY_CHECK_FAILURE: the stream contexts"
@@ -1154,3 +1225,81 @@ registry = ["storage", "volumes", "mount"]
 disk = "ahci"
 disk_image = "fat32-gpt"
 disk_expect = "fat-unchanged"
+
+# Microsoft's FAT file system: fastfat.sys starts with the boot drivers
+# and mounts the volume mountmgr.sys names C: on the first open of a
+# file there; the host's files read back as written.
+
+[x86_64-fat-volume]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.read"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
+
+# And writing through it: a new file over a hole and across two of the
+# cache manager's views, rewritten in part, cut short and flushed; a
+# file renamed and one deleted. The host checks the image afterwards.
+
+[x86_64-fat-write]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.write"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-written"
+
+# The same writes on the disk with a GUID partition table.
+
+[x86_64-fat-write-gpt]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.write"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-gpt"
+disk_expect = "fat-written"
+
+# A file written and closed without a flush: only the lazy writer, or
+# the cache manager's flush at shutdown, writes it to the disk.
+
+[x86_64-fat-lazy]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.lazy"
+registry = ["storage", "volumes", "mount", "fat"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-lazy"
+
+# fastfat.sys started with pcw.sys, cng.sys and ksecdd.sys, as on
+# Windows: its reinitialisation routine runs EFS initialisation and
+# creates \EFSInitEvent, and C: mounts and reads cleanly.
+
+[x86_64-fat-efs]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=fat.efs"
+registry = ["storage", "volumes", "mount", "fat", "crypto"]
+disk = "ahci"
+disk_image = "fat32-mbr"
+disk_expect = "fat-unchanged"
+
+# Microsoft's kernel cryptography and security drivers start as boot
+# drivers, as on Windows: pcw.sys, cng.sys, then ksecdd.sys, which
+# opens \Device\CNG and registers performance counters with pcw.sys.
+
+[x86_64-crypto-boot]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/registry-crypto.txt"]
+cmdline = "test=crypto.boot"
+registry = ["crypto"]

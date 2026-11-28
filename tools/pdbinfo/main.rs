@@ -14,6 +14,12 @@
 //! bits _KTHREAD Alertable 116 4 1      (offset, first bit, bit count)
 //! ```
 //!
+//! A name that is an enumeration prints its values instead:
+//!
+//! ```text
+//! enum _POOL_TYPE NonPagedPool 0
+//! ```
+//!
 //! It goes through `nk-pdb`, so NK has one reading of the format.
 
 use nk_pdb::Pdb;
@@ -44,6 +50,12 @@ fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     for name in types {
+        if let Ok(values) = all.enumerators(name) {
+            for (value_name, value) in values {
+                println!("enum {name} {value_name} {value}");
+            }
+            continue;
+        }
         let layout = all
             .layout(name)
             .map_err(|e| format!("{path}: {name}: {e:?}"))?;

@@ -18,12 +18,16 @@ pub mod convert;
 pub mod counted;
 pub mod crt;
 pub mod dbgfilter;
+pub mod doserror;
+pub mod fatname;
 pub mod format;
+pub mod gen83;
 pub mod legal;
 pub mod once;
 pub mod prefix;
 pub mod range;
 pub mod resource;
+pub mod splay;
 pub mod string;
 pub mod upcase;
 pub mod wildcard;
@@ -99,6 +103,16 @@ impl Text for [u16] {
     }
     fn unit(&self, at: usize) -> u16 {
         self[at]
+    }
+}
+
+/// A byte string, a single-byte page's: each byte is a unit.
+impl Text for [u8] {
+    fn length(&self) -> usize {
+        self.len()
+    }
+    fn unit(&self, at: usize) -> u16 {
+        u16::from(self[at])
     }
 }
 

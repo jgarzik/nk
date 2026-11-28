@@ -61,3 +61,61 @@ pub unsafe fn enter(root: u64, entry: u64, stack: u64, info: u64) -> ! {
         )
     }
 }
+
+/// The cycle counter (`RDTSC`), as winload reads its performance counter.
+pub fn cycles() -> u64 {
+    // SAFETY: RDTSC only reads a counter, which firmware leaves readable.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+/// How many times an instruction that draws a random word is tried
+/// before the generator is taken to be broken: SymCrypt's counts, which
+/// winload uses.
+const RDSEED_TRIES: u32 = 10_000_000;
+const RDRAND_TRIES: u32 = 1_000_000;
+
+/// Draw one word by `RDSEED` (`seed`) or `RDRAND`, trying `tries` times.
+fn draw_word(seed: bool, tries: u32) -> Option<u64> {
+    for _ in 0..tries {
+        let (word, ok): (u64, u8);
+        // SAFETY: the caller checked CPUID for the instruction; it writes
+        // one register and the carry flag.
+        unsafe {
+            if seed {
+                core::arch::asm!("rdseed {w}", "setc {c}", w = out(reg) word, c = out(reg_byte) ok, options(nomem, nostack));
+            } else {
+                core::arch::asm!("rdrand {w}", "setc {c}", w = out(reg) word, c = out(reg_byte) ok, options(nomem, nostack));
+            }
+        }
+        if ok != 0 {
+            return Some(word);
+        }
+    }
+    None
+}
+
+/// Fill `seed` by `RDSEED` or, without it, `rdrand` by `RDRAND`, as
+/// winload draws the processor's entropy, and give the bytes drawn;
+/// `Ok(None)` without either instruction. A generator that never
+/// answers is an error: winload stops the boot then (`SymCryptFatal`).
+pub fn draw_random<'a>(
+    seed: &'a mut [u8],
+    rdrand: &'a mut [u8],
+) -> Result<Option<&'a [u8]>, &'static str> {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+    let has_rdrand = __cpuid(1).ecx & (1 << 30) != 0;
+    let has_rdseed = __cpuid(0).eax >= 7 && __cpuid_count(7, 0).ebx & (1 << 18) != 0;
+    let (out, use_seed, tries) = if has_rdseed {
+        (seed, true, RDSEED_TRIES)
+    } else if has_rdrand {
+        (rdrand, false, RDRAND_TRIES)
+    } else {
+        return Ok(None);
+    };
+    for chunk in out.chunks_mut(8) {
+        let word = draw_word(use_seed, tries)
+            .ok_or("the processor's random number generator does not answer")?;
+        chunk.copy_from_slice(&word.to_le_bytes()[..chunk.len()]);
+    }
+    Ok(Some(out))
+}

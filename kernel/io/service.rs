@@ -158,6 +158,13 @@ pub fn running(name: &str) -> bool {
 /// Start the driver of the service `name`: find its image ([`image`]),
 /// load it and run its entry point.
 pub fn start(name: &str) -> Result<*mut DRIVER_OBJECT, ServiceError> {
+    start_as(name, false)
+}
+
+/// As [`start`], for a driver that starts with the boot drivers when
+/// `boot`: one whose image a boot driver started before has loaded as a
+/// library is started from that image (`ldr::load_boot`).
+fn start_as(name: &str, boot: bool) -> Result<*mut DRIVER_OBJECT, ServiceError> {
     let file = image(name)?;
     if driver::running(name).is_some() {
         return Err(ServiceError::Running);
@@ -165,7 +172,7 @@ pub fn start(name: &str) -> Result<*mut DRIVER_OBJECT, ServiceError> {
     let Some(image) = ldr::boot_file(&file) else {
         return Err(ServiceError::NoImage(file));
     };
-    driver::load(name, &file, image).map_err(ServiceError::Driver)
+    driver::load(name, &file, image, boot).map_err(ServiceError::Driver)
 }
 
 /// `SERVICE_ERROR_CRITICAL`: a boot without this driver has failed.
@@ -185,7 +192,7 @@ const ERROR_CRITICAL: u32 = 3;
 /// set to run.)
 pub fn start_boot_services() -> Result<(), &'static str> {
     for (name, error_control) in cm::boot_start()? {
-        match start(&name) {
+        match start_as(&name, true) {
             Ok(_) => {
                 kprintln!("io: boot-start service {name} started");
                 // The devices this driver serves are started, and what
@@ -214,6 +221,9 @@ pub fn start_boot_services() -> Result<(), &'static str> {
     // other reinitialisation routines.
     STARTED.store(true, core::sync::atomic::Ordering::Release);
     driver::reinitialize_drivers();
+    // Nothing started from here on may have the loader's entropy: Windows
+    // wipes it at this point if no driver asked for it.
+    crate::ex::entropy::wipe();
     Ok(())
 }
 

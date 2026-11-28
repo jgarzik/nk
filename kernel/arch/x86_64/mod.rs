@@ -26,7 +26,8 @@ pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 
 pub use apic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
-    init as interrupts_init, interrupt_enable, interrupts_off, interrupts_restore, self_interrupt,
+    init as interrupts_init, interrupt_enable, interrupts_enabled, interrupts_off,
+    interrupts_restore, self_interrupt,
 };
 
 pub use cpu::{
@@ -130,6 +131,10 @@ pub fn cpu_start(number: usize, stack_top: u64) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// `(vector, IRQL)` of the interrupt that runs a thread's kernel APCs:
+/// APC_LEVEL, on the vector Windows uses.
+pub const APC: (u32, u8) = (0x1F, 1);
+
 /// `(vector, IRQL)` of the interrupt a processor sends itself to run its
 /// deferred procedure calls: DISPATCH_LEVEL.
 pub const DPC: (u32, u8) = (0x2F, 2);
@@ -204,6 +209,22 @@ pub fn pt_root() -> u64 {
 /// each has to be asked.
 pub fn flush_tlb_page(va: u64) {
     crate::ke::ipi::call_all(flush_local, va as usize);
+}
+
+/// Drop any cached translation for the `pages` pages at `va`, on every
+/// processor, with one request to each.
+pub fn flush_tlb_range(va: u64, pages: usize) {
+    let range = [va, pages as u64];
+    crate::ke::ipi::call_all(flush_range_local, (&raw const range).addr());
+}
+
+fn flush_range_local(range: usize) {
+    // SAFETY: the caller's pair lives until every processor has
+    // answered (`ipi::call` waits).
+    let [va, pages] = unsafe { (range as *const [u64; 2]).read() };
+    for page in 0..pages {
+        flush_local((va + page * 4096) as usize);
+    }
 }
 
 fn flush_local(va: usize) {

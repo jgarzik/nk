@@ -23,7 +23,7 @@ use crate::ke::seh::{self, Guard};
 use crate::mm::pool;
 use nk_ex::lookaside::{self, Fields};
 use nk_ntabi::ex::{
-    ALLOCATE_FUNCTION, FREE_FUNCTION, GENERAL_LOOKASIDE, NPAGED_LOOKASIDE_LIST,
+    ALLOCATE_FUNCTION, FREE_FUNCTION, GENERAL_LOOKASIDE, LOOKASIDE_LIST_EX, NPAGED_LOOKASIDE_LIST,
     PAGED_LOOKASIDE_LIST,
 };
 use nk_ntabi::ke::LIST_ENTRY;
@@ -157,6 +157,71 @@ pub unsafe extern "C" fn ExDeletePagedLookasideList(list: *mut PAGED_LOOKASIDE_L
 pub unsafe extern "C" fn ExDeleteNPagedLookasideList(list: *mut NPAGED_LOOKASIDE_LIST) {
     // SAFETY: per the contract.
     unsafe { delete(&raw mut (*list).L) }
+}
+
+/// [`ExInitializeLookasideListEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exinitializelookasidelistex):
+/// as the paged and non-paged forms, with the pool type given, flags
+/// that join it, an optional maximum depth, and routines that take the
+/// list too. Arguments are checked as the pinned kernel checks them
+/// (`nk_ex::lookaside::ex`): `STATUS_INVALID_PARAMETER_4`, `_5` or `_8`
+/// for the one that is wrong. The default routines are the pool's,
+/// which ignore the list.
+///
+/// # Safety
+/// As `ExInitializePagedLookasideList`; the routines, where given, take
+/// the arguments above.
+pub unsafe extern "C" fn ExInitializeLookasideListEx(
+    list: *mut LOOKASIDE_LIST_EX,
+    allocate: *const c_void,
+    free: *const c_void,
+    pool_type: u32,
+    flags: u32,
+    size: usize,
+    tag: u32,
+    depth: u16,
+) -> nk_ntabi::status::NTSTATUS {
+    use nk_ntabi::status::*;
+    let fields = match lookaside::ex(pool_type, flags, size, tag, depth) {
+        Ok(fields) => fields,
+        Err(lookaside::BadParameter(4)) => return STATUS_INVALID_PARAMETER_4,
+        Err(lookaside::BadParameter(5)) => return STATUS_INVALID_PARAMETER_5,
+        Err(_) => return STATUS_INVALID_PARAMETER_8,
+    };
+    // SAFETY: per the contract. The routines' slots hold the driver's
+    // routines, which take one argument more than the plain forms: the
+    // pool's ignore it, as Windows' do.
+    unsafe {
+        initialize(list, None, None, fields);
+        if !allocate.is_null() {
+            (&raw mut (*list).Allocate)
+                .cast::<*const c_void>()
+                .write(allocate);
+        }
+        if !free.is_null() {
+            (&raw mut (*list).Free).cast::<*const c_void>().write(free);
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// [`ExDeleteLookasideListEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-exdeletelookasidelistex):
+/// hand every block the list keeps to its `FreeEx` routine.
+///
+/// # Safety
+/// `list` was initialised by `ExInitializeLookasideListEx` and no thread
+/// uses it any more.
+pub unsafe extern "C" fn ExDeleteLookasideListEx(list: *mut LOOKASIDE_LIST_EX) {
+    // SAFETY: per the contract. As `delete`, with the list as the
+    // routine's second argument.
+    unsafe {
+        let free = (&raw const (*list).Free).cast::<usize>().read();
+        let mut entry = slist::ExpInterlockedFlushSList(&raw mut (*list).ListHead);
+        while !entry.is_null() {
+            let next = (&raw const (*entry).Next).read();
+            seh::call(free, [entry.addr(), list.addr(), 0, 0], &Guard::Nothing);
+            entry = next;
+        }
+    }
 }
 
 // ---- tests --------------------------------------------------------------

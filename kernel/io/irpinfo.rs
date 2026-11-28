@@ -44,6 +44,95 @@ pub unsafe extern "C" fn IoGetPagingIoPriority(irp: *mut IRP) -> u32 {
     paging_io_priority(unsafe { (&raw const (*irp).Flags).read() })
 }
 
+/// [`IoRetrievePriorityInfo`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioretrievepriorityinfo):
+/// the priorities a file system should give a request, as the pinned
+/// kernel decides them: the I/O priority from the request's flags if it
+/// carries one, else from the thread (normal at least for a thread whose
+/// priority was boosted), the thread's base priority and its page
+/// priority; with no thread, normal I/O priority and the other two -1.
+/// A process in background mode caps both at low.
+///
+/// Partial: a file object's own priority (in its extension) and a
+/// thread in a scheduling group were not read, and NK makes neither;
+/// meeting one stops the system by name.
+///
+/// # Safety
+/// `irp` and `file` are null or live; `thread` is null or a thread
+/// object; `info` is a writable `IO_PRIORITY_INFO`.
+pub unsafe extern "C" fn IoRetrievePriorityInfo(
+    irp: *mut IRP,
+    file: *mut FILE_OBJECT,
+    thread: *mut c_void,
+    info: *mut u32,
+) -> NTSTATUS {
+    use nk_ntabi::process::{BACKGROUND, FLAGS};
+    use nk_ntabi::thread::{
+        BASE_PRIORITY, CROSS_THREAD_FLAGS, PRIORITY, PROCESS, SCHEDULING_GROUP,
+        THREAD_IO_PRIORITY_SHIFT, THREAD_PAGE_PRIORITY_SHIFT,
+    };
+    /// `IRP_IO_PRIORITY_MASK` in an IRP's flags.
+    const IRP_PRIORITY: u32 = 0xE_0000;
+    const NORMAL: u32 = 2;
+    // SAFETY: per the contract; the thread and its process are read
+    // field by field, the info written field by field.
+    unsafe {
+        info.add(3).write_unaligned(NORMAL);
+        let thread = thread.cast::<u8>();
+        let background = || {
+            let process = thread.add(PROCESS).cast::<*const u8>().read();
+            process.add(FLAGS).cast::<u32>().read() & BACKGROUND != 0
+        };
+        let flags = || thread.add(CROSS_THREAD_FLAGS).cast::<u32>().read();
+        let io = if !irp.is_null() && (&raw const (*irp).Flags).read() & IRP_PRIORITY != 0 {
+            IoGetIoPriorityHint(irp)
+        } else if !file.is_null() && !(&raw const (*file).FileObjectExtension).read().is_null() {
+            crate::kd::bugcheck(format_args!(
+                "IoRetrievePriorityInfo: NK does not implement a file object's own priority"
+            ));
+        } else if thread.is_null() {
+            NORMAL
+        } else {
+            let mut io = if background() {
+                0
+            } else {
+                flags() >> THREAD_IO_PRIORITY_SHIFT & 7
+            };
+            if io < NORMAL
+                && thread == crate::ps::KeGetCurrentThread().cast()
+                && thread.add(IO_BOOST_COUNT).cast::<u32>().read() != 0
+            {
+                io = NORMAL;
+            }
+            io
+        };
+        if thread.is_null() {
+            info.add(1).write_unaligned(u32::MAX);
+            info.add(2).write_unaligned(u32::MAX);
+            return STATUS_SUCCESS;
+        }
+        info.add(3).write_unaligned(io);
+        if thread.add(PRIORITY).cast::<i8>().read() < 16
+            && !thread
+                .add(SCHEDULING_GROUP)
+                .cast::<*const u8>()
+                .read()
+                .is_null()
+        {
+            crate::kd::bugcheck(format_args!(
+                "IoRetrievePriorityInfo: NK does not implement threads in scheduling groups"
+            ));
+        }
+        info.add(1)
+            .write_unaligned(i32::from(thread.add(BASE_PRIORITY).cast::<i8>().read()) as u32);
+        let mut page = flags() >> THREAD_PAGE_PRIORITY_SHIFT & 7;
+        if background() {
+            page = page.min(NORMAL);
+        }
+        info.add(2).write_unaligned(page);
+    }
+    STATUS_SUCCESS
+}
+
 /// [`IoGetRequestorProcessId`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iogetrequestorprocessid):
 /// the id of the process [`irp::IoGetRequestorProcess`] names; zero
 /// for a request no thread made.

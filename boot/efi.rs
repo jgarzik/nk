@@ -42,6 +42,27 @@ const FILE_INFO: Guid = Guid(
     0x11D2,
     [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
 );
+/// `EFI_RNG_PROTOCOL_GUID`.
+const RNG: Guid = Guid(
+    0x3152BCA5,
+    0xEADE,
+    0x433D,
+    [0x86, 0x2E, 0xC0, 0x1C, 0xDC, 0x29, 0x1F, 0x44],
+);
+/// `EFI_TCG2_PROTOCOL_GUID` and `EFI_TCG_PROTOCOL_GUID`: a TPM 2.0 and
+/// a TPM 1.2, as firmware offers them.
+pub const TCG2: Guid = Guid(
+    0x607F766C,
+    0x7455,
+    0x42BE,
+    [0x93, 0x0B, 0xE4, 0xD7, 0x6D, 0xB2, 0x72, 0x0F],
+);
+pub const TCG: Guid = Guid(
+    0xF541796D,
+    0xA62E,
+    0x4954,
+    [0xA7, 0x75, 0x95, 0x84, 0xF6, 0x1B, 0x9C, 0xDD],
+);
 const ACPI_20_TABLE: Guid = Guid(
     0x8868E871,
     0xE4F1,
@@ -95,13 +116,28 @@ struct BootServices {
     free_pages: usize,
     get_memory_map:
         unsafe extern "efiapi" fn(*mut usize, *mut u8, *mut usize, *mut usize, *mut u32) -> Status,
-    pool: [usize; 2],
+    allocate_pool: unsafe extern "efiapi" fn(u32, usize, *mut *mut u8) -> Status,
+    free_pool: unsafe extern "efiapi" fn(*mut u8) -> Status,
     events: [usize; 6],
     protocol_install: [usize; 3],
     handle_protocol: unsafe extern "efiapi" fn(Handle, *const Guid, *mut *mut c_void) -> Status,
     protocol_misc: [usize; 5],
     image: [usize; 4],
     exit_boot_services: unsafe extern "efiapi" fn(Handle, usize) -> Status,
+    get_next_monotonic_count: usize,
+    stall: unsafe extern "efiapi" fn(usize) -> Status,
+    watchdog_and_drivers: [usize; 3],
+    open_protocols: [usize; 3],
+    handle_lists: [usize; 2],
+    locate_protocol:
+        unsafe extern "efiapi" fn(*const Guid, *mut c_void, *mut *mut c_void) -> Status,
+}
+
+/// `EFI_RNG_PROTOCOL`.
+#[repr(C)]
+struct RngProto {
+    get_info: usize,
+    get_rng: unsafe extern "efiapi" fn(*mut RngProto, *const Guid, usize, *mut u8) -> Status,
 }
 
 #[repr(C)]
@@ -196,6 +232,12 @@ struct Time {
 /// it has one. Taken as UTC, which is what firmware clocks under QEMU
 /// keep and what Windows expects of a UEFI machine's clock.
 pub fn time() -> Option<[u32; 6]> {
+    clock().map(|(fields, _, _)| fields.map(u32::from))
+}
+
+/// The firmware clock as `(year, month, day, hour, minute, second)`,
+/// its nanoseconds and its time zone in minutes, if it has one.
+pub fn clock() -> Option<([u16; 6], u32, i16)> {
     type GetTime = unsafe extern "efiapi" fn(*mut Time, *mut c_void) -> Status;
     let mut t = Time::default();
     // SAFETY: GetTime is the first runtime service after the table
@@ -206,16 +248,60 @@ pub fn time() -> Option<[u32; 6]> {
         get(&raw mut t, core::ptr::null_mut())
     };
     (status == SUCCESS).then(|| {
-        [
-            t.year,
-            t.month.into(),
-            t.day.into(),
-            t.hour.into(),
-            t.minute.into(),
-            t.second.into(),
-        ]
-        .map(u32::from)
+        (
+            [
+                t.year,
+                t.month.into(),
+                t.day.into(),
+                t.hour.into(),
+                t.minute.into(),
+                t.second.into(),
+            ],
+            t.nanosecond,
+            t.time_zone,
+        )
     })
+}
+
+/// Wait `microseconds`.
+pub fn stall(microseconds: usize) {
+    // SAFETY: Stall takes a count and nothing else.
+    unsafe { (bs().stall)(microseconds) };
+}
+
+/// Whether firmware offers the protocol `guid`.
+pub fn has_protocol(guid: &Guid) -> bool {
+    let mut interface: *mut c_void = core::ptr::null_mut();
+    // SAFETY: LocateProtocol writes one interface pointer.
+    unsafe { (bs().locate_protocol)(guid, core::ptr::null_mut(), &raw mut interface) == SUCCESS }
+}
+
+/// What firmware's random number generator did.
+pub enum Rng {
+    /// There is none: the status of looking for it.
+    Absent(Status),
+    /// It failed with this status.
+    Failed(Status),
+    Filled,
+}
+
+/// Fill `out` from firmware's `EFI_RNG_PROTOCOL`, with its default
+/// algorithm.
+pub fn rng(out: &mut [u8]) -> Rng {
+    let mut interface: *mut c_void = core::ptr::null_mut();
+    // SAFETY: LocateProtocol writes one interface pointer; GetRNG fills
+    // `out.len()` bytes of `out`, and a null algorithm is its default.
+    unsafe {
+        let s = (bs().locate_protocol)(&RNG, core::ptr::null_mut(), &raw mut interface);
+        if s != SUCCESS {
+            return Rng::Absent(s);
+        }
+        let rng = interface.cast::<RngProto>();
+        match ((*rng).get_rng)(rng, core::ptr::null(), out.len(), out.as_mut_ptr()) {
+            SUCCESS => Rng::Filled,
+            s => Rng::Failed(s),
+        }
+    }
 }
 
 /// Power the machine off. Works before and after `ExitBootServices`.
@@ -284,6 +370,36 @@ pub fn alloc_pages(pages: usize) -> Option<u64> {
     // SAFETY: firmware just gave us `pages` pages at `addr`, identity mapped.
     unsafe { core::ptr::write_bytes(addr as *mut u8, 0, pages * 4096) };
     Some(addr)
+}
+
+/// Pool memory from firmware, for the library code nkload shares with
+/// the kernel (the registry reader) that is built against `alloc`.
+/// Usable only while boot services are, as everything in nkload is.
+/// Firmware's pool is 8-byte aligned; a stricter alignment is refused.
+pub struct Pool;
+
+/// The alignment `AllocatePool` gives.
+const POOL_ALIGN: usize = 8;
+
+// SAFETY: AllocatePool returns fresh memory of the size asked for, at the
+// alignment `alloc` checks for, and FreePool takes it back.
+unsafe impl core::alloc::GlobalAlloc for Pool {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        if layout.align() > POOL_ALIGN {
+            return core::ptr::null_mut();
+        }
+        let mut block = core::ptr::null_mut();
+        // SAFETY: AllocatePool writes one pointer through the out pointer.
+        match unsafe { (bs().allocate_pool)(LOADER_DATA, layout.size(), &raw mut block) } {
+            SUCCESS => block,
+            _ => core::ptr::null_mut(),
+        }
+    }
+
+    unsafe fn dealloc(&self, block: *mut u8, _layout: core::alloc::Layout) {
+        // SAFETY: `block` came from `alloc`, per GlobalAlloc's contract.
+        unsafe { (bs().free_pool)(block) };
+    }
 }
 
 /// A byte slice over memory from `alloc_pages`, which is never freed.

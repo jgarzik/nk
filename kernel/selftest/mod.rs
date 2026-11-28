@@ -7,6 +7,7 @@
 
 mod absent;
 mod ahcibus;
+mod apc;
 mod base;
 mod bitmap;
 mod callback;
@@ -15,6 +16,7 @@ mod clock;
 mod cm;
 mod cmnotify;
 mod counted;
+mod crypto;
 mod csq;
 mod diskio;
 mod dma;
@@ -25,6 +27,8 @@ mod etw;
 mod ex;
 pub mod except;
 mod exlock;
+mod expand;
+mod fat;
 mod fsd;
 mod hal;
 mod interrupt;
@@ -36,6 +40,10 @@ mod mmio;
 mod mslib;
 mod mutex;
 mod neg;
+mod nkfs;
+mod nkfs_cc;
+mod nkfs_mm;
+mod nkfs_mount;
 mod null;
 mod ob;
 mod open;
@@ -173,7 +181,9 @@ pub static GROUPS: &[&[&Group]] = &[
     thread::GROUPS,
     seh::GROUPS,
     except::GROUPS,
+    expand::GROUPS,
     wait::GROUPS,
+    apc::GROUPS,
     ob::GROUPS,
     rtl::GROUPS,
     bitmap::GROUPS,
@@ -208,6 +218,10 @@ pub static GROUPS: &[&[&Group]] = &[
     startio::GROUPS,
     diskio::GROUPS,
     rawfs::GROUPS,
+    nkfs_mount::GROUPS,
+    fat::GROUPS,
+    nkfs_mm::GROUPS,
+    nkfs_cc::GROUPS,
     service::GROUPS,
     driver_api::GROUPS,
     etw::GROUPS,
@@ -223,6 +237,7 @@ pub static GROUPS: &[&[&Group]] = &[
     storage::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
+    crypto::GROUPS,
 ];
 
 /// Everything the kernel owns that a test or a driver can leak. Compared
@@ -262,11 +277,26 @@ pub fn resources() -> Resources {
     let (whea_blocks, whea_bytes) = crate::whea::storage();
     // The HAL keeps the list of firmware tables it once made.
     let (hal_blocks, hal_bytes) = crate::hal::acpi::storage();
+    // Executive worker threads come and go as work waits for them.
+    let (worker_blocks, worker_bytes, worker_frames) = crate::ke::thread::uncounted_storage();
     Resources {
-        pool_blocks: pool.blocks - table_blocks - registry_blocks - whea_blocks - hal_blocks,
-        pool_bytes: pool.bytes - table_bytes - registry_bytes - whea_bytes - hal_bytes,
+        pool_blocks: pool.blocks
+            - table_blocks
+            - registry_blocks
+            - whea_blocks
+            - hal_blocks
+            - worker_blocks,
+        pool_bytes: pool.bytes
+            - table_bytes
+            - registry_bytes
+            - whea_bytes
+            - hal_bytes
+            - worker_bytes,
         irql: crate::ke::irql::current(),
-        spare_frames: mm::free_frame_count() + mm::pool::frames() + mm::map::table_frames(),
+        spare_frames: mm::free_frame_count()
+            + mm::pool::frames()
+            + mm::map::table_frames()
+            + worker_frames,
         names: crate::ob::count(),
         threads: crate::ke::thread::count(),
         handles: crate::ob::handle::count(),

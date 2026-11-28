@@ -122,8 +122,15 @@ pub fn init(info: &BootInfo) -> Result<(), &'static str> {
 
     let frame = mm::alloc_frames(1).ok_or("no memory for the shared data page")?;
     mm::map::map(SHARED_DATA, frame, 1, Prot::RW).map_err(|_| "cannot map the shared data page")?;
-    // SAFETY: the page was just mapped and zeroed; the field is aligned.
+    // SAFETY: the page was just mapped and zeroed; the fields are aligned.
     unsafe {
+        // The processor state NK saves for a thread is the legacy x87
+        // and SSE state, and no more: that is what the page says code
+        // may use (`RtlGetEnabledExtendedFeatures`).
+        (SHARED_DATA as *mut u8)
+            .add(nk_ntabi::ke::SHARED_XSTATE_ENABLED)
+            .cast::<u64>()
+            .write_volatile(nk_ntabi::ke::XSTATE_MASK_LEGACY);
         (SHARED_DATA as *mut u8)
             .add(SHARED_TICK_MULTIPLIER)
             .cast::<u32>()
@@ -323,4 +330,24 @@ pub fn host_mark_test() -> Result<u64, &'static str> {
     stall(2_000_000);
     kprintln!("NK-CLOCK-MARK end");
     Ok(2)
+}
+
+/// [`RtlGetEnabledExtendedFeatures`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-rtlgetenabledextendedfeatures):
+/// the components of `mask` the shared data page says are enabled, user
+/// and supervisor, as Windows' routine reads them there.
+#[allow(non_snake_case)]
+pub extern "C" fn RtlGetEnabledExtendedFeatures(mask: u64) -> u64 {
+    // SAFETY: the shared data page is mapped from boot on; aligned fields.
+    unsafe {
+        let page = SHARED_DATA as *const u8;
+        let user = page
+            .add(nk_ntabi::ke::SHARED_XSTATE_ENABLED)
+            .cast::<u64>()
+            .read_volatile();
+        let supervisor = page
+            .add(nk_ntabi::ke::SHARED_XSTATE_SUPERVISOR)
+            .cast::<u64>()
+            .read_volatile();
+        (user | supervisor) & mask
+    }
 }

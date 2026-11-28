@@ -345,6 +345,8 @@ const FLAG_IF: u64 = 0x200;
 /// Page-fault error code: the access was a write; an instruction fetch.
 const PF_WRITE: u64 = 2;
 const PF_FETCH: u64 = 0x10;
+/// The faulting access was made in user mode.
+const PF_USER: u64 = 4;
 
 /// The interrupted code as a `CONTEXT`. XMM6-XMM15 are read from the
 /// processor: nothing between the interrupted code and here has touched
@@ -416,7 +418,7 @@ fn deliver(frame: &mut Frame, code: u32, parameters: &[u64]) {
 extern "C" fn trap_handler(frame: &mut Frame) {
     use crate::ke::seh::{
         ACCESS_EXECUTE, ACCESS_READ, ACCESS_WRITE, STATUS_ACCESS_VIOLATION, STATUS_BREAKPOINT,
-        STATUS_ILLEGAL_INSTRUCTION, STATUS_INTEGER_DIVIDE_BY_ZERO,
+        STATUS_ILLEGAL_INSTRUCTION, STATUS_IN_PAGE_ERROR, STATUS_INTEGER_DIVIDE_BY_ZERO,
     };
     /// What the overflow trap, which only x86-64 has, is delivered as.
     const STATUS_INTEGER_OVERFLOW: u32 = 0xC000_0095;
@@ -441,7 +443,10 @@ extern "C" fn trap_handler(frame: &mut Frame) {
         // Another processor is stopping the system and said so.
         super::halt();
     }
-    if vector >= 32 && vector != FAST_FAIL {
+    // The APC interrupt's vector is below 32, in the range of the
+    // processor's own exceptions, as on Windows: its IRQL is its upper
+    // four bits, 1. No exception uses it.
+    if (vector >= 32 && vector != FAST_FAIL) || vector == u64::from(super::APC.0) {
         return super::apic::interrupt(vector as u32);
     }
     let cr2: u64;
@@ -476,12 +481,33 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     } else {
         (u64::MAX, ACCESS_READ, None)
     };
+    // A page of a file the memory manager can bring in.
+    let mut in_page = None;
+    if vector == PAGE_FAULT && !overflow {
+        match crate::mm::fault::page_fault(
+            cr2,
+            access,
+            frame.error & PF_USER != 0,
+            frame.rflags & FLAG_IF != 0,
+        ) {
+            Some(Ok(())) => return,
+            Some(Err(status)) => in_page = Some(status),
+            None => {}
+        }
+    }
     if memory {
         // The kernel's own access to memory that may not be there: the
         // routine returns an error instead.
         if let Some(resume) = seh::fixup(frame.rip) {
             (frame.rip, frame.rax, frame.rdx) = (resume, address, access);
             return;
+        }
+        if let Some(status) = in_page {
+            return deliver(
+                frame,
+                STATUS_IN_PAGE_ERROR,
+                &[access, address, u64::from(status as u32)],
+            );
         }
         if stop.is_none() {
             return deliver(frame, STATUS_ACCESS_VIOLATION, &[access, address]);

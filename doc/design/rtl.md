@@ -18,6 +18,21 @@ pool and are freed by `RtlFreeUnicodeString` or `RtlFreeAnsiString`.
   Windows' table (a fullwidth or accented letter to its plain form),
   recorded from Windows 10 like the upper-case table, and `?` where
   that has none.
+- **The OEM code page is 437**, the same installation's
+  (`nk_rtl::codepage::OEM_437`, from the Unicode Consortium's table),
+  in which FAT keeps short names. Every byte maps both ways. Windows
+  best-fits some characters 437 lacks; NK has no record of those, so
+  each becomes `?`, and a conversion to a counted OEM string reports
+  `STATUS_UNMAPPABLE_CHARACTER` for it, as Windows does for a character
+  with no best fit. The variables file systems read say 437 has no
+  double-byte characters (`kernel/rtl/nls.rs`).
+- **Short names** (`RtlGenerate8dot3Name`, `nk_rtl::gen83`) are
+  Windows' to the character, read from the pinned kernel: the base,
+  the numbering, the checksum (`RtlComputeLfnChecksum`) and when it is
+  used, and the end of the numbers. Whether an extension of more than
+  three characters ends in `~` comes from the registry's
+  `Control\FileSystem\Win95TruncatedExtensions`, read at boot as
+  Windows reads it (`fsrtl::init`).
 - **Upper case** is one table, `nk_rtl::upcase`: Windows' own, every
   unit as `RtlUpcaseUnicodeChar` answers on Windows 10, recorded there
   by the conformance driver `nkc-rtl`. It is older than the Unicode
@@ -70,6 +85,17 @@ allocates, so none can fail for want of memory. Which rotations balance
 a tree is NK's choice: a name found without regard to case is splayed
 to its tree's root. The caller serialises the calls on one table, as on
 Windows. `RtlNextUnicodePrefix` is not exported.
+
+### Splay trees
+
+`RtlSplay` and `RtlDelete` work on a tree of the caller's
+`RTL_SPLAY_LINKS` (a file system's tree of names), which the caller
+builds and searches itself with the header's macros. The algorithm is
+`nk_rtl::splay`, written against a store of links like the prefix
+table's and tested on the host. Which rotations a splay makes, and
+which node a node with two children trades places with before it is
+deleted (the one before it in order), are NK's choice: only the order
+and the root returned are a caller's concern.
 
 ### The AVL table
 
@@ -129,3 +155,17 @@ its flags, a copy of the entry raises the count, an entry freed
 lowers it and frees the block at zero, as the pinned kernel does. An
 alignment of zero is refused by `RtlFindRange`; Windows divides by it.
 The caller serialises the calls on one list.
+
+### Status codes and persisted state
+
+`RtlNtStatusToDosError` and its `NoTeb` form give the Windows error
+code of a status code by the pinned kernel's rules and its own table
+(`nk_rtl::doserror`; `lib/rtl/doserror_table.rs` is written from the
+pinned `ntoskrnl.exe` by `tools/doserror.py`). NK's threads have no
+TEB, so the first keeps no last status, as for Windows' system threads.
+
+`RtlGetPersistedStateLocation` (`kernel/rtl/persist.rs`) follows the
+state-separation redirection maps under
+`Control\StateSeparation\RedirectionMap` when the registry has them,
+and gives the caller's default path when it has not, as Windows does;
+once a map is found absent it is not looked for again.

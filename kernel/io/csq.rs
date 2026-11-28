@@ -1,5 +1,5 @@
-//! Cancel-safe queues: `IoCsqInitialize`, `IoCsqInsertIrp`,
-//! `IoCsqRemoveNextIrp`.
+//! Cancel-safe queues: `IoCsqInitialize` and its `Ex` form,
+//! `IoCsqInsertIrp` and its `Ex` form, `IoCsqRemoveNextIrp`.
 //!
 //! A driver that holds requests must let each be cancelled, and the
 //! race between cancelling one and taking it off the queue is easy to
@@ -65,7 +65,38 @@ pub unsafe extern "C" fn IoCsqInitialize(
     unsafe {
         csq.write_unaligned(IO_CSQ {
             Type: IO_TYPE_CSQ,
-            CsqInsertIrp: Some(insert),
+            CsqInsertIrp: insert as *mut c_void,
+            CsqRemoveIrp: Some(remove),
+            CsqPeekNextIrp: Some(peek),
+            CsqAcquireLock: Some(acquire),
+            CsqReleaseLock: Some(release),
+            CsqCompleteCanceledIrp: Some(complete),
+            ReservePointer: core::ptr::null_mut(),
+        });
+    }
+    STATUS_SUCCESS
+}
+
+/// [`IoCsqInitializeEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocsqinitializeex):
+/// as `IoCsqInitialize`, with an insert routine that may refuse the
+/// request (`IoCsqInsertIrpEx`).
+///
+/// # Safety
+/// `csq` is writable for an `IO_CSQ`.
+pub unsafe extern "C" fn IoCsqInitializeEx(
+    csq: *mut IO_CSQ,
+    insert: CSQ_INSERT_EX,
+    remove: CSQ_REMOVE,
+    peek: CSQ_PEEK,
+    acquire: CSQ_ACQUIRE,
+    release: CSQ_RELEASE,
+    complete: CSQ_COMPLETE,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
+    unsafe {
+        csq.write_unaligned(IO_CSQ {
+            Type: IO_TYPE_CSQ_EX,
+            CsqInsertIrp: insert as *mut c_void,
             CsqRemoveIrp: Some(remove),
             CsqPeekNextIrp: Some(peek),
             CsqAcquireLock: Some(acquire),
@@ -79,7 +110,9 @@ pub unsafe extern "C" fn IoCsqInitialize(
 
 /// The queue's callbacks, read out of the driver's structure.
 struct Callbacks {
-    insert: CSQ_INSERT,
+    /// The insert routine, which returns a status if `ex`.
+    insert: usize,
+    ex: bool,
     remove: CSQ_REMOVE,
     peek: CSQ_PEEK,
     acquire: CSQ_ACQUIRE,
@@ -99,11 +132,20 @@ impl Callbacks {
         unsafe { seh::call(routine, args, &Guard::Nothing) }
     }
 
+    /// The driver's `CsqInsertIrp`, or its `Ex` form with `context`:
+    /// what the latter returned, success for the former.
+    ///
     /// # Safety
-    /// As the driver's `CsqInsertIrp`.
-    unsafe fn insert(&self, csq: *mut IO_CSQ, irp: *mut IRP) {
+    /// As the driver's routine.
+    unsafe fn insert(&self, csq: *mut IO_CSQ, irp: *mut IRP, context: *mut c_void) -> NTSTATUS {
         // SAFETY: per the contract.
-        unsafe { Self::call(self.insert as usize, [csq.addr(), irp.addr(), 0, 0]) };
+        let status =
+            unsafe { Self::call(self.insert, [csq.addr(), irp.addr(), context.addr(), 0]) };
+        if self.ex {
+            status as NTSTATUS
+        } else {
+            STATUS_SUCCESS
+        }
     }
 
     /// # Safety
@@ -153,8 +195,9 @@ impl Callbacks {
 unsafe fn callbacks(csq: *mut IO_CSQ) -> Callbacks {
     // SAFETY: per the contract.
     let queue = unsafe { csq.read_unaligned() };
-    let (Some(insert), Some(remove), Some(peek), Some(acquire), Some(release), Some(complete)) = (
-        queue.CsqInsertIrp,
+    let insert = queue.CsqInsertIrp.addr();
+    let (true, Some(remove), Some(peek), Some(acquire), Some(release), Some(complete)) = (
+        insert != 0,
         queue.CsqRemoveIrp,
         queue.CsqPeekNextIrp,
         queue.CsqAcquireLock,
@@ -167,6 +210,7 @@ unsafe fn callbacks(csq: *mut IO_CSQ) -> Callbacks {
     };
     Callbacks {
         insert,
+        ex: queue.Type == IO_TYPE_CSQ_EX,
         remove,
         peek,
         acquire,
@@ -217,6 +261,25 @@ pub unsafe extern "C" fn IoCsqInsertIrp(
     context: *mut IO_CSQ_IRP_CONTEXT,
 ) {
     // SAFETY: per the contract.
+    unsafe { IoCsqInsertIrpEx(csq, irp, context, core::ptr::null_mut()) };
+}
+
+/// [`IoCsqInsertIrpEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iocsqinsertirpex):
+/// as `IoCsqInsertIrp`, handing `insert_context` to an `Ex` queue's
+/// insert routine. If that routine fails, the request is not marked
+/// pending or made cancellable, and its status is returned; the
+/// request's mark of its queue is left as it is, as Windows leaves it.
+///
+/// # Safety
+/// As `IoCsqInsertIrp`; `insert_context` is what the queue's insert
+/// routine takes.
+pub unsafe extern "C" fn IoCsqInsertIrpEx(
+    csq: *mut IO_CSQ,
+    irp: *mut IRP,
+    context: *mut IO_CSQ_IRP_CONTEXT,
+    insert_context: *mut c_void,
+) -> NTSTATUS {
+    // SAFETY: per the contract.
     unsafe {
         let queue = callbacks(csq);
         if context.is_null() {
@@ -231,7 +294,11 @@ pub unsafe extern "C" fn IoCsqInsertIrp(
         }
         let mut irql = 0;
         queue.acquire(csq, &raw mut irql);
-        queue.insert(csq, irp);
+        let status = queue.insert(csq, irp, insert_context);
+        if status < 0 {
+            queue.release(csq, irql);
+            return status;
+        }
         // `IoMarkIrpPending`.
         (*(*irp).CurrentStackLocation).Control |= SL_PENDING_RETURNED;
         // Install the routine, then look at the cancel flag; the
@@ -257,6 +324,7 @@ pub unsafe extern "C" fn IoCsqInsertIrp(
         } else {
             queue.release(csq, irql);
         }
+        status
     }
 }
 

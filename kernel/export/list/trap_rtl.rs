@@ -9,7 +9,13 @@ use super::super::{Export, NT, State};
 
 trap_list!(
     RtlAddProcessTrustLabelAce,
+    RtlCompareUnicodeStrings,
     RtlCreateSystemVolumeInformationFolder,
+    RtlDowncaseUnicodeString,
+    RtlEqualString,
+    RtlMapSecurityErrorToNtStatus,
     RtlSetSaclSecurityDescriptor,
+    RtlUpperString,
+    RtlValidRelativeSecurityDescriptor,
     _purecall,
 );

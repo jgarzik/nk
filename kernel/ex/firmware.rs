@@ -1,5 +1,5 @@
-//! `ZwSetSystemInformation`: the one class a driver NK runs sets, the
-//! registration of a firmware table provider.
+//! `ZwSetSystemInformation`: the classes drivers NK runs set, the
+//! registration of a firmware table provider and of an entropy routine.
 
 #![allow(non_snake_case)]
 
@@ -9,6 +9,7 @@ use core::ffi::c_void;
 use nk_ex::firmware::{Changed, Provider, Providers};
 use nk_ntabi::status::*;
 use nk_ntabi::sysinfo::{
+    SYSTEM_ENTROPY_INTERRUPT_TIMING_INFORMATION_CLASS, SYSTEM_ENTROPY_TIMING_INFORMATION,
     SYSTEM_FIRMWARE_TABLE_HANDLER, SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS,
 };
 
@@ -26,6 +27,11 @@ static PROVIDERS: SpinLock<Providers> = SpinLock::new(Rank::FirmwareTables, Prov
 /// provider for a table yet: `ZwQuerySystemInformation` does not answer
 /// the class that would.
 ///
+/// `SystemEntropyInterruptTimingInformation` (0x83), from `cng.sys`,
+/// registers its routine for the times of interrupts
+/// (`ke::entropy::register`); a length other than the request's is
+/// `STATUS_INFO_LENGTH_MISMATCH`, as the pinned kernel answers.
+///
 /// Any other class stops the system naming it.
 ///
 /// # Safety
@@ -36,6 +42,27 @@ pub unsafe extern "C" fn ZwSetSystemInformation(
     information: *mut c_void,
     length: u32,
 ) -> NTSTATUS {
+    if class == SYSTEM_ENTROPY_INTERRUPT_TIMING_INFORMATION_CLASS {
+        if information.is_null()
+            || length as usize != size_of::<SYSTEM_ENTROPY_TIMING_INFORMATION>()
+        {
+            return STATUS_INFO_LENGTH_MISMATCH;
+        }
+        // SAFETY: per the contract: the caller's buffer, of the length.
+        let request = unsafe {
+            information
+                .cast::<SYSTEM_ENTROPY_TIMING_INFORMATION>()
+                .read_unaligned()
+        };
+        // SAFETY: per the contract, the driver's routines.
+        return unsafe {
+            crate::ke::entropy::register(
+                request.EntropyRoutine.addr(),
+                request.InitializationRoutine.addr(),
+                request.InitializationContext.addr(),
+            )
+        };
+    }
     if class != SYSTEM_REGISTER_FIRMWARE_TABLE_INFORMATION_HANDLER_CLASS {
         crate::kd::bugcheck(format_args!(
             "ZwSetSystemInformation: NK does not implement information class {class}"

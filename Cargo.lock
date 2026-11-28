@@ -9,6 +9,13 @@ version = "0.2.0"
 [[package]]
 name = "nk-bootinfo"
 version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
+
+[[package]]
+name = "nk-cc"
+version = "0.2.0"
 
 [[package]]
 name = "nk-cm"
@@ -39,11 +46,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-fsrtl"
+version = "0.2.0"
+dependencies = [
+ "nk-rtl",
+]
+
+[[package]]
 name = "nk-hal"
 version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-ntabi",
+]
+
+[[package]]
+name = "nk-io"
+version = "0.2.0"
+dependencies = [
+ "nk-fsrtl",
 ]
 
 [[package]]
@@ -103,6 +124,9 @@ version = "0.2.0"
 [[package]]
 name = "nk-rtl"
 version = "0.2.0"
+dependencies = [
+ "nk-ntabi",
+]
 
 [[package]]
 name = "nk-se"
@@ -135,11 +159,14 @@ version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
+ "nk-cc",
  "nk-cm",
  "nk-disk",
  "nk-etw",
  "nk-ex",
+ "nk-fsrtl",
  "nk-hal",
+ "nk-io",
  "nk-ke",
  "nk-mm",
  "nk-ntabi",
@@ -162,7 +189,9 @@ version = "0.2.0"
 dependencies = [
  "nk-acpi",
  "nk-bootinfo",
+ "nk-cm",
  "nk-mm",
+ "nk-ntabi",
  "nk-pe",
 ]
 

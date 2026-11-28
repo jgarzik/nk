@@ -29,9 +29,13 @@ pub enum Rank {
     Drivers = 10,
     /// The devices registered for a shutdown request (`io::shutdown`).
     Shutdown = 11,
+    /// The registered file systems (`io::fs`).
+    FileSystems = 12,
     /// The device tree and what drivers asked of the Plug and Play
     /// manager (`pnp`).
     DeviceTree = 20,
+    /// Making a type of object (`ob::object::MAKING`).
+    ObjectTypes = 21,
     /// Whether a volume parameter block is mounted, on what, and its
     /// reference count (`io::mount`).
     Vpb = 24,
@@ -52,6 +56,9 @@ pub enum Rank {
     /// The routines registered with the kernel debugger for power
     /// transitions (`kd::debugger`).
     KdPower = 31,
+    /// The process-creation notify routines drivers registered
+    /// (`ps::notify`).
+    ProcessNotify = 32,
     /// The registry (`cm`).
     Registry = 33,
     /// The watches on registry keys (`cm::notify`).
@@ -70,10 +77,19 @@ pub enum Rank {
     FirmwareVariables = 39,
     /// The executive pool (`mm::pool`).
     Pool = 40,
+    /// The cache manager's shared cache maps, their counts and lists
+    /// (`cc::MASTER`).
+    CcMaster = 41,
+    /// The cache manager's views (`cc::VACBS`).
+    CcVacbs = 42,
+    /// The cache manager's dirty-page counts, dirty marks, deferred
+    /// writes and work queue (`cc::DIRTY`).
+    CcDirty = 43,
     /// Kernel address space and page tables (`mm::map`).
     AddressSpace = 50,
-    /// The frame allocator (`mm`).
-    Frames = 60,
+    /// The page-frame-number database and the frame allocator
+    /// (`mm::pfn`).
+    Pfn = 60,
     /// The interprocessor call in progress (`ke::ipi`).
     Ipi = 200,
     /// A queue of work items (`ex::work`).
@@ -82,6 +98,8 @@ pub enum Rank {
     InterruptConnect = 212,
     /// A queue of threads waiting for push locks (`ex::pushlock`).
     PushLock = 215,
+    /// A thread's APC queues (`ke::apc`).
+    Apc = 216,
     /// What a boot's UUIDs share (`ex::uuid`).
     Uuid = 217,
     /// Which vector each device interrupt has, and the interrupt
@@ -254,6 +272,24 @@ impl<T> SpinLock<T> {
         arch::set_irql(irql::HIGH_LEVEL);
         self.lock.force();
         Forced(self)
+    }
+}
+
+impl SpinLock<()> {
+    /// Take a lock that guards no value of its own, for a pair of
+    /// exports that take it in one call and release it in another
+    /// (`IoAcquireVpbSpinLock`). Returns the IRQL to give back.
+    pub fn acquire_split(&self) -> u8 {
+        acquire(&self.lock, self.id(), self.rank)
+    }
+
+    /// Release a lock taken with [`acquire_split`](Self::acquire_split).
+    ///
+    /// # Safety
+    /// This processor holds the lock from `acquire_split`, which
+    /// returned `old_irql`.
+    pub unsafe fn release_split(&self, old_irql: u8) {
+        release(&self.lock, self.id(), old_irql);
     }
 }
 

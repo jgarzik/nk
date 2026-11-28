@@ -193,6 +193,7 @@ unsafe fn serve(interrupt: *mut KINTERRUPT) -> bool {
 /// The interrupt on `vector` arrived: call the service routines
 /// connected to it. Runs at the vector's IRQL.
 fn service(vector: u32) {
+    super::entropy::record();
     let chain = &CHAINS[vector as usize];
     let claimed = chain.walking(|first| {
         if first.is_null() {

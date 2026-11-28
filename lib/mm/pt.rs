@@ -59,6 +59,11 @@ pub trait Arch {
     fn is_leaf(&self, entry: u64, level: u8) -> bool;
     /// True if a leaf entry lets the kernel write what it maps.
     fn writable(&self, entry: u64) -> bool;
+    /// True if what a valid 4 KiB leaf entry maps may have been written
+    /// through it since the entry was made or last [`cleaned`](Self::clean).
+    fn dirty(&self, entry: u64) -> bool;
+    /// The entry with its record of writes cleared.
+    fn clean(&self, entry: u64) -> u64;
     /// Physical address held in a present entry.
     fn addr(&self, entry: u64) -> u64 {
         entry & 0x0000_FFFF_FFFF_F000
@@ -108,6 +113,15 @@ impl Arch for X86_64 {
 
     fn writable(&self, entry: u64) -> bool {
         entry & (1 << 1) != 0
+    }
+
+    /// The processor sets the dirty bit (6) on the first write.
+    fn dirty(&self, entry: u64) -> bool {
+        entry & (1 << 6) != 0
+    }
+
+    fn clean(&self, entry: u64) -> u64 {
+        entry & !(1 << 6)
     }
 }
 
@@ -195,6 +209,17 @@ impl Arch for Aarch64 {
     fn writable(&self, entry: u64) -> bool {
         // AP[2]: read-only.
         entry & (1 << 7) == 0
+    }
+
+    /// NK does not turn on the processor's dirty-state management, so
+    /// nothing records a write: a writable entry counts as written,
+    /// which may write a clean page out but never loses a dirty one.
+    fn dirty(&self, entry: u64) -> bool {
+        self.writable(entry)
+    }
+
+    fn clean(&self, entry: u64) -> u64 {
+        entry
     }
 }
 
@@ -315,6 +340,31 @@ pub fn lookup(mem: &impl TableMem, arch: &impl Arch, root: u64, va: u64) -> Opti
     None
 }
 
+/// The physical address of the table of 4 KiB entries that covers
+/// `va`, made (with the tables above it) if it is not there yet. For a
+/// region whose entries the caller edits directly.
+pub fn leaf_table(
+    mem: &mut impl TableMem,
+    arch: &impl Arch,
+    root: u64,
+    va: u64,
+) -> Result<u64, MapError> {
+    let mut table = root;
+    for l in (1..=3u8).rev() {
+        let e = mem.read(table, index(va, l));
+        table = if !arch.present(e) {
+            let next = mem.alloc_table().ok_or(MapError::NoMemory)?;
+            mem.write(table, index(va, l), arch.table(next));
+            next
+        } else if arch.is_leaf(e, l) {
+            return Err(MapError::AlreadyMapped);
+        } else {
+            arch.addr(e)
+        };
+    }
+    Ok(table)
+}
+
 /// Remove the 4 KiB mapping at `va`. Returns the physical page it mapped.
 /// Intermediate tables are kept. The caller flushes the TLB.
 pub fn unmap(mem: &mut impl TableMem, arch: &impl Arch, root: u64, va: u64) -> Option<u64> {
@@ -338,6 +388,34 @@ pub fn unmap(mem: &mut impl TableMem, arch: &impl Arch, root: u64, va: u64) -> O
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn a_leaf_table_is_the_one_map_fills() {
+        let mut mem = Mem::default();
+        let root = mem.root();
+        let va = 0xFFFF_F980_0020_0000;
+        let leaf = leaf_table(&mut mem, &X86_64, root, va).unwrap();
+        assert_eq!(
+            leaf_table(&mut mem, &X86_64, root, va + 0x1F_F000),
+            Ok(leaf)
+        );
+        map(&mut mem, &X86_64, root, va + 0x3000, 0x7000, 0, Prot::RW).unwrap();
+        let e = mem.read(leaf, 3);
+        assert_eq!(X86_64.addr(e), 0x7000);
+        assert!(!X86_64.dirty(e));
+        assert!(X86_64.dirty(e | 1 << 6));
+        assert_eq!(X86_64.clean(e | 1 << 6), e);
+        assert_ne!(
+            leaf_table(&mut mem, &X86_64, root, va + 0x20_0000),
+            Ok(leaf)
+        );
+        let arm = Aarch64 {
+            mair_normal: 0,
+            mair_device: 1,
+        };
+        assert!(arm.dirty(arm.leaf(0x7000, 0, Prot::RW)));
+        assert!(!arm.dirty(arm.leaf(0x7000, 0, Prot::RO)));
+    }
 
     /// Tables kept in a map keyed by fake physical address.
     #[derive(Default)]

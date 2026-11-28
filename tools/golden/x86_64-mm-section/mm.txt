@@ -1,0 +1,10 @@
+mm.section ok
+mm.section-view ok
+mm.section-read ok
+mm.section-overwrite ok
+mm.section-inpage-error ok
+mm.section-fault ok
+mm.section-flush ok
+mm.section-truncate ok
+mm.section-purge ok
+mm.section-mdl-evict-purge ok

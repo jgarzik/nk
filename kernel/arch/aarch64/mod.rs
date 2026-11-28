@@ -26,9 +26,13 @@ pub use pci::{AML_FORBIDDEN_PORTS, PCI_PORTS, PciPorts, port_read, port_write};
 
 pub use gic::{
     TEST_HIGH, TEST_LOW, TEST_STRAY, disable_interrupts, enable_interrupts,
-    init as interrupts_init, interrupt_enable, interrupts_off, interrupts_restore, self_interrupt,
-    stop_others,
+    init as interrupts_init, interrupt_enable, interrupts_enabled, interrupts_off,
+    interrupts_restore, self_interrupt, stop_others,
 };
+
+/// `(interrupt id, IRQL)` of the interrupt that runs a thread's kernel
+/// APCs: APC_LEVEL.
+pub const APC: (u32, u8) = (4, 1);
 
 /// `(interrupt id, IRQL)` of the interrupt a processor sends itself to
 /// run its deferred procedure calls: DISPATCH_LEVEL.
@@ -264,6 +268,19 @@ pub fn flush_tlb_page(va: u64) {
             in(reg) va >> 12,
             options(nostack)
         );
+    }
+}
+
+/// Drop any cached translation for the `pages` pages at `va`, on every
+/// processor: the instructions broadcast, and one barrier ends them all.
+pub fn flush_tlb_range(va: u64, pages: usize) {
+    // SAFETY: as in `flush_tlb_page`.
+    unsafe {
+        core::arch::asm!("dsb ishst", options(nostack));
+        for page in 0..pages as u64 {
+            core::arch::asm!("tlbi vaae1is, {}", in(reg) (va >> 12) + page, options(nostack));
+        }
+        core::arch::asm!("dsb ish", "isb", options(nostack));
     }
 }
 

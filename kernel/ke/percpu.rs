@@ -3,6 +3,7 @@
 //! is reached through `arch::percpu()`.
 
 use super::dpc::Queue;
+use super::entropy::Timing;
 use super::thread::Dispatcher;
 use super::timer::Table;
 use core::cell::UnsafeCell;
@@ -20,6 +21,8 @@ pub struct PerCpu {
     timers: Table,
     /// The threads ready to run here, and the idle thread.
     dispatcher: Dispatcher,
+    /// The times of this processor's device interrupts, for entropy.
+    entropy: Timing,
 }
 
 // SAFETY: a processor only touches the non-atomic part of its own
@@ -35,6 +38,7 @@ impl PerCpu {
             dpcs: Queue::new(),
             timers: Table::new(),
             dispatcher: Dispatcher::new(),
+            entropy: Timing::new(),
         }
     }
 
@@ -51,6 +55,11 @@ impl PerCpu {
     /// This processor's dispatcher state.
     pub fn dispatcher(&self) -> &Dispatcher {
         &self.dispatcher
+    }
+
+    /// This processor's interrupt-timing state.
+    pub fn entropy(&self) -> &Timing {
+        &self.entropy
     }
 
     /// This processor's table of pending timers.

@@ -4,12 +4,17 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
 
 ## What is absent
 
-**File systems.** None registers (`IoRegisterFileSystem` is absent):
-RAW is all there is to mount. RAW enforces no share access between
-opens of a volume, and its answers to information queries and
-file-system control requests stop the system by name.
+**File systems.** Only `fastfat.sys`, RAW and the ones NK's tests make
+register; no file system recognizer (`fs_rec.sys`) is loaded, so RAW
+takes any volume no other file system claims, whatever is opened on it
+([I/O](io.md), Mounting). RAW enforces no share access between opens of
+a volume, and its answers to information queries and to file-system
+control requests other than mounting stop the system by name.
 
-No APCs, sleep states, device power-down ([Power](power.md)), processes
+No kernel stack segment larger than a thread's stack, and none at
+`DISPATCH_LEVEL` (see [Threads](threads.md), stack expansion). No
+user-mode APC is delivered (one can be queued; an alertable wait
+does not end for it), no sleep states, device power-down ([Power](power.md)), processes
 other than System, user-mode code, ALPC ports, I/O completion ports,
 priority boosts or registry write-back; the clock ticks at a fixed
 rate; NK enforces no security descriptor on its own opens. Microsoft
@@ -65,7 +70,21 @@ callbacks), no
 driver verifier (`kernel/ex/absent.rs`: nothing is verified, a failure
 reported to it goes nowhere), no headless terminal (the same file:
 it cannot be enabled, questions are answered with zeros, output
-succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`), no
+succeeds unseen), no secure kernel (`kernel/ex/vsl.rs`:
+`SkIsSecureKernel` says `STATUS_NOT_IMPLEMENTED`, the other `Sk*`
+routines stop the system with 0x123 as the normal kernel's one routine
+for them does, and `VslExchangeEntropy` fails with
+`STATUS_DEVICE_NOT_CONNECTED`, the buffer untouched), no performance counter
+sets of the kernel's own (when `pcw.sys` registers, Windows' kernel
+registers its synchronization, processor, thermal, event-tracing and
+file-system counter sets with it; NK registers none, `kernel/ex/pcw.rs`),
+boot entropy
+without a TPM and, on arm64, without the processor's generator (the
+loader reports those sources as Windows' loader reports an absent or
+failed one: `doc/BOOT.md`, Boot entropy),
+the extended processor state limited to the legacy x87 and SSE state
+(the shared data page's `XState.EnabledFeatures`, which
+`RtlGetEnabledExtendedFeatures` reads), no
 notification states (`kernel/ex/wnf.rs`: a WNF state name is unknown,
 `STATUS_OBJECT_NAME_NOT_FOUND`, as Windows answers for a name that has
 no instance and that its registry does not list; a name NK's registry
@@ -83,7 +102,7 @@ always has the helper, and `pci.sys` then reports nothing to it.
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
 | I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
-| What the storage stack and the volume drivers import and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys`, `partmgr.sys`, `volmgr.sys`, `volume.sys`, `mountmgr.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
+| What the storage stack, the volume drivers, the FAT file system and the security drivers import and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys`, `partmgr.sys`, `volmgr.sys`, `volume.sys`, `mountmgr.sys`, `fastfat.sys`, `ksecdd.sys`, `cng.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
 
 The `*-neg-trap` scenarios call one through the address its name
 resolves to and require the stop that names it.

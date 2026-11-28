@@ -1,0 +1,17 @@
+[package]
+name = "nk-io"
+description = "The I/O manager's rules for file systems: which file system is asked to mount a volume, and what its answer means"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+nk-fsrtl = { path = "../fsrtl" }
+
+[lints]
+workspace = true

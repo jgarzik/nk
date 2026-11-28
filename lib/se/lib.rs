@@ -28,9 +28,11 @@ extern crate alloc;
 pub mod access;
 pub mod acl;
 pub mod assign;
+pub mod capability;
 pub mod descriptor;
 pub mod information;
 pub mod privilege;
+pub mod sddl;
 pub mod sid;
 pub mod token;
 
