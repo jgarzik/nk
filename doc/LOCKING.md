@@ -81,6 +81,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 32 | `ps::notify::TABLES` | the process, thread, and image-load notify routines drivers have registered, and their kinds | DISPATCH |
 | 33 | `ps::cid::CID_TABLE` | the global PID/TID-to-`EPROCESS`/`ETHREAD` lookup table (`PspCidTable`) | DISPATCH |
 | 34 | `cm::notify::WATCHES` | which keys are watched for changes, by whom, and how each watcher is told | DISPATCH |
+| 35 | `io::completion::IoCompletion::queue` | FIFO completion packet queues of I/O completion port objects | DISPATCH |
 | 36 | `mm::map::LIVE` | which ranges of the dynamic kernel region are handed out; taken with no lock of the address space held | DISPATCH |
 | 37 | `po::POWER` | the power requests made for drivers and which of a device's wait their turn; each device's power block (`DEVOBJ_EXTENSION.Dope`); the registrations for power settings and for coalescing; the devices registered with the runtime power framework, their components' counts and conditions, and which are owed callbacks from a worker | DISPATCH |
 | 38 | `ex::firmware::PROVIDERS` | which firmware table providers drivers have registered, and the reference each holds to its driver object | DISPATCH |

@@ -6,6 +6,7 @@
 //! pended and completed later, and cancelled; `doc/design/io.md` says how.
 
 pub mod build;
+pub mod completion;
 pub mod csq;
 pub mod device;
 pub mod driver;

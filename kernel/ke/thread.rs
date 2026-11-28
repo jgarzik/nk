@@ -55,7 +55,7 @@ use core::sync::atomic::{
 use nk_ke::sched::{self, Leaving};
 use nk_ke::{ListEntry, QUANTUM_TICKS, ReadyQueues, WaitRegister};
 use nk_ntabi::interrupt::GROUP_AFFINITY;
-use nk_ntabi::ke::{DISPATCHER_HEADER, KTIMER, KWAIT_BLOCK};
+use nk_ntabi::ke::{DISPATCHER_HEADER, KEVENT, KTIMER, KWAIT_BLOCK};
 use nk_ntabi::pcr::NATIVE as PCR;
 use nk_ntabi::thread as layout;
 
@@ -117,6 +117,9 @@ pub struct Thread {
     force_iret: bool,
     /// Initial-suspend count (`CREATE_SUSPENDED` / `NtResumeThread`).
     suspend_count: AtomicU32,
+    /// Per-thread synchronization event used by `NtWaitForAlertByThreadId` /
+    /// `NtAlertThreadByThreadId` (SRW locks, condition variables, `RtlWaitOnAddress`).
+    tid_alert_event: KEVENT,
 }
 
 /// The most segments unwinds can have left with frames still on them:
@@ -619,6 +622,11 @@ fn allocate(stack: Stack, thread_priority: u8, state: u8) -> Option<*mut Thread>
         (&raw mut (*thread).active_ef).write(0);
         (&raw mut (*thread).force_iret).write(false);
         (&raw mut (*thread).suspend_count).write(AtomicU32::new(0));
+        super::wait::KeInitializeEvent(
+            &raw mut (*thread).tid_alert_event,
+            1, /* SynchronizationEvent */
+            0,
+        );
         // Every thread NK makes is a system thread.
         field::<u32>(thread, layout::MISC_FLAGS).write(layout::MISC_FLAG_SYSTEM_THREAD);
         super::apc::init_thread(thread);
@@ -835,6 +843,61 @@ pub unsafe fn resume_thread(thread: *mut Thread) -> u32 {
         }
     }
     prev
+}
+
+/// `NtWaitForAlertByThreadId`: wait on the calling thread's per-thread alert
+/// latch (used by `ntdll` SRW locks, condition variables, and `RtlWaitOnAddress`).
+///
+/// # Safety
+/// `timeout` is null or satisfies `PreviousMode`.
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn NtWaitForAlertByThreadId(
+    _address: *const core::ffi::c_void,
+    timeout: *const i64,
+) -> nk_ntabi::status::NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let due = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract.
+        match unsafe { crate::svc::capture::read(timeout, mode) } {
+            Ok(v) => Some(v),
+            Err(st) => return st,
+        }
+    };
+    let me = current();
+    // SAFETY: `me` is the running thread; `tid_alert_event` is an initialized `KEVENT`.
+    let st = unsafe {
+        super::wait::wait_as(
+            Some((&raw mut (*me).tid_alert_event).cast()),
+            due,
+            mode,
+            false,
+        )
+    };
+    if st == 0 {
+        nk_ntabi::status::STATUS_ALERTED
+    } else {
+        st as nk_ntabi::status::NTSTATUS
+    }
+}
+
+/// `NtAlertThreadByThreadId`: signal the target thread's per-thread alert latch.
+#[allow(non_snake_case)]
+pub extern "C" fn NtAlertThreadByThreadId(
+    thread_id: *mut core::ffi::c_void,
+) -> nk_ntabi::status::NTSTATUS {
+    let tid = thread_id.addr() as u64;
+    let target = match crate::ps::cid::lookup_thread(tid) {
+        Ok(t) => t,
+        Err(st) => return st,
+    };
+    let th = target.body().cast::<Thread>();
+    // SAFETY: `target` holds a live `ETHREAD` reference.
+    unsafe {
+        super::wait::KeSetEvent(&raw mut (*th).tid_alert_event, 0, 0);
+    }
+    nk_ntabi::status::STATUS_SUCCESS
 }
 
 /// Start a thread from [`create_unstarted`].

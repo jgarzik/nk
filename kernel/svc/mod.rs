@@ -426,6 +426,54 @@ register_services! {
         byte_offset: *const i64,
         key: *const u32,
     );
+    unsafe Implemented, NtCreateIoCompletion => crate::io::completion::NtCreateIoCompletion, ZwCreateIoCompletion(
+        io_completion_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        number_of_concurrent_threads: u32,
+    );
+    unsafe Implemented, NtOpenIoCompletion => crate::io::completion::NtOpenIoCompletion, ZwOpenIoCompletion(
+        io_completion_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    safe Implemented, NtSetIoCompletion => crate::io::completion::NtSetIoCompletion, ZwSetIoCompletion(
+        io_completion_handle: *mut c_void,
+        key_context: *mut c_void,
+        apc_context: *mut c_void,
+        io_status: NTSTATUS,
+        io_status_information: usize,
+    );
+    safe Partial, NtSetIoCompletionEx => crate::io::completion::NtSetIoCompletionEx, ZwSetIoCompletionEx(
+        io_completion_handle: *mut c_void,
+        io_completion_packet_handle: *mut c_void,
+        key_context: *mut c_void,
+        apc_context: *mut c_void,
+        io_status: NTSTATUS,
+        io_status_information: usize,
+    );
+    unsafe Implemented, NtQueryIoCompletion => crate::io::completion::NtQueryIoCompletion, ZwQueryIoCompletion(
+        io_completion_handle: *mut c_void,
+        class: u32,
+        information: *mut u8,
+        length: u32,
+        return_length: *mut u32,
+    );
+    unsafe Implemented, NtRemoveIoCompletion => crate::io::completion::NtRemoveIoCompletion, ZwRemoveIoCompletion(
+        io_completion_handle: *mut c_void,
+        key_context: *mut *mut c_void,
+        apc_context: *mut *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        timeout: *const i64,
+    );
+    unsafe Implemented, NtRemoveIoCompletionEx => crate::io::completion::NtRemoveIoCompletionEx, ZwRemoveIoCompletionEx(
+        io_completion_handle: *mut c_void,
+        io_completion_information: *mut crate::io::completion::FileIoCompletionInformation,
+        count: u32,
+        num_entries_removed: *mut u32,
+        timeout: *const i64,
+        alertable: u8,
+    );
     unsafe Partial, NtLoadDriver => crate::io::service::NtLoadDriver, ZwLoadDriver(
         driver_service_name: *const UNICODE_STRING,
     );
@@ -634,6 +682,13 @@ register_services! {
     // Process, thread, APC, exception & delay (`kernel/ps`, `kernel/ke`, `kernel/arch`)
     safe Implemented, NtAlertThread => crate::ps::NtAlertThread, ZwAlertThread(
         thread_handle: *mut c_void,
+    );
+    safe Implemented, NtAlertThreadByThreadId => crate::ke::thread::NtAlertThreadByThreadId, ZwAlertThreadByThreadId(
+        thread_id: *mut c_void,
+    );
+    unsafe Implemented, NtWaitForAlertByThreadId => crate::ke::thread::NtWaitForAlertByThreadId, ZwWaitForAlertByThreadId(
+        address: *const c_void,
+        timeout: *const i64,
     );
     safe Implemented, NtClose => crate::ps::NtClose, ZwClose(
         handle: *mut c_void,

@@ -294,6 +294,7 @@ static FILE_NAME: [u16; 4] = wide(b"File");
 static JOB_NAME: [u16; 3] = wide(b"Job");
 static CALLBACK_NAME: [u16; 8] = wide(b"Callback");
 static SECTION_NAME: [u16; 7] = wide(b"Section");
+static IO_COMPLETION_NAME: [u16; 12] = wide(b"IoCompletion");
 static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
 static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
@@ -519,8 +520,22 @@ pub static SECTION_TYPE: ObjectType = ObjectType::new(
     GenericAll: 0x000F_001F,
 });
 
+/// I/O completion ports (`io::completion`).
+pub static IO_COMPLETION_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 15,
+    &IO_COMPLETION_NAME,
+    Some(crate::io::completion::deleted),
+)
+.closing(crate::ob::event_handle_closed)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0001,
+    GenericWrite: 0x0002_0002,
+    GenericExecute: 0x0012_0000,
+    GenericAll: 0x001F_0003,
+});
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 15] = [
+static TYPES: [&ObjectType; 16] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -536,6 +551,7 @@ static TYPES: [&ObjectType; 15] = [
     &JOB_TYPE,
     &CALLBACK_TYPE,
     &SECTION_TYPE,
+    &IO_COMPLETION_TYPE,
 ];
 
 /// How many types drivers may make: Windows' table of types holds 256

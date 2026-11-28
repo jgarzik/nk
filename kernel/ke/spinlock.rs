@@ -61,6 +61,8 @@ pub enum Rank {
     CidTable = 33,
     /// The watches on registry keys (`cm::notify`).
     RegistryWatches = 34,
+    /// I/O completion port queues (`io::completion`).
+    IoCompletion = 35,
     /// The ranges of the dynamic kernel region that are handed out
     /// (`mm::map`).
     Mappings = 36,
