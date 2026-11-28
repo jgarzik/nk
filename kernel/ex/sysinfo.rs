@@ -381,6 +381,11 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
             // SAFETY: per the contract; length is 4 bytes.
             unsafe { buffer.write_bytes(0, 4) };
         }),
+        // `SystemErrorPortTimeouts` (115): 8 bytes (`StartTimeout`, `CommTimeout`).
+        115 => fixed(Fixed::Exactly(8), &|| {
+            // SAFETY: per the contract; length is 8 bytes.
+            unsafe { buffer.write_bytes(0, 8) };
+        }),
         // `SystemProcessorFeaturesInformation` (154): 32 bytes zero.
         154 => fixed(Fixed::Exactly(32), &|| {
             // SAFETY: per the contract; length is 32 bytes.

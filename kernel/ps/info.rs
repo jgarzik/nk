@@ -214,6 +214,22 @@ pub unsafe extern "C" fn NtQueryInformationProcess(
             // SAFETY: per the contract.
             unsafe { write_info_out(information, length, return_length, &val, mode) }
         }
+        37 => {
+            // `ProcessImageInformation` (37): `SECTION_IMAGE_INFORMATION` (64 bytes).
+            // SAFETY: `proc_body` is live.
+            let Some(info) = unsafe { process::user_state(proc_body) }.map(|s| s.image_info) else {
+                return STATUS_INVALID_INFO_CLASS;
+            };
+            // SAFETY: `SECTION_IMAGE_INFORMATION` is a plain `#[repr(C)]` struct.
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    (&raw const info).cast::<u8>(),
+                    size_of::<nk_ntabi::mm::SECTION_IMAGE_INFORMATION>(),
+                )
+            };
+            // SAFETY: per the contract.
+            unsafe { write_info_out(information, length, return_length, bytes, mode) }
+        }
         PROCESS_IMAGE_FILE_NAME_CLASS | PROCESS_IMAGE_FILE_NAME_WIN32_CLASS => {
             // SAFETY: `proc_body` is live.
             let path: Vec<u16> = unsafe { process::user_state(proc_body) }
@@ -514,14 +530,10 @@ pub unsafe extern "C" fn NtDisplayString(string: *const UNICODE_STRING) -> NTSTA
     };
     let text: String = char::decode_utf16(wide.iter().copied())
         .map(|r| r.unwrap_or('?'))
+        .filter(|&c| c != '\r')
         .collect();
-    // Print line-buffered without adding an extra prefix so `autochk.exe` and
-    // `nkt.exe` output appears verbatim on the console.
-    for chunk in text.split('\n') {
-        let trimmed = chunk.strip_suffix('\r').unwrap_or(chunk);
-        if !trimmed.is_empty() {
-            kprintln!("{trimmed}");
-        }
+    if !text.is_empty() {
+        crate::kd::print(format_args!("{text}"));
     }
     STATUS_SUCCESS
 }
@@ -601,4 +613,85 @@ pub unsafe extern "C" fn NtTraceControl(
 /// `NtApphelpCacheControl`: shim cache query (no shims cached on NK).
 pub extern "C" fn NtApphelpCacheControl(_command: u32, _data: *mut c_void) -> NTSTATUS {
     STATUS_NOT_FOUND
+}
+
+/// `NtTraceEvent`: emit a user-mode ETW event (no active user trace sessions on NK).
+pub extern "C" fn NtTraceEvent(
+    _trace_handle: *mut c_void,
+    _flags: u32,
+    _field_size: u32,
+    _fields: *const c_void,
+) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// `NtSerializeBoot`: synchronize native boot-time tools (`autochk.exe`).
+pub extern "C" fn NtSerializeBoot() -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// `NtAllocateLocallyUniqueId`: allocate a fresh monotonic `LUID`.
+///
+/// # Safety
+/// `luid` must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtAllocateLocallyUniqueId(luid: *mut u64) -> NTSTATUS {
+    static NEXT_LUID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0x1000);
+    let mode = capture::mode();
+    let id = NEXT_LUID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    // SAFETY: per the contract.
+    match unsafe { capture::write(luid, id, mode) } {
+        Ok(()) => STATUS_SUCCESS,
+        Err(st) => st,
+    }
+}
+
+/// `NtUpdateWnfStateData`: update a WNF state name (no user subscribers on NK).
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn NtUpdateWnfStateData(
+    _state_name: *const u64,
+    _buffer: *const c_void,
+    _length: u32,
+    _type_id: *const c_void,
+    _explicit_scope: *const c_void,
+    _matching_change_stamp: u32,
+    _check_stamp: u32,
+) -> NTSTATUS {
+    STATUS_SUCCESS
+}
+
+/// `NtRaiseHardError`: native-subsystem hard-error notification (no CSRSS
+/// hard-error port exists, so returns `ResponseNotHandled = 6`).
+///
+/// # Safety
+/// `parameters` and `response` must satisfy `PreviousMode`.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn NtRaiseHardError(
+    error_status: NTSTATUS,
+    number_of_parameters: u32,
+    _unicode_string_parameter_mask: u32,
+    parameters: *const usize,
+    _valid_response_options: u32,
+    response: *mut u32,
+) -> NTSTATUS {
+    const RESPONSE_NOT_HANDLED: u32 = 6;
+    let mode = capture::mode();
+    let p0 = if number_of_parameters >= 1 && !parameters.is_null() {
+        // SAFETY: per the contract; probed via `capture::read`.
+        unsafe { capture::read(parameters, mode).unwrap_or(0) }
+    } else {
+        0
+    };
+    kprintln!(
+        "ps: NtRaiseHardError status={:#010x} nparams={} p0={:#x}",
+        error_status as u32,
+        number_of_parameters,
+        p0
+    );
+    if !response.is_null() {
+        // SAFETY: per the contract.
+        if let Err(st) = unsafe { capture::write(response, RESPONSE_NOT_HANDLED, mode) } {
+            return st;
+        }
+    }
+    STATUS_SUCCESS
 }

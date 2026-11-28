@@ -67,7 +67,7 @@ const THE_LINK: Options = Options {
 };
 
 /// The directories in the root, as on Windows.
-const DIRECTORIES: [&str; 7] = [
+const DIRECTORIES: [&str; 8] = [
     "Device",
     "Driver",
     "FileSystem",
@@ -75,6 +75,7 @@ const DIRECTORIES: [&str; 7] = [
     "BaseNamedObjects",
     "KernelObjects",
     "Callback",
+    "KnownDlls",
 ];
 
 fn status(error: Error) -> NTSTATUS {
@@ -166,6 +167,13 @@ pub fn init() -> Result<(), &'static str> {
             object::set_permanent(body, true);
             object::entered(body, root);
         }
+    }
+    if insert_link(
+        &wide("\\KnownDlls\\KnownDllPath"),
+        &wide("C:\\Windows\\System32"),
+    ) != STATUS_SUCCESS
+    {
+        return Err(NO_MEMORY);
     }
     match insert_link(&wide("\\DosDevices"), &wide("\\??")) {
         STATUS_SUCCESS => Ok(()),

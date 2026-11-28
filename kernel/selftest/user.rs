@@ -1121,10 +1121,16 @@ fn run_nkt(r: &mut Report, info: &BootInfo) {
     use nk_ntabi::process as proc_layout;
     use nk_ntabi::status::NTSTATUS;
 
+    const EXPECTED: &[u8] = include_str!("../../oracle/user/nkt.txt").as_bytes();
+    const OUT_PATH: &str = "\\Device\\BootDevice\\nkt.txt";
+
+    // First user process permanently caches `ntdll.dll`/NLS/API-Set sections,
+    // mounts the FAT32 system volume, and registers `\Device\BootDevice` + `\SystemRoot`.
+    crate::test::keeps_what_it_started();
     let (proc_ref, _th_ref) = match crate::ps::user::start_first(
         info,
         "\\SystemRoot\\System32\\nkt.exe",
-        "\\SystemRoot\\System32\\nkt.exe",
+        "\\SystemRoot\\System32\\nkt.exe \\Device\\BootDevice\\nkt.txt",
     ) {
         Ok(pair) => pair,
         Err(st) => {
@@ -1157,8 +1163,32 @@ fn run_nkt(r: &mut Report, info: &BootInfo) {
         );
         return;
     }
+    let got = match crate::ps::sysdll::read_file_bytes(OUT_PATH) {
+        Ok(bytes) => bytes,
+        Err(st) => {
+            r.fail(
+                "user.nkt",
+                format_args!("reading {OUT_PATH} failed: {st:#010x}"),
+            );
+            return;
+        }
+    };
+    if got != EXPECTED {
+        r.fail(
+            "user.nkt",
+            format_args!(
+                "transcript mismatch vs oracle/user/nkt.txt (got {}B, expected {}B)",
+                got.len(),
+                EXPECTED.len()
+            ),
+        );
+        return;
+    }
     r.ok_with(
         "user.nkt",
-        format_args!("ntdll.dll + nkt.exe ran to NtTerminateProcess(0)"),
+        format_args!(
+            "ntdll.dll + nkt.exe exited 0 and matched oracle/user/nkt.txt ({} bytes)",
+            got.len()
+        ),
     );
 }

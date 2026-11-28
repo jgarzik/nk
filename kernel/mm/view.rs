@@ -1000,6 +1000,69 @@ pub fn cow_released_frame(vad: Vad, page: u64, old_pa: u64) {
     }
 }
 
+/// True if `pa` is currently a section-owned shared prototype frame for `(vad, page)`
+/// (as opposed to a private CoW copy owned exclusively by this process's PTE).
+pub fn is_shared_frame(vad: Vad, page: u64, pa: u64) -> bool {
+    let VadKind::Mapped {
+        section: sec_addr,
+        offset,
+        ..
+    } = vad.kind
+    else {
+        return false;
+    };
+    let section_body = core::ptr::with_exposed_provenance::<u8>(sec_addr);
+    // SAFETY: `vad` keeps `section_body` alive under `space.lock()`.
+    match unsafe { section::user_section(section_body) } {
+        Some(UserSection::Pagefile(pf)) => {
+            let idx = ((offset + (page - vad.start)) / PAGE_SIZE as u64) as usize;
+            pf.frames.read().get(idx).copied() == Some(pa)
+        }
+        Some(UserSection::Image(img)) => {
+            if vad.start != img.preferred_base {
+                return false;
+            }
+            let idx = ((page - vad.start) / PAGE_SIZE as u64) as usize;
+            img.proto_frames.read().get(idx).copied() == Some(pa)
+        }
+        Some(UserSection::DataFile(_)) => {
+            // SAFETY: `vad` keeps `section_body` alive.
+            let ca = unsafe { section::section_ca(section_body) };
+            if ca.is_null() {
+                return false;
+            }
+            let file_offset = offset + (page - vad.start);
+            let ss_idx = (file_offset / SUBSECTION_BYTES) as usize;
+            let pg_idx = ((file_offset % SUBSECTION_BYTES) / PAGE_SIZE as u64) as usize;
+            let frame = pa / PAGE_SIZE as u64;
+            let g = pfn::lock();
+            // SAFETY: `ca` is live via `vad`.
+            let ss = unsafe { (*ca).subsection(&g, ss_idx) };
+            if ss.is_null() {
+                return false;
+            }
+            // SAFETY: valid under PFN lock.
+            let proto = unsafe { (*ss).protos[pg_idx].load(Ordering::Relaxed) };
+            matches!(Proto::decode(proto), Proto::Valid(f) if f == frame)
+        }
+        None => false,
+    }
+}
+
+/// Materialize a `UserSwPte::Prototype` page inside `vad` into a resident PTE
+/// (called by `NtProtectVirtualMemory` before updating protection, without
+/// holding `space.lock()` so data-file I/O can block freely).
+pub fn materialize_for_protect(space: &AddressSpace, vad: Vad, page: u64) -> Result<(), NTSTATUS> {
+    match fault_mapped_page(space, vad, page, Access::Read) {
+        UserFault::Resolved => Ok(()),
+        UserFault::InPageError(st) => Err(st),
+        UserFault::AccessViolation
+        | UserFault::GuardViolation
+        | UserFault::StackOverflow
+        | UserFault::NotUser => Err(STATUS_INVALID_PAGE_PROTECTION),
+    }
+}
+
 /// Return the Win32 protection of a not-yet-faulted `UserSwPte::Prototype` page
 /// inside a mapped VAD (for `NtQueryVirtualMemory`).
 pub fn prototype_page_protect(vad: Vad, page: u64) -> u32 {

@@ -11,23 +11,66 @@ use crate::ob::object::{self, ObRef};
 use core::ffi::c_void;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
-use nk_ob::handles::Mode;
 use nk_se::information::{class_known, token_information_buffer};
 use nk_se::token::TokenType;
 
 /// The object a handle names, if it is of type `ty`, with what the
-/// handle was granted.
+/// handle was granted. Also resolves Windows 10 token pseudo-handles
+/// (`-4` = current process token, `-5` = current thread token, `-6` = effective token).
 fn referenced(
     handle: *mut c_void,
     ty: &'static object::ObjectType,
 ) -> Result<(ObRef, u32), NTSTATUS> {
-    handle::reference_for(
-        handle as u64,
-        Some(core::ptr::from_ref(ty)),
-        0,
-        Mode::Kernel,
-    )
-    .map(|(body, information)| (body, information.granted))
+    if core::ptr::eq(ty, &raw const object::TOKEN_TYPE) {
+        let raw = handle as isize;
+        match raw {
+            -4 => {
+                // SAFETY: `PsGetCurrentProcess` returns the live calling `EPROCESS`.
+                let tok = unsafe {
+                    crate::ps::process::PsReferencePrimaryToken(
+                        crate::ps::process::PsGetCurrentProcess(),
+                    )
+                };
+                if tok.is_null() {
+                    return Err(STATUS_NO_TOKEN);
+                }
+                // SAFETY: `PsReferencePrimaryToken` returned a new reference.
+                return Ok((unsafe { ObRef::adopt(tok.cast()) }, 0x000F_01FF));
+            }
+            -5 => {
+                // SAFETY: `ke::thread::current` is the live calling thread.
+                let imp = unsafe { super::impersonate::reference(crate::ke::thread::current()) };
+                let Some(imp) = imp else {
+                    return Err(STATUS_NO_TOKEN);
+                };
+                // SAFETY: `impersonate::reference` returned a new reference.
+                return Ok((unsafe { ObRef::adopt(imp.token) }, 0x000F_01FF));
+            }
+            -6 => {
+                // SAFETY: `ke::thread::current` is the live calling thread.
+                let imp = unsafe { super::impersonate::reference(crate::ke::thread::current()) };
+                if let Some(imp) = imp {
+                    // SAFETY: `impersonate::reference` returned a new reference.
+                    return Ok((unsafe { ObRef::adopt(imp.token) }, 0x000F_01FF));
+                }
+                // SAFETY: `PsGetCurrentProcess` returns the live calling `EPROCESS`.
+                let tok = unsafe {
+                    crate::ps::process::PsReferencePrimaryToken(
+                        crate::ps::process::PsGetCurrentProcess(),
+                    )
+                };
+                if tok.is_null() {
+                    return Err(STATUS_NO_TOKEN);
+                }
+                // SAFETY: `PsReferencePrimaryToken` returned a new reference.
+                return Ok((unsafe { ObRef::adopt(tok.cast()) }, 0x000F_01FF));
+            }
+            _ => {}
+        }
+    }
+    let hmode = crate::svc::capture::handle_mode(crate::svc::capture::mode());
+    handle::reference_for(handle as u64, Some(core::ptr::from_ref(ty)), 0, hmode)
+        .map(|(body, information)| (body, information.granted))
 }
 
 /// A handle to `token` with `access` and the attributes given, written

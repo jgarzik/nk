@@ -159,6 +159,8 @@ pub const STATUS_INVALID_CID: NTSTATUS = err(0xC000_000B);
 pub const STATUS_PROCESS_IS_TERMINATING: NTSTATUS = err(0xC000_010A);
 /// Attempt to operate on a thread that is terminating.
 pub const STATUS_THREAD_IS_TERMINATING: NTSTATUS = err(0xC000_004B);
+/// A worker factory or system shutdown is in progress.
+pub const STATUS_SHUTDOWN_IN_PROGRESS: NTSTATUS = err(0xC000_02FE);
 /// A user-mode APC was delivered while waiting alertably.
 pub const STATUS_USER_APC: NTSTATUS = 0x0000_00C0;
 

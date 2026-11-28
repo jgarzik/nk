@@ -18,8 +18,8 @@ use nk_mm::protect::{
     self, MEM_COMMIT, MEM_DECOMMIT, MEM_FREE, MEM_LARGE_PAGES, MEM_RELEASE, MEM_RESERVE, MEM_RESET,
     MEM_TOP_DOWN, MEM_WRITE_WATCH, MM_PROT_EMPTY, MM_PROT_EXECUTE, MM_PROT_EXECUTE_READ,
     MM_PROT_EXECUTE_READWRITE, MM_PROT_EXECUTE_WRITECOPY, MM_PROT_GUARD, MM_PROT_NOACCESS,
-    MM_PROT_READONLY, MM_PROT_READWRITE, MM_PROT_WRITECOPY, PAGE_NOACCESS, PAGE_READWRITE,
-    mm_break_cow, mm_is_cow, mm_is_guard, mm_to_user_hw, mm_to_win32, user_hw_to_mm, win32_to_mm,
+    MM_PROT_READONLY, MM_PROT_READWRITE, MM_PROT_WRITECOPY, PAGE_NOACCESS, mm_break_cow, mm_is_cow,
+    mm_is_guard, mm_to_user_hw, mm_to_win32, user_hw_to_mm, win32_to_mm,
 };
 use nk_mm::pt::Arch;
 use nk_mm::pte::{Access, UserSwPte};
@@ -28,7 +28,7 @@ use nk_mm::vad::{
 };
 use nk_ntabi::mm::{
     MEM_ADDRESS_REQUIREMENTS, MEM_EXTENDED_PARAMETER, MEM_EXTENDED_PARAMETER_ADDRESS_REQUIREMENTS,
-    MEMORY_BASIC_INFORMATION, MEMORY_BASIC_INFORMATION_CLASS,
+    MEMORY_BASIC_INFORMATION, MEMORY_BASIC_INFORMATION_CLASS, MEMORY_IMAGE_INFORMATION_CLASS,
     MEMORY_MAPPED_FILENAME_INFORMATION_CLASS, MEMORY_RANGE_ENTRY, MEMORY_REGION_INFORMATION,
     MEMORY_REGION_INFORMATION_CLASS, VM_CFG_CALL_TARGET_INFORMATION, VM_PREFETCH_INFORMATION,
 };
@@ -192,6 +192,7 @@ fn access_allowed(mm_prot: u8, access: Access) -> bool {
 /// tables cannot be allocated. Also returns `(old_win32_prot, needs_tlb_flush)`.
 fn protect_one_page(
     space: &AddressSpace,
+    vad: Vad,
     va: u64,
     new_mm_prot: u8,
 ) -> Result<(u32, bool), NTSTATUS> {
@@ -207,14 +208,33 @@ fn protect_one_page(
             (old & arch_pt.cow_bit()) != 0,
         );
         let pa = arch_pt.addr(old);
-        let new_entry = if let Some((hw_prot, cow)) = mm_to_user_hw(new_mm_prot) {
+        // Never grant direct write access to a shared prototype frame on a CoW
+        // or image view: downgrade RW/RWX to WRITECOPY/EXECUTE_WRITECOPY so the
+        // first write breaks CoW cleanly into a private frame.
+        let eff_mm = if matches!(
+            vad.kind,
+            VadKind::Mapped {
+                share_write: false,
+                ..
+            }
+        ) && super::view::is_shared_frame(vad, va, pa)
+        {
+            match new_mm_prot {
+                MM_PROT_READWRITE => MM_PROT_WRITECOPY,
+                MM_PROT_EXECUTE_READWRITE => MM_PROT_EXECUTE_WRITECOPY,
+                other => other,
+            }
+        } else {
+            new_mm_prot
+        };
+        let new_entry = if let Some((hw_prot, cow)) = mm_to_user_hw(eff_mm) {
             valid_user_pte(pa, hw_prot, cow)
         } else {
             // `PAGE_NOACCESS` or `PAGE_GUARD` on a resident frame: preserve the
             // physical frame in a Transition software PTE!
             UserSwPte::Transition {
                 pfn: pa / PAGE_SIZE as u64,
-                mm_prot: new_mm_prot,
+                mm_prot: eff_mm,
             }
             .encode()
         };
@@ -237,12 +257,28 @@ fn protect_one_page(
             }
             UserSwPte::Transition { pfn, mm_prot } => {
                 let pa = pfn * PAGE_SIZE as u64;
-                let new_entry = if let Some((hw_prot, cow)) = mm_to_user_hw(new_mm_prot) {
+                let eff_mm = if matches!(
+                    vad.kind,
+                    VadKind::Mapped {
+                        share_write: false,
+                        ..
+                    }
+                ) && super::view::is_shared_frame(vad, va, pa)
+                {
+                    match new_mm_prot {
+                        MM_PROT_READWRITE => MM_PROT_WRITECOPY,
+                        MM_PROT_EXECUTE_READWRITE => MM_PROT_EXECUTE_WRITECOPY,
+                        other => other,
+                    }
+                } else {
+                    new_mm_prot
+                };
+                let new_entry = if let Some((hw_prot, cow)) = mm_to_user_hw(eff_mm) {
                     valid_user_pte(pa, hw_prot, cow)
                 } else {
                     UserSwPte::Transition {
                         pfn,
-                        mm_prot: new_mm_prot,
+                        mm_prot: eff_mm,
                     }
                     .encode()
                 };
@@ -252,8 +288,7 @@ fn protect_one_page(
                 Ok((mm_to_win32(mm_prot), false))
             }
             UserSwPte::Prototype { .. } => {
-                // Stage 2B extends this for mapped sections.
-                Ok((PAGE_READWRITE, false))
+                Ok((super::view::prototype_page_protect(vad, va), false))
             }
         }
     }
@@ -360,7 +395,7 @@ fn allocate_vm(
                 newly_committed += 1;
             } else {
                 // Already committed: Windows updates its protection to `protect`.
-                let (_, need_flush) = protect_one_page(space, va, mm_prot)?;
+                let (_, need_flush) = protect_one_page(space, *vad, va, mm_prot)?;
                 flushed |= need_flush;
             }
             va += PAGE_SIZE as u64;
@@ -665,21 +700,59 @@ pub unsafe extern "C" fn NtFreeVirtualMemory(
             if start != vad.start {
                 return STATUS_FREE_VM_NOT_AT_BASE;
             }
+            let (decommitted, had_valid) = decommit_private_range(space, vad.start, vad.end);
+            inner.vads.remove(vad.start);
+            inner.uncharge_commit(decommitted);
+            if had_valid {
+                arch::flush_tlb_range(vad.start, vad.pages() as usize);
+            }
+            (vad.start, vad.len())
         } else {
             let Some(end) = page_up(req_base.saturating_add(req_size)) else {
                 return STATUS_INVALID_PARAMETER_3;
             };
-            if start != vad.start || end != vad.end {
+            if end > vad.end {
                 return STATUS_UNABLE_TO_FREE_VM;
             }
+            let (decommitted, had_valid) = decommit_private_range(space, start, end);
+            inner.vads.remove(vad.start);
+            // Re-insert any surviving prefix and/or suffix of the private VAD
+            // (Windows' `ntdll` heap manager trims alignment slack via partial `MEM_RELEASE`).
+            let count_committed = |lo: u64, hi: u64| -> u64 {
+                let mut c = 0u64;
+                let mut cur = lo;
+                while cur < hi {
+                    if space.read_pte(cur) != 0 {
+                        c += 1;
+                    }
+                    cur += PAGE_SIZE as u64;
+                }
+                c
+            };
+            if start > vad.start {
+                let _ = inner.vads.insert(Vad {
+                    start: vad.start,
+                    end: start,
+                    protect: vad.protect,
+                    kind: VadKind::Private,
+                    committed_pages: count_committed(vad.start, start),
+                });
+            }
+            if end < vad.end {
+                let _ = inner.vads.insert(Vad {
+                    start: end,
+                    end: vad.end,
+                    protect: vad.protect,
+                    kind: VadKind::Private,
+                    committed_pages: count_committed(end, vad.end),
+                });
+            }
+            inner.uncharge_commit(decommitted);
+            if had_valid {
+                arch::flush_tlb_range(start, ((end - start) / PAGE_SIZE as u64) as usize);
+            }
+            (start, end - start)
         }
-        let (decommitted, had_valid) = decommit_private_range(space, vad.start, vad.end);
-        inner.vads.remove(vad.start);
-        inner.uncharge_commit(decommitted);
-        if had_valid {
-            arch::flush_tlb_range(vad.start, vad.pages() as usize);
-        }
-        (vad.start, vad.len())
     } else {
         // MEM_DECOMMIT: `req_size == 0` decommits from `start` through `vad.end`.
         let end = if req_size == 0 {
@@ -766,8 +839,40 @@ pub unsafe extern "C" fn NtProtectVirtualMemory(
         Err(st) => return st,
     };
 
+    // Materialize any `UserSwPte::Prototype` pages before taking `space.lock()`
+    // so mapped-section I/O can block freely without holding the address-space lock.
+    let mut proto_pages: alloc::vec::Vec<(Vad, u64)> = alloc::vec::Vec::new();
+    {
+        let inner = space.read();
+        let Some(&vad) = inner.vads.find_containing(start) else {
+            return STATUS_CONFLICTING_ADDRESSES;
+        };
+        if end > vad.end {
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+        let arch_pt = arch::pt_arch();
+        let mut check = start;
+        while check < end {
+            let raw = space.read_pte(check);
+            if raw == 0 {
+                return STATUS_NOT_COMMITTED;
+            }
+            if !arch_pt.present(raw)
+                && matches!(UserSwPte::decode(raw), UserSwPte::Prototype { .. })
+            {
+                proto_pages.push((vad, check));
+            }
+            check += PAGE_SIZE as u64;
+        }
+    }
+    for (vad, va) in proto_pages {
+        if let Err(st) = super::view::materialize_for_protect(space, vad, va) {
+            return st;
+        }
+    }
+
     let inner = space.lock();
-    let Some(vad) = inner.vads.find_containing(start) else {
+    let Some(&vad) = inner.vads.find_containing(start) else {
         return STATUS_CONFLICTING_ADDRESSES;
     };
     if end > vad.end {
@@ -786,7 +891,7 @@ pub unsafe extern "C" fn NtProtectVirtualMemory(
     let mut flushed = false;
     let mut va = start;
     while va < end {
-        let (old_w32, need_flush) = match protect_one_page(space, va, new_mm) {
+        let (old_w32, need_flush) = match protect_one_page(space, vad, va, new_mm) {
             Ok(v) => v,
             Err(st) => return st,
         };
@@ -967,6 +1072,47 @@ pub unsafe extern "C" fn NtQueryVirtualMemory(
             if let Err(st) = unsafe {
                 capture::write(
                     memory_information.cast::<MEMORY_REGION_INFORMATION>(),
+                    info,
+                    mode,
+                )
+            } {
+                return st;
+            }
+            if !return_length.is_null() {
+                // SAFETY: as above.
+                if let Err(st) = unsafe { capture::write(return_length, needed, mode) } {
+                    return st;
+                }
+            }
+            STATUS_SUCCESS
+        }
+        MEMORY_IMAGE_INFORMATION_CLASS => {
+            let needed = size_of::<nk_ntabi::mm::MEMORY_IMAGE_INFORMATION>();
+            if memory_information_length < needed {
+                if !return_length.is_null() {
+                    // SAFETY: per the contract; `capture::write` probes user pointers.
+                    let _ = unsafe { capture::write(return_length, needed, mode) };
+                }
+                return STATUS_INFO_LENGTH_MISMATCH;
+            }
+            let inner = space.read();
+            let Some(vad) = inner.vads.find_containing(va).copied() else {
+                return STATUS_INVALID_ADDRESS;
+            };
+            drop(inner);
+            if !matches!(vad.kind, VadKind::Mapped { is_image: true, .. }) {
+                return STATUS_INVALID_ADDRESS;
+            }
+            let info = nk_ntabi::mm::MEMORY_IMAGE_INFORMATION {
+                ImageBase: vad.start,
+                SizeOfImage: vad.len(),
+                ImageFlags: 0,
+                _pad0: 0,
+            };
+            // SAFETY: per the contract; `capture::write` probes user pointers.
+            if let Err(st) = unsafe {
+                capture::write(
+                    memory_information.cast::<nk_ntabi::mm::MEMORY_IMAGE_INFORMATION>(),
                     info,
                     mode,
                 )

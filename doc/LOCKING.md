@@ -77,6 +77,7 @@ already held has a lower rank; two locks of one rank never nest.
 | 27 | `io::wmi::WMI` | which devices are registered with WMI, their provider ids, and the registration requests waiting to be sent | DISPATCH |
 | 28 | `whea::SOURCES` | which sources of hardware errors exist, each one's state and the calls into it in progress | DISPATCH |
 | 29 | `io::interrupt::DEVICES` | which translated interrupts each physical device object has | DISPATCH |
+| 30 | `ex::tp::WaitCompletionPacket::state` | association state of wait completion packets (`WAIT_COMPLETION_PACKET_TYPE`) | DISPATCH |
 | 31 | `kd::debugger::POWER_HANDLERS` | which routines are registered for the debugger to call around a power transition | DISPATCH |
 | 32 | `ps::notify::TABLES` | the process, thread, and image-load notify routines drivers have registered, and their kinds | DISPATCH |
 | 33 | `ps::cid::CID_TABLE` | the global PID/TID-to-`EPROCESS`/`ETHREAD` lookup table (`PspCidTable`) | DISPATCH |

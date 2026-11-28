@@ -377,4 +377,51 @@ pub unsafe extern "C" fn NtWriteFile(
     }
 }
 
+/// [`NtQueryVolumeInformationFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntqueryvolumeinformationfile).
+///
+/// # Safety
+/// Pointer parameters must satisfy `PreviousMode`.
+pub unsafe extern "C" fn NtQueryVolumeInformationFile(
+    file_handle: *mut c_void,
+    io_status_block: *mut IO_STATUS_BLOCK,
+    fs_information: *mut u8,
+    length: u32,
+    fs_information_class: u32,
+) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
+    let len = length as usize;
+    let mut kbuf = alloc::vec![0u8; len];
+    match file::query_volume_information(file_handle as u64, fs_information_class, &mut kbuf) {
+        Ok(r) => {
+            let n = r.information.min(len);
+            if n > 0 {
+                // SAFETY: per the contract; `copy_to_caller` probes user pointers.
+                let cp = unsafe {
+                    crate::svc::capture::copy_to_caller(fs_information, &kbuf[..n], mode)
+                };
+                if let Err(st) = cp {
+                    return st;
+                }
+            }
+            let iosb = IO_STATUS_BLOCK {
+                Status: r.status,
+                Information: r.information,
+            };
+            // SAFETY: per the contract.
+            if let Err(st) = unsafe { crate::svc::capture::write(io_status_block, iosb, mode) } {
+                return st;
+            }
+            r.status
+        }
+        Err(e) => match e {
+            file::IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
+            file::IoError::Handle(s) | file::IoError::Refused(s) => s,
+            file::IoError::NotCompleted { dispatch_status: s }
+            | file::IoError::StatusMismatch {
+                dispatch_status: s, ..
+            } => s,
+        },
+    }
+}
+
 pub use crate::svc::zw::{ZwCreateFile, ZwOpenFile};

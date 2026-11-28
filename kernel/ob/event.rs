@@ -218,6 +218,7 @@ fn waitable(ty: &ObjectType) -> bool {
         &raw const object::EVENT_TYPE,
         &raw const object::THREAD_TYPE,
         &raw const object::PROCESS_TYPE,
+        &raw const object::TIMER_TYPE,
     ]
     .iter()
     .any(|&known| core::ptr::eq(ty, known))
@@ -336,6 +337,12 @@ pub unsafe extern "C" fn NtResetEvent(
         }
     }
     STATUS_SUCCESS
+}
+
+/// `NtSetEventBoostPriority`: set event with priority boost (NK does not apply boosts).
+pub extern "C" fn NtSetEventBoostPriority(event_handle: *mut c_void) -> NTSTATUS {
+    // SAFETY: `previous_state` is null.
+    unsafe { NtSetEvent(event_handle, core::ptr::null_mut()) }
 }
 
 /// `NtClearEvent`: reset an event without returning its previous state.

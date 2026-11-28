@@ -57,10 +57,21 @@ pub struct MEMORY_RANGE_ENTRY {
     pub NumberOfBytes: u64,
 }
 
+/// `MEMORY_IMAGE_INFORMATION` (`ntifs.h`, 24 bytes on 64-bit Windows).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct MEMORY_IMAGE_INFORMATION {
+    pub ImageBase: u64,
+    pub SizeOfImage: u64,
+    pub ImageFlags: u32,
+    pub _pad0: u32,
+}
+
 /// `MEMORY_INFORMATION_CLASS` values handled by `NtQueryVirtualMemory`.
 pub const MEMORY_BASIC_INFORMATION_CLASS: u32 = 0;
 pub const MEMORY_MAPPED_FILENAME_INFORMATION_CLASS: u32 = 2;
-pub const MEMORY_REGION_INFORMATION_CLASS: u32 = 6;
+pub const MEMORY_REGION_INFORMATION_CLASS: u32 = 3;
+pub const MEMORY_IMAGE_INFORMATION_CLASS: u32 = 6;
 
 /// `VIRTUAL_MEMORY_INFORMATION_CLASS` values handled by `NtSetInformationVirtualMemory`.
 pub const VM_PREFETCH_INFORMATION: u32 = 0;

@@ -426,6 +426,13 @@ register_services! {
         byte_offset: *const i64,
         key: *const u32,
     );
+    unsafe Implemented, NtQueryVolumeInformationFile => crate::io::zwfile::NtQueryVolumeInformationFile, ZwQueryVolumeInformationFile(
+        file_handle: *mut c_void,
+        io_status_block: *mut IO_STATUS_BLOCK,
+        fs_information: *mut u8,
+        length: u32,
+        fs_information_class: u32,
+    );
     unsafe Implemented, NtCreateIoCompletion => crate::io::completion::NtCreateIoCompletion, ZwCreateIoCompletion(
         io_completion_handle: *mut *mut c_void,
         desired_access: u32,
@@ -473,6 +480,84 @@ register_services! {
         num_entries_removed: *mut u32,
         timeout: *const i64,
         alertable: u8,
+    );
+    unsafe Implemented, NtCreateWaitCompletionPacket => crate::ex::tp::NtCreateWaitCompletionPacket, ZwCreateWaitCompletionPacket(
+        wcp_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+    );
+    unsafe Implemented, NtAssociateWaitCompletionPacket => crate::ex::tp::NtAssociateWaitCompletionPacket, ZwAssociateWaitCompletionPacket(
+        wcp_handle: *mut c_void,
+        iocp_handle: *mut c_void,
+        target_handle: *mut c_void,
+        key_context: *mut c_void,
+        apc_context: *mut c_void,
+        io_status: NTSTATUS,
+        io_status_information: usize,
+        already_signaled: *mut u8,
+    );
+    safe Implemented, NtCancelWaitCompletionPacket => crate::ex::tp::NtCancelWaitCompletionPacket, ZwCancelWaitCompletionPacket(
+        wcp_handle: *mut c_void,
+        remove_signaled_packet: u8,
+    );
+    unsafe Implemented, NtCreateTimer2 => crate::ex::tp::NtCreateTimer2, ZwCreateTimer2(
+        timer_handle: *mut *mut c_void,
+        reserved1: *mut c_void,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        attributes: u32,
+        desired_access: u32,
+    );
+    unsafe Implemented, NtSetTimer2 => crate::ex::tp::NtSetTimer2, ZwSetTimer2(
+        timer_handle: *mut c_void,
+        due_time: *const i64,
+        period: *const i64,
+        parameters: *const c_void,
+    );
+    unsafe Implemented, NtCancelTimer2 => crate::ex::tp::NtCancelTimer2, ZwCancelTimer2(
+        timer_handle: *mut c_void,
+        parameters: *mut c_void,
+    );
+    unsafe Partial, NtCreateWorkerFactory => crate::ex::tp::NtCreateWorkerFactory, ZwCreateWorkerFactory(
+        wf_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *const OBJECT_ATTRIBUTES,
+        iocp_handle: *mut c_void,
+        process_handle: *mut c_void,
+        start_routine: *mut c_void,
+        start_param: *mut c_void,
+        max_thread_count: u32,
+        stack_reserve: usize,
+        stack_commit: usize,
+    );
+    unsafe Partial, NtQueryInformationWorkerFactory => crate::ex::tp::NtQueryInformationWorkerFactory, ZwQueryInformationWorkerFactory(
+        wf_handle: *mut c_void,
+        class: u32,
+        information: *mut u8,
+        length: u32,
+        return_length: *mut u32,
+    );
+    unsafe Partial, NtSetInformationWorkerFactory => crate::ex::tp::NtSetInformationWorkerFactory, ZwSetInformationWorkerFactory(
+        wf_handle: *mut c_void,
+        class: u32,
+        information: *const c_void,
+        length: u32,
+    );
+    safe Partial, NtReleaseWorkerFactoryWorker => crate::ex::tp::NtReleaseWorkerFactoryWorker, ZwReleaseWorkerFactoryWorker(
+        wf_handle: *mut c_void,
+    );
+    safe Partial, NtWorkerFactoryWorkerReady => crate::ex::tp::NtWorkerFactoryWorkerReady, ZwWorkerFactoryWorkerReady(
+        wf_handle: *mut c_void,
+    );
+    unsafe Partial, NtWaitForWorkViaWorkerFactory => crate::ex::tp::NtWaitForWorkViaWorkerFactory, ZwWaitForWorkViaWorkerFactory(
+        wf_handle: *mut c_void,
+        mini_packets: *mut crate::io::completion::FileIoCompletionInformation,
+        count: u32,
+        packets_returned: *mut u32,
+        deferred_work: *const c_void,
+    );
+    unsafe Partial, NtShutdownWorkerFactory => crate::ex::tp::NtShutdownWorkerFactory, ZwShutdownWorkerFactory(
+        wf_handle: *mut c_void,
+        pending_worker_count: *mut u32,
     );
     unsafe Partial, NtLoadDriver => crate::io::service::NtLoadDriver, ZwLoadDriver(
         driver_service_name: *const UNICODE_STRING,
@@ -611,6 +696,9 @@ register_services! {
     unsafe Implemented, NtSetEvent => crate::ob::event::NtSetEvent, ZwSetEvent(
         event_handle: *mut c_void,
         previous_state: *mut i32,
+    );
+    safe Implemented, NtSetEventBoostPriority => crate::ob::event::NtSetEventBoostPriority, ZwSetEventBoostPriority(
+        event_handle: *mut c_void,
     );
     unsafe Implemented, NtResetEvent => crate::ob::event::NtResetEvent, ZwResetEvent(
         event_handle: *mut c_void,
@@ -830,6 +918,33 @@ register_services! {
     safe Partial, NtApphelpCacheControl => crate::ps::info::NtApphelpCacheControl, ZwApphelpCacheControl(
         command: u32,
         data: *mut c_void,
+    );
+    safe Partial, NtTraceEvent => crate::ps::info::NtTraceEvent, ZwTraceEvent(
+        trace_handle: *mut c_void,
+        flags: u32,
+        field_size: u32,
+        fields: *const c_void,
+    );
+    safe Implemented, NtSerializeBoot => crate::ps::info::NtSerializeBoot, ZwSerializeBoot();
+    unsafe Implemented, NtAllocateLocallyUniqueId => crate::ps::info::NtAllocateLocallyUniqueId, ZwAllocateLocallyUniqueId(
+        luid: *mut u64,
+    );
+    unsafe Partial, NtRaiseHardError => crate::ps::info::NtRaiseHardError, ZwRaiseHardError(
+        error_status: NTSTATUS,
+        number_of_parameters: u32,
+        unicode_string_parameter_mask: u32,
+        parameters: *const usize,
+        valid_response_options: u32,
+        response: *mut u32,
+    );
+    safe Partial, NtUpdateWnfStateData => crate::ps::info::NtUpdateWnfStateData, ZwUpdateWnfStateData(
+        state_name: *const u64,
+        buffer: *const c_void,
+        length: u32,
+        type_id: *const c_void,
+        explicit_scope: *const c_void,
+        matching_change_stamp: u32,
+        check_stamp: u32,
     );
 
     // Security (`kernel/se`)

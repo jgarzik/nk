@@ -51,6 +51,8 @@ pub enum Rank {
     Whea = 28,
     /// Which interrupts each device has been given (`io::interrupt`).
     DeviceInterrupts = 29,
+    /// Wait completion packet state (`ex::tp`).
+    WaitCompletion = 30,
     /// The routines registered with the kernel debugger for power
     /// transitions (`kd::debugger`).
     KdPower = 31,

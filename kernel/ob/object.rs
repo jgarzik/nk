@@ -295,6 +295,9 @@ static JOB_NAME: [u16; 3] = wide(b"Job");
 static CALLBACK_NAME: [u16; 8] = wide(b"Callback");
 static SECTION_NAME: [u16; 7] = wide(b"Section");
 static IO_COMPLETION_NAME: [u16; 12] = wide(b"IoCompletion");
+static WAIT_COMPLETION_PACKET_NAME: [u16; 20] = wide(b"WaitCompletionPacket");
+static TIMER_NAME: [u16; 7] = wide(b"IRTimer");
+static WORKER_FACTORY_NAME: [u16; 15] = wide(b"TpWorkerFactory");
 static SILO_CONTEXT_PAGED_NAME: [u16; 18] = wide(b"PsSiloContextPaged");
 static SILO_CONTEXT_NONPAGED_NAME: [u16; 21] = wide(b"PsSiloContextNonPaged");
 
@@ -534,8 +537,47 @@ pub static IO_COMPLETION_TYPE: ObjectType = ObjectType::new(
     GenericAll: 0x001F_0003,
 });
 
+/// Wait completion packets (`ex::tp`).
+pub static WAIT_COMPLETION_PACKET_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 16,
+    &WAIT_COMPLETION_PACKET_NAME,
+    Some(crate::ex::tp::wcp_deleted),
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0001,
+    GenericWrite: 0x0002_0001,
+    GenericExecute: 0x0002_0000,
+    GenericAll: 0x001F_0001,
+});
+
+/// User-mode Timer2 objects (`ex::tp` over `KTIMER2`).
+pub static TIMER_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 17,
+    &TIMER_NAME,
+    Some(crate::ex::tp::timer2_deleted),
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0001,
+    GenericWrite: 0x0002_0002,
+    GenericExecute: 0x0012_0000,
+    GenericAll: 0x001F_0003,
+});
+
+/// Threadpool worker factories (`ex::tp`).
+pub static WORKER_FACTORY_TYPE: ObjectType = ObjectType::new(
+    FIRST_TYPE_INDEX + 18,
+    &WORKER_FACTORY_NAME,
+    Some(crate::ex::tp::wf_deleted),
+)
+.rights(GENERIC_MAPPING {
+    GenericRead: 0x0002_0008,
+    GenericWrite: 0x0002_0037,
+    GenericExecute: 0x0002_0000,
+    GenericAll: 0x000F_00FF,
+});
+
 /// Every type, by index from `FIRST_TYPE_INDEX`.
-static TYPES: [&ObjectType; 16] = [
+static TYPES: [&ObjectType; 19] = [
     &EVENT_TYPE,
     &THREAD_TYPE,
     &DEVICE_TYPE,
@@ -552,6 +594,9 @@ static TYPES: [&ObjectType; 16] = [
     &CALLBACK_TYPE,
     &SECTION_TYPE,
     &IO_COMPLETION_TYPE,
+    &WAIT_COMPLETION_PACKET_TYPE,
+    &TIMER_TYPE,
+    &WORKER_FACTORY_TYPE,
 ];
 
 /// How many types drivers may make: Windows' table of types holds 256
