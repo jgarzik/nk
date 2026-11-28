@@ -28,6 +28,18 @@ class Mutants(unittest.TestCase):
                 self.assertNotEqual(changed, text)
                 self.assertTrue(path.read_text().startswith("#"), "say why the break matters")
 
+    def test_build_env_and_cli_args(self):
+        args = mutants.parse_args(["--jobs", "4", "--fat", "clock-fast"])
+        self.assertEqual(args.jobs, 4)
+        self.assertTrue(args.fat)
+        self.assertEqual(args.names, ["clock-fast"])
+        thin = mutants.build_env(thin_lto=True, parallel_workers=4)
+        self.assertEqual(thin["CARGO_PROFILE_RELEASE_LTO"], "thin")
+        self.assertEqual(thin["CARGO_PROFILE_RELEASE_CODEGEN_UNITS"], "4")
+        self.assertEqual(thin["CARGO_BUILD_JOBS"], "2")
+        fat = mutants.build_env(thin_lto=False, parallel_workers=1)
+        self.assertNotIn("CARGO_PROFILE_RELEASE_LTO", fat)
+
 
 if __name__ == "__main__":
     unittest.main()
