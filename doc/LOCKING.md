@@ -431,6 +431,30 @@ The IRQL belongs to the processor, not the thread. Every switch happens
 at `DISPATCH_LEVEL`, and each thread lowers it again on its own way out
 of the dispatcher.
 
+### Kernel APCs across processors
+
+Queuing a kernel APC (`ke::apc::KeInsertQueueApc`) holds the target
+thread's APC lock (rank 216), links the APC into its queue, marks
+`KernelApcPending`, and issues a `SeqCst` fence before reading the
+target's wait register, state, processor and disable counts. Each path
+on the target that can make an APC deliverable does the mirror side
+with a `SeqCst` fence between its write and its check, so one of the
+two always sees the other:
+
+- **Waiting (`interrupts_wait`).** The target begins its wait before
+  reading `KernelApcPending`.
+- **Switching in (`switched_in`).** The dispatcher writes
+  `next_processor` and then `STATE = RUNNING` (`Release`) before the
+  switch, and `switched_in` fences before reading `KernelApcPending`
+  (`Acquire`), so either the queuer sees `RUNNING` and the new
+  processor and interrupts it, or the target sees `KernelApcPending`
+  and interrupts itself.
+- **Leaving a critical or guarded region.** The target raises its
+  disable count to zero, fences, and reads the queue head atomically.
+- **Clearing `KernelApcPending`.** `deliver` clears the pending byte
+  only under the thread's APC lock, so it cannot drop a mark set by a
+  concurrent insert without also seeing the queued APC.
+
 ### Object locks
 
 Every object a thread can wait on (event, semaphore, timer, mutex,

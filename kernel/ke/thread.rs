@@ -267,10 +267,13 @@ unsafe fn dequeue(ready: &mut ReadyQueues, floor: u8) -> Option<*mut Thread> {
 /// # Safety
 /// `thread` is a live thread that the caller may change the state of.
 unsafe fn set_state(thread: *mut Thread, state: u8) {
-    // SAFETY: per the contract.
+    // SAFETY: per the contract; other processors read `STATE` atomically
+    // (`ke::apc`), and `Release` publishes `next_processor` before
+    // `RUNNING` is visible.
     unsafe {
-        field::<u8>(thread, layout::STATE).write(state);
-        field::<u8>(thread, layout::RUNNING).write(u8::from(state == layout::state::RUNNING));
+        AtomicU8::from_ptr(field(thread, layout::STATE)).store(state, Ordering::Release);
+        AtomicU8::from_ptr(field(thread, layout::RUNNING))
+            .store(u8::from(state == layout::state::RUNNING), Ordering::Relaxed);
     }
 }
 
@@ -749,7 +752,7 @@ fn steal() -> Option<*mut Thread> {
             ready.remove(link, level);
             let thread = thread_of(link);
             (*thread).queued_on.store(0, Ordering::SeqCst);
-            next_processor(thread).store(me as u32, Ordering::Relaxed);
+            next_processor(thread).store(me as u32, Ordering::Release);
             return Some(thread);
         }
     }
@@ -782,7 +785,7 @@ pub unsafe fn apc_lock<'a>(thread: *mut Thread) -> &'a SpinLock<()> {
 /// `thread` is a live thread.
 pub unsafe fn processor(thread: *mut Thread) -> usize {
     // SAFETY: per the contract.
-    unsafe { next_processor(thread).load(Ordering::Relaxed) as usize }
+    unsafe { next_processor(thread).load(Ordering::Acquire) as usize }
 }
 
 /// A field of the thread's Windows-shaped block, for the modules that
@@ -853,7 +856,7 @@ pub unsafe fn make_ready(thread: *mut Thread) {
             field::<u32>(thread, layout::IDEAL_PROCESSOR).read() as usize,
             idling,
         );
-        next_processor(thread).store(processor as u32, Ordering::Relaxed);
+        next_processor(thread).store(processor as u32, Ordering::Release);
         processor
     };
     let dispatcher = arch::percpu_of(processor)
@@ -1079,7 +1082,9 @@ fn after_switch() {
     // SAFETY: the previous thread is off its stack now. If it exited,
     // nothing else refers to it and it is on no queue.
     unsafe {
-        if field::<u8>(previous, layout::STATE).read() == layout::state::TERMINATED {
+        if AtomicU8::from_ptr(field(previous, layout::STATE)).load(Ordering::Acquire)
+            == layout::state::TERMINATED
+        {
             let header = previous.cast::<DISPATCHER_HEADER>();
             // Its memory is about to be reused: nothing may still point
             // into it. A wait cancels its own timer, so this holds.
