@@ -51,6 +51,14 @@ provides. What the counts say:
   `conhost.exe` does so only by delay-load. That is why phase 8 can prove
   `cmd.exe` before phase 9 exists. A console without the window system
   might be possible; NK does not pursue it.
+- **High-priority Microsoft subsystem imports:** `ledger/x86_64.json`
+  (`corpus.high_priority`) explicitly tracks and prioritizes closing the
+  kernel-export gaps of four core Microsoft subsystems: `storport.sys`
+  (storage port — already running, closing remaining `partial`/`traps`
+  entries), `ndis.sys` and `tcpip.sys` (networking stack, along with
+  `netio.sys`/`fwpkclnt.sys`), and `ntfs.sys` (NTFS, along with `clfs.sys`
+  via `ext-ms-win-fs-clfs-l1-1-0.dll`). Run `tools/ledger.py --priority`
+  for the live gap breakdown.
 - Besides drivers that export to drivers, which NK binds, the loader
   must handle kernel-mode API sets (`ext-ms-*` names) and imports from
   the kernel by ordinal (`acpi.sys` has one).
@@ -89,7 +97,9 @@ ready.
 
 After the rescue disk, unordered: `ntfs.sys`; networking (`ndis`, `tcpip`, a NIC driver); booting an unmodified `boot.wim` from a RAM disk; paging to
 disk; third-party vendor drivers on the OptiPlex; a full Windows boot to
-logon.
+logon. Across all phases, closing the kernel-export import gaps needed by
+`storport.sys`, `tcpip.sys`, `ndis.sys`, and `ntfs.sys` is tracked as
+high-priority work in `ledger/x86_64.json` (`corpus.high_priority`).
 
 ## Next step: foundation for user mode
 

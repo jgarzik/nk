@@ -9,13 +9,16 @@ prints. With no boot log yet, every import is "missing". The names drivers
 looked up at run time (`MmGetSystemRoutineAddress`) and did not find come
 from the same boot, as `NK-LOOKUP <name> absent` lines.
 
-Usage: ledger.py [--check | --missing <binary>...]
-  default    rewrite ledger/<arch>.json
-  --check    fail if a committed ledger differs from what would be generated
-             (fixtures that are not downloaded make the check a visible SKIP)
-  --missing  print, by area, the kernel names the named corpus binaries
-             import that the last x86-64 boot did not export as implemented,
-             and the other modules they import from
+Usage: ledger.py [--check | --missing <binary>... | --priority]
+  default     rewrite ledger/<arch>.json
+  --check     fail if a committed ledger differs from what would be generated
+              (fixtures that are not downloaded make the check a visible SKIP)
+  --missing   print, by area, the kernel names the named corpus binaries
+              import that the last x86-64 boot did not export as implemented,
+              and the other modules they import from
+  --priority  print the per-binary status and combined unimplemented kernel
+              imports of the high-priority Microsoft subsystems
+              (storport.sys, tcpip.sys, ndis.sys, ntfs.sys)
 """
 
 import json
@@ -132,6 +135,11 @@ def import_state(module, name, exports, libraries):
 KERNEL_MODULES = ("ntoskrnl.exe", "hal.dll")
 CORPUS = ROOT / "ledger" / "corpus.x86_64.txt"
 KERNEL = ROOT / "ledger" / "ntoskrnl.x86_64.txt"
+# High-priority Microsoft driver subsystems whose remaining kernel import gaps
+# NK tracks prominently in the ledger and roadmap.
+HIGH_PRIORITY_SUBSYSTEMS = ("storport.sys", "tcpip.sys", "ndis.sys", "ntfs.sys")
+# Kernel API sets whose host driver is in the corpus, for transitive closure.
+CORPUS_APISET_HOSTS = {"ext-ms-win-fs-clfs-l1-1-0.dll": "clfs.sys"}
 
 
 def microsoft_kernel(exports, listing):
@@ -197,6 +205,87 @@ def missing(exports, lists, wanted):
     return by_area, sorted(seen), sorted(others)
 
 
+def high_priority(exports, lists, targets=HIGH_PRIORITY_SUBSYSTEMS):
+    """Direct and transitive in-corpus kernel import status for the
+    high-priority Microsoft subsystems (`storport.sys`, `tcpip.sys`,
+    `ndis.sys`, `ntfs.sys`)."""
+    parsed = {}
+    for line in lists.splitlines():
+        if line.startswith("#"):
+            continue
+        head, _, symbols = line.partition(":")
+        file, version, module = head.split()
+        rec = parsed.setdefault(
+            file, {"version": version, "kernel": {}, "by_ordinal": 0, "other_modules": {}}
+        )
+        syms = symbols.split()
+        if module not in KERNEL_MODULES:
+            if module != "-":
+                rec["other_modules"][module] = len(syms)
+            continue
+        for name in syms:
+            state = next((exports[(m, name)] for m in KERNEL_MODULES if (m, name) in exports),
+                         "missing")
+            rec["kernel"][name] = state
+            rec["by_ordinal"] += name.startswith("#")
+
+    present = [t for t in targets if t in parsed]
+    if not present:
+        return None
+
+    direct_union = {}
+    by_binary = []
+    for file in present:
+        rec = parsed[file]
+        kmap = rec["kernel"]
+        direct_union.update(kmap)
+        not_impl = {
+            s: sorted(name for name, st in kmap.items() if st == s)
+            for s in ("missing", "traps", "partial")
+        }
+        by_binary.append({
+            "file": file,
+            "version": rec["version"],
+            "kernel": {"total": len(kmap),
+                       **{s: sum(1 for v in kmap.values() if v == s) for s in STATES}},
+            "by_ordinal": rec["by_ordinal"],
+            "other_modules": dict(sorted(rec["other_modules"].items())),
+            "not_implemented": not_impl,
+        })
+
+    # Transitive closure over corpus-present dependency drivers (including
+    # kernel API sets whose host driver is in the corpus).
+    closure = set(present)
+    queue = list(present)
+    while queue:
+        cur = queue.pop()
+        for mod in parsed[cur]["other_modules"]:
+            dep = CORPUS_APISET_HOSTS.get(mod.lower(), mod.lower())
+            if dep in parsed and dep not in closure:
+                closure.add(dep)
+                queue.append(dep)
+    closure_union = {}
+    for file in closure:
+        closure_union.update(parsed[file]["kernel"])
+
+    return {
+        "note": "high-priority Microsoft driver subsystems (storport.sys, tcpip.sys, "
+                "ndis.sys, ntfs.sys): direct kernel import gaps and transitive "
+                "in-corpus closure",
+        "binaries": present,
+        "kernel_names": {"total": len(direct_union),
+                         **{s: sum(1 for v in direct_union.values() if v == s) for s in STATES}},
+        "by_binary": by_binary,
+        "with_dependencies": {
+            "binaries": sorted(closure),
+            "kernel_names": {
+                "total": len(closure_union),
+                **{s: sum(1 for v in closure_union.values() if v == s) for s in STATES},
+            },
+        },
+    }
+
+
 def corpus(exports, lists):
     """How much of what Microsoft's own kernel-mode binaries import NK
     provides. `lists` is the text of the committed import lists
@@ -225,6 +314,7 @@ def corpus(exports, lists):
             entry["kernel"]["total"] += 1
             entry["kernel"][state] += 1
             entry["by_ordinal"] += name.startswith("#")
+    prio = high_priority(exports, lists)
     return {
         "note": "Microsoft's kernel-mode binaries of the pinned build (fixtures/corpus.toml): "
                 "distinct names they import from ntoskrnl.exe and hal.dll, by what NK does "
@@ -232,6 +322,7 @@ def corpus(exports, lists):
         "binaries": len(binaries),
         "kernel_names": {"total": len(union),
                          **{s: sum(1 for v in union.values() if v == s) for s in STATES}},
+        **({"high_priority": prio} if prio is not None else {}),
         "by_binary": [binaries[f] for f in sorted(binaries)],
         **({"microsoft_kernel": microsoft_kernel(exports, KERNEL.read_text())}
            if KERNEL.exists() else {}),
@@ -304,9 +395,50 @@ def missing_report(exports, lists, wanted):
     return lines
 
 
+def priority_report(exports, lists, targets=HIGH_PRIORITY_SUBSYSTEMS):
+    """Summary lines `--priority` prints for the high-priority subsystems."""
+    prio = high_priority(exports, lists, targets=targets)
+    if prio is None:
+        return ["ledger: none of the high-priority subsystems are in the corpus"]
+    lines = ["High-priority Microsoft subsystems (direct kernel imports):"]
+    for b in prio["by_binary"]:
+        k = b["kernel"]
+        lines.append(
+            f"  {b['file']:14s} total={k['total']:3d} impl={k['implemented']:3d} "
+            f"partial={k['partial']:2d} traps={k['traps']:2d} missing={k['missing']:3d}"
+        )
+    u = prio["kernel_names"]
+    lines.append(
+        f"  {'UNION':14s} total={u['total']:3d} impl={u['implemented']:3d} "
+        f"partial={u['partial']:2d} traps={u['traps']:2d} missing={u['missing']:3d}"
+    )
+    dep = prio["with_dependencies"]
+    dk = dep["kernel_names"]
+    lines.append(
+        f"  {'WITH DEPS':14s} total={dk['total']:3d} impl={dk['implemented']:3d} "
+        f"partial={dk['partial']:2d} traps={dk['traps']:2d} missing={dk['missing']:3d} "
+        f"({len(dep['binaries'])} binaries)"
+    )
+    lines.append("")
+    lines.extend(missing_report(exports, lists, prio["binaries"]))
+    return lines
+
+
+def print_priority():
+    exports, booted = kernel_exports("x86_64")
+    if not booted:
+        print("ledger: no boot log (run: make check)")
+        return 1
+    for line in priority_report(exports, CORPUS.read_text()):
+        print(line)
+    return 0
+
+
 def main():
     if sys.argv[1:2] == ["--missing"] and len(sys.argv) > 2:
         return print_missing(sys.argv[2:])
+    if sys.argv[1:2] == ["--priority"]:
+        return print_priority()
     check = "--check" in sys.argv
     manifest = tomllib.loads((ROOT / "fixtures" / "manifest.toml").read_text())["fixture"]
     # Only driver images have import tables.
