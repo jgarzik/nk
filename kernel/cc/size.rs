@@ -72,7 +72,7 @@ fn resize(scm: &Scm, sizes: &CC_FILE_SIZES) -> NTSTATUS {
     }
     let new_size = sizes.FileSize as u64;
     let old_size = scm.file_size.get() as u64;
-    if new_size < old_size && scm.flags.get() & flag::PIN_ACCESS == 0 {
+    if new_size < old_size && scm.flags() & flag::PIN_ACCESS == 0 {
         let first = page_up(new_size).div_ceil(VIEW_BYTES) as usize;
         vacb::unmap_views(scm, first, Busy::Wait);
         let page = PAGE_SIZE as u64;
@@ -361,7 +361,7 @@ pub unsafe extern "C" fn CcSetAdditionalCacheAttributes(
     // SAFETY: per the contract.
     let scm = unsafe { open_map(file, "CcSetAdditionalCacheAttributes") };
     let _m = MASTER.lock();
-    let mut f = scm.flags.get();
+    let mut f = scm.flags();
     f = if disable_read_ahead != 0 {
         f | flag::DISABLE_READ_AHEAD
     } else {
@@ -372,7 +372,7 @@ pub unsafe extern "C" fn CcSetAdditionalCacheAttributes(
     } else {
         f & !flag::DISABLE_WRITE_BEHIND
     };
-    scm.flags.set(f);
+    scm.set_flags(f);
 }
 
 /// [`CcSetAdditionalCacheAttributesEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccsetadditionalcacheattributesex):
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn CcSetAdditionalCacheAttributesEx(file: *mut FILE_OBJECT
         CcSetAdditionalCacheAttributes(file, u8::from(flags & 2 != 0), u8::from(flags & 4 != 0))
     };
     let _m = MASTER.lock();
-    let mut f = scm.flags.get();
+    let mut f = scm.flags();
     let set = |f: u32, bit: u32, on: bool| if on { f | 1 << bit } else { f & !(1 << bit) };
     f = set(f, 23, flags & 0x1 != 0);
     if flags & 0x8 == 0 && f & 1 << 26 != 0 {
@@ -401,5 +401,5 @@ pub unsafe extern "C" fn CcSetAdditionalCacheAttributesEx(file: *mut FILE_OBJECT
     f = set(f, 28, flags & 0x10 != 0);
     f = set(f, 27, flags & 0x20 != 0);
     f = set(f, 12, flags & 0x1000_0000 != 0);
-    scm.flags.set(f);
+    scm.set_flags(f);
 }

@@ -49,7 +49,7 @@ fn new_scm(
         Scm {
             open_count: Cell::new(0),
             refs: Cell::new(1),
-            flags: Cell::new(flag::BEING_CREATED),
+            flags: core::sync::atomic::AtomicU32::new(flag::BEING_CREATED),
             file_size: Cell::new(0),
             valid_data_length: Cell::new(0),
             valid_data_goal: Cell::new(0),
@@ -196,14 +196,14 @@ unsafe fn initialize(
                 // SAFETY: the fresh map, not yet seen by anyone else.
                 let s = unsafe { &*fresh };
                 if pin_access {
-                    s.flags.set(s.flags.get() | flag::PIN_ACCESS);
+                    s.set_flags(s.flags() | flag::PIN_ACCESS);
                 }
                 link(&mut m, s);
                 // SAFETY: as above.
                 unsafe { (*sop).SharedCacheMap = fresh.cast() };
                 break (s, true);
             }
-            Some(s) if s.flags.get() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
+            Some(s) if s.flags() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
                 wait_lifecycle(m, sop);
             }
             Some(s) => {
@@ -310,8 +310,7 @@ fn create(scm: &Scm, file: *mut FILE_OBJECT, sizes: &CC_FILE_SIZES) -> Result<()
         scm.file_size.set(sizes.FileSize);
         scm.valid_data_length.set(sizes.ValidDataLength);
         scm.valid_data_goal.set(sizes.ValidDataLength);
-        scm.flags
-            .set((scm.flags.get() | flags) & !flag::BEING_CREATED);
+        scm.set_flags((scm.flags() | flags) & !flag::BEING_CREATED);
         m.take_waiters_for(scm.sop)
     };
     wake_lifecycle_waiters(waiters);
@@ -392,7 +391,7 @@ pub unsafe extern "C" fn CcUninitializeCacheMap(
         // SAFETY: as in `initialize`.
         match unsafe { scm.as_ref() } {
             None => break None,
-            Some(s) if s.flags.get() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
+            Some(s) if s.flags() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
                 wait_lifecycle(m, sop);
                 continue;
             }
@@ -421,17 +420,18 @@ pub unsafe extern "C" fn CcUninitializeCacheMap(
                     && scm.file_size.get() > t
                 {
                     scm.file_size.set(t);
-                    scm.flags.set(scm.flags.get() | flag::TRUNCATE_REQUIRED);
+                    scm.set_flags(scm.flags() | flag::TRUNCATE_REQUIRED);
                 }
                 let dirty_pages = {
                     let _d = super::DIRTY.lock();
                     scm.dirty_pages.get()
                 };
+                let f = scm.flags();
                 let state = uninit::State {
                     open_count: scm.open_count.get(),
                     dirty_pages,
-                    write_queued: scm.flags.get() & flag::WRITE_QUEUED != 0,
-                    pin_access: scm.flags.get() & flag::PIN_ACCESS != 0,
+                    write_queued: f & flag::WRITE_QUEUED != 0,
+                    pin_access: f & flag::PIN_ACCESS != 0,
                     truncate: truncate.is_some(),
                 };
                 let outcome = match uninit::decide(&state) {
@@ -511,7 +511,7 @@ fn unlink_pcm(scm: &Scm, pcm: *mut Pcm) {
 
 /// Start deleting `scm`, under the lock: nobody else finds it to use.
 pub fn begin_delete(m: &mut super::Master, scm: &Scm) {
-    scm.flags.set(scm.flags.get() | flag::BEING_DELETED);
+    scm.set_flags(scm.flags() | flag::BEING_DELETED);
     unlink(m, scm);
 }
 
@@ -522,7 +522,7 @@ pub fn begin_delete(m: &mut super::Master, scm: &Scm) {
 /// its file system the close).
 pub fn delete(scm: &Scm) {
     vacb::unmap_views(scm, 0, Busy::Wait);
-    if scm.flags.get() & flag::TRUNCATE_REQUIRED != 0 {
+    if scm.flags() & flag::TRUNCATE_REQUIRED != 0 {
         flush::purge_section(scm.sop, Some((scm.file_size.get() as u64, 0)), false);
     }
     super::pin::delete_bcbs(scm);

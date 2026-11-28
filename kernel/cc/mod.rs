@@ -40,7 +40,7 @@ use crate::mm::pool;
 use crate::mm::section::SectionRef;
 use core::cell::{Cell, UnsafeCell};
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use nk_cc::mbcb::Mbcb;
 use nk_cc::vacbidx::VacbIndex;
 use nk_ntabi::cc::CACHE_UNINITIALIZE_EVENT;
@@ -91,7 +91,9 @@ pub struct Scm {
     /// creation or deletion in progress. The map is not deleted while
     /// one is held.
     pub refs: Cell<u32>,
-    pub flags: Cell<u32>,
+    /// Written under [`MASTER`]; atomic so pin/read-ahead paths can read
+    /// flags without holding [`MASTER`].
+    pub flags: AtomicU32,
     pub file_size: Cell<i64>,
     pub valid_data_length: Cell<i64>,
     pub valid_data_goal: Cell<i64>,
@@ -336,7 +338,7 @@ pub unsafe fn acquire_map(sop: *mut SECTION_OBJECT_POINTERS) -> Option<&'static 
         // SAFETY: a map the field names is live under `MASTER`.
         match unsafe { scm.as_ref() } {
             None => return None,
-            Some(s) if s.flags.get() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
+            Some(s) if s.flags() & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 => {
                 wait_lifecycle(m, sop);
             }
             Some(s) => {
@@ -348,6 +350,16 @@ pub unsafe fn acquire_map(sop: *mut SECTION_OBJECT_POINTERS) -> Option<&'static 
 }
 
 impl Scm {
+    /// Current lifecycle and attribute flags.
+    pub fn flags(&self) -> u32 {
+        self.flags.load(Ordering::Acquire)
+    }
+
+    /// Replace the flag word (caller holds [`MASTER`]).
+    pub fn set_flags(&self, value: u32) {
+        self.flags.store(value, Ordering::Release);
+    }
+
     /// The file's section.
     pub fn section(&self) -> &SectionRef {
         // SAFETY: set before the map is found by anyone but its creator,

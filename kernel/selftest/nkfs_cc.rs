@@ -48,6 +48,7 @@ static CC: Group = Group {
         "cc.wait-twice",
         "cc.vacb-evict-race",
         "cc.lifecycle-race",
+        "cc.pin-attribute-race",
     ],
     run: cc_tests,
     manual: false,
@@ -853,11 +854,11 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
         // SAFETY: a cached nkfs file.
         unsafe { cc::size::CcSetAdditionalCacheAttributes(file, 1, 1) };
         // SAFETY: nkfs's map.
-        let flags = unsafe { (*cc::scm_of(file)).flags.get() };
+        let flags = unsafe { (*cc::scm_of(file)).flags() };
         // SAFETY: as above.
         unsafe { cc::size::CcSetAdditionalCacheAttributes(file, 0, 0) };
         // SAFETY: as above.
-        let after = unsafe { (*cc::scm_of(file)).flags.get() };
+        let after = unsafe { (*cc::scm_of(file)).flags() };
         if flags & 0x203 != 0x203 || after & 0x3 != 0 || after & 0x200 == 0 {
             Err("disabling write-behind did not also disable modified writing, kept after")
         } else {
@@ -963,6 +964,51 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
     verdicts.push(("cc.lazy-close", close));
     verdicts.push(("cc.wait-twice", wait_twice()));
     verdicts.push(("cc.lifecycle-race", lifecycle_race(file, sop)));
+    verdicts.push(("cc.pin-attribute-race", pin_attribute_race(file, sop)));
+    Ok(())
+}
+
+/// Setting `MODIFIED_WRITE_DISABLED` via `CcSetAdditionalCacheAttributes`
+/// while a BCB is pinned must not cause `CcUnpinData` to release a resource
+/// that the pin never acquired; subsequent pins after unpinning pick up the
+/// new policy cleanly.
+fn pin_attribute_race(
+    file: *mut FILE_OBJECT,
+    sop: *mut SECTION_OBJECT_POINTERS,
+) -> Result<(), &'static str> {
+    initialize(file, false);
+    // Pin while MODIFIED_WRITE_DISABLED is clear (no resource acquired).
+    let (ok1, bcb1, buf1) = pin(file, 0x10000, 0x1000, PIN_WAIT);
+    if ok1 != 1 || bcb1 == 0 || buf1 == 0 {
+        let zero = 0i64;
+        // SAFETY: cached file.
+        unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+        return Err("initial pin before attribute change failed");
+    }
+    // Turn MODIFIED_WRITE_DISABLED on while `bcb1` is still pinned.
+    // SAFETY: cached file object.
+    unsafe { cc::size::CcSetAdditionalCacheAttributes(file, 0, 1) };
+    // Unpinning must NOT attempt to release an unowned resource.
+    unpin(bcb1);
+
+    // Pin again now that pin_count reached 0: this pin acquires the resource
+    // and must release it cleanly on unpin.
+    let (ok2, bcb2, buf2) = pin(file, 0x10000, 0x1000, PIN_WAIT);
+    if ok2 != 1 || bcb2 == 0 || buf2 == 0 {
+        let zero = 0i64;
+        // SAFETY: cached file.
+        unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+        return Err("second pin after attribute change failed");
+    }
+    // SAFETY: pinned BCB handle.
+    unsafe { cc::pin::CcSetDirtyPinnedData(bcb2 as *mut c_void, core::ptr::null()) };
+    unpin(bcb2);
+    flush_all(sop);
+    nkfs::take_log();
+    let zero = 0i64;
+    // SAFETY: cached file.
+    unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
     Ok(())
 }
 

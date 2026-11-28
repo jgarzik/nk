@@ -56,6 +56,10 @@ pub struct Bcb {
     pub newest_lsn: Cell<i64>,
     // Under the map's BCB mutex.
     pin_count: Cell<u32>,
+    /// Whether active pins on this BCB hold its resource, latched when
+    /// `pin_count` transitions `0 -> 1` so an attribute change while
+    /// pinned cannot unbalance pin and unpin.
+    uses_resource: AtomicBool,
     vacb: Cell<usize>,
     base_address: Cell<usize>,
     pub scm: *const Scm,
@@ -94,7 +98,7 @@ impl Bcb {
 /// Whether pins of `scm` take their BCB's resource: its stream is one
 /// whose modified writing is disabled.
 fn uses_resource(scm: &Scm) -> bool {
-    scm.flags.get() & flag::MODIFIED_WRITE_DISABLED != 0
+    scm.flags() & flag::MODIFIED_WRITE_DISABLED != 0
 }
 
 /// Stop the system if `[offset, offset + len)` leaves the view that
@@ -246,11 +250,11 @@ fn pin_file_data(
         return Ok(None);
     };
     within_view(&v, offset, length, routine);
-    let takes_resource = how != Use::ReadOnly && uses_resource(scm);
+    let want_resource = how != Use::ReadOnly && uses_resource(scm);
     // A new BCB of a pinned metadata stream covers whole pages, within
     // the view.
     let whole_pages = how == Use::ReadWrite
-        && scm.flags.get() & (flag::PIN_ACCESS | flag::MODIFIED_WRITE_DISABLED)
+        && scm.flags() & (flag::PIN_ACCESS | flag::MODIFIED_WRITE_DISABLED)
             == flag::PIN_ACCESS | flag::MODIFIED_WRITE_DISABLED;
     let (bcb_offset, bcb_end) = if whole_pages {
         let page = PAGE_SIZE as u64;
@@ -273,6 +277,7 @@ fn pin_file_data(
             oldest_lsn: Cell::new(0),
             newest_lsn: Cell::new(0),
             pin_count: Cell::new(0),
+            uses_resource: AtomicBool::new(want_resource),
             vacb: Cell::new(NO_VACB),
             base_address: Cell::new(0),
             scm,
@@ -287,17 +292,19 @@ fn pin_file_data(
     }
     // SAFETY: the fresh BCB, ours alone; its resource does not move.
     unsafe { resource::ExInitializeResourceLite((*fresh).resource()) };
-    let (bcb, used_fresh, extra_view) = scm.with_bcbs(|bcbs, _| {
+    let (bcb, used_fresh, extra_view, takes_resource) = scm.with_bcbs(|bcbs, _| {
         // SAFETY: BCBs on the list are live under the mutex.
         let entries: alloc::vec::Vec<Entry> =
             bcbs.iter().map(|&b| unsafe { (*b).entry() }).collect();
         let (bcb, used_fresh) = match bcblist::find(&entries, offset, end) {
             Ok(i) => (bcbs[i], false),
-            Err(_) if flags & PIN_IF_BCB != 0 => return (core::ptr::null_mut(), false, true),
+            Err(_) if flags & PIN_IF_BCB != 0 => {
+                return (core::ptr::null_mut(), false, true, false);
+            }
             Err(_) => {
                 let at = entries.partition_point(|e| e.offset <= bcb_offset);
                 if bcbs.try_reserve(1).is_err() {
-                    return (core::ptr::null_mut(), false, true);
+                    return (core::ptr::null_mut(), false, true, false);
                 }
                 bcbs.insert(at, fresh);
                 (fresh, true)
@@ -305,7 +312,12 @@ fn pin_file_data(
         };
         // SAFETY: as above.
         let b = unsafe { &*bcb };
-        b.pin_count.set(b.pin_count.get() + 1);
+        let prev = b.pin_count.get();
+        if prev == 0 {
+            b.uses_resource.store(want_resource, Ordering::Release);
+        }
+        let takes = b.uses_resource.load(Ordering::Acquire);
+        b.pin_count.set(prev + 1);
         let extra = if b.vacb.get() == NO_VACB {
             b.vacb.set(v.vacb);
             b.base_address.set(v.va - (offset - b.file_offset) as usize);
@@ -313,7 +325,7 @@ fn pin_file_data(
         } else {
             true
         };
-        (bcb, used_fresh, extra)
+        (bcb, used_fresh, extra, takes)
     });
     if !used_fresh {
         // SAFETY: never seen by anyone else.
@@ -627,8 +639,7 @@ pub unsafe extern "C" fn CcUnpinData(bcb: *mut c_void) {
         },
         Handle::Bcb => {
             let b = bcb_of(bcb.addr(), "CcUnpinData");
-            // SAFETY: a BCB names its live map.
-            unpin(b, uses_resource(unsafe { &*b.scm }));
+            unpin(b, b.uses_resource.load(Ordering::Acquire));
         }
         other => cache_manager_bugcheck(format_args!(
             "CcUnpinData was given {bcb:p}, which is no handle the cache manager gave ({other:?})"
@@ -731,8 +742,7 @@ pub fn delete_bcbs(scm: &Scm) {
 pub struct DirtyRun {
     pub offset: u64,
     pub length: u32,
-    bcbs: alloc::vec::Vec<*mut Bcb>,
-    resource: bool,
+    bcbs: alloc::vec::Vec<(*mut Bcb, bool)>,
 }
 
 /// `CcAcquireByteRangeForWrite` for pins: the next dirty run of `scm`
@@ -741,7 +751,7 @@ pub struct DirtyRun {
 /// BCBs are clean from now on, their pages handed to the memory manager
 /// as modified.
 pub fn take_dirty_run(scm: &Scm, from: u64, end: u64, most: u64) -> Option<DirtyRun> {
-    let resource = uses_resource(scm);
+    let want_resource = uses_resource(scm);
     let run = scm.with_bcbs(|bcbs, _| {
         // SAFETY: BCBs on the list are live under the mutex.
         let entries: alloc::vec::Vec<Entry> =
@@ -750,23 +760,30 @@ pub fn take_dirty_run(scm: &Scm, from: u64, end: u64, most: u64) -> Option<Dirty
         if start >= end {
             return None;
         }
-        let taken: alloc::vec::Vec<*mut Bcb> = members.iter().map(|&i| bcbs[i]).collect();
-        for &b in &taken {
+        let mut taken: alloc::vec::Vec<(*mut Bcb, bool)> =
+            alloc::vec::Vec::with_capacity(members.len());
+        for &i in &members {
+            let ptr = bcbs[i];
             // SAFETY: as above.
-            let b = unsafe { &*b };
-            b.pin_count.set(b.pin_count.get() + 1);
+            let b = unsafe { &*ptr };
+            let prev = b.pin_count.get();
+            if prev == 0 {
+                b.uses_resource.store(want_resource, Ordering::Release);
+            }
+            let takes = b.uses_resource.load(Ordering::Acquire);
+            b.pin_count.set(prev + 1);
+            taken.push((ptr, takes));
         }
         Some(DirtyRun {
             offset: start,
             length: (stop - start) as u32,
             bcbs: taken,
-            resource,
         })
     })?;
-    for &b in &run.bcbs {
+    for &(ptr, takes) in &run.bcbs {
         // SAFETY: held by the run's pin.
-        let b = unsafe { &*b };
-        if resource {
+        let b = unsafe { &*ptr };
+        if takes {
             // SAFETY: the BCB's resource.
             unsafe { resource::ExAcquireResourceExclusiveLite(b.resource(), 1) };
         }
@@ -781,13 +798,13 @@ pub fn take_dirty_run(scm: &Scm, from: u64, end: u64, most: u64) -> Option<Dirty
 /// `CcReleaseByteRangeFromWrite` for pins: the run's write is over;
 /// after a failure that is not fatal its BCBs are dirty again.
 pub fn finish_run(run: DirtyRun, redirty: bool) {
-    for b in run.bcbs {
+    for (ptr, takes) in run.bcbs {
         // SAFETY: held by the run's pin.
-        let b = unsafe { &*b };
+        let b = unsafe { &*ptr };
         if redirty {
             set_dirty(b, core::ptr::null());
         }
-        unpin(b, run.resource);
+        unpin(b, takes);
     }
 }
 

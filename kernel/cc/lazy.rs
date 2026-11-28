@@ -373,7 +373,7 @@ fn run(work: Work) {
 /// Whether a map is for the lazy writer: dirty (and writing behind),
 /// or open by nobody and to be deleted.
 fn wanted(scm: &Scm, dirty: u64) -> bool {
-    let f = scm.flags.get();
+    let f = scm.flags();
     if f & (flag::WRITE_QUEUED | flag::BEING_CREATED | flag::BEING_DELETED) != 0 {
         return false;
     }
@@ -415,7 +415,7 @@ fn lazy_write_scan() {
             }
             let share = dirty.min(budget);
             budget -= share;
-            scm.flags.set(scm.flags.get() | flag::WRITE_QUEUED);
+            scm.set_flags(scm.flags() | flag::WRITE_QUEUED);
             scm.refs.set(scm.refs.get() + 1);
             chosen.push((scm, share));
             more |= dirty > share;
@@ -465,7 +465,7 @@ fn set_share(scm: &Scm, share: u64) {
 /// Take back a write-behind that could not be queued.
 fn unqueue(scm: &Scm) {
     let _m = MASTER.lock();
-    scm.flags.set(scm.flags.get() & !flag::WRITE_QUEUED);
+    scm.set_flags(scm.flags() & !flag::WRITE_QUEUED);
     scm.refs.set(scm.refs.get() - 1);
 }
 
@@ -540,11 +540,11 @@ fn lazy_close(scm: &Scm) {
         scm.open_count.get() == 0
             && scm.refs.get() == 1
             && scm.dirty_pages.get() == 0
-            && scm.flags.get() & flag::BEING_DELETED == 0
+            && scm.flags() & flag::BEING_DELETED == 0
     };
     let file = {
         let _m = MASTER.lock();
-        scm.flags.set(scm.flags.get() & !flag::WRITE_QUEUED);
+        scm.set_flags(scm.flags() & !flag::WRITE_QUEUED);
         if !closing(scm) {
             scm.refs.set(scm.refs.get() - 1);
             return;
@@ -609,7 +609,7 @@ pub fn schedule_read_ahead(
     mask: u32,
 ) {
     use nk_cc::readahead::{pattern, plan};
-    if scm.flags.get() & flag::DISABLE_READ_AHEAD != 0 {
+    if scm.flags() & flag::DISABLE_READ_AHEAD != 0 {
         return;
     }
     // SAFETY: a live file object of the caller's.
