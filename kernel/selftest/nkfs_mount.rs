@@ -531,6 +531,11 @@ fn unregister_race_test(disk_driver: *mut DRIVER_OBJECT) -> Result<(), &'static 
         ke::thread::NORMAL_PRIORITY,
         ke::thread::ANYWHERE,
     )?;
+    // Ensure the mounter is running before starting the unregister loop so
+    // it contends concurrently even under heavy SMP soak load.
+    while RACE_MOUNTS.load(Ordering::Acquire) == 0 {
+        ke::thread::yield_now();
+    }
 
     let mut failed = None;
     for _ in 0..64 {

@@ -600,6 +600,11 @@ pub fn evict_race_test(scm: &Scm) -> Result<(), &'static str> {
         let _ = unmap_views(scm, 0, Busy::Wait);
         thread::yield_now();
     }
+    // Under heavy SMP soak load, ensure the reader thread has completed at
+    // least one acquisition (two VACB slots are free here) before stopping.
+    while shared.acquired.load(Ordering::Acquire) == 0 && !shared.bad.load(Ordering::Acquire) {
+        thread::yield_now();
+    }
 
     shared.stop.store(true, Ordering::Release);
     // SAFETY: referenced thread object.

@@ -1431,6 +1431,10 @@ fn lifecycle_race(
         cc::lazy::CcWaitForCurrentLazyWriterActivity();
     }
 
+    while shared.purges.load(Ordering::Acquire) == 0 || shared.flushes.load(Ordering::Acquire) == 0
+    {
+        thread::yield_now();
+    }
     shared.stop.store(true, Ordering::Release);
     for t in [t_purge, t_flush] {
         // SAFETY: referenced thread objects.
