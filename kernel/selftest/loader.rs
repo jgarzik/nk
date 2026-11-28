@@ -46,6 +46,7 @@ pub static GROUP: Group = Group {
     names: &[
         "ldr.reject.wrong-machine",
         "ldr.reject.unresolved-import",
+        "ldr.reject.missing-library",
         "ldr.module.kernel",
         "ldr.import.kernel-names",
         "ldr.module.driver",
@@ -225,21 +226,33 @@ fn run(r: &mut Report, _: &BootInfo) {
             _ => false,
         },
     );
-    // A real driver that needs a module the kernel does not provide: the
-    // KMDF sample imports the framework loader. It is refused for the
-    // first import that cannot be bound: a kernel routine NK has no
-    // export for, if it imports one, else the library that is not
-    // there.
+    // NK-owned negative PE32+ fixtures (tools/negpe.py): one importing an
+    // intentionally unresolvable kernel symbol, and one importing from an
+    // intentionally absent library module. Both carry trapping entry points
+    // and must be rejected cleanly with zero leaks.
     expect_refusal(
         r,
         "ldr.reject.unresolved-import",
         "unresolved.sys",
         |e| match e {
-            LoadError::Unresolved { module, symbol } => {
+            LoadError::Unresolved { module, symbol }
+                if module.eq_ignore_ascii_case("ntoskrnl.exe")
+                    && symbol == "NkIntentionalMissingExport" =>
+            {
                 kprintln!("ldr: refused image, unresolved import {module}!{symbol}");
                 true
             }
-            LoadError::NoLibrary { module } => {
+            _ => false,
+        },
+    );
+    expect_refusal(
+        r,
+        "ldr.reject.missing-library",
+        "nomodule.sys",
+        |e| match e {
+            LoadError::NoLibrary { module }
+                if module.eq_ignore_ascii_case("nk-nonexistent-lib.sys") =>
+            {
                 kprintln!("ldr: refused image, no library {module}");
                 true
             }

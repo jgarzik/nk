@@ -225,9 +225,15 @@ pub fn absent_lookups() -> usize {
     ABSENT.load(core::sync::atomic::Ordering::Relaxed)
 }
 
-/// Print the table for the ledger: `NK-EXPORT <module> <name> <state>`.
+/// Print the table for the ledger: `NK-EXPORT <module> <name> <state>`,
+/// plus any kernel exports bound by ordinal (`#<ordinal>`).
 pub fn print_all() {
     for e in all() {
         kprintln!("NK-EXPORT {} {} {}", e.module, e.name, e.state.name());
+    }
+    for &(ordinal, target) in BY_ORDINAL {
+        if let Some(e) = all().find(|e| e.name == target) {
+            kprintln!("NK-EXPORT {} #{} {}", e.module, ordinal, e.state.name());
+        }
     }
 }

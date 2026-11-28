@@ -64,6 +64,7 @@ class MicrosoftKernel(unittest.TestCase):
     def test_counts(self):
         exports = dict(EXPORTS)
         exports[("ntoskrnl.exe", "NkOnly")] = "implemented"
+        exports[("ntoskrnl.exe", "#4")] = "implemented"
         exports[("other.sys", "KeSetEvent")] = "implemented"
         kernel = ledger.microsoft_kernel(exports, KERNEL)
         self.assertEqual((kernel["names"], kernel["by_ordinal_only"], kernel["forwarded"]),

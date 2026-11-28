@@ -129,5 +129,25 @@ class Selection(unittest.TestCase):
                 self.assertNotIn("x86_64-soak", names)
 
 
+class Devices(unittest.TestCase):
+    def test_nvme_and_phase5_devices_emit_expected_qemu_args(self):
+        self.assertEqual(
+            boot_test.disk_devices("x86_64", "nvme"),
+            ["-drive", "if=none,id=nkdata,format=raw,file=data.img",
+             "-device", "nvme,drive=nkdata,serial=nk-nvme"],
+        )
+        self.assertEqual(
+            boot_test.extra_devices("x86_64", usb="xhci", usb_kbd=True, serial2=True),
+            ["-device", "qemu-xhci,id=xhci",
+             "-device", "usb-kbd,bus=xhci.0,port=1,id=kbd0",
+             "-chardev", "socket,id=ser2,path=ser2.sock,server=on,wait=off",
+             "-device", "isa-serial,index=1,chardev=ser2"],
+        )
+        with self.assertRaises(ValueError):
+            boot_test.disk_devices("aarch64", "nvme")
+        with self.assertRaises(ValueError):
+            boot_test.extra_devices("x86_64", usb_kbd=True)
+
+
 if __name__ == "__main__":
     unittest.main()

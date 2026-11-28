@@ -203,6 +203,55 @@ pub unsafe extern "C" fn IoSetHardErrorOrVerifyDevice(irp: *mut IRP, device: *mu
     }
 }
 
+/// [`IoValidateDeviceIoControlAccess`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iovalidatedeviceiocontrolaccess):
+/// verify that the requestor of an I/O or file-system control IRP has
+/// the read/write access bits `required_access` asks for (`FILE_READ_ACCESS`
+/// = 1, `FILE_WRITE_ACCESS` = 2). Kernel-mode requests always succeed;
+/// user-mode requests are checked against `FileObject->ReadAccess` and
+/// `WriteAccess`.
+///
+/// # Safety
+/// `irp` is a live IRP with a valid current stack location and file object.
+pub unsafe extern "C" fn IoValidateDeviceIoControlAccess(
+    irp: *mut IRP,
+    required_access: u32,
+) -> NTSTATUS {
+    const FILE_READ_ACCESS: u32 = 1;
+    const FILE_WRITE_ACCESS: u32 = 2;
+    if irp.is_null() || required_access & !(FILE_READ_ACCESS | FILE_WRITE_ACCESS) != 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // SAFETY: per the contract.
+    unsafe {
+        let location = (&raw const (*irp).CurrentStackLocation).read();
+        if location.is_null() {
+            return STATUS_INVALID_PARAMETER;
+        }
+        let major = (&raw const (*location).MajorFunction).read();
+        if !matches!(
+            major,
+            IRP_MJ_DEVICE_CONTROL | IRP_MJ_INTERNAL_DEVICE_CONTROL | IRP_MJ_FILE_SYSTEM_CONTROL
+        ) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (&raw const (*irp).RequestorMode).read() == KERNEL_MODE || required_access == 0 {
+            return STATUS_SUCCESS;
+        }
+        let file = (&raw const (*location).FileObject).read();
+        if file.is_null() {
+            return STATUS_INVALID_PARAMETER;
+        }
+        if required_access & FILE_READ_ACCESS != 0 && (&raw const (*file).ReadAccess).read() == 0 {
+            return STATUS_ACCESS_DENIED;
+        }
+        if required_access & FILE_WRITE_ACCESS != 0 && (&raw const (*file).WriteAccess).read() == 0
+        {
+            return STATUS_ACCESS_DENIED;
+        }
+        STATUS_SUCCESS
+    }
+}
+
 /// [`IoRecordIoAttribution`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iorecordioattribution):
 /// charge disk I/O to the process an attribution handle stands for.
 /// The information must be version 1 (`STATUS_REVISION_MISMATCH`), as
@@ -298,7 +347,39 @@ pub fn test() -> Result<u32, &'static str> {
             {
                 return Err("I/O attribution was not answered as on a system that has none");
             }
-            Ok(16)
+            // IoValidateDeviceIoControlAccess: checks major function, mode and file access.
+            let mut fake_file = core::mem::zeroed::<FILE_OBJECT>();
+            let fake_file_ptr = &raw mut fake_file;
+            let loc = irp::next_location(request);
+            (*request).CurrentStackLocation = loc;
+            (*loc).MajorFunction = IRP_MJ_READ;
+            (*loc).FileObject = fake_file_ptr;
+            if IoValidateDeviceIoControlAccess(request, 1) != STATUS_INVALID_PARAMETER {
+                return Err("IoValidateDeviceIoControlAccess accepted a non-control IRP");
+            }
+            (*loc).MajorFunction = IRP_MJ_DEVICE_CONTROL;
+            (*request).RequestorMode = KERNEL_MODE;
+            if IoValidateDeviceIoControlAccess(request, 3) != STATUS_SUCCESS {
+                return Err("IoValidateDeviceIoControlAccess refused a kernel-mode request");
+            }
+            (*request).RequestorMode = USER_MODE;
+            if IoValidateDeviceIoControlAccess(request, 1) != STATUS_ACCESS_DENIED
+                || IoValidateDeviceIoControlAccess(request, 2) != STATUS_ACCESS_DENIED
+                || IoValidateDeviceIoControlAccess(request, 4) != STATUS_INVALID_PARAMETER
+            {
+                return Err("IoValidateDeviceIoControlAccess missed a denied or invalid access");
+            }
+            (&raw mut (*fake_file_ptr).ReadAccess).write(1);
+            if IoValidateDeviceIoControlAccess(request, 1) != STATUS_SUCCESS
+                || IoValidateDeviceIoControlAccess(request, 2) != STATUS_ACCESS_DENIED
+            {
+                return Err("IoValidateDeviceIoControlAccess mischecked ReadAccess");
+            }
+            (&raw mut (*fake_file_ptr).WriteAccess).write(1);
+            if IoValidateDeviceIoControlAccess(request, 3) != STATUS_SUCCESS {
+                return Err("IoValidateDeviceIoControlAccess mischecked Read+WriteAccess");
+            }
+            Ok(22)
         })()
     };
     // SAFETY: the test's IRP, which no driver holds.

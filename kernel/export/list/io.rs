@@ -122,6 +122,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Partial, io::irpext::IoPropagateIrpExtension),
     export!(Partial, io::irpext::IoPropagateIrpExtensionEx),
     export!(Implemented, io::irpinfo::IoRecordIoAttribution),
+    export!(Implemented, io::irpinfo::IoValidateDeviceIoControlAccess),
     export!(Implemented, io::irpext::IoSetActivityIdIrp),
     export!(Implemented, io::irpext::IoSetGenericIrpExtension),
     export!(Implemented, io::irpinfo::IoSetHardErrorOrVerifyDevice),

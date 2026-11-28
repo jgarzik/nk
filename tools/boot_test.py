@@ -146,22 +146,48 @@ def kernel_cmdline(sc):
 
 
 def disk_devices(arch, disk):
-    """QEMU's arguments for the scenario's data disk (`disk`: "ahci" or
-    None): data.img on the machine's AHCI controller. Not a snapshot:
-    what the guest writes has to be in the file after the boot."""
+    """QEMU's arguments for the scenario's data disk (`disk`: "ahci", "nvme"
+    or None). Not a snapshot: what the guest writes has to be in the file
+    after the boot."""
     if disk is None:
         return []
-    if disk != "ahci":
-        raise ValueError(f"unknown disk {disk!r}")
     drive = ["-drive", "if=none,id=nkdata,format=raw,file=data.img"]
-    if arch == "x86_64":
-        # q35 has an ICH9 AHCI controller; its ports are the bus `ide`.
-        return drive + ["-device", "ide-hd,drive=nkdata,bus=ide.0"]
-    # `virt` has none: the same controller, as a PCIe device.
-    return drive + ["-device", "ich9-ahci,id=ahci", "-device", "ide-hd,drive=nkdata,bus=ahci.0"]
+    if disk == "ahci":
+        if arch == "x86_64":
+            # q35 has an ICH9 AHCI controller; its ports are the bus `ide`.
+            return drive + ["-device", "ide-hd,drive=nkdata,bus=ide.0"]
+        # `virt` has none: the same controller, as a PCIe device.
+        return drive + ["-device", "ich9-ahci,id=ahci", "-device", "ide-hd,drive=nkdata,bus=ahci.0"]
+    if disk == "nvme":
+        if arch != "x86_64":
+            raise ValueError("nvme disk is supported on x86_64 only")
+        return drive + ["-device", "nvme,drive=nkdata,serial=nk-nvme"]
+    raise ValueError(f"unknown disk {disk!r}")
 
 
-def qemu_command(arch, smp, interactive, disk=None):
+def extra_devices(arch, usb=None, usb_kbd=False, serial2=False):
+    """QEMU's arguments for optional Phase 5 devices: xHCI host controller,
+    preattached USB keyboard, and secondary ISA UART backed by a host socket."""
+    args = []
+    if usb is not None:
+        if usb != "xhci" or arch != "x86_64":
+            raise ValueError(f"unsupported usb {usb!r} on {arch}")
+        args += ["-device", "qemu-xhci,id=xhci"]
+        if usb_kbd:
+            args += ["-device", "usb-kbd,bus=xhci.0,port=1,id=kbd0"]
+    elif usb_kbd:
+        raise ValueError("usb_kbd requires usb = 'xhci'")
+    if serial2:
+        if arch != "x86_64":
+            raise ValueError("serial2 is supported on x86_64 only")
+        args += [
+            "-chardev", "socket,id=ser2,path=ser2.sock,server=on,wait=off",
+            "-device", "isa-serial,index=1,chardev=ser2",
+        ]
+    return args
+
+
+def qemu_command(arch, smp, interactive, disk=None, usb=None, usb_kbd=False, serial2=False):
     """The command line. Paths are relative to the scenario directory, where
     QEMU is started, so the QMP socket path stays short."""
     code, _ = FIRMWARE[arch]
@@ -181,6 +207,7 @@ def qemu_command(arch, smp, interactive, disk=None):
         "-nic", "none", "-display", "none", "-no-reboot",
     ]
     cmd += disk_devices(arch, disk)
+    cmd += extra_devices(arch, usb=usb, usb_kbd=usb_kbd, serial2=serial2)
     if interactive:
         return cmd + ["-serial", "mon:stdio"]
     return cmd + [
@@ -250,25 +277,204 @@ def kill_stale(directory):
             pass
 
 
-def boot(arch, smp, directory, interactive, disk=None):
+SERIAL2_EXPECT = b"NK-SER-TX:HELLO-HOST\n"
+SERIAL2_REPLY = b"NK-SER-RX:HELLO-GUEST\n"
+
+# QMP key sequences sent on `NK-QMP-KEYS <name>` markers.
+QMP_KEY_SEQS = {
+    "seq1": [["a"], ["b"]],
+    "seq2": [["shift", "c"], ["d"]],
+}
+
+
+def _connect_unix(directory, sock_name, timeout=20.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        s = socket.socket(socket.AF_UNIX)
+        try:
+            s.settimeout(5)
+            s.connect(str(directory / sock_name))
+            return s
+        except OSError:
+            s.close()
+            time.sleep(0.05)
+    raise TimeoutError(f"timed out connecting to {sock_name}")
+
+
+def run_serial2_peer(directory, stop_event, errors):
+    """Host peer for the secondary ISA UART (`serial2 = true`). Reads the
+    expected guest->host payload and sends a distinct host->guest payload."""
+    try:
+        s = _connect_unix(directory, "ser2.sock", timeout=30.0)
+    except OSError as e:
+        errors.append(f"serial2 peer failed to connect: {e}")
+        return
+    try:
+        s.settimeout(0.2)
+        buf = bytearray()
+        deadline = time.monotonic() + TIMEOUT
+        while not stop_event.is_set() and time.monotonic() < deadline:
+            try:
+                chunk = s.recv(256)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                if SERIAL2_EXPECT in buf:
+                    s.sendall(SERIAL2_REPLY)
+                    (directory / "serial2.log").write_bytes(bytes(buf))
+                    return
+            except TimeoutError:
+                continue
+        (directory / "serial2.log").write_bytes(bytes(buf))
+        errors.append(f"serial2 peer did not receive expected guest payload (got {bytes(buf)!r})")
+    except OSError as e:
+        errors.append(f"serial2 peer I/O error: {e}")
+    finally:
+        s.close()
+
+
+class QmpSession:
+    """Persistent QMP connection supporting command replies and async events
+    (such as `DEVICE_DELETED`) for host-driven USB hotplug scenarios."""
+
+    def __init__(self, directory):
+        self.sock = _connect_unix(directory, "qmp.sock", timeout=30.0)
+        self.sock.settimeout(20.0)
+        self.f = self.sock.makefile("rw")
+        self.events = []
+        json.loads(self.f.readline())  # greeting
+        self.execute("qmp_capabilities")
+
+    def close(self):
+        try:
+            self.f.close()
+        finally:
+            self.sock.close()
+
+    def execute(self, cmd, arguments=None):
+        req = {"execute": cmd}
+        if arguments is not None:
+            req["arguments"] = arguments
+        self.f.write(json.dumps(req) + "\n")
+        self.f.flush()
+        while True:
+            line = self.f.readline()
+            if not line:
+                raise OSError("QMP socket closed")
+            msg = json.loads(line)
+            if "event" in msg:
+                self.events.append(msg)
+                continue
+            if "error" in msg:
+                raise RuntimeError(f"QMP {cmd} failed: {msg['error']}")
+            if "return" in msg:
+                return msg["return"]
+
+    def wait_event(self, name, device_id=None, timeout=20.0):
+        deadline = time.monotonic() + timeout
+        while True:
+            for i, ev in enumerate(self.events):
+                if ev.get("event") == name and (
+                    device_id is None or ev.get("data", {}).get("device") == device_id
+                ):
+                    return self.events.pop(i)
+            rem = deadline - time.monotonic()
+            if rem <= 0:
+                raise TimeoutError(f"timed out waiting for QMP event {name} ({device_id})")
+            self.sock.settimeout(min(rem, 1.0))
+            try:
+                line = self.f.readline()
+            except TimeoutError:
+                continue
+            if not line:
+                raise OSError("QMP socket closed while waiting for event")
+            msg = json.loads(line)
+            if "event" in msg:
+                self.events.append(msg)
+
+
+def handle_qmp_marker(session, line, errors, actions):
+    """Execute one host QMP step requested by a guest serial marker."""
+    text = line.decode(errors="replace").strip()
+    try:
+        if "NK-QMP-ADD-KBD" in text:
+            session.execute("device_add", {
+                "driver": "usb-kbd", "bus": "xhci.0", "port": "1", "id": "kbd0",
+            })
+            actions.append("add-kbd")
+        elif "NK-QMP-DEL-KBD" in text:
+            session.execute("device_del", {"id": "kbd0"})
+            session.wait_event("DEVICE_DELETED", device_id="kbd0", timeout=20.0)
+            actions.append("del-kbd")
+        elif "NK-QMP-KEYS " in text:
+            seq_name = text.split("NK-QMP-KEYS ", 1)[1].split()[0]
+            keys = QMP_KEY_SEQS.get(seq_name)
+            if not keys:
+                errors.append(f"unknown QMP key sequence {seq_name!r}")
+                return
+            for chord in keys:
+                session.execute("send-key", {
+                    "keys": [{"type": "qcode", "data": k} for k in chord],
+                    "hold-time": 40,
+                })
+                time.sleep(0.08)
+            actions.append(f"keys:{seq_name}")
+    except (OSError, RuntimeError, TimeoutError, ValueError) as e:
+        errors.append(f"QMP action failed for {text!r}: {e}")
+
+
+def boot(arch, smp, directory, interactive, disk=None, usb=None, usb_kbd=False,
+         serial2=False, hotplug=False):
     """Run QEMU in `directory` (which holds esp.img, vars.fd and, for a
     scenario with a disk, data.img). Returns
-    the timeout in seconds if it had to be killed (else 0), and the host
-    times at which the kernel's clock marks arrived. The serial output
-    goes to serial.log there."""
-    proc, timed_out, marks = None, 0, []
+    (timed_out, marks, host_errors)."""
+    proc, timed_out, marks, host_errors = None, 0, [], []
+    stop_event = threading.Event()
+    peer_thread = None
+    qmp_queue = []
+    qmp_cond = threading.Condition()
+    qmp_thread = None
+    qmp_actions = []
+    cmd = qemu_command(arch, smp, interactive, disk=disk, usb=usb,
+                       usb_kbd=usb_kbd, serial2=serial2)
     try:
         if interactive:
-            proc = subprocess.Popen(qemu_command(arch, smp, True, disk), cwd=directory)
+            proc = subprocess.Popen(cmd, cwd=directory)
             proc.wait()
-            return 0, marks
+            return 0, marks, host_errors
         with open(directory / "serial.log", "wb") as log, \
                 open(directory / "qemu.err", "wb") as err:
             proc = subprocess.Popen(
-                qemu_command(arch, smp, False, disk), cwd=directory,
+                cmd, cwd=directory,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
                 start_new_session=True, preexec_fn=die_with_parent,
             )
+            if serial2:
+                peer_thread = threading.Thread(
+                    target=run_serial2_peer, args=(directory, stop_event, host_errors), daemon=True,
+                )
+                peer_thread.start()
+            if hotplug:
+                def qmp_worker():
+                    try:
+                        session = QmpSession(directory)
+                    except (OSError, RuntimeError, TimeoutError) as e:
+                        host_errors.append(f"QMP connect failed: {e}")
+                        return
+                    try:
+                        while True:
+                            with qmp_cond:
+                                while not qmp_queue and not stop_event.is_set():
+                                    qmp_cond.wait(timeout=0.2)
+                                if not qmp_queue and stop_event.is_set():
+                                    return
+                                marker = qmp_queue.pop(0)
+                            handle_qmp_marker(session, marker, host_errors, qmp_actions)
+                    finally:
+                        session.close()
+
+                qmp_thread = threading.Thread(target=qmp_worker, daemon=True)
+                qmp_thread.start()
 
             def pump():
                 # Unbuffered copy: a hung boot still leaves what it printed.
@@ -278,7 +484,13 @@ def boot(arch, smp, directory, interactive, disk=None):
                     log.write(chunk)
                     log.flush()
                     *lines, tail = (tail + chunk).split(b"\n")
-                    marks.extend(time.monotonic() for l in lines if b"NK-CLOCK-MARK" in l)
+                    for l in lines:
+                        if b"NK-CLOCK-MARK" in l:
+                            marks.append(time.monotonic())
+                        if hotplug and b"NK-QMP-" in l:
+                            with qmp_cond:
+                                qmp_queue.append(l)
+                                qmp_cond.notify()
 
             reader = threading.Thread(target=pump, daemon=True)
             reader.start()
@@ -288,10 +500,20 @@ def boot(arch, smp, directory, interactive, disk=None):
                 timed_out = TIMEOUT
                 hang_evidence(arch, directory)
             finally:
+                stop_event.set()
+                with qmp_cond:
+                    qmp_cond.notify_all()
                 kill(proc)
                 reader.join()
-        return timed_out, marks
+                if peer_thread:
+                    peer_thread.join(timeout=5)
+                if qmp_thread:
+                    qmp_thread.join(timeout=5)
+        if hotplug and not qmp_actions and not host_errors and not timed_out:
+            host_errors.append("hotplug scenario performed no host QMP actions")
+        return timed_out, marks, host_errors
     finally:
+        stop_event.set()
         if proc:
             kill(proc)
 
@@ -351,7 +573,14 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
         shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
         if disk:
             make_disk(sc, data)
-        timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
+        usb = sc.get("usb")
+        usb_kbd = bool(sc.get("usb_kbd", False))
+        serial2 = bool(sc.get("serial2", False))
+        hotplug = bool(sc.get("hotplug", False))
+        timed_out, marks, host_errors = boot(
+            arch, smp_of(sc), directory, interactive, disk=disk,
+            usb=usb, usb_kbd=usb_kbd, serial2=serial2, hotplug=hotplug,
+        )
         if interactive:
             passed = True
             return 0
@@ -368,7 +597,10 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             shutil.copyfile(FIRMWARE[arch][1], directory / "vars.fd")
             if disk:
                 make_disk(sc, data)
-            timed_out, marks = boot(arch, smp_of(sc), directory, interactive, disk)
+            timed_out, marks, host_errors = boot(
+                arch, smp_of(sc), directory, interactive, disk=disk,
+                usb=usb, usb_kbd=usb_kbd, serial2=serial2, hotplug=hotplug,
+            )
             text = (directory / "serial.log").read_text(errors="replace")
         log = judge.Log(text)
         golden = load_golden(sc["golden"]) if "golden" in sc and not bless else None
@@ -378,6 +610,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
             must_fail=sc.get("must_fail", ()),
             timed_out=timed_out, marks=marks,
         )
+        problems += host_errors
         if disk:
             # QEMU has exited, or been killed: either way what it wrote
             # is in the file.
@@ -426,7 +659,7 @@ def run_scenario(name, sc, image=None, interactive=False, bless=False, instance=
     finally:
         # The image and the firmware variables are rebuilt each run and
         # never help a diagnosis; the logs stay unless the run passed.
-        for scratch in ("esp.img", "vars.fd", "qmp.sock", "qemu.pid"):
+        for scratch in ("esp.img", "vars.fd", "qmp.sock", "ser2.sock", "qemu.pid"):
             (directory / scratch).unlink(missing_ok=True)
         # The disk is the evidence when it is what was wrong.
         if not disk_wrong:

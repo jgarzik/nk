@@ -15,7 +15,7 @@ SCENARIOS = tomllib.loads((TOOLS / "scenarios.toml").read_text())
 KEYS = {
     "arch", "tier", "smp", "accel", "cmdline", "expect", "match", "then", "must_fail",
     "golden", "canonical", "disk", "disk_size", "disk_image", "disk_expect", "registry",
-    "paths",
+    "paths", "usb", "usb_kbd", "serial2", "hotplug",
 }
 
 
@@ -72,17 +72,24 @@ class Scenarios(unittest.TestCase):
                 for name in sc.get("registry", ()):
                     self.assertTrue(mkesp.registry_file(name).exists(), name)
                 if "disk_image" in sc:
-                    self.assertEqual(sc.get("disk"), "ahci")
+                    self.assertIn(sc.get("disk"), ("ahci", "nvme"))
                     self.assertNotIn("disk_size", sc, "a FAT disk has its own size")
                     self.assertIn(sc["disk_image"], fatdisk.LAYOUTS)
                     self.assertIn(sc["disk_expect"], fatdisk.CHECKS)
                 elif "disk" in sc:
-                    self.assertEqual(sc["disk"], "ahci")
+                    self.assertIn(sc["disk"], ("ahci", "nvme"))
                     self.assertIn(sc["disk_expect"], datadisk.CHECKS)
                     size = sc.get("disk_size", datadisk.DEFAULT_MIB)
                     self.assertIsInstance(size, int)
                     # Room for the write range, and sectors after it.
                     self.assertGreater(size << 20, datadisk.WRITE_END * datadisk.SECTOR)
+                if "usb" in sc:
+                    self.assertEqual(sc["usb"], "xhci")
+                    self.assertEqual(sc["arch"], "x86_64")
+                if sc.get("usb_kbd") or sc.get("hotplug"):
+                    self.assertEqual(sc.get("usb"), "xhci")
+                if sc.get("serial2"):
+                    self.assertEqual(sc["arch"], "x86_64")
 
     def test_each_architecture_has_its_main_scenario(self):
         # `make check` / `check-arm` and the ledger rely on these.

@@ -645,6 +645,24 @@ pub fn open_as(
                 // it is in the table another thread may close it and
                 // write the flags (`cleanup`). Nothing else can reach
                 // the file yet, nor if no handle is made.
+                // Record granted read/write/delete flags on the file object
+                // when the driver did not already set them via IoSetShareAccess,
+                // so routines like IoValidateDeviceIoControlAccess observe the
+                // open's access as on Windows.
+                const FILE_READ_DATA: u32 = 0x0001;
+                const FILE_WRITE_DATA: u32 = 0x0002;
+                const FILE_APPEND_DATA: u32 = 0x0004;
+                const FILE_EXECUTE: u32 = 0x0020;
+                const DELETE: u32 = 0x0001_0000;
+                if (*file).ReadAccess == 0 && granted & (FILE_READ_DATA | FILE_EXECUTE) != 0 {
+                    (*file).ReadAccess = 1;
+                }
+                if (*file).WriteAccess == 0 && granted & (FILE_WRITE_DATA | FILE_APPEND_DATA) != 0 {
+                    (*file).WriteAccess = 1;
+                }
+                if (*file).DeleteAccess == 0 && granted & DELETE != 0 {
+                    (*file).DeleteAccess = 1;
+                }
                 (*file).Flags |= FO_HANDLE_CREATED;
                 let attributes = nk_ob::handles::Attributes {
                     inherit: extra.inherit,
