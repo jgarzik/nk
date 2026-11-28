@@ -414,6 +414,147 @@ pub fn generic_call_test() -> Result<usize, &'static str> {
     Ok(cpus)
 }
 
+/// Interrupts whose handler sends an interprocessor interrupt to another
+/// processor arrive while this processor sends interprocessor interrupts
+/// to its target. On controllers whose interrupt command register is
+/// written in two halves (xAPIC), an interrupt between the writes would
+/// clobber the destination and deliver the interrupt to the wrong
+/// processor. Returns how many interrupts were sent under fire.
+pub fn interrupted_test() -> Result<u64, &'static str> {
+    use super::{interrupt, thread};
+    use core::sync::atomic::AtomicBool;
+
+    static READY: AtomicBool = AtomicBool::new(false);
+    static FLOODING: AtomicBool = AtomicBool::new(false);
+    static DISTRACTOR: AtomicUsize = AtomicUsize::new(0);
+    static TARGET: AtomicUsize = AtomicUsize::new(1);
+    static HANDLED: AtomicU64 = AtomicU64::new(0);
+    static SENT: AtomicU64 = AtomicU64::new(0);
+    static MISDIRECTED: AtomicU64 = AtomicU64::new(0);
+
+    fn distract(_: u32) {
+        arch::interrupt_processor(DISTRACTOR.load(Ordering::Relaxed), arch::TEST_STRAY.0);
+        HANDLED.fetch_add(1, Ordering::Release);
+    }
+
+    fn check_target(_: u32) {
+        if me() != TARGET.load(Ordering::Relaxed) {
+            MISDIRECTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn check_distractor(_: u32) {
+        if me() != DISTRACTOR.load(Ordering::Relaxed) {
+            MISDIRECTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn flood(sender: usize) {
+        READY.store(true, Ordering::Release);
+        let mut sent = 0u64;
+        while FLOODING.load(Ordering::Acquire) {
+            arch::interrupt_processor(sender, arch::TEST_LOW.0);
+            sent += 1;
+            let mut patience = 10_000;
+            while HANDLED.load(Ordering::Acquire) < sent
+                && FLOODING.load(Ordering::Acquire)
+                && patience > 0
+            {
+                core::hint::spin_loop();
+                patience -= 1;
+            }
+        }
+    }
+
+    fn send(_: usize) {
+        while !READY.load(Ordering::Acquire) {
+            thread::yield_now();
+        }
+        let target = TARGET.load(Ordering::Relaxed);
+        let deadline = time::interrupt_time() + 3_000_000;
+        let mut sent = 0u64;
+        while sent < 200_000 && MISDIRECTED.load(Ordering::Relaxed) == 0 {
+            arch::interrupt_processor(target, arch::TEST_HIGH.0);
+            sent += 1;
+            if sent & 0x3F == 0
+                && time::interrupt_time() > deadline
+                && HANDLED.load(Ordering::Acquire) > 0
+            {
+                break;
+            }
+        }
+        SENT.store(sent, Ordering::Release);
+        FLOODING.store(false, Ordering::Release);
+    }
+
+    let cpus = smp::online_count();
+    let (low, low_level) = arch::TEST_LOW;
+    let (high, high_level) = arch::TEST_HIGH;
+    let (stray, stray_level) = arch::TEST_STRAY;
+    HANDLED.store(0, Ordering::Relaxed);
+    SENT.store(0, Ordering::Relaxed);
+    MISDIRECTED.store(0, Ordering::Relaxed);
+    if cpus < 2 {
+        interrupt::register(low, low_level, |_| {
+            arch::self_interrupt(arch::TEST_HIGH.0);
+            HANDLED.fetch_add(1, Ordering::Release);
+        });
+        interrupt::register(high, high_level, |_| {});
+        for _ in 0..64 {
+            arch::self_interrupt(low);
+            call_on(0, count, 0);
+        }
+        time::stall(1_000);
+        interrupt::unregister(low);
+        interrupt::unregister(high);
+        if HANDLED.load(Ordering::Acquire) == 0 {
+            return Err("no interrupt arrived during the call loop");
+        }
+        return Ok(64);
+    }
+
+    let sender = 0usize;
+    let target = 1usize;
+    let flooder = cpus - 1;
+    let distractor = if cpus >= 3 { flooder } else { sender };
+    TARGET.store(target, Ordering::Relaxed);
+    DISTRACTOR.store(distractor, Ordering::Relaxed);
+    READY.store(false, Ordering::Relaxed);
+    FLOODING.store(true, Ordering::Release);
+
+    interrupt::register(low, low_level, distract);
+    interrupt::register(high, high_level, check_target);
+    interrupt::register(stray, stray_level, check_distractor);
+
+    let threads = thread::count();
+    let started = thread::create(flood, sender, thread::NORMAL_PRIORITY, 1 << flooder)
+        .and_then(|_| thread::create(send, 0, thread::NORMAL_PRIORITY, 1 << sender));
+    if started.is_err() {
+        FLOODING.store(false, Ordering::Release);
+        READY.store(true, Ordering::Release);
+    }
+    thread::settle(threads);
+    // Let any last interrupt the flooder or sender fired drain before unregistering.
+    time::stall(5_000);
+    interrupt::unregister(low);
+    interrupt::unregister(high);
+    interrupt::unregister(stray);
+
+    started?;
+    if MISDIRECTED.load(Ordering::Acquire) != 0 {
+        return Err("an interprocessor interrupt arrived on the wrong processor");
+    }
+    let sent = SENT.load(Ordering::Acquire);
+    let handled = HANDLED.load(Ordering::Acquire);
+    if sent == 0 || handled == 0 {
+        return Err("no interprocessor interrupt ran under interrupts");
+    }
+    if irql::current() != irql::PASSIVE_LEVEL {
+        return Err("the IRQL did not come back down");
+    }
+    Ok(sent)
+}
+
 /// Processor 1 takes an interprocessor call and never returns from it,
 /// interrupts off. The caller must give up and stop the system.
 pub fn stuck_test() {

@@ -5,3 +5,4 @@ smp.generic-call ok
 smp.counter ok
 smp.tlb ok
 smp.lock-interrupted ok
+smp.ipi-interrupted ok

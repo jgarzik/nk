@@ -691,10 +691,12 @@ and calls nothing while it is held.
 - `lib/ke`: the rules as pure functions (`Held`, `check_raise`,
   `check_lower`), the lock (`TicketLock`, host threads contending) and
   the wait register (every interleaving with several wakers).
-- `ke.irql-and-locks`, `ke.interrupts`: on the booted kernel, the IRQL
-  moves as stated, interrupts arrive once, at their level and in order of
-  urgency, and nothing is left held. x86-64 runs x2APIC under KVM and
-  xAPIC under emulation.
+- `ke.irql-and-locks`, `ke.interrupts`, `smp.ipi-interrupted`: on the
+  booted kernel, the IRQL moves as stated, interrupts arrive once, at
+  their level and in order of urgency, interprocessor interrupts keep
+  their destination when preempted by a handler that also sends one, and
+  nothing is left held. x86-64 runs x2APIC under KVM and xAPIC under
+  emulation.
 - `*-neg-lock-order`, `*-neg-lock-twice`, `*-neg-irql-lower`: boots that
   break a rule on purpose and must end in the bugcheck named above.
 - `oracle.nkc-irql`: a conformance driver raises and lowers the IRQL,
