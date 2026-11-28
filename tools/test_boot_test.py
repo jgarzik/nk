@@ -194,6 +194,38 @@ class Qmp(unittest.TestCase):
             t.join(timeout=2.0)
         self.assertEqual(errors, [])
 
+    def test_qmp_session_stops_promptly_on_stop_event(self):
+        client, server = socket.socketpair()
+        stop = threading.Event()
+
+        def peer():
+            try:
+                server.sendall(b'{"QMP": {"version": {}}}\n')
+                buf = b""
+                while b"\n" not in buf:
+                    buf += server.recv(4096)
+                server.sendall(b'{"return": {}}\n')
+                time.sleep(0.15)
+                stop.set()
+                time.sleep(0.5)
+            except OSError:
+                pass
+            finally:
+                server.close()
+
+        t = threading.Thread(target=peer, daemon=True)
+        t.start()
+        session = boot_test.QmpSession(sock=client, stop_event=stop)
+        started = time.monotonic()
+        try:
+            with self.assertRaises(TimeoutError):
+                session.wait_event("DEVICE_DELETED", device_id="kbd0", timeout=20.0)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 2.0)
+        finally:
+            session.close()
+            t.join(timeout=2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

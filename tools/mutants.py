@@ -141,14 +141,53 @@ def run(name, root=ROOT, thin_lto=True, parallel_workers=1):
     return ok, msg
 
 
-def dirty_tracked_files():
-    """Tracked files modified in `ROOT`, to mirror into temporary worktrees."""
-    res = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=ROOT,
-                         capture_output=True, text=True, check=True)
-    return [line for line in res.stdout.splitlines() if line.strip()]
+def working_tree_changes(root=ROOT):
+    """Return `(to_copy, to_delete)` relative paths representing uncommitted
+    working-tree state relative to `HEAD`: modified tracked files, untracked
+    non-ignored files, and locally deleted tracked files."""
+    diff = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=root,
+                          capture_output=True, text=True, check=True)
+    untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=root,
+                               capture_output=True, text=True, check=True)
+    to_copy, to_delete = [], []
+    seen = set()
+    for rel in diff.stdout.splitlines():
+        rel = rel.strip()
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        if (root / rel).exists():
+            to_copy.append(rel)
+        else:
+            to_delete.append(rel)
+    for rel in untracked.stdout.splitlines():
+        rel = rel.strip()
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        if (root / rel).exists():
+            to_copy.append(rel)
+    return to_copy, to_delete
 
 
-def create_worktree(index, dirty):
+def sync_working_tree(src_root, dst_root, to_copy, to_delete):
+    """Mirror uncommitted additions, modifications, and deletions from
+    `src_root` into `dst_root`."""
+    for rel in to_delete:
+        dst = dst_root / rel
+        if dst.exists() or dst.is_symlink():
+            dst.unlink()
+    for rel in to_copy:
+        src = src_root / rel
+        dst = dst_root / rel
+        if src.is_dir():
+            continue
+        if src.exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+
+def create_worktree(index, to_copy, to_delete):
     wdir = WORKTREES / f"w{index}"
     if wdir.exists():
         subprocess.run(["git", "worktree", "remove", "--force", str(wdir)],
@@ -157,12 +196,7 @@ def create_worktree(index, dirty):
     wdir.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "worktree", "add", "--detach", "--force", str(wdir), "HEAD"],
                    cwd=ROOT, capture_output=True, text=True, check=True)
-    for rel in dirty:
-        src = ROOT / rel
-        dst = wdir / rel
-        if src.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+    sync_working_tree(ROOT, wdir, to_copy, to_delete)
     (wdir / "target").mkdir(parents=True, exist_ok=True)
     fixtures_dst = wdir / "target" / "fixtures"
     if not fixtures_dst.exists():
@@ -196,11 +230,11 @@ def run_parallel(names, jobs, thin_lto):
                 return fallback.popleft()
             return None
 
-    dirty = dirty_tracked_files()
+    to_copy, to_delete = working_tree_changes()
     worktrees = []
     try:
         subprocess.run(["git", "worktree", "prune"], cwd=ROOT, capture_output=True)
-        worktrees = [create_worktree(i, dirty) for i in range(jobs)]
+        worktrees = [create_worktree(i, to_copy, to_delete) for i in range(jobs)]
 
         def worker(worker_id):
             wdir = worktrees[worker_id]

@@ -345,7 +345,8 @@ class QmpSession:
     `socket.makefile()`, because a `TimeoutError` on a Python `BufferedReader`
     invalidates the file wrapper and drops subsequent reads."""
 
-    def __init__(self, directory=None, sock=None):
+    def __init__(self, directory=None, sock=None, stop_event=None):
+        self.stop_event = stop_event
         if sock is None:
             self.sock = _connect_unix(directory, "qmp.sock", timeout=30.0)
         else:
@@ -364,6 +365,8 @@ class QmpSession:
     def _readline(self, timeout):
         deadline = time.monotonic() + timeout
         while True:
+            if self.stop_event is not None and self.stop_event.is_set():
+                raise TimeoutError("QMP session stopped")
             nl = self._buf.find(b"\n")
             if nl != -1:
                 line = bytes(self._buf[:nl + 1])
@@ -372,7 +375,8 @@ class QmpSession:
             rem = deadline - time.monotonic()
             if rem <= 0:
                 raise TimeoutError("timed out reading QMP line")
-            self.sock.settimeout(min(rem, 1.0))
+            slice_t = min(rem, 0.2 if self.stop_event is not None else 1.0)
+            self.sock.settimeout(slice_t)
             try:
                 chunk = self.sock.recv(4096)
             except TimeoutError:
@@ -487,16 +491,17 @@ def boot(arch, smp, directory, interactive, disk=None, usb=None, usb_kbd=False,
             if hotplug:
                 def qmp_worker():
                     try:
-                        session = QmpSession(directory)
+                        session = QmpSession(directory, stop_event=stop_event)
                     except (OSError, RuntimeError, TimeoutError) as e:
-                        host_errors.append(f"QMP connect failed: {e}")
+                        if not stop_event.is_set():
+                            host_errors.append(f"QMP connect failed: {e}")
                         return
                     try:
                         while True:
                             with qmp_cond:
                                 while not qmp_queue and not stop_event.is_set():
                                     qmp_cond.wait(timeout=0.2)
-                                if not qmp_queue and stop_event.is_set():
+                                if stop_event.is_set():
                                     return
                                 marker = qmp_queue.pop(0)
                             handle_qmp_marker(session, marker, host_errors, qmp_actions)
@@ -528,6 +533,13 @@ def boot(arch, smp, directory, interactive, disk=None, usb=None, usb_kbd=False,
                 proc.wait(timeout=TIMEOUT)
             except subprocess.TimeoutExpired:
                 timed_out = TIMEOUT
+                # Release the live QMP worker's socket before hang_evidence
+                # connects to QEMU's single-client qmp.sock.
+                stop_event.set()
+                with qmp_cond:
+                    qmp_cond.notify_all()
+                if qmp_thread:
+                    qmp_thread.join(timeout=3)
                 hang_evidence(arch, directory)
             finally:
                 stop_event.set()
