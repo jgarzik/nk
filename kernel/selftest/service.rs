@@ -175,7 +175,9 @@ fn zw_load_starts() -> Result<(), &'static str> {
         if !opened {
             return Err("IoOpenDriverRegistryKey failed during DriverEntry initialization");
         }
-        if resources() != before_init {
+        let after_init = resources();
+        if after_init != before_init {
+            kprintln!("service: init leak before={before_init:?} after={after_init:?}");
             return Err("IoOpenDriverRegistryKey DriverEntry test leaked resources");
         }
     }
@@ -272,7 +274,9 @@ fn zw_load_starts() -> Result<(), &'static str> {
         if !marked_unloading || !bind_refused {
             return Err("import binding was not refused while driver unload was claimed");
         }
-        if resources() != before_race {
+        let after_race = resources();
+        if after_race != before_race {
+            kprintln!("service: race leak before={before_race:?} after={after_race:?}");
             return Err("unload-race test left resources behind");
         }
     }
@@ -444,7 +448,9 @@ fn zw_load_starts() -> Result<(), &'static str> {
         {
             return Err("IoSetCompletionRoutineEx did not pin driver image through unload");
         }
-        if resources() != before_ex {
+        let after_ex = resources();
+        if after_ex != before_ex {
+            kprintln!("service: ex leak before={before_ex:?} after={after_ex:?}");
             return Err("completion-pin test left resources behind");
         }
     }
