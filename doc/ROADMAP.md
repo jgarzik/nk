@@ -71,18 +71,12 @@ each. What NK has of each part is in `doc/design/`.
 
 ## Phases
 
-In order. Phase 4 (memory sections, cache manager, FsRtl, kernel APCs,
-`cng.sys`/`ksecdd.sys` with boot entropy, and `fastfat.sys` mounting,
-reading and writing `C:`) and Phase 5 (KMDF runtime and WDK `echo.x64.sys`,
-`stornvme.sys` on PCIe NVMe with GPT FAT32 writeback, `msisadrv.sys` +
-`serial.sys` + `serenum.sys` on COM2, and Microsoft's USB 3.0 xHCI + HID
-keyboard stack with live QMP hotplug, surprise removal and reattach) are
-proven on QEMU x86-64. Physical boot on the Dell OptiPlex is deferred to
-Phase 10+ once the rescue-disk user-mode stack is ready. From here, the
-foundation and Phases 6–10 build user mode up to the Windows rescue disk.
-The foundation changes what was built on a single process and a boot-time
-scale (one address space, one handle table, spin locks around every
-table) before user mode builds on it.
+In order, from here to the rescue disk (what already runs is in
+`README.md`). The foundation changes what was built on a single process
+and a boot-time scale (one address space, one handle table, spin locks
+around every table) before user mode builds on it; physical boot on the
+Dell OptiPlex joins in Phase 10 once the rescue-disk user-mode stack is
+ready.
 
 | # | Phase | NK gains | Proof (unmodified binaries) |
 | --- | --- | --- | --- |
@@ -99,14 +93,9 @@ logon.
 
 ## Next step: foundation for user mode
 
-The foundation prepares the single-process boot-time kernel for user mode
-(previous mode and argument capture, unified object parse routines,
-passive-level table locks, requesting-thread I/O completion, per-process
-handle tables, and keeping firmware runtime regions out of the user half),
-followed by Phase 6 (user mode, `ntdll.dll`, and `autochk.exe`). Its
-detailed plan will be written here when it starts.
-
-What NK lacks is listed in `doc/design/absent.md`.
+The detailed plan for the foundation and Phase 6 (`ntdll.dll`,
+`autochk.exe`) will be written here when work begins. What NK lacks is
+listed in `doc/design/absent.md`.
 
 ## Risks
 

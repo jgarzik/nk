@@ -143,7 +143,8 @@ never). `HalRemoveInterruptRemapping`, by which the arbiter takes a
 choice back, is a trap.
 
 **Interrupt objects** (`kernel/ke/kinterrupt.rs`,
-`kernel/io/interrupt.rs`). `IoConnectInterruptEx` allocates a
+`kernel/io/interrupt.rs`). `IoConnectInterruptEx` (and legacy
+`IoConnectInterrupt`, used by drivers such as `serial.sys`) allocates a
 `KINTERRUPT`, of the pinned build's layout, and links it into its
 vector's chain; the vector's first object unmasks the line, its last
 masks it. Fully specified connections name a translated vector and

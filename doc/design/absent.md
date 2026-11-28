@@ -29,8 +29,9 @@ not made.
 **Plug and Play** (the section of that name says what NK does). No
 device installation: a driver-database record is applied when a device
 is first seen. No arbiters or translators of bus drivers are asked: NK
-assigns resources itself. No removal on request, eject, stop or
-rebalance, and so none of the notifications that go with them. A filter driver
+assigns resources itself. No query-remove, eject, stop or rebalance
+(surprise removal and remove-complete notifications are supported; see
+[Plug and Play](pnp.md)). A filter driver
 that is registered for a device or its class and has no image among
 the boot files is left out of the stack, where Windows fails the
 device: the reference machine registers `EhStorClass` (a KMDF driver
@@ -100,7 +101,7 @@ answers those a binary reaches and stops the system naming any other
 | --- | --- | --- |
 | ALPC ports (`ZwAlpc*`) | `msrpc.sys` | `msrpc.sys` is a library, loaded for what it exports; its `DllInitialize` calls none of these, which serve the RPC calls made through it |
 | I/O completion ports | `msrpc.sys` | on which `msrpc.sys` waits for its ALPC messages |
-| What the storage stack, the volume drivers, the FAT file system and the security drivers import and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | `acpi.sys`, `pci.sys`, `pshed.dll`, `storport.sys`, `classpnp.sys`, `disk.sys`, `partmgr.sys`, `volmgr.sys`, `volume.sys`, `mountmgr.sys`, `fastfat.sys`, `ksecdd.sys`, `cng.sys` | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
+| What Microsoft's inbox drivers import and NK lacks (`kernel/export/list/trap_*.rs`, a list per area) | ACPI, PCI, storage, volume, FAT, crypto, KMDF, serial and USB/HID drivers | the lists drive the work: a boot that reaches one names it, and the commit that implements a routine takes its name off the list. An imported variable has no trap: it is absent until it is real |
 
 The `*-neg-trap` scenarios call one through the address its name
 resolves to and require the stop that names it.

@@ -39,10 +39,12 @@ routines promises. `MmPageEntireDriver`, `MmLockPagableCodeSection` and
 address lies in, or null.
 
 **Driver and library duality.** A kernel image loaded as a library via
-another image's imports (such as `wdfldr.sys`, `ucx01000.sys`,
-`usbd.sys`, or `hidclass.sys`) can also be started as a service driver
-without reloading the binary; `io::driver::load` reuses the resident
-image and keeps its export table live while any importer holds it.
+another image's imports (such as `ksecdd.sys`, `wdfldr.sys`,
+`ucx01000.sys`, `usbd.sys`, or `hidclass.sys`) can also be started as a
+boot-start service without reloading the binary; `ldr::load_boot` reuses
+the resident image and keeps its export table live while any importer
+holds it (non-boot loads return `STATUS_IMAGE_ALREADY_LOADED`, matching
+Windows).
 
 **An image's messages.** A driver reads text from a message table in
 an image's resources with

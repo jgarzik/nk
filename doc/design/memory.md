@@ -54,7 +54,7 @@ Part of NK's design ([DESIGN.md](../DESIGN.md)): the principles there apply.
 
 ## Files in memory
 
-Phase 4 adds pageable memory of one kind: a file's pages, mapped in the
+NK has pageable memory of one kind: a file's pages, mapped in the
 system cache for the cache manager. Pool stays non-paged and driver
 images stay resident. Microsoft's file systems see the memory manager
 only through `SECTION_OBJECT_POINTERS`, paging IRPs, MDLs and a few
