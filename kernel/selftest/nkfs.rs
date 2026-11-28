@@ -16,7 +16,9 @@ use crate::io::{device, irp, mdl};
 use crate::mm::pool;
 use crate::ob::{handle, object};
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 use nk_ntabi::ex::ERESOURCE;
 use nk_ntabi::fsrtl::FSRTL_ADVANCED_FCB_HEADER;
 use nk_ntabi::io::*;
@@ -62,6 +64,17 @@ static LOG: [[AtomicU64; 4]; LOG_ROOM] = [const { [const { AtomicU64::new(0) }; 
 static LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// A read at this offset plus one fails; 0 for none.
 static FAIL_AT: AtomicU64 = AtomicU64::new(0);
+/// Optional write-pause hook for deterministic in-flight flush tests:
+/// when `PAUSE_WRITE_AT == offset + 1`, the paging write sets
+/// `WRITE_PAUSED = true` and waits until `WRITE_RELEASE` is set, then
+/// completes with `WRITE_STATUS` (skipping the buffer copy on error).
+static PAUSE_WRITE_AT: AtomicU64 = AtomicU64::new(0);
+static WRITE_PAUSED: AtomicBool = AtomicBool::new(false);
+static WRITE_RELEASE: AtomicBool = AtomicBool::new(false);
+static WRITE_STATUS: AtomicI32 = AtomicI32::new(STATUS_SUCCESS);
+/// Persistent write-failure injection for error-handling tests: fails
+/// every paging write while non-zero.
+static FAIL_WRITE_STATUS: AtomicI32 = AtomicI32::new(STATUS_SUCCESS);
 static DATA: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 static FCB: AtomicPtr<Fcb> = AtomicPtr::new(core::ptr::null_mut());
 /// At the last paging write: bit 0, the writing thread held the main
@@ -96,6 +109,34 @@ pub fn take_log() -> alloc::vec::Vec<Record> {
 /// Have the read that starts at `offset` fail (`None`: none).
 pub fn fail_read_at(offset: Option<u64>) {
     FAIL_AT.store(offset.map_or(0, |o| o + 1), Ordering::Release);
+}
+
+/// Arm a one-shot pause on the next paging write starting at `offset`.
+pub fn arm_write_pause(offset: u64) {
+    WRITE_PAUSED.store(false, Ordering::Release);
+    WRITE_RELEASE.store(false, Ordering::Release);
+    WRITE_STATUS.store(STATUS_SUCCESS, Ordering::Release);
+    PAUSE_WRITE_AT.store(offset + 1, Ordering::Release);
+}
+
+/// Wait until the armed paging write has entered `nkfs::transfer`.
+pub fn wait_write_paused() {
+    while !WRITE_PAUSED.load(Ordering::Acquire) {
+        crate::ke::thread::yield_now();
+    }
+}
+
+/// Release the paused paging write with `status`.
+pub fn release_write_pause(status: NTSTATUS) {
+    PAUSE_WRITE_AT.store(0, Ordering::Release);
+    WRITE_STATUS.store(status, Ordering::Release);
+    WRITE_RELEASE.store(true, Ordering::Release);
+}
+
+/// Fail every subsequent paging write with `status` (`STATUS_SUCCESS`
+/// clears injection).
+pub fn fail_writes_with(status: NTSTATUS) {
+    FAIL_WRITE_STATUS.store(status, Ordering::Release);
 }
 
 /// The file's bytes as nkfs holds them.
@@ -176,6 +217,22 @@ unsafe fn transfer(irp: *mut IRP, location: *mut IO_STACK_LOCATION) -> (NTSTATUS
         }
         if major == IRP_MJ_READ && FAIL_AT.load(Ordering::Acquire) == offset + 1 {
             return (STATUS_DEVICE_DATA_ERROR, 0);
+        }
+        if major == IRP_MJ_WRITE && flags & IRP_PAGING_IO != 0 {
+            if PAUSE_WRITE_AT.load(Ordering::Acquire) == offset + 1 {
+                WRITE_PAUSED.store(true, Ordering::Release);
+                while !WRITE_RELEASE.load(Ordering::Acquire) {
+                    crate::ke::thread::yield_now();
+                }
+                let st = WRITE_STATUS.load(Ordering::Acquire);
+                if nt_error(st) {
+                    return (st, 0);
+                }
+            }
+            let injected = FAIL_WRITE_STATUS.load(Ordering::Acquire);
+            if nt_error(injected) {
+                return (injected, 0);
+            }
         }
         if flags & IRP_NOCACHE == 0 || offset as usize >= FILE_BYTES {
             return (STATUS_INVALID_DEVICE_REQUEST, 0);

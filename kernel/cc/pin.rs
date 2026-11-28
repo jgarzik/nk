@@ -749,8 +749,16 @@ pub struct DirtyRun {
 /// at or after `from` and before `end`, of at most `most` bytes. Its
 /// BCBs' resources are taken exclusive, waiting for their pinners; the
 /// BCBs are clean from now on, their pages handed to the memory manager
-/// as modified.
-pub fn take_dirty_run(scm: &Scm, from: u64, end: u64, most: u64) -> Option<DirtyRun> {
+/// as modified. `on_take` runs under the BCB mutex once the run is
+/// chosen, so the caller can publish the in-flight range before another
+/// flush can observe the BCBs clean.
+pub fn take_dirty_run(
+    scm: &Scm,
+    from: u64,
+    end: u64,
+    most: u64,
+    on_take: impl FnOnce(u64, u64),
+) -> Option<DirtyRun> {
     let want_resource = uses_resource(scm);
     let run = scm.with_bcbs(|bcbs, _| {
         // SAFETY: BCBs on the list are live under the mutex.
@@ -774,6 +782,7 @@ pub fn take_dirty_run(scm: &Scm, from: u64, end: u64, most: u64) -> Option<Dirty
             b.pin_count.set(prev + 1);
             taken.push((ptr, takes));
         }
+        on_take(start, stop);
         Some(DirtyRun {
             offset: start,
             length: (stop - start) as u32,

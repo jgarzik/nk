@@ -58,6 +58,8 @@ fn new_scm(
             prev: Cell::new(core::ptr::null_mut()),
             privates: Cell::new(core::ptr::null_mut()),
             uninit_events: Cell::new(core::ptr::null_mut()),
+            inflight: Cell::new(core::ptr::null_mut()),
+            flush_waiters: Cell::new(core::ptr::null_mut()),
             sop,
             file_object: Cell::new(core::ptr::null_mut()),
             callbacks,

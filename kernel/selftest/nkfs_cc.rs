@@ -49,6 +49,7 @@ static CC: Group = Group {
         "cc.vacb-evict-race",
         "cc.lifecycle-race",
         "cc.pin-attribute-race",
+        "cc.flush-inflight",
     ],
     run: cc_tests,
     manual: false,
@@ -965,7 +966,180 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
     verdicts.push(("cc.wait-twice", wait_twice()));
     verdicts.push(("cc.lifecycle-race", lifecycle_race(file, sop)));
     verdicts.push(("cc.pin-attribute-race", pin_attribute_race(file, sop)));
+    verdicts.push(("cc.flush-inflight", flush_inflight_test(file, sop)));
     Ok(())
+}
+
+/// Synchronous whole-file and ranged `CcFlushCache` (as well as direct
+/// `mm::flush::flush_section`) must wait for an in-flight write-behind or
+/// concurrent paging write rather than returning early, and must surface an
+/// error when that write fails.
+fn flush_inflight_test(
+    file: *mut FILE_OBJECT,
+    sop: *mut SECTION_OBJECT_POINTERS,
+) -> Result<(), &'static str> {
+    use crate::ke::thread;
+    use core::sync::atomic::{AtomicBool, AtomicI32};
+
+    struct FlushTask {
+        sop: *mut SECTION_OBJECT_POINTERS,
+        offset: Option<i64>,
+        length: u32,
+        direct_mm: bool,
+        done: AtomicBool,
+        status: AtomicI32,
+    }
+
+    fn run_flush(arg: usize) {
+        // SAFETY: `arg` points to `FlushTask` on the test's stack until exit.
+        let t = unsafe { &*(arg as *const FlushTask) };
+        let status = if t.direct_mm {
+            let range = t.offset.map(|o| (o as u64, t.length));
+            flush::flush_section(t.sop, range, None).Status
+        } else {
+            let mut iosb = IO_STATUS_BLOCK {
+                Status: STATUS_PENDING,
+                Information: 0,
+            };
+            let off_val = t.offset.unwrap_or(0);
+            let off_ptr = if t.offset.is_some() {
+                &raw const off_val
+            } else {
+                core::ptr::null()
+            };
+            // SAFETY: live `sop`, stack `off_val` and `iosb`.
+            unsafe { cc::flush::CcFlushCache(t.sop, off_ptr, t.length, &raw mut iosb) };
+            iosb.Status
+        };
+        t.status.store(status, Ordering::Release);
+        t.done.store(true, Ordering::Release);
+    }
+
+    initialize(file, false);
+    // Helper: dirty one page at `offset`, trigger a background flush that
+    // pauses inside `nkfs`, launch a synchronous flush task, verify it stays
+    // blocked while the write is paused, release the write with `write_st`,
+    // and return the synchronous flush's status.
+    let run_case = |offset: i64,
+                    sync_range: Option<(i64, u32)>,
+                    direct_mm: bool,
+                    write_st: NTSTATUS|
+     -> Result<NTSTATUS, &'static str> {
+        let marker = [0x6B_u8; 0x20];
+        // SAFETY: cached file and stack buffer.
+        let wrote = unsafe {
+            entry::nk_entry_CcCopyWriteEx(
+                file.cast(),
+                &raw const offset,
+                marker.len() as u32,
+                1,
+                marker.as_ptr().cast(),
+                core::ptr::null_mut(),
+            )
+        };
+        if wrote != 1 {
+            return Err("CcCopyWriteEx failed in flush_inflight_test");
+        }
+        nkfs::arm_write_pause(offset as u64);
+        let bg = FlushTask {
+            sop,
+            offset: None,
+            length: 0,
+            direct_mm: false,
+            done: AtomicBool::new(false),
+            status: AtomicI32::new(STATUS_PENDING),
+        };
+        let sync = FlushTask {
+            sop,
+            offset: sync_range.map(|(o, _)| o),
+            length: sync_range.map_or(0, |(_, l)| l),
+            direct_mm,
+            done: AtomicBool::new(false),
+            status: AtomicI32::new(STATUS_PENDING),
+        };
+        let before = thread::count();
+        let t_bg = thread::create_referenced(
+            run_flush,
+            core::ptr::from_ref(&bg).addr(),
+            thread::NORMAL_PRIORITY,
+            thread::ANYWHERE,
+        )?;
+        // Wait until the background flush is paused inside nkfs's paging write
+        // (run already removed from MBCB and `WRITE_IN_PROGRESS` set in MM).
+        nkfs::wait_write_paused();
+
+        let t_sync = thread::create_referenced(
+            run_flush,
+            core::ptr::from_ref(&sync).addr(),
+            thread::NORMAL_PRIORITY,
+            thread::ANYWHERE,
+        )?;
+        for _ in 0..32 {
+            thread::yield_now();
+        }
+        let finished_early = sync.done.load(Ordering::Acquire);
+        nkfs::release_write_pause(write_st);
+
+        for t in [t_bg, t_sync] {
+            // SAFETY: referenced thread objects.
+            unsafe {
+                crate::ke::wait::wait(Some(t.cast()), None);
+                crate::ob::object::dereference(t.cast());
+            }
+        }
+        thread::settle(before);
+        if finished_early {
+            return Err("synchronous flush returned before in-flight paging write completed");
+        }
+        Ok(sync.status.load(Ordering::Acquire))
+    };
+
+    let mut verdict = Ok(());
+    // 1. Whole-file CcFlushCache waits for in-flight write (success).
+    match run_case(0x70000, None, false, STATUS_SUCCESS) {
+        Ok(st) if st == STATUS_SUCCESS => {}
+        Ok(_) => verdict = Err("whole-file CcFlushCache failed after successful in-flight write"),
+        Err(why) => verdict = Err(why),
+    }
+    // 2. Ranged CcFlushCache waits for in-flight write (success).
+    if verdict.is_ok() {
+        match run_case(0x71000, Some((0x71000, 0x1000)), false, STATUS_SUCCESS) {
+            Ok(st) if st == STATUS_SUCCESS => {}
+            Ok(_) => verdict = Err("ranged CcFlushCache failed after successful in-flight write"),
+            Err(why) => verdict = Err(why),
+        }
+    }
+    // 3. Direct MmFlushSection waits on WRITE_IN_PROGRESS even after MODIFIED
+    //    was cleared by the first writer.
+    if verdict.is_ok() {
+        match run_case(0x72000, Some((0x72000, 0x1000)), true, STATUS_SUCCESS) {
+            Ok(st) if st == STATUS_SUCCESS => {}
+            Ok(_) => verdict = Err("direct MmFlushSection failed after successful in-flight write"),
+            Err(why) => verdict = Err(why),
+        }
+    }
+    // 4. Whole-file CcFlushCache surfaces error when the in-flight write fails.
+    if verdict.is_ok() {
+        nkfs::fail_writes_with(STATUS_DEVICE_DATA_ERROR);
+        let res = run_case(0x73000, None, false, STATUS_DEVICE_DATA_ERROR);
+        nkfs::fail_writes_with(STATUS_SUCCESS);
+        match res {
+            Ok(st) if nt_error(st) => {}
+            Ok(_) => {
+                verdict =
+                    Err("synchronous CcFlushCache reported success after failed in-flight write");
+            }
+            Err(why) => verdict = Err(why),
+        }
+    }
+
+    flush_all(sop);
+    nkfs::take_log();
+    let zero = 0i64;
+    // SAFETY: cached file.
+    unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+    verdict
 }
 
 /// Setting `MODIFIED_WRITE_DISABLED` via `CcSetAdditionalCacheAttributes`

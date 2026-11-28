@@ -16,6 +16,8 @@ use super::section::{self, ControlArea, Subsection};
 use super::{PAGE_SIZE, pool};
 use crate::arch;
 use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
 use core::sync::atomic::Ordering;
 use nk_mm::pfn::{Location, flag};
 use nk_mm::pt::Arch;
@@ -220,6 +222,53 @@ pub fn flush_section(
     result
 }
 
+/// A thread waiting for an in-flight flush write (`WRITE_IN_PROGRESS`) to
+/// finish, living on the sleeper's stack until signalled.
+struct FlushWaiter {
+    next: *mut FlushWaiter,
+    event: *mut KEVENT,
+}
+
+struct FlushWaiters(UnsafeCell<*mut FlushWaiter>);
+
+// SAFETY: accessed only while holding the PFN lock (`pfn::Guard`).
+unsafe impl Sync for FlushWaiters {}
+
+static FLUSH_WAITERS: FlushWaiters = FlushWaiters(UnsafeCell::new(core::ptr::null_mut()));
+
+/// Link `waiter` onto [`FLUSH_WAITERS`] under the PFN lock.
+///
+/// # Safety
+/// `waiter` lives on the caller's stack until detached and signalled.
+unsafe fn enqueue_flush_waiter(_: &mut Guard, waiter: *mut FlushWaiter) {
+    // SAFETY: guarded by the PFN lock; per the contract for `waiter`.
+    unsafe {
+        let head = FLUSH_WAITERS.0.get();
+        (*waiter).next = *head;
+        *head = waiter;
+    }
+}
+
+/// Detach every queued flush waiter under the PFN lock so the caller can
+/// signal them after dropping the lock.
+fn take_flush_waiters(_: &mut Guard) -> *mut FlushWaiter {
+    // SAFETY: guarded by the PFN lock.
+    unsafe { core::mem::replace(&mut *FLUSH_WAITERS.0.get(), core::ptr::null_mut()) }
+}
+
+/// Signal every waiter detached by [`take_flush_waiters`], outside the PFN lock.
+fn wake_flush_waiters(mut head: *mut FlushWaiter) {
+    while !head.is_null() {
+        // SAFETY: each waiter lives on its sleeper's stack until signalled;
+        // read `next` before waking.
+        unsafe {
+            let next = (*head).next;
+            crate::ke::wait::KeSetEvent((*head).event, 0, 0);
+            head = next;
+        }
+    }
+}
+
 /// Write the modified pages `lo..hi` of subsection `i` of `ca`.
 fn flush_subsection(
     ca: &ControlArea,
@@ -243,11 +292,19 @@ fn flush_subsection(
     let (mut j, mut alone_until) = (lo, lo);
     while j < hi {
         let most = if j < alone_until { 1 } else { WRITE_CLUSTER };
-        let (start, frames) = match gather(ss, j, hi, most) {
+        let mut event = MaybeUninit::<KEVENT>::uninit();
+        let mut waiter = FlushWaiter {
+            next: core::ptr::null_mut(),
+            event: event.as_mut_ptr(),
+        };
+        let (start, frames) = match gather(ss, j, hi, most, &mut event, &mut waiter) {
             Gathered::Run(start, frames) => (start, frames),
             Gathered::Busy(at) => {
-                // Another write of the page is in flight: wait it out.
-                crate::ke::thread::sleep();
+                // Another write of the page is in flight: wait until it
+                // clears `WRITE_IN_PROGRESS` and signals `event`.
+                // SAFETY: `gather` initialised `event` and linked `waiter`
+                // under the PFN lock before releasing it.
+                unsafe { crate::ke::wait::wait(Some(event.as_mut_ptr().cast()), None) };
                 j = at;
                 continue;
             }
@@ -275,7 +332,8 @@ enum Gathered {
     /// A run of modified pages, each held and marked as being written:
     /// its first page and frames.
     Run(usize, Vec<u64>),
-    /// The page at this index is being written by another flush.
+    /// The page at this index is being written by another flush; the
+    /// caller's waiter has been linked and must be waited on.
     Busy(usize),
     /// No modified page from where the search began.
     Clean,
@@ -283,7 +341,14 @@ enum Gathered {
 
 /// From page `j` on (before `hi`), the first run of at most `most`
 /// modified pages, taken for writing.
-fn gather(ss: &Subsection, mut j: usize, hi: usize, most: usize) -> Gathered {
+fn gather(
+    ss: &Subsection,
+    mut j: usize,
+    hi: usize,
+    most: usize,
+    event: &mut MaybeUninit<KEVENT>,
+    waiter: &mut FlushWaiter,
+) -> Gathered {
     let mut frames = Vec::with_capacity(WRITE_CLUSTER);
     let a = arch::pt_arch();
     let mut g = pfn::lock();
@@ -310,13 +375,22 @@ fn gather(ss: &Subsection, mut j: usize, hi: usize, most: usize) -> Gathered {
         };
         let e = frame.map(|f| *pfn::frames(&mut g).db.get(f));
         match (frame, e) {
-            (Some(frame), Some(e)) if e.has(flag::MODIFIED) && !e.has(flag::READ_IN_PROGRESS) => {
-                if e.has(flag::WRITE_IN_PROGRESS) {
-                    if frames.is_empty() {
-                        return Gathered::Busy(j);
+            (Some(_), Some(e)) if e.has(flag::WRITE_IN_PROGRESS) => {
+                // Another flush took this page and cleared `MODIFIED`:
+                // stop our current cluster (if any) or wait for that write
+                // to finish so we neither return early nor miss a failure.
+                if frames.is_empty() {
+                    // SAFETY: `event` and `waiter` live on the caller's stack
+                    // until signalled after `WRITE_IN_PROGRESS` clears.
+                    unsafe {
+                        crate::ke::wait::KeInitializeEvent(event.as_mut_ptr(), 0, 0);
+                        enqueue_flush_waiter(&mut g, core::ptr::from_mut(waiter));
                     }
-                    break;
+                    return Gathered::Busy(j);
                 }
+                break;
+            }
+            (Some(frame), Some(e)) if e.has(flag::MODIFIED) && !e.has(flag::READ_IN_PROGRESS) => {
                 let db = &mut pfn::frames(&mut g).db;
                 if let Err(e) = db.reference(frame) {
                     crate::kd::bugcheck(format_args!("mm: flushing a page: {}", e.0));
@@ -394,19 +468,23 @@ fn write(
         super::fault::unmap_system(mdl);
         iosb.Status
     };
-    let mut g = pfn::lock();
-    let no_write = ca.no_write();
-    for &frame in frames {
-        let db = &mut pfn::frames(&mut g).db;
-        let e = db.get_mut(frame);
-        e.flags &= !flag::WRITE_IN_PROGRESS;
-        if nt_error(status) {
-            e.flags |= flag::MODIFIED;
+    let waiters = {
+        let mut g = pfn::lock();
+        let no_write = ca.no_write();
+        for &frame in frames {
+            let db = &mut pfn::frames(&mut g).db;
+            let e = db.get_mut(frame);
+            e.flags &= !flag::WRITE_IN_PROGRESS;
+            if nt_error(status) {
+                e.flags |= flag::MODIFIED;
+            }
+            if let Err(e) = db.dereference(frame, no_write, false) {
+                crate::kd::bugcheck(format_args!("mm: a flush write finished: {}", e.0));
+            }
         }
-        if let Err(e) = db.dereference(frame, no_write, false) {
-            crate::kd::bugcheck(format_args!("mm: a flush write finished: {}", e.0));
-        }
-    }
+        take_flush_waiters(&mut g)
+    };
+    wake_flush_waiters(waiters);
     status
 }
 

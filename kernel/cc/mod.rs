@@ -102,6 +102,10 @@ pub struct Scm {
     prev: Cell<*mut Scm>,
     privates: Cell<*mut Pcm>,
     uninit_events: Cell<*mut CACHE_UNINITIALIZE_EVENT>,
+    /// Paging writes taken out of the dirty bitmap/BCBs and currently in
+    /// flight, and synchronous flushes waiting on them; under [`MASTER`].
+    pub(super) inflight: Cell<*mut flush::InFlight>,
+    pub(super) flush_waiters: Cell<*mut flush::FlushWaiter>,
     // Set while the map is being created, then fixed until it is
     // deleted.
     pub sop: *mut SECTION_OBJECT_POINTERS,

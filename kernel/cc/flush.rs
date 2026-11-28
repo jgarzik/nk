@@ -13,9 +13,163 @@
 use super::{DIRTY, MASTER, Scm, dereference, reference, trace};
 use crate::fsrtl::acquire::CC_FLUSH;
 use crate::mm::{PAGE_SIZE, flush};
+use core::cell::Cell;
+use core::mem::MaybeUninit;
 use nk_cc::mbcb::Run;
 use nk_ntabi::io::{IO_STATUS_BLOCK, SECTION_OBJECT_POINTERS};
+use nk_ntabi::ke::KEVENT;
 use nk_ntabi::status::*;
+
+/// A dirty run taken out of `scm`'s BCBs or bitmap and currently being
+/// written by `MmFlushSection`, linked on `scm.inflight` under [`MASTER`]
+/// so synchronous flushes wait for it instead of returning early.
+pub struct InFlight {
+    next: *mut InFlight,
+    start: u64,
+    end: u64,
+}
+
+/// A synchronous flush waiting for an overlapping [`InFlight`] write to
+/// finish, linked on `scm.flush_waiters` under [`MASTER`].
+pub struct FlushWaiter {
+    next: *mut FlushWaiter,
+    start: u64,
+    end: u64,
+    /// Set if an overlapping in-flight write failed with a fatal error
+    /// that was not redirtied, so the waiter does not report false success.
+    fatal: Cell<NTSTATUS>,
+    event: *mut KEVENT,
+}
+
+fn overlaps(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
+    a_start < b_end && b_start < a_end
+}
+
+/// Publish an in-flight write range on `scm.inflight` under [`MASTER`].
+///
+/// # Safety
+/// `node` lives on the caller's stack until [`finish_inflight`] unlinks it.
+unsafe fn register_inflight(scm: &Scm, node: *mut InFlight, start: u64, end: u64) {
+    let _m = MASTER.lock();
+    // SAFETY: per the contract; guarded by `MASTER`.
+    unsafe {
+        (*node).start = start;
+        (*node).end = end;
+        (*node).next = scm.inflight.get();
+    }
+    scm.inflight.set(node);
+}
+
+/// Remove `node` from `scm.inflight` and wake any synchronous flushes
+/// waiting on an overlapping range, propagating `fatal` if the write
+/// failed fatally without redirtying.
+fn finish_inflight(scm: &Scm, node: *mut InFlight, fatal: Option<NTSTATUS>) {
+    let woken = {
+        let _m = MASTER.lock();
+        // SAFETY: `node` is on `scm.inflight`, guarded by `MASTER`.
+        let (start, end) = unsafe { ((*node).start, (*node).end) };
+        let mut cursor = scm.inflight.get();
+        let mut prev: *mut InFlight = core::ptr::null_mut();
+        while !cursor.is_null() {
+            // SAFETY: nodes live on their writers' stacks until unlinked here.
+            let next = unsafe { (*cursor).next };
+            if cursor == node {
+                if prev.is_null() {
+                    scm.inflight.set(next);
+                } else {
+                    // SAFETY: as above.
+                    unsafe { (*prev).next = next };
+                }
+                break;
+            }
+            prev = cursor;
+            cursor = next;
+        }
+        let mut woken: *mut FlushWaiter = core::ptr::null_mut();
+        let mut w = scm.flush_waiters.get();
+        let mut w_prev: *mut FlushWaiter = core::ptr::null_mut();
+        while !w.is_null() {
+            // SAFETY: waiters live on their sleepers' stacks until detached
+            // here and signalled.
+            unsafe {
+                let next = (*w).next;
+                if overlaps((*w).start, (*w).end, start, end) {
+                    if let Some(status) = fatal
+                        && !nt_error((*w).fatal.get())
+                    {
+                        (*w).fatal.set(status);
+                    }
+                    if w_prev.is_null() {
+                        scm.flush_waiters.set(next);
+                    } else {
+                        (*w_prev).next = next;
+                    }
+                    (*w).next = woken;
+                    woken = w;
+                } else {
+                    w_prev = w;
+                }
+                w = next;
+            }
+        }
+        woken
+    };
+    let mut w = woken;
+    while !w.is_null() {
+        // SAFETY: detached waiters live on their sleepers' stacks until
+        // signalled; read `next` before waking.
+        unsafe {
+            let next = (*w).next;
+            crate::ke::wait::KeSetEvent((*w).event, 0, 0);
+            w = next;
+        }
+    }
+}
+
+/// Whether any [`InFlight`] write on `scm` overlaps `[start, end)`.
+/// If so, link a stack waiter and wait for it to finish, returning any
+/// fatal error status propagated from it; else return `None`.
+fn wait_overlapping_inflight(scm: &Scm, start: u64, end: u64) -> Option<NTSTATUS> {
+    let mut event = MaybeUninit::<KEVENT>::uninit();
+    let mut waiter = FlushWaiter {
+        next: core::ptr::null_mut(),
+        start,
+        end,
+        fatal: Cell::new(STATUS_SUCCESS),
+        event: event.as_mut_ptr(),
+    };
+    let must_wait = {
+        let _m = MASTER.lock();
+        let mut at = scm.inflight.get();
+        let mut hit = false;
+        while !at.is_null() {
+            // SAFETY: nodes on `scm.inflight` live on their writers' stacks
+            // under `MASTER`.
+            unsafe {
+                if overlaps((*at).start, (*at).end, start, end) {
+                    hit = true;
+                    break;
+                }
+                at = (*at).next;
+            }
+        }
+        if hit {
+            // SAFETY: stack event and waiter, signalled before we return.
+            unsafe {
+                crate::ke::wait::KeInitializeEvent(event.as_mut_ptr(), 0, 0);
+                waiter.next = scm.flush_waiters.get();
+            }
+            scm.flush_waiters.set(&raw mut waiter);
+        }
+        hit
+    };
+    if !must_wait {
+        return None;
+    }
+    // SAFETY: stack event initialised and linked above.
+    unsafe { crate::ke::wait::wait(Some(event.as_mut_ptr().cast()), None) };
+    Some(waiter.fatal.get())
+}
 
 /// The most one write of a flush carries: what the memory manager writes
 /// in one request.
@@ -78,61 +232,111 @@ pub fn flush_scm(scm: &Scm, range: Option<(u64, u32)>, budget: Option<u64>) -> I
     };
     let page = PAGE_SIZE as u64;
     let mut left = budget.unwrap_or(u64::MAX);
-    // Pinned runs.
-    let mut from = start;
-    while left != 0 {
-        let Some(run) = super::pin::take_dirty_run(scm, from, end, RUN_PAGES * page) else {
-            break;
-        };
-        from = run.offset + u64::from(run.length);
-        let written = flush::flush_section(scm.sop, Some((run.offset, run.length)), Some(CC_FLUSH));
-        trace(format_args!(
-            "write pinned {:p} {:#x}+{:#x}: {:#x}",
-            core::ptr::from_ref(scm),
-            run.offset,
-            run.length,
-            written.Status
-        ));
-        let pages = u64::from(run.length).div_ceil(page);
-        left = left.saturating_sub(pages);
-        note(&mut result, &written);
-        super::pin::finish_run(run, keep_dirty(written.Status));
-    }
-    // Runs of the bitmap.
-    let (first, stop) = (start / page, end.div_ceil(page));
-    let mut from = first;
-    while left != 0 {
-        let most = RUN_PAGES.min(left);
-        let Some(run) = scm.with_bcbs(|_, mbcb| {
-            if budget.is_some() {
-                mbcb.take_lazy_run(most)
-            } else {
-                mbcb.take_run(from, stop, most)
-            }
-        }) else {
-            break;
-        };
-        charge(scm, -(run.pages as i64));
-        from = run.page + run.pages;
-        left = left.saturating_sub(run.pages);
-        let written = flush::flush_section(
-            scm.sop,
-            Some((run.page * page, (run.pages * page) as u32)),
-            Some(CC_FLUSH),
-        );
-        trace(format_args!(
-            "write {:p} {:#x}+{:#x}: {:#x}",
-            core::ptr::from_ref(scm),
-            run.page * page,
-            run.pages * page,
-            written.Status
-        ));
-        note(&mut result, &written);
-        if keep_dirty(written.Status) {
-            redirty(scm, run);
+    let mut waited_inflight = false;
+    loop {
+        // Pinned runs.
+        let mut from = start;
+        while left != 0 {
+            let mut inflight = InFlight {
+                next: core::ptr::null_mut(),
+                start: 0,
+                end: 0,
+            };
+            let Some(run) = super::pin::take_dirty_run(scm, from, end, RUN_PAGES * page, |s, e| {
+                // SAFETY: `inflight` stays on this stack until `finish_inflight`.
+                unsafe { register_inflight(scm, &raw mut inflight, s, e) };
+            }) else {
+                break;
+            };
+            from = run.offset + u64::from(run.length);
+            let written =
+                flush::flush_section(scm.sop, Some((run.offset, run.length)), Some(CC_FLUSH));
+            trace(format_args!(
+                "write pinned {:p} {:#x}+{:#x}: {:#x}",
+                core::ptr::from_ref(scm),
+                run.offset,
+                run.length,
+                written.Status
+            ));
+            let pages = u64::from(run.length).div_ceil(page);
+            left = left.saturating_sub(pages);
+            note(&mut result, &written);
+            let redirty_run = keep_dirty(written.Status);
+            super::pin::finish_run(run, redirty_run);
+            let fatal = (nt_error(written.Status) && !redirty_run).then_some(written.Status);
+            finish_inflight(scm, &raw mut inflight, fatal);
         }
+        // Runs of the bitmap.
+        let (first, stop) = (start / page, end.div_ceil(page));
+        let mut from = first;
+        while left != 0 {
+            let most = RUN_PAGES.min(left);
+            let mut inflight = InFlight {
+                next: core::ptr::null_mut(),
+                start: 0,
+                end: 0,
+            };
+            let Some(run) = scm.with_bcbs(|_, mbcb| {
+                let run = if budget.is_some() {
+                    mbcb.take_lazy_run(most)
+                } else {
+                    mbcb.take_run(from, stop, most)
+                }?;
+                // Publish in-flight before releasing `bcb_lock` so a concurrent
+                // synchronous flush never observes the bitmap clean while this
+                // run has yet to reach disk.
+                // SAFETY: `inflight` stays on this stack until `finish_inflight`.
+                unsafe {
+                    register_inflight(
+                        scm,
+                        &raw mut inflight,
+                        run.page * page,
+                        (run.page + run.pages) * page,
+                    );
+                }
+                Some(run)
+            }) else {
+                break;
+            };
+            charge(scm, -(run.pages as i64));
+            from = run.page + run.pages;
+            left = left.saturating_sub(run.pages);
+            let written = flush::flush_section(
+                scm.sop,
+                Some((run.page * page, (run.pages * page) as u32)),
+                Some(CC_FLUSH),
+            );
+            trace(format_args!(
+                "write {:p} {:#x}+{:#x}: {:#x}",
+                core::ptr::from_ref(scm),
+                run.page * page,
+                run.pages * page,
+                written.Status
+            ));
+            note(&mut result, &written);
+            let redirty_run = keep_dirty(written.Status);
+            if redirty_run {
+                redirty(scm, run);
+            }
+            let fatal = (nt_error(written.Status) && !redirty_run).then_some(written.Status);
+            finish_inflight(scm, &raw mut inflight, fatal);
+        }
+        // For synchronous flushes (`budget.is_none()`), wait out any
+        // overlapping write-behind or concurrent flush already in flight,
+        // then re-check the BCBs/bitmap in case that write failed and
+        // redirtied its range.
+        if budget.is_none()
+            && let Some(fatal) = wait_overlapping_inflight(scm, start, end)
+        {
+            waited_inflight = true;
+            if nt_error(fatal) && !nt_error(result.Status) {
+                result.Status = fatal;
+            }
+            continue;
+        }
+        break;
     }
-    if range.is_some() {
+    if range.is_some() || (budget.is_none() && waited_inflight) {
         let rest = flush::flush_section(scm.sop, range, Some(CC_FLUSH));
         note(&mut result, &rest);
     }
