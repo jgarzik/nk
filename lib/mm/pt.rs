@@ -110,6 +110,10 @@ pub trait Arch {
     fn writable(&self, entry: u64) -> bool;
     /// True if a leaf entry is accessible from user mode.
     fn user(&self, entry: u64) -> bool;
+    /// True if a valid leaf entry allows instruction execution (NX/UXN clear).
+    fn executable(&self, entry: u64) -> bool;
+    /// Software-available bit on a valid leaf PTE marking copy-on-write.
+    fn cow_bit(&self) -> u64;
     /// True if what a valid 4 KiB leaf entry maps may have been written
     /// through it since the entry was made or last [`cleaned`](Self::clean).
     fn dirty(&self, entry: u64) -> bool;
@@ -186,6 +190,14 @@ impl Arch for X86_64 {
 
     fn user(&self, entry: u64) -> bool {
         entry & (1 << 2) != 0
+    }
+
+    fn executable(&self, entry: u64) -> bool {
+        entry & (1 << 63) == 0
+    }
+
+    fn cow_bit(&self) -> u64 {
+        crate::pte::X64_COW_BIT
     }
 
     /// The processor sets the dirty bit (6) on the first write.
@@ -297,6 +309,18 @@ impl Arch for Aarch64 {
     fn user(&self, entry: u64) -> bool {
         // AP[1]: EL0 access permitted.
         entry & (1 << 6) != 0
+    }
+
+    fn executable(&self, entry: u64) -> bool {
+        if self.user(entry) {
+            entry & (1 << 54) == 0
+        } else {
+            entry & (1 << 53) == 0
+        }
+    }
+
+    fn cow_bit(&self) -> u64 {
+        crate::pte::ARM64_COW_BIT
     }
 
     /// NK does not turn on the processor's dirty-state management, so

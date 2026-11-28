@@ -78,10 +78,7 @@ pub fn page_fault(
     interrupts: bool,
 ) -> Option<Result<(), NTSTATUS>> {
     use crate::ke::seh::{ACCESS_EXECUTE, ACCESS_WRITE};
-    if !interrupts
-        || !super::cache::is_cache_va(va)
-        || crate::ke::irql::current() >= crate::ke::irql::DISPATCH_LEVEL
-    {
+    if !interrupts || crate::ke::irql::current() >= crate::ke::irql::DISPATCH_LEVEL {
         return None;
     }
     let access = match access {
@@ -89,10 +86,25 @@ pub fn page_fault(
         ACCESS_EXECUTE => nk_mm::pte::Access::Execute,
         _ => nk_mm::pte::Access::Read,
     };
-    crate::arch::enable_interrupts();
-    let outcome = super::cache::fault(va, access, user_mode);
-    crate::arch::disable_interrupts();
-    outcome
+    if super::cache::is_cache_va(va) {
+        crate::arch::enable_interrupts();
+        let outcome = super::cache::fault(va, access, user_mode);
+        crate::arch::disable_interrupts();
+        return outcome;
+    }
+    if va < super::user::USER_PROBE_ADDRESS {
+        crate::arch::enable_interrupts();
+        let outcome = match super::vm::handle_fault(va, access, user_mode) {
+            super::vm::UserFault::Resolved => Some(Ok(())),
+            super::vm::UserFault::GuardViolation => Some(Err(STATUS_GUARD_PAGE_VIOLATION)),
+            super::vm::UserFault::StackOverflow => Some(Err(STATUS_STACK_OVERFLOW)),
+            super::vm::UserFault::InPageError(st) => Some(Err(st)),
+            super::vm::UserFault::AccessViolation | super::vm::UserFault::NotUser => None,
+        };
+        crate::arch::disable_interrupts();
+        return outcome;
+    }
+    None
 }
 
 /// One read in flight: what its waiters wait on, and the MDL it reads

@@ -5,7 +5,7 @@ use crate::test::{Group, Report};
 use nk_bootinfo::BootInfo;
 
 pub static GROUP: Group = Group {
-    names: &["user.stub"],
+    names: &["user.stub", "user.vm"],
     run,
     manual: false,
 };
@@ -15,6 +15,7 @@ pub static GROUPS: &[&Group] = &[&GROUP];
 #[cfg(not(target_arch = "x86_64"))]
 fn run(r: &mut Report, _info: &BootInfo) {
     r.skip("user.stub", format_args!("x86-64 only"));
+    r.skip("user.vm", format_args!("x86-64 only"));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -390,6 +391,340 @@ nk_user_stub_cli_end:
 
         res
     }
+
+    pub fn run_vm() -> Result<(), &'static str> {
+        use crate::io::mdl::{IoAllocateMdl, IoFreeMdl, MmUnlockPages, probe_and_lock};
+        use crate::svc::zw;
+        use core::ffi::c_void;
+        use nk_mm::protect::*;
+        use nk_ntabi::io::{IO_WRITE_ACCESS, USER_MODE};
+        use nk_ntabi::ke::KAPC_STATE;
+        use nk_ntabi::mm::{
+            MEM_ADDRESS_REQUIREMENTS, MEM_EXTENDED_PARAMETER,
+            MEM_EXTENDED_PARAMETER_ADDRESS_REQUIREMENTS, MEMORY_BASIC_INFORMATION,
+            MEMORY_BASIC_INFORMATION_CLASS,
+        };
+        use nk_ntabi::status::STATUS_GUARD_PAGE_VIOLATION;
+
+        // SAFETY: `process::system()` is live forever.
+        let proc_ref = unsafe { process::create_minimal(b"vmtest.exe", process::system(), false) }
+            .map_err(|_| "failed to create vmtest process")?;
+        let proc = proc_ref.body();
+        // SAFETY: `proc_ref` keeps `proc` alive for the entire test.
+        let Some(space) = (unsafe { process::address_space(proc) }) else {
+            return Err("vmtest process has no AddressSpace");
+        };
+
+        // SAFETY: attaching to our live `proc` and detaching before returning.
+        unsafe {
+            let mut apc_state = core::mem::zeroed::<KAPC_STATE>();
+            process::KeStackAttachProcess(proc.cast(), &raw mut apc_state);
+
+            let res = (|| -> Result<(), &'static str> {
+                let cur = (-1isize) as *mut c_void;
+                // 1. Reserve 4 pages (16 KiB).
+                let mut base: *mut c_void = core::ptr::null_mut();
+                let mut size: usize = 4 * mm::PAGE_SIZE;
+                let st = zw::ZwAllocateVirtualMemory(
+                    cur,
+                    &raw mut base,
+                    0,
+                    &raw mut size,
+                    MEM_RESERVE,
+                    PAGE_READWRITE,
+                );
+                if st != STATUS_SUCCESS || base.is_null() || size != 4 * mm::PAGE_SIZE {
+                    return Err("ZwAllocateVirtualMemory(MEM_RESERVE) failed");
+                }
+                // Verify query reports MEM_RESERVE.
+                let mut mbi = MEMORY_BASIC_INFORMATION::default();
+                let mut ret_len = 0usize;
+                let st = zw::ZwQueryVirtualMemory(
+                    cur,
+                    base,
+                    MEMORY_BASIC_INFORMATION_CLASS,
+                    (&raw mut mbi).cast(),
+                    size_of::<MEMORY_BASIC_INFORMATION>(),
+                    &raw mut ret_len,
+                );
+                if st != STATUS_SUCCESS
+                    || mbi.State != MEM_RESERVE
+                    || mbi.RegionSize != (4 * mm::PAGE_SIZE) as u64
+                    || mbi.Type != MEM_PRIVATE
+                {
+                    return Err("ZwQueryVirtualMemory(MEM_RESERVE) mismatch");
+                }
+
+                // 2. Commit middle 2 pages (pages 1..3) as PAGE_READWRITE.
+                let mut cbase = base.wrapping_byte_add(mm::PAGE_SIZE);
+                let mut csize = 2 * mm::PAGE_SIZE;
+                let st = zw::ZwAllocateVirtualMemory(
+                    cur,
+                    &raw mut cbase,
+                    0,
+                    &raw mut csize,
+                    MEM_COMMIT,
+                    PAGE_READWRITE,
+                );
+                if st != STATUS_SUCCESS || csize != 2 * mm::PAGE_SIZE {
+                    return Err("ZwAllocateVirtualMemory(MEM_COMMIT) failed");
+                }
+
+                // Query page 0 -> RESERVE 1 page; page 1 -> COMMIT 2 pages RW.
+                let st = zw::ZwQueryVirtualMemory(
+                    cur,
+                    cbase,
+                    MEMORY_BASIC_INFORMATION_CLASS,
+                    (&raw mut mbi).cast(),
+                    size_of::<MEMORY_BASIC_INFORMATION>(),
+                    &raw mut ret_len,
+                );
+                if st != STATUS_SUCCESS
+                    || mbi.State != MEM_COMMIT
+                    || mbi.Protect != PAGE_READWRITE
+                    || mbi.RegionSize != (2 * mm::PAGE_SIZE) as u64
+                {
+                    return Err("ZwQueryVirtualMemory(MEM_COMMIT) mismatch");
+                }
+
+                // 3. Demand-zero fault via copy: read must yield 0, write persists.
+                let mut read_val = 0xDEAD_BEEFu64;
+                if mm::user::copy(
+                    (&raw mut read_val).cast(),
+                    cbase.cast::<u8>(),
+                    size_of::<u64>(),
+                )
+                .is_err()
+                    || read_val != 0
+                {
+                    return Err("demand-zero read fault did not yield zero");
+                }
+                let magic = 0x1122_3344_5566_7788u64;
+                if mm::user::copy(
+                    cbase.cast::<u8>(),
+                    (&raw const magic).cast(),
+                    size_of::<u64>(),
+                )
+                .is_err()
+                {
+                    return Err("demand-zero write failed");
+                }
+                let pa_before = space
+                    .translate(cbase.addr() as u64)
+                    .ok_or("committed page has no physical translation after fault")?;
+
+                // 4. Protect to PAGE_WRITECOPY -> writing must CoW to a NEW frame!
+                let mut pbase = cbase;
+                let mut psize = mm::PAGE_SIZE;
+                let mut old_prot = 0u32;
+                let st = zw::ZwProtectVirtualMemory(
+                    cur,
+                    &raw mut pbase,
+                    &raw mut psize,
+                    PAGE_WRITECOPY,
+                    &raw mut old_prot,
+                );
+                if st != STATUS_SUCCESS || old_prot != PAGE_READWRITE {
+                    return Err("ZwProtectVirtualMemory(PAGE_WRITECOPY) failed");
+                }
+                let magic2 = 0xAABB_CCDD_EEFF_0011u64;
+                if mm::user::copy(
+                    cbase.cast::<u8>(),
+                    (&raw const magic2).cast(),
+                    size_of::<u64>(),
+                )
+                .is_err()
+                {
+                    return Err("CoW write fault failed");
+                }
+                let pa_after = space
+                    .translate(cbase.addr() as u64)
+                    .ok_or("CoW page missing translation")?;
+                if pa_after == pa_before {
+                    return Err("CoW write did not allocate a fresh frame");
+                }
+                // Protection must have promoted to PAGE_READWRITE.
+                let st = zw::ZwQueryVirtualMemory(
+                    cur,
+                    cbase,
+                    MEMORY_BASIC_INFORMATION_CLASS,
+                    (&raw mut mbi).cast(),
+                    size_of::<MEMORY_BASIC_INFORMATION>(),
+                    &raw mut ret_len,
+                );
+                if st != STATUS_SUCCESS || mbi.Protect != PAGE_READWRITE {
+                    return Err("CoW write did not promote protection to PAGE_READWRITE");
+                }
+
+                // 5. PAGE_NOACCESS preserves frame in Transition PTE and rejects read.
+                let st = zw::ZwProtectVirtualMemory(
+                    cur,
+                    &raw mut pbase,
+                    &raw mut psize,
+                    PAGE_NOACCESS,
+                    &raw mut old_prot,
+                );
+                if st != STATUS_SUCCESS || old_prot != PAGE_READWRITE {
+                    return Err("ZwProtectVirtualMemory(PAGE_NOACCESS) failed");
+                }
+                if mm::user::copy(
+                    (&raw mut read_val).cast(),
+                    cbase.cast::<u8>(),
+                    size_of::<u64>(),
+                )
+                .is_ok()
+                {
+                    return Err("PAGE_NOACCESS read did not fault");
+                }
+                let st = zw::ZwProtectVirtualMemory(
+                    cur,
+                    &raw mut pbase,
+                    &raw mut psize,
+                    PAGE_READWRITE,
+                    &raw mut old_prot,
+                );
+                if st != STATUS_SUCCESS || old_prot != PAGE_NOACCESS {
+                    return Err("ZwProtectVirtualMemory(restore RW) failed");
+                }
+                if mm::user::copy(
+                    (&raw mut read_val).cast(),
+                    cbase.cast::<u8>(),
+                    size_of::<u64>(),
+                )
+                .is_err()
+                    || read_val != magic2
+                {
+                    return Err("PAGE_NOACCESS transition did not preserve frame contents");
+                }
+
+                // 6. One-shot PAGE_GUARD raises STATUS_GUARD_PAGE_VIOLATION once, then clears!
+                let st = zw::ZwProtectVirtualMemory(
+                    cur,
+                    &raw mut pbase,
+                    &raw mut psize,
+                    PAGE_READWRITE | PAGE_GUARD,
+                    &raw mut old_prot,
+                );
+                if st != STATUS_SUCCESS || old_prot != PAGE_READWRITE {
+                    return Err("ZwProtectVirtualMemory(PAGE_GUARD) failed");
+                }
+                // First fault via `handle_fault` returns GuardViolation and clears PAGE_GUARD.
+                let first =
+                    mm::vm::handle_fault(cbase.addr() as u64, nk_mm::pte::Access::Read, true);
+                if first != mm::vm::UserFault::GuardViolation {
+                    return Err("PAGE_GUARD first touch did not return GuardViolation");
+                }
+                let _ = STATUS_GUARD_PAGE_VIOLATION;
+                // Second access succeeds and preserves `magic2`.
+                if mm::user::copy(
+                    (&raw mut read_val).cast(),
+                    cbase.cast::<u8>(),
+                    size_of::<u64>(),
+                )
+                .is_err()
+                    || read_val != magic2
+                {
+                    return Err("PAGE_GUARD did not clear after first touch");
+                }
+
+                // 7. MmProbeAndLockPages on an untouched demand-zero committed page (page 2).
+                let page2 = cbase.wrapping_byte_add(mm::PAGE_SIZE);
+                let mdl = IoAllocateMdl(page2, mm::PAGE_SIZE as u32, 0, 0, core::ptr::null_mut());
+                if mdl.is_null() {
+                    return Err("IoAllocateMdl failed");
+                }
+                let lock_res = probe_and_lock(mdl, USER_MODE, IO_WRITE_ACCESS);
+                if lock_res.is_ok() {
+                    MmUnlockPages(mdl);
+                }
+                IoFreeMdl(mdl);
+                if lock_res.is_err() {
+                    return Err("MmProbeAndLockPages failed on demand-zero user page");
+                }
+
+                // 8. NtAllocateVirtualMemoryEx with AddressRequirements + NtRead/WriteVirtualMemory.
+                let mut req = MEM_ADDRESS_REQUIREMENTS {
+                    LowestStartingAddress: 0x1000_0000,
+                    HighestEndingAddress: 0x1FFF_FFFF,
+                    Alignment: 0x10_0000,
+                };
+                let mut ext = MEM_EXTENDED_PARAMETER {
+                    Type: MEM_EXTENDED_PARAMETER_ADDRESS_REQUIREMENTS,
+                    Value: (&raw mut req).addr() as u64,
+                };
+                let mut ebase: *mut c_void = core::ptr::null_mut();
+                let mut esize: usize = mm::PAGE_SIZE;
+                let st = zw::ZwAllocateVirtualMemoryEx(
+                    cur,
+                    &raw mut ebase,
+                    &raw mut esize,
+                    MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN,
+                    PAGE_READWRITE,
+                    &raw mut ext,
+                    1,
+                );
+                if st != STATUS_SUCCESS
+                    || ebase.addr() < 0x1000_0000
+                    || ebase.addr() >= 0x2000_0000
+                    || !ebase.addr().is_multiple_of(0x10_0000)
+                {
+                    return Err("ZwAllocateVirtualMemoryEx AddressRequirements mismatch");
+                }
+                let wbuf = 0xFEED_FACE_CAFE_BABEu64;
+                let mut wdone = 0usize;
+                let st = zw::ZwWriteVirtualMemory(
+                    cur,
+                    ebase,
+                    (&raw const wbuf).cast(),
+                    size_of::<u64>(),
+                    &raw mut wdone,
+                );
+                let mut rbuf = 0u64;
+                let mut rdone = 0usize;
+                let st2 = zw::ZwReadVirtualMemory(
+                    cur,
+                    ebase,
+                    (&raw mut rbuf).cast(),
+                    size_of::<u64>(),
+                    &raw mut rdone,
+                );
+                if st != STATUS_SUCCESS
+                    || st2 != STATUS_SUCCESS
+                    || wdone != 8
+                    || rdone != 8
+                    || rbuf != wbuf
+                {
+                    return Err("ZwRead/WriteVirtualMemory round-trip failed");
+                }
+
+                // 9. Decommit page 1 and release both VADs cleanly.
+                let mut dbase = cbase;
+                let mut dsize = mm::PAGE_SIZE;
+                if zw::ZwFreeVirtualMemory(cur, &raw mut dbase, &raw mut dsize, MEM_DECOMMIT)
+                    != STATUS_SUCCESS
+                {
+                    return Err("ZwFreeVirtualMemory(MEM_DECOMMIT) failed");
+                }
+                let mut fsize = 0usize;
+                if zw::ZwFreeVirtualMemory(cur, &raw mut base, &raw mut fsize, MEM_RELEASE)
+                    != STATUS_SUCCESS
+                {
+                    return Err("ZwFreeVirtualMemory(MEM_RELEASE) failed");
+                }
+                fsize = 0;
+                if zw::ZwFreeVirtualMemory(cur, &raw mut ebase, &raw mut fsize, MEM_RELEASE)
+                    != STATUS_SUCCESS
+                {
+                    return Err("ZwFreeVirtualMemory(MEM_RELEASE ex) failed");
+                }
+                Ok(())
+            })();
+
+            process::KeUnstackDetachProcess(&raw mut apc_state);
+            drop(proc_ref);
+            res
+        }
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -402,5 +737,14 @@ fn run(r: &mut Report, _info: &BootInfo) {
             ),
         ),
         Err(why) => r.fail("user.stub", format_args!("{why}")),
+    }
+    match x64::run_vm() {
+        Ok(()) => r.ok_with(
+            "user.vm",
+            format_args!(
+                "VAD reserve/commit/decommit/release, demand-zero, CoW, NOACCESS, PAGE_GUARD, MDL lock"
+            ),
+        ),
+        Err(why) => r.fail("user.vm", format_args!("{why}")),
     }
 }

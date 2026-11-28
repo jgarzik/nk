@@ -205,7 +205,22 @@ pub unsafe fn probe_and_lock(
                     }
                 }
             }
-            // User mode can name only pages of the user range.
+            // User mode can name only pages of the user range. In a non-System
+            // user process, fault in demand-zero / CoW pages before locking.
+            if va < user::USER_PROBE_ADDRESS
+                && crate::arch::current_address_space() != crate::arch::kernel_address_space()
+            {
+                match mm::vm::probe_and_lock_user_page(va, operation != IO_READ_ACCESS) {
+                    Ok(pa) => {
+                        pfns(mdl).add(i).write(pa / PAGE_SIZE as u64);
+                        continue;
+                    }
+                    Err(status) => {
+                        unlock_cached(mdl, i);
+                        return Err(status);
+                    }
+                }
+            }
             let found = if access_mode == KERNEL_MODE || user::frame_of(va).is_some() {
                 map::lookup(va)
             } else {

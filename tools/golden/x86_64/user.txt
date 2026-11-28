@@ -1,1 +1,2 @@
 user.stub ok
+user.vm ok

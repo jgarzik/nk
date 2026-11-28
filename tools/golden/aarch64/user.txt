@@ -1,1 +1,2 @@
 user.stub skip
+user.vm skip

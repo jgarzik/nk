@@ -142,7 +142,11 @@ fn release(va: u64, pages: usize) {
 /// page.
 pub fn frame_of(va: u64) -> Option<u64> {
     let page = va & !(PAGE_SIZE as u64 - 1);
-    if !(LOWEST_USER_ADDRESS..USER_PROBE_ADDRESS).contains(&va) || firmware(page, PAGE_SIZE as u64)
+    if !(LOWEST_USER_ADDRESS..USER_PROBE_ADDRESS).contains(&va) {
+        return None;
+    }
+    if crate::arch::current_address_space() == crate::arch::kernel_address_space()
+        && firmware(page, PAGE_SIZE as u64)
     {
         return None;
     }

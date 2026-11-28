@@ -400,6 +400,68 @@ register_services! {
         driver_service_name: *const UNICODE_STRING,
     );
 
+    // Memory (`kernel/mm`)
+    unsafe Implemented, NtAllocateVirtualMemory => crate::mm::vm::NtAllocateVirtualMemory, ZwAllocateVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *mut *mut c_void,
+        zero_bits: usize,
+        region_size: *mut usize,
+        allocation_type: u32,
+        protect: u32,
+    );
+    unsafe Partial, NtAllocateVirtualMemoryEx => crate::mm::vm::NtAllocateVirtualMemoryEx, ZwAllocateVirtualMemoryEx(
+        process_handle: *mut c_void,
+        base_address: *mut *mut c_void,
+        region_size: *mut usize,
+        allocation_type: u32,
+        page_protection: u32,
+        extended_parameters: *mut nk_ntabi::mm::MEM_EXTENDED_PARAMETER,
+        extended_parameter_count: u32,
+    );
+    unsafe Implemented, NtFreeVirtualMemory => crate::mm::vm::NtFreeVirtualMemory, ZwFreeVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *mut *mut c_void,
+        region_size: *mut usize,
+        free_type: u32,
+    );
+    unsafe Implemented, NtProtectVirtualMemory => crate::mm::vm::NtProtectVirtualMemory, ZwProtectVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *mut *mut c_void,
+        region_size: *mut usize,
+        new_protect: u32,
+        old_protect: *mut u32,
+    );
+    unsafe Partial, NtQueryVirtualMemory => crate::mm::vm::NtQueryVirtualMemory, ZwQueryVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *const c_void,
+        memory_information_class: u32,
+        memory_information: *mut c_void,
+        memory_information_length: usize,
+        return_length: *mut usize,
+    );
+    unsafe Partial, NtSetInformationVirtualMemory => crate::mm::vm::NtSetInformationVirtualMemory, ZwSetInformationVirtualMemory(
+        process_handle: *mut c_void,
+        vm_information_class: u32,
+        number_of_entries: usize,
+        virtual_addresses: *const nk_ntabi::mm::MEMORY_RANGE_ENTRY,
+        vm_information: *const c_void,
+        vm_information_length: usize,
+    );
+    unsafe Implemented, NtReadVirtualMemory => crate::mm::vm::NtReadVirtualMemory, ZwReadVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *const c_void,
+        buffer: *mut c_void,
+        number_of_bytes_to_read: usize,
+        number_of_bytes_read: *mut usize,
+    );
+    unsafe Implemented, NtWriteVirtualMemory => crate::mm::vm::NtWriteVirtualMemory, ZwWriteVirtualMemory(
+        process_handle: *mut c_void,
+        base_address: *mut c_void,
+        buffer: *const c_void,
+        number_of_bytes_to_write: usize,
+        number_of_bytes_written: *mut usize,
+    );
+
     // Object manager (`kernel/ob`)
     unsafe Partial, NtCreateEvent => crate::ob::event::NtCreateEvent, ZwCreateEvent(
         event_handle: *mut *mut c_void,

@@ -533,11 +533,19 @@ extern "C" fn trap_handler(frame: &mut Frame) {
     if memory {
         if from_user {
             if let Some(status) = in_page {
-                if super::user::handle_user_exception(
-                    frame,
-                    STATUS_IN_PAGE_ERROR,
-                    &[access, address, u64::from(status as u32)],
+                let (code, params): (u32, &[u64]) = if matches!(
+                    status,
+                    nk_ntabi::status::STATUS_GUARD_PAGE_VIOLATION
+                        | nk_ntabi::status::STATUS_STACK_OVERFLOW
                 ) {
+                    (status as u32, &[access, address])
+                } else {
+                    (
+                        STATUS_IN_PAGE_ERROR,
+                        &[access, address, u64::from(status as u32)],
+                    )
+                };
+                if super::user::handle_user_exception(frame, code, params) {
                     return;
                 }
             } else if vector == GENERAL_PROTECTION {

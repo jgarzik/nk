@@ -6,11 +6,147 @@
 pub const PAGE_NOACCESS: u32 = 0x01;
 pub const PAGE_READONLY: u32 = 0x02;
 pub const PAGE_READWRITE: u32 = 0x04;
+pub const PAGE_WRITECOPY: u32 = 0x08;
 pub const PAGE_EXECUTE: u32 = 0x10;
 pub const PAGE_EXECUTE_READ: u32 = 0x20;
 pub const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+pub const PAGE_EXECUTE_WRITECOPY: u32 = 0x80;
+pub const PAGE_GUARD: u32 = 0x100;
 pub const PAGE_NOCACHE: u32 = 0x200;
 pub const PAGE_WRITECOMBINE: u32 = 0x400;
+
+/// Virtual memory allocation/state/type flags (`winnt.h`).
+pub const MEM_COMMIT: u32 = 0x0000_1000;
+pub const MEM_RESERVE: u32 = 0x0000_2000;
+pub const MEM_DECOMMIT: u32 = 0x0000_4000;
+pub const MEM_RELEASE: u32 = 0x0000_8000;
+pub const MEM_FREE: u32 = 0x0001_0000;
+pub const MEM_PRIVATE: u32 = 0x0002_0000;
+pub const MEM_MAPPED: u32 = 0x0004_0000;
+pub const MEM_RESET: u32 = 0x0008_0000;
+pub const MEM_TOP_DOWN: u32 = 0x0010_0000;
+pub const MEM_WRITE_WATCH: u32 = 0x0020_0000;
+pub const MEM_LARGE_PAGES: u32 = 0x2000_0000;
+pub const MEM_IMAGE: u32 = 0x0100_0000;
+
+/// Compact 5-bit internal protection code stored in software PTEs (bits 5..9).
+/// `0` means uncommitted/empty; `1..=8` are committed base protections;
+/// bit 4 (`0x10`) adds `PAGE_GUARD`.
+pub const MM_PROT_EMPTY: u8 = 0;
+pub const MM_PROT_READONLY: u8 = 1;
+pub const MM_PROT_EXECUTE: u8 = 2;
+pub const MM_PROT_EXECUTE_READ: u8 = 3;
+pub const MM_PROT_READWRITE: u8 = 4;
+pub const MM_PROT_WRITECOPY: u8 = 5;
+pub const MM_PROT_EXECUTE_READWRITE: u8 = 6;
+pub const MM_PROT_EXECUTE_WRITECOPY: u8 = 7;
+pub const MM_PROT_NOACCESS: u8 = 8;
+pub const MM_PROT_GUARD: u8 = 0x10;
+
+/// Convert a Win32 user-mode `PAGE_*` protection into NK's 5-bit internal code.
+/// Rejects invalid combinations (`PAGE_NOACCESS | PAGE_GUARD`, both `NOCACHE`
+/// and `WRITECOMBINE`, unknown bits, or zero).
+pub const fn win32_to_mm(win32: u32) -> Option<u8> {
+    let base = win32 & !(PAGE_GUARD | PAGE_NOCACHE | PAGE_WRITECOMBINE);
+    let modifiers = win32 & (PAGE_NOCACHE | PAGE_WRITECOMBINE);
+    if modifiers == PAGE_NOCACHE | PAGE_WRITECOMBINE {
+        return None;
+    }
+    let guard = win32 & PAGE_GUARD != 0;
+    let code = match base {
+        PAGE_NOACCESS => {
+            if guard || modifiers != 0 {
+                return None;
+            }
+            MM_PROT_NOACCESS
+        }
+        PAGE_READONLY => MM_PROT_READONLY,
+        PAGE_READWRITE => MM_PROT_READWRITE,
+        PAGE_WRITECOPY => MM_PROT_WRITECOPY,
+        PAGE_EXECUTE => MM_PROT_EXECUTE,
+        PAGE_EXECUTE_READ => MM_PROT_EXECUTE_READ,
+        PAGE_EXECUTE_READWRITE => MM_PROT_EXECUTE_READWRITE,
+        PAGE_EXECUTE_WRITECOPY => MM_PROT_EXECUTE_WRITECOPY,
+        _ => return None,
+    };
+    Some(if guard { code | MM_PROT_GUARD } else { code })
+}
+
+/// Convert NK's 5-bit internal protection code back to Win32 `PAGE_*`.
+pub const fn mm_to_win32(mm: u8) -> u32 {
+    let guard = if mm & MM_PROT_GUARD != 0 {
+        PAGE_GUARD
+    } else {
+        0
+    };
+    let base = match mm & !MM_PROT_GUARD {
+        MM_PROT_READONLY => PAGE_READONLY,
+        MM_PROT_EXECUTE => PAGE_EXECUTE,
+        MM_PROT_EXECUTE_READ => PAGE_EXECUTE_READ,
+        MM_PROT_READWRITE => PAGE_READWRITE,
+        MM_PROT_WRITECOPY => PAGE_WRITECOPY,
+        MM_PROT_EXECUTE_READWRITE => PAGE_EXECUTE_READWRITE,
+        MM_PROT_EXECUTE_WRITECOPY => PAGE_EXECUTE_WRITECOPY,
+        MM_PROT_NOACCESS => PAGE_NOACCESS,
+        _ => 0,
+    };
+    base | guard
+}
+
+/// True if `mm` is a copy-on-write protection (`WRITECOPY` or `EXECUTE_WRITECOPY`).
+pub const fn mm_is_cow(mm: u8) -> bool {
+    matches!(
+        mm & !MM_PROT_GUARD,
+        MM_PROT_WRITECOPY | MM_PROT_EXECUTE_WRITECOPY
+    )
+}
+
+/// True if `mm` has `PAGE_GUARD` set.
+pub const fn mm_is_guard(mm: u8) -> bool {
+    mm & MM_PROT_GUARD != 0
+}
+
+/// Promote a copy-on-write protection to its writable private equivalent.
+pub const fn mm_break_cow(mm: u8) -> u8 {
+    match mm & !MM_PROT_GUARD {
+        MM_PROT_WRITECOPY => MM_PROT_READWRITE,
+        MM_PROT_EXECUTE_WRITECOPY => MM_PROT_EXECUTE_READWRITE,
+        other => other,
+    }
+}
+
+/// Hardware user-page [`crate::pt::Prot`] for a non-guard, accessible 5-bit
+/// protection code, plus whether the valid PTE should carry the copy-on-write
+/// software bit (mapped read-only in hardware so the first write faults).
+/// Returns `None` for `EMPTY`, `NOACCESS`, or `GUARD`.
+pub const fn mm_to_user_hw(mm: u8) -> Option<(crate::pt::Prot, bool)> {
+    use crate::pt::Prot;
+    if mm == MM_PROT_EMPTY || mm & MM_PROT_GUARD != 0 {
+        return None;
+    }
+    match mm {
+        MM_PROT_READONLY => Some((Prot::USER_RO, false)),
+        MM_PROT_EXECUTE | MM_PROT_EXECUTE_READ => Some((Prot::USER_RX, false)),
+        MM_PROT_READWRITE => Some((Prot::USER_RW, false)),
+        MM_PROT_WRITECOPY => Some((Prot::USER_RO, true)),
+        MM_PROT_EXECUTE_READWRITE => Some((Prot::USER_RWX, false)),
+        MM_PROT_EXECUTE_WRITECOPY => Some((Prot::USER_RX, true)),
+        _ => None,
+    }
+}
+
+/// Recover NK's 5-bit internal protection code from a valid user hardware PTE's
+/// `(writable, executable, cow)` attributes.
+pub const fn user_hw_to_mm(writable: bool, executable: bool, cow: bool) -> u8 {
+    match (writable, executable, cow) {
+        (false, false, false) => MM_PROT_READONLY,
+        (false, false, true) => MM_PROT_WRITECOPY,
+        (true, false, _) => MM_PROT_READWRITE,
+        (false, true, false) => MM_PROT_EXECUTE_READ,
+        (false, true, true) => MM_PROT_EXECUTE_WRITECOPY,
+        (true, true, _) => MM_PROT_EXECUTE_READWRITE,
+    }
+}
 
 /// `MEMORY_CACHING_TYPE`.
 pub const MM_NON_CACHED: u32 = 0;
