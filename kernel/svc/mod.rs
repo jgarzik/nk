@@ -1267,24 +1267,23 @@ pub fn self_test() -> Result<(), &'static str> {
         return Err("out-of-range service index did not return STATUS_INVALID_SYSTEM_SERVICE");
     }
     capture::self_test()?;
-    // F3: unified `ob::open_by_name` + `ob::check_access` on device default SD.
+    // Unified `ob::open_by_name` + `ob::check_access` on a boot device's default SD
+    // (`\Device\RawDisk` exists on every boot on both x86-64 and arm64).
     {
-        let path: alloc::vec::Vec<u16> = "\\Device\\Null".encode_utf16().collect();
+        let path: alloc::vec::Vec<u16> = "\\Device\\RawDisk".encode_utf16().collect();
         let (dev, _) = crate::ob::lookup(None, &path)
-            .map_err(|_| "F3: \\Device\\Null was not found in the namespace")?;
-        // SAFETY: `dev` holds a reference to `\Device\Null`.
+            .map_err(|_| "\\Device\\RawDisk was not found in the namespace")?;
+        // SAFETY: `dev` holds a reference to `\Device\RawDisk`.
         let allowed = unsafe { crate::ob::check_access(dev.body(), 0x8000_0000, USER_MODE, false) };
         if allowed != Ok(nk_ntabi::io::FILE_GENERIC_MAPPING.GenericRead) {
-            return Err(
-                "F3: SYSTEM user-mode check on default device SD did not grant GENERIC_READ",
-            );
+            return Err("SYSTEM user-mode check on default device SD did not grant GENERIC_READ");
         }
         // Impersonate anonymous token: not in SYSTEM/Admins/World, so denied.
         let current = (-2isize) as *mut c_void;
         if crate::se::impersonate::ZwImpersonateAnonymousToken(current) != 0 {
-            return Err("F3: ZwImpersonateAnonymousToken failed");
+            return Err("ZwImpersonateAnonymousToken failed");
         }
-        // SAFETY: `dev` holds a reference to `\Device\Null`.
+        // SAFETY: `dev` holds a reference to `\Device\RawDisk`.
         let denied = unsafe { crate::ob::check_access(dev.body(), 0x8000_0000, USER_MODE, false) };
         let null_tok: *mut c_void = core::ptr::null_mut();
         // SAFETY: clearing impersonation token on current thread.
@@ -1297,7 +1296,7 @@ pub fn self_test() -> Result<(), &'static str> {
             )
         };
         if denied != Err(nk_ntabi::status::STATUS_ACCESS_DENIED) {
-            return Err("F3: anonymous user-mode check on default device SD was not denied");
+            return Err("anonymous user-mode check on default device SD was not denied");
         }
     }
     Ok(())
