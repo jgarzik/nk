@@ -176,13 +176,6 @@ impl<const N: usize> Modules<N> {
         true
     }
 
-    /// Undo an unload claim on the image at `base`.
-    pub fn cancel_unload(&mut self, base: u64) {
-        if let Some(module) = self.slots.iter_mut().flatten().find(|m| m.base == base) {
-            module.unloading = false;
-        }
-    }
-
     /// Hand the images to `take`, oldest load first, for as long as it
     /// takes them (it says so by returning `true`), and return how many
     /// there are. Nothing is allocated here.
@@ -396,7 +389,5 @@ mod tests {
         // Once unloading is claimed, duplicate claims and new importers fail.
         assert!(!table.begin_unload(0x2000));
         assert_eq!(table.count_importer(0x2000, 1), None);
-        table.cancel_unload(0x2000);
-        assert_eq!(table.count_importer(0x2000, 1), Some(1));
     }
 }

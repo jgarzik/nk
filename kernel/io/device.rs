@@ -524,8 +524,9 @@ pub unsafe extern "C" fn IoGetLowerDeviceObject(device: *mut DEVICE_OBJECT) -> *
 
 /// [`IoEnumerateDeviceObjectList`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioenumeratedeviceobjectlist):
 /// list every device object owned by `driver`, taking a pointer reference on
-/// each entry written. If the buffer is too small, writes the total count to
-/// `actual` and returns `STATUS_BUFFER_TOO_SMALL` without taking references.
+/// each entry written. When `list` is smaller than the driver's device count,
+/// fills and references as many entries as fit, writes the total count to
+/// `actual`, and returns `STATUS_BUFFER_TOO_SMALL`, matching Windows.
 ///
 /// # Safety
 /// `driver` is a live driver object; `actual` is writable; `list` is null or
@@ -539,7 +540,11 @@ pub unsafe extern "C" fn IoEnumerateDeviceObjectList(
     if driver.is_null() || actual.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    let capacity = list_size as usize / size_of::<*mut DEVICE_OBJECT>();
+    let capacity = if list.is_null() {
+        0
+    } else {
+        list_size as usize / size_of::<*mut DEVICE_OBJECT>()
+    };
     // SAFETY: per the contract; `DriverObject.DeviceObject` list belongs to `DATABASE`.
     unsafe {
         let _database = DATABASE.lock();
@@ -550,16 +555,15 @@ pub unsafe extern "C" fn IoEnumerateDeviceObjectList(
             cur = (*cur).NextDevice;
         }
         actual.write_unaligned(count);
-        if list.is_null() || capacity < count as usize {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
+        let to_copy = capacity.min(count as usize);
         let mut cur = (*driver).DeviceObject;
-        let mut idx = 0usize;
-        while !cur.is_null() {
+        for idx in 0..to_copy {
             ob::object::reference(cur.cast());
             list.add(idx).write_unaligned(cur);
-            idx += 1;
             cur = (*cur).NextDevice;
+        }
+        if capacity < count as usize {
+            return STATUS_BUFFER_TOO_SMALL;
         }
     }
     STATUS_SUCCESS

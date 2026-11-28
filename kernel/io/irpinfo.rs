@@ -263,11 +263,11 @@ pub unsafe extern "C" fn IoSetHardErrorOrVerifyDevice(irp: *mut IRP, device: *mu
 /// verify that the requestor of an I/O or file-system control IRP has
 /// the read/write access bits `required_access` asks for (`FILE_READ_ACCESS`
 /// = 1, `FILE_WRITE_ACCESS` = 2). Kernel-mode requests always succeed;
-/// user-mode requests are checked against `FileObject->ReadAccess` and
-/// `WriteAccess`.
+/// user-mode requests are checked against the current stack location's
+/// `SL_READ_ACCESS_GRANTED` / `SL_WRITE_ACCESS_GRANTED` flags, as on Windows.
 ///
 /// # Safety
-/// `irp` is a live IRP with a valid current stack location and file object.
+/// `irp` is a live IRP with a valid current stack location.
 pub unsafe extern "C" fn IoValidateDeviceIoControlAccess(
     irp: *mut IRP,
     required_access: u32,
@@ -293,15 +293,11 @@ pub unsafe extern "C" fn IoValidateDeviceIoControlAccess(
         if (&raw const (*irp).RequestorMode).read() == KERNEL_MODE || required_access == 0 {
             return STATUS_SUCCESS;
         }
-        let file = (&raw const (*location).FileObject).read();
-        if file.is_null() {
-            return STATUS_INVALID_PARAMETER;
-        }
-        if required_access & FILE_READ_ACCESS != 0 && (&raw const (*file).ReadAccess).read() == 0 {
+        let flags = (&raw const (*location).Flags).read();
+        if required_access & FILE_READ_ACCESS != 0 && flags & SL_READ_ACCESS_GRANTED == 0 {
             return STATUS_ACCESS_DENIED;
         }
-        if required_access & FILE_WRITE_ACCESS != 0 && (&raw const (*file).WriteAccess).read() == 0
-        {
+        if required_access & FILE_WRITE_ACCESS != 0 && flags & SL_WRITE_ACCESS_GRANTED == 0 {
             return STATUS_ACCESS_DENIED;
         }
         STATUS_SUCCESS
@@ -403,13 +399,16 @@ pub fn test() -> Result<u32, &'static str> {
             {
                 return Err("I/O attribution was not answered as on a system that has none");
             }
-            // IoValidateDeviceIoControlAccess: checks major function, mode and file access.
+            // IoValidateDeviceIoControlAccess: checks major function, mode and
+            // per-request SL_READ_ACCESS_GRANTED / SL_WRITE_ACCESS_GRANTED flags
+            // (not FileObject->ReadAccess/WriteAccess, which belong to share access).
             let mut fake_file = core::mem::zeroed::<FILE_OBJECT>();
             let fake_file_ptr = &raw mut fake_file;
             let loc = irp::next_location(request);
             (*request).CurrentStackLocation = loc;
             (*loc).MajorFunction = IRP_MJ_READ;
             (*loc).FileObject = fake_file_ptr;
+            (*loc).Flags = 0;
             if IoValidateDeviceIoControlAccess(request, 1) != STATUS_INVALID_PARAMETER {
                 return Err("IoValidateDeviceIoControlAccess accepted a non-control IRP");
             }
@@ -419,21 +418,23 @@ pub fn test() -> Result<u32, &'static str> {
                 return Err("IoValidateDeviceIoControlAccess refused a kernel-mode request");
             }
             (*request).RequestorMode = USER_MODE;
+            // Setting FileObject.ReadAccess alone must not satisfy user-mode IOCTL access.
+            (&raw mut (*fake_file_ptr).ReadAccess).write(1);
             if IoValidateDeviceIoControlAccess(request, 1) != STATUS_ACCESS_DENIED
                 || IoValidateDeviceIoControlAccess(request, 2) != STATUS_ACCESS_DENIED
                 || IoValidateDeviceIoControlAccess(request, 4) != STATUS_INVALID_PARAMETER
             {
                 return Err("IoValidateDeviceIoControlAccess missed a denied or invalid access");
             }
-            (&raw mut (*fake_file_ptr).ReadAccess).write(1);
+            (*loc).Flags = SL_READ_ACCESS_GRANTED;
             if IoValidateDeviceIoControlAccess(request, 1) != STATUS_SUCCESS
                 || IoValidateDeviceIoControlAccess(request, 2) != STATUS_ACCESS_DENIED
             {
-                return Err("IoValidateDeviceIoControlAccess mischecked ReadAccess");
+                return Err("IoValidateDeviceIoControlAccess mischecked SL_READ_ACCESS_GRANTED");
             }
-            (&raw mut (*fake_file_ptr).WriteAccess).write(1);
+            (*loc).Flags = SL_READ_ACCESS_GRANTED | SL_WRITE_ACCESS_GRANTED;
             if IoValidateDeviceIoControlAccess(request, 3) != STATUS_SUCCESS {
-                return Err("IoValidateDeviceIoControlAccess mischecked Read+WriteAccess");
+                return Err("IoValidateDeviceIoControlAccess mischecked read+write granted flags");
             }
             Ok(22)
         })()

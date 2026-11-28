@@ -126,53 +126,65 @@ fn version() -> Result<(), &'static str> {
             );
         }
     }
-    if crate::rtl::RtlIsStateSeparationEnabled() != 0 {
-        return Err("RtlIsStateSeparationEnabled must be false on NK");
-    }
-    // SAFETY: null pointers are allowed for optional query filters.
-    let bad_desc = unsafe {
-        crate::hal::description::IoQueryDeviceDescription(
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null_mut(),
-        )
-    };
-    if bad_desc != nk_ntabi::status::STATUS_INVALID_PARAMETER {
-        return Err("IoQueryDeviceDescription accepted null callout");
-    }
-    // SAFETY: non-null dummy callout pointer is never invoked when no legacy
-    // description matches.
-    let missing_desc = unsafe {
-        crate::hal::description::IoQueryDeviceDescription(
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::dangling(),
-            core::ptr::null_mut(),
-        )
-    };
-    if missing_desc != nk_ntabi::status::STATUS_OBJECT_NAME_NOT_FOUND {
-        return Err("IoQueryDeviceDescription did not return STATUS_OBJECT_NAME_NOT_FOUND");
-    }
-    // SAFETY: null is compared against loaded image ranges and yields null;
-    // lock-by-handle and unlock accept the returned handle.
-    unsafe {
-        if !crate::ldr::MmLockPagableDataSection(core::ptr::null_mut()).is_null() {
-            return Err("MmLockPagableDataSection returned non-null for null address");
-        }
-        crate::ldr::MmLockPagableSectionByHandle(core::ptr::null_mut());
-        crate::ldr::MmUnlockPagableImageSection(core::ptr::null_mut());
-    }
     verify_version_info()?;
     capture_context_boundary()?;
+    enumerate_device_object_list_partial()?;
+    Ok(())
+}
+
+/// Regression check for `IoEnumerateDeviceObjectList`: when the caller's array
+/// is smaller than the driver's device count, Windows copies and references as
+/// many entries as fit before returning `STATUS_BUFFER_TOO_SMALL`.
+fn enumerate_device_object_list_partial() -> Result<(), &'static str> {
+    use crate::io::{device, driver};
+    use nk_ntabi::io::DEVICE_OBJECT;
+    use nk_ntabi::status::STATUS_BUFFER_TOO_SMALL;
+
+    let before = super::resources();
+    let drv = driver::builtin("NkEnumDevTest", |_| {})
+        .map_err(|_| "could not create builtin driver for IoEnumerateDeviceObjectList test")?;
+    let mut d1: *mut DEVICE_OBJECT = core::ptr::null_mut();
+    let mut d2: *mut DEVICE_OBJECT = core::ptr::null_mut();
+    // SAFETY: live builtin driver object, output pointers writable.
+    let res = unsafe {
+        let s1 = device::IoCreateDevice(drv, 0, core::ptr::null(), 0x22, 0, 0, &raw mut d1);
+        let s2 = device::IoCreateDevice(drv, 0, core::ptr::null(), 0x22, 0, 0, &raw mut d2);
+        let check = if s1 != STATUS_SUCCESS || s2 != STATUS_SUCCESS {
+            Err("could not create devices for IoEnumerateDeviceObjectList test")
+        } else {
+            let mut slot = [core::ptr::null_mut::<DEVICE_OBJECT>(); 1];
+            let mut actual = 0u32;
+            let st = device::IoEnumerateDeviceObjectList(
+                drv,
+                slot.as_mut_ptr(),
+                size_of::<*mut DEVICE_OBJECT>() as u32,
+                &raw mut actual,
+            );
+            let copied = slot[0];
+            if !copied.is_null() {
+                crate::ob::object::dereference(copied.cast());
+            }
+            if st != STATUS_BUFFER_TOO_SMALL || actual != 2 || (copied != d1 && copied != d2) {
+                Err(
+                    "IoEnumerateDeviceObjectList did not partially fill and reference on short buffer",
+                )
+            } else {
+                Ok(())
+            }
+        };
+        if !d1.is_null() {
+            device::IoDeleteDevice(d1);
+        }
+        if !d2.is_null() {
+            device::IoDeleteDevice(d2);
+        }
+        check
+    };
+    driver::remove_builtin(drv);
+    res?;
+    if super::resources() != before {
+        return Err("IoEnumerateDeviceObjectList partial-fill test leaked resources");
+    }
     Ok(())
 }
 

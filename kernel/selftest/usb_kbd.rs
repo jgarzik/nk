@@ -23,6 +23,7 @@ use crate::pnp::registry;
 use crate::test::{Group, Report};
 use alloc::vec::Vec;
 use nk_bootinfo::BootInfo;
+use nk_ntabi::io::KEYBOARD_INPUT_DATA;
 use nk_ntabi::status::{STATUS_CANCELLED, STATUS_SUCCESS};
 
 pub static GROUP: Group = Group {
@@ -37,19 +38,6 @@ pub static GROUPS: &[&Group] = &[&GROUP];
 const GUID_DEVINTERFACE_KEYBOARD: [u8; 16] = [
     0xC3, 0x96, 0x4B, 0x88, 0xEF, 0x56, 0xD1, 0x11, 0xBC, 0x8C, 0x00, 0xA0, 0xC9, 0x14, 0x05, 0xDD,
 ];
-
-/// `KEYBOARD_INPUT_DATA` (`ntddkbd.h`, 12 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct KeyboardInputData {
-    unit_id: u16,
-    make_code: u16,
-    flags: u16,
-    reserved: u16,
-    extra_information: u32,
-}
-
-const _: () = assert!(size_of::<KeyboardInputData>() == 12);
 
 const KEY_MAKE: u16 = 0;
 const KEY_BREAK: u16 = 1;
@@ -170,10 +158,18 @@ fn read_keys(handle: u64, want: usize) -> Result<Vec<(u16, u16)>, &'static str> 
             kprintln!("usb: keyboard read status={:#010x}", r.status as u32);
             return Err("keyboard read returned error status");
         }
-        for chunk in buf[..r.information].as_chunks::<12>().0 {
-            let make_code = u16::from_le_bytes([chunk[2], chunk[3]]);
-            let flags = u16::from_le_bytes([chunk[4], chunk[5]]);
-            out.push((make_code, flags));
+        for chunk in buf[..r.information]
+            .as_chunks::<{ size_of::<KEYBOARD_INPUT_DATA>() }>()
+            .0
+        {
+            // SAFETY: `KEYBOARD_INPUT_DATA` is a plain `#[repr(C)]` POD struct.
+            let event = unsafe {
+                chunk
+                    .as_ptr()
+                    .cast::<KEYBOARD_INPUT_DATA>()
+                    .read_unaligned()
+            };
+            out.push((event.MakeCode, event.Flags));
         }
     }
     if out.len() < want {

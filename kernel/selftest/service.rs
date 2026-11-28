@@ -395,10 +395,44 @@ fn zw_load_starts() -> Result<(), &'static str> {
                 0,
                 0,
             );
+            // Verify freeing or reusing an uncompleted IRP with
+            // IoSetCompletionRoutineEx installed releases its wrapper, device
+            // reference, and driver unload pin so ZwUnloadDriver never hangs.
+            let mut cleanup_ok = true;
+            let irp_free = irp::IoAllocateIrp(2, 0);
+            let irp_reuse = irp::IoAllocateIrp(2, 0);
+            if !irp_free.is_null() && !irp_reuse.is_null() {
+                let sf = irp::IoSetCompletionRoutineEx(
+                    dev,
+                    irp_free,
+                    Some(cb_suppressed),
+                    core::ptr::null_mut(),
+                    1,
+                    1,
+                    1,
+                );
+                let sr = irp::IoSetCompletionRoutineEx(
+                    dev,
+                    irp_reuse,
+                    Some(cb_suppressed),
+                    core::ptr::null_mut(),
+                    1,
+                    1,
+                    1,
+                );
+                irp::IoReuseIrp(irp_reuse, STATUS_SUCCESS);
+                irp::IoFreeIrp(irp_reuse);
+                irp::IoFreeIrp(irp_free);
+                cleanup_ok = sf == STATUS_SUCCESS && sr == STATUS_SUCCESS;
+            }
             // Delete the device immediately so `(*drv).DeviceObject` is NULL
             // before unload runs; only the completion pins keep the image live.
             device::IoDeleteDevice(dev);
-            (sa, sb)
+            if cleanup_ok {
+                (sa, sb)
+            } else {
+                (STATUS_UNSUCCESSFUL, STATUS_UNSUCCESSFUL)
+            }
         };
         if sa != STATUS_SUCCESS || sb != STATUS_SUCCESS {
             return Err("IoSetCompletionRoutineEx failed");

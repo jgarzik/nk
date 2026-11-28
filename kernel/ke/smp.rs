@@ -154,10 +154,8 @@ pub fn ap_main(number: usize) -> ! {
     if let Err(why) = thread::init_cpu(stack_of(number)) {
         panic!("processor {number}: {why}");
     }
-    let prev = ONLINE.fetch_or(1 << number, Ordering::Release);
-    KeNumberProcessors
-        .0
-        .store((prev | (1 << number)).count_ones() as u8, Ordering::Release);
+    KeNumberProcessors.0.fetch_add(1, Ordering::AcqRel);
+    ONLINE.fetch_or(1 << number, Ordering::Release);
     arch::enable_interrupts();
     thread::idle_loop()
 }
@@ -168,6 +166,9 @@ pub fn self_test() -> Result<usize, &'static str> {
     let cpus = platform::get().cpus().len();
     if online_count() != cpus {
         return Err("not every processor firmware listed is running");
+    }
+    if usize::from(KeNumberProcessors.0.load(Ordering::Acquire)) != online_count() {
+        return Err("KeNumberProcessors does not match online processor count");
     }
     if KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS) as usize != online_count()
         || KeQueryActiveProcessorCountEx(0) as usize != online_count()

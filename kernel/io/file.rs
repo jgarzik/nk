@@ -650,24 +650,6 @@ pub fn open_as(
                 // it is in the table another thread may close it and
                 // write the flags (`cleanup`). Nothing else can reach
                 // the file yet, nor if no handle is made.
-                // Record granted read/write/delete flags on the file object
-                // when the driver did not already set them via IoSetShareAccess,
-                // so routines like IoValidateDeviceIoControlAccess observe the
-                // open's access as on Windows.
-                const FILE_READ_DATA: u32 = 0x0001;
-                const FILE_WRITE_DATA: u32 = 0x0002;
-                const FILE_APPEND_DATA: u32 = 0x0004;
-                const FILE_EXECUTE: u32 = 0x0020;
-                const DELETE: u32 = 0x0001_0000;
-                if (*file).ReadAccess == 0 && granted & (FILE_READ_DATA | FILE_EXECUTE) != 0 {
-                    (*file).ReadAccess = 1;
-                }
-                if (*file).WriteAccess == 0 && granted & (FILE_WRITE_DATA | FILE_APPEND_DATA) != 0 {
-                    (*file).WriteAccess = 1;
-                }
-                if (*file).DeleteAccess == 0 && granted & DELETE != 0 {
-                    (*file).DeleteAccess = 1;
-                }
                 (*file).Flags |= FO_HANDLE_CREATED;
                 let attributes = nk_ob::handles::Attributes {
                     inherit: extra.inherit,
@@ -839,7 +821,7 @@ pub unsafe extern "C" fn IoGetDeviceObjectPointer(
 /// The open file `handle` names, with a reference for a request to
 /// hold.
 fn file_of(handle: u64) -> Result<*mut FILE_OBJECT, IoError> {
-    file_for(handle, KERNEL_MODE, Needs::All(0))
+    file_for(handle, KERNEL_MODE, Needs::All(0)).map(|(file, _)| file)
 }
 
 /// What a request made for user mode needs its handle to have been
@@ -854,10 +836,10 @@ enum Needs {
     Write,
 }
 
-/// The open file `handle` names, with a reference, for a request made
-/// on behalf of `mode` that needs `needs` of the handle. User mode's
-/// handle without it is refused: `STATUS_ACCESS_DENIED`.
-fn file_for(handle: u64, mode: i8, needs: Needs) -> Result<*mut FILE_OBJECT, IoError> {
+/// The open file `handle` names, with a reference and its granted access
+/// mask, for a request made on behalf of `mode` that needs `needs` of the
+/// handle. User mode's handle without it is refused: `STATUS_ACCESS_DENIED`.
+fn file_for(handle: u64, mode: i8, needs: Needs) -> Result<(*mut FILE_OBJECT, u32), IoError> {
     let (mode, all) = match (mode, needs) {
         (KERNEL_MODE, _) => (Mode::Kernel, 0),
         (_, Needs::All(mask)) => (Mode::User, mask),
@@ -873,7 +855,7 @@ fn file_for(handle: u64, mode: i8, needs: Needs) -> Result<*mut FILE_OBJECT, IoE
         return Err(IoError::Handle(STATUS_ACCESS_DENIED));
     }
     // The caller's reference from here.
-    Ok(body.into_raw().cast())
+    Ok((body.into_raw().cast(), information.granted))
 }
 
 /// A requestor's buffer, as a system service is given it: an address
@@ -984,12 +966,12 @@ unsafe fn send(
     parameters: impl FnOnce(*mut FILE_OBJECT) -> [u64; 4],
     mode: i8,
     needs: Needs,
-    build: impl FnOnce(*mut FILE_OBJECT, *mut IRP) -> Result<(), IoError>,
+    build: impl FnOnce(*mut FILE_OBJECT, *mut IRP, u32) -> Result<(), IoError>,
 ) -> Result<Pending, IoError> {
-    let file = file_for(handle, mode, needs)?;
+    let (file, granted) = file_for(handle, mode, needs)?;
     // SAFETY: `file` is an open file, referenced.
     let built = unsafe { request(file, major, parameters(file)) }.and_then(|irp| {
-        build(file, irp).map(|()| irp).inspect_err(|_| {
+        build(file, irp, granted).map(|()| irp).inspect_err(|_| {
             // SAFETY: the request was not sent.
             unsafe { discard(irp) }
         })
@@ -1049,7 +1031,7 @@ unsafe fn transfer(
         rw_parameters(len as u32, offset.unwrap_or((*file).CurrentByteOffset))
     };
     // SAFETY: per the contract; `irp` is fresh.
-    let build = |_, irp: *mut IRP| unsafe {
+    let build = |_, irp: *mut IRP, _| unsafe {
         if mode != KERNEL_MODE {
             if major == IRP_MJ_READ {
                 probe_write(buffer)?;
@@ -1146,7 +1128,7 @@ pub fn flush(handle: u64) -> Result<IoResult, IoError> {
             |_| [0; 4],
             KERNEL_MODE,
             Needs::Write,
-            |_, _| Ok(()),
+            |_, _, _| Ok(()),
         )
     }?
     .wait()
@@ -1168,7 +1150,7 @@ pub fn set_information(handle: u64, class: u32, input: &[u8]) -> Result<IoResult
             |_| [u64::from(input.len as u32), u64::from(class), 0, 0],
             KERNEL_MODE,
             Needs::All(0),
-            |_, irp| system_buffer(irp, input, 0),
+            |_, irp, _| system_buffer(irp, input, 0),
         )
     }?
     .wait()
@@ -1189,7 +1171,7 @@ pub fn query_information(handle: u64, class: u32, output: &mut [u8]) -> Result<I
             |_| [u64::from(output.len as u32), u64::from(class), 0, 0],
             KERNEL_MODE,
             Needs::All(0),
-            |_, irp| {
+            |_, irp, _| {
                 system_buffer(irp, Buffer::NONE, output.len).map(|()| {
                     if output.len != 0 {
                         (*irp).Flags |= IRP_INPUT_OPERATION;
@@ -1372,7 +1354,17 @@ unsafe fn control(
         ioctl_parameters(output.len as u32, input.len as u32, code, type3)
     };
     // SAFETY: per the contract; `irp` is fresh.
-    let build = |_, irp: *mut IRP| unsafe {
+    let build = |_, irp: *mut IRP, granted: u32| unsafe {
+        // Record the handle's granted read/write access on the stack location
+        // (`SL_READ_ACCESS_GRANTED` / `SL_WRITE_ACCESS_GRANTED`) as Windows'
+        // `IopXxxControlFile` does for `IoValidateDeviceIoControlAccess`.
+        let next = irp::next_location(irp);
+        if granted & FILE_READ_DATA != 0 {
+            (*next).Flags |= SL_READ_ACCESS_GRANTED;
+        }
+        if granted & FILE_WRITE_DATA != 0 {
+            (*next).Flags |= SL_WRITE_ACCESS_GRANTED;
+        }
         // The buffered part of a request: a system buffer of `len`
         // bytes holding the input.
         let buffered = |len: usize| -> Result<(), IoError> {

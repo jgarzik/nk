@@ -240,6 +240,49 @@ unsafe extern "C" fn completion_ex_trampoline(
     status
 }
 
+/// Release any [`CompletionEx`] wrapper, device reference, and driver unload
+/// pin installed on stack location `loc`.
+///
+/// # Safety
+/// `loc` is a valid stack location inside a live IRP that no completion path
+/// is concurrently running on.
+unsafe fn release_completion_ex_at(loc: *mut IO_STACK_LOCATION) {
+    // SAFETY: per the contract.
+    unsafe {
+        if (*loc).CompletionRoutine.is_some_and(|r| {
+            core::ptr::fn_addr_eq(r, completion_ex_trampoline as IO_COMPLETION_ROUTINE)
+        }) && !(*loc).Context.is_null()
+        {
+            let raw = (*loc).Context.cast::<CompletionEx>();
+            let saved = raw.read();
+            (*loc).CompletionRoutine = None;
+            (*loc).Context = core::ptr::null_mut();
+            let _ = pool::free(raw.cast());
+            crate::ob::object::dereference(saved.device.cast());
+            if saved.pinned {
+                super::driver::unpin_completion(saved.driver);
+            }
+        }
+    }
+}
+
+/// Release every uncompleted [`CompletionEx`] wrapper attached to `irp` so
+/// freeing or reusing an IRP that was never completed never leaks its pool
+/// block, device reference, or driver unload pin.
+///
+/// # Safety
+/// `irp` is a live IRP that no driver holds.
+unsafe fn release_all_completion_ex(irp: *mut IRP) {
+    // SAFETY: per the contract; stack locations immediately follow `IRP`.
+    unsafe {
+        let count = usize::try_from((*irp).StackCount).unwrap_or(0);
+        let base = irp.add(1).cast::<IO_STACK_LOCATION>();
+        for i in 0..count {
+            release_completion_ex_at(base.add(i));
+        }
+    }
+}
+
 /// [`IoSetCompletionRoutineEx`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-iosetcompletionroutineex):
 /// install a completion routine on the next stack location of `irp`, holding a
 /// reference on `device` and pinning its driver image against unload until the
@@ -291,6 +334,7 @@ pub unsafe extern "C" fn IoSetCompletionRoutineEx(
             control,
         });
         let next = next_location(irp);
+        release_completion_ex_at(next);
         (*next).CompletionRoutine = Some(completion_ex_trampoline);
         (*next).Context = block.cast();
         // Always invoke the trampoline so the wrapper, device reference, and
@@ -565,6 +609,7 @@ pub unsafe fn free(irp: *mut IRP) {
     // the check in `IofCompleteRequest`. The IRP's extension block, if
     // it has one, goes with it.
     unsafe {
+        release_all_completion_ex(irp);
         super::irpext::freed(irp);
         (*irp).Type = 0;
     }
@@ -649,6 +694,7 @@ pub unsafe extern "C" fn IoReuseIrp(irp: *mut IRP, status: NTSTATUS) {
             ));
         }
         let kept = (*irp).AllocationFlags & REUSE_KEEPS;
+        release_all_completion_ex(irp);
         let extension = super::irpext::before_reuse(irp);
         IoInitializeIrp(irp, (*irp).Size, (*irp).StackCount);
         (*irp).AllocationFlags = kept;

@@ -287,8 +287,10 @@ pub extern "C" fn KeFlushQueuedDpcs() {
 /// report this processor's DPC watchdog limits and remaining ticks.
 ///
 /// # Safety
-/// `info` is writable for 5 `u32` words (`KDPC_WATCHDOG_INFORMATION`).
-pub unsafe extern "C" fn KeQueryDpcWatchdogInformation(info: *mut [u32; 5]) -> NTSTATUS {
+/// `info` is writable for a `KDPC_WATCHDOG_INFORMATION` structure.
+pub unsafe extern "C" fn KeQueryDpcWatchdogInformation(
+    info: *mut nk_ntabi::ke::KDPC_WATCHDOG_INFORMATION,
+) -> NTSTATUS {
     if info.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
@@ -302,9 +304,16 @@ pub unsafe extern "C" fn KeQueryDpcWatchdogInformation(info: *mut [u32; 5]) -> N
         0
     };
     let remaining = limit.saturating_sub(elapsed);
-    // DpcTimeLimit, DpcTimeCount, DpcWatchdogLimit, DpcWatchdogCount, Reserved
     // SAFETY: checked non-null; per the contract.
-    unsafe { info.write_unaligned([limit, remaining, limit, remaining, 0]) };
+    unsafe {
+        info.write_unaligned(nk_ntabi::ke::KDPC_WATCHDOG_INFORMATION {
+            DpcTimeLimit: limit,
+            DpcTimeCount: remaining,
+            DpcWatchdogLimit: limit,
+            DpcWatchdogCount: remaining,
+            Reserved: 0,
+        });
+    }
     STATUS_SUCCESS
 }
 
