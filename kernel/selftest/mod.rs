@@ -64,6 +64,7 @@ mod review;
 mod rtl;
 mod se;
 mod seh;
+mod serial;
 mod service;
 mod setoken;
 mod sioctl;
@@ -239,6 +240,7 @@ pub static GROUPS: &[&[&Group]] = &[
     storage::GROUPS,
     nvme::GROUPS,
     echo::GROUPS,
+    serial::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,

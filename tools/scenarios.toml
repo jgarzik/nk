@@ -1329,3 +1329,16 @@ tier = "gate"
 paths = ["kernel/", "lib/", "boot/", "fixtures/"]
 cmdline = "test=echo.load"
 registry = ["kmdf", "echo"]
+
+# Microsoft's inbox serial.sys (+ serenum.sys upper filter) on a secondary
+# ISA 16550 UART (COM2, 0x2F8) enumerated beneath the ICH9 LPC/ISA bridge
+# (msisadrv.sys, KMDF), verifying COM1 (0x3F8) remains NK's log port and
+# bidirectional transfer matches the host socket peer.
+
+[x86_64-serial]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=serial.load"
+registry = ["storage", "kmdf", "serial"]
+serial2 = true

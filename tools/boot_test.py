@@ -322,6 +322,10 @@ def run_serial2_peer(directory, stop_event, errors):
                 if SERIAL2_EXPECT in buf:
                     s.sendall(SERIAL2_REPLY)
                     (directory / "serial2.log").write_bytes(bytes(buf))
+                    # Keep the peer socket open until QEMU exits so QEMU's
+                    # chardev does not disconnect on HUP before the 16550 FIFO
+                    # drains all reply bytes.
+                    stop_event.wait(timeout=TIMEOUT)
                     return
             except TimeoutError:
                 continue

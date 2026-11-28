@@ -5,10 +5,10 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 1176,
-  "implemented": 780,
+  "implemented": 782,
   "partial": 92,
   "traps": 118,
-  "missing": 46,
+  "missing": 44,
   "library": 140
  },
  "looked_up_absent": {
@@ -16151,7 +16151,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlNumberOfSetBits",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -16770,7 +16770,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "RtlFindClearBitsAndSet",
-     "state": "missing"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -19114,6 +19114,105 @@
      "module": "ntoskrnl.exe",
      "name": "PoCallDriver",
      "state": "implemented"
+    }
+   ]
+  },
+  {
+   "name": "msisadrv",
+   "file": "msisadrv.x64.sys",
+   "sha256": "46b2c56f21291d6375fbe33d8d48d0662bdd4770b8962d1d1aaa540893897a9a",
+   "status": "microsoft-inbox",
+   "loaded_at_boot": true,
+   "imports": [
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlInitializeBitMap",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeInitializeEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "IofCompleteRequest",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlFindClearBitsAndSet",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "HalDispatchTable",
+     "state": "partial"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlClearAllBits",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeLeaveCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "ExAllocatePoolWithTag",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "DbgPrintEx",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlCopyUnicodeString",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "RtlClearBits",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeSetEvent",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeWaitForSingleObject",
+     "state": "implemented"
+    },
+    {
+     "module": "ntoskrnl.exe",
+     "name": "KeEnterCriticalRegion",
+     "state": "implemented"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionBind",
+     "state": "library"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionUnbind",
+     "state": "library"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionBindClass",
+     "state": "library"
+    },
+    {
+     "module": "WDFLDR.SYS",
+     "name": "WdfVersionUnbindClass",
+     "state": "library"
     }
    ]
   },
@@ -21857,10 +21956,10 @@
   "binaries": 60,
   "kernel_names": {
    "total": 1740,
-   "implemented": 779,
+   "implemented": 781,
    "partial": 92,
    "traps": 116,
-   "missing": 753
+   "missing": 751
   },
   "by_binary": [
    {
@@ -21960,10 +22059,10 @@
     "version": "10.0.19041.2006",
     "kernel": {
      "total": 186,
-     "implemented": 146,
+     "implemented": 147,
      "partial": 9,
      "traps": 6,
-     "missing": 25
+     "missing": 24
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22014,10 +22113,10 @@
     "version": "10.0.19041.1865",
     "kernel": {
      "total": 486,
-     "implemented": 306,
+     "implemented": 307,
      "partial": 25,
      "traps": 28,
-     "missing": 127
+     "missing": 126
     },
     "by_ordinal": 1,
     "other_modules": {
@@ -22245,10 +22344,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 14,
-     "implemented": 12,
+     "implemented": 13,
      "partial": 1,
      "traps": 0,
-     "missing": 1
+     "missing": 0
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22286,10 +22385,10 @@
     "version": "10.0.19041.1387",
     "kernel": {
      "total": 359,
-     "implemented": 268,
+     "implemented": 270,
      "partial": 23,
      "traps": 8,
-     "missing": 60
+     "missing": 58
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22332,10 +22431,10 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 625,
-     "implemented": 319,
+     "implemented": 320,
      "partial": 46,
      "traps": 29,
-     "missing": 231
+     "missing": 230
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22562,10 +22661,10 @@
     "version": "10.0.19041.1",
     "kernel": {
      "total": 29,
-     "implemented": 26,
+     "implemented": 27,
      "partial": 1,
      "traps": 0,
-     "missing": 2
+     "missing": 1
     },
     "by_ordinal": 0,
     "other_modules": {}
@@ -22575,10 +22674,10 @@
     "version": "10.0.19041.1202",
     "kernel": {
      "total": 115,
-     "implemented": 90,
+     "implemented": 91,
      "partial": 9,
      "traps": 7,
-     "missing": 9
+     "missing": 8
     },
     "by_ordinal": 0,
     "other_modules": {
@@ -22785,7 +22884,7 @@
    "names": 3064,
    "by_ordinal_only": 23,
    "forwarded": 0,
-   "exported_by_nk": 997,
+   "exported_by_nk": 999,
    "nk_names_it_lacks": [
     "ExAllocateTimerInternal2",
     "KeRemoveQueueApc",

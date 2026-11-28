@@ -1,0 +1,105 @@
+# Registry content for Microsoft's inbox PCI-to-ISA bridge driver
+# (msisadrv.sys, KMDF), serial port driver (serial.sys), and serial bus
+# enumerator upper filter (serenum.sys), captured from the pinned reference
+# Windows 10 22H2 (10.0.19045.2006) installation.
+
+key ControlSet001\Services\msisadrv
+value ErrorControl dword 3
+value Group sz "Boot Bus Extender"
+value ImagePath expand_sz System32\drivers\msisadrv.sys
+value Owners multi_sz machine.inf
+value Start dword 0
+value Tag dword 2
+value Type dword 1
+
+key ControlSet001\Services\msisadrv\Parameters\Wdf
+value WdfMajorVersion dword 1
+value WdfMinorVersion dword 15
+
+key DriverDatabase\DeviceIds\PCI\CC_0601
+value machine.inf binary hex:01ff0000
+key DriverDatabase\DeviceIds\PCI\VEN_8086&DEV_2918
+value machine.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\machine.inf
+value "" multi_sz machine.inf_amd64_b748590104fe1c15
+value Active sz machine.inf_amd64_b748590104fe1c15
+value Configurations multi_sz MSISADRV
+key DriverDatabase\DriverPackages\machine.inf_amd64_b748590104fe1c15
+value "" sz machine.inf
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value Version binary hex:ffff0900000000007de9364d25e3ce11bfc108002be1031800808ca3c594c6010100614a00000a008000000000000000
+key DriverDatabase\DriverPackages\machine.inf_amd64_b748590104fe1c15\Descriptors\PCI\CC_0601
+value Configuration sz MSISADRV
+value Description sz %pci\cc_0601_desc%
+value Manufacturer sz %gendev_mfg%
+key DriverDatabase\DriverPackages\machine.inf_amd64_b748590104fe1c15\Descriptors\PCI\VEN_8086&DEV_2918
+value Configuration sz MSISADRV
+value Description sz %lpccontroller_desc%
+value Manufacturer sz %intel_mfg%
+key DriverDatabase\DriverPackages\machine.inf_amd64_b748590104fe1c15\Configurations\MSISADRV
+value ConfigFlags dword 0
+value ConfigScope dword 5
+value Service sz msisadrv
+
+key ControlSet001\Services\Serial
+value DisplayName sz "@msports.inf,%Serial.SVCDESC%;Serial port driver"
+value ErrorControl dword 0
+value ForceFifoEnable dword 1
+value Group sz "Extended base"
+value ImagePath expand_sz \SystemRoot\System32\drivers\serial.sys
+value LogFifo dword 0
+value Owners multi_sz msports.inf hiddigi.inf
+value PermitShare dword 0
+value RxFIFO dword 8
+value Start dword 3
+value Tag dword 32
+value TxFIFO dword 14
+value Type dword 1
+
+key ControlSet001\Services\serenum
+value DisplayName sz "@msports.inf,%Serenum.SVCDESC%;Serenum Filter Driver"
+value ErrorControl dword 1
+value Group sz "PNP Filter"
+value ImagePath expand_sz \SystemRoot\System32\drivers\serenum.sys
+value Owners multi_sz msports.inf
+value Start dword 3
+value Tag dword 5
+value Type dword 1
+
+key ControlSet001\Control\Class\{4d36e978-e325-11ce-bfc1-08002be10318}
+value Class sz Ports
+value ClassDesc sz @%SystemRoot%\System32\msports.dll,-10000
+value IconPath multi_sz %SystemRoot%\system32\setupapi.dll,-23
+value Installer32 sz MsPorts.Dll,PortsClassInstaller
+
+key DriverDatabase\DeviceIds\*PNP0501
+value msports.inf binary hex:01ff0000
+key DriverDatabase\DriverInfFiles\msports.inf
+value "" multi_sz msports.inf_amd64_f2e8231e8b60f214
+value Active sz msports.inf_amd64_f2e8231e8b60f214
+value Configurations multi_sz LptPort.NT EcpPort.NT ComPort.NT MultiComPort.NT Serial.NT SerialEnumerator.NT NonPort.NT
+key DriverDatabase\DriverPackages\msports.inf_amd64_f2e8231e8b60f214
+value "" sz msports.inf
+value Provider sz Microsoft
+value SignerScore dword 0xd000003
+value StatusFlags dword 18
+value Version binary hex:ffff09000000000078e9364d25e3ce11bfc108002be1031800808ca3c594c6010100614a00000a008000000000000000
+key DriverDatabase\DriverPackages\msports.inf_amd64_f2e8231e8b60f214\Descriptors\*PNP0501
+value Configuration sz ComPort.NT
+value Description sz %*pnp0501.devicedesc%
+value Manufacturer sz %std%
+key DriverDatabase\DriverPackages\msports.inf_amd64_f2e8231e8b60f214\Configurations\ComPort.NT
+value ConfigFlags dword 0
+value ConfigScope dword 7
+value Service sz Serial
+value UpperFilters multi_sz serenum
+key DriverDatabase\DriverPackages\msports.inf_amd64_f2e8231e8b60f214\Configurations\ComPort.NT\Driver
+value PortSubClass binary hex:01
+
+# Written by MsPorts.dll (PortsClassInstaller) on Windows when COM2 is installed.
+key "ControlSet001\\Enum\\ACPI\\PNP0501\\2\\Device Parameters"
+value FirmwareIdentified dword 1
+value PollingPeriod dword 0
+value PortName sz COM2

@@ -544,6 +544,15 @@ status = "microsoft-inbox"
 note = "serenum.sys 10.0.19041.1, the serial bus enumerator upper filter"
 
 [[fixture]]
+name = "msisadrv"
+arch = "x86_64"
+file = "msisadrv.x64.sys"
+url = "https://msdl.microsoft.com/download/symbols/msisadrv.sys/1AAAEF93b000/msisadrv.sys"
+sha256 = "46b2c56f21291d6375fbe33d8d48d0662bdd4770b8962d1d1aaa540893897a9a"
+status = "microsoft-inbox"
+note = "msisadrv.sys 10.0.19041.1202, the KMDF PCI-to-ISA bridge driver enumerating ACPI ISA devices"
+
+[[fixture]]
 name = "nkc-thread"
 arch = "x86_64"
 file = "nkc-thread.x64.sys"
