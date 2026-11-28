@@ -311,22 +311,20 @@ fn key_of(handle: *mut c_void) -> Result<Held, NTSTATUS> {
 /// # Safety
 /// `attributes` points to an `OBJECT_ATTRIBUTES` whose name is null or
 /// a counted string.
-unsafe fn named(attributes: *const OBJECT_ATTRIBUTES) -> Result<(Held, Vec<u16>), NTSTATUS> {
-    if attributes.is_null() {
-        return Err(STATUS_INVALID_PARAMETER);
-    }
-    // SAFETY: per the contract; the structure is the driver's, read
-    // field by field.
-    let (root, path) = unsafe {
-        (
-            (&raw const (*attributes).RootDirectory).read_unaligned(),
-            crate::rtl::copy_unicode((&raw const (*attributes).ObjectName).read_unaligned()),
-        )
-    };
+unsafe fn named(
+    attributes: *const OBJECT_ATTRIBUTES,
+    mode: i8,
+) -> Result<(Held, Vec<u16>), NTSTATUS> {
+    // SAFETY: per the contract; fault-protected when `UserMode`.
+    let oa = unsafe { crate::svc::capture::capture_object_attributes(attributes, mode) }?
+        .ok_or(STATUS_INVALID_PARAMETER)?;
+    let root = oa.root;
+    let path = oa.name.unwrap_or_default();
     if root.is_null() {
         return absolute(&path);
     }
-    let root = handle::reference(root as u64, None)?;
+    let root =
+        handle::reference_for(root as u64, None, 0, crate::svc::capture::handle_mode(mode))?.0;
     let (body, path) = if root.is(&object::DIRECTORY_TYPE) {
         crate::ob::lookup(Some(root.body()), &path)?
     } else if path.first() == Some(&u16::from(b'\\')) {
@@ -642,9 +640,10 @@ pub unsafe extern "C" fn NtOpenKey(
     desired_access: u32,
     attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     let mut asked = Vec::new();
     // SAFETY: per the contract.
-    let found = unsafe { named(attributes) }.and_then(|(start, path)| {
+    let found = unsafe { named(attributes, mode) }.and_then(|(start, path)| {
         if crate::kd::trace_registry() {
             asked.clone_from(&path);
         }
@@ -656,9 +655,15 @@ pub unsafe extern "C" fn NtOpenKey(
     });
     let status = match found.and_then(|key| open(key, desired_access)) {
         Ok(handle) => {
-            // SAFETY: per the contract.
-            unsafe { key_handle.write_unaligned(handle) };
-            STATUS_SUCCESS
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            match unsafe { crate::svc::capture::write(key_handle, handle, mode) } {
+                Ok(()) => STATUS_SUCCESS,
+                Err(status) => {
+                    let _ =
+                        handle::close_for(handle as u64, crate::svc::capture::handle_mode(mode));
+                    status
+                }
+            }
         }
         Err(status) => status,
     };
@@ -677,17 +682,20 @@ pub unsafe extern "C" fn NtOpenKey(
 ///
 /// # Safety
 /// `class` is null or points to a counted string.
-unsafe fn class_of(class: *const UNICODE_STRING) -> Option<Vec<u8>> {
+unsafe fn class_of(class: *const UNICODE_STRING, mode: i8) -> Result<Vec<u8>, NTSTATUS> {
     if class.is_null() {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
-    // SAFETY: per the contract; the structure is the driver's, read
-    // field by field.
-    unsafe {
-        let buffer = (&raw const (*class).Buffer).read_unaligned();
-        let length = (&raw const (*class).Length).read_unaligned();
-        crate::se::copied(buffer.cast(), usize::from(length))
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let units = unsafe { crate::svc::capture::capture_unicode_string(class, mode) }?;
+    let mut bytes = Vec::new();
+    if bytes.try_reserve_exact(units.len() * 2).is_err() {
+        return Err(STATUS_INSUFFICIENT_RESOURCES);
     }
+    for u in units {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    Ok(bytes)
 }
 
 /// Open the key `path` below `start`, making it, with `class`, if it
@@ -775,22 +783,34 @@ pub unsafe extern "C" fn NtCreateKey(
     _create_options: u32,
     disposition: *mut u32,
 ) -> NTSTATUS {
-    // SAFETY: per the contract. The class is the driver's memory: the
-    // registry is given a copy, made before its lock is taken.
-    let Some(class) = (unsafe { class_of(class) }) else {
-        return STATUS_INSUFFICIENT_RESOURCES;
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let class = match unsafe { class_of(class, mode) } {
+        Ok(c) => c,
+        Err(status) => return status,
     };
     // SAFETY: per the contract.
-    let made =
-        unsafe { named(attributes) }.and_then(|(start, path)| create_below(&start, &path, &class));
+    let made = unsafe { named(attributes, mode) }
+        .and_then(|(start, path)| create_below(&start, &path, &class));
     match made.and_then(|(key, new)| Ok((open(key, desired_access)?, new))) {
         Ok((handle, new)) => {
-            // SAFETY: per the contract.
-            unsafe {
-                key_handle.write_unaligned(handle);
-                if !disposition.is_null() {
-                    disposition.write_unaligned(if new { CREATED } else { OPENED });
-                }
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            let write = unsafe {
+                crate::svc::capture::write(key_handle, handle, mode).and_then(|()| {
+                    if !disposition.is_null() {
+                        crate::svc::capture::write(
+                            disposition,
+                            if new { CREATED } else { OPENED },
+                            mode,
+                        )
+                    } else {
+                        Ok(())
+                    }
+                })
+            };
+            if let Err(status) = write {
+                let _ = handle::close_for(handle as u64, crate::svc::capture::handle_mode(mode));
+                return status;
             }
             STATUS_SUCCESS
         }
@@ -811,19 +831,22 @@ pub unsafe extern "C" fn NtSetValueKey(
     data: *const u8,
     data_size: u32,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     // Held to the end of the call: longer than the registry's lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
         Err(status) => return status,
     };
     let key = held.key();
-    // SAFETY: per the contract. Name and data are the driver's memory:
-    // the registry is given copies.
-    let (name, data) = unsafe {
-        let Some(data) = crate::se::copied(data, data_size as usize) else {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        };
-        (crate::rtl::copy_unicode(value_name), data)
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(value_name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let data = match unsafe { crate::svc::capture::capture_bytes(data, data_size as usize, mode) } {
+        Ok(d) => d,
+        Err(status) => return status,
     };
     set_value(key, &name, kind, &data)
 }
@@ -839,15 +862,18 @@ pub unsafe extern "C" fn NtDeleteValueKey(
     key_handle: *mut c_void,
     value_name: *const UNICODE_STRING,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     // Held to the end of the call: longer than the registry's lock.
     let held = match key_of(key_handle) {
         Ok(held) => held,
         Err(status) => return status,
     };
     let key = held.key();
-    // SAFETY: per the contract. The name is the driver's memory: the
-    // registry is given a copy.
-    let name = unsafe { crate::rtl::copy_unicode(value_name) };
+    // SAFETY: per the contract; captured before taking the registry lock.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(value_name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
     delete_value_of(key, &name)
 }
 
@@ -872,6 +898,7 @@ unsafe fn inform(
     result_length: *mut u32,
     mut format: impl FnMut(&mut [u8]) -> Result<(Fit, usize), NTSTATUS>,
 ) -> NTSTATUS {
+    let mode = crate::svc::capture::mode();
     let mut out = Vec::new();
     let (fit, needed) = loop {
         let (fit, needed) = match format(&mut out) {
@@ -886,16 +913,23 @@ unsafe fn inform(
         if out.try_reserve_exact(room).is_err() {
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        // SAFETY: per the contract; `room` is at most `length`.
-        out.extend((0..room).map(|i| unsafe { information.add(i).read() }));
+        out.resize(room, 0);
+        // SAFETY: per the contract; fault-protected for `UserMode`.
+        let copied = unsafe { crate::svc::capture::copy_from_caller(&mut out, information, mode) };
+        if let Err(status) = copied {
+            return status;
+        }
     };
-    // SAFETY: per the contract; `out` is no longer than `length`.
-    unsafe {
-        result_length.write_unaligned(needed as u32);
-        if fit != Fit::Nothing {
-            for (i, &byte) in out.iter().enumerate() {
-                information.add(i).write(byte);
-            }
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let wrote_len = unsafe { crate::svc::capture::write(result_length, needed as u32, mode) };
+    if let Err(status) = wrote_len {
+        return status;
+    }
+    if fit != Fit::Nothing {
+        // SAFETY: per the contract; `out` is no longer than `length`.
+        let wrote_buf = unsafe { crate::svc::capture::copy_to_caller(information, &out, mode) };
+        if let Err(status) = wrote_buf {
+            return status;
         }
     }
     match fit {
@@ -1096,8 +1130,12 @@ pub unsafe extern "C" fn NtQueryValueKey(
         Err(status) => return status,
     };
     let key = held.key();
-    // SAFETY: per the contract.
-    let name = unsafe { crate::rtl::copy_unicode(value_name) };
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(value_name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
     let format = |out: &mut [u8]| {
         let hive = HIVE.lock();
         let (stored_name, kind, data) = hive.value(key, &name).map_err(status)?;

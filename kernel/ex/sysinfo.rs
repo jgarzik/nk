@@ -175,7 +175,40 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
     length: u32,
     return_length: *mut u32,
 ) -> NTSTATUS {
-    let buffer = buffer.cast::<u8>();
+    let mode = crate::svc::capture::mode();
+    if crate::svc::capture::is_user(mode) {
+        if let Err(status) =
+            crate::svc::capture::probe_read(buffer.addr(), length as usize, 1, mode)
+        {
+            return status;
+        }
+        if !return_length.is_null()
+            && let Err(status) = crate::svc::capture::probe_read(return_length.addr(), 4, 1, mode)
+        {
+            return status;
+        }
+    }
+    // For user-mode callers, stage into a kernel copy so no internal helper
+    // ever dereferences a user pointer directly.
+    let mut staged = Vec::new();
+    let target = if crate::svc::capture::is_user(mode) && length > 0 {
+        if staged.try_reserve_exact(length as usize).is_err() {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        staged.resize(length as usize, 0);
+        // Preserve caller bytes in padding/input fields (e.g. FirmwareTable).
+        // SAFETY: probed above.
+        let copied =
+            unsafe { crate::svc::capture::copy_from_caller(&mut staged, buffer.cast(), mode) };
+        if let Err(status) = copied {
+            return status;
+        }
+        staged.as_mut_ptr()
+    } else {
+        buffer.cast::<u8>()
+    };
+    let buffer_orig = buffer.cast::<u8>();
+    let buffer = target;
     let fixed = |rule: Fixed, write: &dyn Fn()| {
         let answer = rule.answer(length);
         if answer.fits {
@@ -249,11 +282,22 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
         SYSTEM_FIRMWARE_TABLE_INFORMATION_CLASS => {
             // SAFETY: per the contract.
             let (status, reported) = unsafe { super::firmware::query_table(buffer, length) };
+            if !staged.is_empty()
+                && let Err(err) =
+                    // SAFETY: probed above.
+                    unsafe {
+                        crate::svc::capture::copy_to_caller(buffer_orig, &staged, mode)
+                    }
+            {
+                return err;
+            }
             if let Some(reported) = reported
                 && !return_length.is_null()
+                && let Err(err) =
+                    // SAFETY: per the contract; fault-protected for `UserMode`.
+                    unsafe { crate::svc::capture::write(return_length, reported, mode) }
             {
-                // SAFETY: per the contract.
-                unsafe { return_length.write_unaligned(reported) };
+                return err;
             }
             return status;
         }
@@ -276,9 +320,19 @@ pub unsafe extern "C" fn NtQuerySystemInformation(
             "NtQuerySystemInformation: NK does not implement information class {other}"
         )),
     };
-    if !return_length.is_null() {
-        // SAFETY: per the contract.
-        unsafe { return_length.write_unaligned(reported) };
+    if !staged.is_empty()
+        && let Err(err) =
+            // SAFETY: probed above.
+            unsafe { crate::svc::capture::copy_to_caller(buffer_orig, &staged, mode) }
+    {
+        return err;
+    }
+    if !return_length.is_null()
+        && let Err(err) =
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            unsafe { crate::svc::capture::write(return_length, reported, mode) }
+    {
+        return err;
     }
     status
 }

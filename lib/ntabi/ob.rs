@@ -78,6 +78,7 @@ const _: () = {
 /// [`OBJECT_ATTRIBUTES`](https://learn.microsoft.com/en-us/windows/win32/api/ntdef/ns-ntdef-_object_attributes):
 /// how a caller names the object it wants opened or created.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct OBJECT_ATTRIBUTES {
     pub Length: u32,
     pub RootDirectory: *mut c_void,

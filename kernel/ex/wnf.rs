@@ -63,8 +63,12 @@ pub unsafe extern "C" fn NtQueryWnfStateData(
     if state_name.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    // SAFETY: per the contract.
-    let name = unsafe { state_name.read_unaligned() };
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let name = match unsafe { crate::svc::capture::read(state_name, mode) } {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
     if !is_listed(name) {
         let digits = wnf::value_name(name);
         let digits = core::str::from_utf8(&digits).unwrap_or("?");
@@ -73,11 +77,15 @@ pub unsafe extern "C" fn NtQueryWnfStateData(
     }
     // SAFETY: optional output pointers are writable per the contract.
     unsafe {
-        if !change_stamp.is_null() {
-            change_stamp.write_unaligned(0);
+        if !change_stamp.is_null()
+            && let Err(status) = crate::svc::capture::write(change_stamp, 0, mode)
+        {
+            return status;
         }
-        if !buffer_size.is_null() {
-            buffer_size.write_unaligned(0);
+        if !buffer_size.is_null()
+            && let Err(status) = crate::svc::capture::write(buffer_size, 0, mode)
+        {
+            return status;
         }
     }
     STATUS_SUCCESS
@@ -201,17 +209,23 @@ pub unsafe extern "C" fn NtQueryWnfStateNameInformation(
     if info_buffer_size < 4 {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    // SAFETY: checked non-null.
-    let name = unsafe { state_name.read_unaligned() };
+    let mode = crate::svc::capture::mode();
+    // SAFETY: checked non-null; fault-protected for `UserMode`.
+    let name = match unsafe { crate::svc::capture::read(state_name, mode) } {
+        Ok(v) => v,
+        Err(status) => return status,
+    };
     let answer = match name_info_class {
         0 => u32::from(is_listed(name)), // WnfInfoStateNameExist
         1 => 0u32,                       // WnfInfoSubscribersPresent
         2 => 1u32,                       // WnfInfoIsQuiescent
         _ => return STATUS_INVALID_PARAMETER,
     };
-    // SAFETY: checked non-null and >= 4 bytes.
-    unsafe { info_buffer.cast::<u32>().write_unaligned(answer) };
-    STATUS_SUCCESS
+    // SAFETY: checked non-null and >= 4 bytes; fault-protected for `UserMode`.
+    match unsafe { crate::svc::capture::write(info_buffer.cast::<u32>(), answer, mode) } {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
 }
 
 pub use crate::svc::zw::{ZwQueryWnfStateData, ZwQueryWnfStateNameInformation};

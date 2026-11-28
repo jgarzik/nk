@@ -17,7 +17,6 @@ const OBJ_PERMANENT: u32 = 0x10;
 const OBJ_EXCLUSIVE: u32 = 0x20;
 const OBJ_OPENIF: u32 = 0x80;
 const OBJ_OPENLINK: u32 = 0x100;
-const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 
 /// Whether the object `body` is of the type `ty`.
 ///
@@ -82,33 +81,32 @@ pub unsafe extern "C" fn NtCreateDirectoryObject(
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
-    let (mut root, mut name, mut attributes) = (core::ptr::null_mut(), alloc::vec::Vec::new(), 0);
-    if !object_attributes.is_null() {
-        // SAFETY: per the contract; the driver's memory, read field by
-        // field through its pointer.
-        let length = unsafe {
-            root = (&raw const (*object_attributes).RootDirectory).read_unaligned();
-            name = crate::rtl::copy_unicode(
-                (&raw const (*object_attributes).ObjectName).read_unaligned(),
-            );
-            attributes = (&raw const (*object_attributes).Attributes).read_unaligned();
-            (&raw const (*object_attributes).Length).read_unaligned()
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let oa =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
         };
-        if length as usize != size_of::<OBJECT_ATTRIBUTES>()
-            || attributes & !OBJ_VALID_ATTRIBUTES != 0
-            || attributes & OBJ_OPENLINK != 0
-        {
-            return STATUS_INVALID_PARAMETER;
+    let (root, name, attributes) = match oa {
+        Some(oa) => {
+            if oa.attributes & OBJ_OPENLINK != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if oa.attributes & OBJ_EXCLUSIVE != 0 {
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            (oa.root, oa.name.unwrap_or_default(), oa.attributes)
         }
-        if attributes & OBJ_EXCLUSIVE != 0 {
-            return STATUS_NOT_IMPLEMENTED;
-        }
-    }
+        None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
+    };
     let start = match resolve_root(root, name.is_empty()) {
         Ok(start) => start,
         Err(status) => {
-            // SAFETY: per the contract.
-            unsafe { directory_handle.write_unaligned(core::ptr::null_mut()) };
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            let _ = unsafe {
+                crate::svc::capture::write(directory_handle, core::ptr::null_mut(), mode)
+            };
             return status;
         }
     };
@@ -125,7 +123,7 @@ pub unsafe extern "C" fn NtCreateDirectoryObject(
         let (body, existed) = match made {
             Ok(made) => made,
             Err(status) => {
-                directory_handle.write_unaligned(core::ptr::null_mut());
+                let _ = crate::svc::capture::write(directory_handle, core::ptr::null_mut(), mode);
                 return status;
             }
         };
@@ -146,7 +144,12 @@ pub unsafe extern "C" fn NtCreateDirectoryObject(
         object::dereference(body);
         match opened {
             Ok(opened) => {
-                directory_handle.write_unaligned(opened as *mut c_void);
+                if let Err(status) =
+                    crate::svc::capture::write(directory_handle, opened as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(opened, crate::svc::capture::handle_mode(mode));
+                    return status;
+                }
                 if existed {
                     STATUS_OBJECT_NAME_EXISTS
                 } else {
@@ -154,7 +157,7 @@ pub unsafe extern "C" fn NtCreateDirectoryObject(
                 }
             }
             Err(status) => {
-                directory_handle.write_unaligned(core::ptr::null_mut());
+                let _ = crate::svc::capture::write(directory_handle, core::ptr::null_mut(), mode);
                 status
             }
         }

@@ -22,7 +22,6 @@ use nk_ntabi::status::*;
 const OBJ_INHERIT: u32 = 0x2;
 const OBJ_CASE_INSENSITIVE: u32 = 0x40;
 const OBJ_FORCE_ACCESS_CHECK: u32 = 0x400;
-const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 
 /// [`ZwCreateFile`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-ntcreatefile):
 /// open or create what the object attributes name, for kernel mode,
@@ -62,35 +61,34 @@ pub unsafe extern "C" fn NtCreateFile(
     ea_buffer: *const c_void,
     ea_length: u32,
 ) -> NTSTATUS {
-    if object_attributes.is_null() {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; captured fault-safely when `UserMode`.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
+        })
+    else {
         return STATUS_INVALID_PARAMETER;
-    }
-    // SAFETY: per the contract; the driver's memory, read field by
-    // field through its pointer.
-    let (length, root, name, attributes, qos, allocation_size) = unsafe {
-        (
-            (&raw const (*object_attributes).Length).read_unaligned(),
-            (&raw const (*object_attributes).RootDirectory).read_unaligned(),
-            crate::rtl::copy_unicode((&raw const (*object_attributes).ObjectName).read_unaligned()),
-            (&raw const (*object_attributes).Attributes).read_unaligned(),
-            (&raw const (*object_attributes).SecurityQualityOfService).read_unaligned(),
-            if allocation_size.is_null() {
-                0
-            } else {
-                allocation_size.read_unaligned()
-            },
-        )
     };
-    if length as usize != size_of::<OBJECT_ATTRIBUTES>() || attributes & !OBJ_VALID_ATTRIBUTES != 0
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
+    let allocation_size = if allocation_size.is_null() {
+        0
+    } else {
+        // SAFETY: per the contract; captured fault-safely when `UserMode`.
+        match unsafe { crate::svc::capture::read(allocation_size, mode) } {
+            Ok(v) => v,
+            Err(status) => return status,
+        }
+    };
     if !ea_buffer.is_null() && ea_length != 0 {
         return STATUS_EAS_NOT_SUPPORTED;
     }
-    if !qos.is_null() {
+    if oa.qos.is_some() {
         return STATUS_NOT_IMPLEMENTED;
     }
+    let root = oa.root;
+    let name = oa.name.unwrap_or_default();
+    let attributes = oa.attributes;
     let mut location_flags = 0;
     if attributes & OBJ_CASE_INSENSITIVE == 0 {
         location_flags |= SL_CASE_SENSITIVE;
@@ -106,7 +104,7 @@ pub unsafe extern "C" fn NtCreateFile(
         create_options,
         disposition: create_disposition,
         kind: Kind::File,
-        requestor_mode: crate::ke::thread::previous_mode(),
+        requestor_mode: mode,
     };
     let extra = Extra {
         file_attributes: file_attributes as u16,
@@ -117,11 +115,18 @@ pub unsafe extern "C" fn NtCreateFile(
     };
     match file::open_as(&request, &name, &extra) {
         Ok((handle, result)) => {
-            // SAFETY: per the contract.
-            unsafe {
-                file_handle.write_unaligned(handle as *mut c_void);
-                (&raw mut (*io_status_block).Status).write_unaligned(result.status);
-                (&raw mut (*io_status_block).Information).write_unaligned(result.information);
+            let iosb = IO_STATUS_BLOCK {
+                Status: result.status,
+                Information: result.information,
+            };
+            // SAFETY: per the contract; written fault-safely when `UserMode`.
+            let write = unsafe {
+                crate::svc::capture::write(file_handle, handle as *mut c_void, mode)
+                    .and_then(|()| crate::svc::capture::write(io_status_block, iosb, mode))
+            };
+            if let Err(status) = write {
+                let _ = crate::ob::handle::close(handle);
+                return status;
             }
             result.status
         }

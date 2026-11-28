@@ -3,5 +3,5 @@
 scenario: x86_64
 fails: ob.event-handle
 file: kernel/ob/event.rs
-replace:         wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0) as NTSTATUS
-with:         wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, false) as NTSTATUS
+replace:         wait::wait_as(Some(body.cast()), timeout_val, mode, alertable != 0) as NTSTATUS
+with:         wait::wait_as(Some(body.cast()), timeout_val, mode, false) as NTSTATUS

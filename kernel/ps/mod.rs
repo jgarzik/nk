@@ -209,14 +209,21 @@ pub unsafe extern "C" fn NtSetInformationThread(
     length: u32,
 ) -> NTSTATUS {
     use nk_ps::info;
+    let mode = crate::svc::capture::mode();
     // A class whose information is one 32-bit number.
-    let number = || {
-        // SAFETY: per the contract, once the length is known to be 4.
-        (length == 4).then(|| unsafe { information.cast::<i32>().read_unaligned() })
+    let number = || -> Result<Option<i32>, NTSTATUS> {
+        if length != 4 {
+            return Ok(None);
+        }
+        // SAFETY: per the contract; fault-protected for `UserMode`.
+        unsafe { crate::svc::capture::read(information.cast::<i32>(), mode) }.map(Some)
     };
     match class {
         info::THREAD_PRIORITY => {
-            let Some(priority) = number() else {
+            let Some(priority) = (match number() {
+                Ok(v) => v,
+                Err(status) => return status,
+            }) else {
                 return STATUS_INFO_LENGTH_MISMATCH;
             };
             if !info::priority_allowed(priority) {
@@ -229,7 +236,10 @@ pub unsafe extern "C" fn NtSetInformationThread(
             })
         }
         info::THREAD_BASE_PRIORITY => {
-            let Some(increment) = number() else {
+            let Some(increment) = (match number() {
+                Ok(v) => v,
+                Err(status) => return status,
+            }) else {
                 return STATUS_INFO_LENGTH_MISMATCH;
             };
             with_thread(thread_handle, THREAD_SET_LIMITED_INFORMATION, |thread| {
@@ -246,8 +256,13 @@ pub unsafe extern "C" fn NtSetInformationThread(
             if length as usize != size_of::<*mut c_void>() {
                 return STATUS_INFO_LENGTH_MISMATCH;
             }
-            // SAFETY: per the contract: the length is a handle's.
-            let token = unsafe { information.cast::<*mut c_void>().read_unaligned() };
+            // SAFETY: per the contract; fault-protected for `UserMode`.
+            let token =
+                match unsafe { crate::svc::capture::read(information.cast::<*mut c_void>(), mode) }
+                {
+                    Ok(t) => t,
+                    Err(status) => return status,
+                };
             with_thread(thread_handle, THREAD_SET_THREAD_TOKEN, |thread| {
                 // SAFETY: a thread, referenced by the look-up.
                 unsafe { crate::se::impersonate::set_thread_impersonation_token(thread, token) }

@@ -35,6 +35,21 @@ Each thread records its caller mode in `KTHREAD.PreviousMode` (offset
   that saves `KTHREAD.PreviousMode`, sets it to `KernelMode`, calls `Nt*`,
   and restores the prior value on return.
 
+## Argument capture
+
+Every `Nt*` service validates and copies caller pointers through
+`kernel/svc/capture.rs` (built on pure, host-tested range/alignment rules in
+`lib/mm/probe.rs` and fault-protected copies in `mm::user::copy`):
+
+- When `PreviousMode == UserMode`, pointers are checked against
+  `MmUserProbeAddress` (`STATUS_ACCESS_VIOLATION` /
+  `STATUS_DATATYPE_MISALIGNMENT`), copied into kernel memory before any spin
+  lock is taken, and written back through fault-protected copies.
+  `OBJ_KERNEL_HANDLE` is stripped from user-mode `OBJECT_ATTRIBUTES`.
+- When `PreviousMode == KernelMode`, caller pointers are trusted directly,
+  as on Windows.
+- NK never holds a Rust reference (`&T` / `&mut T`) into user memory.
+
 ## Absent services and information classes
 
 - An index past `SERVICE_COUNT` (`>= 471`) returns

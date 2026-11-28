@@ -12,6 +12,7 @@ pub mod frames;
 pub mod heap;
 pub mod pfn;
 pub mod pooltab;
+pub mod probe;
 pub mod protect;
 pub mod pt;
 pub mod pte;

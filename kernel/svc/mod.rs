@@ -19,6 +19,8 @@
 
 #![allow(non_snake_case)]
 
+pub mod capture;
+
 use crate::export::State;
 use crate::kd;
 use crate::ke::thread::PreviousModeGuard;
@@ -557,5 +559,6 @@ pub fn self_test() -> Result<(), &'static str> {
     if oob != STATUS_INVALID_SYSTEM_SERVICE {
         return Err("out-of-range service index did not return STATUS_INVALID_SYSTEM_SERVICE");
     }
+    capture::self_test()?;
     Ok(())
 }

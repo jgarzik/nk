@@ -9,7 +9,6 @@
 
 #![allow(non_snake_case)]
 
-use crate::rtl;
 use core::ffi::c_void;
 use nk_ntabi::io::UNICODE_STRING;
 use nk_ntabi::status::{NTSTATUS, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND};
@@ -27,8 +26,12 @@ pub unsafe extern "C" fn NtQueryLicenseValue(
     _data_size: u32,
     _result_size: *mut u32,
 ) -> NTSTATUS {
-    // SAFETY: the caller's string.
-    let name = unsafe { rtl::copy_unicode(name) };
+    let mode = crate::svc::capture::mode();
+    // SAFETY: the caller's string; fault-protected for `UserMode`.
+    let name = match unsafe { crate::svc::capture::capture_unicode_string(name, mode) } {
+        Ok(n) => n,
+        Err(status) => return status,
+    };
     if name.is_empty() {
         return STATUS_INVALID_PARAMETER;
     }

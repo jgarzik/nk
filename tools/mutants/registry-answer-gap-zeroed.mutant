@@ -4,5 +4,5 @@
 scenario: x86_64
 fails: cm.enumerate.values
 file: kernel/cm/mod.rs
-replace:         out.extend((0..room).map(|i| unsafe { information.add(i).read() }));
-with:         out.resize(room, 0);
+replace:         let copied = unsafe { crate::svc::capture::copy_from_caller(&mut out, information, mode) };
+with:         let copied: Result<(), NTSTATUS> = Ok(());

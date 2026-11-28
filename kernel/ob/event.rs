@@ -17,7 +17,7 @@ use core::ffi::c_void;
 use nk_ntabi::io::KERNEL_MODE;
 use nk_ntabi::ob::OBJECT_ATTRIBUTES;
 use nk_ntabi::status::*;
-use nk_ob::handles::{Attributes, Mode};
+use nk_ob::handles::Attributes;
 
 /// `SYNCHRONIZE`: the right to wait on an object.
 const SYNCHRONIZE: u32 = 0x0010_0000;
@@ -28,8 +28,6 @@ const OBJ_PERMANENT: u32 = 0x10;
 const OBJ_EXCLUSIVE: u32 = 0x20;
 const OBJ_OPENIF: u32 = 0x80;
 const OBJ_OPENLINK: u32 = 0x100;
-/// `OBJ_VALID_ATTRIBUTES` (`wdm.h`): every attribute there is.
-const OBJ_VALID_ATTRIBUTES: u32 = 0x1FF2;
 
 /// [`ZwCreateEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwcreateevent):
 /// a new event (`event_type` 0 for a notification event, 1 for a
@@ -61,31 +59,25 @@ pub unsafe extern "C" fn NtCreateEvent(
     if event_type > 1 {
         return STATUS_INVALID_PARAMETER;
     }
-    let (mut root, mut name, mut attributes) = (core::ptr::null_mut(), alloc::vec::Vec::new(), 0);
-    if !object_attributes.is_null() {
-        // SAFETY: per the contract; the driver's memory, read field by
-        // field through its pointer.
-        let (length, object_name, given) = unsafe {
-            root = (&raw const (*object_attributes).RootDirectory).read_unaligned();
-            (
-                (&raw const (*object_attributes).Length).read_unaligned(),
-                (&raw const (*object_attributes).ObjectName).read_unaligned(),
-                (&raw const (*object_attributes).Attributes).read_unaligned(),
-            )
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let oa =
+        match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
         };
-        if length as usize != size_of::<OBJECT_ATTRIBUTES>()
-            || given & !OBJ_VALID_ATTRIBUTES != 0
-            || given & OBJ_OPENLINK != 0
-        {
-            return STATUS_INVALID_PARAMETER;
+    let (root, name, attributes) = match oa {
+        Some(oa) => {
+            if oa.attributes & OBJ_OPENLINK != 0 {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if oa.attributes & OBJ_EXCLUSIVE != 0 {
+                return STATUS_NOT_IMPLEMENTED;
+            }
+            (oa.root, oa.name.unwrap_or_default(), oa.attributes)
         }
-        if given & OBJ_EXCLUSIVE != 0 {
-            return STATUS_NOT_IMPLEMENTED;
-        }
-        // SAFETY: per the contract.
-        name = unsafe { crate::rtl::copy_unicode(object_name) };
-        attributes = given;
-    }
+        None => (core::ptr::null_mut(), alloc::vec::Vec::new(), 0),
+    };
     let start = match resolve_root(root, name.is_empty()) {
         Ok(start) => start,
         Err(status) => return status,
@@ -103,6 +95,7 @@ pub unsafe extern "C" fn NtCreateEvent(
         Ok(made) => made,
         Err(status) => return status,
     };
+    let kernel_handle = !crate::svc::capture::is_user(mode);
     // SAFETY: the reference `create_event` returned is given up once
     // the handle, if there is one, holds the event.
     unsafe {
@@ -113,7 +106,7 @@ pub unsafe extern "C" fn NtCreateEvent(
                 inherit: attributes & OBJ_INHERIT != 0,
                 protect_from_close: false,
             },
-            true,
+            kernel_handle,
         );
         if opened.is_err() && !existed && !name.is_empty() {
             // No handle was ever open: undo the namespace entry.
@@ -122,7 +115,12 @@ pub unsafe extern "C" fn NtCreateEvent(
         object::dereference(body);
         match opened {
             Ok(opened) => {
-                event_handle.write_unaligned(opened as *mut c_void);
+                if let Err(status) =
+                    crate::svc::capture::write(event_handle, opened as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(opened, crate::svc::capture::handle_mode(mode));
+                    return status;
+                }
                 if existed {
                     STATUS_OBJECT_NAME_EXISTS
                 } else {
@@ -151,30 +149,24 @@ pub unsafe extern "C" fn NtOpenEvent(
     desired_access: u32,
     object_attributes: *const OBJECT_ATTRIBUTES,
 ) -> NTSTATUS {
-    if object_attributes.is_null() {
+    let mode = crate::svc::capture::mode();
+    // SAFETY: per the contract; fault-protected for `UserMode`.
+    let Some(oa) =
+        (match unsafe { crate::svc::capture::capture_object_attributes(object_attributes, mode) } {
+            Ok(oa) => oa,
+            Err(status) => return status,
+        })
+    else {
         return STATUS_INVALID_PARAMETER;
-    }
-    // SAFETY: per the contract; the driver's memory, read field by field
-    // through its pointer.
-    let (length, root, name, given) = unsafe {
-        (
-            (&raw const (*object_attributes).Length).read_unaligned(),
-            (&raw const (*object_attributes).RootDirectory).read_unaligned(),
-            (&raw const (*object_attributes).ObjectName).read_unaligned(),
-            (&raw const (*object_attributes).Attributes).read_unaligned(),
-        )
     };
-    if length as usize != size_of::<OBJECT_ATTRIBUTES>()
-        || given & !OBJ_VALID_ATTRIBUTES != 0
-        || given & OBJ_OPENLINK != 0
-    {
+    if oa.attributes & OBJ_OPENLINK != 0 {
         return STATUS_INVALID_PARAMETER;
     }
-    if name.is_null() {
+    let Some(wide) = oa.name else {
         return STATUS_OBJECT_NAME_INVALID;
-    }
-    // SAFETY: per the contract.
-    let wide = unsafe { crate::rtl::copy_unicode(name) };
+    };
+    let root = oa.root;
+    let given = oa.attributes;
     let start = match resolve_root(root, wide.is_empty()) {
         Ok(start) => start,
         Err(status) => return status,
@@ -186,6 +178,7 @@ pub unsafe extern "C" fn NtOpenEvent(
         Err(status) => return status,
     };
     let body = held.body();
+    let kernel_handle = !crate::svc::capture::is_user(mode);
     // SAFETY: the look-up's reference, given up once the handle, if
     // there is one, holds the event.
     unsafe {
@@ -202,12 +195,17 @@ pub unsafe extern "C" fn NtOpenEvent(
                 inherit: given & OBJ_INHERIT != 0,
                 protect_from_close: false,
             },
-            true,
+            kernel_handle,
         );
         drop(held);
         match opened {
             Ok(opened) => {
-                event_handle.write_unaligned(opened as *mut c_void);
+                if let Err(status) =
+                    crate::svc::capture::write(event_handle, opened as *mut c_void, mode)
+                {
+                    let _ = handle::close_for(opened, crate::svc::capture::handle_mode(mode));
+                    return status;
+                }
                 STATUS_SUCCESS
             }
             Err(status) => status,
@@ -245,14 +243,28 @@ pub unsafe extern "C" fn NtWaitForSingleObject(
     alertable: u8,
     timeout: *const i64,
 ) -> NTSTATUS {
-    let held = match handle::reference_for(handle as u64, None, SYNCHRONIZE, Mode::Kernel) {
+    let mode = crate::svc::capture::mode();
+    let timeout_val = if timeout.is_null() {
+        None
+    } else {
+        // SAFETY: per the contract; fault-protected for `UserMode`.
+        match unsafe { crate::svc::capture::read(timeout, mode) } {
+            Ok(v) => Some(v),
+            Err(status) => return status,
+        }
+    };
+    let held = match handle::reference_for(
+        handle as u64,
+        None,
+        SYNCHRONIZE,
+        crate::svc::capture::handle_mode(mode),
+    ) {
         Ok((held, _)) => held,
         Err(status) => return status,
     };
     let body = held.body();
     // SAFETY: the object is referenced until the wait is over; its
-    // type says its body is a dispatcher object; per the contract for
-    // the timeout.
+    // type says its body is a dispatcher object.
     unsafe {
         let ty = object::type_of(body);
         if !waitable(ty) {
@@ -264,8 +276,7 @@ pub unsafe extern "C" fn NtWaitForSingleObject(
                  implemented"
             ));
         }
-        let timeout = (!timeout.is_null()).then(|| timeout.read_unaligned());
-        wait::wait_as(Some(body.cast()), timeout, KERNEL_MODE, alertable != 0) as NTSTATUS
+        wait::wait_as(Some(body.cast()), timeout_val, mode, alertable != 0) as NTSTATUS
     }
 }
 
