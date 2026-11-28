@@ -415,10 +415,8 @@ pub fn report_detected_device(
 /// has detached and deleted its own device. NK's own: what a test's
 /// driver does when it is done.
 pub fn remove_reported_device(pdo: *mut DEVICE_OBJECT) {
-    super::engine::remove_now(pdo as usize, false);
-    // SAFETY: a device `report_detected_device` made, out of the tree
-    // now and with nothing attached.
-    unsafe { device::IoDeleteDevice(pdo) };
+    // SAFETY: a device `report_detected_device` made, with nothing attached.
+    unsafe { super::engine::remove_reported_now(pdo) };
 }
 
 /// The names Windows gives the bus types (`INTERFACE_TYPE`) in a

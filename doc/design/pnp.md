@@ -149,7 +149,11 @@ disappeared subtree (disabling its interfaces and moving each node to
 `State::SurpriseRemoved`), and `IRP_MN_REMOVE_DEVICE` is deferred for
 any node whose device stack still holds open references
 (`ReferenceCount > 0`) until the last handle closes and the engine
-thread completes teardown. That, the removal after a failed
+thread completes teardown. If an orderly removal is requested for an
+ancestor while a descendant is still deferred awaiting handle closure,
+the ancestor moves to `State::RemovePending` (interfaces disabled) so
+`advance` completes its removal as soon as its children drain. That,
+the removal after a failed
 start, and `pnp::remove_reported_device` are the only removals: there
 is no query-remove, no eject, no stop and no rebalance.
 
@@ -166,9 +170,12 @@ parent's instance path); any other is not found unless a driver set
 it. A
 device interface is registered under Windows' link name and
 `DeviceClasses` record; enabling it makes the symbolic link to the
-physical device object (which therefore needs a name) and queues the
-callbacks registered for the class's arrivals onto an executive worker
-thread (matching Windows, while `PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES`
+physical device object (which therefore needs a name) and appends the
+notification to a single serialized FIFO dispatch queue drained by one
+executive worker item at a time (matching Windows' serialized PnP
+event delivery so arrival/removal order is preserved and callbacks for
+one registration never race concurrently across workers, while
+`PNPNOTIFY_DEVICE_INTERFACE_INCLUDE_EXISTING_INTERFACES` still
 delivers existing interfaces synchronously before registration returns);
 enabled before its device has
 started, an interface waits for the start. Disabling one answers

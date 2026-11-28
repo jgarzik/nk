@@ -322,7 +322,7 @@ fn advance(pdo: usize) -> bool {
             enumerate(pdo);
             true
         }
-        State::SurpriseRemoved => finish_remove_subtree(pdo),
+        State::SurpriseRemoved | State::RemovePending => finish_remove_subtree(pdo),
         State::Started | State::Failed => false,
     }
 }
@@ -1211,16 +1211,21 @@ fn surprise_remove_subtree(pdo: usize) {
     if found.state == State::SurpriseRemoved {
         return;
     }
+    let already_pending = found.state == State::RemovePending;
     let device = pdo as *mut DEVICE_OBJECT;
-    super::interface::device_stopped(pdo, true);
-    super::depend::forget(pdo);
+    if !already_pending {
+        super::interface::device_stopped(pdo, true);
+        super::depend::forget(pdo);
+    }
     if found.state == State::Started {
         // SAFETY: the tree's device; the engine's mutex is held, at
         // `PASSIVE_LEVEL`.
         unsafe { query::pnp(device, IRP_MN_SURPRISE_REMOVAL, [0; 4]) };
     }
     node::with(pdo, |node| node.state = State::SurpriseRemoved);
-    SURPRISE_PENDING.fetch_add(1, Ordering::AcqRel);
+    if !already_pending {
+        SURPRISE_PENDING.fetch_add(1, Ordering::AcqRel);
+    }
     // Deliver GUID_TARGET_DEVICE_REMOVE_COMPLETE once at the surprise-removal
     // transition (as Windows does) so target-device subscribers can close their
     // handles and allow deferred IRP_MN_REMOVE_DEVICE to proceed.
@@ -1229,8 +1234,10 @@ fn surprise_remove_subtree(pdo: usize) {
 
 /// Phase 2 of removal: recursively deliver `IRP_MN_REMOVE_DEVICE` bottom-up
 /// for any node whose children have all been removed and whose device stack
-/// has no open references (`ReferenceCount == 0`). Returns `true` if `pdo`
-/// (or any descendant) was finally removed.
+/// has no open references (`ReferenceCount == 0`). If an orderly removal
+/// encounters a child still awaiting handle closure, mark the parent
+/// `State::RemovePending` so [`advance`] finishes it once its children go.
+/// Returns `true` if `pdo` (or any descendant) progressed.
 fn finish_remove_subtree(pdo: usize) -> bool {
     let Some(found) = node::get(pdo) else {
         return false;
@@ -1243,6 +1250,13 @@ fn finish_remove_subtree(pdo: usize) -> bool {
         return progress;
     };
     if !found.children.is_empty() {
+        if !matches!(found.state, State::SurpriseRemoved | State::RemovePending) {
+            super::interface::device_stopped(pdo, true);
+            super::depend::forget(pdo);
+            node::with(pdo, |node| node.state = State::RemovePending);
+            SURPRISE_PENDING.fetch_add(1, Ordering::AcqRel);
+            return true;
+        }
         return progress;
     }
     let device = pdo as *mut DEVICE_OBJECT;
@@ -1250,10 +1264,11 @@ fn finish_remove_subtree(pdo: usize) -> bool {
     if found.state == State::SurpriseRemoved && unsafe { device::stack_has_references(device) } {
         return progress;
     }
+    let was_deferred = matches!(found.state, State::SurpriseRemoved | State::RemovePending);
     // SAFETY: the tree's device; the engine's mutex is held, at
     // `PASSIVE_LEVEL`. The reference dropped last is the tree's.
     unsafe {
-        if found.state != State::SurpriseRemoved {
+        if !was_deferred {
             super::interface::device_stopped(pdo, true);
             super::depend::forget(pdo);
         }
@@ -1276,8 +1291,11 @@ fn finish_remove_subtree(pdo: usize) -> bool {
         registry::clear_allocation(&found.instance);
         (&raw mut (*(*device).DeviceObjectExtension).DeviceNode).write(core::ptr::null_mut());
         node::remove(pdo);
-        if found.state == State::SurpriseRemoved {
+        if was_deferred {
             SURPRISE_PENDING.fetch_sub(1, Ordering::AcqRel);
+        }
+        if found.reported && found.delete_reported {
+            device::IoDeleteDevice(device);
         }
         kprintln!("pnp: {}: removed", found.instance);
         object::dereference(device.cast());
@@ -1300,6 +1318,24 @@ pub fn remove(pdo: usize, surprise: bool) {
 /// [`remove`], for a caller that does not hold the engine's mutex.
 pub fn remove_now(pdo: usize, surprise: bool) {
     serialised(|| remove(pdo, surprise));
+}
+
+/// Remove a reported device and delete its PDO once removal completes
+/// (immediately when no descendant is deferred, or from
+/// `finish_remove_subtree` once deferred children finish draining).
+///
+/// # Safety
+/// `pdo` was created by `root::report_detected_device` and has nothing
+/// attached above it.
+pub unsafe fn remove_reported_now(pdo: *mut DEVICE_OBJECT) {
+    let delete_now = serialised(|| {
+        remove(pdo as usize, false);
+        node::with(pdo as usize, |node| node.delete_reported = true).is_none()
+    });
+    if delete_now {
+        // SAFETY: per the contract; the node is out of the tree.
+        unsafe { device::IoDeleteDevice(pdo) };
+    }
 }
 
 /// The last device a driver's `AddDevice` attached on the way up from
