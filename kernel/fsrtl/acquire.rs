@@ -95,10 +95,12 @@ unsafe fn run(file: *mut FILE_OBJECT, op: &Operation, parameters: [u64; 5]) -> N
         }
         let base = base_device(file);
         let driver = (*base).DriverObject;
-        let callbacks = (*(*driver).DriverExtension)
-            .FsFilterCallbacks
-            .cast::<u8>()
-            .cast_const();
+        let ext = (*driver).DriverExtension;
+        let callbacks = if ext.is_null() {
+            core::ptr::null()
+        } else {
+            (*ext).FsFilterCallbacks.cast::<u8>().cast_const()
+        };
         let fast_io = (*driver)
             .FastIoDispatch
             .cast::<FAST_IO_DISPATCH>()

@@ -1427,3 +1427,15 @@ paths = ["kernel/arch/x86_64/user.rs", "kernel/svc/", "kernel/selftest/user.rs"]
 cmdline = "test=user.svc_trap"
 expect = "bugcheck"
 match = "BUGCHECK: NtAddAtom: NK does not implement this service"
+
+# Phase 6 low-memory proof: 48 MiB RW + RO mapped data-file views backed by
+# \Device\NkFsLarge inside a memory-constrained VM prove working-set trimming,
+# mapped-page writer flushing without explicit NtFlushVirtualMemory, and
+# standby reclaim with zero data corruption and zero leaks.
+
+[x86_64-user-lowmem]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/mm/writer.rs", "kernel/mm/trim.rs", "kernel/mm/view.rs", "kernel/mm/pfn.rs", "kernel/selftest/nkfs.rs", "kernel/selftest/user.rs"]
+memory = "96M"
+cmdline = "test=user.lowmem"

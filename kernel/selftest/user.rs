@@ -34,7 +34,20 @@ pub static SVC_TRAP: Group = Group {
     manual: true,
 };
 
-pub static GROUPS: &[&Group] = &[&GROUP, &NKT, &AUTOCHK_CLEAN, &AUTOCHK_DIRTY, &SVC_TRAP];
+pub static LOWMEM: Group = Group {
+    names: &["user.lowmem"],
+    run: run_lowmem,
+    manual: true,
+};
+
+pub static GROUPS: &[&Group] = &[
+    &GROUP,
+    &NKT,
+    &AUTOCHK_CLEAN,
+    &AUTOCHK_DIRTY,
+    &SVC_TRAP,
+    &LOWMEM,
+];
 
 #[cfg(not(target_arch = "x86_64"))]
 fn run(r: &mut Report, _info: &BootInfo) {
@@ -61,6 +74,11 @@ fn run_autochk_dirty(r: &mut Report, _info: &BootInfo) {
 #[cfg(not(target_arch = "x86_64"))]
 fn run_svc_trap(r: &mut Report, _info: &BootInfo) {
     r.skip("user.svc_trap", format_args!("x86-64 only"));
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn run_lowmem(r: &mut Report, _info: &BootInfo) {
+    r.skip("user.lowmem", format_args!("x86-64 only"));
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -1372,5 +1390,286 @@ fn run_svc_trap(r: &mut Report, _info: &BootInfo) {
     r.fail(
         "user.svc_trap",
         format_args!("unimplemented syscall did not bugcheck"),
+    );
+}
+
+#[cfg(target_arch = "x86_64")]
+fn run_lowmem(r: &mut Report, _info: &BootInfo) {
+    use super::nkfs::{self, LARGE_DEVICE, LargeVolume, large_word};
+    use crate::mm;
+    use crate::ps::process;
+    use crate::svc::zw;
+    use core::ffi::c_void;
+    use nk_mm::protect::{PAGE_READONLY, PAGE_READWRITE};
+    use nk_ntabi::io::{IO_STATUS_BLOCK, UNICODE_STRING};
+    use nk_ntabi::ke::KAPC_STATE;
+    use nk_ntabi::mm::{SEC_COMMIT, SECTION_ALL_ACCESS, VIEW_UNMAP};
+    use nk_ntabi::ob::OBJECT_ATTRIBUTES;
+    use nk_ntabi::status::STATUS_SUCCESS;
+
+    let vol = match LargeVolume::mount() {
+        Ok(v) => v,
+        Err(why) => {
+            r.fail(
+                "user.lowmem",
+                format_args!("nkfs large mount failed: {why}"),
+            );
+            return;
+        }
+    };
+
+    // Map 72 MiB (18,432 pages) in a 96 MiB VM — strictly larger than usable RAM!
+    const VIEW_PAGES: usize = 18 * 1024;
+    const VIEW_BYTES: usize = VIEW_PAGES * mm::PAGE_SIZE;
+
+    let initial_free = mm::pfn::free_plus_standby();
+    let trimmed_before = mm::trim::trimmed_pages();
+    let (_, writer_pages_before) = mm::writer::stats();
+
+    let res: Result<(), &'static str> = (|| {
+        // SAFETY: `process::system()` is live forever.
+        let proc_ref = unsafe { process::create_minimal(b"lowmem.exe", process::system(), false) }
+            .map_err(|_| "create_minimal(lowmem.exe) failed")?;
+        let proc = proc_ref.body();
+
+        let mut apc_state = core::mem::MaybeUninit::<KAPC_STATE>::zeroed();
+        // SAFETY: `proc` is live; attach for user-view mapping and streaming, then detach.
+        unsafe {
+            process::KeStackAttachProcess(proc.cast(), apc_state.as_mut_ptr());
+        }
+
+        let inner_res = (|| -> Result<(), &'static str> {
+            let cur = (-1isize) as *mut c_void;
+            let path: alloc::vec::Vec<u16> = LARGE_DEVICE.encode_utf16().collect();
+            let us = UNICODE_STRING {
+                Length: (path.len() * 2) as u16,
+                MaximumLength: (path.len() * 2) as u16,
+                Buffer: path.as_ptr().cast_mut(),
+            };
+            let oa = OBJECT_ATTRIBUTES {
+                Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+                RootDirectory: core::ptr::null_mut(),
+                ObjectName: &raw const us,
+                Attributes: 0x40, // OBJ_CASE_INSENSITIVE
+                SecurityDescriptor: core::ptr::null_mut(),
+                SecurityQualityOfService: core::ptr::null_mut(),
+            };
+            let mut fh: *mut c_void = core::ptr::null_mut();
+            let mut iosb = IO_STATUS_BLOCK {
+                Status: 0,
+                Information: 0,
+            };
+            // SAFETY: kernel-mode ZwCreateFile targeting `\Device\NkFsLarge`.
+            let st = unsafe {
+                zw::ZwCreateFile(
+                    &raw mut fh,
+                    0xC010_0000, // GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE
+                    &raw const oa,
+                    &raw mut iosb,
+                    core::ptr::null(),
+                    0x80,
+                    0x3,
+                    1,    // FILE_OPEN
+                    0x20, // FILE_SYNCHRONOUS_IO_NONALERT
+                    core::ptr::null_mut(),
+                    0,
+                )
+            };
+            if st != STATUS_SUCCESS {
+                return Err("ZwCreateFile(\\Device\\NkFsLarge) failed");
+            }
+
+            let mut sec: *mut c_void = core::ptr::null_mut();
+            let max_sz: i64 = nkfs::LARGE_BYTES as i64;
+            // SAFETY: creating a 64 MiB data-file section on `\Device\NkFsLarge`.
+            let st_sec = unsafe {
+                zw::ZwCreateSection(
+                    &raw mut sec,
+                    SECTION_ALL_ACCESS,
+                    core::ptr::null(),
+                    &raw const max_sz,
+                    PAGE_READWRITE,
+                    SEC_COMMIT,
+                    fh,
+                )
+            };
+            if st_sec != STATUS_SUCCESS {
+                let _ = zw::ZwClose(fh);
+                return Err("ZwCreateSection(\\Device\\NkFsLarge) failed");
+            }
+
+            // 1. Map a 72 MiB RW view and write a unique coherent tag to every page
+            //    WITHOUT ever calling NtFlushVirtualMemory!
+            let mut rw_base: *mut c_void = core::ptr::null_mut();
+            let mut rw_size: usize = VIEW_BYTES;
+            // SAFETY: mapping view in attached `lowmem.exe`.
+            let st_map = unsafe {
+                zw::ZwMapViewOfSection(
+                    sec,
+                    cur,
+                    &raw mut rw_base,
+                    0,
+                    0,
+                    core::ptr::null_mut(),
+                    &raw mut rw_size,
+                    VIEW_UNMAP,
+                    0,
+                    PAGE_READWRITE,
+                )
+            };
+            if st_map != STATUS_SUCCESS || rw_base.is_null() {
+                let _ = zw::ZwClose(sec);
+                let _ = zw::ZwClose(fh);
+                return Err("ZwMapViewOfSection(RW 72 MiB) failed");
+            }
+
+            let mut page_buf = [0u64; 512];
+            for p in 0..VIEW_PAGES {
+                let tag = ((p as u32) ^ 0xA5A5_1234) | 1;
+                for (w, slot) in page_buf.iter_mut().enumerate() {
+                    *slot = large_word(p, w, tag);
+                }
+                let dst = rw_base.cast::<u8>().wrapping_add(p * mm::PAGE_SIZE);
+                // SAFETY: `mm::user::copy` triggers user page faults cleanly through
+                // `mm::vm::handle_user_fault` -> `view::fault_mapped_page`.
+                let ok =
+                    unsafe { mm::user::copy(dst, page_buf.as_ptr().cast::<u8>(), mm::PAGE_SIZE) };
+                if ok.is_err() {
+                    let _ = zw::ZwUnmapViewOfSection(cur, rw_base);
+                    let _ = zw::ZwClose(sec);
+                    let _ = zw::ZwClose(fh);
+                    return Err("writing dirty page in 72 MiB RW view failed");
+                }
+            }
+
+            // 2. Re-read all 18,432 pages (forcing re-fault from nkfs for trimmed
+            //    and written-back pages!) and verify every word matches its tag.
+            for p in 0..VIEW_PAGES {
+                let tag = ((p as u32) ^ 0xA5A5_1234) | 1;
+                let src = rw_base.cast::<u8>().wrapping_add(p * mm::PAGE_SIZE);
+                // SAFETY: `mm::user::copy` fault-protects the read.
+                let ok = unsafe {
+                    mm::user::copy(page_buf.as_mut_ptr().cast::<u8>(), src, mm::PAGE_SIZE)
+                };
+                if ok.is_err() {
+                    let _ = zw::ZwUnmapViewOfSection(cur, rw_base);
+                    let _ = zw::ZwClose(sec);
+                    let _ = zw::ZwClose(fh);
+                    return Err("reading back page from 72 MiB RW view failed");
+                }
+                if page_buf[0] != large_word(p, 0, tag)
+                    || page_buf[255] != large_word(p, 255, tag)
+                    || page_buf[511] != large_word(p, 511, tag)
+                {
+                    let _ = zw::ZwUnmapViewOfSection(cur, rw_base);
+                    let _ = zw::ZwClose(sec);
+                    let _ = zw::ZwClose(fh);
+                    return Err("data corruption detected after trim + mapped-page writeback");
+                }
+            }
+
+            // 3. Unmap RW view, map a 72 MiB RO view, and stream through all 18,432
+            //    pages to verify clean standby trimming + reclaim.
+            let _ = zw::ZwUnmapViewOfSection(cur, rw_base);
+
+            let mut ro_base: *mut c_void = core::ptr::null_mut();
+            let mut ro_size: usize = VIEW_BYTES;
+            // SAFETY: mapping 72 MiB RO view.
+            let st_ro = unsafe {
+                zw::ZwMapViewOfSection(
+                    sec,
+                    cur,
+                    &raw mut ro_base,
+                    0,
+                    0,
+                    core::ptr::null_mut(),
+                    &raw mut ro_size,
+                    VIEW_UNMAP,
+                    0,
+                    PAGE_READONLY,
+                )
+            };
+            if st_ro != STATUS_SUCCESS || ro_base.is_null() {
+                let _ = zw::ZwClose(sec);
+                let _ = zw::ZwClose(fh);
+                return Err("ZwMapViewOfSection(RO 72 MiB) failed");
+            }
+            for p in 0..VIEW_PAGES {
+                let tag = ((p as u32) ^ 0xA5A5_1234) | 1;
+                let src = ro_base.cast::<u8>().wrapping_add(p * mm::PAGE_SIZE);
+                let mut w0 = 0u64;
+                // SAFETY: `mm::user::copy` fault-protects the read.
+                if unsafe { mm::user::copy((&raw mut w0).cast::<u8>(), src, 8) }.is_err()
+                    || w0 != large_word(p, 0, tag)
+                {
+                    let _ = zw::ZwUnmapViewOfSection(cur, ro_base);
+                    let _ = zw::ZwClose(sec);
+                    let _ = zw::ZwClose(fh);
+                    return Err("72 MiB RO view verification mismatch");
+                }
+            }
+
+            let _ = zw::ZwUnmapViewOfSection(cur, ro_base);
+            let _ = zw::ZwClose(sec);
+            let _ = zw::ZwClose(fh);
+            Ok(())
+        })();
+
+        // SAFETY: detaching from `proc`.
+        unsafe { process::KeUnstackDetachProcess(apc_state.as_mut_ptr()) };
+        drop(proc_ref);
+        inner_res
+    })();
+
+    // Flush any remaining modified pages before dropping `LargeVolume` and checking PFN invariants.
+    mm::writer::flush_all();
+    let (reads, writes, nkfs_pages_written, corruptions) = vol.stats();
+    let trimmed_delta = mm::trim::trimmed_pages().saturating_sub(trimmed_before);
+    let (_, writer_pages_after) = mm::writer::stats();
+    let writer_pages_delta = writer_pages_after.saturating_sub(writer_pages_before);
+
+    // Purge cached standby pages on `\Device\NkFsLarge` so its ControlArea and
+    // frames release cleanly before unmounting `LargeVolume`.
+    let _ = mm::flush::purge_section(vol.sop(), None, false);
+    drop(vol);
+
+    if let Err(why) = res {
+        r.fail("user.lowmem", format_args!("{why}"));
+        return;
+    }
+    if corruptions != 0 {
+        r.fail(
+            "user.lowmem",
+            format_args!("nkfs observed {corruptions} corrupted pages during writeback"),
+        );
+        return;
+    }
+    if writes == 0 || nkfs_pages_written == 0 || writer_pages_delta == 0 {
+        r.fail(
+            "user.lowmem",
+            format_args!(
+                "mapped-page writer did not flush dirty pages (writes={writes}, pages={nkfs_pages_written}, mpw={writer_pages_delta})"
+            ),
+        );
+        return;
+    }
+    if trimmed_delta == 0 {
+        r.fail(
+            "user.lowmem",
+            format_args!(
+                "working-set trimmer did not demote any pages (initial_free={initial_free})"
+            ),
+        );
+        return;
+    }
+    if let Err(why) = mm::pfn::check() {
+        r.fail("user.lowmem", format_args!("pfn::check failed: {why}"));
+        return;
+    }
+    r.ok_with(
+        "user.lowmem",
+        format_args!(
+            "72 MiB RW+RO views in low RAM (free0={initial_free}): trimmed={trimmed_delta}, mpw_pages={writer_pages_delta}, nkfs_reads={reads}, nkfs_writes={writes}/{nkfs_pages_written}p, corrupt=0"
+        ),
     );
 }

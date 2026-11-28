@@ -157,6 +157,36 @@ pub fn remove(id: u64) {
     CID_TABLE.lock().remove(id);
 }
 
+/// Snapshot an [`ObRef`] for every live non-System `EPROCESS` in `PspCidTable`.
+/// Used by the working-set trimmer (`mm::trim`) so it can iterate user address
+/// spaces at `PASSIVE_LEVEL` after releasing `CID_TABLE`.
+pub fn snapshot_user_processes() -> alloc::vec::Vec<ObRef> {
+    let sys = super::process::system();
+    let table = CID_TABLE.lock();
+    let mut out = alloc::vec::Vec::new();
+    for slot in &table.slots {
+        if slot.id != 0 && slot.id != TOMBSTONE && slot.is_process {
+            let ptr = core::ptr::with_exposed_provenance_mut::<u8>(slot.body);
+            // SAFETY: `CID_TABLE` is held so `ptr` cannot be freed concurrently.
+            if ptr != sys && unsafe { object::try_reference(ptr) } {
+                // SAFETY: `try_reference` took a new reference.
+                out.push(unsafe { ObRef::adopt(ptr) });
+            }
+        }
+    }
+    for &(body, is_proc) in table.overflow.values() {
+        if is_proc {
+            let ptr = core::ptr::with_exposed_provenance_mut::<u8>(body);
+            // SAFETY: as above.
+            if ptr != sys && unsafe { object::try_reference(ptr) } {
+                // SAFETY: `try_reference` took a new reference.
+                out.push(unsafe { ObRef::adopt(ptr) });
+            }
+        }
+    }
+    out
+}
+
 /// Look up a live `EPROCESS` by `pid` and return a referenced handle to it.
 pub fn lookup_process(pid: u64) -> Result<ObRef, NTSTATUS> {
     let table = CID_TABLE.lock();

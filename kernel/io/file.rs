@@ -244,7 +244,9 @@ unsafe fn start(file: *mut FILE_OBJECT, irp: *mut IRP, mode: i8) -> Pending {
         (*irp).UserEvent = &raw mut waiting.done;
         irp::requestor_keeps(irp);
         (*irp).RequestorMode = mode;
-        (*irp).Thread = ke::pcr::current_thread().cast();
+        let cur_thread = ke::pcr::current_thread();
+        (*irp).Thread = cur_thread.cast();
+        (*irp).ApcEnvironment = cur_thread.add(nk_ntabi::thread::APC_STATE_INDEX).read() as i8;
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
         // Windows calls the driver for a synchronous request with kernel
@@ -1471,7 +1473,9 @@ pub unsafe fn read_async(
         };
         (*irp).UserIosb = iosb;
         (*irp).RequestorMode = mode;
-        (*irp).Thread = ke::pcr::current_thread().cast();
+        let cur_thread = ke::pcr::current_thread();
+        (*irp).Thread = cur_thread.cast();
+        (*irp).ApcEnvironment = cur_thread.add(nk_ntabi::thread::APC_STATE_INDEX).read() as i8;
         (*irp).OriginalFileObject = file;
         (*irp::next_location(irp)).FileObject = file;
         irp::set_async_completion(irp, file, held_event, true, mode != KERNEL_MODE);

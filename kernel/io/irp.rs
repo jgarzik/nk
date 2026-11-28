@@ -748,6 +748,7 @@ pub unsafe extern "C" fn IoMakeAssociatedIrp(master: *mut IRP, stack_size: i8) -
         (*irp).Flags = IRP_ASSOCIATED_IRP;
         (*irp).SystemBuffer = master.cast();
         (*irp).Thread = (*master).Thread;
+        (*irp).ApcEnvironment = (*master).ApcEnvironment;
         (*irp).RequestorMode = (*master).RequestorMode;
     }
     irp

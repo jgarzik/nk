@@ -102,6 +102,19 @@ pub fn give_back_released(guard: &mut Guard, pfn: u64) {
     assert!(freed, "a released frame {pfn:#x} was not allocated");
 }
 
+/// Total immediately reclaimable frames (`Free + Standby`).
+pub fn free_plus_standby() -> u64 {
+    let mut guard = lock();
+    let f = frames(&mut guard);
+    f.bitmap.free_frames() + f.db.count(Location::Standby)
+}
+
+/// Number of unmapped dirty frames waiting on `Location::Modified`.
+pub fn modified_count() -> u64 {
+    let mut guard = lock();
+    frames(&mut guard).db.count(Location::Modified)
+}
+
 /// How many frames are free, and on standby, modified and
 /// modified-no-write.
 pub fn counts() -> [u64; 4] {

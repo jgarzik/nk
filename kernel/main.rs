@@ -135,6 +135,12 @@ extern "C" fn on_kernel_stack(info: &'static BootInfo) -> ! {
     if let Err(why) = cc::init() {
         test::abort("cc.init", format_args!("{why}"));
     }
+    if let Err(why) = mm::writer::init() {
+        test::abort("mm.writer", format_args!("{why}"));
+    }
+    if let Err(why) = mm::trim::init() {
+        test::abort("mm.trim", format_args!("{why}"));
+    }
     ex::timezone::init();
     ex::entropy::init(info);
     if let Err(why) = hal::description::publish() {

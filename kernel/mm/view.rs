@@ -504,10 +504,16 @@ fn io_err_status(e: file::IoError) -> NTSTATUS {
     match e {
         file::IoError::NoMemory => STATUS_INSUFFICIENT_RESOURCES,
         file::IoError::Handle(s) | file::IoError::Refused(s) => s,
-        file::IoError::NotCompleted { dispatch_status } => dispatch_status,
-        file::IoError::StatusMismatch {
+        file::IoError::NotCompleted { dispatch_status }
+        | file::IoError::StatusMismatch {
             dispatch_status, ..
-        } => dispatch_status,
+        } => {
+            if nt_error(dispatch_status) {
+                dispatch_status
+            } else {
+                STATUS_UNSUCCESSFUL
+            }
+        }
     }
 }
 
@@ -937,6 +943,47 @@ pub fn unmap_vad(space: &AddressSpace, vad: Vad) {
     unsafe { object::dereference(section_body) };
 }
 
+/// Demote a shared data-file frame evicted by the working-set trimmer: drop its
+/// PFN share count, propagate `dirty` into `flag::MODIFIED`, and return `true`
+/// if the frame landed on `Location::Modified` (so the trimmer wakes the writer).
+pub(super) fn trim_data_page(ca: *mut ControlArea, file_offset: u64, pa: u64, dirty: bool) -> bool {
+    if ca.is_null() {
+        return false;
+    }
+    let frame = pa / PAGE_SIZE as u64;
+    let ss_idx = (file_offset / SUBSECTION_BYTES) as usize;
+    let pg_idx = ((file_offset % SUBSECTION_BYTES) / PAGE_SIZE as u64) as usize;
+    let mut g = pfn::lock();
+    // SAFETY: caller holds `space.lock()` and `vad` pins the section + `ca`.
+    let ca_ref = unsafe { &*ca };
+    let ss = ca_ref.subsection(&g, ss_idx);
+    if ss.is_null() {
+        return false;
+    }
+    // SAFETY: valid under PFN lock.
+    let proto_slot = unsafe { &(*ss).protos[pg_idx] };
+    if !matches!(Proto::decode(proto_slot.load(Ordering::Relaxed)), Proto::Valid(f) if f == frame) {
+        return false;
+    }
+    let db = &mut pfn::frames(&mut g).db;
+    if dirty {
+        db.get_mut(frame).flags |= nk_mm::pfn::flag::MODIFIED;
+    }
+    let no_write = ca_ref.no_write();
+    match db.unshare(frame, no_write, false) {
+        Ok(nk_mm::pfn::Unshared::Listed(loc)) => {
+            proto_slot.store(Proto::Transition(frame).encode(), Ordering::Relaxed);
+            loc == nk_mm::pfn::Location::Modified
+        }
+        Ok(nk_mm::pfn::Unshared::Transition) => {
+            proto_slot.store(Proto::Transition(frame).encode(), Ordering::Relaxed);
+            false
+        }
+        Ok(nk_mm::pfn::Unshared::StillMapped) => false,
+        Err(e) => crate::kd::bugcheck(format_args!("mm: trimming user data-file page: {}", e.0)),
+    }
+}
+
 /// Release a frame referenced by a data-file view: if it matches the section's
 /// prototype frame, drop its PFN share count (and propagate `dirty`); otherwise
 /// it was a private CoW copy so free it directly.
@@ -948,7 +995,7 @@ fn release_data_page(ca: *mut ControlArea, file_offset: u64, pa: u64, dirty: boo
     let frame = pa / PAGE_SIZE as u64;
     let ss_idx = (file_offset / SUBSECTION_BYTES) as usize;
     let pg_idx = ((file_offset % SUBSECTION_BYTES) / PAGE_SIZE as u64) as usize;
-    let is_shared = {
+    let (is_shared, kick_writer) = {
         let mut g = pfn::lock();
         // SAFETY: `ca` is alive via the VAD's section reference.
         let ca_ref = unsafe { &*ca };
@@ -960,14 +1007,40 @@ fn release_data_page(ca: *mut ControlArea, file_offset: u64, pa: u64, dirty: boo
         } else {
             false
         };
+        let mut kick = false;
         if shared {
+            let db = &mut pfn::frames(&mut g).db;
+            if dirty {
+                db.get_mut(frame).flags |= nk_mm::pfn::flag::MODIFIED;
+            }
             let no_write = ca_ref.no_write();
-            if let Err(e) = pfn::frames(&mut g).db.dereference(frame, no_write, dirty) {
-                crate::kd::bugcheck(format_args!("mm: unmapping user data-file page: {}", e.0));
+            match db.unshare(frame, no_write, false) {
+                Ok(nk_mm::pfn::Unshared::Listed(loc)) => {
+                    // SAFETY: `ss` is non-null and valid under PFN lock.
+                    unsafe {
+                        (*ss).protos[pg_idx]
+                            .store(Proto::Transition(frame).encode(), Ordering::Relaxed);
+                    }
+                    kick = loc == nk_mm::pfn::Location::Modified;
+                }
+                Ok(nk_mm::pfn::Unshared::Transition) => {
+                    // SAFETY: `ss` is non-null and valid under PFN lock.
+                    unsafe {
+                        (*ss).protos[pg_idx]
+                            .store(Proto::Transition(frame).encode(), Ordering::Relaxed);
+                    }
+                }
+                Ok(nk_mm::pfn::Unshared::StillMapped) => {}
+                Err(e) => {
+                    crate::kd::bugcheck(format_args!("mm: unmapping user data-file page: {}", e.0));
+                }
             }
         }
-        shared
+        (shared, kick)
     };
+    if kick_writer {
+        super::writer::kick();
+    }
     if !is_shared {
         free_frames(pa, 1);
     }
@@ -1322,6 +1395,10 @@ pub fn fault_mapped_page(space: &AddressSpace, vad: Vad, page: u64, access: Acce
                 };
                 ss
             };
+
+            // Under low physical memory, proactively trim mapped views and let
+            // the mapped-page writer flush dirty pages onto Standby before faulting in.
+            super::trim::ensure_free_frames(super::trim::LOW_WATER_FRAMES);
 
             // Bring the file page into memory via the shared PFN / `mm::fault::resolve` path!
             if let Err(st) = fault::resolve(ss, pg_idx, None, Mode::FaultIn) {
@@ -2004,7 +2081,11 @@ pub unsafe extern "C" fn NtFlushVirtualMemory(
     };
 
     let iosb = if let Some((sop, file_off)) = ca_and_off {
-        super::flush::flush_section(sop, Some((file_off, flush_len as u32)), None)
+        super::flush::flush_section(
+            sop,
+            Some((file_off, flush_len as u32)),
+            Some(crate::fsrtl::acquire::CC_FLUSH),
+        )
     } else {
         IO_STATUS_BLOCK {
             Status: STATUS_SUCCESS,
