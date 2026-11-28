@@ -27,3 +27,5 @@ cc.lifecycle-race ok
 cc.pin-attribute-race ok
 cc.flush-inflight ok
 cc.copy-write-nowait-mixed ok
+cc.shutdown-drain ok
+cc.wait-lazy-barrier ok

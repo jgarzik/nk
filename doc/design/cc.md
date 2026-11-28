@@ -64,8 +64,10 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   system reads them.
 - **Creation.** `CcInitializeCacheMap` puts a fresh map in
   `SharedCacheMap`, marked as being created, before the section exists;
-  whoever finds a map being created or deleted waits 10 ms and looks
-  again (Windows waits on an event: no binary can tell). The creator
+  whoever finds a map being created or deleted sleeps on an event-driven
+  lifecycle waiter under `MASTER` and revalidates `SharedCacheMap` once
+  the transition settles (falling through to the memory manager in
+  `CcFlushCache`/`CcPurgeCacheSection` when no map remains). The creator
   makes the section (`MmCreateCacheManagerSection`) with no lock held;
   a failure the file system would not expect becomes
   `STATUS_UNEXPECTED_MM_CREATE_ERR`, the half-made map is undone and
@@ -83,9 +85,10 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   else when the map is deleted. TRUE means deleted in this call.
 - **Deletion.** The views are taken back (waiting for any in use), the
   file is purged from its size if it was truncated, the BCBs freed,
-  `SharedCacheMap` cleared, the events signalled, the map freed, and the
-  reference on the file object dropped last: for a stream file object
-  that may send the file system its close.
+  `SharedCacheMap` cleared, the events signalled, the map freed,
+  lifecycle waiters woken, and the reference on the file object dropped
+  last: for a stream file object that may send the file system its close
+  without holding up lifecycle waiters.
 
 ## Views and pins
 
@@ -94,9 +97,13 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   first use (`MmMapViewInSystemCache`, at most 256 KiB, no I/O) and
   counts its users; one nobody uses stays mapped until its VACB is
   wanted for another view, unmapped VACBs first, then the least
-  recently used. With every VACB in use, `STATUS_INSUFFICIENT_RESOURCES`;
-  a memory-manager failure the file system would not expect becomes
-  `STATUS_UNEXPECTED_MM_MAP_ERROR`.
+  recently used. Evicting or tearing down a view is two-phase: the old
+  map's index stays pointing at the `!ready` VACB until
+  `MmUnmapViewInSystemCache` completes, and concurrent lookups sleep on
+  an event-driven waiter (or return `None` for no-wait callers) rather
+  than racing to double-map or drop the section early. With every VACB
+  in use, `STATUS_INSUFFICIENT_RESOURCES`; a memory-manager failure the
+  file system would not expect becomes `STATUS_UNEXPECTED_MM_MAP_ERROR`.
 - **`CcMapData`** (`kernel/cc/pin.rs`) hands back the view's VACB plus
   one. Waiting, it reads what is not in memory and raises a failed
   read's status; without waiting it returns FALSE, the handle untouched
@@ -107,10 +114,13 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   stream whose modified writing is disabled a pin takes the BCB's
   resource (exclusive with `PIN_EXCLUSIVE`, else shared, starving
   exclusive waiters) and the unpin releases it; elsewhere the resource
-  is not used, as `CcPinFileData` and `CcUnpinFileDataEx` decide.
-  Without waiting, a pin whose resource or pages are not to be had
-  undoes itself and returns FALSE. `CcPreparePinWrite` reads no page it
-  overwrites whole and is dirty from the start.
+  is not used, as `CcPinFileData` and `CcUnpinFileDataEx` decide. Each
+  BCB latches whether it uses its resource under `bcb_lock` when pinned
+  from zero, so a concurrent `CcSetAdditionalCacheAttributes` cannot
+  cause a mismatched acquire/release. Without waiting, a pin whose
+  resource or pages are not to be had undoes itself and returns FALSE.
+  `CcPreparePinWrite` reads no page it overwrites whole and is dirty
+  from the start.
 - **Dirty BCBs.** `CcSetDirtyPinnedData` marks the BCB and charges its
   pages to the map and the cache; the memory manager hears of it only
   when the range is written (`MmSetAddressRangeModified`, then
@@ -139,10 +149,14 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
 - **Copy writes.** `CcCopyWrite` and `CcCopyWriteEx` make no read of a
   page they overwrite whole or of one wholly at or beyond the valid
   data length in the FCB header (`MmCopyToCachedPage`: the rest of such
-  a page is zero); other pages are read in. The range is marked in the
-  map's dirty-page bitmap and charged. Without waiting, a write-through
-  file object returns FALSE at once; with write-through the range is
-  flushed before returning and a failure raised.
+  a page is zero); other pages are read in. No-wait writes preflight
+  VACB availability and residency across the entire range before
+  mutating any byte, and each page is marked in the map's dirty-page
+  bitmap and charged before its bytes are overwritten so a mid-copy
+  buffer fault or bitmap OOM never leaves modified pages untracked.
+  Without waiting, a write-through file object returns FALSE at once;
+  with write-through the range is flushed before returning and a failure
+  raised.
 - **MDLs** (`kernel/cc/mdl.rs`). `CcMdlRead` and `CcPrepareMdlWrite`
   lock the cache's pages into one MDL per view, chained. A prepared
   write reads only pages it covers in part and keeps the map open until
@@ -156,11 +170,16 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   exclusive on a metadata stream, waiting for its pinners, and its
   range handed to the memory manager as modified), then the bitmap's,
   at most 16 pages a write, each written by `MmFlushSection` with the
-  file taken through FsRtl. A failed write leaves its run dirty unless
-  the memory manager calls the error fatal; a range flush ends with a
-  flush of the whole range for pages dirtied elsewhere. Write errors are
-  returned, never raised. With no cache map the section is flushed.
-  `CcIsThereDirtyData` looks for a map on the volume with dirty pages.
+  file taken through FsRtl. Runs taken for writing are published on the
+  map's `inflight` list before `bcb_lock` is released so a synchronous
+  flush waits on overlapping in-flight writes (and `MmFlushSection`
+  likewise waits on `WRITE_IN_PROGRESS` frames) before returning,
+  re-checking redirtied runs or propagating fatal failures. A failed
+  write leaves its run dirty unless the memory manager calls the error
+  fatal; a range flush ends with a flush of the whole range for pages
+  dirtied elsewhere. Write errors are returned, never raised. With no
+  cache map the section is flushed. `CcIsThereDirtyData` looks for a map
+  on the volume with dirty pages.
 
 ## Sizes and purges
 
@@ -229,9 +248,19 @@ What needs no file, lock or page lives in `lib/cc`, tested on the host:
   once when its entry cannot be had. The queue is served in order as
   dirty pages are written. Windows' soft throttle and the memory check
   for the write are not built.
-- **Waiting for it.** `CcWaitForCurrentLazyWriterActivity` runs a scan at
-  once, which writes every dirty page (NK's choice for a scan asked
-  for), attaches a barrier behind that scan, and returns once no scan or
-  item remains queued or running: concurrent waiters never wait for each
-  other. The I/O manager's shutdown calls it after every file system has
-  had its shutdown request, where Windows calls it.
+- **Waiting for it and shutdown.** `CcWaitForCurrentLazyWriterActivity`
+  runs a scan at once, which writes every dirty page (NK's choice for a
+  scan asked for), attaches a barrier behind that scan, and returns once
+  no scan or item from that batch or before remains queued or running:
+  concurrent waiters never wait for each other, and it remains a
+  completion barrier rather than an unbounded drain. At shutdown, the
+  I/O manager calls `cc::lazy::shutdown_flush` after every file system
+  has had its shutdown request; it drains all eligible dirty and closing
+  maps across as many 64-map (`SCAN_ROOM`) batches as needed without
+  waiting on `CcIdleDelay`, rotating scanned maps to the tail of
+  `MASTER`'s list for round-robin fairness so failing maps cannot starve
+  healthy ones. Retryable failures are bounded to 3 attempts without
+  forward progress (partial writes reset the counter) and permanent/fatal
+  errors terminate immediately, tracked in per-map drain state (`lib/cc::drain`)
+  without clearing dirty bits; terminal failures log lost-delayed-write
+  diagnostics and shutdown emits a final drain summary.

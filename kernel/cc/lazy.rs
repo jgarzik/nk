@@ -27,10 +27,11 @@ use super::{DIRTY, MASTER, Scm, flag, map, trace};
 use crate::ke::seh::{self, Guard, Unhandled};
 use crate::ke::wait;
 use crate::mm::pool;
-use core::cell::UnsafeCell;
+use core::cell::{Cell, UnsafeCell};
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicU64, Ordering};
+use nk_cc::drain::{Attempt, DrainSummary, Outcome};
 use nk_cc::pages::{self, Scan};
 use nk_ntabi::ex::{CRITICAL_WORK_QUEUE, WORK_QUEUE_ITEM};
 use nk_ntabi::io::FILE_OBJECT;
@@ -79,6 +80,14 @@ struct Barrier {
     event: *mut KEVENT,
 }
 
+/// A waiter in [`drain_dirty_for_shutdown`], living on the caller's
+/// stack until all shutdown drain batches finish.
+struct DrainWaiter {
+    next: *mut DrainWaiter,
+    event: *mut KEVENT,
+    summary: Cell<DrainSummary>,
+}
+
 /// The queue and the scan's state, under [`DIRTY`].
 pub struct Queue {
     head: *mut Entry,
@@ -88,6 +97,18 @@ pub struct Queue {
     post_tick: *mut Barrier,
     /// Waiters waiting for all queued and running work to finish.
     barriers: *mut Barrier,
+    /// Waiters waiting for the active multi-batch shutdown drain to
+    /// finish.
+    drain_waiters: *mut DrainWaiter,
+    /// Monotonic generation identifying the active shutdown drain.
+    drain_gen: u32,
+    /// A multi-batch shutdown drain is in progress.
+    drain_active: bool,
+    /// A worker is inspecting `MASTER` to decide whether another
+    /// shutdown batch is needed.
+    drain_checking: bool,
+    /// Accumulated statistics for the active shutdown drain.
+    drain_summary: DrainSummary,
     /// The timer is armed or a scan is under way.
     scan_active: bool,
     /// A scan is to run.
@@ -110,6 +131,17 @@ impl Queue {
             tail: core::ptr::null_mut(),
             post_tick: core::ptr::null_mut(),
             barriers: core::ptr::null_mut(),
+            drain_waiters: core::ptr::null_mut(),
+            drain_gen: 0,
+            drain_active: false,
+            drain_checking: false,
+            drain_summary: DrainSummary {
+                batches: 0,
+                maps_flushed: 0,
+                pages_written: 0,
+                failed_maps: 0,
+                remaining_dirty_pages: 0,
+            },
             scan_active: false,
             scan_pending: false,
             everything: false,
@@ -243,6 +275,21 @@ fn signal_barriers(mut node: *mut Barrier) {
     }
 }
 
+/// Signal every shutdown-drain waiter on `node` with `summary`.
+fn signal_drain_waiters(mut node: *mut DrainWaiter, summary: DrainSummary) {
+    while !node.is_null() {
+        // SAFETY: each node stays live on its waiter's stack until its
+        // event is signalled; write summary and read `next` first.
+        unsafe {
+            let next = (*node).next;
+            (*node).summary.set(summary);
+            let event = (*node).event;
+            wait::KeSetEvent(event, 0, 0);
+            node = next;
+        }
+    }
+}
+
 /// Arm the timer, under the lock, if no scan is active.
 fn arm(q: &mut Queue, delay: i64) {
     q.scan_active = true;
@@ -297,30 +344,38 @@ pub fn post(work: Work) -> Result<(), ()> {
 unsafe extern "C" fn worker_item(parameter: *mut c_void) {
     let slot = parameter.addr();
     loop {
-        let (scan, entry, done) = {
+        let (scan, entry, done, check_drain) = {
             let mut d = DIRTY.lock();
             let q = &mut d.queue;
             if core::mem::replace(&mut q.scan_pending, false) {
                 q.running += 1;
-                (true, core::ptr::null_mut(), core::ptr::null_mut())
+                (true, core::ptr::null_mut(), core::ptr::null_mut(), None)
             } else {
                 let e = q.pop();
                 if !e.is_null() {
                     q.running += 1;
-                    (false, e, core::ptr::null_mut())
+                    (false, e, core::ptr::null_mut(), None)
                 } else {
-                    let done = if q.running == 0 {
+                    let idle = q.running == 0;
+                    let done = if idle {
                         core::mem::replace(&mut q.barriers, core::ptr::null_mut())
                     } else {
                         core::ptr::null_mut()
                     };
+                    let check_drain = (idle && q.drain_active && !q.drain_checking).then(|| {
+                        q.drain_checking = true;
+                        q.drain_gen
+                    });
                     q.active_mask &= !(1u8 << slot);
-                    (false, core::ptr::null_mut(), done)
+                    (false, core::ptr::null_mut(), done, check_drain)
                 }
             }
         };
         if !scan && entry.is_null() {
             signal_barriers(done);
+            if let Some(drain_gen) = check_drain {
+                advance_shutdown_drain(drain_gen);
+            }
             return;
         }
         if scan {
@@ -334,17 +389,26 @@ unsafe extern "C" fn worker_item(parameter: *mut c_void) {
             }
             run(work);
         }
-        let done = {
+        let (done, check_drain) = {
             let mut d = DIRTY.lock();
             let q = &mut d.queue;
             q.running -= 1;
-            if q.running == 0 && !q.scan_pending && q.head.is_null() {
+            let idle = q.running == 0 && !q.scan_pending && q.head.is_null();
+            let done = if idle {
                 core::mem::replace(&mut q.barriers, core::ptr::null_mut())
             } else {
                 core::ptr::null_mut()
-            }
+            };
+            let check_drain = (idle && q.drain_active && !q.drain_checking).then(|| {
+                q.drain_checking = true;
+                q.drain_gen
+            });
+            (done, check_drain)
         };
         signal_barriers(done);
+        if let Some(drain_gen) = check_drain {
+            advance_shutdown_drain(drain_gen);
+        }
     }
 }
 
@@ -370,22 +434,34 @@ fn run(work: Work) {
     }
 }
 
-/// Whether a map is for the lazy writer: dirty (and writing behind),
-/// or open by nobody and to be deleted.
-fn wanted(scm: &Scm, dirty: u64) -> bool {
+/// Whether a map is for the lazy writer: dirty (and writing behind, or
+/// during a shutdown drain), or open by nobody and to be deleted.
+fn wanted(scm: &Scm, dirty: u64, drain_gen: u32) -> bool {
     let f = scm.flags();
     if f & (flag::WRITE_QUEUED | flag::BEING_CREATED | flag::BEING_DELETED) != 0 {
         return false;
     }
+    if drain_gen != 0 && scm.drain.get().is_terminal(drain_gen) {
+        return false;
+    }
     let closing = scm.open_count.get() == 0;
+    if drain_gen != 0 {
+        return dirty != 0 || (closing && scm.refs.get() == 0);
+    }
     (dirty != 0 && (f & flag::DISABLE_WRITE_BEHIND == 0 || closing)) || closing
 }
 
 /// `CcLazyWriteScan`.
 fn lazy_write_scan() {
-    let (total, everything) = {
+    let (total, everything, drain_gen) = {
         let mut d = DIRTY.lock();
-        (d.pages, core::mem::replace(&mut d.queue.everything, false))
+        let drain_gen = if d.queue.drain_active {
+            d.queue.drain_gen
+        } else {
+            0
+        };
+        let everything = core::mem::replace(&mut d.queue.everything, false) || drain_gen != 0;
+        (d.pages, everything, drain_gen)
     };
     let available = crate::mm::flush::available_pages() as u64;
     let mut budget = pages::pages_to_write(&Scan {
@@ -396,38 +472,62 @@ fn lazy_write_scan() {
         low_memory: available < pages::LOW_AVAILABLE_PAGES,
         everything,
     });
-    let mut chosen: alloc::vec::Vec<(*const Scm, u64)> = alloc::vec::Vec::with_capacity(SCAN_ROOM);
+    let mut chosen: alloc::vec::Vec<(*const Scm, u64, u64)> =
+        alloc::vec::Vec::with_capacity(SCAN_ROOM);
     let mut more = false;
     {
-        let m = MASTER.lock();
-        map::each(&m, |scm| {
+        let mut m = MASTER.lock();
+        map::scan_fair(&mut m, |scm| {
             let dirty = {
                 let _d = DIRTY.lock();
                 scm.dirty_pages.get()
             };
-            if !wanted(scm, dirty) {
-                more |= dirty != 0;
-                return;
+            if !wanted(scm, dirty, drain_gen) {
+                if drain_gen == 0 || !scm.drain.get().is_terminal(drain_gen) {
+                    more |= dirty != 0;
+                }
+                return false;
             }
             if chosen.len() == SCAN_ROOM {
                 more = true;
-                return;
+                return false;
             }
-            let share = dirty.min(budget);
-            budget -= share;
+            let share = if drain_gen != 0 {
+                dirty
+            } else {
+                dirty.min(budget)
+            };
+            budget = budget.saturating_sub(share);
             scm.set_flags(scm.flags() | flag::WRITE_QUEUED);
             scm.refs.set(scm.refs.get() + 1);
-            chosen.push((scm, share));
+            chosen.push((scm, share, dirty));
             more |= dirty > share;
+            true
         });
     }
-    for &(scm, share) in &chosen {
+    let mut posted = 0usize;
+    for &(scm, share, dirty) in &chosen {
         // SAFETY: referenced above.
-        set_share(unsafe { &*scm }, share);
+        let s = unsafe { &*scm };
+        set_share(s, share);
         if post(Work::WriteBehind(scm)).is_err() {
-            // SAFETY: as above.
-            unqueue(unsafe { &*scm });
+            if drain_gen != 0 && dirty != 0 {
+                record_drain_attempt(
+                    s,
+                    drain_gen,
+                    Attempt::Write {
+                        dirty_before: dirty,
+                        dirty_after: dirty,
+                        status: STATUS_INSUFFICIENT_RESOURCES,
+                        fatal: false,
+                    },
+                    0,
+                );
+            }
+            unqueue(s);
             more = true;
+        } else {
+            posted += 1;
         }
     }
     trace(format_args!(
@@ -437,6 +537,9 @@ fn lazy_write_scan() {
     super::throttle::post_deferred();
     let mut d = DIRTY.lock();
     let q = &mut d.queue;
+    if drain_gen != 0 && q.drain_active && q.drain_gen == drain_gen && posted != 0 {
+        q.drain_summary.batches += 1;
+    }
     let mut b = core::mem::replace(&mut q.post_tick, core::ptr::null_mut());
     while !b.is_null() {
         // SAFETY: barriers of the post-tick list live on their waiters'
@@ -447,7 +550,11 @@ fn lazy_write_scan() {
         q.barriers = b;
         b = next;
     }
-    if more || !chosen.is_empty() {
+    if q.drain_active {
+        // Successive shutdown drain batches are triggered immediately by
+        // `advance_shutdown_drain`, never delayed by `IDLE_DELAY`.
+        q.scan_active = true;
+    } else if more || !chosen.is_empty() {
         arm(q, IDLE_DELAY);
     } else {
         q.scan_active = false;
@@ -500,18 +607,182 @@ fn release(routine: Option<nk_ntabi::cc::RELEASE_FROM_CC>, context: *mut c_void)
     }
 }
 
+/// Update `scm`'s shutdown-drain state and global summary for one
+/// write-behind attempt, logging a lost-delayed-write diagnostic on
+/// terminal failure without altering dirty bits.
+fn record_drain_attempt(scm: &Scm, drain_gen: u32, attempt: Attempt, pages_written: u64) {
+    let (outcome, file) = {
+        let _m = MASTER.lock();
+        let mut state = scm.drain.get();
+        let outcome = state.record(drain_gen, attempt);
+        scm.drain.set(state);
+        (outcome, scm.file_object.get())
+    };
+    {
+        let mut d = DIRTY.lock();
+        let q = &mut d.queue;
+        if q.drain_active && q.drain_gen == drain_gen {
+            q.drain_summary.pages_written += pages_written;
+            match outcome {
+                Outcome::Clean => q.drain_summary.maps_flushed += 1,
+                Outcome::Terminal { .. } => q.drain_summary.failed_maps += 1,
+                Outcome::Inactive | Outcome::Progress | Outcome::Retry { .. } => {}
+            }
+        }
+    }
+    if let Outcome::Terminal {
+        status,
+        attempts,
+        remaining_dirty,
+    } = outcome
+    {
+        log_lost_delayed_write(scm, file, status, remaining_dirty, attempts);
+    }
+}
+
+/// Log a lost-delayed-write diagnostic with file/volume identity,
+/// status, remaining dirty pages and attempt count.
+fn log_lost_delayed_write(
+    scm: &Scm,
+    file: *mut FILE_OBJECT,
+    status: NTSTATUS,
+    remaining_dirty: u64,
+    attempts: u8,
+) {
+    let (device, vpb, name_len, name_buf) = if !file.is_null() {
+        // SAFETY: `file` is referenced by `scm` until deletion and the
+        // caller holds a reference on `scm`.
+        unsafe {
+            (
+                (*file).DeviceObject,
+                (*file).Vpb,
+                usize::from((*file).FileName.Length / 2),
+                (*file).FileName.Buffer,
+            )
+        }
+    } else {
+        (
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            0,
+            core::ptr::null_mut(),
+        )
+    };
+    let mut name = [0u8; 96];
+    let mut used = 0usize;
+    if !name_buf.is_null() && name_len != 0 {
+        // SAFETY: `FileName.Buffer` holds `name_len` UTF-16 code units.
+        let units = unsafe { core::slice::from_raw_parts(name_buf, name_len) };
+        for ch in char::decode_utf16(units.iter().copied()) {
+            let c = ch.unwrap_or('?');
+            let mut enc = [0u8; 4];
+            let s = c.encode_utf8(&mut enc).as_bytes();
+            if used + s.len() > name.len() {
+                break;
+            }
+            name[used..used + s.len()].copy_from_slice(s);
+            used += s.len();
+        }
+    }
+    let name = core::str::from_utf8(&name[..used]).unwrap_or("");
+    kprintln!(
+        "cc: lost delayed write: scm={:p} file={file:p} name=\"{name}\" device={device:p} vpb={vpb:p} status={:#010x} remaining_dirty_pages={remaining_dirty} attempts={attempts}",
+        core::ptr::from_ref(scm),
+        status as u32
+    );
+}
+
+/// Inspect `MASTER` once a shutdown-drain batch goes idle: schedule the
+/// next batch immediately if eligible non-terminal maps remain, else
+/// finish the drain and wake every waiter with the final summary.
+fn advance_shutdown_drain(drain_gen: u32) {
+    let (more_work, remaining_dirty) = {
+        let m = MASTER.lock();
+        let mut more_work = false;
+        let mut remaining_dirty = 0u64;
+        map::each(&m, |scm| {
+            let f = scm.flags();
+            if f & (flag::BEING_CREATED | flag::BEING_DELETED) != 0 {
+                return;
+            }
+            let dirty = {
+                let _d = DIRTY.lock();
+                scm.dirty_pages.get()
+            };
+            if scm.drain.get().is_terminal(drain_gen) {
+                remaining_dirty += dirty;
+                return;
+            }
+            if f & flag::WRITE_QUEUED != 0
+                || dirty != 0
+                || (scm.open_count.get() == 0 && scm.refs.get() == 0)
+            {
+                more_work = true;
+            }
+        });
+        (more_work, remaining_dirty)
+    };
+    let (wake_next, finished) = {
+        let mut d = DIRTY.lock();
+        let q = &mut d.queue;
+        q.drain_checking = false;
+        if !q.drain_active || q.drain_gen != drain_gen {
+            (false, None)
+        } else if more_work {
+            q.everything = true;
+            q.scan_active = true;
+            q.scan_pending = true;
+            (true, None)
+        } else if q.running == 0 && !q.scan_pending && q.head.is_null() {
+            q.drain_active = false;
+            q.scan_active = false;
+            q.drain_summary.remaining_dirty_pages = remaining_dirty;
+            let summary = q.drain_summary;
+            let waiters = core::mem::replace(&mut q.drain_waiters, core::ptr::null_mut());
+            (false, Some((waiters, summary)))
+        } else {
+            (false, None)
+        }
+    };
+    if wake_next {
+        wake();
+    }
+    if let Some((waiters, summary)) = finished {
+        signal_drain_waiters(waiters, summary);
+    }
+}
+
 /// `CcWriteBehind`.
 fn write_behind(scm: &Scm) {
+    let drain_gen = {
+        let d = DIRTY.lock();
+        if d.queue.drain_active {
+            d.queue.drain_gen
+        } else {
+            0
+        }
+    };
     // SAFETY: the file system's callbacks, kept while the map lives.
     let callbacks = unsafe { scm.callbacks.as_ref() };
-    let dirty = {
+    let dirty_before = {
         let _d = DIRTY.lock();
         scm.dirty_pages.get()
     };
-    if dirty != 0 {
+    if dirty_before != 0 {
         let context = scm.lazy_write_context;
         if !acquire(callbacks.and_then(|c| c.AcquireForLazyWrite), context) {
-            // Not now: the next scan tries again.
+            if drain_gen != 0 {
+                record_drain_attempt(
+                    scm,
+                    drain_gen,
+                    Attempt::AcquireFailed {
+                        dirty: dirty_before,
+                        status: STATUS_FILE_LOCK_CONFLICT,
+                    },
+                    0,
+                );
+            }
+            // Not now: the next scan tries again (unless terminal for this drain).
             unqueue(scm);
             return;
         }
@@ -524,6 +795,26 @@ fn write_behind(scm: &Scm) {
             result.Status,
             result.Information
         ));
+        if drain_gen != 0 {
+            let dirty_after = {
+                let _d = DIRTY.lock();
+                scm.dirty_pages.get()
+            };
+            let fatal = nt_error(result.Status)
+                && nk_mm::section::is_write_error_fatal(true, false, result.Status);
+            let pages_written = (result.Information as u64).div_ceil(crate::mm::PAGE_SIZE as u64);
+            record_drain_attempt(
+                scm,
+                drain_gen,
+                Attempt::Write {
+                    dirty_before,
+                    dirty_after,
+                    status: result.Status,
+                    fatal,
+                },
+                pages_written,
+            );
+        }
     }
     super::throttle::post_deferred();
     lazy_close(scm);
@@ -666,9 +957,59 @@ pub extern "C" fn CcWaitForCurrentLazyWriterActivity() -> NTSTATUS {
     STATUS_SUCCESS
 }
 
+/// Drain every eligible dirty or closing cache map across as many
+/// `SCAN_ROOM`-bounded batches as required, immediately scheduling
+/// successive batches without waiting on `IDLE_DELAY`, bounding
+/// no-progress retries per map, preserving dirty bits on unsuccessful
+/// writeback, and emitting lost-delayed-write and summary diagnostics.
+pub fn drain_dirty_for_shutdown() -> DrainSummary {
+    crate::ke::irql::expect_passive("shutdown_flush");
+    let mut event = MaybeUninit::<KEVENT>::uninit();
+    // SAFETY: an event on this stack, signalled before it ends.
+    unsafe { wait::KeInitializeEvent(event.as_mut_ptr(), 0, 0) };
+    let mut waiter = DrainWaiter {
+        next: core::ptr::null_mut(),
+        event: event.as_mut_ptr(),
+        summary: Cell::new(DrainSummary::default()),
+    };
+    let w = &raw mut waiter;
+    let should_wake = {
+        let mut d = DIRTY.lock();
+        let q = &mut d.queue;
+        let starting = !q.drain_active;
+        if starting {
+            q.drain_gen = q.drain_gen.wrapping_add(1).max(1);
+            q.drain_active = true;
+            q.drain_summary = DrainSummary::default();
+            q.everything = true;
+            q.scan_active = true;
+            q.scan_pending = true;
+        }
+        // SAFETY: the fresh waiter, the list's until signalled.
+        unsafe { (*w).next = q.drain_waiters };
+        q.drain_waiters = w;
+        starting
+    };
+    if should_wake {
+        wake();
+    }
+    // SAFETY: as above.
+    unsafe { wait::wait(Some(event.as_mut_ptr().cast()), None) };
+    let summary = waiter.summary.get();
+    kprintln!(
+        "cc: shutdown drain: batches={} maps_flushed={} pages_written={} failed_maps={} remaining_dirty_pages={}",
+        summary.batches,
+        summary.maps_flushed,
+        summary.pages_written,
+        summary.failed_maps,
+        summary.remaining_dirty_pages
+    );
+    summary
+}
+
 /// What the I/O manager's shutdown calls once every file system has had
-/// its shutdown request, as Windows' calls
-/// `CcWaitForCurrentLazyWriterActivity` there.
+/// its shutdown request: drain all dirty cache maps across as many
+/// bounded batches as needed without waiting on the lazy-writer timer.
 pub fn shutdown_flush() {
-    CcWaitForCurrentLazyWriterActivity();
+    let _ = drain_dirty_for_shutdown();
 }

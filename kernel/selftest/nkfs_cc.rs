@@ -51,6 +51,8 @@ static CC: Group = Group {
         "cc.pin-attribute-race",
         "cc.flush-inflight",
         "cc.copy-write-nowait-mixed",
+        "cc.shutdown-drain",
+        "cc.wait-lazy-barrier",
     ],
     run: cc_tests,
     manual: false,
@@ -972,6 +974,8 @@ fn copies(volume: &Volume, verdicts: &mut Verdicts) -> Result<(), &'static str> 
         "cc.copy-write-nowait-mixed",
         copy_write_nowait_mixed_test(file, sop),
     ));
+    verdicts.push(("cc.shutdown-drain", shutdown_drain_test(volume)));
+    verdicts.push(("cc.wait-lazy-barrier", wait_lazy_barrier_test(volume)));
     Ok(())
 }
 
@@ -1000,6 +1004,7 @@ extern "C" fn copy_write_faulting_source(offset: usize) {
 /// partial page below VDL must neither modify the first page nor leave
 /// untracked dirt; a faulting source buffer mid-write must leave any already
 /// modified page accounted for in the dirty bitmap.
+#[inline(never)]
 fn copy_write_nowait_mixed_test(
     file: *mut FILE_OBJECT,
     sop: *mut SECTION_OBJECT_POINTERS,
@@ -1124,6 +1129,7 @@ fn copy_write_nowait_mixed_test(
 /// `mm::flush::flush_section`) must wait for an in-flight write-behind or
 /// concurrent paging write rather than returning early, and must surface an
 /// error when that write fails.
+#[inline(never)]
 fn flush_inflight_test(
     file: *mut FILE_OBJECT,
     sop: *mut SECTION_OBJECT_POINTERS,
@@ -1703,4 +1709,310 @@ fn fast_paths(volume: &Volume, verdicts: &mut Verdicts) {
     verdicts.push(("cc.fast-mdl", mdl));
     // SAFETY: nkfs's header.
     unsafe { (*fcb).header.Common.IsFastIoPossible = 0 };
+}
+
+/// Initialize caching on an [`nkfs::ExtraFile`] with its exact size.
+fn init_extra(extra: &nkfs::ExtraFile, size: i64) {
+    let sizes = CC_FILE_SIZES {
+        AllocationSize: size,
+        FileSize: size,
+        ValidDataLength: size,
+    };
+    // SAFETY: live extra file object with valid FCB header and SOP.
+    unsafe {
+        entry::nk_entry_CcInitializeCacheMap(
+            extra.file.cast(),
+            (&raw const sizes).cast(),
+            0,
+            (&raw const CALLBACKS).cast(),
+            core::ptr::null_mut(),
+        );
+    }
+}
+
+/// Dirty one page at `offset` on `file` with byte pattern `fill`.
+#[inline(never)]
+fn dirty_extra_page(file: *mut FILE_OBJECT, offset: i64, fill: u8) -> bool {
+    let page = alloc::vec![fill; 0x1000];
+    // SAFETY: cached file and live buffer.
+    unsafe {
+        entry::nk_entry_CcCopyWriteEx(
+            file.cast(),
+            &raw const offset,
+            page.len() as u32,
+            1,
+            page.as_ptr().cast(),
+            core::ptr::null_mut(),
+        ) == 1
+    }
+}
+
+/// Cleanly flush, uninitialize and wait for teardown of a slice of
+/// [`nkfs::ExtraFile`]s before they are dropped.
+#[inline(never)]
+fn teardown_extras(files: &[nkfs::ExtraFile]) -> Result<(), &'static str> {
+    let zero = 0i64;
+    for f in files {
+        f.set_write_fail(0, STATUS_SUCCESS, 0);
+        flush_all(f.sop());
+        // SAFETY: live extra file.
+        unsafe {
+            cc::map::CcUninitializeCacheMap(f.file, &raw const zero, core::ptr::null_mut());
+        }
+    }
+    let _ = cc::lazy::drain_dirty_for_shutdown();
+    for f in files {
+        // SAFETY: live extra file SOP.
+        if unsafe { !(*f.sop()).SharedCacheMap.is_null() } {
+            return Err("extra file shared cache map did not tear down cleanly");
+        }
+    }
+    Ok(())
+}
+
+/// Shutdown multi-batch drain (>64 maps without timer sleep), transient
+/// error recovery, bounded retries on persistent retryable errors with
+/// dirty-bit preservation and fair traversal, immediate termination on
+/// permanent/fatal errors, and partial-write progress resetting retries.
+#[inline(never)]
+fn shutdown_drain_test(volume: &Volume) -> Result<(), &'static str> {
+    // 1. >64 dirty maps (70 maps) must all drain across >=2 immediate batches.
+    {
+        let mut files = Vec::with_capacity(70);
+        for _ in 0..70 {
+            files.push(volume.open_extra_file(0x4000)?);
+        }
+        for (i, f) in files.iter().enumerate() {
+            init_extra(f, 0x4000);
+            if !dirty_extra_page(f.file, 0, (i as u8).wrapping_add(1)) {
+                let _ = teardown_extras(&files);
+                return Err("CcCopyWriteEx failed while dirtying 70 maps");
+            }
+        }
+        let summary = cc::lazy::drain_dirty_for_shutdown();
+        let all_on_disk = files.iter().enumerate().all(|(i, f)| {
+            let expected = (i as u8).wrapping_add(1);
+            dirty_pages(f.file) == 0 && f.data()[..0x100].iter().all(|&b| b == expected)
+        });
+        teardown_extras(&files)?;
+        if summary.batches < 2 {
+            return Err("70 dirty maps did not span at least two SCAN_ROOM batches");
+        }
+        if summary.maps_flushed < 70
+            || summary.failed_maps != 0
+            || summary.remaining_dirty_pages != 0
+        {
+            return Err("shutdown drain summary did not report all 70 maps flushed cleanly");
+        }
+        if !all_on_disk {
+            return Err("not all 70 dirty maps reached disk on shutdown drain");
+        }
+    }
+
+    // 2. Transient retryable error (2 failures, 3rd attempt succeeds).
+    {
+        let f = volume.open_extra_file(0x4000)?;
+        init_extra(&f, 0x4000);
+        f.set_write_fail(2, STATUS_INSUFFICIENT_RESOURCES, 0);
+        if !dirty_extra_page(f.file, 0, 0xA5) {
+            let _ = teardown_extras(&[f]);
+            return Err("could not dirty transient-error test file");
+        }
+        let summary = cc::lazy::drain_dirty_for_shutdown();
+        let attempts = f.write_attempts();
+        let successes = f.write_successes();
+        let dirty = dirty_pages(f.file);
+        let ok_bytes = f.data()[..0x100].iter().all(|&b| b == 0xA5);
+        teardown_extras(&[f])?;
+        if summary.failed_maps != 0 || summary.remaining_dirty_pages != 0 {
+            return Err("transient-error file did not recover during shutdown drain");
+        }
+        if attempts != 3 || successes != 1 || dirty != 0 || !ok_bytes {
+            return Err("transient-error recovery did not flush on the 3rd attempt");
+        }
+    }
+
+    // 3. Persistent retryable error (64 failing maps ahead of 2 healthy maps):
+    //    must flush healthy maps (fair traversal), bound retries to 3 per
+    //    failing map, and preserve dirty bits on every failing map.
+    {
+        let mut healthy = Vec::with_capacity(2);
+        for _ in 0..2 {
+            healthy.push(volume.open_extra_file(0x4000)?);
+        }
+        let mut failing = Vec::with_capacity(64);
+        for _ in 0..64 {
+            failing.push(volume.open_extra_file(0x4000)?);
+        }
+        // Initialize healthy maps first, then failing maps so the 64 failing
+        // maps sit at the head of `MASTER`'s list ahead of the healthy maps.
+        for (i, f) in healthy.iter().enumerate() {
+            init_extra(f, 0x4000);
+            if !dirty_extra_page(f.file, 0, 0xC0 + i as u8) {
+                let _ = teardown_extras(&healthy);
+                let _ = teardown_extras(&failing);
+                return Err("could not dirty healthy map");
+            }
+        }
+        for (i, f) in failing.iter().enumerate() {
+            init_extra(f, 0x4000);
+            f.set_write_fail(u32::MAX, STATUS_INSUFFICIENT_RESOURCES, 0);
+            if !dirty_extra_page(f.file, 0, 0x40 + (i as u8 & 0x3F)) {
+                let _ = teardown_extras(&healthy);
+                let _ = teardown_extras(&failing);
+                return Err("could not dirty failing map");
+            }
+        }
+        let summary = cc::lazy::drain_dirty_for_shutdown();
+        let healthy_flushed = healthy.iter().enumerate().all(|(i, f)| {
+            dirty_pages(f.file) == 0 && f.data()[..0x100].iter().all(|&b| b == 0xC0 + i as u8)
+        });
+        let failing_bounded_and_dirty = failing
+            .iter()
+            .all(|f| f.write_attempts() == 3 && dirty_pages(f.file) == 1);
+        // Prove preserved dirty bits still flush once the failure clears.
+        failing[0].set_write_fail(0, STATUS_SUCCESS, 0);
+        flush_all(failing[0].sop());
+        let recovered_after_clear = dirty_pages(failing[0].file) == 0
+            && failing[0].data()[..0x100].iter().all(|&b| b == 0x40);
+        teardown_extras(&healthy)?;
+        teardown_extras(&failing)?;
+        if !healthy_flushed {
+            return Err("64 failing maps at head starved healthy maps behind them");
+        }
+        if !failing_bounded_and_dirty {
+            return Err("failing maps were not bounded to 3 attempts with dirty bits preserved");
+        }
+        if summary.failed_maps != 64 || summary.remaining_dirty_pages != 64 {
+            return Err("shutdown summary misreported persistent failing maps");
+        }
+        if !recovered_after_clear {
+            return Err("preserved dirty bit did not flush after failure cleared");
+        }
+    }
+
+    // 4. Permanent/fatal write error must terminate on attempt 1 without retries.
+    {
+        let f = volume.open_extra_file(0x4000)?;
+        init_extra(&f, 0x4000);
+        f.set_write_fail(u32::MAX, STATUS_MEDIA_WRITE_PROTECTED, 0);
+        if !dirty_extra_page(f.file, 0, 0xEE) {
+            let _ = teardown_extras(&[f]);
+            return Err("could not dirty fatal-error file");
+        }
+        let summary = cc::lazy::drain_dirty_for_shutdown();
+        let attempts = f.write_attempts();
+        teardown_extras(&[f])?;
+        if attempts != 1 || summary.failed_maps != 1 {
+            return Err("fatal write error was retried unnecessarily or not counted");
+        }
+    }
+
+    // 5. Partial-write progress resets the no-progress retry counter: page 0
+    //    succeeds in batch 1 while page 2 persistently fails, so page 2 gets
+    //    1 attempt in the progress batch plus 3 subsequent no-progress attempts.
+    {
+        let f = volume.open_extra_file(0x4000)?;
+        init_extra(&f, 0x4000);
+        f.set_write_fail(u32::MAX, STATUS_INSUFFICIENT_RESOURCES, 0x2000);
+        if !dirty_extra_page(f.file, 0x0, 0x31) || !dirty_extra_page(f.file, 0x2000, 0x32) {
+            let _ = teardown_extras(&[f]);
+            return Err("could not dirty partial-progress file");
+        }
+        let summary = cc::lazy::drain_dirty_for_shutdown();
+        let page0_ok = f.data()[..0x100].iter().all(|&b| b == 0x31);
+        let page2_attempts = f.failed_range_attempts();
+        let dirty = dirty_pages(f.file);
+        teardown_extras(&[f])?;
+        if !page0_ok {
+            return Err("partial-write progress did not persist the healthy page");
+        }
+        if page2_attempts != 4 {
+            return Err("partial-write progress did not reset the 3-attempt retry counter");
+        }
+        if dirty != 1 || summary.failed_maps != 1 || summary.remaining_dirty_pages != 1 {
+            return Err("partial-write terminal failure did not preserve remaining dirty page");
+        }
+    }
+
+    Ok(())
+}
+
+/// `CcWaitForCurrentLazyWriterActivity` must act as a completion barrier
+/// for currently queued lazy-writer activity rather than looping until
+/// newly dirtied data from unrelated writers is drained.
+#[inline(never)]
+fn wait_lazy_barrier_test(volume: &Volume) -> Result<(), &'static str> {
+    use crate::ke::thread;
+    use core::sync::atomic::AtomicBool;
+
+    let file = volume.file;
+    initialize(file, false);
+    let extra = volume.open_extra_file(0x4000)?;
+    init_extra(&extra, 0x4000);
+
+    let offset = 0x90000i64;
+    let marker = alloc::vec![0x9B_u8; 0x1000];
+    // SAFETY: cached file and live buffer.
+    let wrote = unsafe {
+        entry::nk_entry_CcCopyWriteEx(
+            file.cast(),
+            &raw const offset,
+            marker.len() as u32,
+            1,
+            marker.as_ptr().cast(),
+            core::ptr::null_mut(),
+        )
+    };
+    if wrote != 1 {
+        let _ = teardown_extras(&[extra]);
+        return Err("could not dirty main file for lazy barrier test");
+    }
+
+    static BARRIER_DONE: AtomicBool = AtomicBool::new(false);
+    BARRIER_DONE.store(false, Ordering::Release);
+    fn run_barrier(_: usize) {
+        cc::lazy::CcWaitForCurrentLazyWriterActivity();
+        BARRIER_DONE.store(true, Ordering::Release);
+    }
+
+    nkfs::arm_write_pause(offset as u64);
+    let before = thread::count();
+    let t = thread::create_referenced(run_barrier, 0, thread::NORMAL_PRIORITY, thread::ANYWHERE)
+        .map_err(|_| "no memory for lazy barrier thread")?;
+    nkfs::wait_write_paused();
+
+    // Dirty an unrelated file AFTER the barrier's scan has already run.
+    let dirtied_late = dirty_extra_page(extra.file, 0, 0x5E);
+    nkfs::release_write_pause(STATUS_SUCCESS);
+
+    let timeout: i64 = -50_000_000;
+    // SAFETY: referenced thread, waited on before dereference.
+    let waited = unsafe { crate::ke::wait::wait(Some(t.cast()), Some(timeout)) };
+    // SAFETY: as above.
+    unsafe { crate::ob::object::dereference(t.cast()) };
+    while thread::count() != before {
+        thread::yield_now();
+    }
+
+    let late_still_dirty = dirty_pages(extra.file) == 1;
+    let main_on_disk = nkfs::data()[0x90000..0x90100].iter().all(|&b| b == 0x9B);
+    let teardown_res = teardown_extras(&[extra]);
+    let zero = 0i64;
+    // SAFETY: cached file.
+    unsafe { cc::map::CcUninitializeCacheMap(file, &raw const zero, core::ptr::null_mut()) };
+    cc::lazy::CcWaitForCurrentLazyWriterActivity();
+    nkfs::take_log();
+    teardown_res?;
+
+    if waited != STATUS_SUCCESS as u32 || !BARRIER_DONE.load(Ordering::Acquire) {
+        return Err("CcWaitForCurrentLazyWriterActivity did not return promptly");
+    }
+    if !dirtied_late || !main_on_disk {
+        return Err("queued lazy write did not reach disk before barrier returned");
+    }
+    if !late_still_dirty {
+        return Err("CcWaitForCurrentLazyWriterActivity waited for data dirtied after its scan");
+    }
+    Ok(())
 }

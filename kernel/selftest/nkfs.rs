@@ -146,6 +146,106 @@ pub fn data() -> &'static [u8] {
     unsafe { core::slice::from_raw_parts(DATA.load(Ordering::Acquire), FILE_BYTES) }
 }
 
+/// Extra per-file FCB for multi-map cache tests (`cc.shutdown-drain`,
+/// `cc.wait-lazy-barrier`), sharing `\Device\NkFs` with its own small
+/// backing buffer and per-file paging write fault injection.
+#[repr(C)]
+pub struct ExtraFcb {
+    pub fcb: Fcb,
+    pub data: *mut u8,
+    pub len: usize,
+    /// Number of matching paging writes to fail (`u32::MAX` = persistent).
+    pub fail_count: AtomicU32,
+    pub fail_status: AtomicI32,
+    /// Fail paging writes whose `offset >= fail_from_offset`.
+    pub fail_from_offset: AtomicU64,
+    /// Total paging write attempts reaching `transfer` for this file.
+    pub write_attempts: AtomicU32,
+    /// Paging write attempts at `offset >= fail_from_offset`.
+    pub failed_range_attempts: AtomicU32,
+    /// Successful paging writes completed for this file.
+    pub write_successes: AtomicU32,
+}
+
+/// While non-null during `IRP_MJ_CREATE`, attach this `ExtraFcb` instead
+/// of the default single `FCB`.
+static EXTRA_CREATE_FCB: AtomicPtr<ExtraFcb> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Owned handle, file object, `ExtraFcb` and backing buffer for one
+/// independent cached file on `\Device\NkFs`.
+pub struct ExtraFile {
+    fcb: *mut ExtraFcb,
+    handle: u64,
+    pub file: *mut FILE_OBJECT,
+}
+
+impl ExtraFile {
+    pub fn sop(&self) -> *mut SECTION_OBJECT_POINTERS {
+        // SAFETY: `self.fcb` is live for the lifetime of `ExtraFile`.
+        unsafe { &raw mut (*self.fcb).fcb.sop }
+    }
+
+    pub fn data(&self) -> &[u8] {
+        // SAFETY: `data` is live for `len` bytes until `Drop`.
+        unsafe { core::slice::from_raw_parts((*self.fcb).data, (*self.fcb).len) }
+    }
+
+    /// Configure paging write failure injection on this file.
+    /// `count == u32::MAX` fails persistently; `count == 0` disables.
+    pub fn set_write_fail(&self, count: u32, status: NTSTATUS, from_offset: u64) {
+        // SAFETY: `self.fcb` is live.
+        unsafe {
+            (*self.fcb)
+                .fail_from_offset
+                .store(from_offset, Ordering::Release);
+            (*self.fcb).fail_status.store(status, Ordering::Release);
+            (*self.fcb).fail_count.store(count, Ordering::Release);
+        }
+    }
+
+    pub fn write_attempts(&self) -> u32 {
+        // SAFETY: `self.fcb` is live.
+        unsafe { (*self.fcb).write_attempts.load(Ordering::Acquire) }
+    }
+
+    pub fn failed_range_attempts(&self) -> u32 {
+        // SAFETY: `self.fcb` is live.
+        unsafe { (*self.fcb).failed_range_attempts.load(Ordering::Acquire) }
+    }
+
+    pub fn write_successes(&self) -> u32 {
+        // SAFETY: `self.fcb` is live.
+        unsafe { (*self.fcb).write_successes.load(Ordering::Acquire) }
+    }
+}
+
+impl Drop for ExtraFile {
+    fn drop(&mut self) {
+        if !self.file.is_null() {
+            // SAFETY: the reference `open_extra_file` took.
+            unsafe { object::dereference(self.file.cast()) };
+        }
+        if self.handle != 0 {
+            file::close(self.handle);
+        }
+        if !self.fcb.is_null() {
+            // SAFETY: `self.fcb` and its data buffer belong exclusively to
+            // this `ExtraFile` once closed and uninitialized.
+            unsafe {
+                crate::ex::resource::ExDeleteResourceLite(&raw mut (*self.fcb).fcb.resource);
+                crate::ex::resource::ExDeleteResourceLite(
+                    &raw mut (*self.fcb).fcb.paging_io_resource,
+                );
+                let data = (*self.fcb).data;
+                if !data.is_null() {
+                    let _ = pool::free(data);
+                }
+            }
+            let _ = pool::free(self.fcb.cast());
+        }
+    }
+}
+
 /// The dispatch routine.
 ///
 /// # Safety
@@ -157,9 +257,16 @@ unsafe extern "C" fn dispatch(_: *mut DEVICE_OBJECT, irp: *mut IRP) -> NTSTATUS 
         let file = (*location).FileObject;
         let (status, information) = match (*location).MajorFunction {
             IRP_MJ_CREATE => {
-                let fcb = FCB.load(Ordering::Acquire);
-                (*file).FsContext = fcb.cast();
-                (*file).SectionObjectPointer = (&raw mut (*fcb).sop).cast();
+                let extra = EXTRA_CREATE_FCB.swap(core::ptr::null_mut(), Ordering::AcqRel);
+                if !extra.is_null() {
+                    let fcb = &raw mut (*extra).fcb;
+                    (*file).FsContext = fcb.cast();
+                    (*file).SectionObjectPointer = (&raw mut (*fcb).sop).cast();
+                } else {
+                    let fcb = FCB.load(Ordering::Acquire);
+                    (*file).FsContext = fcb.cast();
+                    (*file).SectionObjectPointer = (&raw mut (*fcb).sop).cast();
+                }
                 (STATUS_SUCCESS, FILE_OPENED)
             }
             IRP_MJ_READ | IRP_MJ_WRITE => transfer(irp, location),
@@ -186,6 +293,18 @@ unsafe fn transfer(irp: *mut IRP, location: *mut IO_STACK_LOCATION) -> (NTSTATUS
         let length = (*location).Parameters[0] as u32;
         let offset = (*location).Parameters[2];
         let flags = (*irp).Flags;
+        let file_obj = (*location).FileObject;
+        let main_fcb = FCB.load(Ordering::Acquire);
+        if !file_obj.is_null() && (*file_obj).FsContext != main_fcb.cast() {
+            return transfer_extra(
+                irp,
+                major,
+                length,
+                offset,
+                flags,
+                (*file_obj).FsContext.cast(),
+            );
+        }
         if flags & IRP_PAGING_IO != 0 {
             let thread = crate::ke::pcr::current_thread();
             let active = thread.add(CACHE_MANAGER_ACTIVE).read();
@@ -254,6 +373,82 @@ unsafe fn transfer(irp: *mut IRP, location: *mut IO_STACK_LOCATION) -> (NTSTATUS
             core::ptr::copy_nonoverlapping(file, system.cast::<u8>(), count);
         } else {
             core::ptr::copy_nonoverlapping(system.cast::<u8>(), file, count);
+        }
+        (STATUS_SUCCESS, count)
+    }
+}
+
+/// Serve a read or write on an [`ExtraFile`].
+///
+/// # Safety
+/// Live IRP and live `ExtraFcb`.
+unsafe fn transfer_extra(
+    irp: *mut IRP,
+    major: u8,
+    length: u32,
+    offset: u64,
+    flags: u32,
+    extra: *mut ExtraFcb,
+) -> (NTSTATUS, usize) {
+    // SAFETY: per the contract.
+    unsafe {
+        if major == IRP_MJ_WRITE && flags & IRP_PAGING_IO != 0 {
+            (*extra).write_attempts.fetch_add(1, Ordering::AcqRel);
+            let fail_from = (*extra).fail_from_offset.load(Ordering::Acquire);
+            if offset >= fail_from {
+                let fail_st = (*extra).fail_status.load(Ordering::Acquire);
+                let mut prev = (*extra).fail_count.load(Ordering::Acquire);
+                let mut should_fail = false;
+                while prev > 0 {
+                    if prev == u32::MAX {
+                        should_fail = true;
+                        break;
+                    }
+                    match (*extra).fail_count.compare_exchange_weak(
+                        prev,
+                        prev - 1,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => {
+                            should_fail = true;
+                            break;
+                        }
+                        Err(actual) => prev = actual,
+                    }
+                }
+                if should_fail && nt_error(fail_st) {
+                    (*extra)
+                        .failed_range_attempts
+                        .fetch_add(1, Ordering::AcqRel);
+                    return (fail_st, 0);
+                }
+            }
+        }
+        let len = (*extra).len;
+        if flags & IRP_NOCACHE == 0 || offset as usize >= len {
+            return (STATUS_INVALID_DEVICE_REQUEST, 0);
+        }
+        let count = (length as usize).min(len - offset as usize);
+        let system = mdl::MmMapLockedPagesSpecifyCache(
+            (*irp).MdlAddress,
+            KERNEL_MODE,
+            1,
+            core::ptr::null_mut(),
+            0,
+            16,
+        );
+        if system.is_null() {
+            return (STATUS_INSUFFICIENT_RESOURCES, 0);
+        }
+        let buf = (*extra).data.add(offset as usize);
+        if major == IRP_MJ_READ {
+            core::ptr::copy_nonoverlapping(buf, system.cast::<u8>(), count);
+        } else {
+            core::ptr::copy_nonoverlapping(system.cast::<u8>(), buf, count);
+            if flags & IRP_PAGING_IO != 0 {
+                (*extra).write_successes.fetch_add(1, Ordering::AcqRel);
+            }
         }
         (STATUS_SUCCESS, count)
     }
@@ -394,6 +589,81 @@ impl Volume {
             return Err("the nkfs file's second handle names no object");
         }
         Ok((handle, object.cast()))
+    }
+
+    /// Open a separate independent file backed by its own `ExtraFcb` and
+    /// `size`-byte pool buffer.
+    pub fn open_extra_file(&self, size: usize) -> Result<ExtraFile, &'static str> {
+        let data = pool::alloc_zeroed(size, TAG);
+        let extra = pool::alloc_zeroed(size_of::<ExtraFcb>(), TAG).cast::<ExtraFcb>();
+        if data.is_null() || extra.is_null() {
+            if !data.is_null() {
+                let _ = pool::free(data);
+            }
+            if !extra.is_null() {
+                let _ = pool::free(extra.cast());
+            }
+            return Err("no memory for nkfs extra file");
+        }
+        // SAFETY: freshly allocated blocks owned exclusively here.
+        unsafe {
+            let header = &raw mut (*extra).fcb.header.Common;
+            (*header).NodeByteSize = size_of::<Fcb>() as i16;
+            (*header).AllocationSize = size as i64;
+            (*header).FileSize = size as i64;
+            (*header).ValidDataLength = size as i64;
+            crate::ex::resource::ExInitializeResourceLite(&raw mut (*extra).fcb.resource);
+            crate::ex::resource::ExInitializeResourceLite(&raw mut (*extra).fcb.paging_io_resource);
+            (*header).Resource = &raw mut (*extra).fcb.resource;
+            (*header).PagingIoResource = &raw mut (*extra).fcb.paging_io_resource;
+            (*extra).data = data;
+            (*extra).len = size;
+        }
+        EXTRA_CREATE_FCB.store(extra, Ordering::Release);
+        let open_res = file::open(&OpenRequest::new(DEVICE));
+        let leftover = EXTRA_CREATE_FCB.swap(core::ptr::null_mut(), Ordering::AcqRel);
+        let Ok((handle, _)) = open_res else {
+            if !leftover.is_null() {
+                // SAFETY: never attached to any file object.
+                unsafe {
+                    crate::ex::resource::ExDeleteResourceLite(&raw mut (*extra).fcb.resource);
+                    crate::ex::resource::ExDeleteResourceLite(
+                        &raw mut (*extra).fcb.paging_io_resource,
+                    );
+                }
+                let _ = pool::free(data);
+                let _ = pool::free(extra.cast());
+            }
+            return Err("extra nkfs file did not open");
+        };
+        let mut object: *mut c_void = core::ptr::null_mut();
+        // SAFETY: kernel handle just opened.
+        let status = unsafe {
+            handle::ObReferenceObjectByHandle(
+                handle as *mut c_void,
+                0,
+                core::ptr::null(),
+                KERNEL_MODE,
+                &raw mut object,
+                core::ptr::null_mut(),
+            )
+        };
+        if status != STATUS_SUCCESS {
+            file::close(handle);
+            // SAFETY: handle closed; nothing else references `extra`.
+            unsafe {
+                crate::ex::resource::ExDeleteResourceLite(&raw mut (*extra).fcb.resource);
+                crate::ex::resource::ExDeleteResourceLite(&raw mut (*extra).fcb.paging_io_resource);
+            }
+            let _ = pool::free(data);
+            let _ = pool::free(extra.cast());
+            return Err("extra nkfs handle names no object");
+        }
+        Ok(ExtraFile {
+            fcb: extra,
+            handle,
+            file: object.cast(),
+        })
     }
 
     /// The file's FCB.

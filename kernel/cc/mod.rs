@@ -106,6 +106,9 @@ pub struct Scm {
     /// flight, and synchronous flushes waiting on them; under [`MASTER`].
     pub(super) inflight: Cell<*mut flush::InFlight>,
     pub(super) flush_waiters: Cell<*mut flush::FlushWaiter>,
+    /// Per-map shutdown drain retry/terminal state, independent of dirty
+    /// bits; under [`MASTER`].
+    pub(super) drain: Cell<nk_cc::drain::MapDrainState>,
     // Set while the map is being created, then fixed until it is
     // deleted.
     pub sop: *mut SECTION_OBJECT_POINTERS,
@@ -138,10 +141,12 @@ pub struct LifecycleWaiter {
     event: *mut KEVENT,
 }
 
-/// What [`MASTER`] guards beyond the maps' own fields: the list of every
-/// shared cache map and waiters blocked on a lifecycle transition.
+/// What [`MASTER`] guards beyond the maps' own fields: the doubly-linked
+/// list of every shared cache map and waiters blocked on a lifecycle
+/// transition.
 pub struct Master {
     head: *mut Scm,
+    tail: *mut Scm,
     waiters: *mut LifecycleWaiter,
 }
 
@@ -200,6 +205,7 @@ pub static MASTER: SpinLock<Master> = SpinLock::new(
     Rank::CcMaster,
     Master {
         head: core::ptr::null_mut(),
+        tail: core::ptr::null_mut(),
         waiters: core::ptr::null_mut(),
     },
 );

@@ -60,6 +60,7 @@ fn new_scm(
             uninit_events: Cell::new(core::ptr::null_mut()),
             inflight: Cell::new(core::ptr::null_mut()),
             flush_waiters: Cell::new(core::ptr::null_mut()),
+            drain: Cell::new(nk_cc::drain::MapDrainState::new()),
             sop,
             file_object: Cell::new(core::ptr::null_mut()),
             callbacks,
@@ -92,13 +93,16 @@ fn new_scm(
 
 /// Link `scm` at the head of the list of maps.
 fn link(m: &mut super::Master, scm: &Scm) {
+    let ptr = core::ptr::from_ref(scm).cast_mut();
     scm.prev.set(core::ptr::null_mut());
     scm.next.set(m.head);
     // SAFETY: maps on the list are live under the lock.
     if let Some(head) = unsafe { m.head.as_ref() } {
-        head.prev.set(core::ptr::from_ref(scm).cast_mut());
+        head.prev.set(ptr);
+    } else {
+        m.tail = ptr;
     }
-    m.head = core::ptr::from_ref(scm).cast_mut();
+    m.head = ptr;
 }
 
 /// Every shared cache map, under the lock.
@@ -111,6 +115,58 @@ pub fn each(m: &super::Master, mut f: impl FnMut(&Scm)) {
     }
 }
 
+/// Move `scm` to the tail of `m`'s list so subsequent scans visit other
+/// maps before retrying `scm`.
+pub fn move_to_tail(m: &mut super::Master, scm: &Scm) {
+    let ptr = core::ptr::from_ref(scm).cast_mut();
+    if m.tail == ptr {
+        return;
+    }
+    let (prev, next) = (scm.prev.get(), scm.next.get());
+    // SAFETY: maps on the list are live under the lock.
+    unsafe {
+        match prev.as_ref() {
+            Some(p) => p.next.set(next),
+            None => m.head = next,
+        }
+        if let Some(n) = next.as_ref() {
+            n.prev.set(prev);
+        }
+        let old_tail = m.tail;
+        if let Some(t) = old_tail.as_ref() {
+            t.next.set(ptr);
+        } else {
+            m.head = ptr;
+        }
+        scm.prev.set(old_tail);
+        scm.next.set(core::ptr::null_mut());
+        m.tail = ptr;
+    }
+}
+
+/// Traverse every map currently on `m`'s list at most once, rotating any
+/// map for which `f` returns `true` to the tail for round-robin fairness.
+pub fn scan_fair(m: &mut super::Master, mut f: impl FnMut(&Scm) -> bool) {
+    let orig_tail = m.tail;
+    if orig_tail.is_null() {
+        return;
+    }
+    let mut at = m.head;
+    // SAFETY: maps on the list are live under the lock; reading `next`
+    // before moving `scm` to the tail preserves the snapshot order.
+    while let Some(scm) = unsafe { at.as_ref() } {
+        let next = scm.next.get();
+        let is_last = core::ptr::eq(scm, orig_tail);
+        if f(scm) {
+            move_to_tail(m, scm);
+        }
+        if is_last {
+            break;
+        }
+        at = next;
+    }
+}
+
 /// Take `scm` off the list.
 fn unlink(m: &mut super::Master, scm: &Scm) {
     let (prev, next) = (scm.prev.get(), scm.next.get());
@@ -120,8 +176,9 @@ fn unlink(m: &mut super::Master, scm: &Scm) {
             Some(p) => p.next.set(next),
             None => m.head = next,
         }
-        if let Some(n) = next.as_ref() {
-            n.prev.set(prev);
+        match next.as_ref() {
+            Some(n) => n.prev.set(prev),
+            None => m.tail = prev,
         }
     }
     scm.next.set(core::ptr::null_mut());
