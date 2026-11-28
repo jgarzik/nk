@@ -5,8 +5,8 @@
  "summary": {
   "note": "distinct imports of the fixtures loaded at boot",
   "total": 1176,
-  "implemented": 760,
-  "partial": 90,
+  "implemented": 761,
+  "partial": 89,
   "traps": 121,
   "missing": 65,
   "library": 140
@@ -5979,7 +5979,7 @@
     {
      "module": "ntoskrnl.exe",
      "name": "PoFxRegisterComponentPerfStates",
-     "state": "partial"
+     "state": "implemented"
     },
     {
      "module": "ntoskrnl.exe",
@@ -21857,8 +21857,8 @@
   "binaries": 60,
   "kernel_names": {
    "total": 1740,
-   "implemented": 759,
-   "partial": 90,
+   "implemented": 760,
+   "partial": 89,
    "traps": 119,
    "missing": 772
   },
@@ -22496,8 +22496,8 @@
     "version": "10.0.19041.1949",
     "kernel": {
      "total": 269,
-     "implemented": 245,
-     "partial": 21,
+     "implemented": 246,
+     "partial": 20,
      "traps": 3,
      "missing": 0
     },

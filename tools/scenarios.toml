@@ -1303,3 +1303,17 @@ tier = "gate"
 paths = ["kernel/", "lib/", "boot/", "fixtures/registry-crypto.txt"]
 cmdline = "test=crypto.boot"
 registry = ["crypto"]
+
+# Microsoft's inbox NVMe miniport (stornvme.sys) on QEMU's PCIe NVMe
+# controller with a GPT FAT32 volume: verifies NVMe PCI ancestry, reads
+# known files, and persists bounded writes verified offline by fatdisk.py.
+
+[x86_64-nvme-fat]
+arch = "x86_64"
+tier = "gate"
+paths = ["kernel/", "lib/", "boot/", "fixtures/"]
+cmdline = "test=nvme.load"
+registry = ["storage", "nvme", "volumes", "mount", "fat"]
+disk = "nvme"
+disk_image = "fat32-gpt"
+disk_expect = "fat-written"

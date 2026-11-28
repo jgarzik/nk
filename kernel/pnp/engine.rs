@@ -920,7 +920,8 @@ fn translate_interrupt(
     partial: &Partial,
 ) -> Result<(Vec<io::interrupt::Resource>, Vec<Partial>, u32), NTSTATUS> {
     use crate::hal::interrupt::{self as hal, Line, Polarity, Raw, Trigger};
-    let (_, count, number, _) = partial.as_interrupt().ok_or(STATUS_INVALID_PARAMETER)?;
+    let (_, count, number, raw_affinity) =
+        partial.as_interrupt().ok_or(STATUS_INVALID_PARAMETER)?;
     let message = partial.is_message();
     let shared = partial.share == nk_pnp::resources::SHARE_SHARED;
     let raw = if message {
@@ -943,7 +944,12 @@ fn translate_interrupt(
             }
         }))
     };
-    let first = hal::translate(raw, u64::MAX)?;
+    let affinity = if raw_affinity != 0 {
+        raw_affinity
+    } else {
+        u64::MAX
+    };
+    let first = hal::translate(raw, affinity)?;
     let messages = if message { u32::from(count) } else { 1 };
     let mut resources = Vec::new();
     let mut partials = Vec::new();

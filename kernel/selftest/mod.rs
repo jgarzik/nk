@@ -45,6 +45,7 @@ mod nkfs_cc;
 mod nkfs_mm;
 mod nkfs_mount;
 mod null;
+mod nvme;
 mod ob;
 mod open;
 mod oracle;
@@ -235,6 +236,7 @@ pub static GROUPS: &[&[&Group]] = &[
     oracle::GROUPS,
     neg::GROUPS,
     storage::GROUPS,
+    nvme::GROUPS,
     volumes::GROUPS,
     stordirect::GROUPS,
     crypto::GROUPS,

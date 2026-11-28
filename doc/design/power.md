@@ -78,7 +78,9 @@ and what a driver asks of one gets the pinned kernel's answer with
 none: a power control request is not supported, no crash dump device
 can be registered, performance states the extension must supply or
 handle are not implemented. Performance states a driver manages itself
-and dependencies between components (providers) stop the system,
+(`PO_FX_FLAG_PERF_PEP_OPTIONAL`, used by `stornvme.sys` via `storport.sys`)
+are recorded on the component and succeed; duplicate registration is refused.
+Dependencies between components (providers) stop the system,
 naming themselves. The Plug and Play manager's own activations of a
 device around enumeration, which on Windows keep it in D0, are not
 made.

@@ -17,7 +17,7 @@ pub(in crate::export) static EXPORTS: &[Export] = &[
     export!(Implemented, po::fx::PoFxNotifySurprisePowerOn),
     export!(Implemented, po::fx::PoFxPowerControl),
     export!(Implemented, po::fx::PoFxPowerOnCrashdumpDevice),
-    export!(Partial, po::fx::PoFxRegisterComponentPerfStates),
+    export!(Implemented, po::fx::PoFxRegisterComponentPerfStates),
     export!(Implemented, po::fx::PoFxRegisterCrashdumpDevice),
     export!(Partial, po::fx::PoFxRegisterDevice),
     export!(Implemented, po::fx::PoFxRegisterDripsWatchdogCallback),

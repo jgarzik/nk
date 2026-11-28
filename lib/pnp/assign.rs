@@ -312,11 +312,21 @@ fn place(
     if space == Space::Interrupt && descriptor.flags & INTERRUPT_MESSAGE != 0 {
         // As many messages as the range of tokens is long.
         let count = wanted.maximum.checked_sub(wanted.minimum)? + 1;
+        // `IO_RESOURCE_DESCRIPTOR.u.Interrupt`: AffinityPolicy at data[8..12],
+        // TargetedProcessors (KAFFINITY) at data[16..24]. Preserve an explicit
+        // target mask (`IrqPolicySpecifiedProcessors` = 4) when specified.
+        const IRQ_POLICY_SPECIFIED_PROCESSORS: u32 = 4;
+        let policy = u32::from_le_bytes(descriptor.data[8..12].try_into().unwrap());
+        let affinity = if policy == IRQ_POLICY_SPECIFIED_PROCESSORS {
+            u64::from_le_bytes(descriptor.data[16..24].try_into().unwrap())
+        } else {
+            0
+        };
         let partial = Partial::raw_messages(
             descriptor.share,
             descriptor.flags,
             u16::try_from(count).ok()?,
-            0,
+            affinity,
         );
         return Some(Placed::At(partial, None));
     }
@@ -861,5 +871,24 @@ mod tests {
         assert_eq!(assignment.ranges[0].space, Space::BusNumber);
         assert_eq!(space_of(TYPE_MEMORY_LARGE), Some(Space::Memory));
         assert_eq!(space_of(TYPE_DEVICE_PRIVATE), None);
+    }
+
+    #[test]
+    fn specified_processor_affinity_is_preserved_for_messages() {
+        let mut msg = IoDescriptor::interrupt(
+            0,
+            1,
+            INTERRUPT_LATCHED | INTERRUPT_MESSAGE,
+            0xFFFF_FFFE,
+            0xFFFF_FFFE,
+        );
+        // IrqPolicySpecifiedProcessors (4) targeting CPU 2 (mask 0x4).
+        msg.data[8..12].copy_from_slice(&4u32.to_le_bytes());
+        msg.data[16..24].copy_from_slice(&0x4u64.to_le_bytes());
+        let assignment = assign(&list(vec![msg]), &[], &Claims::new(), NOBODY).unwrap();
+        assert_eq!(
+            assignment.partials[0].as_interrupt(),
+            Some((0, 1, MESSAGE_TOKEN, 0x4))
+        );
     }
 }
